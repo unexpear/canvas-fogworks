@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build output (reproducible via `npm run build`)
+dist/
+
+# Packaged installers and unpacked app bundles (~450MB; rebuild via `npm run dist`).
+# NOTE: exe/ holds a shipped build that predates the SCHEMA_VERSION gate — it is
+# referenced in docs/DOCUMENT-SCHEMA.md as the reason "a bump fails loudly" is not
+# true for older readers. Keep a copy outside the repo if that evidence matters.
+exe/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.log

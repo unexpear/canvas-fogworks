@@ -1,0 +1,50 @@
+{
+  "name": "visual-design-engine",
+  "version": "0.0.5",
+  "description": "A document-based visual programming engine for interfaces.",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "test": "jest --config=./jest.config.js",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "check": "npm run typecheck && npm test && npm run build",
+    "dev": "node scripts/build.js --watch --electron",
+    "dist": "node scripts/build.js && npx electron-builder"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/uuid": "^9.0.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.1",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "~5.4.0"
+  },
+  "build": {
+    "appId": "com.visualdesignengine.app",
+    "productName": "Visual Design Engine",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "dist/electron/**/*",
+      "dist/app/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
