@@ -5,14 +5,14 @@
  * The Dispatcher applies mutations after execution.
  */
 
-import { ProjectDocument } from "../document/Document";
+import { ReadonlyDocument } from "../document/Document";
 import { MutationResult, ActionPayload } from "./types";
 
 /** Base class for all executable mutations. */
 export abstract class Action {
-    protected document: ProjectDocument;
+    protected document: ReadonlyDocument;
 
-    constructor(document: ProjectDocument) {
+    constructor(document: ReadonlyDocument) {
         this.document = document;
     }
 
@@ -21,7 +21,7 @@ export abstract class Action {
      * run component actions against a working copy so each observes the effects
      * of the ones before it (e.g. create-a-node-then-move-it in one transaction).
      */
-    public rebind(document: ProjectDocument): void {
+    public rebind(document: ReadonlyDocument): void {
         this.document = document;
     }
 

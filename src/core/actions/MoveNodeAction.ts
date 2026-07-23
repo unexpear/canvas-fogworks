@@ -4,7 +4,7 @@
  */
 
 import { Action } from "./Action";
-import { ProjectDocument } from "../document/Document";
+import { ReadonlyDocument } from "../document/Document";
 import { MutationResult, ActionPayload } from "./types";
 
 export class MoveNodeAction extends Action {
@@ -12,7 +12,7 @@ export class MoveNodeAction extends Action {
     private newX: number;
     private newY: number;
 
-    constructor(document: ProjectDocument, nodeId: string, newX: number, newY: number) {
+    constructor(document: ReadonlyDocument, nodeId: string, newX: number, newY: number) {
         super(document);
         this.nodeId = nodeId;
         this.newX = newX;

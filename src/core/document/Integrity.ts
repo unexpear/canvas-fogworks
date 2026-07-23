@@ -10,10 +10,10 @@
  * corrupting state later.
  */
 
-import { ProjectDocument } from "./Document";
-import { Node } from "./Node";
+import { ReadonlyDocument } from "./Document";
+import { ReadonlyNode } from "./SceneGraph";
 
-function checkNodeRanges(node: Node): void {
+function checkNodeRanges(node: ReadonlyNode): void {
     const g = node.geometry;
     for (const [field, value] of [["x", g.x], ["y", g.y], ["width", g.width], ["height", g.height]] as const) {
         if (!Number.isFinite(value)) {
@@ -48,7 +48,7 @@ function checkNodeRanges(node: Node): void {
  *  - every parentless node appears in `rootNodeUuids`
  *  - the tree is acyclic
  */
-export function validateDocumentIntegrity(doc: ProjectDocument): void {
+export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
     // 1. Per-node ranges.
     doc.nodes.forEach(node => checkNodeRanges(node));
 

@@ -7,13 +7,13 @@
  */
 
 import { Action } from "./Action";
-import { ProjectDocument } from "../document/Document";
+import { ProjectDocument, ReadonlyDocument } from "../document/Document";
 import { Node } from "../document/Node";
 import { MutationResult, ActionPayload, NodeDelta } from "./types";
 import { applyMutationsToDocument } from "./applyMutations";
 
 /** Deep, independent copy of a document for in-transaction simulation. */
-function cloneWorkingDocument(doc: ProjectDocument): ProjectDocument {
+function cloneWorkingDocument(doc: ReadonlyDocument): ProjectDocument {
     return {
         version: doc.version,
         metadata: JSON.parse(JSON.stringify(doc.metadata)),
@@ -48,7 +48,7 @@ export class TransactionAction extends Action {
     private componentActions: Array<Action>;
     private transactionName: string;
 
-    constructor(document: ProjectDocument, transactionName: string, actions: Array<Action>) {
+    constructor(document: ReadonlyDocument, transactionName: string, actions: Array<Action>) {
         super(document);
         this.transactionName = transactionName;
         this.componentActions = actions;

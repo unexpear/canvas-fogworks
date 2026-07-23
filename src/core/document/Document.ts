@@ -39,6 +39,17 @@ export const CURRENT_VERSION: string =
  */
 export const SCHEMA_VERSION = "1";
 
+/**
+ * Recursively strips mutability. `Date` is left intact (it is a value here, and
+ * its mutators are not part of how the document is edited).
+ */
+export type DeepReadonly<T> =
+    T extends Date ? T :
+    T extends Map<infer K, infer V> ? ReadonlyMap<K, DeepReadonly<V>> :
+    T extends (infer E)[] ? ReadonlyArray<DeepReadonly<E>> :
+    T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> } :
+    T;
+
 /** Runtime metadata: `date` is a live Date object. */
 export interface DocumentMetadata {
     project_name: string;
@@ -67,6 +78,18 @@ export interface ProjectDocument {
     
     variables: VariableStore; // Global design tokens and variables
 }
+
+/**
+ * A read-only view of the document.
+ *
+ * `ActionDispatcher.getDocument()` returns this, so invariant #3 ("the dispatcher
+ * is the only write path") is checked by the compiler instead of by convention:
+ * a tool, the renderer, or a React handler that tries to assign to `node.geometry`
+ * or push to `rootNodeUuids` now fails to build. Only `applyMutationsToDocument`
+ * — which takes the mutable `ProjectDocument` the dispatcher holds privately —
+ * can write.
+ */
+export type ReadonlyDocument = DeepReadonly<ProjectDocument>;
 
 /** Defines the global context for reusable styles (Design Tokens). */
 export interface VariableStore {

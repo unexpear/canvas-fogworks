@@ -4,7 +4,7 @@
  */
 
 import { Action } from "./Action";
-import { ProjectDocument } from "../document/Document";
+import { ReadonlyDocument } from "../document/Document";
 import { Node, NodeType } from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 import { generateUUID } from "../ids/UUID";
@@ -21,7 +21,7 @@ export class AddNodeAction extends Action {
     private createdNodeId: string | null = null;
 
     constructor(
-        document: ProjectDocument,
+        document: ReadonlyDocument,
         nodeType: NodeType,
         x: number,
         y: number,

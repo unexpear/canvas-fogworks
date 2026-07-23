@@ -6,7 +6,10 @@
 
 1. **The Dispatcher is the only write path.** Never mutate a `ProjectDocument` or a
    `Node` outside an `Action` → `applyMutationsToDocument`. No component, tool, effect, or
-   AI/plugin code writes the document directly.
+   AI/plugin code writes the document directly. **The compiler enforces this**:
+   `getDocument()` hands back a `ReadonlyDocument`. If you find yourself wanting to cast
+   it away, you want an Action instead — the only legitimate casts are the serialization
+   boundary in `serializeDocument` (which copies out to the wire shape).
 2. **Actions are declarative.** `execute()` returns deltas; it must not mutate the document.
 3. **Never alias a history snapshot.** Any document obtained from history/serialization
    must be deep-cloned before it becomes live state (`hydrateDocument` guarantees this).

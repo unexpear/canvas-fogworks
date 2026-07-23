@@ -10,8 +10,11 @@
  * Milestone 1 note: the GeometryEngine must emit ComputedState in this order.
  */
 
-import { ProjectDocument } from "./Document";
+import { ReadonlyDocument } from "./Document";
 import { Node } from "./Node";
+import { DeepReadonly } from "./Document";
+
+export type ReadonlyNode = DeepReadonly<Node>;
 
 /**
  * Depth-first traversal: parents before their children, siblings in `children`
@@ -33,7 +36,7 @@ import { Node } from "./Node";
  * This lives here, shared, because duplicating it is exactly how the double-move
  * bug was introduced: `deleteSelectedNodes` had the filter and `MoveTool` did not.
  */
-export function selectionRoots(doc: ProjectDocument, ids: string[]): string[] {
+export function selectionRoots(doc: ReadonlyDocument, ids: string[]): string[] {
     const selected = new Set(ids);
 
     const hasSelectedAncestor = (id: string): boolean => {
@@ -50,8 +53,8 @@ export function selectionRoots(doc: ProjectDocument, ids: string[]): string[] {
     return ids.filter(id => doc.nodes.has(id) && !hasSelectedAncestor(id));
 }
 
-export function traverseSceneGraph(doc: ProjectDocument): Node[] {
-    const ordered: Node[] = [];
+export function traverseSceneGraph(doc: ReadonlyDocument): ReadonlyNode[] {
+    const ordered: ReadonlyNode[] = [];
     const visited = new Set<string>();
 
     const walk = (id: string): void => {

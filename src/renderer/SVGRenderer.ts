@@ -10,7 +10,7 @@
  * changes (which don't move the viewport) don't thrash thousands of grid lines.
  */
 
-import { ProjectDocument } from "../core/document/Document";
+import { ReadonlyDocument } from "../core/document/Document";
 import { Node } from "../core/document/Node";
 import { ComputedGeometry } from "../core/geometry/ComputedGeometry";
 
@@ -56,7 +56,7 @@ function isFiniteGeometry(geo: { x: number; y: number; width: number; height: nu
 
 export function renderSVG(
     container: HTMLElement,
-    doc: ProjectDocument,
+    doc: ReadonlyDocument,
     state: RendererState
 ): void {
     let svg = container.querySelector("svg") as SVGSVGElement | null;
@@ -130,7 +130,7 @@ function renderGrid(gridGroup: SVGGElement, container: HTMLElement, state: Rende
 
 function renderContent(
     contentGroup: SVGGElement,
-    doc: ProjectDocument,
+    doc: ReadonlyDocument,
     z: number,
     computed: ComputedGeometry
 ): void {
@@ -206,7 +206,7 @@ function renderContent(
     });
 }
 
-function renderOverlay(overlayGroup: SVGGElement, doc: ProjectDocument, state: RendererState, z: number): void {
+function renderOverlay(overlayGroup: SVGGElement, doc: ReadonlyDocument, state: RendererState, z: number): void {
     clearChildren(overlayGroup);
     const selectedSet = new Set(state.selectedNodeIds);
     const computed = state.computed;

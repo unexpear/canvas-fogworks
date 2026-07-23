@@ -4,7 +4,7 @@
  */
 
 import { Action } from "./Action";
-import { ProjectDocument } from "../document/Document";
+import { ReadonlyDocument } from "../document/Document";
 import { MutationResult, ActionPayload } from "./types";
 
 export interface GeometryUpdate {
@@ -18,7 +18,7 @@ export class UpdateNodeGeometryAction extends Action {
     private nodeId: string;
     private newGeometry: GeometryUpdate;
 
-    constructor(document: ProjectDocument, nodeId: string, geometry: GeometryUpdate) {
+    constructor(document: ReadonlyDocument, nodeId: string, geometry: GeometryUpdate) {
         super(document);
         this.nodeId = nodeId;
         this.newGeometry = geometry;

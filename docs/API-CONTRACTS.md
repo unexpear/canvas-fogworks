@@ -39,6 +39,7 @@ const Serializer: {
 
 Types: `ProjectDocument`, `DocumentMetadata`, `SerializedMetadata`, `VariableStore`,
 `Node`, `NodeType`, `Geometry`, `Style`, `Layout`, `StateDefinition`, `SerializedDocument`,
+`DeepReadonly`, `ReadonlyDocument`, `ReadonlyNode`,
 `LoadResult`, `SaveResult`, `NODE_TYPES`/`isNodeType`. See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
 
 ## Actions (`core/actions/`)
@@ -91,7 +92,7 @@ class ActionDispatcher {
   redo(): ProjectDocument | null;
   canUndo(): boolean;
   canRedo(): boolean;
-  getDocument(): ProjectDocument;
+  getDocument(): ReadonlyDocument;   // deep-readonly; mutation requires an Action
   loadDocument(doc: ProjectDocument): void;            // New/Open: replace + reset history
 }
 

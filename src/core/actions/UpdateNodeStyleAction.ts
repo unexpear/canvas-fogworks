@@ -4,7 +4,7 @@
  */
 
 import { Action } from "./Action";
-import { ProjectDocument } from "../document/Document";
+import { ReadonlyDocument } from "../document/Document";
 import { MutationResult, ActionPayload } from "./types";
 
 export interface StyleUpdate {
@@ -19,7 +19,7 @@ export class UpdateNodeStyleAction extends Action {
     private nodeId: string;
     private newStyle: StyleUpdate;
 
-    constructor(document: ProjectDocument, nodeId: string, style: StyleUpdate) {
+    constructor(document: ReadonlyDocument, nodeId: string, style: StyleUpdate) {
         super(document);
         this.nodeId = nodeId;
         this.newStyle = style;

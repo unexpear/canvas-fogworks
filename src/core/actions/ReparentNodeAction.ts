@@ -8,7 +8,7 @@
  */
 
 import { Action } from "./Action";
-import { ProjectDocument } from "../document/Document";
+import { ReadonlyDocument } from "../document/Document";
 import { MutationResult, ActionPayload } from "./types";
 
 export class ReparentNodeAction extends Action {
@@ -21,7 +21,7 @@ export class ReparentNodeAction extends Action {
      * @param index Insertion position among the new siblings (appended if omitted).
      */
     constructor(
-        document: ProjectDocument,
+        document: ReadonlyDocument,
         nodeId: string,
         newParentId: string | null,
         index?: number

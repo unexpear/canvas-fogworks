@@ -9,7 +9,7 @@ import { ActionDispatcher } from "../core/actions/ActionDispatcher";
 import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document";
 import { Node } from "../core/document/Node";
 import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
-import { traverseSceneGraph } from "../core/document/SceneGraph";
+import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeWorldGeometry } from "../core/geometry/ComputedGeometry";
 import { UpdateNodeGeometryAction } from "../core/actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../core/actions/UpdateNodeStyleAction";
@@ -253,7 +253,7 @@ export function App() {
             <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
                 <div style={{ width: 180, background: "#16162a", borderRight: "1px solid #2a2a4a", overflow: "auto", padding: 8 }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 6 }}>LAYERS</div>
-                    {traverseSceneGraph(dispatcher.getDocument()).map((n: Node) => {
+                    {traverseSceneGraph(dispatcher.getDocument()).map((n: ReadonlyNode) => {
                         const id = n.id;
                         return (
                         <div

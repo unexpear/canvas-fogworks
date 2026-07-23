@@ -4,7 +4,7 @@
  */
 
 import { Action } from "./Action";
-import { ProjectDocument } from "../document/Document";
+import { ReadonlyDocument } from "../document/Document";
 import { MutationResult, ActionPayload } from "./types";
 
 export class ResizeNodeAction extends Action {
@@ -12,7 +12,7 @@ export class ResizeNodeAction extends Action {
     private newWidth: number;
     private newHeight: number;
 
-    constructor(document: ProjectDocument, nodeId: string, newWidth: number, newHeight: number) {
+    constructor(document: ReadonlyDocument, nodeId: string, newWidth: number, newHeight: number) {
         super(document);
         this.nodeId = nodeId;
         this.newWidth = newWidth;

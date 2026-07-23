@@ -10,9 +10,11 @@ Everything in the engine — now and in every future milestone — rests on thes
    `ProjectDocument`. Nothing authoritative lives in the renderer, the tools, or React.
 2. **Actions are declarative.** An `Action` computes *what should change* (a
    `MutationResult` of deltas) and returns it. It never mutates the document.
-3. **The Dispatcher is the only write path.** `ActionDispatcher.dispatchAction()` (plus
-   `undo`/`redo`/`loadDocument`) are the *only* places the document changes. There is
-   exactly one function that mutates document state: `applyMutationsToDocument`.
+3. **The Dispatcher is the only write path — enforced by the compiler.**
+   `getDocument()` returns `ReadonlyDocument` (a `DeepReadonly<ProjectDocument>`), so a
+   tool, the renderer, or a React handler that tries to assign to `node.geometry` or
+   push to `rootNodeUuids` **fails to build**. The mutable document is held privately by
+   the dispatcher, and exactly one function mutates it: `applyMutationsToDocument`.
 4. **History is snapshot-based.** Each committed revision is an immutable, deep-cloned
    JSON snapshot. Undo/redo restore a snapshot; they never replay actions. Restored
    state is deep-cloned so it can never alias the history stack.

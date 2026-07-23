@@ -6,7 +6,7 @@
  * stamps, then runs the migration chain; unknown versions throw.
  */
 
-import { ProjectDocument, createEmptyDocument, SCHEMA_VERSION, SerializedMetadata } from "./Document";
+import { ProjectDocument, ReadonlyDocument, createEmptyDocument, SCHEMA_VERSION, SerializedMetadata } from "./Document";
 import { Node, isNodeType } from "./Node";
 import { validateDocumentIntegrity } from "./Integrity";
 
@@ -54,7 +54,7 @@ export interface SerializedDocument {
  * Serializes a ProjectDocument to a JSON-safe string.
  * Converts Map<string, Node> to a plain object for JSON compatibility.
  */
-export function serializeDocument(doc: ProjectDocument): string {
+export function serializeDocument(doc: ReadonlyDocument): string {
     const envelope: SerializedDocument = {
         version: doc.version,
         document: {
@@ -65,9 +65,11 @@ export function serializeDocument(doc: ProjectDocument): string {
                     ? doc.metadata.date.toISOString()
                     : String(doc.metadata.date)
             },
-            nodes: Object.fromEntries(doc.nodes),
-            rootNodeUuids: doc.rootNodeUuids,
-            variables: doc.variables
+            // Serialization COPIES out of the read-only view into the mutable wire
+            // shape; the casts are the boundary, not a hole in the invariant.
+            nodes: Object.fromEntries(doc.nodes) as Record<string, Node>,
+            rootNodeUuids: [...doc.rootNodeUuids],
+            variables: doc.variables as ProjectDocument["variables"]
         }
     };
 
@@ -210,7 +212,7 @@ function migrateIfNeeded(raw: any): SerializedDocument {
  * Deep equality comparison for two ProjectDocuments.
  * Useful for testing serialization round-trips.
  */
-export function compareDocuments(a: ProjectDocument, b: ProjectDocument): boolean {
+export function compareDocuments(a: ReadonlyDocument, b: ReadonlyDocument): boolean {
     const dateMs = (d: any): number => (d instanceof Date ? d.getTime() : new Date(d).getTime());
 
     if (a.version !== b.version) return false;
@@ -283,7 +285,7 @@ export const Serializer = {
      * The write path mirrors the read path: a failure (quota exceeded, storage
      * disabled) is a value, not a silent no-op. "Saved" must never be a lie.
      */
-    save(doc: ProjectDocument): SaveResult {
+    save(doc: ReadonlyDocument): SaveResult {
         try {
             localStorage.setItem(STORAGE_KEY, serializeDocument(doc));
             return { status: "saved" };

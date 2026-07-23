@@ -4,14 +4,14 @@
  */
 
 import { Action } from "./Action";
-import { ProjectDocument } from "../document/Document";
+import { ReadonlyDocument } from "../document/Document";
 import { MutationResult, ActionPayload, NodeDelta } from "./types";
 
 export class DeleteNodeAction extends Action {
     private nodeId: string;
     private deletedNodeIds: string[] = [];
 
-    constructor(document: ProjectDocument, nodeId: string) {
+    constructor(document: ReadonlyDocument, nodeId: string) {
         super(document);
         this.nodeId = nodeId;
     }

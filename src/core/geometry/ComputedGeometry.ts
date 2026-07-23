@@ -16,7 +16,7 @@
  *      This is what lets M2 layout apply to a preview instead of being bypassed.
  */
 
-import { ProjectDocument } from "../document/Document";
+import { ReadonlyDocument } from "../document/Document";
 import { Geometry } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
 
@@ -39,7 +39,7 @@ export interface ComputedGeometry {
  *   applied before composition. Drag/resize previews flow through here.
  */
 export function computeWorldGeometry(
-    doc: ProjectDocument,
+    doc: ReadonlyDocument,
     pending?: Map<string, Partial<Geometry>> | null
 ): ComputedGeometry {
     const order: string[] = [];

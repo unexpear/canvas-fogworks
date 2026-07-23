@@ -9,13 +9,13 @@
  * Future: Replace with delta-based history for large documents.
  */
 
-import { ProjectDocument } from "../document/Document";
+import { ProjectDocument, ReadonlyDocument } from "../document/Document";
 import { Node } from "../document/Node";
 import { ActionPayload, Revision, DocumentSnapshot } from "./types";
 import { generateUUID } from "../ids/UUID";
 
 /** Deep-clone a document, converting Maps to plain objects for JSON serialization. */
-function cloneDocument(doc: ProjectDocument): DocumentSnapshot {
+function cloneDocument(doc: ReadonlyDocument): DocumentSnapshot {
     return JSON.parse(JSON.stringify({
         ...doc,
         nodes: Object.fromEntries(doc.nodes)
@@ -87,7 +87,7 @@ export class HistoryManager {
      */
     private lastCommittedId: string | null = null;
 
-    constructor(initialDoc: ProjectDocument) {
+    constructor(initialDoc: ReadonlyDocument) {
         this.revisions = [{
             id: generateUUID(),
             timestamp: Date.now(),
@@ -105,7 +105,7 @@ export class HistoryManager {
      */
     public commitRevision(
         actionPayload: ActionPayload,
-        documentState: ProjectDocument,
+        documentState: ReadonlyDocument,
         allowCoalesce = false
     ): void {
         this.revisions = this.revisions.slice(0, this.currentIndex + 1);
