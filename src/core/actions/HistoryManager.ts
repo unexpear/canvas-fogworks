@@ -79,6 +79,13 @@ function coalesceKey(payload: ActionPayload): string | null {
 export class HistoryManager {
     private revisions: Array<Revision>;
     private currentIndex: number;
+    /**
+     * Id of the revision the last commit produced. Coalescing may only merge into
+     * THAT revision — any undo/redo moves the cursor and clears this, so an edit
+     * made after stepping through history starts a fresh undo step instead of
+     * silently rewriting a revision the user just navigated to.
+     */
+    private lastCommittedId: string | null = null;
 
     constructor(initialDoc: ProjectDocument) {
         this.revisions = [{
@@ -121,9 +128,14 @@ export class HistoryManager {
             this.currentIndex > 0 &&
             previous !== undefined &&
             coalesceKey(previous.actionPayload) === key &&
+            previous.id === this.lastCommittedId &&
+            // Bounded at BOTH ends: a backwards clock step would otherwise make
+            // `now - previous.timestamp` negative and coalesce unrelated edits.
+            now - previous.timestamp >= 0 &&
             now - previous.timestamp <= COALESCE_WINDOW_MS
         ) {
             this.revisions[this.currentIndex] = revision;
+            this.lastCommittedId = revision.id;
             return;
         }
 
@@ -138,6 +150,7 @@ export class HistoryManager {
         }
 
         this.currentIndex = this.revisions.length - 1;
+        this.lastCommittedId = revision.id;
     }
 
     public undo(): ProjectDocument | null {
@@ -145,6 +158,7 @@ export class HistoryManager {
             return null;
         }
         this.currentIndex--;
+        this.lastCommittedId = null; // cursor moved — end any coalescing run
         return hydrateDocument(this.revisions[this.currentIndex].document);
     }
 
@@ -153,7 +167,14 @@ export class HistoryManager {
             return null;
         }
         this.currentIndex++;
+        this.lastCommittedId = null; // cursor moved — end any coalescing run
         return hydrateDocument(this.revisions[this.currentIndex].document);
+    }
+
+    /** The document at the current cursor position (used to roll back a failed apply). */
+    public current(): ProjectDocument | null {
+        const revision = this.revisions[this.currentIndex];
+        return revision ? hydrateDocument(revision.document) : null;
     }
 
     public canUndo(): boolean {

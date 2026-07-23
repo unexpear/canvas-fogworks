@@ -239,7 +239,10 @@ export function App() {
                             );
                             if (!confirmedOverwriteRef.current) return;
                         }
-                        Serializer.save(dispatcher.getDocument());
+                        const result = Serializer.save(dispatcher.getDocument());
+                        if (result.status === "failed") {
+                            window.alert(`Save failed: ${result.error.message}`);
+                        }
                     }}
                     style={{ fontSize: 11, padding: "3px 8px", background: "#00bfff", color: "#000", border: "none", borderRadius: 3, cursor: "pointer" }}
                 >
@@ -365,7 +368,12 @@ function NumInput({ value, onChange }: { value: number; onChange: (v: number) =>
         <input
             type="number"
             value={value}
-            onChange={e => onChange(parseFloat(e.target.value) || 0)}
+            // Skip non-numeric input rather than substituting 0: `|| 0` turned a
+            // half-typed value (or "-") into a real edit that snapped the node to 0.
+            onChange={e => {
+                const v = parseFloat(e.target.value);
+                if (Number.isFinite(v)) onChange(v);
+            }}
             style={{
                 width: "100%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
                 background: "#0f0f1a", color: "#e0e0e0", border: "1px solid #2a2a4a", borderRadius: 2, marginBottom: 4

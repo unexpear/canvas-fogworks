@@ -34,8 +34,13 @@ const PAN_LIMIT = 10000;
 
 export function clampViewport(vp: EditorState["viewport"]): void {
     vp.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, vp.zoom));
-    vp.x = Math.max(-PAN_LIMIT, Math.min(PAN_LIMIT, vp.x));
-    vp.y = Math.max(-PAN_LIMIT, Math.min(PAN_LIMIT, vp.y));
+    // vp.x/y are SCREEN offsets (the transform applies translate before scale), so
+    // the reachable world area shrinks as zoom rises. Scale the limit by zoom so
+    // PAN_LIMIT means the same ±10000 WORLD units at every zoom level — otherwise
+    // at zoom 20 nothing beyond world x=500 could be scrolled to.
+    const limit = PAN_LIMIT * vp.zoom;
+    vp.x = Math.max(-limit, Math.min(limit, vp.x));
+    vp.y = Math.max(-limit, Math.min(limit, vp.y));
 }
 
 export function createEditorState(): EditorState {

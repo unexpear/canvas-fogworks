@@ -17,6 +17,8 @@ import { ComputedGeometry } from "../core/geometry/ComputedGeometry";
 const svgNS = "http://www.w3.org/2000/svg";
 const GRID_BASE = 20;
 const GRID_MAX_LINES_PER_AXIS = 300; // density cap: coarsen the grid instead of exploding line count
+/** Resize-handle size in SCREEN pixels (converted to world by dividing by zoom). */
+export const HANDLE_SIZE_PX = 8;
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -222,7 +224,10 @@ function renderOverlay(overlayGroup: SVGGElement, doc: ProjectDocument, state: R
     });
 
     // Resize handles (world-space, so they belong in the transform group).
-    const HS = Math.max(4, Math.min(16, 8 / z));
+    // Clamp in SCREEN pixels, then convert to world once. Clamping `8/z` directly
+    // clamps a world-space size, so past zoom 2 (or below 0.5) the handle stopped
+    // being 8px on screen — the opposite of what the clamp was for.
+    const HS = HANDLE_SIZE_PX / z;
     state.selectedNodeIds.forEach(nodeId => {
         const geo = computed.rects.get(nodeId);
         if (!geo || !isFiniteGeometry(geo)) return;

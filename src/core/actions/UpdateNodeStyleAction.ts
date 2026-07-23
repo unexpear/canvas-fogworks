@@ -12,6 +12,7 @@ export interface StyleUpdate {
     opacity?: number;
     stroke?: string;
     radius?: number;
+    fontSize?: number;
 }
 
 export class UpdateNodeStyleAction extends Action {
@@ -30,6 +31,7 @@ export class UpdateNodeStyleAction extends Action {
         // Presence-based, not value-based — see UpdateNodeGeometryAction.validate().
         if ("opacity" in s && (!Number.isFinite(s.opacity) || (s.opacity as number) < 0 || (s.opacity as number) > 1)) return false;
         if ("radius" in s && (!Number.isFinite(s.radius) || (s.radius as number) < 0)) return false;
+        if ("fontSize" in s && (!Number.isFinite(s.fontSize) || (s.fontSize as number) <= 0)) return false;
         if ("fill" in s && typeof s.fill !== "string") return false;
         if ("stroke" in s && typeof s.stroke !== "string") return false;
         return true;

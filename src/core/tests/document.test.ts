@@ -16,6 +16,7 @@ import { TransactionAction } from "../actions/TransactionAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeWorldGeometry, hitTest } from "../geometry/ComputedGeometry";
+import { clampViewport } from "../../editor/EditorState";
 import { Node } from "../document/Node";
 
 function createDocWithRectangle(): ProjectDocument {
@@ -1023,6 +1024,99 @@ describe("History coalescing and retention", () => {
 
         // The user can always get back to the true starting document.
         expect(dispatcher.getDocument().nodes.size).toBe(0);
+    });
+});
+
+// ─── Rule-audit follow-ups (medium/low findings) ───
+describe("Rule-audit follow-ups", () => {
+    test("an unknown node.type is rejected on load", () => {
+        const bad = JSON.stringify({
+            version: SCHEMA_VERSION,
+            document: {
+                metadata: {}, rootNodeUuids: ["n"], variables: {},
+                nodes: { n: {
+                    id: "n", type: "evil.node", parent: null, children: [],
+                    geometry: { x: 0, y: 0, width: 10, height: 10 },
+                    style: { fill: "#000", opacity: 1 }, layout: {}
+                } }
+            }
+        });
+        expect(() => deserializeDocument(bad)).toThrow("malformed");
+    });
+
+    test("a non-object layout is rejected on load", () => {
+        const bad = JSON.stringify({
+            version: SCHEMA_VERSION,
+            document: {
+                metadata: {}, rootNodeUuids: ["n"], variables: {},
+                nodes: { n: {
+                    id: "n", type: "core.rectangle", parent: null, children: [],
+                    geometry: { x: 0, y: 0, width: 10, height: 10 },
+                    style: { fill: "#000", opacity: 1 }, layout: "nope"
+                } }
+            }
+        });
+        expect(() => deserializeDocument(bad)).toThrow("malformed");
+    });
+
+    test("an unparseable metadata date falls back instead of becoming Invalid Date", () => {
+        const doc = deserializeDocument(JSON.stringify({
+            version: SCHEMA_VERSION,
+            document: { metadata: { project_name: 42, date: "not-a-date" }, nodes: {}, rootNodeUuids: [], variables: {} }
+        }));
+        expect(Number.isNaN(doc.metadata.date.getTime())).toBe(false);
+        expect(typeof doc.metadata.project_name).toBe("string");
+    });
+
+    test("fontSize is validated by UpdateNodeStyleAction", () => {
+        const doc = createDocWithRectangle();
+        expect(new UpdateNodeStyleAction(doc, "rectangle-001", { fontSize: 0 }).validate()).toBe(false);
+        expect(new UpdateNodeStyleAction(doc, "rectangle-001", { fontSize: 12 }).validate()).toBe(true);
+    });
+
+    test("a node added and deleted in one transaction emits no delta", () => {
+        const doc = createDocWithRectangle();
+        const dispatcher = new ActionDispatcher(doc);
+        const result = dispatcher.dispatchAction(new TransactionAction(doc, "add-then-remove", [
+            new AddNodeAction(doc, "core.rectangle", 0, 0, 10, 10, "#fff", "temp"),
+            new DeleteNodeAction(doc, "temp")
+        ]));
+        expect(result.success).toBe(true);
+        expect(result.propertyDeltas.has("temp")).toBe(false); // no __deleteNode for a node that never existed
+        expect(dispatcher.getDocument().nodes.has("temp")).toBe(false);
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+    });
+
+    test("an edit after an undo starts a new undo step even if it would coalesce", () => {
+        const doc = createDocWithRectangle();
+        const dispatcher = new ActionDispatcher(doc);
+        const style = (o: number) =>
+            new UpdateNodeStyleAction(dispatcher.getDocument(), "rectangle-001", { opacity: o });
+
+        dispatcher.dispatchAction(style(0.5), { coalesce: true });
+        dispatcher.dispatchAction(style(0.6), { coalesce: true }); // coalesces
+        dispatcher.undo();                                        // cursor moves
+        dispatcher.dispatchAction(style(0.7), { coalesce: true }); // must NOT merge into it
+
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.get("rectangle-001")!.style.opacity).toBe(1);
+    });
+
+    test("a throwing validate() is contained, not propagated", () => {
+        const doc = createDocWithRectangle();
+        const dispatcher = new ActionDispatcher(doc);
+        const bomb = new MoveNodeAction(doc, "rectangle-001", 5, 5);
+        (bomb as any).validate = () => { throw new Error("boom"); };
+        const spy = jest.spyOn(console, "error").mockImplementation(() => {});
+        expect(() => dispatcher.dispatchAction(bomb)).not.toThrow();
+        expect(dispatcher.dispatchAction(bomb).success).toBe(false);
+        spy.mockRestore();
+    });
+
+    test("viewport pan limit scales with zoom so content stays reachable", () => {
+        const vp = { x: 9000, y: 0, zoom: 20 };
+        clampViewport(vp);
+        expect(vp.x).toBe(9000); // previously clamped to 10000 screen px = world 500
     });
 });
 

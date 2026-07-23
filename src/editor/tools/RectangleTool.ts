@@ -11,7 +11,12 @@ import { EditorState } from "../EditorState";
 import { Tool } from "./ToolController";
 
 const DEFAULT_FILL = "#4a90d9";
-const MIN_SIZE = 2;
+/**
+ * Minimum drag size to commit a rectangle, in SCREEN pixels. Expressed in screen
+ * units so the same physical gesture behaves identically at every zoom — a world
+ * threshold meant "too small to bother with" changed meaning as you zoomed.
+ */
+const MIN_SIZE_PX = 2;
 
 export class RectangleTool implements Tool {
     private dispatcher: ActionDispatcher;
@@ -58,12 +63,18 @@ export class RectangleTool implements Tool {
         this.refresh();
     }
 
+    /** Same predicate the preview uses, so what is drawn is exactly what commits. */
+    private meetsMinSize(rect: { width: number; height: number }): boolean {
+        const min = MIN_SIZE_PX / Math.max(0.01, this.editorState.viewport.zoom);
+        return rect.width >= min && rect.height >= min;
+    }
+
     onMouseUp(e: MouseEvent, canvasRect?: DOMRect): void {
         if (!this.isDragging) return;
         const rect = this.editorState.previewRect;
         this.cancel();
 
-        if (rect && rect.width >= MIN_SIZE && rect.height >= MIN_SIZE) {
+        if (rect && this.meetsMinSize(rect)) {
             this.dispatcher.dispatchAction(new AddNodeAction(
                 this.dispatcher.getDocument(),
                 "core.rectangle",

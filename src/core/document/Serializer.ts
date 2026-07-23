@@ -7,20 +7,36 @@
  */
 
 import { ProjectDocument, createEmptyDocument, SCHEMA_VERSION, SerializedMetadata } from "./Document";
-import { Node } from "./Node";
+import { Node, isNodeType } from "./Node";
 import { validateDocumentIntegrity } from "./Integrity";
 
 /** Structural check for a persisted node — guards against malformed input. */
+function isPlainObject(v: any): boolean {
+    return !!v && typeof v === "object" && !Array.isArray(v);
+}
+function isOptionalString(v: any): boolean {
+    return v === undefined || typeof v === "string";
+}
+
 function isValidNode(n: any): n is Node {
     return !!n && typeof n === "object" &&
         typeof n.id === "string" &&
-        typeof n.type === "string" &&
-        Array.isArray(n.children) &&
-        !!n.geometry && typeof n.geometry === "object" &&
+        // Membership, not just "is a string": an unknown type would render as a
+        // fallback box and silently misrepresent the document.
+        isNodeType(n.type) &&
+        Array.isArray(n.children) && n.children.every((c: any) => typeof c === "string") &&
+        (n.parent === undefined || n.parent === null || typeof n.parent === "string") &&
+        isPlainObject(n.geometry) &&
         typeof n.geometry.x === "number" && typeof n.geometry.y === "number" &&
         typeof n.geometry.width === "number" && typeof n.geometry.height === "number" &&
-        !!n.style && typeof n.style === "object" &&
-        typeof n.style.fill === "string" && typeof n.style.opacity === "number";
+        isPlainObject(n.style) &&
+        typeof n.style.fill === "string" && typeof n.style.opacity === "number" &&
+        isOptionalString(n.style.stroke) &&
+        (n.style.radius === undefined || typeof n.style.radius === "number") &&
+        (n.style.fontSize === undefined || typeof n.style.fontSize === "number") &&
+        isPlainObject(n.layout) &&
+        isOptionalString(n.text) && isOptionalString(n.src) && isOptionalString(n.name) &&
+        (n.states === undefined || isPlainObject(n.states));
 }
 
 /** The envelope wrapping a serialized document (JSON-accurate: date is a string). */
@@ -94,11 +110,15 @@ export function deserializeDocument(json: string): ProjectDocument {
     doc.version = migrated.version;
 
     const md = migrated.document.metadata;
-    if (md && typeof md === "object") {
+    if (isPlainObject(md)) {
+        // Validate, don't just default: a non-string name or an unparseable date
+        // would otherwise flow straight into the live document (and `Invalid Date`
+        // survives serialization as null, quietly losing the field).
+        const parsedDate = md.date !== undefined ? new Date(md.date) : null;
         doc.metadata = {
-            project_name: md.project_name ?? doc.metadata.project_name,
-            created_by: md.created_by ?? doc.metadata.created_by,
-            date: md.date ? new Date(md.date) : doc.metadata.date
+            project_name: typeof md.project_name === "string" ? md.project_name : doc.metadata.project_name,
+            created_by: typeof md.created_by === "string" ? md.created_by : doc.metadata.created_by,
+            date: parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate : doc.metadata.date
         };
     }
 
@@ -219,6 +239,10 @@ const STORAGE_KEY = "vde-document";
 export const CORRUPT_BACKUP_KEY = "vde-document.corrupt-backup";
 
 /** Distinguishes "nothing saved" from "saved but unreadable" for the caller. */
+export type SaveResult =
+    | { status: "saved" }
+    | { status: "failed"; error: Error };
+
 export type LoadResult =
     | { status: "empty"; document: null }
     | { status: "loaded"; document: ProjectDocument }
@@ -255,7 +279,17 @@ export const Serializer = {
         return this.loadResult().document;
     },
 
-    save(doc: ProjectDocument): void {
-        localStorage.setItem(STORAGE_KEY, serializeDocument(doc));
+    /**
+     * The write path mirrors the read path: a failure (quota exceeded, storage
+     * disabled) is a value, not a silent no-op. "Saved" must never be a lie.
+     */
+    save(doc: ProjectDocument): SaveResult {
+        try {
+            localStorage.setItem(STORAGE_KEY, serializeDocument(doc));
+            return { status: "saved" };
+        } catch (e) {
+            console.error("Failed to save document:", e);
+            return { status: "failed", error: e as Error };
+        }
     }
 };

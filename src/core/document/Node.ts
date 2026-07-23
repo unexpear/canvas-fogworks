@@ -4,7 +4,17 @@
  * Nodes are never mutated directly; changes happen via Actions.
  */
 
-export type NodeType = "core.rectangle" | "core.text" | "core.image"; // Extend with new types later
+/**
+ * The closed set of node types. Single source of truth: `NodeType` is derived from
+ * it, and both validation paths check membership against it — so adding a type is
+ * one edit, and an unknown type cannot slip in through a hand-edited file.
+ */
+export const NODE_TYPES = ["core.rectangle", "core.text", "core.image"] as const;
+export type NodeType = typeof NODE_TYPES[number];
+
+export function isNodeType(value: unknown): value is NodeType {
+    return typeof value === "string" && (NODE_TYPES as readonly string[]).includes(value);
+}
 
 /**
  * Represents the immutable, persisted definition of a node instance.

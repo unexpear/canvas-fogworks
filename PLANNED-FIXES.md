@@ -1,7 +1,7 @@
 # PLANNED-FIXES.md — Reconciled (fix-all pass complete)
 
 > **Status as of 2026-07-23.** Gate: `npm run check` (typecheck of app + tests,
-> **89 tests**, production build) — **green**.
+> **97 tests**, production build) — **green**.
 
 ## ⚠️ Identifier namespaces — read first
 
@@ -39,7 +39,7 @@ Capabilities added across the fix passes: a shared `applyMutations` helper,
 `ReparentNodeAction`, `traverseSceneGraph`, `SCHEMA_VERSION`, history coalescing,
 `Style.fontSize`, `EditorState.isDragging`/`previewRect`/`pendingGeometry`,
 `MutationResult.fullReload`, a typed `DocumentSnapshot`, and `typecheck`/`check`
-npm scripts. Test count 43 → **89**.
+npm scripts. Test count 43 → **97**.
 
 ---
 
@@ -238,10 +238,68 @@ into one undo step. Test count 81 → **89**.
 
 ---
 
+## Rule-audit follow-ups (medium/low findings)
+
+The audit's remaining medium/low findings, worked after the 11 confirmed flaws.
+
+**Validation completeness**
+- `node.type` is now checked for **membership** in `NODE_TYPES` (single source of
+  truth, `isNodeType`) on both paths — an unknown type previously loaded and rendered
+  as a fallback box, silently misrepresenting the document.
+- `isValidNode` now also validates `layout`, `parent`, `children` element types,
+  `style.stroke/radius/fontSize`, and `text`/`src`/`name`/`states`.
+- Metadata is **validated, not just defaulted**: a non-string name or unparseable date
+  falls back instead of flowing through (an `Invalid Date` serializes to `null`, quietly
+  losing the field).
+- `fontSize` is settable via `StyleUpdate` and validated (`> 0`) — the schema table
+  asserted Action-path coverage that did not exist.
+
+**Dispatcher / transactions**
+- **`dispatch` now never throws, with no boundary.** `validate()` is inside the
+  try/catch, and the apply/commit stage is guarded with a **rollback** to the last
+  revision so the live document and history cannot diverge.
+- **Add-then-delete in one transaction emits nothing.** `addedIds` is a live set, so it
+  could not answer "did this exist before the transaction?"; a new `everAdded` set makes
+  the documented net-no-op skip actually fire (it previously emitted `__deleteNode` for a
+  node the real document never had).
+
+**Editor / geometry**
+- Resize handles clamp in **screen pixels** (`HANDLE_SIZE_PX / z`). Clamping `8/z`
+  clamped a *world* size, so past zoom 2 the handle stopped being 8px on screen.
+- The rectangle minimum size is a **screen-pixel** threshold, and the preview uses the
+  identical predicate — what is drawn is exactly what commits.
+- `clampViewport` scales the pan limit by zoom; at zoom 20 nothing beyond world x≈500
+  was previously reachable.
+- Inspector number fields **skip non-numeric input** instead of substituting `0`
+  (`parseFloat(...) || 0` turned a half-typed value into an edit that snapped to 0).
+
+**History**
+- Coalescing is anchored to the **last committed revision id** and bounded at both ends,
+  so an edit after an undo/redo starts a fresh undo step rather than rewriting a revision
+  the user just navigated to, and a backwards clock step cannot merge unrelated edits.
+
+**Persistence**
+- `Serializer.save` returns a `SaveResult`; a quota/disabled-storage failure surfaces in
+  the UI instead of a silent no-op. "Saved" is no longer able to be a lie.
+
+Test count 89 → **97**.
+
+### Deliberately not done
+- **`DeepReadonly<ProjectDocument>` for `getDocument()`** and a **discriminated-union
+  delta type** — both are genuine improvements and would make two invariants
+  compiler-enforced rather than convention, but each is a broad refactor of every
+  consumer. Better as their own change than smuggled into a fix pass.
+- **A linter for the JSDoc-header rule** — adding ESLint is tooling scope creep here;
+  the rule is currently convention, and is marked as such.
+- **Surfacing the history-truncation discontinuity in the UI** — real, but it is a UX
+  decision (what should "undo" do at the boundary?), not a defect to patch silently.
+
+---
+
 ## Verification
 - `npx tsc --noEmit` (app) — clean.
 - `npx tsc --noEmit -p tsconfig.test.json` (tests) — clean.
-- `npm test` — **89/89**.
+- `npm test` — **97/97**.
 - `node scripts/build.js` — emits `dist/electron/preload.js`; version injected (no `__APP_VERSION__` left in the bundle).
 - `npm run check` (typecheck + test + build) — green.
 - Browser smoke test of the built app: draw (single node, preview shows then clears), select (outline + 4 handles), **move via override** (renders at dragged position, commits, undo restores), **resize via override** (150→210, Escape mid-resize cancels) — no console errors.

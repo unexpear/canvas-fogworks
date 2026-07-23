@@ -61,7 +61,7 @@ zero." See `docs/ARCHITECTURE.md` § *Current vs. target data flow*.
 Undo/Redo (with coalescing; the initial revision is never evicted) · revision system ·
 JSON serialization (schema version decoupled from app version) ·
 **validation** (Action-path `validate()` **and** `validateDocumentIntegrity` on load:
-ranges, dangling parents, ghost roots, cycles) · **89 automated tests**.
+ranges, dangling parents, ghost roots, cycles) · **97 automated tests**.
 
 **Proven concepts (the invariants everything above depends on):**
 1. The **document is the single source of truth**.

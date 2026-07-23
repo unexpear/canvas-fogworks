@@ -70,6 +70,12 @@ export class TransactionAction extends Action {
 
         const addedIds = new Set<string>();
         const deletedIds = new Set<string>();
+        // Nodes created at ANY point in this transaction. `addedIds` is the live
+        // set (the delete branch removes from it), so it cannot answer "did this
+        // node exist before the transaction?" — and without that, a node added
+        // then deleted emitted a __deleteNode for a node the real document never
+        // had. This set makes the documented net-no-op skip actually fire.
+        const everAdded = new Set<string>();
         const propertyEdits = new Map<string, Record<string, any>>();
 
         for (const action of this.componentActions) {
@@ -89,6 +95,7 @@ export class TransactionAction extends Action {
             for (const [nodeId, deltas] of result.propertyDeltas) {
                 if (deltas.__addNode) {
                     addedIds.add(nodeId);
+                    everAdded.add(nodeId);
                     deletedIds.delete(nodeId);
                 } else if (deltas.__deleteNode) {
                     deletedIds.add(nodeId);
@@ -121,7 +128,7 @@ export class TransactionAction extends Action {
         // Pre-existing nodes that were deleted (a node added then deleted in the
         // same transaction is a net no-op and is skipped).
         for (const id of deletedIds) {
-            if (addedIds.has(id)) continue;
+            if (everAdded.has(id)) continue; // created and destroyed within the transaction
             finalDeltas.set(id, { __deleteNode: true });
         }
 

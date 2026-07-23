@@ -1,6 +1,6 @@
 # Testing Strategy
 
-> 🔒 Frozen for Milestone 0 · v0.0.5. Suite: `src/core/tests/document.test.ts` (89 tests).
+> 🔒 Frozen for Milestone 0 · v0.0.5. Suite: `src/core/tests/document.test.ts` (97 tests).
 
 ## Philosophy
 
@@ -15,7 +15,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 89 tests
+npm test                                   # jest (ts-jest), 97 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run check                              # typecheck + test + build (the gate)
@@ -25,7 +25,7 @@ npm run check                              # typecheck + test + build (the gate)
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (89 tests)
+## What is covered (97 tests)
 
 | Area | Representative cases |
 |------|----------------------|
