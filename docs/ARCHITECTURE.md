@@ -67,11 +67,11 @@ Everything in the engine — now and in every future milestone — rests on thes
 2. `dispatchAction`: `validate()` → `execute()` (returns `MutationResult`) →
    `applyMutationsToDocument` (the mutation) → `historyManager.commitRevision` (snapshot)
    → `notify` (listeners).
-3. `validate()`, `execute()` and listener callbacks never throw out of dispatch — an
-   invalid/failed action returns `{ success: false }`, and a listener that throws is
-   isolated and logged. *(Known boundary: the apply/commit stage — `applyMutations`,
-   `serialize`, `commitRevision` — is not individually guarded; a throw there would
-   escape after the document was already mutated. See §6.)*
+3. **Dispatch never throws — no boundary.** Every stage is guarded: `validate()` and
+   `execute()` share a try/catch, listener callbacks are isolated, and the
+   apply/commit stage (`applyMutations` → `serialize` → `commitRevision`) is wrapped
+   with a **rollback to the last committed revision**, so a throw there cannot leave
+   the live document ahead of history. Failures are always `{ success: false }`.
 4. React's `onChange` subscriber bumps a render tick; the effect calls `renderSVG`.
    (Ephemeral editor-state changes bump the same tick via `refresh()` directly.)
 

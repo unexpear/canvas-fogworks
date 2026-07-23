@@ -51,7 +51,8 @@
 ## Numbers & geometry
 
 - `width`/`height` are strictly `> 0`; `opacity ∈ [0,1]`; `radius ≥ 0`.
-- Clamp the viewport (`clampViewport`: zoom `[0.05, 20]`, pan `±10000`); guard against
+- Clamp the viewport (`clampViewport`: zoom `[0.05, 20]`; pan `±10000` **world** units,
+  scaled by zoom so content stays reachable); guard against
   divide-by-zero on `zoom` (`Math.max(0.01, zoom)`).
 - Guard rendering against non-finite geometry before emitting SVG attributes.
 
