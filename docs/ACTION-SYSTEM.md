@@ -11,9 +11,10 @@ and it is what makes undo/redo, and later AI, plugins, and collaboration, safe.
 
 ```ts
 abstract class Action {
-  protected document: ProjectDocument;
-  constructor(document: ProjectDocument);
-  rebind(document: ProjectDocument): void;   // retarget (used by transactions)
+  protected document: ReadonlyDocument;      // an Action only READS its document
+  constructor(document: ReadonlyDocument);
+  rebind(document: ReadonlyDocument): void;  // retarget (transactions; and the
+                                             // dispatcher, before validate)
   abstract validate(): boolean;              // may this run against `document`?
   abstract execute(): MutationResult;         // compute deltas — DO NOT mutate
   abstract serialize(): ActionPayload;        // for the history payload
@@ -31,13 +32,13 @@ abstract class Action {
 ### Command catalogue
 | Action | Effect (delta) |
 |--------|----------------|
-| `AddNodeAction` | `__addNode` (a full `Node`) |
-| `DeleteNodeAction` | `__deleteNode` for the node **and every descendant** (cycle-safe) |
-| `MoveNodeAction` | `geometry: { x, y }` |
-| `ResizeNodeAction` | `geometry: { width, height }` |
-| `UpdateNodeGeometryAction` | `geometry: {…partial…}` |
-| `UpdateNodeStyleAction` | `style: {…partial…}` |
-| `ReparentNodeAction` | `__reparent: { parent, index? }` — moves a node in the tree |
+| `AddNodeAction` | `{ kind: "add", node }` |
+| `DeleteNodeAction` | `{ kind: "delete" }` for the node **and every descendant** (cycle-safe) |
+| `MoveNodeAction` | `{ kind: "patch", geometry: { x, y } }` |
+| `ResizeNodeAction` | `{ kind: "patch", geometry: { width, height } }` |
+| `UpdateNodeGeometryAction` | `{ kind: "patch", geometry: {…partial…} }` |
+| `UpdateNodeStyleAction` | `{ kind: "patch", style: {…partial…} }` |
+| `ReparentNodeAction` | `{ kind: "patch", reparent: { parent, index? } }` |
 | `TransactionAction` | merges multiple actions into one atomic result + one revision |
 
 ## 2. MutationResult & the delta protocol
@@ -45,16 +46,14 @@ abstract class Action {
 ```ts
 interface MutationResult {
   updatedNodeIds: Set<string>;
-  propertyDeltas: Map<string, Record<string, any>>; // nodeId → delta
+  propertyDeltas: Map<string, NodeDelta>;           // nodeId → delta
   success: boolean;
   fullReload?: boolean;   // set on undo/redo/load: reload from getDocument()
 }
 ```
 
-A **delta** (the `Record` per node) is interpreted by `applyMutationsToDocument`
-(`applyMutations.ts`) — the single mutation site — as follows:
-
-A delta is a **discriminated union** (`NodeDelta`), not a bag of magic keys — the
+Deltas are interpreted by `applyMutationsToDocument` (`applyMutations.ts`) — the single
+mutation site. A delta is a **discriminated union** (`NodeDelta`), not a bag of magic keys — the
 terminal/composable rule below is enforced by the type system, so a malformed delta
 is a compile error rather than a silently-dropped edit:
 
@@ -98,13 +97,16 @@ validate → execute → apply → commit → notify
 ```
 
 1. Guard: not an `Action` → `{ success: false }`.
-2. `validate()` false → `{ success: false }`.
-3. `execute()` throwing → caught → `{ success: false }`.
+2. **Rebind** the action to the current document, so the gate and the mutation always
+   target the same document (a stale action then fails closed instead of half-applying).
+3. `validate()` false, or `validate()`/`execute()` throwing → `{ success: false }`.
 4. `execute()` returns `{ success: false }` → returned as-is (no apply/commit).
-5. Otherwise: `applyMutationsToDocument` → `historyManager.commitRevision` → `notify`.
+5. Otherwise: `applyMutationsToDocument` → `commitRevision` → `notify`. If that stage
+   throws, the document is **rolled back** to the last committed revision.
 
-**The dispatcher never throws out of dispatch.** Failures are values, not exceptions —
-callers (e.g. React event handlers) can't be crashed by a bad edit.
+**The dispatcher never throws out of dispatch — no boundary.** Every stage is guarded,
+so failures are values, not exceptions; a React event handler cannot be crashed by a
+bad edit, and the live document can never end up ahead of history.
 
 **Listener isolation:** `notify` wraps each `onChange` listener in try/catch, so one
 throwing subscriber neither skips the others nor propagates after the mutation committed.
