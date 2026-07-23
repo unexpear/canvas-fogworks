@@ -3,15 +3,43 @@
  * @description Shared types used across all Actions and History tracking.
  */
 
-import { Node } from "../document/Node";
+import { Node, Geometry, Style, Layout } from "../document/Node";
 import { ProjectDocument, SerializedMetadata } from "../document/Document";
+
+/**
+ * What one action wants done to one node.
+ *
+ * The union encodes the terminal/composable rule that used to live only in prose:
+ *  - `add` and `delete` are TERMINAL — they fully describe the node's fate, and the
+ *    type makes it impossible to attach property edits to them.
+ *  - `patch` is COMPOSABLE — an optional reparent plus optional property patches,
+ *    applied together. "Drop into a frame and reposition" is one `patch`.
+ *
+ * Replacing the old `Record<string, any>` with magic `__addNode`/`__deleteNode`/
+ * `__reparent` keys means a malformed delta is now a compile error rather than a
+ * silently-dropped edit.
+ */
+export type NodeDelta =
+    | { kind: "add"; node: Node }
+    | { kind: "delete" }
+    | {
+        kind: "patch";
+        /** Move within the tree. Applied before the property patches below. */
+        reparent?: { parent: string | null; index?: number };
+        geometry?: Partial<Geometry>;
+        style?: Partial<Style>;
+        layout?: Partial<Layout>;
+        text?: string;
+        src?: string;
+        name?: string;
+    };
 
 /** The result of an action execution. Communicates changes without coupling services. */
 export interface MutationResult {
     /** Node IDs that were programmatically altered by this transaction. */
     updatedNodeIds: Set<string>;
-    /** UUID -> Delta object detailing exactly what changed (e.g., { x: 150, y: 20 }). */
-    propertyDeltas: Map<string, Record<string, any>>;
+    /** Node id → the change requested for that node. */
+    propertyDeltas: Map<string, NodeDelta>;
     success: boolean;
     /**
      * Set on undo/redo notifications: the whole document was replaced, so

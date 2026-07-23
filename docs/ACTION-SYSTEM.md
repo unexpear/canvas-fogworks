@@ -54,26 +54,40 @@ interface MutationResult {
 A **delta** (the `Record` per node) is interpreted by `applyMutationsToDocument`
 (`applyMutations.ts`) — the single mutation site — as follows:
 
-| Delta key | Meaning | Applied as |
-|-----------|---------|-----------|
-| `__addNode: Node` | create a node | `nodes.set`; if it has a `parent`, push to `parent.children`, else push to `rootNodeUuids` |
-| `__deleteNode: true` | remove a node | detach from `parent.children`, `nodes.delete`, drop from `rootNodeUuids` |
-| `__reparent: { parent, index? }` | move within the tree | detach from current parent/root, insert into the new parent's `children` (or `rootNodeUuids`) at `index` (appended if omitted), update `node.parent` |
-| `geometry: {…}` | patch geometry | `Object.assign(node.geometry, …)` |
-| `style: {…}` | patch style | `Object.assign(node.style, …)` |
-| `layout: {…}` | patch layout | `Object.assign(node.layout, …)` |
-| `text` / `src` / `name` | scalar set | assigned when not `undefined` |
+A delta is a **discriminated union** (`NodeDelta`), not a bag of magic keys — the
+terminal/composable rule below is enforced by the type system, so a malformed delta
+is a compile error rather than a silently-dropped edit:
 
-**Terminal vs. composable structural keys.** `__addNode` and `__deleteNode` are
-*terminal*: they fully describe the node's fate, and mixing property keys with them in
-one delta is meaningless — don't. `__reparent` is structural but **composable**: it is
-applied and then execution falls through to the property assignments, so
-`{ __reparent, geometry }` is legal and lands both (a transaction that drops a node into
-a frame and repositions it emits exactly that).
+```ts
+type NodeDelta =
+  | { kind: "add";    node: Node }
+  | { kind: "delete" }
+  | { kind: "patch";  reparent?: { parent: string | null; index?: number };
+                      geometry?: Partial<Geometry>; style?: Partial<Style>;
+                      layout?: Partial<Layout>;
+                      text?: string; src?: string; name?: string };
+```
 
-`__reparent` also detaches from the **destination** before inserting, so re-parenting a
-node that the destination already lists (e.g. an `__addNode` that baked the child into
-its new parent's `children`) cannot duplicate the entry.
+| Variant | Meaning | Applied as |
+|---------|---------|-----------|
+| `add` | create a node | `nodes.set`; if it has a resolvable `parent`, push to `parent.children`, else land it at the root |
+| `delete` | remove a node | detach from `parent.children`, `nodes.delete`, drop from `rootNodeUuids` |
+| `patch.reparent` | move within the tree | resolve the destination first, detach from **both** the source and the destination, then insert at `index` (appended if omitted) |
+| `patch.geometry` / `.style` / `.layout` | patch | `Object.assign(node.<field>, …)` |
+| `patch.text` / `.src` / `.name` | scalar set | assigned when not `undefined` |
+
+`applyMutationsToDocument` switches exhaustively on `kind`; adding a variant without
+handling it fails to compile.
+
+**Terminal vs. composable — now enforced by the type.** `add` and `delete` are
+*terminal*: they fully describe the node's fate, and the union makes it impossible to
+attach property edits to them. `reparent` lives **inside** `patch`, so it composes:
+`{ kind: "patch", reparent, geometry }` is one delta that lands both (a transaction
+that drops a node into a frame and repositions it emits exactly that).
+
+`reparent` detaches from the **destination** before inserting, so re-parenting a node
+the destination already lists (e.g. an `add` that baked the child into its new parent's
+`children`) cannot duplicate the entry.
 
 ## 3. Dispatch lifecycle
 

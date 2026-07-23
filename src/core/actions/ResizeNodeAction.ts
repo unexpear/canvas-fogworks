@@ -32,7 +32,7 @@ export class ResizeNodeAction extends Action {
 
         return {
             updatedNodeIds: new Set([this.nodeId]),
-            propertyDeltas: new Map([[this.nodeId, { geometry: { width: this.newWidth, height: this.newHeight } }]]),
+            propertyDeltas: new Map([[this.nodeId, { kind: "patch", geometry: { width: this.newWidth, height: this.newHeight } } as const]]),
             success: true
         };
     }

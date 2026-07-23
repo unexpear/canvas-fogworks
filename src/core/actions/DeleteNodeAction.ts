@@ -5,7 +5,7 @@
 
 import { Action } from "./Action";
 import { ProjectDocument } from "../document/Document";
-import { MutationResult, ActionPayload } from "./types";
+import { MutationResult, ActionPayload, NodeDelta } from "./types";
 
 export class DeleteNodeAction extends Action {
     private nodeId: string;
@@ -44,9 +44,9 @@ export class DeleteNodeAction extends Action {
 
         this.deletedNodeIds = [this.nodeId, ...this.collectDescendants(this.nodeId)];
 
-        const deltas = new Map<string, Record<string, any>>();
+        const deltas = new Map<string, NodeDelta>();
         for (const id of this.deletedNodeIds) {
-            deltas.set(id, { __deleteNode: true });
+            deltas.set(id, { kind: "delete" });
         }
 
         return {

@@ -1,108 +1,113 @@
 /**
  * @module applyMutations
- * @description Single source of truth for turning a MutationResult's property
- * deltas into concrete changes on a ProjectDocument. Shared by ActionDispatcher
- * (applies to the live document) and TransactionAction (applies to a working
- * copy so later component actions observe earlier ones).
+ * @description Single source of truth for turning a MutationResult's node deltas
+ * into concrete changes on a ProjectDocument. Shared by ActionDispatcher (applies
+ * to the live document) and TransactionAction (applies to a working copy so later
+ * component actions observe earlier ones).
+ *
+ * This is the ONLY function in the codebase that mutates a live document.
  */
 
 import { ProjectDocument } from "../document/Document";
 import { Node } from "../document/Node";
+import { NodeDelta } from "./types";
+
+/** Detach a node from wherever it currently sits (its parent, or the root list). */
+function detach(doc: ProjectDocument, node: Node, nodeId: string): void {
+    if (node.parent) {
+        const oldParent = doc.nodes.get(node.parent);
+        if (oldParent) {
+            oldParent.children = oldParent.children.filter(id => id !== nodeId);
+        }
+    } else {
+        doc.rootNodeUuids = doc.rootNodeUuids.filter(id => id !== nodeId);
+    }
+}
 
 export function applyMutationsToDocument(
     doc: ProjectDocument,
-    propertyDeltas: Map<string, Record<string, any>>
+    propertyDeltas: Map<string, NodeDelta>
 ): void {
-    propertyDeltas.forEach((deltas, nodeId) => {
-        if (deltas.__addNode) {
-            const node = deltas.__addNode as Node;
-            doc.nodes.set(nodeId, node);
-            // Maintain tree linkage: a node with a parent joins that parent's
-            // children; only true roots go into rootNodeUuids.
-            const parent = node.parent ? doc.nodes.get(node.parent) : null;
-            if (parent) {
-                if (!parent.children.includes(nodeId)) parent.children.push(nodeId);
-            } else {
-                // No parent, or a parent that does not resolve: land it at the root
-                // rather than leaving it unreachable from any root (which would fail
-                // integrity validation on the next save/load round-trip).
-                node.parent = null;
-                if (!doc.rootNodeUuids.includes(nodeId)) doc.rootNodeUuids.push(nodeId);
-            }
-            return;
-        }
-
-        if (deltas.__deleteNode) {
-            const node = doc.nodes.get(nodeId);
-            if (node && node.parent) {
-                const parent = doc.nodes.get(node.parent);
+    propertyDeltas.forEach((delta, nodeId) => {
+        switch (delta.kind) {
+            case "add": {
+                const node = delta.node;
+                doc.nodes.set(nodeId, node);
+                const parent = node.parent ? doc.nodes.get(node.parent) : null;
                 if (parent) {
-                    parent.children = parent.children.filter(id => id !== nodeId);
+                    if (!parent.children.includes(nodeId)) parent.children.push(nodeId);
+                } else {
+                    // No parent, or one that does not resolve: land it at the root
+                    // rather than leaving it unreachable (which would fail integrity
+                    // validation on the next save/load round-trip).
+                    node.parent = null;
+                    if (!doc.rootNodeUuids.includes(nodeId)) doc.rootNodeUuids.push(nodeId);
                 }
+                return;
             }
-            doc.nodes.delete(nodeId);
-            doc.rootNodeUuids = doc.rootNodeUuids.filter(id => id !== nodeId);
-            return;
-        }
 
-        const node = doc.nodes.get(nodeId);
-        if (!node) return;
+            case "delete": {
+                const node = doc.nodes.get(nodeId);
+                if (node) detach(doc, node, nodeId);
+                doc.nodes.delete(nodeId);
+                doc.rootNodeUuids = doc.rootNodeUuids.filter(id => id !== nodeId);
+                return;
+            }
 
-        // NOTE: __reparent is structural but NOT terminal — it falls through to the
-        // property assignments below, so "reparent and move" in one delta lands both.
-        if (deltas.__reparent) {
-            const { parent: newParentId, index } = deltas.__reparent as {
-                parent: string | null;
-                index?: number;
-            };
+            case "patch": {
+                const node = doc.nodes.get(nodeId);
+                if (!node) return;
 
-            // Resolve the destination FIRST. If it cannot be resolved, leave the
-            // node exactly where it is — detaching without re-attaching would
-            // produce a node that is in `nodes` but in no parent and no root.
-            const newParent = newParentId != null ? doc.nodes.get(newParentId) : null;
-            if (newParentId != null && !newParent) return;
+                if (delta.reparent) {
+                    const { parent: newParentId, index } = delta.reparent;
 
-            // Detach from the current location.
-            if (node.parent) {
-                const oldParent = doc.nodes.get(node.parent);
-                if (oldParent) {
-                    oldParent.children = oldParent.children.filter(id => id !== nodeId);
+                    // Resolve the destination FIRST. Detaching without being able to
+                    // re-attach would leave the node in `nodes` but in no parent and
+                    // no root.
+                    const newParent = newParentId != null ? doc.nodes.get(newParentId) : null;
+                    if (newParentId != null && !newParent) return;
+
+                    detach(doc, node, nodeId);
+
+                    // Detach from the DESTINATION too: the node may already be listed
+                    // there (e.g. an `add` that baked the child into its new parent's
+                    // children), and re-inserting would duplicate the entry.
+                    if (newParent) {
+                        newParent.children = newParent.children.filter(id => id !== nodeId);
+                    } else {
+                        doc.rootNodeUuids = doc.rootNodeUuids.filter(id => id !== nodeId);
+                    }
+
+                    if (newParent) {
+                        const at = typeof index === "number"
+                            ? Math.max(0, Math.min(index, newParent.children.length))
+                            : newParent.children.length;
+                        newParent.children.splice(at, 0, nodeId);
+                        node.parent = newParentId;
+                    } else {
+                        const at = typeof index === "number"
+                            ? Math.max(0, Math.min(index, doc.rootNodeUuids.length))
+                            : doc.rootNodeUuids.length;
+                        doc.rootNodeUuids.splice(at, 0, nodeId);
+                        node.parent = null;
+                    }
                 }
-            } else {
-                doc.rootNodeUuids = doc.rootNodeUuids.filter(id => id !== nodeId);
+
+                if (delta.geometry) Object.assign(node.geometry, delta.geometry);
+                if (delta.style) Object.assign(node.style, delta.style);
+                if (delta.layout) Object.assign(node.layout, delta.layout);
+                if (delta.text !== undefined) node.text = delta.text;
+                if (delta.src !== undefined) node.src = delta.src;
+                if (delta.name !== undefined) node.name = delta.name;
+                return;
             }
 
-            // Detach from the DESTINATION too. The node may already be listed there
-            // (e.g. a transaction whose __addNode baked the child into the new
-            // parent's `children`); re-inserting without this duplicates the entry
-            // and produces a document that fails integrity validation on reload.
-            if (newParent) {
-                newParent.children = newParent.children.filter(id => id !== nodeId);
-            } else {
-                doc.rootNodeUuids = doc.rootNodeUuids.filter(id => id !== nodeId);
-            }
-
-            // Attach at the requested position (append when unspecified).
-            if (newParent) {
-                const at = typeof index === "number"
-                    ? Math.max(0, Math.min(index, newParent.children.length))
-                    : newParent.children.length;
-                newParent.children.splice(at, 0, nodeId);
-                node.parent = newParentId;
-            } else {
-                const at = typeof index === "number"
-                    ? Math.max(0, Math.min(index, doc.rootNodeUuids.length))
-                    : doc.rootNodeUuids.length;
-                doc.rootNodeUuids.splice(at, 0, nodeId);
-                node.parent = null;
+            default: {
+                // Exhaustiveness: adding a NodeDelta variant without handling it here
+                // is now a compile error.
+                const never: never = delta;
+                throw new Error(`Unhandled node delta: ${JSON.stringify(never)}`);
             }
         }
-
-        if (deltas.geometry) Object.assign(node.geometry, deltas.geometry);
-        if (deltas.style) Object.assign(node.style, deltas.style);
-        if (deltas.layout) Object.assign(node.layout, deltas.layout);
-        if (deltas.text !== undefined) node.text = deltas.text;
-        if (deltas.src !== undefined) node.src = deltas.src;
-        if (deltas.name !== undefined) node.name = deltas.name;
     });
 }

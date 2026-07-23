@@ -80,7 +80,7 @@ export class AddNodeAction extends Action {
 
         return {
             updatedNodeIds: new Set([this.createdNodeId]),
-            propertyDeltas: new Map([[this.createdNodeId, { __addNode: node }]]),
+            propertyDeltas: new Map([[this.createdNodeId, { kind: "add", node } as const]]),
             success: true
         };
     }

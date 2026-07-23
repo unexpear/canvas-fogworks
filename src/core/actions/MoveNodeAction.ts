@@ -31,7 +31,7 @@ export class MoveNodeAction extends Action {
 
         return {
             updatedNodeIds: new Set([this.nodeId]),
-            propertyDeltas: new Map([[this.nodeId, { geometry: { x: this.newX, y: this.newY } }]]),
+            propertyDeltas: new Map([[this.nodeId, { kind: "patch", geometry: { x: this.newX, y: this.newY } } as const]]),
             success: true
         };
     }

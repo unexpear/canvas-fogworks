@@ -9,7 +9,7 @@
 import { Action } from "./Action";
 import { ProjectDocument } from "../document/Document";
 import { Node } from "../document/Node";
-import { MutationResult, ActionPayload } from "./types";
+import { MutationResult, ActionPayload, NodeDelta } from "./types";
 import { applyMutationsToDocument } from "./applyMutations";
 
 /** Deep, independent copy of a document for in-transaction simulation. */
@@ -25,18 +25,23 @@ function cloneWorkingDocument(doc: ProjectDocument): ProjectDocument {
     };
 }
 
-/** Merge property deltas (geometry/style/layout/…) for the same pre-existing node. */
-function mergePropertyDeltas(target: Record<string, any>, source: Record<string, any>): Record<string, any> {
-    const result = { ...target };
-    for (const [key, value] of Object.entries(source)) {
-        if (typeof value === "object" && value !== null && !Array.isArray(value) &&
-            typeof result[key] === "object" && result[key] !== null && !Array.isArray(result[key])) {
-            result[key] = mergePropertyDeltas(result[key], value);
-        } else {
-            result[key] = value;
-        }
-    }
-    return result;
+type PatchDelta = Extract<NodeDelta, { kind: "patch" }>;
+
+/** Merge two patches for the same node; the later one wins field by field. */
+function mergePatch(target: PatchDelta, source: PatchDelta): PatchDelta {
+    return {
+        kind: "patch",
+        reparent: source.reparent ?? target.reparent,
+        geometry: (source.geometry || target.geometry)
+            ? { ...target.geometry, ...source.geometry } : undefined,
+        style: (source.style || target.style)
+            ? { ...target.style, ...source.style } : undefined,
+        layout: (source.layout || target.layout)
+            ? { ...target.layout, ...source.layout } : undefined,
+        text: source.text ?? target.text,
+        src: source.src ?? target.src,
+        name: source.name ?? target.name
+    };
 }
 
 export class TransactionAction extends Action {
@@ -76,7 +81,7 @@ export class TransactionAction extends Action {
         // then deleted emitted a __deleteNode for a node the real document never
         // had. This set makes the documented net-no-op skip actually fire.
         const everAdded = new Set<string>();
-        const propertyEdits = new Map<string, Record<string, any>>();
+        const propertyEdits = new Map<string, PatchDelta>();
 
         for (const action of this.componentActions) {
             action.rebind(working);
@@ -92,18 +97,18 @@ export class TransactionAction extends Action {
                 );
             }
 
-            for (const [nodeId, deltas] of result.propertyDeltas) {
-                if (deltas.__addNode) {
+            for (const [nodeId, delta] of result.propertyDeltas) {
+                if (delta.kind === "add") {
                     addedIds.add(nodeId);
                     everAdded.add(nodeId);
                     deletedIds.delete(nodeId);
-                } else if (deltas.__deleteNode) {
+                } else if (delta.kind === "delete") {
                     deletedIds.add(nodeId);
                     addedIds.delete(nodeId);
                     propertyEdits.delete(nodeId);
                 } else {
-                    const prev = propertyEdits.get(nodeId) ?? {};
-                    propertyEdits.set(nodeId, mergePropertyDeltas(prev, deltas));
+                    const prev = propertyEdits.get(nodeId) ?? { kind: "patch" as const };
+                    propertyEdits.set(nodeId, mergePatch(prev, delta));
                 }
             }
 
@@ -111,14 +116,14 @@ export class TransactionAction extends Action {
         }
 
         // Collapse the simulated result into one net delta per node.
-        const finalDeltas = new Map<string, Record<string, any>>();
+        const finalDeltas = new Map<string, NodeDelta>();
 
         // Nodes created (and not later deleted) in this transaction: emit a
         // single __addNode carrying their final simulated state, so any edits
         // applied afterward are already baked in.
         for (const id of addedIds) {
             const node = working.nodes.get(id);
-            if (node) finalDeltas.set(id, { __addNode: node });
+            if (node) finalDeltas.set(id, { kind: "add", node });
         }
         // Pre-existing nodes that were only edited.
         for (const [id, deltas] of propertyEdits) {
@@ -129,7 +134,7 @@ export class TransactionAction extends Action {
         // same transaction is a net no-op and is skipped).
         for (const id of deletedIds) {
             if (everAdded.has(id)) continue; // created and destroyed within the transaction
-            finalDeltas.set(id, { __deleteNode: true });
+            finalDeltas.set(id, { kind: "delete" });
         }
 
         return {

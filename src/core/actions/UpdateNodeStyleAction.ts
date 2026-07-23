@@ -43,7 +43,7 @@ export class UpdateNodeStyleAction extends Action {
         }
         return {
             updatedNodeIds: new Set([this.nodeId]),
-            propertyDeltas: new Map([[this.nodeId, { style: this.newStyle }]]),
+            propertyDeltas: new Map([[this.nodeId, { kind: "patch", style: this.newStyle } as const]]),
             success: true
         };
     }

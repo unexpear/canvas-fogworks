@@ -74,7 +74,7 @@ export class ReparentNodeAction extends Action {
             updatedNodeIds: new Set([this.nodeId]),
             propertyDeltas: new Map([[
                 this.nodeId,
-                { __reparent: { parent: this.newParentId, index: this.index } }
+                { kind: "patch", reparent: { parent: this.newParentId, index: this.index } } as const
             ]]),
             success: true
         };

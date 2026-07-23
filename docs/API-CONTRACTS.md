@@ -33,13 +33,13 @@ function compareDocuments(a: ProjectDocument, b: ProjectDocument): boolean;
 const Serializer: {
   loadResult(): LoadResult;                  // "empty" | "loaded" | "corrupt"
   load(): ProjectDocument | null;            // back-compat convenience
-  save(doc: ProjectDocument): void;
+  save(doc: ProjectDocument): SaveResult;   // { status: "saved" } | { status: "failed", error }
 };
 ```
 
 Types: `ProjectDocument`, `DocumentMetadata`, `SerializedMetadata`, `VariableStore`,
 `Node`, `NodeType`, `Geometry`, `Style`, `Layout`, `StateDefinition`, `SerializedDocument`,
-`LoadResult`. See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
+`LoadResult`, `SaveResult`, `NODE_TYPES`/`isNodeType`. See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
 
 ## Actions (`core/actions/`)
 
@@ -64,17 +64,28 @@ new UpdateNodeStyleAction(doc, nodeId: string, style: Partial<Style>);
 new TransactionAction(doc, label: string, actions: Action[]);
 
 // applyMutations.ts — the single mutation site
-function applyMutationsToDocument(doc: ProjectDocument, propertyDeltas: Map<string, Record<string, any>>): void;
+function applyMutationsToDocument(doc: ProjectDocument, propertyDeltas: Map<string, NodeDelta>): void;
 ```
 
-Types: `MutationResult`, `ActionPayload`, `Revision`, `DocumentSnapshot`.
+Types: `MutationResult`, `NodeDelta`, `ActionPayload`, `Revision`, `DocumentSnapshot`.
+
+```ts
+// The delta protocol is a discriminated union — terminal vs composable is enforced
+// by the type, not by prose. See ACTION-SYSTEM.md.
+type NodeDelta =
+  | { kind: "add"; node: Node }
+  | { kind: "delete" }
+  | { kind: "patch"; reparent?: { parent: string | null; index?: number };
+      geometry?: Partial<Geometry>; style?: Partial<Style>; layout?: Partial<Layout>;
+      text?: string; src?: string; name?: string };
+```
 
 ## Dispatcher & History (`core/actions/`)
 
 ```ts
 class ActionDispatcher {
   constructor(initialDoc: ProjectDocument);
-  dispatchAction(action: Action): MutationResult;      // never throws
+  dispatchAction(action: Action, options?: { coalesce?: boolean }): MutationResult; // never throws
   onChange(listener: (r: MutationResult) => void): () => void;  // returns unsubscribe
   undo(): ProjectDocument | null;
   redo(): ProjectDocument | null;
@@ -86,7 +97,8 @@ class ActionDispatcher {
 
 class HistoryManager {
   constructor(initialDoc: ProjectDocument);
-  commitRevision(payload: ActionPayload, documentState: ProjectDocument): void;
+  commitRevision(payload: ActionPayload, documentState: ProjectDocument, allowCoalesce?: boolean): void;
+  current(): ProjectDocument | null;   // cursor position, used to roll back a failed apply
   undo(): ProjectDocument | null;   // deep-cloned snapshot
   redo(): ProjectDocument | null;   // deep-cloned snapshot
   canUndo(): boolean;
@@ -111,7 +123,7 @@ interface EditorState {
   viewport: { x: number; y: number; zoom: number };
 }
 function createEditorState(): EditorState;
-function clampViewport(vp): void;            // zoom ∈ [0.05, 20], pan ∈ ±10000
+function clampViewport(vp): void;            // zoom ∈ [0.05, 20]; pan ±10000 WORLD units (scaled by zoom)
 
 interface Tool {                             // all methods optional
   onMouseDown?(e: MouseEvent, canvasRect?: DOMRect): void;

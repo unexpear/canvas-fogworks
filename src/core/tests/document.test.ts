@@ -1113,6 +1113,25 @@ describe("Rule-audit follow-ups", () => {
         spy.mockRestore();
     });
 
+    test("actions emit typed deltas (add / delete / patch)", () => {
+        const doc = createDocWithParentChild();
+        const add = new AddNodeAction(doc, "core.rectangle", 0, 0, 10, 10, "#fff", "z");
+        add.execute();
+        expect(add.execute().propertyDeltas.get(add.getCreatedNodeId()!)!.kind).toBe("add");
+
+        const del = new DeleteNodeAction(doc, "child-001");
+        expect(del.execute().propertyDeltas.get("child-001")!.kind).toBe("delete");
+
+        const move = new MoveNodeAction(doc, "child-001", 1, 2);
+        const patch = move.execute().propertyDeltas.get("child-001")!;
+        expect(patch.kind).toBe("patch");
+        expect(patch.kind === "patch" && patch.geometry).toEqual({ x: 1, y: 2 });
+
+        const rep = new ReparentNodeAction(doc, "child-001", null);
+        const rp = rep.execute().propertyDeltas.get("child-001")!;
+        expect(rp.kind === "patch" && rp.reparent).toEqual({ parent: null, index: undefined });
+    });
+
     test("viewport pan limit scales with zoom so content stays reachable", () => {
         const vp = { x: 9000, y: 0, zoom: 20 };
         clampViewport(vp);
