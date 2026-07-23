@@ -1,5 +1,7 @@
 # API Contracts
 
+<!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer/SVGRenderer.ts, src/electron/preload.js, scripts/build.js -->
+
 > 🔒 Frozen for Milestone 0 · v0.0.5. The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 

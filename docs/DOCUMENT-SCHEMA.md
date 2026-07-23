@@ -1,5 +1,7 @@
 # Document Schema
 
+<!-- describes: src/core/document -->
+
 > 🔒 Frozen for Milestone 0 · v0.0.5. Types are in `src/core/document/`.
 
 ## ProjectDocument
@@ -8,7 +10,7 @@ The complete, authoritative state of a project (`Document.ts`).
 
 ```ts
 interface ProjectDocument {
-  version: string;                 // schema version, = CURRENT_VERSION on new docs
+  version: string;                 // = SCHEMA_VERSION on new docs (NEVER the app version)
   metadata: DocumentMetadata;
   nodes: Map<string, Node>;        // UUID → Node, O(1) lookup
   rootNodeUuids: string[];         // top-level nodes, in order
@@ -24,7 +26,7 @@ interface DocumentMetadata {       // runtime shape (date is a live Date)
 
 - `nodes` is the flat repository of **all** nodes (roots and descendants alike).
 - The tree is expressed by `rootNodeUuids` + each node's `parent`/`children`, not by nesting.
-- `CURRENT_VERSION = "0.0.5"`. `createEmptyDocument()` returns a valid empty document
+- New documents are stamped `SCHEMA_VERSION`. `createEmptyDocument()` returns a valid empty document
   (`"Untitled Prototype"`, `created_by: "system"`, empty maps/arrays).
 
 ## Node
@@ -32,7 +34,9 @@ interface DocumentMetadata {       // runtime shape (date is a live Date)
 Every object in `nodes` (`Node.ts`). **Nodes are never mutated directly — only via Actions.**
 
 ```ts
-type NodeType = "core.rectangle" | "core.text" | "core.image"; // extend later
+const NODE_TYPES = ["core.rectangle", "core.text", "core.image"] as const;
+type NodeType = typeof NODE_TYPES[number];   // derived — one edit adds a type
+function isNodeType(v: unknown): v is NodeType;  // membership, checked on BOTH paths
 
 interface Node {
   id: string;                       // UUID, equals the map key
@@ -67,6 +71,13 @@ interface Layout {     // constraint intent, not absolute position (Milestone 2)
 
 interface StateDefinition { [key: string]: any; } // reserved for Milestone 7
 ```
+
+## Read-only views
+
+`Document.ts` also exports `DeepReadonly<T>` and `ReadonlyDocument`
+(`= DeepReadonly<ProjectDocument>`). `ActionDispatcher.getDocument()` returns the
+latter, so "the dispatcher is the only write path" is enforced by the compiler rather
+than by convention — see [ARCHITECTURE.md](ARCHITECTURE.md) invariant 3.
 
 ## Coordinate space (the M1 contract)
 
@@ -193,7 +204,8 @@ They are deliberately decoupled: **shipping a new build must never orphan saved
 documents.** A drift test pins `CURRENT_VERSION` to `package.json`, and another
 asserts `SCHEMA_VERSION` is *not* the app version.
 
-`migrateIfNeeded(raw)` behaviour:
+`migrateIfNeeded(raw, currentSchema = SCHEMA_VERSION)` behaviour (the schema is a
+parameter so the future-bump case is testable today):
 - version **equals** `SCHEMA_VERSION` → pass through.
 - **legacy semver** (`0.0.5` etc., written before the split) → same shape as schema 1;
   re-stamped and accepted.

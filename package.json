@@ -10,7 +10,8 @@
     "check": "npm run typecheck && npm run lint && npm test && npm run build",
     "dev": "node scripts/build.js --watch --electron",
     "dist": "node scripts/build.js && npx electron-builder",
-    "lint": "node scripts/check-module-headers.js"
+    "lint": "node scripts/check-module-headers.js",
+    "doc-drift": "node scripts/check-doc-drift.js"
   },
   "dependencies": {
     "react": "^19.2.8",

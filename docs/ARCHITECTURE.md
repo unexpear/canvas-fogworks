@@ -1,5 +1,7 @@
 # Architecture
 
+<!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry/ComputedGeometry.ts, src/renderer/SVGRenderer.ts -->
+
 > 🔒 Frozen for Milestone 0 · v0.0.5. Describes the verified current implementation.
 
 ## 1. The five invariants
@@ -17,7 +19,9 @@ Everything in the engine — now and in every future milestone — rests on thes
    the dispatcher, and exactly one function mutates it: `applyMutationsToDocument`.
 4. **History is snapshot-based.** Each committed revision is an immutable, deep-cloned
    JSON snapshot. Undo/redo restore a snapshot; they never replay actions. Restored
-   state is deep-cloned so it can never alias the history stack.
+   state is deep-cloned so it can never alias the history stack. Retention is bounded
+   by *memory* rather than a step count; at the truncation boundary undo stops rather
+   than teleporting, and `revertToOriginal()` is the explicit way back.
 5. **The renderer is completely independent.** `renderSVG` is a pure read of
    `(document, RendererState) → DOM`. It has no reference to the dispatcher and cannot
    write.

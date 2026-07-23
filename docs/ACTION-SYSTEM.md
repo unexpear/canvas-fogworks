@@ -1,5 +1,7 @@
 # Action System
 
+<!-- describes: src/core/actions -->
+
 > 🔒 Frozen for Milestone 0 · v0.0.5. Code in `src/core/actions/`.
 
 The action system is the engine's spine: it is **the only way the document changes**,

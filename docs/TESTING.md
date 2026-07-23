@@ -1,5 +1,7 @@
 # Testing Strategy
 
+<!-- describes: src/core/tests, jest.config.js, scripts/check-module-headers.js -->
+
 > 🔒 Frozen for Milestone 0 · v0.0.5. Suite: `src/core/tests/document.test.ts` (97 tests).
 
 ## Philosophy
@@ -104,6 +106,40 @@ Three tests were added to close them; the third required making the schema injec
 > `Tests: 0 total`, or a non-zero exit with no failure count, as **unverified** — never
 > as a kill. A false *survived* prompts investigation; a false *killed* is silent, and
 > is the one that leaves a guard unprotected while looking green.
+
+## Doc-staleness tripwire (`npm run doc-drift`)
+
+Each doc that describes specific code declares it in the doc itself:
+
+```html
+<!-- describes: src/core/actions, src/core/document/Serializer.ts -->
+```
+
+`scripts/check-doc-drift.js` flags a doc when any declared source has been **committed
+to since the doc was last committed to**. Clearing the flag means committing the doc —
+which is the re-read it exists to force.
+
+It cannot tell you prose is wrong; nothing can. It targets the failure that actually
+occurred: editing one section and never re-reading the rest, so drift accumulated where
+nobody was looking.
+
+**Measured on first run against real history — 3 flags, 2 true positives:**
+
+| Doc | Verdict |
+|---|---|
+| `API-CONTRACTS.md` | **true** — `migrateIfNeeded` had become a public export and was undocumented |
+| `DOCUMENT-SCHEMA.md` | **true** — still described `version` as `= CURRENT_VERSION on new docs`; it is `SCHEMA_VERSION`, plus a stale `migrateIfNeeded` signature and a hand-written `NodeType` |
+| `ARCHITECTURE.md` | **false** — its history claims were still accurate |
+
+The `DOCUMENT-SCHEMA` case is the point: `CURRENT_VERSION` still *exists*, so no
+identifier check could see it, and it is prose, so the API pin could not either. The
+freeze rule had already missed it once. The tripwire caught it only by forcing the
+re-read — which is the whole design claim.
+
+**Not in `npm run check`.** It is noisy by construction: every source commit flags its
+doc whether or not the doc is wrong, and the flag clears only on a doc commit. Adding it
+to the gate is one line in `package.json`; that is a workflow-cost decision, not a
+correctness one.
 
 ## Regression discipline
 
