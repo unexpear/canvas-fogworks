@@ -46,6 +46,30 @@ npm run check                              # typecheck + lint + test + build (th
 | **Restore dirty set** | undo reports only the changed node, not the whole document |
 | **Document integrity (load path)** | rejects `opacity: 5`, negative size, dangling parent, ghost root, unclaimed child, parentless non-root; accepts a well-formed nested doc |
 
+## The API-surface pin
+
+`src/core/tests/apiSurface.ts` is never executed. It imports every symbol documented
+in [API-CONTRACTS.md](API-CONTRACTS.md) and asserts its shape, so `tsc` fails if a
+documented export is renamed, removed, or changes signature.
+
+It exists because API-CONTRACTS.md drifted in three places during one pass **while the
+freeze rule was in force**, and the drift was found by accident. Two mechanisms were
+measured against that drift before this one was kept:
+
+| Mechanism | Result |
+|---|---|
+| Identifier-existence checker over backticked names in docs | caught **0 of 4** — the drift was semantic (`ProjectDocument` still existed, it was just the wrong type), and 5 of 5 hits were false positives |
+| Assignability assertion (`expectType<ReadonlyDocument>(…)`) | **passed** even with `getDocument()` reverted to mutable — mutable widens to readonly |
+| Generic conditional (`expectNotMutable`) | **fails** correctly: `Argument of type 'ProjectDocument' is not assignable to parameter of type 'never'` |
+
+The lesson is in the middle row: an assertion that only checks *assignability* cannot
+detect a guarantee weakening, because weakening is exactly the direction assignability
+allows. Guarantees that must not weaken need a conditional generic over the argument's
+own type — and the check must be verified by breaking the code on purpose.
+
+**Not covered:** prose describing behaviour that has since changed. Nothing mechanical
+catches that; it needs review.
+
 ## Regression discipline
 
 When fixing a bug, add a test that **fails on the unfixed code and passes after**. Example
