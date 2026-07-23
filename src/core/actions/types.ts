@@ -76,4 +76,6 @@ export interface Revision {
     actionId: string;
     actionPayload: ActionPayload;
     document: DocumentSnapshot;
+    /** Approximate retained bytes, used for the memory-bounded history budget. */
+    sizeBytes: number;
 }

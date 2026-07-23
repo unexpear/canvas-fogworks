@@ -94,6 +94,8 @@ class ActionDispatcher {
   canRedo(): boolean;
   getDocument(): ReadonlyDocument;   // deep-readonly; mutation requires an Action
   loadDocument(doc: ProjectDocument): void;            // New/Open: replace + reset history
+  hasTruncatedHistory(): boolean;                      // undo can no longer reach the start
+  revertToOriginal(): ProjectDocument;                 // explicit way back; itself undoable
 }
 
 class HistoryManager {
@@ -105,10 +107,13 @@ class HistoryManager {
   canUndo(): boolean;
   canRedo(): boolean;
   getRevisionCount(): number;
+  hasTruncatedHistory(): boolean;
+  getOriginal(): ProjectDocument;      // pinned outside the trimmable list
   getCurrentIndex(): number;
   getCurrentActionId(): string;
 }
-// MAX_HISTORY_SIZE = 200
+// Retention is memory-bounded: DEFAULT_HISTORY_LIMITS = { maxBytes: 128MB, minEntries: 50, maxEntries: 10_000 }
+// Injectable via `new ActionDispatcher(doc, limits)` / `new HistoryManager(doc, limits)`.
 ```
 
 ## Editor (`editor/`)

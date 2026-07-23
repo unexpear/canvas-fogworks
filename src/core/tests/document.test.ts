@@ -1010,20 +1010,53 @@ describe("History coalescing and retention", () => {
         expect(dispatcher.getDocument().nodes.size).toBe(2); // one undo == one add
     });
 
-    test("the initial revision survives history overflow", () => {
+    test("history is memory-bounded, so a long session does not truncate", () => {
         const doc = createEmptyDocument();
         const dispatcher = new ActionDispatcher(doc);
 
-        // Far more discrete revisions than MAX_HISTORY_SIZE (200).
         for (let i = 0; i < 260; i++) {
             dispatcher.dispatchAction(new AddNodeAction(dispatcher.getDocument(), "core.rectangle", i, 0, 10, 10));
         }
         expect(dispatcher.getDocument().nodes.size).toBe(260);
+        expect(dispatcher.hasTruncatedHistory()).toBe(false); // well inside the byte budget
+
+        while (dispatcher.canUndo()) dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.size).toBe(0);
+    });
+
+    test("when history DOES truncate, undo stops at the boundary instead of teleporting", () => {
+        const doc = createEmptyDocument();
+        // Tiny budget forces truncation deterministically.
+        const dispatcher = new ActionDispatcher(doc, { maxBytes: 1, minEntries: 5, maxEntries: 10_000 });
+
+        for (let i = 0; i < 20; i++) {
+            dispatcher.dispatchAction(new AddNodeAction(dispatcher.getDocument(), "core.rectangle", i, 0, 10, 10));
+        }
+        expect(dispatcher.hasTruncatedHistory()).toBe(true);
 
         while (dispatcher.canUndo()) dispatcher.undo();
 
-        // The user can always get back to the true starting document.
-        expect(dispatcher.getDocument().nodes.size).toBe(0);
+        // Undo stopped at the oldest RETAINED step — it did not jump to the start.
+        const afterUndoAll = dispatcher.getDocument().nodes.size;
+        expect(afterUndoAll).toBeGreaterThan(0);
+        expect(afterUndoAll).toBeLessThan(20);
+    });
+
+    test("revertToOriginal is the explicit way back, and is itself undoable", () => {
+        const doc = createEmptyDocument();
+        const dispatcher = new ActionDispatcher(doc, { maxBytes: 1, minEntries: 5, maxEntries: 10_000 });
+
+        for (let i = 0; i < 20; i++) {
+            dispatcher.dispatchAction(new AddNodeAction(dispatcher.getDocument(), "core.rectangle", i, 0, 10, 10));
+        }
+        while (dispatcher.canUndo()) dispatcher.undo();
+        const strandedAt = dispatcher.getDocument().nodes.size;
+
+        dispatcher.revertToOriginal();
+        expect(dispatcher.getDocument().nodes.size).toBe(0); // the true starting document
+
+        dispatcher.undo(); // the revert is a normal revision, so it can be undone
+        expect(dispatcher.getDocument().nodes.size).toBe(strandedAt);
     });
 });
 

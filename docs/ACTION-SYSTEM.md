@@ -118,8 +118,17 @@ cursor. **No actions are re-executed on undo/redo** — a full snapshot is resto
 
 - `commitRevision(payload, doc)`: truncates any redo tail, deep-clones the document via
   `cloneDocument` (JSON round-trip; `Map`→object, `Date`→ISO string), pushes it, and
-  trims to `MAX_HISTORY_SIZE = 200` — **but never evicts index 0**, so "undo all the
-  way back" always reaches the true starting document.
+  trims to fit a **memory budget** (`DEFAULT_HISTORY_LIMITS`: 128 MB, floor of 50
+  entries, hard cap 10 000) rather than a fixed step count — a snapshot is a whole
+  document, so "200 steps" meant wildly different memory for different documents.
+  A normal session never truncates.
+- **At the truncation boundary, undo STOPS — it does not teleport.** Trimming drops
+  the oldest revisions, so after truncation index 0 is the oldest *retained* step, not
+  the original. Undo walks back to there and stops. The document the history began
+  from is pinned **outside** the trimmable list and reachable via
+  `revertToOriginal()`, which commits as a normal revision (so the revert is itself
+  undoable). `hasTruncatedHistory()` tells the UI when to offer it.
+
 - **Coalescing — opt-in by the CALLER, not inferred from the action type.**
   `dispatchAction(action, { coalesce: true })` lets consecutive edits to the *same node*
   within `COALESCE_WINDOW_MS = 400` replace the previous revision instead of appending,

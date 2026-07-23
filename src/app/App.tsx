@@ -43,8 +43,8 @@ export function App() {
     const [toolName, setToolName] = useState<string>("select");
     // Consolidated UI state — one setState per refresh (React batches it into a
     // single commit). `tick` drives the imperative canvas repaint effect.
-    const [ui, setUi] = useState<{ tick: number; selectedNodeId: string | null; canUndo: boolean; canRedo: boolean }>({
-        tick: 0, selectedNodeId: null, canUndo: false, canRedo: false
+    const [ui, setUi] = useState<{ tick: number; selectedNodeId: string | null; canUndo: boolean; canRedo: boolean; truncated: boolean }>({
+        tick: 0, selectedNodeId: null, canUndo: false, canRedo: false, truncated: false
     });
 
     const canvasRef = useRef<HTMLDivElement>(null);
@@ -65,7 +65,8 @@ export function App() {
             tick: prev.tick + 1,
             selectedNodeId: es.selectedNodeIds[0] ?? null,
             canUndo: dispatcher.canUndo(),
-            canRedo: dispatcher.canRedo()
+            canRedo: dispatcher.canRedo(),
+            truncated: dispatcher.hasTruncatedHistory()
         }));
     }, []);
 
@@ -219,6 +220,25 @@ export function App() {
                 <div style={{ width: 1, height: 20, background: "#2a2a4a", margin: "0 4px" }} />
                 <ToolButton icon="↩" label="Undo" disabled={!ui.canUndo} onClick={() => { dispatcher.undo(); refresh(); }} />
                 <ToolButton icon="↪" label="Redo" disabled={!ui.canRedo} onClick={() => { dispatcher.redo(); refresh(); }} />
+                {ui.truncated && (
+                    // Only shown once history actually truncated: undo now stops at the
+                    // oldest retained step, so this is the explicit way back to the start.
+                    <ToolButton
+                        icon="⟲"
+                        label="Revert to original"
+                        onClick={() => {
+                            if (window.confirm(
+                                "Some older history was discarded, so Undo cannot reach the start.\n\n" +
+                                "Revert the document to how it was when this session began? " +
+                                "(You can undo this revert.)"
+                            )) {
+                                dispatcher.revertToOriginal();
+                                es.selectedNodeIds = [];
+                                refresh();
+                            }
+                        }}
+                    />
+                )}
                 <div style={{ flex: 1 }} />
                 {startedFromCorruptSave && (
                     <span

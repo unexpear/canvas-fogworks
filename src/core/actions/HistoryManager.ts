@@ -12,6 +12,11 @@
 import { ProjectDocument, ReadonlyDocument } from "../document/Document";
 import { Node } from "../document/Node";
 import { ActionPayload, Revision, DocumentSnapshot } from "./types";
+
+/** Rough retained-bytes estimate for a snapshot (UTF-16 chars ≈ 2 bytes). */
+function approximateSize(snapshot: DocumentSnapshot): number {
+    return JSON.stringify(snapshot).length * 2;
+}
 import { generateUUID } from "../ids/UUID";
 
 /** Deep-clone a document, converting Maps to plain objects for JSON serialization. */
@@ -48,7 +53,26 @@ function hydrateDocument(raw: DocumentSnapshot): ProjectDocument {
     return doc;
 }
 
-const MAX_HISTORY_SIZE = 200;
+/**
+ * History retention is bounded by MEMORY, not by a step count, so a normal session
+ * effectively never truncates. A snapshot is a full-document clone, so a fixed step
+ * count meant "200 steps" regardless of whether that was 2 MB or 2 GB.
+ *
+ * `minEntries` is a usability floor that wins over the byte budget: on a very large
+ * document a handful of snapshots can exceed the budget on their own, and a user
+ * with two undo steps is worse than a user with elevated memory use.
+ */
+export interface HistoryLimits {
+    maxBytes: number;
+    minEntries: number;
+    maxEntries: number;
+}
+
+export const DEFAULT_HISTORY_LIMITS: HistoryLimits = {
+    maxBytes: 128 * 1024 * 1024,
+    minEntries: 50,
+    maxEntries: 10_000
+};
 
 /**
  * A run of edits to the SAME property-set of the SAME node within this window
@@ -79,6 +103,15 @@ function coalesceKey(payload: ActionPayload): string | null {
 export class HistoryManager {
     private revisions: Array<Revision>;
     private currentIndex: number;
+    private limits: HistoryLimits;
+    /**
+     * The document as it was when this history began, kept OUTSIDE `revisions` so
+     * trimming can never discard it. Undo deliberately does not walk to it (it stops
+     * at the oldest retained step); `getOriginal()` is the explicit way back.
+     */
+    private readonly originalSnapshot: DocumentSnapshot;
+    /** True once trimming has discarded steps, i.e. index 0 is no longer the original. */
+    private truncated = false;
     /**
      * Id of the revision the last commit produced. Coalescing may only merge into
      * THAT revision — any undo/redo moves the cursor and clears this, so an edit
@@ -87,13 +120,17 @@ export class HistoryManager {
      */
     private lastCommittedId: string | null = null;
 
-    constructor(initialDoc: ReadonlyDocument) {
+    constructor(initialDoc: ReadonlyDocument, limits?: HistoryLimits) {
+        this.limits = limits ?? DEFAULT_HISTORY_LIMITS;
+        const snapshot = cloneDocument(initialDoc);
+        this.originalSnapshot = snapshot;
         this.revisions = [{
             id: generateUUID(),
             timestamp: Date.now(),
             actionId: "INITIAL",
             actionPayload: { actionId: "INITIAL", payload: null, timestamp: Date.now() },
-            document: cloneDocument(initialDoc)
+            document: snapshot,
+            sizeBytes: approximateSize(snapshot)
         }];
         this.currentIndex = 0;
     }
@@ -111,12 +148,14 @@ export class HistoryManager {
         this.revisions = this.revisions.slice(0, this.currentIndex + 1);
 
         const now = Date.now();
+        const snapshot = cloneDocument(documentState);
         const revision: Revision = {
             id: generateUUID(),
             timestamp: now,
             actionId: actionPayload.actionId,
             actionPayload: actionPayload,
-            document: cloneDocument(documentState)
+            document: snapshot,
+            sizeBytes: approximateSize(snapshot)
         };
 
         // Collapse a rapid run of edits to the same node property into a single
@@ -140,14 +179,7 @@ export class HistoryManager {
         }
 
         this.revisions.push(revision);
-
-        // Trim oldest revisions if exceeding max size, but ALWAYS keep the
-        // INITIAL revision at index 0 so "undo all the way back" can still
-        // reach the document's true starting state.
-        if (this.revisions.length > MAX_HISTORY_SIZE) {
-            const excess = this.revisions.length - MAX_HISTORY_SIZE;
-            this.revisions.splice(1, excess);
-        }
+        this.trim();
 
         this.currentIndex = this.revisions.length - 1;
         this.lastCommittedId = revision.id;
@@ -169,6 +201,38 @@ export class HistoryManager {
         this.currentIndex++;
         this.lastCommittedId = null; // cursor moved — end any coalescing run
         return hydrateDocument(this.revisions[this.currentIndex].document);
+    }
+
+    /**
+     * Drop the oldest revisions until the history fits its memory budget. Trimming
+     * from the FRONT means undo stops at the oldest retained step rather than
+     * teleporting across a gap — `getOriginal()` is the explicit way back to the start.
+     */
+    private trim(): void {
+        const { maxBytes, minEntries, maxEntries } = this.limits;
+
+        while (this.revisions.length > maxEntries) {
+            this.revisions.shift();
+            this.truncated = true;
+        }
+
+        let total = this.revisions.reduce((sum, r) => sum + r.sizeBytes, 0);
+        while (total > maxBytes && this.revisions.length > minEntries) {
+            const dropped = this.revisions.shift();
+            if (!dropped) break;
+            total -= dropped.sizeBytes;
+            this.truncated = true;
+        }
+    }
+
+    /** True once trimming discarded steps — the oldest retained step is not the original. */
+    public hasTruncatedHistory(): boolean {
+        return this.truncated;
+    }
+
+    /** The document this history began from. Never trimmed; the explicit way back. */
+    public getOriginal(): ProjectDocument {
+        return hydrateDocument(this.originalSnapshot);
     }
 
     /** The document at the current cursor position (used to roll back a failed apply). */
