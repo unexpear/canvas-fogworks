@@ -4,7 +4,7 @@
  */
 
 import { createEmptyDocument, ProjectDocument, CURRENT_VERSION, SCHEMA_VERSION } from "../document/Document";
-import { serializeDocument, deserializeDocument, compareDocuments, Serializer } from "../document/Serializer";
+import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
 import { AddNodeAction } from "../actions/AddNodeAction";
@@ -16,7 +16,8 @@ import { TransactionAction } from "../actions/TransactionAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeWorldGeometry, hitTest } from "../geometry/ComputedGeometry";
-import { clampViewport } from "../../editor/EditorState";
+import { clampViewport, createEditorState } from "../../editor/EditorState";
+import { MoveTool } from "../../editor/tools/MoveTool";
 import { Node } from "../document/Node";
 
 function createDocWithRectangle(): ProjectDocument {
@@ -1169,6 +1170,66 @@ describe("Rule-audit follow-ups", () => {
         const vp = { x: 9000, y: 0, zoom: 20 };
         clampViewport(vp);
         expect(vp.x).toBe(9000); // previously clamped to 10000 screen px = world 500
+    });
+});
+
+// ─── Gaps found by mutation-testing the campaign's own guards ───
+describe("Guards the suite did not previously protect", () => {
+    // Mutation "MoveTool selectionRoots filter" SURVIVED: the existing test exercised
+    // selectionRoots + computeWorldGeometry directly, never MoveTool — so the CRITICAL
+    // double-apply bug could have been reintroduced with no test failing.
+    test("MoveTool patches only selection roots, so a parent+child drag applies once", () => {
+        const doc = createDocWithParentChild();
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        es.selectedNodeIds = ["parent-001", "child-001"]; // a parent AND its own child
+        const tool = new MoveTool(dispatcher, es, () => { });
+
+        const at = (x: number) => ({ clientX: x, clientY: 0 } as MouseEvent);
+        tool.onMouseDown(at(0));
+        tool.onMouseMove(at(50));
+
+        // Only the root of the selection may be patched.
+        expect([...(es.pendingGeometry?.keys() ?? [])]).toEqual(["parent-001"]);
+
+        tool.onMouseUp(at(50));
+
+        const live = dispatcher.getDocument();
+        expect(live.nodes.get("child-001")!.geometry.x).toBe(10);           // stored: untouched
+        expect(computeWorldGeometry(live).rects.get("child-001")!.x).toBe(60); // world: +50 once, not +100
+    });
+
+    // Mutation "coalesce anchored to last commit" SURVIVED: the existing test happened
+    // to land on currentIndex === 0, so it was gated by a different guard entirely.
+    // This forces currentIndex > 0 after the undo, which is where the anchor matters.
+    test("an edit after undo does not merge into the revision the cursor landed on", () => {
+        const doc = createDocWithRectangle();
+        const dispatcher = new ActionDispatcher(doc);
+        const style = (o: number) =>
+            new UpdateNodeStyleAction(dispatcher.getDocument(), "rectangle-001", { opacity: o });
+
+        dispatcher.dispatchAction(style(0.5), { coalesce: true });                 // revision 1
+        dispatcher.dispatchAction(new MoveNodeAction(dispatcher.getDocument(), "rectangle-001", 7, 0)); // revision 2
+        dispatcher.undo();                                                          // cursor -> revision 1
+        dispatcher.dispatchAction(style(0.7), { coalesce: true });                  // must NOT overwrite it
+
+        dispatcher.undo();
+        // Revision 1 still exists, so we land on opacity 0.5 — not back at the start.
+        expect(dispatcher.getDocument().nodes.get("rectangle-001")!.style.opacity).toBe(0.5);
+    });
+
+    // Mutation "legacy re-stamp to schema 1" SURVIVED: today LEGACY_SCHEMA and
+    // SCHEMA_VERSION are both "1", so the two behaviours are indistinguishable until a
+    // future bump — exactly when the bug would bite. Injecting the schema exposes it now.
+    test("a legacy file is normalised to schema 1, not silently marked current", () => {
+        const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
+
+        // Pretending the build has moved to schema "2": the legacy file is schema-1
+        // DATA, so with no 1→2 migration step it must be refused, never accepted as "2".
+        expect(() => migrateIfNeeded(legacy, "2")).toThrow('Migration not implemented for document schema "1"');
+
+        // At the current schema it still loads normally.
+        expect(migrateIfNeeded(legacy, "1").version).toBe("1");
     });
 });
 

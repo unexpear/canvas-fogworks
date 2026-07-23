@@ -70,6 +70,31 @@ own type — and the check must be verified by breaking the code on purpose.
 **Not covered:** prose describing behaviour that has since changed. Nothing mechanical
 catches that; it needs review.
 
+## Mutation testing (verifying the tests, not the code)
+
+"A check is worthless until you have broken the code on purpose and watched it fail"
+applies to the whole suite, not just to new regression tests. Every guard added during
+the audit campaign was weakened one at a time, with the suite run against each
+weakening. A guard nothing notices is not protected.
+
+First pass over 18 guards: **13 killed, 2 survived, 3 unverified** (the mutation string
+did not match — *unverified*, not passing). The survivors were real gaps:
+
+| Guard | Why nothing caught it |
+|---|---|
+| `MoveTool` selection-root filter | the test exercised `selectionRoots` + `computeWorldGeometry` directly, never `MoveTool` — so the CRITICAL parent+child double-apply could have been reintroduced silently |
+| coalesce anchored to the last commit | the existing test happened to land on `currentIndex === 0`, so a *different* guard was rejecting the merge; the anchor itself was never exercised |
+| legacy → schema-1 normalisation | `LEGACY_SCHEMA` and `SCHEMA_VERSION` are both `"1"` today, so correct and incorrect behaviour are indistinguishable until a future bump — exactly when it would bite |
+
+Three tests were added to close them; the third required making the schema injectable
+(`migrateIfNeeded(raw, currentSchema)`) so the future-bump case can be exercised now.
+
+**Two of the mutations were themselves wrong** and produced false "survived" results —
+one changed an object field but not the local variable set on the next line, the other
+left the `try/catch` in place while claiming to remove isolation. Re-running with
+corrected mutations killed both. The lesson generalises: *a mutation that does not
+actually weaken the guard proves nothing*, and it fails in the safe-looking direction.
+
 ## Regression discipline
 
 When fixing a bug, add a test that **fails on the unfixed code and passes after**. Example

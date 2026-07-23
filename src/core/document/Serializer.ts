@@ -171,16 +171,16 @@ const LEGACY_SCHEMA = "1";
  * - Older known schema       → run the migration chain (none needed yet).
  * - Newer/unknown schema     → throw; we cannot safely read the future.
  */
-function migrateIfNeeded(raw: any): SerializedDocument {
+export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION): SerializedDocument {
     let version: string = raw.version;
 
     // 1. Refuse the future FIRST — before any normalisation can mislabel it.
     const fileNum = Number(version);
-    const currentNum = Number(SCHEMA_VERSION);
+    const currentNum = Number(currentSchema);
     if (Number.isFinite(fileNum) && Number.isFinite(currentNum) && fileNum > currentNum) {
         throw new Error(
             `Document schema "${version}" is newer than this build supports ` +
-            `(schema "${SCHEMA_VERSION}"). Update the application to open it.`
+            `(schema "${currentSchema}"). Update the application to open it.`
         );
     }
 
@@ -198,13 +198,13 @@ function migrateIfNeeded(raw: any): SerializedDocument {
     // if (version === "1") { raw = migrate_1_to_2(raw); version = "2"; }
 
     // 4. Fully migrated?
-    if (version === SCHEMA_VERSION) {
+    if (version === currentSchema) {
         return raw as SerializedDocument;
     }
 
     throw new Error(
         `Migration not implemented for document schema "${version}". ` +
-        `Current schema: "${SCHEMA_VERSION}".`
+        `Current schema: "${currentSchema}".`
     );
 }
 
