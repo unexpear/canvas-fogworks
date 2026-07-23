@@ -7,9 +7,10 @@
     "build": "node scripts/build.js",
     "test": "jest --config=./jest.config.js",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
-    "check": "npm run typecheck && npm test && npm run build",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build",
     "dev": "node scripts/build.js --watch --electron",
-    "dist": "node scripts/build.js && npx electron-builder"
+    "dist": "node scripts/build.js && npx electron-builder",
+    "lint": "node scripts/check-module-headers.js"
   },
   "dependencies": {
     "react": "^19.2.8",

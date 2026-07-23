@@ -1,3 +1,10 @@
+/**
+ * @module preload
+ * @description contextBridge preload: exposes a minimal, explicitly-enumerated
+ * `window.electronAPI` to the sandboxed renderer. Every subscription returns a
+ * disposer so the renderer can remove the exact listener it added.
+ */
+
 const { contextBridge, ipcRenderer } = require("electron");
 
 // Each subscription returns a disposer so the renderer can remove the exact

@@ -18,7 +18,8 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 npm test                                   # jest (ts-jest), 97 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
-npm run check                              # typecheck + test + build (the gate)
+npm run lint                               # module-header rule (no ESLint dependency)
+npm run check                              # typecheck + lint + test + build (the gate)
 ```
 
 - Runner: **Jest** via **ts-jest**, `testEnvironment: node` (`jest.config.js`).

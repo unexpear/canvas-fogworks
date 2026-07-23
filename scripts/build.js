@@ -1,10 +1,11 @@
 /**
- * Build script for Visual Design Engine
- * 1. Bundles the React app with esbuild
- * 2. Bundles the Electron main process with esbuild
- * 3. Copies HTML to dist/app/
- * Run `npm run dist` to also package into .exe
- * Run `node scripts/build.js --watch` for live rebuild on change
+ * @module build
+ * @description Build orchestrator. Emits three esbuild bundles — the React app,
+ * the Electron main process, and the preload script (which must be its own file,
+ * because Electron loads it at runtime rather than importing it) — then copies
+ * index.html with the bundle injected.
+ *
+ * `npm run dist` also packages an installer; `--watch` rebuilds on change.
  */
 
 const esbuild = require("esbuild");

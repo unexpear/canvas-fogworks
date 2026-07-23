@@ -30,7 +30,8 @@
 - Prefer explicit interfaces for all cross-module data. Distinguish runtime vs. wire types
   when they differ (`DocumentMetadata` vs `SerializedMetadata`).
 - Every module starts with a `@module` / `@description` JSDoc header stating its single
-  responsibility.
+  responsibility. **Enforced** by `npm run lint` (`scripts/check-module-headers.js`),
+  which runs inside `npm run check`. Test files are exempt.
 - Name Actions `<Verb>NodeAction`; keep one Action per file.
 - Keep functions single-purpose; extract shared logic to one home (e.g. the single
   `applyMutationsToDocument`) rather than duplicating.

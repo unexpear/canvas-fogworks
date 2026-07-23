@@ -1,7 +1,9 @@
 /**
- * Electron Main Process
- * Creates a native desktop window for the Visual Design Engine.
- * No server needed — loads the bundled HTML/JS directly.
+ * @module main
+ * @description Electron main process: owns the native window, the application
+ * menu, the Open/Save dialogs, and the `save-file` IPC handler (which only writes
+ * to paths the user approved through a dialog). No server — loads the bundled
+ * HTML/JS directly.
  */
 
 const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
