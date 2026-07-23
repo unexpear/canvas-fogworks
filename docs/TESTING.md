@@ -89,11 +89,21 @@ did not match — *unverified*, not passing). The survivors were real gaps:
 Three tests were added to close them; the third required making the schema injectable
 (`migrateIfNeeded(raw, currentSchema)`) so the future-bump case can be exercised now.
 
-**Two of the mutations were themselves wrong** and produced false "survived" results —
-one changed an object field but not the local variable set on the next line, the other
-left the `try/catch` in place while claiming to remove isolation. Re-running with
-corrected mutations killed both. The lesson generalises: *a mutation that does not
-actually weaken the guard proves nothing*, and it fails in the safe-looking direction.
+**Three of the mutations were themselves wrong**, and they failed in BOTH directions:
+
+- Two produced false *survived* results — one changed an object field but not the local
+  variable set on the next line; the other left the `try/catch` in place while claiming
+  to remove listener isolation. Corrected, both were killed.
+- One produced a false ***killed*** result. The `ComputedGeometry` unresolved-parent
+  mutation did not compile (dropping the `continue` leaves `parentRect` possibly
+  undefined at the deref), so jest exited non-zero having run **zero tests** — and the
+  harness read any non-zero exit as "a test caught it". Mutated validly, by restoring
+  the exact pre-fix code, it **survived**: nothing protected that guard. A test was added.
+
+> **Harness rule:** a mutation run must assert that the suite actually RAN. Treat
+> `Tests: 0 total`, or a non-zero exit with no failure count, as **unverified** — never
+> as a kill. A false *survived* prompts investigation; a false *killed* is silent, and
+> is the one that leaves a guard unprotected while looking green.
 
 ## Regression discipline
 

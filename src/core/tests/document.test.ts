@@ -1199,6 +1199,35 @@ describe("Guards the suite did not previously protect", () => {
         expect(computeWorldGeometry(live).rects.get("child-001")!.x).toBe(60); // world: +50 once, not +100
     });
 
+    // Mutation "RS-7 unresolved-parent skip" reported KILLED, but the suite had never
+    // RUN — the mutation failed to compile, and the harness read a non-zero exit as
+    // "a test caught it". Mutated validly (restoring the exact pre-fix code) it
+    // SURVIVED: nothing protected this guard.
+    test("a node whose parent is unresolved is skipped, not silently placed at the origin", () => {
+        const doc = createEmptyDocument();
+        const mk = (id: string, parent: string | null, children: string[], x: number, y: number): Node => ({
+            id, type: "core.rectangle", parent, children,
+            geometry: { x, y, width: 50, height: 50 },
+            style: { fill: "#000", opacity: 1 }, layout: {}
+        });
+        // Q is the only root and does NOT list P, so P is reachable only via the
+        // orphan tail — and traversal therefore emits C before its own parent.
+        doc.nodes.set("Q", mk("Q", null, [], 0, 0));
+        doc.nodes.set("C", mk("C", "P", [], 10, 10));
+        doc.nodes.set("P", mk("P", "Q", ["C"], 100, 100));
+        doc.rootNodeUuids = ["Q"];
+
+        const computed = computeWorldGeometry(doc);
+        expect(computed.order.indexOf("C")).toBeLessThan(computed.order.indexOf("P"));
+
+        // Absent rather than misplaced. Falling back to origin (0,0) would draw C at
+        // (10,10) instead of (110,110) AND make hit-testing agree with the wrong
+        // drawing — corruption with no visible symptom.
+        expect(computed.rects.has("C")).toBe(false);
+        expect(hitTest(computed, 12, 12)).not.toBe("C");
+        expect(computed.rects.get("P")).toMatchObject({ x: 100, y: 100 });
+    });
+
     // Mutation "coalesce anchored to last commit" SURVIVED: the existing test happened
     // to land on currentIndex === 0, so it was gated by a different guard entirely.
     // This forces currentIndex > 0 after the undo, which is where the anchor matters.
