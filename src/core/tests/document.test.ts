@@ -1787,6 +1787,24 @@ describe("M2 layout through computeGeometry", () => {
         // height 30 → 20): world (10, 30).
         expect(cs.nodes.get("g")!.bounds).toMatchObject({ x: 10, y: 30, width: 20, height: 10 });
     });
+
+    test("a laid-out child composes through its container's TRANSFORM, not around it", () => {
+        // The doc claims a laid-out child still inherits the parent's matrix. Prove it:
+        // a container scaled 2× about its own origin must scale its child's COMPUTED
+        // position and size — layout does not bypass the transform pipeline.
+        const doc = createEmptyDocument();
+        const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], node: Partial<Node>): Node =>
+            ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout: {}, ...node });
+        doc.nodes.set("P", mk("P", null, ["c"], { x: 0, y: 0, width: 100, height: 100 },
+            { layout: { container: { direction: "row", padding: 10 } }, transform: { scaleX: 2, scaleY: 2, origin: { x: 0, y: 0 } } }));
+        doc.nodes.set("c", mk("c", "P", [], { x: 999, y: 999, width: 50, height: 50 }, {}));
+        doc.rootNodeUuids = ["P"];
+
+        const cs = computeGeometry(doc);
+        // Child local from layout: padding 10 → (10,10,50,50). Under the container's
+        // 2× scale about (0,0): position 10→20 and size 50→100.
+        expect(cs.nodes.get("c")!.bounds).toEqual({ x: 20, y: 20, width: 100, height: 100 });
+    });
 });
 
 describe("M2 layout dirty-tracking — the sibling ripple", () => {
