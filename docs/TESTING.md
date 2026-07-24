@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v8 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, grid, constraints, absolute + margins). Suite: `src/core/tests/document.test.ts` (183 tests).
+> 🔒 Frozen contract · schema v8 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, grid, constraints, absolute + margins). Suite: `src/core/tests/document.test.ts` (184 tests).
 
 ## Philosophy
 
@@ -17,7 +17,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 183 tests
+npm test                                   # jest (ts-jest), 184 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -28,7 +28,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (183 tests)
+## What is covered (184 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -206,6 +206,18 @@ tests), absolute not excluded from the hug measure, the constraint gate's `|| is
 allowance (the absolute-can-be-constrained test), and `MoveTool`'s `&& !isAbsolute` (the
 absolute-draggable test) — each killed by its targeted test. Both features degrade to the
 pre-M2 behaviour when absent (in-flow / margin 0), so every existing test was byte-identical.
+
+**Margins + absolute adversarial review — the margin math and absolute exclusion held (400×400
+fuzz clean, every axis cross-checked); ONE high bug found.** Letting an absolute child of a
+container be constrained exposed a latent flaw: `UpdateNodeLayoutAction` auto-captures
+`constraintRef` from the parent's STORED size while `resolveConstraints` positions against
+its COMPUTED size. Fine for a plain static parent (equal), but a container's computed size
+routinely differs (hug), so a badge pinned to a hug-card corner flew off at rest (`x = 0 +
+(50 − 400) = −350`). The fuzz was blind (both paths share the frozen ref and agree on the
+wrong value); the one absolute+constraint test used a *fixed* container, sidestepping it.
+Fixed by skipping the auto-capture for **container** parents (their stored size is an
+unreliable reference — that capture is the M5 tool-layer's job, from the computed size); an
+explicit ref still activates it. Regression test proven to fail on the unfixed code.
 
 **Grid adversarial review — found TWO real bugs the fuzz was blind to.** A read-only
 multi-lens review (100k random grids and 400 fresh fuzz seeds found the cell math and all

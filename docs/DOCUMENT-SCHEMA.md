@@ -247,11 +247,18 @@ constraints (inert).
 
 - The response is resolved **statelessly** in `computeGeometry` (`resolveConstraints`)
   against a **frozen** reference `Layout.constraintRef` — the parent size the child's
-  geometry is "at rest" against, captured ONCE when `constraints` is first set (from the
-  parent's stored size) and never rewritten by resize. `offset = parentCurrentSize −
-  constraintRef` is therefore non-zero for a **direct** resize (parent's stored size moves,
-  ref frozen) AND a **layout-driven** one (a grown/stretched/celled frame's computed size
-  moves, ref frozen) — one formula, both sources. `scale` guards `ref > 0` (validated).
+  geometry is "at rest" against, captured ONCE when `constraints` is first set and never
+  rewritten by resize. `offset = parentCurrentSize − constraintRef` is therefore non-zero
+  for a **direct** resize (parent's stored size moves, ref frozen) AND a **layout-driven**
+  one (a grown/stretched/celled frame's computed size moves, ref frozen) — one formula,
+  both sources. `scale` guards `ref > 0` (validated).
+- **The ref is auto-captured from the parent's STORED size, but ONLY for a non-container
+  parent** — a container's stored size is unreliable (hug/grow/stretch make its computed
+  size differ), so auto-capturing from it would place the child against the wrong box and
+  teleport it at rest. So an `absolute` child of a **container** gets no auto ref and stays
+  static until a tool provides a computed-derived ref (the M5 re-baseline). An **explicit**
+  `constraintRef` in the patch always wins, so `absolute` + constraints under a container is
+  fully supported once the ref is set correctly.
 - A per-CHILD reference (not per-parent) means authoring one child never re-baselines its
   siblings. Constraints need **no new dirty machinery**: a parent size change dirties the
   parent and the child inherits top-down.

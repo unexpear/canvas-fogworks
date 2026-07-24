@@ -66,7 +66,7 @@ reachable via `revertToOriginal()`) · revision system ·
 JSON serialization (schema version decoupled from app version) ·
 **validation** (Action-path `validate()` **and** `validateDocumentIntegrity` on load:
 ranges, dangling parents, ghost roots, cycles) · automated tests.
-(M0 and M1 together contribute **123** of the suite's current **183** tests; the count is not M0's alone. M2 added the rest.)
+(M0 and M1 together contribute **123** of the suite's current **184** tests; the count is not M0's alone. M2 added the rest.)
 
 **Round-trip closure (what took M0 from "nearly" to done):** an adversarial audit found
 the engine could author a document it could not reopen — `AddNodeAction.validate()`

@@ -60,7 +60,14 @@ export class UpdateNodeLayoutAction extends Action {
         if (layout.constraints !== undefined && layout.constraintRef === undefined && node?.layout.constraintRef === undefined) {
             const parentId = node?.parent;
             const parent = parentId ? this.document.nodes.get(parentId) : undefined;
-            if (parent) layout.constraintRef = { width: parent.geometry.width, height: parent.geometry.height };
+            // Auto-capture ONLY from a NON-container parent. A container's STORED size is an
+            // unreliable reference — hug/grow/stretch make its computed size differ from
+            // stored — so capturing from it would place an absolute child against the wrong
+            // box and teleport it at rest. A ref for an absolute child of a container must
+            // come from the tool layer (the parent's COMPUTED size — M5); until then the
+            // constraint stays inert (the child keeps its stored position) rather than jumping.
+            const parentIsContainer = !!parent && (parent.layout.container !== undefined || parent.layout.grid !== undefined);
+            if (parent && !parentIsContainer) layout.constraintRef = { width: parent.geometry.width, height: parent.geometry.height };
         }
         return {
             updatedNodeIds: new Set([this.nodeId]),

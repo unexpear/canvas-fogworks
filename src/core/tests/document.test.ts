@@ -2755,6 +2755,25 @@ describe("M2 margins + absolute-position escape", () => {
         expect(es.pendingGeometry).toBeNull(); // in-flow (laid out) → not draggable
     });
 
+    test("setting constraints on an absolute child of a HUG container does not auto-capture a bad ref (review regression)", () => {
+        // Review-found: a container's STORED size ≠ its COMPUTED size (hug here: stored 400,
+        // computed 50), so auto-capturing the ref from stored and resolving against computed
+        // teleports the child at rest (x = 0 + (50 − 400) = −350). Auto-capture is now skipped
+        // for container parents, so the absolute child stays put (constraint inert until a
+        // tool provides a computed-derived ref).
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["inflow", "abs"], { x: 0, y: 0, width: 400, height: 100 }, { container: { direction: "row", hugWidth: true } }));
+        doc.nodes.set("inflow", mk("inflow", "P", [], { x: 0, y: 0, width: 50, height: 30 }, {}));
+        doc.nodes.set("abs", mk("abs", "P", [], { x: 0, y: 0, width: 30, height: 30 }, { position: "absolute" }));
+        doc.rootNodeUuids = ["P"];
+        const dispatcher = new ActionDispatcher(doc);
+        expect(computeGeometry(dispatcher.getDocument()).nodes.get("P")!.local.width).toBe(50); // hugs to inflow(50)
+
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "abs", { constraints: { horizontal: "right" } }));
+        expect(dispatcher.getDocument().nodes.get("abs")!.layout.constraintRef).toBeUndefined(); // NOT captured from the container's stored 400
+        expect(computeGeometry(dispatcher.getDocument()).nodes.get("abs")!.bounds.x).toBe(0);    // stays at rest, not teleported to −350
+    });
+
     test("margin + position are write-path citizens: schema-8 round-trip + both-paths validation", () => {
         const d = createDocWithParentChild();
         const ok = (l: any) => new UpdateNodeLayoutAction(d, "child-001", l).validate();
