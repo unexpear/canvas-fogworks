@@ -206,6 +206,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "2") { raw = migrate_2_to_3(raw); version = "3"; }
     if (version === "3") { raw = migrate_3_to_4(raw); version = "4"; }
     if (version === "4") { raw = migrate_4_to_5(raw); version = "5"; }
+    if (version === "5") { raw = migrate_5_to_6(raw); version = "6"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -244,6 +245,11 @@ function migrate_3_to_4(raw: any): any {
 /** Schema 4 → 5: adds optional `Layout.grow`. Pass-through by content. */
 function migrate_4_to_5(raw: any): any {
     return { ...raw, version: "5" };
+}
+
+/** Schema 5 → 6: adds optional `Layout.grid`. Pass-through by content. */
+function migrate_5_to_6(raw: any): any {
+    return { ...raw, version: "6" };
 }
 
 /**

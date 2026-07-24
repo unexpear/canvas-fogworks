@@ -30,7 +30,7 @@
 import { DeepReadonly, ReadonlyDocument } from "../document/Document";
 import { Geometry, Node } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
-import { expandDirtyForLayout, layoutChildren, measureIntrinsicSizes } from "./LayoutEngine";
+import { expandDirtyForLayout, layoutChildren, layoutGridChildren, measureIntrinsicSizes } from "./LayoutEngine";
 import {
     Mat2D, IDENTITY, Rect, multiply, compose, invert, applyToPoint,
     transformRectToAABB, unionRect
@@ -133,20 +133,18 @@ export function computeGeometry(
         const computedLocal = laidOut.get(id);
         const m = measured.get(id);
         const base = computedLocal ?? { x: g.x, y: g.y, width: m?.width ?? g.width, height: m?.height ?? g.height };
-        const local: Rect = patch
-            ? {
-                x: patch.x ?? base.x,
-                y: patch.y ?? base.y,
-                // A laid-out child's SIZE is a layout RESULT that already folded THIS
-                // node's pending size in via the measure pass (a grow child fed its
-                // pending base is then grown PAST it). Re-imposing patch.width/height here
-                // would double-count — clamping the child back below its grown size and
-                // leaving a gap before its already-positioned sibling. So a pending patch
-                // on a laid-out child previews only POSITION; its size stays the layout's.
-                width: computedLocal ? base.width : (patch.width ?? base.width),
-                height: computedLocal ? base.height : (patch.height ?? base.height),
-            }
-            : base;
+        // A laid-out child's WHOLE rect is a layout RESULT: its position is the slot/cell,
+        // and its size already folded any pending size via the MEASURE pass (a flex child
+        // resizes through measure; a grid child fills its cell). So a raw pending patch
+        // must NOT touch it — applying patch.x/y would leak the child's ignored stored x/y
+        // (a grid item flies to its stored 999,999), and patch.width/height would
+        // double-count (a grow child clamps back below its grown size). Free (non-laid-out)
+        // nodes still take the pending patch — that is the drag/resize preview.
+        const local: Rect = computedLocal
+            ? base
+            : patch
+                ? { x: patch.x ?? base.x, y: patch.y ?? base.y, width: patch.width ?? base.width, height: patch.height ?? base.height }
+                : base;
 
         if (!isFiniteRect(local)) continue;
 
@@ -178,6 +176,18 @@ function layoutContainerPass(
     laidOut: Map<string, Rect>,
     measured: ReadonlyMap<string, { width: number; height: number }>
 ): void {
+    // GRID: children fill cells regardless of their own size, so it needs only the child
+    // ids (in order) and the container's resolved size — never the measured child sizes.
+    const grid = node.layout.grid;
+    if (grid) {
+        const ids: string[] = [];
+        for (const childId of node.children) if (doc.nodes.get(childId)) ids.push(childId);
+        for (const [id, rect] of layoutGridChildren(grid, { width: parentLocal.width, height: parentLocal.height }, ids)) {
+            laidOut.set(id, rect);
+        }
+        return;
+    }
+
     const container = node.layout.container;
     if (!container) return;
     const children: { id: string; width: number; height: number; grow?: number }[] = [];

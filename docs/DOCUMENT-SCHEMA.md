@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v5 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + flex-grow). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v6 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + flex-grow + grid). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -67,8 +67,9 @@ interface Layout {     // constraint intent, not absolute position (Milestone 2)
   horizontalAlignment?: "left" | "right" | "center";  // reserved (constraints, deferred)
   verticalAlignment?: "top" | "bottom" | "center";    // reserved (constraints, deferred)
   spacing?: number;                                    // reserved
-  container?: LayoutContainer;                         // M2 auto-layout — LIVE
+  container?: LayoutContainer;                         // M2 auto-layout (flex) — LIVE
   grow?: number;                                       // M2 flex-grow (child hint) — LIVE
+  grid?: LayoutGrid;                                   // M2 grid — LIVE; EXCLUSIVE with container
 }
 
 interface LayoutContainer {          // this node's DIRECT CHILDREN are auto-positioned
@@ -78,6 +79,14 @@ interface LayoutContainer {          // this node's DIRECT CHILDREN are auto-pos
   alignItems?: "start" | "center" | "end" | "stretch";  // cross-axis; stretch resizes
   hugWidth?: boolean;                // size width to contents (schema 4); absolute axis
   hugHeight?: boolean;               // size height to contents (schema 4); absolute axis
+}
+
+type TrackSize = { px: number } | { fr: number };     // fixed px, or a share of leftover
+
+interface LayoutGrid {               // children auto-flow row-major into cells and fill them
+  columns: TrackSize[];              // ≥1 column tracks; defines the column count
+  rowHeight: TrackSize;              // uniform per-row height (px, or fr = equal share)
+  columnGap?: number; rowGap?: number; padding?: number;  // >= 0
 }
 
 interface StateDefinition { [key: string]: any; } // reserved for Milestone 7
@@ -198,8 +207,31 @@ CSS `flex-grow`), and is consumed by the container parent during positioning.
   `migrate_4_to_5` is a pass-through. The bump is still required: a schema-4 build would
   draw a growing child at its base size instead of filled.
 
-> **Still deferred (not in schema 5):** constraints/anchors, flex-shrink, wrap, grid,
-> per-child margins, absolute-position escapes, responsive rules. These are M2's
+**Grid — landed in schema 6 (Milestone 2).** `Layout.grid` is an ALTERNATIVE to
+`container` (the two are **mutually exclusive**). A grid's direct children auto-flow
+row-major into `columns.length` columns × `ceil(count/columns)` rows and **fill their
+cell** — their stored size is ignored, like a laid-out flex child's position. Column
+tracks are fixed `{ px }` or `{ fr }` (sharing the leftover inner width); `rowHeight` is a
+single uniform track applied to every row (`{ px }` fixed, or `{ fr }` = equal share of the
+inner height). `columnGap`/`rowGap`/`padding` inset as expected.
+
+- Like flex-grow, grid is a **position-pass** producer (`LayoutEngine.layoutGridChildren`):
+  it reads no child sizes, so it needs no measure feedback and reuses the same dirty
+  machinery (`isLayoutContainer` counts a grid as a container). Grid-container hug, explicit
+  per-row `rows[]`, `auto`/content tracks, spans and explicit placement are deferred.
+- **Mutual exclusivity is enforced on write** (`UpdateNodeLayoutAction` carries the clear
+  IN its delta — setting one emits the other as `undefined` — so even a transaction that
+  merges a container-set and a grid-set resolves last-wins rather than dropping both) AND
+  on read (`layoutError` rejects a node carrying both), so the two can never coexist — a
+  hand-edited file with both fails to load. `TrackSize` is validated (exactly one of
+  `px` ≥ 0 or `fr` > 0) on both paths.
+- **Absent means no grid**, so every schema-5 document is a valid schema-6 document —
+  `migrate_5_to_6` is a pass-through. The bump is still required: a schema-5 build would
+  ignore the grid and draw the children at their stored `x/y`.
+
+> **Still deferred (not in schema 6):** constraints/anchors, flex-shrink, wrap, per-child
+> margins, absolute-position escapes, responsive rules, and the grid tail (explicit
+> placement/spans, `auto`/content tracks, per-row sizes, grid hug). These are M2's
 > remaining deliverables — see [MILESTONES.md](../MILESTONES.md) § Milestone 2.
 
 > **It bumped `SCHEMA_VERSION` to `"2"`** — as the freeze rule required, with a
@@ -299,7 +331,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"5"`; chain: 1→2 transform, 2→3 auto-layout, 3→4 hug sizing, 4→5 flex-grow) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"6"`; chain: 1→2 transform, 2→3 auto-layout, 3→4 hug, 4→5 flex-grow, 5→6 grid) | **only** when the persisted shape changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

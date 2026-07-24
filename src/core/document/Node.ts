@@ -78,6 +78,32 @@ export interface Layout {
      * `flex-grow`), so it lives on the node's own `Layout`, not on `LayoutContainer`.
      */
     grow?: number;
+    /**
+     * Grid auto-layout (Milestone 2). An ALTERNATIVE to `container` (flex) — the two are
+     * mutually exclusive. This node's direct children are auto-flowed row-major into a
+     * grid of the given column tracks, each filling its cell. See `LayoutGrid`.
+     */
+    grid?: LayoutGrid;
+}
+
+/** A grid track size: a fixed pixel size, or a fraction of the leftover space (`fr`). */
+export type TrackSize = { px: number } | { fr: number };
+
+/**
+ * A CSS-grid-like container: children auto-flow row-major into cells and STRETCH to fill
+ * them (their stored size is ignored, like a laid-out flex child's position). Row count is
+ * derived from the child count (`ceil(count / columns)`); every row uses `rowHeight`.
+ *
+ * Grid is a POSITION-pass concern only — items fill cells regardless of their own size, so
+ * it needs no measure feedback. `fr` tracks share the container's leftover inner size
+ * (grid-container hug is deferred, so the container's own size is fixed/from its parent).
+ */
+export interface LayoutGrid {
+    columns: readonly TrackSize[];   // ≥1 column tracks; defines the column count
+    rowHeight: TrackSize;   // uniform height for every auto-flowed row (px, or fr = equal share)
+    columnGap?: number;     // between columns (>= 0)
+    rowGap?: number;        // between rows (>= 0)
+    padding?: number;       // inset from the container's edges (>= 0)
 }
 
 /** A flex-stack: children packed along one axis, with padding, gap and cross-align. */
@@ -104,6 +130,19 @@ export interface LayoutContainer {
 const DIRECTIONS = new Set(["row", "column"]);
 const ALIGNMENTS = new Set(["start", "center", "end", "stretch"]);
 
+/** Validity check for one grid `TrackSize` — exactly one of `px` (≥0) or `fr` (>0). */
+function trackError(t: unknown): string | null {
+    if (typeof t !== "object" || t === null) return "must be an object";
+    const hasPx = "px" in t;
+    const hasFr = "fr" in t;
+    if (hasPx === hasFr) return "must have exactly one of px or fr";
+    const px = (t as { px?: unknown }).px;
+    const fr = (t as { fr?: unknown }).fr;
+    if (hasPx && (typeof px !== "number" || !Number.isFinite(px) || px < 0)) return "px must be finite and >= 0";
+    if (hasFr && (typeof fr !== "number" || !Number.isFinite(fr) || fr <= 0)) return "fr must be finite and > 0";
+    return null;
+}
+
 /**
  * Validity check for a layout patch, shared by the edit path (`UpdateNodeLayoutAction`)
  * and the load path (`validateDocumentIntegrity`) so the two cannot drift — the same
@@ -114,6 +153,20 @@ export function layoutError(l: Partial<Layout>): string | null {
     // `grow` is independent of `container` and must be checked BEFORE the no-container
     // early return, or a `{ grow: -5 }` patch would slip through unvalidated.
     if (l.grow !== undefined && (!Number.isFinite(l.grow) || l.grow < 0)) return "layout.grow must be finite and >= 0";
+    // Grid is independent of `container` (and mutually exclusive with it), so validate it
+    // BEFORE the no-container early return — else a `{ grid: <bad> }` patch would slip by.
+    if ("grid" in l && l.grid !== undefined) {
+        const g = l.grid as LayoutGrid;
+        if (typeof g !== "object" || g === null) return "layout.grid must be an object";
+        if (l.container !== undefined) return "layout.grid and layout.container are mutually exclusive";
+        if (!Array.isArray(g.columns) || g.columns.length === 0) return "layout.grid.columns must be a non-empty array";
+        for (const t of g.columns) { const e = trackError(t); if (e) return `layout.grid.columns track ${e}`; }
+        const rhe = trackError(g.rowHeight); if (rhe) return `layout.grid.rowHeight ${rhe}`;
+        if (g.columnGap !== undefined && (!Number.isFinite(g.columnGap) || g.columnGap < 0)) return "layout.grid.columnGap must be finite and >= 0";
+        if (g.rowGap !== undefined && (!Number.isFinite(g.rowGap) || g.rowGap < 0)) return "layout.grid.rowGap must be finite and >= 0";
+        if (g.padding !== undefined && (!Number.isFinite(g.padding) || g.padding < 0)) return "layout.grid.padding must be finite and >= 0";
+        return null; // grid is exclusive with container — skip the flex checks below
+    }
     if (!("container" in l) || l.container === undefined) return null;
     const c = l.container;
     if (typeof c !== "object" || c === null) return "layout.container must be an object";

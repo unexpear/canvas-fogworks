@@ -11,22 +11,24 @@
  *
  * SCOPE: a flex stack — row/column, gap, padding, cross-axis align
  * (start/center/end/stretch), intrinsic ("hug") sizing (a container sizes an axis to
- * its contents; see `measureIntrinsicSizes`), AND flex-grow (children fill leftover
- * main-axis space). DEFERRED with their own milestone weight: flex-shrink, wrap, grid,
- * per-child margins, absolute-position escapes, constraints/anchors. See MILESTONES.md.
+ * its contents; see `measureIntrinsicSizes`), flex-grow (children fill leftover main-axis
+ * space), AND a grid (`layoutGridChildren` — auto-flow into px/fr cell tracks). DEFERRED
+ * with their own milestone weight: flex-shrink, wrap, explicit grid placement/spans,
+ * auto/content tracks, per-child margins, absolute-position escapes, constraints/anchors.
+ * See MILESTONES.md.
  */
 
 import { ReadonlyDocument } from "../document/Document";
-import { Geometry, LayoutContainer } from "../document/Node";
+import { Geometry, LayoutContainer, LayoutGrid, TrackSize } from "../document/Node";
 import { ReadonlyNode } from "../document/SceneGraph";
 import { Rect } from "./Matrix";
 
 /** Minimal read-only shape — accepts both `Node` and a `ReadonlyDocument` node. */
-type HasLayout = { readonly layout: { readonly container?: unknown } } | undefined;
+type HasLayout = { readonly layout: { readonly container?: unknown; readonly grid?: unknown } } | undefined;
 
-/** True when this node auto-positions its children. */
+/** True when this node auto-positions its children — a flex container OR a grid. */
 export function isLayoutContainer(node: HasLayout): boolean {
-    return !!node && node.layout.container !== undefined;
+    return !!node && (node.layout.container !== undefined || node.layout.grid !== undefined);
 }
 
 /** True when this node is a container that sizes at least one axis to its contents. */
@@ -156,6 +158,61 @@ export function layoutChildren(
 
         cursor += mainSize + gap;
     }
+    return out;
+}
+
+/**
+ * Resolve grid track sizes to pixels: fixed `px` tracks take their size; `fr` tracks
+ * share `available` (already net of gaps) in proportion to their fraction. Negative
+ * `available` clamps `fr` tracks to 0 (fixed tracks still take their px and may overflow).
+ */
+function resolveTracks(tracks: readonly TrackSize[], available: number): number[] {
+    let fixed = 0;
+    let totalFr = 0;
+    for (const t of tracks) {
+        if ("px" in t) fixed += Math.max(0, t.px);
+        else totalFr += Math.max(0, t.fr);
+    }
+    const freeForFr = Math.max(0, available - fixed);
+    return tracks.map(t =>
+        "px" in t ? Math.max(0, t.px) : (totalFr > 0 ? freeForFr * (Math.max(0, t.fr) / totalFr) : 0));
+}
+
+/**
+ * Compute the cell rect for each child of a GRID container. Children auto-flow row-major
+ * into `columns.length` columns × `ceil(count/cols)` rows and STRETCH to fill their cell,
+ * so their stored size is ignored (like a laid-out flex child's position). `fr` column
+ * tracks share the leftover inner width; a uniform `rowHeight` is either fixed px or an
+ * `fr` equal-share of the inner height. Unlike flex, this never reads child sizes, so it
+ * is a pure position-pass producer with no measure dependency.
+ */
+export function layoutGridChildren(
+    grid: LayoutGrid,
+    parentSize: { width: number; height: number },
+    childIds: readonly string[]
+): Map<string, Rect> {
+    const out = new Map<string, Rect>();
+    const cols = grid.columns.length;
+    if (cols === 0) return out;
+    const colGap = grid.columnGap ?? 0;
+    const rowGap = grid.rowGap ?? 0;
+    const pad = grid.padding ?? 0;
+    const rows = Math.ceil(childIds.length / cols);
+
+    const colWidths = resolveTracks(grid.columns, (parentSize.width - 2 * pad) - colGap * (cols - 1));
+    // Uniform row height: fixed px, or fr = equal share of the inner height across rows.
+    const innerH = (parentSize.height - 2 * pad) - rowGap * Math.max(0, rows - 1);
+    const rowH = "px" in grid.rowHeight ? Math.max(0, grid.rowHeight.px) : (rows > 0 ? Math.max(0, innerH) / rows : 0);
+
+    const colX: number[] = [];
+    let x = pad;
+    for (let c = 0; c < cols; c++) { colX[c] = x; x += colWidths[c] + colGap; }
+
+    childIds.forEach((id, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        out.set(id, { x: colX[col], y: pad + row * (rowH + rowGap), width: colWidths[col], height: rowH });
+    });
     return out;
 }
 

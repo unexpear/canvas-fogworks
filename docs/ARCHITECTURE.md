@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
 
-> 🔒 Frozen contract · schema v5 (app v0.0.5) · current through Milestone 2 (auto-layout + intrinsic sizing; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v6 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + flex-grow + grid; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -121,11 +121,14 @@ container, so a deep resize re-lays-out every ancestor it actually moves. **Flex
 (`Layout.grow`) is the inverse of hug — children fill a fixed container's leftover
 main-axis space — and is applied purely in the position pass, so it needs no measure
 feedback and no new dirty-tracking (a growing sibling reflows through the same ripple).
+**Grid** (`layoutGridChildren`) is likewise a position-pass producer: children auto-flow
+into px/fr cell tracks and fill them, so it reads no child sizes and reuses the same dirty
+machinery (once `isLayoutContainer` counts a grid as a container).
 
 Still outstanding for the computed layer: **resolved style** (M5 tokens) belongs in
-`ComputedState` and is not there yet; and M2's **richer layout** — constraints, grid,
-intrinsic sizing and the rest — is deferred (see MILESTONES.md). Layout output today is
-expressed *as* geometry (computed local rects), not as a distinct channel.
+`ComputedState` and is not there yet; and M2's **remaining layout** — constraints/anchors,
+flex-shrink, wrap, explicit grid placement — is deferred (see MILESTONES.md). Layout
+output today is expressed *as* geometry (computed local rects), not as a distinct channel.
 
 ## 5. Module map
 

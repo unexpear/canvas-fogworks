@@ -57,8 +57,12 @@ export const CURRENT_VERSION: string =
  *         space) for Milestone 2. Absent = 0 = fixed to base size, so `migrate_4_to_5`
  *         is a pass-through — but a schema-4 build would draw a growing child at its base
  *         size instead of filled, misstating the doc.
+ *
+ *   "6" — adds optional `Layout.grid` (grid auto-layout: children flow into a cell grid)
+ *         for Milestone 2. Absent = no grid, so `migrate_5_to_6` is a pass-through — but a
+ *         schema-5 build would ignore the grid and draw the children at their stored x/y.
  */
-export const SCHEMA_VERSION = "5";
+export const SCHEMA_VERSION = "6";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

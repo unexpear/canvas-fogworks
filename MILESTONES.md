@@ -19,7 +19,7 @@ M0.5 Core Documentation      ✅   contracts frozen before building upward
       │
 M1  Computed State           ✅   stored intent -> calculated results
       │
-M2  Layout Engine            🚧   auto-layout + hug + flex-grow; constraints/grid deferred
+M2  Layout Engine            🚧   auto-layout + hug + grow + grid; constraints deferred
       │
 M3  Renderer                 ⬜*  reads ComputedState only
       │
@@ -66,7 +66,7 @@ reachable via `revertToOriginal()`) · revision system ·
 JSON serialization (schema version decoupled from app version) ·
 **validation** (Action-path `validate()` **and** `validateDocumentIntegrity` on load:
 ranges, dangling parents, ghost roots, cycles) · automated tests.
-(M0 and M1 together contribute **123** of the suite's current **158** tests; the count is not M0's alone. M2 added the rest.)
+(M0 and M1 together contribute **123** of the suite's current **167** tests; the count is not M0's alone. M2 added the rest.)
 
 **Round-trip closure (what took M0 from "nearly" to done):** an adversarial audit found
 the engine could author a document it could not reopen — `AddNodeAction.validate()`
@@ -185,9 +185,9 @@ been missed.
 **"center inside parent"** instead of **`x = 240`**.
 
 M2 is deliberately marked **in progress, not done**: the milestone's full system list is
-large. **Auto-layout containers, intrinsic ("hug") sizing, and flex-grow** are built and
-verified; the rest is real work with its own weight, listed as deferred below rather than
-quietly folded in.
+large. **Auto-layout containers, intrinsic ("hug") sizing, flex-grow, and a grid** are
+built and verified; the rest is real work with its own weight, listed as deferred below
+rather than quietly folded in.
 
 ```
 Document → Geometry + Layout Engine → Computed State → Renderer
@@ -229,6 +229,15 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   no cycle and **no new dirty-tracking** (a growing sibling reflows through the existing
   ripple). It is inert where there is nothing to distribute: a hug-main container, or an
   overflow (flex-shrink is deferred). Orthogonal to `stretch` (main vs cross axis).
+- **Grid.** `Layout.grid` is an ALTERNATIVE to `container` (the two are mutually exclusive,
+  enforced on both write and read): children auto-flow row-major into `{ px }`/`{ fr }`
+  column tracks + a uniform `rowHeight` and fill their cells (`layoutGridChildren`). Like
+  grow it is a position-pass-only producer — it reads no child sizes, so it needs no
+  measure feedback and reuses the dirty machinery once `isLayoutContainer` counts a grid as
+  a container. Mutation testing surfaced a coverage gap it then closed: an `fr`-row grid's
+  row heights depend on the item COUNT, so **adding** an item (which reports only the new
+  node) must reflow the existing rows — pinned by a deterministic `incremental === full`
+  test, since a `px`-row grid or a delete could not exercise the grid's climb path.
 - **A full document citizen.** `UpdateNodeLayoutAction` is the write-path primitive
   (authorable, undoable, serializable, validated), exactly as `UpdateNodeTransformAction`
   is for M1. `layoutError` is shared by the edit path and the load path (a non-boolean
@@ -239,13 +248,13 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   milestone: a resize handle on a hug container's hugged axis is a visual no-op — the
   engine correctly ignores the pending resize — but the handle is not yet hidden.)*
 - **Schema cost, paid under the freeze rule.** `SCHEMA_VERSION` `"2"` → `"3"` (auto-layout)
-  → `"4"` (hug) → `"5"` (grow), each with a pass-through migration, because an older build
-  would draw a container's children / a hug container / a growing child at now-vestigial
-  stored geometry.
+  → `"4"` (hug) → `"5"` (grow) → `"6"` (grid), each with a pass-through migration, because
+  an older build would draw the children at now-vestigial stored geometry.
 
 **Deferred (each its own deliverable, NOT built):** constraints · anchors (pin to
-edges) · flex-shrink · wrap · grid · per-child margins · absolute-position escapes ·
-responsive / breakpoint rules · drag-to-reorder.
+edges) · flex-shrink · wrap · per-child margins · absolute-position escapes ·
+responsive / breakpoint rules · drag-to-reorder · the **grid tail** (explicit
+placement/spans, `auto`/content tracks, per-row sizes, grid-container hug).
 
 **Explicitly NOT in scope yet:** `ComputedState` still carries geometry only; resolved
 style (M5 tokens) is still absent. Layout output is expressed *as* geometry (computed

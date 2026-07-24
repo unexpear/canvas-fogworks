@@ -11,6 +11,13 @@
  *
  * Passing `{ container: undefined }` REMOVES auto-layout (the children revert to their
  * stored geometry), which is why the patch merges field-by-field rather than replacing.
+ *
+ * MUTUAL EXCLUSIVITY (grid ⊕ container): setting one emits the OTHER as `undefined` in
+ * the same delta, so the exclusivity is carried IN the delta rather than applied as a
+ * side effect in the single mutation site. This is what keeps a TRANSACTION correct: two
+ * layout patches on one node merge field-by-field (later wins), so `set container` then
+ * `set grid` collapses to `{ container: undefined, grid: … }` — grid wins — instead of a
+ * post-hoc "clear both" that would drop BOTH.
  */
 
 import { Action } from "./Action";
@@ -38,9 +45,14 @@ export class UpdateNodeLayoutAction extends Action {
         if (!this.validate()) {
             throw new Error(`Validation failed: invalid layout for node "${this.nodeId}".`);
         }
+        // Carry grid ⊕ container exclusivity IN the delta (see the module note): setting
+        // one clears the other, self-consistently, so a transaction merge stays correct.
+        const layout: Partial<Layout> = { ...this.newLayout };
+        if (layout.grid !== undefined) layout.container = undefined;
+        if (layout.container !== undefined) layout.grid = undefined;
         return {
             updatedNodeIds: new Set([this.nodeId]),
-            propertyDeltas: new Map([[this.nodeId, { kind: "patch", layout: this.newLayout } as const]]),
+            propertyDeltas: new Map([[this.nodeId, { kind: "patch", layout } as const]]),
             success: true
         };
     }

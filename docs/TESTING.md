@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v5 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + flex-grow). Suite: `src/core/tests/document.test.ts` (158 tests).
+> 🔒 Frozen contract · schema v6 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + flex-grow + grid). Suite: `src/core/tests/document.test.ts` (167 tests).
 
 ## Philosophy
 
@@ -17,7 +17,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 158 tests
+npm test                                   # jest (ts-jest), 167 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -28,7 +28,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (158 tests)
+## What is covered (167 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -56,7 +56,8 @@ npm run check                              # typecheck + lint + test + build (th
 | **M2 `MoveTool`** | a laid-out child records no pending move (position is computed); the container itself stays draggable |
 | **M2 intrinsic (hug) sizing** | `measureIntrinsicSizes` folds a hug axis from children (row/column, one-axis, empty→padding); a hug container is **sized to its contents** through `computeGeometry` (stored size vestigial); **hug-cross + stretch** is coherent (pre-stretch measure, no cycle); a size change **ripples up a 3-deep hug chain, halts at the first FIXED container, and reflows its siblings** (incremental === full, non-vacuous); **pending** resize of a deep leaf hugs the chain in the live preview (pins the pending→seed union); reparent **into/out of** a hug container resizes it; measure stays **total** on a missing child; current-schema round-trip + a non-boolean hug flag rejected on **both** paths |
 | **M2 flex-grow** | `layoutChildren` distributes leftover main-axis space **proportional to `grow`** (single/multiple growers, gap+padding subtracted first); **inert** with no free space (exact fit or overflow — no shrink); a fixed container grows a child to fill while a **hug-main** container leaves nothing to grow; resizing one child **reflows a growing sibling** incrementally (non-vacuous, only the resized node reported); a **pending resize of a grow child previews the SAME layout as committing it** (regression for the review-found double-apply); **grow overrides hug** on a node that is both a hug container and a grow child; schema-5 round-trip + a negative `grow` rejected on **both** paths (incl. a `{grow}` patch with no container, guarding the early return) |
-| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains automatically) |
+| **M2 grid** | `layoutGridChildren` auto-flows row-major with fixed + **`fr`** column tracks (share leftover width), a uniform `rowHeight` (px or `fr` equal-share), gaps and padding; a grid **sizes children to cells** through `computeGeometry` (stored size ignored); deleting an item **reflows survivors** into earlier cells incrementally; **adding to an `fr`-row grid reflows every existing row's height** incrementally (pins the grid's dirty-climb path — a `px`-row grid or a delete cannot); `isLayoutContainer` recognises a grid; resizing a grid item **stays in its cell** (a pending patch on a laid-out child is absorbed, not leaked to its stored x/y — review regression); a transaction that sets **container then grid keeps the grid, not neither** (review regression); **grid ⊕ container mutual exclusivity** enforced in the write delta and on read; schema-6 round-trip + malformed `TrackSize` / both-set rejected on **both** paths |
+| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow, GRID, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains automatically) |
 
 ## The API-surface pin
 
@@ -164,6 +165,33 @@ the working tree and dropped the `grow` wiring in `layoutContainerPass`; the sam
 caught that too. *Lesson: an agent review catches semantic/interaction bugs the property
 fuzz is structurally blind to — but re-run the full gate afterward, because the review can
 disturb the tree.*
+
+**Grid pass — 5 guards, all killed, one gap surfaced.** Weakened: (1) auto-flow row
+placement (all items in row 0) → killed by 2 tests; (2) `fr` tracks getting no share →
+killed by 2; (3) `isLayoutContainer` not recognising a grid → killed; (4) the
+mutual-exclusivity clearing in `applyMutations` → killed; (5) the `TrackSize` `fr > 0`
+check → killed by the write-path test. Guard (3) was initially killed **only** by its unit
+test — the delete-reflow test reports the parent directly (no climb), and `px`-row grids
+don't resize on count — so mutation testing exposed a missing case: an `fr`-row grid's
+heights depend on the item count, so **adding** an item (which reports only the new node)
+must reflow existing rows via the climb. A deterministic `incremental === full` test was
+added and now co-kills the mutation — the same "a survivor is a missing test" lesson.
+
+**Grid adversarial review — found TWO real bugs the fuzz was blind to.** A read-only
+multi-lens review (100k random grids and 400 fresh fuzz seeds found the cell math and all
+five design claims clean) confirmed two high-severity defects, both preview/edge-only so
+`incremental === full` never diverged: (1) **resizing a grid item teleported it to its
+ignored stored x/y** — the earlier "laid-out child previews position only" fix guarded
+size but *leaked* position, and the resize tool's pending patch carries stored-based x/y;
+fixed by having a laid-out child ignore a pending patch **entirely** (its whole rect is the
+layout's result — size already folded through measure), with a regression test. (2) a
+**transaction merging a container-set and a grid-set on one node dropped BOTH** layouts —
+the merged delta held both and the post-hoc "clear both" in `applyMutations` cleared both;
+fixed by carrying grid⊕container exclusivity **in the delta** (`UpdateNodeLayoutAction`
+sets the other field to `undefined`), so the field-by-field transaction merge is last-wins.
+Both regression tests were proven to fail on the unfixed code. *Reinforces: the property
+fuzz cannot see a bug that is uniformly wrong across incremental and full — an adversarial
+review can.*
 
 ## Doc-staleness tripwire (`npm run doc-drift`)
 

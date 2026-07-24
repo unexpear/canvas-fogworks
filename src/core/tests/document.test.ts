@@ -18,7 +18,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds } from "../geometry/GeometryEngine";
-import { layoutChildren, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes } from "../geometry/LayoutEngine";
+import { layoutChildren, layoutGridChildren, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
 import { clampViewport, createEditorState } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
@@ -1580,15 +1580,15 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "6" that has no 5→6 step: the
+        // Pretending the build has moved to a schema "7" that has no 6→7 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→3→4→5), and then REFUSED at "5" — never re-stamped straight to the current
-        // schema. The error naming "5" (not "1") is the proof the chain actually ran.
+        // (1→2→…→6), and then REFUSED at "6" — never re-stamped straight to the current
+        // schema. The error naming "6" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 4→5 landed for flex-grow.)
-        expect(() => migrateIfNeeded(legacy, "6")).toThrow('Migration not implemented for document schema "5"');
+        // time a real migration is added — here, when 5→6 landed for grid.)
+        expect(() => migrateIfNeeded(legacy, "7")).toThrow('Migration not implemented for document schema "6"');
 
-        // At the current schema it loads, having been migrated 0.0.4 → 1 → 2 → 3 → 4 → 5.
+        // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
     });
 
@@ -2029,15 +2029,18 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
             } else if (op === 2) {
                 dispatcher.dispatchAction(new ResizeNodeAction(doc, pick(ids), 1 + rnd() * 80, 1 + rnd() * 80));
             } else if (op === 3) {
-                // Change a random node's layout: a container (with independently-random
-                // HUG flags, which build multi-level hug chains as op 0 nests and op 4
-                // reparents), OR remove the container, OR set a flex `grow` factor.
+                // Change a random node's layout: a flex container (with random HUG flags),
+                // OR remove the container, OR set a flex `grow`, OR make it a GRID (which
+                // clears any container — mutual exclusivity — and lays children into cells).
+                const track = () => rnd() < 0.5 ? { px: rnd() * 40 } : { fr: 1 + rnd() * 2 };
                 const r = rnd();
-                const rule = r < 0.4
+                const rule = r < 0.35
                     ? { container: { direction: pick([...dirs]), gap: rnd() * 12, padding: rnd() * 12, alignItems: pick([...aligns]), hugWidth: rnd() < 0.5, hugHeight: rnd() < 0.5 } }
-                    : r < 0.6
+                    : r < 0.5
                         ? { container: undefined }
-                        : { grow: rnd() < 0.3 ? 0 : rnd() * 3 };
+                        : r < 0.7
+                            ? { grow: rnd() < 0.3 ? 0 : rnd() * 3 }
+                            : { grid: { columns: Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), rowHeight: track(), columnGap: rnd() * 8, rowGap: rnd() * 8, padding: rnd() * 8 } };
                 dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, pick(ids), rule));
             } else if (op === 4) {
                 dispatcher.dispatchAction(new ReparentNodeAction(doc, pick(ids), rnd() < 0.5 ? null : pick(ids)));
@@ -2356,5 +2359,169 @@ describe("M2 flex-grow", () => {
             + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
             + ` "style": { "fill": "#000", "opacity": 1 }, "layout": { "grow": -1 } } } } }`;
         expect(() => deserializeDocument(bad)).toThrow("grow");
+    });
+});
+
+describe("M2 grid", () => {
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+
+    test("layoutGridChildren auto-flows row-major with fixed tracks, gaps and padding", () => {
+        // 2 cols 40px, colGap 10, rowGap 8, pad 5, rowHeight 30; 4 items -> 2 rows.
+        const cells = layoutGridChildren(
+            { columns: [{ px: 40 }, { px: 40 }], rowHeight: { px: 30 }, columnGap: 10, rowGap: 8, padding: 5 },
+            { width: 200, height: 200 }, ["a", "b", "c", "d"]);
+        expect(cells.get("a")).toEqual({ x: 5, y: 5, width: 40, height: 30 });   // r0c0
+        expect(cells.get("b")).toEqual({ x: 55, y: 5, width: 40, height: 30 });  // r0c1 (5+40+10)
+        expect(cells.get("c")).toEqual({ x: 5, y: 43, width: 40, height: 30 });  // r1c0 (5+30+8)
+        expect(cells.get("d")).toEqual({ x: 55, y: 43, width: 40, height: 30 }); // r1c1
+    });
+
+    test("fr column tracks share leftover inner width; fr rowHeight equal-shares inner height", () => {
+        // [50px, 1fr, 1fr] over width 250 -> fr tracks split the leftover 200 -> 100 each.
+        const frCols = layoutGridChildren(
+            { columns: [{ px: 50 }, { fr: 1 }, { fr: 1 }], rowHeight: { px: 40 } },
+            { width: 250, height: 100 }, ["a", "b", "c"]);
+        expect(frCols.get("a")).toMatchObject({ x: 0, width: 50 });
+        expect(frCols.get("b")).toMatchObject({ x: 50, width: 100 });
+        expect(frCols.get("c")).toMatchObject({ x: 150, width: 100 });
+
+        // rowHeight fr over height 120, 4 items in 2 cols -> 2 rows of 60 each.
+        const frRows = layoutGridChildren(
+            { columns: [{ px: 100 }, { px: 100 }], rowHeight: { fr: 1 } },
+            { width: 200, height: 120 }, ["a", "b", "c", "d"]);
+        expect(frRows.get("a")).toMatchObject({ y: 0, height: 60 });
+        expect(frRows.get("c")).toMatchObject({ y: 60, height: 60 });
+    });
+
+    test("a grid sizes its children to cells through computeGeometry (stored size ignored)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 200, height: 80 }, { grid: { columns: [{ fr: 1 }, { fr: 1 }], rowHeight: { px: 40 } } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 999, y: 999, width: 5, height: 5 }, {}));
+        doc.nodes.set("c2", mk("c2", "P", [], { x: -999, y: -999, width: 5, height: 5 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        expect(cs.nodes.get("c1")!.bounds).toEqual({ x: 0, y: 0, width: 100, height: 40 });   // fills cell
+        expect(cs.nodes.get("c2")!.bounds).toEqual({ x: 100, y: 0, width: 100, height: 40 });
+    });
+
+    test("deleting a grid item reflows the survivors into earlier cells, incrementally", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["a", "b", "c", "d"], { x: 0, y: 0, width: 200, height: 200 }, { grid: { columns: [{ px: 100 }, { px: 100 }], rowHeight: { px: 50 } } }));
+        for (const id of ["a", "b", "c", "d"]) doc.nodes.set(id, mk(id, "P", [], { x: 0, y: 0, width: 10, height: 10 }, {}));
+        doc.rootNodeUuids = ["P"];
+
+        const dispatcher = new ActionDispatcher(doc);
+        const base = computeGeometry(dispatcher.getDocument());
+        expect(base.nodes.get("b")!.bounds).toMatchObject({ x: 100, y: 0 }); // r0c1
+
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "a")); // remove the first cell
+
+        const full = computeGeometry(dispatcher.getDocument());
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, dirty);
+        expect(full.nodes.get("b")!.bounds).toMatchObject({ x: 0, y: 0 }); // b slid into a's old cell (non-vacuous)
+        expect(dirty.has("b")).toBe(false);                                // only "a" (+ parent) was reported
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+    });
+
+    test("adding an item to an fr-row grid reflows every existing row's height, incrementally", () => {
+        // fr rows => row height depends on the item COUNT. Adding an item (which reports
+        // only the NEW node) must reflow existing items — which requires the dirty climb
+        // to recognise the grid as a layout container. A px-row grid or a delete could not
+        // catch this (delete reports the parent directly; px rows don't resize on count).
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["a", "b"], { x: 0, y: 0, width: 60, height: 90 }, { grid: { columns: [{ px: 60 }], rowHeight: { fr: 1 } } }));
+        doc.nodes.set("a", mk("a", "P", [], { x: 0, y: 0, width: 10, height: 10 }, {}));
+        doc.nodes.set("b", mk("b", "P", [], { x: 0, y: 0, width: 10, height: 10 }, {}));
+        doc.rootNodeUuids = ["P"];
+
+        const dispatcher = new ActionDispatcher(doc);
+        const base = computeGeometry(dispatcher.getDocument());
+        expect(base.nodes.get("a")!.bounds.height).toBe(45); // 2 rows over 90
+
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+        dispatcher.dispatchAction(new AddNodeAction(dispatcher.getDocument(), "core.rectangle", 0, 0, 10, 10, "#fff", "c", "P"));
+
+        const full = computeGeometry(dispatcher.getDocument());
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, dirty);
+        expect(full.nodes.get("a")!.bounds.height).toBe(30); // 3 rows over 90 (non-vacuous: 45 -> 30)
+        expect(dirty.has("a")).toBe(false);                  // only "c" was reported
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+    });
+
+    test("resizing a grid item does not teleport it to its ignored stored x/y (pending absorbed)", () => {
+        // Review-found bug: the resize tool emits a pending patch built from the item's
+        // STORED geometry (x/y = 999), and a laid-out child must ignore it entirely — its
+        // whole rect is the cell. Previously a pending patch leaked x/y and the item flew
+        // off to (999,999) during the drag.
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1"], { x: 0, y: 0, width: 200, height: 80 }, { grid: { columns: [{ fr: 1 }, { fr: 1 }], rowHeight: { px: 40 } } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 999, y: 999, width: 5, height: 5 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const pending = new Map([["c1", { x: 999, y: 999, width: 15, height: 15 }]]);
+        expect(computeGeometry(doc, pending).nodes.get("c1")!.bounds).toEqual({ x: 0, y: 0, width: 100, height: 40 });
+    });
+
+    test("a transaction setting container THEN grid on one node keeps the GRID, not neither", () => {
+        // Review-found bug: the merged delta carried BOTH, and the old post-hoc "clear
+        // both" dropped both -> a silent empty layout. Exclusivity now lives in the delta
+        // (each set clears the other), so the field-by-field merge is last-wins.
+        const doc = createDocWithParentChild();
+        const dispatcher = new ActionDispatcher(doc);
+        const tx = new TransactionAction(doc, "flex-then-grid", [
+            new UpdateNodeLayoutAction(doc, "parent-001", { container: { direction: "row" } }),
+            new UpdateNodeLayoutAction(doc, "parent-001", { grid: { columns: [{ px: 20 }], rowHeight: { px: 20 } } }),
+        ]);
+        expect(dispatcher.dispatchAction(tx).success).toBe(true);
+        const p = dispatcher.getDocument().nodes.get("parent-001")!;
+        expect(p.layout.grid).toBeDefined();       // last set wins
+        expect(p.layout.container).toBeUndefined(); // not both — and crucially not NEITHER
+    });
+
+    test("isLayoutContainer recognises a grid; grid and flex-container are mutually exclusive", () => {
+        expect(isLayoutContainer({ layout: { grid: { columns: [{ px: 10 }], rowHeight: { px: 10 } } } })).toBe(true);
+
+        // Setting a grid clears an existing flex container (and vice versa).
+        const doc = createDocWithParentChild();
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, "parent-001", { container: { direction: "row" } }));
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, "parent-001", { grid: { columns: [{ px: 20 }], rowHeight: { px: 20 } } }));
+        let p = dispatcher.getDocument().nodes.get("parent-001")!;
+        expect(p.layout.container).toBeUndefined();
+        expect(p.layout.grid).toBeDefined();
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "parent-001", { container: { direction: "column" } }));
+        p = dispatcher.getDocument().nodes.get("parent-001")!;
+        expect(p.layout.grid).toBeUndefined();
+        expect(p.layout.container).toBeDefined();
+
+        // A single patch carrying BOTH is rejected on the edit path.
+        expect(new UpdateNodeLayoutAction(doc, "parent-001", { container: { direction: "row" }, grid: { columns: [{ px: 10 }], rowHeight: { px: 10 } } }).validate()).toBe(false);
+    });
+
+    test("grid is a write-path citizen: validation, schema-6 round-trip, both-paths rejection", () => {
+        const d = createDocWithParentChild();
+        const ok = (grid: any) => new UpdateNodeLayoutAction(d, "parent-001", { grid }).validate();
+        expect(ok({ columns: [{ px: 50 }], rowHeight: { px: 40 } })).toBe(true);
+        expect(ok({ columns: [], rowHeight: { px: 40 } })).toBe(false);                 // empty columns
+        expect(ok({ columns: [{ px: -5 }], rowHeight: { px: 40 } })).toBe(false);       // px < 0
+        expect(ok({ columns: [{ fr: 0 }], rowHeight: { px: 40 } })).toBe(false);        // fr must be > 0
+        expect(ok({ columns: [{ px: 5, fr: 1 }], rowHeight: { px: 40 } })).toBe(false); // both px + fr
+        expect(ok({ columns: [{ px: 50 }], rowHeight: { fr: -1 } })).toBe(false);       // bad rowHeight
+
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "parent-001", { grid: { columns: [{ px: 50 }, { fr: 1 }], rowHeight: { px: 40 }, columnGap: 4 } }));
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+
+        const envelope = (layout: string) => `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
+            + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
+            + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
+            + ` "style": { "fill": "#000", "opacity": 1 }, "layout": ${layout} } } } }`;
+        // Load path rejects a malformed track exactly as the edit path does.
+        expect(() => deserializeDocument(envelope(`{ "grid": { "columns": [{ "fr": 0 }], "rowHeight": { "px": 10 } } }`))).toThrow();
+        // ...and a document carrying BOTH grid and container.
+        expect(() => deserializeDocument(envelope(`{ "container": { "direction": "row" }, "grid": { "columns": [{ "px": 10 }], "rowHeight": { "px": 10 } } }`))).toThrow("mutually exclusive");
     });
 });

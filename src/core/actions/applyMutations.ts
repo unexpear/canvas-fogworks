@@ -96,6 +96,10 @@ export function applyMutationsToDocument(
                 if (delta.geometry) Object.assign(node.geometry, delta.geometry);
                 if (delta.transform) node.transform = { ...node.transform, ...delta.transform };
                 if (delta.style) Object.assign(node.style, delta.style);
+                // grid ⊕ container exclusivity is carried IN the delta by
+                // UpdateNodeLayoutAction (it sets the other field to `undefined`), so a
+                // plain field-by-field merge is correct — and a merged transaction delta
+                // resolves last-wins instead of dropping both.
                 if (delta.layout) Object.assign(node.layout, delta.layout);
                 if (delta.text !== undefined) node.text = delta.text;
                 if (delta.src !== undefined) node.src = delta.src;
