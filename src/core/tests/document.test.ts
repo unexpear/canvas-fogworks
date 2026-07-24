@@ -18,7 +18,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds } from "../geometry/GeometryEngine";
-import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
+import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
 import { clampViewport, createEditorState } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
@@ -1580,13 +1580,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "14" that has no 13→14 step: the
+        // Pretending the build has moved to a schema "15" that has no 14→15 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→13), and then REFUSED at "13" — never re-stamped straight to the current
-        // schema. The error naming "13" (not "1") is the proof the chain actually ran.
+        // (1→2→…→14), and then REFUSED at "14" — never re-stamped straight to the current
+        // schema. The error naming "14" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 12→13 landed for grid spans.)
-        expect(() => migrateIfNeeded(legacy, "14")).toThrow('Migration not implemented for document schema "13"');
+        // time a real migration is added — here, when 13→14 landed for per-side margins.)
+        expect(() => migrateIfNeeded(legacy, "15")).toThrow('Migration not implemented for document schema "14"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -2056,8 +2056,9 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
                                     // constraints: the action auto-captures constraintRef; op-2 resizes
                                     // (source a) and op-3 toggles + a later resize (source b) drive it.
                                     ? { constraints: { horizontal: hMode, vertical: vMode } }
-                                    // absolute-escape (out of flow) and/or a flex margin.
-                                    : { position: rnd() < 0.5 ? "absolute" : undefined, margin: rnd() * 10 };
+                                    // absolute-escape (out of flow) and/or a flex/grid margin —
+                                    // sometimes a uniform number, sometimes a per-side object.
+                                    : { position: rnd() < 0.5 ? "absolute" : undefined, margin: rnd() < 0.5 ? rnd() * 10 : { top: rnd() * 8, right: rnd() * 8, bottom: rnd() * 8, left: rnd() * 8 } };
                 dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, pick(ids), rule as any));
             } else if (op === 4) {
                 dispatcher.dispatchAction(new ReparentNodeAction(doc, pick(ids), rnd() < 0.5 ? null : pick(ids)));
@@ -2914,12 +2915,111 @@ describe("M2 grid spans", () => {
     });
 });
 
+describe("M2 per-side + grid-cell margins", () => {
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+
+    test("resolveMargin: a number is uniform; an object is per-side; omitted/negative sides are 0", () => {
+        expect(resolveMargin(5)).toEqual({ top: 5, right: 5, bottom: 5, left: 5 });
+        expect(resolveMargin({ top: 1, left: 2 })).toEqual({ top: 1, right: 0, bottom: 0, left: 2 });
+        expect(resolveMargin(undefined)).toEqual({ top: 0, right: 0, bottom: 0, left: 0 });
+        expect(resolveMargin({ top: -3, right: 4 })).toEqual({ top: 0, right: 4, bottom: 0, left: 0 }); // negative clamps
+    });
+
+    test("per-side margins in a ROW map left/right to main and top/bottom to cross", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 200, height: 100 },
+            { container: { direction: "row", gap: 0 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 30, height: 10 }, { margin: { left: 5, right: 15, top: 8, bottom: 0 } }));
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 20, height: 10 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // main = left(5) before + right(15) after; cross = top(8). c1 x=5; c2 x = 5+30+15 = 50.
+        expect(cs.nodes.get("c1")!.bounds).toEqual({ x: 5, y: 8, width: 30, height: 10 });
+        expect(cs.nodes.get("c2")!.bounds).toEqual({ x: 50, y: 0, width: 20, height: 10 });
+    });
+
+    test("per-side margins in a COLUMN map top/bottom to main and left/right to cross", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 100, height: 200 },
+            { container: { direction: "column", gap: 0 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 10, height: 30 }, { margin: { top: 5, bottom: 15, left: 8 } }));
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 10, height: 20 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // main = top(5) before + bottom(15) after; cross = left(8). c1 y=5; c2 y = 5+30+15 = 50.
+        expect(cs.nodes.get("c1")!.bounds).toEqual({ x: 8, y: 5, width: 10, height: 30 });
+        expect(cs.nodes.get("c2")!.bounds).toEqual({ x: 0, y: 50, width: 10, height: 20 });
+    });
+
+    test("a hug row's main size includes the asymmetric per-side margins", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 999, height: 50 },
+            { container: { direction: "row", hugWidth: true, gap: 0 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 30, height: 10 }, { margin: { left: 5, right: 15 } }));
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 20, height: 10 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // hugWidth = (5 + 15 + 30) + (0 + 0 + 20) = 70.
+        expect(cs.nodes.get("P")!.bounds.width).toBe(70);
+    });
+
+    test("a grid-cell margin insets the child within its cell", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1"], { x: 0, y: 0, width: 60, height: 40 },
+            { grid: { columns: [{ px: 60 }], rowHeight: { px: 40 }, padding: 0 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 5, height: 5 }, { margin: { left: 5, right: 10, top: 8, bottom: 2 } }));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // cell 60×40; inset: x=5, y=8, width = 60-5-10 = 45, height = 40-8-2 = 30.
+        expect(cs.nodes.get("c1")!.bounds).toEqual({ x: 5, y: 8, width: 45, height: 30 });
+    });
+
+    test("an auto grid track grows to fit the child PLUS its margins", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1"], { x: 0, y: 0, width: 999, height: 999 },
+            { grid: { columns: [{ auto: true }], rowHeight: { px: 10 }, hugWidth: true, padding: 0 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 30, height: 5 }, { margin: { left: 5, right: 10 } }));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // auto col = child width 30 + left 5 + right 10 = 45; hugWidth = 45. c1 inset back to its own 30.
+        expect(cs.nodes.get("P")!.bounds.width).toBe(45);
+        expect(cs.nodes.get("c1")!.bounds).toMatchObject({ x: 5, width: 30 });
+    });
+
+    test("margins are write-path citizens: number + per-side, schema-14 round-trip, both-paths rejection", () => {
+        const d = createDocWithParentChild();
+        const ok = (l: any) => new UpdateNodeLayoutAction(d, "child-001", l).validate();
+        expect(ok({ margin: 5 })).toBe(true);
+        expect(ok({ margin: { top: 1, left: 2 } })).toBe(true);
+        expect(ok({ margin: { top: -1 } })).toBe(false);   // negative side
+        expect(ok({ margin: { top: "x" } })).toBe(false);  // non-number side
+        expect(ok({ margin: "big" })).toBe(false);         // neither number nor object
+        expect(ok({ margin: -5 })).toBe(false);            // negative number
+        expect(ok({ margin: [1, 2, 3, 4] })).toBe(false);  // an array is not a Margins (review regression — would silently zero)
+
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "child-001", { margin: { top: 3, right: 4 } }));
+        const reloaded = deserializeDocument(serializeDocument(dispatcher.getDocument()));
+        expect(reloaded.nodes.get("child-001")!.layout.margin).toEqual({ top: 3, right: 4 });
+
+        const envelope = (layout: string) => `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
+            + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
+            + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
+            + ` "style": { "fill": "#000", "opacity": 1 }, "layout": ${layout} } } } }`;
+        expect(() => deserializeDocument(envelope(`{ "margin": { "top": -1 } }`))).toThrow();
+        expect(() => deserializeDocument(envelope(`{ "margin": "big" }`))).toThrow();
+        expect(() => deserializeDocument(envelope(`{ "margin": [1, 2, 3, 4] }`))).toThrow(); // array rejected on load, not silently zeroed
+    });
+});
+
 describe("M2 flex wrap", () => {
     const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
         ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
 
     test("breakFlexLines: break predicate, first-fits, margins, empty, nowrap", () => {
-        const it = (main: number, cross: number, margin = 0) => ({ main, cross, margin });
+        // `margin` here is the per-axis TOTAL (before + after) — the old symmetric 2·margin.
+        const it = (main: number, cross: number, margin = 0) => ({ main, cross, marginMain: 2 * margin, marginCross: 2 * margin });
         // innerMain 100, gap 10: [40,40] = 40+10+40 = 90 ≤ 100 stays; +40 -> 140 > 100 wraps.
         const l = breakFlexLines([it(40, 5), it(40, 8), it(40, 5)], 100, 10, true);
         expect(l.map(x => x.items)).toEqual([[0, 1], [2]]);
@@ -2929,8 +3029,10 @@ describe("M2 flex wrap", () => {
         expect(breakFlexLines([it(45, 1), it(45, 1)], 100, 10, true)).toHaveLength(1);
         // first child always fits even if it alone overflows.
         expect(breakFlexLines([it(200, 1)], 100, 0, true)).toEqual([{ items: [0], cross: 1 }]);
-        // margins count into the item main: (40 + 2·5) each, gap 0 -> [0,1] then [2].
-        expect(breakFlexLines([it(40, 1, 5), it(40, 1, 5), it(40, 1, 5)], 100, 0, true).map(x => x.items)).toEqual([[0, 1], [2]]);
+        // margins count into the item main and CHANGE the break: two 40-wide items fit bare
+        // (80 ≤ 100), but with margin 10 (total 20) each item is 60, so 60+60=140 > 100 wraps.
+        expect(breakFlexLines([it(40, 1), it(40, 1)], 100, 0, true).map(x => x.items)).toEqual([[0, 1]]);         // bare -> one line
+        expect(breakFlexLines([it(40, 1, 10), it(40, 1, 10)], 100, 0, true).map(x => x.items)).toEqual([[0], [1]]); // margined -> wraps
         expect(breakFlexLines([], 100, 0, true)).toEqual([]);                       // empty -> []
         expect(breakFlexLines([it(40, 1), it(40, 1), it(40, 1)], 100, 10, false)).toHaveLength(1); // nowrap -> one line
     });

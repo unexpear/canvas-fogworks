@@ -116,12 +116,14 @@ export interface Layout {
      */
     position?: "absolute";
     /**
-     * Per-child margin (Milestone 2), uniform on all sides, in a FLEX parent's flow: the
-     * child is spaced `margin` from its neighbours on the main axis and inset `margin` on
-     * the cross axis. Absent = 0. Ignored for a grid child, a constrained/absolute child,
-     * or a child of a plain parent (out of flow). >= 0.
+     * Per-child margin (Milestone 2). A single `number` is uniform on all four sides; a
+     * `Margins` object gives PER-SIDE margins (any omitted side = 0). In a FLEX parent it is
+     * flow spacing (main-axis before/after + cross-axis inset, mapped from the physical sides by
+     * `direction`); in a GRID parent it insets the child WITHIN its cell (and an `auto` track
+     * grows to fit the child + its margins). Absent = 0. Ignored for a constrained/absolute
+     * child or a child of a plain parent (out of flow). Every side >= 0.
      */
-    margin?: number;
+    margin?: number | Margins;
     /**
      * Grid SPAN (Milestone 2). How many columns / rows this node occupies in its GRID parent's
      * auto-placement. Absent = 1 (a single cell). `colSpan` is clamped to the column count; a
@@ -153,6 +155,14 @@ export type VConstraint = "top" | "bottom" | "top-bottom" | "center" | "scale";
 export interface Constraints {
     horizontal?: HConstraint;
     vertical?: VConstraint;
+}
+
+/** Per-side margins (any omitted side = 0). The object form of `Layout.margin`. */
+export interface Margins {
+    top?: number;
+    right?: number;
+    bottom?: number;
+    left?: number;
 }
 
 /**
@@ -238,6 +248,20 @@ const ALIGNMENTS = new Set(["start", "center", "end", "stretch"]);
 const H_CONSTRAINTS = new Set(["left", "right", "left-right", "center", "scale"]);
 const V_CONSTRAINTS = new Set(["top", "bottom", "top-bottom", "center", "scale"]);
 
+/** Validity check for `Layout.margin` — a finite `number >= 0`, or a `Margins` object of finite `>= 0` sides. */
+function marginError(m: unknown): string | null {
+    if (typeof m === "number") return (!Number.isFinite(m) || m < 0) ? "must be finite and >= 0" : null;
+    // Reject arrays (and non-objects): an array is `typeof "object"` but is not a `Margins`, and
+    // without this guard it would validate clean (every named side reads `undefined`) and silently
+    // drop to {0,0,0,0} — a round-trip-closure gap, since TypeScript forbids an array at the edit path.
+    if (typeof m !== "object" || m === null || Array.isArray(m)) return "must be a number or a per-side object";
+    for (const side of ["top", "right", "bottom", "left"] as const) {
+        const v = (m as Record<string, unknown>)[side];
+        if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v < 0)) return `${side} must be finite and >= 0`;
+    }
+    return null;
+}
+
 /** Validity check for one grid `TrackSize` — exactly one of `px` (≥0), `fr` (>0), or `auto` (true). */
 function trackError(t: unknown): string | null {
     if (typeof t !== "object" || t === null) return "must be an object";
@@ -265,7 +289,10 @@ export function layoutError(l: Partial<Layout>): string | null {
     // early return, or a `{ grow: -5 }` patch would slip through unvalidated.
     if (l.grow !== undefined && (!Number.isFinite(l.grow) || l.grow < 0)) return "layout.grow must be finite and >= 0";
     if (l.shrink !== undefined && (!Number.isFinite(l.shrink) || l.shrink < 0)) return "layout.shrink must be finite and >= 0";
-    if (l.margin !== undefined && (!Number.isFinite(l.margin) || l.margin < 0)) return "layout.margin must be finite and >= 0";
+    if (l.margin !== undefined) {
+        const e = marginError(l.margin);
+        if (e) return `layout.margin ${e}`;
+    }
     // Grid spans: positive integers, capped so the derived row count cannot OOM. Per-child
     // (grid children have no container), so validate BEFORE the no-container early return.
     if (l.colSpan !== undefined && (!Number.isInteger(l.colSpan) || l.colSpan < 1 || l.colSpan > GRID_SPAN_MAX)) return `layout.colSpan must be an integer in [1, ${GRID_SPAN_MAX}]`;

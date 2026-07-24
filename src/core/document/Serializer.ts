@@ -214,6 +214,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "10") { raw = migrate_10_to_11(raw); version = "11"; }
     if (version === "11") { raw = migrate_11_to_12(raw); version = "12"; }
     if (version === "12") { raw = migrate_12_to_13(raw); version = "13"; }
+    if (version === "13") { raw = migrate_13_to_14(raw); version = "14"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -292,6 +293,11 @@ function migrate_11_to_12(raw: any): any {
 /** Schema 12 → 13: adds `Layout.colSpan`/`rowSpan` (grid item spans). Pass-through by content. */
 function migrate_12_to_13(raw: any): any {
     return { ...raw, version: "13" };
+}
+
+/** Schema 13 → 14: widens `Layout.margin` to `number | Margins` + grid-cell margins. Pass-through by content. */
+function migrate_13_to_14(raw: any): any {
+    return { ...raw, version: "14" };
 }
 
 /**

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v13 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug/spans), constraints, absolute + margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v14 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug/spans), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -74,10 +74,12 @@ interface Layout {     // constraint intent, not absolute position (Milestone 2)
   constraints?: Constraints;                           // M2 anchors (child of a PLAIN parent) — LIVE
   constraintRef?: { width: number; height: number };  // frozen parent-size reference for `constraints`
   position?: "absolute";                               // M2 out-of-flow escape — LIVE
-  margin?: number;                                     // M2 uniform flex-flow spacing — LIVE
+  margin?: number | Margins;                           // M2 flex spacing / grid-cell inset — LIVE (uniform or per-side)
   colSpan?: number;                                    // M2 grid item span — LIVE; integer [1, GRID_SPAN_MAX]
   rowSpan?: number;                                    // M2 grid item span — LIVE; integer [1, GRID_SPAN_MAX]
 }
+
+interface Margins { top?: number; right?: number; bottom?: number; left?: number }  // per-side; any omitted side = 0
 
 interface Constraints {              // how this child responds when its PLAIN parent resizes
   horizontal?: "left" | "right" | "left-right" | "center" | "scale";  // default "left"
@@ -354,19 +356,27 @@ constraints (inert).
 "absolute"` takes a child OUT of its flex/grid parent's flow: it claims no slot/cell, does
 not contribute to the parent's hug size or consume flex free-space, and is positioned by
 its stored geometry + `constraints` relative to the parent's box (like CSS
-`position: absolute`) — so it stays draggable. `Layout.margin` (uniform, ≥ 0) is per-child
-spacing in a **flex** parent's flow: `margin` on the main axis before and after the child
-(folded into the grow free-space and the hug measure) and an inset on the cross axis.
-Margins are ignored for grid children, constrained/absolute children, and children of a
-plain parent (all out of the flex flow). Both are validated on both paths. **Absent means
-in-flow / 0**, so every schema-7 document is a valid schema-8 document — `migrate_7_to_8`
-is a pass-through; the bump is required because a schema-7 build would lay an absolute child
-into the flow and ignore its margin.
+`position: absolute`) — so it stays draggable. `Layout.margin` (schema 8, uniform ≥ 0) is
+per-child spacing in a **flex** parent's flow: main-axis before/after + a cross-axis inset.
+**Absent means in-flow / 0**, so every schema-7 document is a valid schema-8 document —
+`migrate_7_to_8` is a pass-through; the bump is required because a schema-7 build would lay an
+absolute child into the flow and ignore its margin.
 
-> **Still deferred (not in schema 13):** align-content / wrap-reverse, per-side margins,
-> responsive/breakpoint rules, grid-cell margins, the constrained-child re-baseline (above),
-> and the grid tail remainder (explicit line-based placement, dense packing, column auto-flow,
-> `minmax()`/`fit-content` tracks). These are M2's remaining deliverables — see
+**Per-side + grid-cell margins (schema 14).** `Layout.margin` widens to `number | Margins`: a
+plain number stays uniform, a `Margins` object gives per-side top/right/bottom/left (any omitted
+side = 0, every side ≥ 0). Physical sides map to a flex container's LOGICAL axes by `direction`
+(row: left/right = main before/after, top/bottom = cross; column transposed) — the measure fold
+and the position pass map identically, so a hugged container agrees with its children. Margins
+now also apply to a **grid** child: they INSET it within its cell, and an `auto` track grows to
+fit the child + its horizontal/vertical margins (so the inset gives the child its own size). A
+plain number is the old behaviour, so `migrate_13_to_14` is a pass-through; the bump is required
+because a schema-13 build would not understand a per-side object and would ignore a grid child's
+margin. Validated (number ≥ 0, or a `Margins` of finite ≥ 0 sides) on both paths.
+
+> **Still deferred (not in schema 14):** align-content / wrap-reverse,
+> responsive/breakpoint rules, the constrained-child re-baseline (above), and the grid tail
+> remainder (explicit line-based placement, dense packing, column auto-flow, `minmax()`/
+> `fit-content` tracks). These are M2's remaining deliverables — see
 > [MILESTONES.md](../MILESTONES.md) § Milestone 2.
 
 > **It bumped `SCHEMA_VERSION` to `"2"`** — as the freeze rule required, with a
@@ -466,7 +476,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"13"`; chain: …10→11 grid `auto` tracks + hug, 11→12 flex wrap, 12→13 grid spans) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"14"`; chain: …11→12 flex wrap, 12→13 grid spans, 13→14 per-side/grid margins) | **only** when the persisted shape changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

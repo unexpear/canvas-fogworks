@@ -96,8 +96,13 @@ export const CURRENT_VERSION: string =
  *   "13" — adds `Layout.colSpan`/`rowSpan` (grid item spans) for Milestone 2. Absent = 1 (a
  *         single cell), so `migrate_12_to_13` is a pass-through — but a schema-12 build would
  *         ignore the spans and mis-place / mis-size the grid's cells.
+ *
+ *   "14" — widens `Layout.margin` to `number | Margins` (per-side margins) and applies it to
+ *         GRID children (cell inset), not just flex. A plain `number` is the old uniform
+ *         margin, so `migrate_13_to_14` is a pass-through — but a schema-13 build would not
+ *         understand a per-side object and would ignore a grid child's margin.
  */
-export const SCHEMA_VERSION = "13";
+export const SCHEMA_VERSION = "14";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

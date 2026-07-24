@@ -24,7 +24,7 @@ import {
     ProjectDocument, ReadonlyDocument, createEmptyDocument,
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
-import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, layoutError, Layout } from "../document/Node";
+import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, Layout } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
@@ -32,7 +32,7 @@ import {
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
-import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, GridCell, breakFlexLines, FlexLine, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
+import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, GridCell, breakFlexLines, FlexLine, resolveMargin, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
 import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot } from "../actions/types";
@@ -114,7 +114,10 @@ export function __apiSurfacePin(): void {
     expectType<LayoutContainer>(container);
     expectType<string | null>(layoutError({ container } as Partial<Layout>));
     expectType<Map<string, Rect>>(layoutChildren(container, { width: 1, height: 1 }, [{ id: "a", width: 1, height: 1 }]));
-    expectType<FlexLine[]>(breakFlexLines([{ main: 1, cross: 1, margin: 0 }], 1, 0, true));
+    expectType<FlexLine[]>(breakFlexLines([{ main: 1, cross: 1, marginMain: 0, marginCross: 0 }], 1, 0, true));
+    const margins: Margins = { top: 1, left: 2 };
+    expectType<{ top: number; right: number; bottom: number; left: number }>(resolveMargin(margins));
+    expectType<{ top: number; right: number; bottom: number; left: number }>(resolveMargin(5));
     expectType<Set<string>>(expandDirtyForLayout(doc, new Set<string>()));
     expectType<boolean>(isLayoutContainer(doc.nodes.get("id")));
     expectType<boolean>(isAbsolute(doc.nodes.get("id")));

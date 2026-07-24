@@ -23,7 +23,7 @@
  */
 
 import { ReadonlyDocument } from "../document/Document";
-import { Constraints, Geometry, GRID_MAX_TRACKS, GRID_SPAN_MAX, LayoutContainer, LayoutGrid, TrackSize } from "../document/Node";
+import { Constraints, Geometry, GRID_MAX_TRACKS, GRID_SPAN_MAX, LayoutContainer, LayoutGrid, Margins, TrackSize } from "../document/Node";
 import { ReadonlyNode } from "../document/SceneGraph";
 import { Rect } from "./Matrix";
 
@@ -87,18 +87,19 @@ export function measureIntrinsicSizes(
             const row = c.direction === "row";
             const gap = c.gap ?? 0;
             const pad = c.padding ?? 0;
-            const items: { main: number; cross: number; margin: number }[] = [];
+            const items: { main: number; cross: number; marginMain: number; marginCross: number }[] = [];
             let mainSum = 0;
             for (const childId of node.children) {
                 const childNode = byId.get(childId);
                 if (isAbsolute(childNode)) continue; // out of flow — no contribution to hug size
                 const own = measured.get(childId);   // already measured (bottom-up)
                 if (!own) continue;                  // damaged/unmeasured child — skip (stays total)
-                const m = Math.max(0, childNode?.layout.margin ?? 0);
+                const lm = logicalMargin(resolveMargin(childNode?.layout.margin), row);
                 const cm = row ? own.width : own.height;
                 const cc = row ? own.height : own.width;
-                items.push({ main: cm, cross: cc, margin: m });
-                mainSum += 2 * m + cm;
+                const marginMain = lm.mainBefore + lm.mainAfter;
+                items.push({ main: cm, cross: cc, marginMain, marginCross: lm.crossBefore + lm.crossAfter });
+                mainSum += marginMain + cm;
             }
             const mainHug = 2 * pad + mainSum + gap * Math.max(0, items.length - 1);
             // WRAP: the cross axis hugs the STACKED lines. Inert when the MAIN axis hugs (no
@@ -114,7 +115,7 @@ export function measureIntrinsicSizes(
                 crossHug = 2 * pad + crossSum + gap * Math.max(0, lines.length - 1);
             } else {
                 let crossMax = 0;
-                for (const it of items) crossMax = Math.max(crossMax, 2 * it.margin + it.cross);
+                for (const it of items) crossMax = Math.max(crossMax, it.marginCross + it.cross);
                 crossHug = 2 * pad + crossMax; // empty container → 2*pad
             }
             // Overwrite ONLY the hugged PHYSICAL axis; the other keeps pending ?? stored.
@@ -130,13 +131,13 @@ export function measureIntrinsicSizes(
         // the position pass's filter or the auto-track flow indices would drift.
         const gr = node.layout.grid;
         if (gr && (gr.hugWidth || gr.hugHeight)) {
-            const inFlow: { width: number; height: number; colSpan?: number; rowSpan?: number }[] = [];
+            const inFlow: { width: number; height: number; colSpan?: number; rowSpan?: number; margin?: number | Margins }[] = [];
             for (const childId of node.children) {
                 const childNode = byId.get(childId);
                 if (isAbsolute(childNode)) continue;
                 const own = measured.get(childId);
                 if (!own) continue;
-                inFlow.push({ width: own.width, height: own.height, colSpan: childNode?.layout.colSpan, rowSpan: childNode?.layout.rowSpan });
+                inFlow.push({ width: own.width, height: own.height, colSpan: childNode?.layout.colSpan, rowSpan: childNode?.layout.rowSpan, margin: childNode?.layout.margin });
             }
             const pad = gr.padding ?? 0;
             const { colWidths, rowHeights, cols, rows } = resolveGridTracks(gr, inFlow, { width, height });
@@ -146,6 +147,33 @@ export function measureIntrinsicSizes(
         measured.set(node.id, { width, height });
     }
     return measured;
+}
+
+/** A resolved per-side margin (physical sides, each ≥ 0). */
+type PhysicalMargin = { top: number; right: number; bottom: number; left: number };
+
+/** Resolve `Layout.margin` (a uniform number or a per-side object) to explicit physical sides (each ≥ 0). */
+export function resolveMargin(m: number | Margins | undefined): PhysicalMargin {
+    if (typeof m === "number") { const v = Math.max(0, m); return { top: v, right: v, bottom: v, left: v }; }
+    return {
+        top: Math.max(0, m?.top ?? 0),
+        right: Math.max(0, m?.right ?? 0),
+        bottom: Math.max(0, m?.bottom ?? 0),
+        left: Math.max(0, m?.left ?? 0),
+    };
+}
+
+/**
+ * Map physical margins to a flex container's LOGICAL axes by `direction`. For a `row` the main
+ * axis is horizontal (before = left, after = right) and the cross is vertical; for a `column` the
+ * main axis is vertical (before = top, after = bottom) and the cross is horizontal. The measure
+ * fold and the position pass BOTH map through this, so a hugged container's size and its laid-out
+ * children agree on where each margin lands.
+ */
+function logicalMargin(pm: PhysicalMargin, row: boolean): { mainBefore: number; mainAfter: number; crossBefore: number; crossAfter: number } {
+    return row
+        ? { mainBefore: pm.left, mainAfter: pm.right, crossBefore: pm.top, crossAfter: pm.bottom }
+        : { mainBefore: pm.top, mainAfter: pm.bottom, crossBefore: pm.left, crossAfter: pm.right };
 }
 
 /** One wrapped flex line: indices into the caller's item list, and the line's cross extent. */
@@ -162,14 +190,15 @@ export interface FlexLine {
  * lays out (the grid lesson: one resolver called both places cannot drift).
  *
  * Children pack along the main axis in order; a new line starts when the current line is
- * NON-EMPTY and adding the next item (its `2·margin + main`, plus one `gap`) would exceed
+ * NON-EMPTY and adding the next item (its `marginMain + main`, plus one `gap`) would exceed
  * `innerMain` (strict `>`, so an exact fit stays). The FIRST item on a line always stays, even
  * if it alone overflows. `wrap === false` returns a single line holding every item — the
- * nowrap path, byte-identical to the pre-wrap single stack. Pure and TOTAL (never throws): an
- * empty list returns `[]`, and every line has ≥1 item, so there is no division or bounds hazard.
+ * nowrap path, byte-identical to the pre-wrap single stack. `marginMain`/`marginCross` are the
+ * before+after margin TOTALS on each axis (already mapped from the physical sides by direction).
+ * Pure and TOTAL (never throws): an empty list returns `[]`, and every line has ≥1 item.
  */
 export function breakFlexLines(
-    items: readonly { main: number; cross: number; margin: number }[],
+    items: readonly { main: number; cross: number; marginMain: number; marginCross: number }[],
     innerMain: number,
     gap: number,
     wrap: boolean
@@ -178,7 +207,7 @@ export function breakFlexLines(
     let cur: number[] | null = null;
     let curMain = 0;
     for (let i = 0; i < items.length; i++) {
-        const itemMain = 2 * Math.max(0, items[i].margin) + items[i].main;
+        const itemMain = Math.max(0, items[i].marginMain) + items[i].main;
         if (cur === null) {
             cur = [i]; curMain = itemMain; lineIdx.push(cur);
         } else if (wrap && curMain + gap + itemMain > innerMain) {
@@ -190,7 +219,7 @@ export function breakFlexLines(
     return lineIdx.map(idxs => {
         let cross = 0;
         for (const idx of idxs) {
-            const c = 2 * Math.max(0, items[idx].margin) + items[idx].cross;
+            const c = Math.max(0, items[idx].marginCross) + items[idx].cross;
             if (c > cross) cross = c;
         }
         return { items: idxs, cross };
@@ -212,7 +241,7 @@ export function breakFlexLines(
 export function layoutChildren(
     container: LayoutContainer,
     parentSize: { width: number; height: number },
-    children: readonly { id: string; width: number; height: number; grow?: number; shrink?: number; margin?: number }[]
+    children: readonly { id: string; width: number; height: number; grow?: number; shrink?: number; margin?: number | Margins }[]
 ): Map<string, Rect> {
     const gap = container.gap ?? 0;
     const pad = container.padding ?? 0;
@@ -225,11 +254,14 @@ export function layoutChildren(
     const mainOf = (c: { width: number; height: number }) => row ? c.width : c.height;
     const crossOf = (c: { width: number; height: number }) => row ? c.height : c.width;
 
+    // Per-child LOGICAL margins (physical sides mapped by direction — the position pass and the
+    // measure fold map identically, so a hugged container agrees with its children).
+    const margins = children.map(c => logicalMargin(resolveMargin(c.margin), row));
     // WRAP is inert when the MAIN axis hugs — a hugged main has no definite size to wrap
     // against (like `grow` under a hugged main); the same expression the measure fold uses,
     // so both passes break into the SAME lines.
     const effectiveWrap = container.wrap === true && !(row ? container.hugWidth : container.hugHeight);
-    const items = children.map(c => ({ main: mainOf(c), cross: crossOf(c), margin: Math.max(0, c.margin ?? 0) }));
+    const items = children.map((c, i) => ({ main: mainOf(c), cross: crossOf(c), marginMain: margins[i].mainBefore + margins[i].mainAfter, marginCross: margins[i].crossBefore + margins[i].crossAfter }));
     const lines = breakFlexLines(items, innerMain, gap, effectiveWrap);
     const singleLine = lines.length <= 1;
 
@@ -237,17 +269,17 @@ export function layoutChildren(
     let crossCursor = pad; // cross-axis offset of the current line's leading edge
     for (const line of lines) {
         // Free space drives grow (leftover) OR shrink (overflow), computed PER LINE — each
-        // line distributes its own slack (CSS wrap behaviour). `margin` (2·margin, before +
-        // after) is counted into `used` FIRST, so it is never grown or shrunk. Grow takes all
-        // the leftover by `grow` ratio (differs from CSS: a lone `grow: 0.5` still fills the
-        // line); shrink gives up the DEFICIT weighted by `shrink × base-main`, clamped at 0.
+        // line distributes its own slack (CSS wrap behaviour). Each child's main margins
+        // (before + after) are counted into `used` FIRST, so they are never grown or shrunk.
+        // Grow takes all the leftover by `grow` ratio (differs from CSS: a lone `grow: 0.5`
+        // still fills the line); shrink gives up the DEFICIT weighted by `shrink × base-main`.
         let usedMain = gap * Math.max(0, line.items.length - 1);
         let growSum = 0;
         let shrinkWeight = 0;
         for (const idx of line.items) {
             const c = children[idx];
             const baseMain = mainOf(c);
-            usedMain += 2 * Math.max(0, c.margin ?? 0) + baseMain;
+            usedMain += margins[idx].mainBefore + margins[idx].mainAfter + baseMain;
             growSum += Math.max(0, c.grow ?? 0);
             shrinkWeight += Math.max(0, c.shrink ?? 0) * baseMain;
         }
@@ -262,7 +294,7 @@ export function layoutChildren(
         let cursor = pad; // main-axis offset, reset at each line
         for (const idx of line.items) {
             const c = children[idx];
-            const m = Math.max(0, c.margin ?? 0);
+            const lm = margins[idx];
             const grow = Math.max(0, c.grow ?? 0);
             const shrink = Math.max(0, c.shrink ?? 0);
             const baseMain = mainOf(c);
@@ -271,20 +303,20 @@ export function layoutChildren(
                     : shrinking && shrink > 0 ? Math.max(0, baseMain - (-free) * (shrink * baseMain / shrinkWeight))
                         : baseMain;
             const ownCross = crossOf(c);
-            const availCross = bandCross - 2 * m;
+            const availCross = bandCross - lm.crossBefore - lm.crossAfter;
             const crossSize = align === "stretch" ? Math.max(0, availCross) : ownCross;
 
             let crossOff = 0; // within the available cross, before the leading cross margin
             if (align === "center") crossOff = (availCross - crossSize) / 2;
             else if (align === "end") crossOff = availCross - crossSize;
-            const cross = crossCursor + m + crossOff;
+            const cross = crossCursor + lm.crossBefore + crossOff;
 
-            cursor += m; // leading main-axis margin
+            cursor += lm.mainBefore; // leading main-axis margin
             out.set(c.id, row
                 ? { x: cursor, y: cross, width: mainSize, height: crossSize }
                 : { x: cross, y: cursor, width: crossSize, height: mainSize });
 
-            cursor += mainSize + m + gap; // trailing main-axis margin, then the gap
+            cursor += mainSize + lm.mainAfter + gap; // trailing main-axis margin, then the gap
         }
         crossCursor += bandCross + gap; // next line stacks below this one (align-content deferred)
     }
@@ -402,7 +434,7 @@ export function placeGridItems(
  */
 export function resolveGridTracks(
     grid: LayoutGrid,
-    children: readonly { width: number; height: number; colSpan?: number; rowSpan?: number }[],
+    children: readonly { width: number; height: number; colSpan?: number; rowSpan?: number; margin?: number | Margins }[],
     parentSize: { width: number; height: number }
 ): { colWidths: number[]; rowHeights: number[]; cols: number; rows: number; cells: GridCell[] } {
     const cols = grid.columns.length;
@@ -416,8 +448,11 @@ export function resolveGridTracks(
     const rowAuto = new Array<number>(rows).fill(0);
     children.forEach((ch, i) => {
         const cell = cells[i];
-        if (cell.colSpan === 1 && ch.width > colAuto[cell.col]) colAuto[cell.col] = ch.width;
-        if (cell.rowSpan === 1 && ch.height > rowAuto[cell.row]) rowAuto[cell.row] = ch.height;
+        // An `auto` track fits the SINGLE-span child PLUS its margins (so the inset cell in
+        // layoutGridChildren gives the child its own size). A spanning item drives no auto track.
+        const pm = resolveMargin(ch.margin);
+        if (cell.colSpan === 1 && ch.width + pm.left + pm.right > colAuto[cell.col]) colAuto[cell.col] = ch.width + pm.left + pm.right;
+        if (cell.rowSpan === 1 && ch.height + pm.top + pm.bottom > rowAuto[cell.row]) rowAuto[cell.row] = ch.height + pm.top + pm.bottom;
     });
 
     const rowTracks: TrackSize[] = [];
@@ -445,7 +480,7 @@ export function resolveGridTracks(
 export function layoutGridChildren(
     grid: LayoutGrid,
     parentSize: { width: number; height: number },
-    children: readonly { id: string; width: number; height: number; colSpan?: number; rowSpan?: number }[]
+    children: readonly { id: string; width: number; height: number; colSpan?: number; rowSpan?: number; margin?: number | Margins }[]
 ): Map<string, Rect> {
     const out = new Map<string, Rect>();
     const cols = grid.columns.length;
@@ -471,7 +506,14 @@ export function layoutGridChildren(
         for (let k = 0; k < cell.colSpan; k++) width += colWidths[cell.col + k];
         let height = (cell.rowSpan - 1) * rowGap;
         for (let k = 0; k < cell.rowSpan; k++) height += rowHeights[cell.row + k];
-        out.set(ch.id, { x: colX[cell.col], y: rowY[cell.row], width, height });
+        // Margins INSET the child within its cell (physical sides — a grid cell is axis-aligned).
+        const m = resolveMargin(ch.margin);
+        out.set(ch.id, {
+            x: colX[cell.col] + m.left,
+            y: rowY[cell.row] + m.top,
+            width: Math.max(0, width - m.left - m.right),
+            height: Math.max(0, height - m.top - m.bottom),
+        });
     });
     return out;
 }

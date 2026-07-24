@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer/SVGRenderer.ts, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v13 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug/spans), constraints, absolute + margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v14 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug/spans), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -56,9 +56,11 @@ function layoutChildren(                          // pure flex-stack math (multi
 ): Map<string, Rect>;                             // childId → parent-relative rect
 interface FlexLine { items: number[]; cross: number }  // indices into the input + the line's cross size
 function breakFlexLines(                           // shared by the position pass + the measure cross-hug fold
-  items: readonly { main: number; cross: number; margin: number }[],
-  innerMain: number, gap: number, wrap: boolean
+  items: readonly { main: number; cross: number; marginMain: number; marginCross: number }[],
+  innerMain: number, gap: number, wrap: boolean    // marginMain/Cross = before+after totals (mapped by direction)
 ): FlexLine[];
+function resolveMargin(m: number | Margins | undefined):  // uniform number or per-side object -> physical sides
+  { top: number; right: number; bottom: number; left: number };
 function isLayoutContainer(node: { layout: { container?: unknown } } | undefined): boolean;
 function expandDirtyForLayout(doc: ReadonlyDocument, dirty: ReadonlySet<string>): Set<string>;
                                                   // climbs a change up the hug chain to the first fixed container
@@ -69,8 +71,8 @@ function measureIntrinsicSizes(                    // bottom-up: resolved own-si
 function layoutGridChildren(                       // grid: children auto-flow (with spans) into px/fr/auto cells and fill them
   grid: LayoutGrid,
   parentSize: { width: number; height: number },
-  children: readonly { id: string; width: number; height: number; colSpan?: number; rowSpan?: number }[]
-): Map<string, Rect>;                             // childId → cell rect (a span sums its tracks + internal gaps)
+  children: readonly { id: string; width: number; height: number; colSpan?: number; rowSpan?: number; margin?: number | Margins }[]
+): Map<string, Rect>;                             // childId → cell rect (a span sums tracks + gaps; margins inset the child)
 interface GridCell { col: number; row: number; colSpan: number; rowSpan: number }
 function placeGridItems(                            // sparse auto-placement — the SINGLE placement authority
   items: readonly { colSpan?: number; rowSpan?: number }[],
@@ -78,7 +80,7 @@ function placeGridItems(                            // sparse auto-placement —
 ): { cells: GridCell[]; rows: number };           // cells index-aligned with items; rows derived (may exceed ceil(n/cols))
 function resolveGridTracks(                         // shared by the measure fold (hug) and the position pass (cells)
   grid: LayoutGrid,
-  children: readonly { width: number; height: number; colSpan?: number; rowSpan?: number }[],
+  children: readonly { width: number; height: number; colSpan?: number; rowSpan?: number; margin?: number | Margins }[],
   parentSize: { width: number; height: number }
 ): { colWidths: number[]; rowHeights: number[]; cols: number; rows: number; cells: GridCell[] };
 function resolveConstraints(                       // anchors: reposition a plain parent's child on resize
@@ -89,8 +91,9 @@ function resolveConstraints(                       // anchors: reposition a plai
 ): Rect;                                          // offset = parentSize - ref; static if either absent
 function isAbsolute(node: { layout: { position?: unknown } } | undefined): boolean; // out-of-flow escape
 
-// Layout also carries per-child `margin` (uniform flex-flow spacing),
-// `position: "absolute"` (out of flow), and `colSpan`/`rowSpan` (grid item spans).
+// Layout also carries per-child `margin` (a uniform number OR a per-side `Margins` object —
+// flex flow spacing / grid-cell inset), `position: "absolute"` (out of flow), and
+// `colSpan`/`rowSpan` (grid item spans).
 
 // Serializer.ts
 function serializeDocument(doc: ReadonlyDocument): string;
@@ -106,7 +109,7 @@ const Serializer: {
 
 Types: `ProjectDocument`, `DocumentMetadata`, `SerializedMetadata`, `VariableStore`,
 `Node`, `NodeType`, `Geometry`, `Style`, `Layout`, `LayoutContainer`, `LayoutGrid`,
-`TrackSize`, `Constraints`, `HConstraint`, `VConstraint`, `Transform`,
+`TrackSize`, `Constraints`, `HConstraint`, `VConstraint`, `Margins`, `Transform`,
 `StateDefinition`, `SerializedDocument`, `DeepReadonly`, `ReadonlyDocument`, `ReadonlyNode`,
 `LoadResult`, `SaveResult`, `NODE_TYPES`/`isNodeType`. Shared validators
 `transformError(t)` / `layoutError(l)` return an error string or `null`, and are used by

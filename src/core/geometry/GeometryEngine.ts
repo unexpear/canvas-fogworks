@@ -28,7 +28,7 @@
  */
 
 import { DeepReadonly, ReadonlyDocument } from "../document/Document";
-import { Geometry, Node } from "../document/Node";
+import { Geometry, Margins, Node } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
 import { expandDirtyForLayout, isAbsolute, isLayoutContainer, layoutChildren, layoutGridChildren, measureIntrinsicSizes, resolveConstraints } from "./LayoutEngine";
 import {
@@ -201,13 +201,13 @@ function layoutContainerPass(
     // container's hug size and its cells.
     const grid = node.layout.grid;
     if (grid) {
-        const children: { id: string; width: number; height: number; colSpan?: number; rowSpan?: number }[] = [];
+        const children: { id: string; width: number; height: number; colSpan?: number; rowSpan?: number; margin?: number | Margins }[] = [];
         for (const childId of node.children) {
             const child = doc.nodes.get(childId);
             if (!child || isAbsolute(child)) continue;
             const own = measured.get(childId);
             if (!own) continue;
-            children.push({ id: childId, width: own.width, height: own.height, colSpan: child.layout.colSpan, rowSpan: child.layout.rowSpan });
+            children.push({ id: childId, width: own.width, height: own.height, colSpan: child.layout.colSpan, rowSpan: child.layout.rowSpan, margin: child.layout.margin });
         }
         for (const [id, rect] of layoutGridChildren(grid, { width: parentLocal.width, height: parentLocal.height }, children)) {
             laidOut.set(id, rect);
@@ -217,7 +217,7 @@ function layoutContainerPass(
 
     const container = node.layout.container;
     if (!container) return;
-    const children: { id: string; width: number; height: number; grow?: number; shrink?: number; margin?: number }[] = [];
+    const children: { id: string; width: number; height: number; grow?: number; shrink?: number; margin?: number | Margins }[] = [];
     for (const childId of node.children) {
         const child = doc.nodes.get(childId);
         if (!child || isAbsolute(child)) continue; // absolute children are out of the flow

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
 
-> 🔒 Frozen contract · schema v13 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug/spans), constraints, absolute + margins; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v14 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug/spans), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -163,8 +163,11 @@ re-baseline is not yet built.*
 its flex/grid parent's flow (no slot/cell, excluded from hug size and grow free-space),
 positioned instead by its stored geometry + constraints against the parent box — so the
 constraint gate admits an absolute child of any parent, and `MoveTool` leaves it draggable.
-`Layout.margin` (uniform) is flex-flow spacing, folded into the grow free-space and the hug
-measure. Both are small position-pass/measure additions with no new dirty-tracking.
+`Layout.margin` (`number | Margins`) is flex-flow spacing / a grid-cell inset, folded into the
+grow free-space and the hug measure. Per-side margins map physical sides to the flex logical
+axes by `direction` (via `resolveMargin`/`logicalMargin`), and both the measure fold and the
+position pass map identically so a hugged container agrees with its children. All are small
+position-pass/measure additions with no new dirty-tracking.
 
 Still outstanding for the computed layer: **resolved style** (M5 tokens) belongs in
 `ComputedState` and is not there yet; and M2's **remaining layout** — align-content /

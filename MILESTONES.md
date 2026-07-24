@@ -254,6 +254,19 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   held under a fuzz that varies `rows` shorter/longer than the derived rows). A single
   unequal-row test pins explicit-wins + implicit-fallback + prefix-sum row-Y +
   fr-after-px at once; all five guards mutation-tested and killed.
+- **Per-side + grid-cell margins.** `Layout.margin` widened from a uniform `number` to
+  `number | Margins` (per-side top/right/bottom/left), and now applies to GRID children too
+  (a cell inset; an `auto` track grows to fit the child + its margins). The flex math generalised
+  the symmetric `2·margin` to per-side before/after via a direction-based physical→logical map
+  (`resolveMargin`/`logicalMargin`) used identically by `layoutChildren`, `breakFlexLines`, and
+  the measure fold — so a hugged/wrapping container agrees with its children. A plain number is
+  byte-identical to before (regression-checked). All eight guards mutation-tested and killed —
+  one of which SURVIVED at first because the `breakFlexLines` margin test was vacuous (the items
+  broke the same way with or without the margin); an unequal case that only wraps once the margin
+  is added closed it (a-survivor-is-a-missing-test). An adversarial read-only review then found a
+  round-trip-closure gap: `marginError` accepted an ARRAY margin (`typeof [] === "object"`, every
+  named side reads undefined) and silently zeroed it — the loader was more permissive than the
+  (TypeScript-guarded) edit path. Fixed with an `Array.isArray` guard + a both-paths test. schema 13→14.
 - **Grid spans — a real placement algorithm.** `Layout.colSpan`/`rowSpan` let a grid item
   occupy multiple cells. A design panel (3 lenses converged) settled it around one shared
   `placeGridItems` — CSS-style SPARSE auto-placement: a forward-only, row-major cursor gives each
@@ -341,13 +354,13 @@ Document → Geometry + Layout Engine → Computed State → Renderer
 - **Schema cost, paid under the freeze rule.** `SCHEMA_VERSION` `"2"` → `"3"` (auto-layout)
   → `"4"` (hug) → `"5"` (grow) → `"6"` (grid) → `"7"` (constraints) → `"8"` (absolute +
   margin) → `"9"` (shrink) → `"10"` (grid per-row `rows`) → `"11"` (grid `auto` tracks +
-  hug) → `"12"` (flex wrap) → `"13"` (grid spans), each with a pass-through migration, because an
-  older build would draw the children at now-vestigial stored geometry / unanchored / in-flow /
-  unshrunk / at a uniform row height / not sized to content / on one overflowing line / one cell
-  each.
+  hug) → `"12"` (flex wrap) → `"13"` (grid spans) → `"14"` (per-side/grid margins), each with a
+  pass-through migration, because an older build would draw the children at now-vestigial stored
+  geometry / unanchored / in-flow / unshrunk / at a uniform row height / not sized to content / on
+  one overflowing line / one cell each / with a uniform (or ignored, for grid) margin.
 
-**Deferred (each its own deliverable, NOT built):** align-content / wrap-reverse · **per-side**
-margins · grid-cell margins · responsive / breakpoint rules · drag-to-reorder ·
+**Deferred (each its own deliverable, NOT built):** align-content / wrap-reverse ·
+responsive / breakpoint rules · drag-to-reorder ·
 the constrained-child **re-baseline** (off-reference edits, an M5 tool-layer concern) ·
 the **grid tail remainder** (explicit line-based placement, dense packing, column auto-flow,
 `minmax()`/`fit-content` tracks).
