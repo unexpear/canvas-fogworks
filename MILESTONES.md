@@ -58,10 +58,25 @@ zero." See `docs/ARCHITECTURE.md` § *Current vs. target data flow*.
 **scene graph** (`rootNodeUuids` + `parent`/`children`, authored via `AddNodeAction`
 `parentId` + `ReparentNodeAction`, traversed by `traverseSceneGraph`) ·
 `Action` interface · `ActionDispatcher` · `MutationResult` · `HistoryManager` ·
-Undo/Redo (with coalescing; the initial revision is never evicted) · revision system ·
+Undo/Redo (caller-opted coalescing; memory-bounded retention; undo stops at the
+truncation boundary and the starting document is pinned OUTSIDE the trimmable list,
+reachable via `revertToOriginal()`) · revision system ·
 JSON serialization (schema version decoupled from app version) ·
 **validation** (Action-path `validate()` **and** `validateDocumentIntegrity` on load:
-ranges, dangling parents, ghost roots, cycles) · **97 automated tests**.
+ranges, dangling parents, ghost roots, cycles) · **107 automated tests**.
+
+**Round-trip closure (what took M0 from "nearly" to done):** an adversarial audit found
+the engine could author a document it could not reopen — `AddNodeAction.validate()`
+checked only that the node type was non-empty, while the load path checked membership in
+`NODE_TYPES`. It also found `loadDocument()` bypassed `validateDocumentIntegrity`, leaving
+the in-memory load path unguarded while the string path was guarded. Both are closed and
+mutation-tested: **anything the edit path accepts, the load path can reopen.**
+
+**Explicitly NOT in M0's scope** (so "done" means something precise): the engine can
+*author* a nested scene graph — proven by building and restructuring a 4-level tree
+through the dispatcher — but no editor affordance invokes it. `ReparentNodeAction` has no
+non-test callers. That is a **Milestone 4** gap (grouping / drag-into-frame), not an M0
+one. M0 is the engine; reachability is the editor's job.
 
 **Proven concepts (the invariants everything above depends on):**
 1. The **document is the single source of truth**.
@@ -76,8 +91,16 @@ milestones extend a fixed reference instead of drifting.
 
 **Deliverables (all present):** `docs/ARCHITECTURE.md`, `docs/DOCUMENT-SCHEMA.md`,
 `docs/ACTION-SYSTEM.md`, `docs/TESTING.md`, `docs/CODING-STANDARDS.md`,
-`docs/API-CONTRACTS.md`, `docs/README.md`, and this `MILESTONES.md` — all
-independently verified against the code by an adversarial review pass.
+`docs/API-CONTRACTS.md`, `docs/README.md`, and this `MILESTONES.md`.
+
+Verification is **continuous, not a one-off claim**: `apiSurface.ts` pins every
+documented signature at compile time, `npm run lint` enforces module headers, and
+`npm run doc-drift` flags a doc whose declared sources have moved. An adversarial
+audit found six prose defects *after* the set was first called verified — stale test
+counts, a `Serializer.save` signature contradicted between two frozen docs, a
+`ProjectDocument`-for-`ReadonlyDocument` substitution, and a restore-notification
+description the project had already replaced. All are fixed; the lesson recorded is
+that "verified" is a perishable claim and only the tooling makes it durable.
 
 **Rule (authoritative statement in [docs/README.md](docs/README.md#the-freeze-rule)):**
 a change to a frozen contract ships in the *same* change as the doc update **and** a

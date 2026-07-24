@@ -13,29 +13,29 @@ const SCHEMA_VERSION: string;                // "1" — persisted document schem
 function createEmptyDocument(): ProjectDocument;
 
 // SceneGraph.ts — the ONLY correct node ordering (z-order / layer order)
-function traverseSceneGraph(doc: ProjectDocument): Node[]; // depth-first, cycle-safe, keeps orphans
+function traverseSceneGraph(doc: ReadonlyDocument): ReadonlyNode[]; // depth-first, cycle-safe, keeps orphans
 
 // Integrity.ts — structural + range validation (runs inside deserializeDocument)
-function validateDocumentIntegrity(doc: ProjectDocument): void;  // throws on the first problem
+function validateDocumentIntegrity(doc: ReadonlyDocument): void;  // throws on the first problem
 
 // geometry/ComputedGeometry.ts — the Milestone 1 seam
 interface WorldRect { x: number; y: number; width: number; height: number }
 interface ComputedGeometry { order: string[]; rects: Map<string, WorldRect> }
 function computeWorldGeometry(
-  doc: ProjectDocument,
+  doc: ReadonlyDocument,
   pending?: Map<string, Partial<Geometry>> | null   // drag previews are an INPUT
 ): ComputedGeometry;
 function hitTest(computed: ComputedGeometry, x: number, y: number): string | null; // DOM-free
 
 // Serializer.ts
-function serializeDocument(doc: ProjectDocument): string;
+function serializeDocument(doc: ReadonlyDocument): string;
 function deserializeDocument(json: string): ProjectDocument;   // throws on invalid JSON / bad envelope / foreign version
-function compareDocuments(a: ProjectDocument, b: ProjectDocument): boolean;
+function compareDocuments(a: ReadonlyDocument, b: ReadonlyDocument): boolean;
 
 const Serializer: {
   loadResult(): LoadResult;                  // "empty" | "loaded" | "corrupt"
   load(): ProjectDocument | null;            // back-compat convenience
-  save(doc: ProjectDocument): SaveResult;   // { status: "saved" } | { status: "failed", error }
+  save(doc: ReadonlyDocument): SaveResult;   // { status: "saved" } | { status: "failed", error }
 };
 ```
 
@@ -48,8 +48,8 @@ Types: `ProjectDocument`, `DocumentMetadata`, `SerializedMetadata`, `VariableSto
 
 ```ts
 abstract class Action {
-  constructor(document: ProjectDocument);
-  rebind(document: ProjectDocument): void;
+  constructor(document: ReadonlyDocument);   // an Action only READS
+  rebind(document: ReadonlyDocument): void;
   abstract validate(): boolean;
   abstract execute(): MutationResult;
   abstract serialize(): ActionPayload;
@@ -102,7 +102,7 @@ class ActionDispatcher {
 
 class HistoryManager {
   constructor(initialDoc: ProjectDocument);
-  commitRevision(payload: ActionPayload, documentState: ProjectDocument, allowCoalesce?: boolean): void;
+  commitRevision(payload: ActionPayload, documentState: ReadonlyDocument, allowCoalesce?: boolean): void;
   current(): ProjectDocument | null;   // cursor position, used to roll back a failed apply
   undo(): ProjectDocument | null;   // deep-cloned snapshot
   redo(): ProjectDocument | null;   // deep-cloned snapshot
@@ -161,7 +161,7 @@ interface RendererState {
   computed: ComputedGeometry;   // resolved world rects + draw order (required)
   viewport: { x: number; y: number; zoom: number };
 }
-function renderSVG(container: HTMLElement, doc: ProjectDocument, state: RendererState): void;
+function renderSVG(container: HTMLElement, doc: ReadonlyDocument, state: RendererState): void;
 ```
 
 - Pure read of `(doc, state)`; no dispatcher reference, cannot write.

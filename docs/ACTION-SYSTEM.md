@@ -154,7 +154,7 @@ committed history (regression **R2**; locked by the test
 *"edit after undo does not corrupt earlier revisions"*).
 
 The dispatcher's `undo`/`redo`/`loadDocument` swap `currentDocumentState` and notify
-with `fullReload: true` (and `updatedNodeIds` = all current node ids) so delta-driven
+with `fullReload: true` and `updatedNodeIds` = the REAL dirty set so delta-driven
 subscribers reload wholesale.
 
 ## 5. Transactions

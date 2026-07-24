@@ -18,7 +18,7 @@ import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeWorldGeometry, hitTest } from "../geometry/ComputedGeometry";
 import { clampViewport, createEditorState } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
-import { Node } from "../document/Node";
+import { Node, NODE_TYPES } from "../document/Node";
 
 function createDocWithRectangle(): ProjectDocument {
     const doc = createEmptyDocument();
@@ -1170,6 +1170,40 @@ describe("Rule-audit follow-ups", () => {
         const vp = { x: 9000, y: 0, zoom: 20 };
         clampViewport(vp);
         expect(vp.x).toBe(9000); // previously clamped to 10000 screen px = world 500
+    });
+});
+
+// ─── M0 round-trip closure: the engine must not author what it cannot reopen ───
+describe("Edit path and load path agree", () => {
+    test("AddNodeAction rejects a node type outside NODE_TYPES", () => {
+        const doc = createEmptyDocument();
+        // TypeScript alone does not stop this — a cast, a plugin (M15) or an
+        // AI-emitted action (M14) reaches validate() with an arbitrary string.
+        const action = new AddNodeAction(doc, "core.bogus" as any, 0, 0, 10, 10);
+        expect(action.validate()).toBe(false);
+        expect(new ActionDispatcher(doc).dispatchAction(action).success).toBe(false);
+    });
+
+    test("anything the edit path accepts, the load path can reopen", () => {
+        const doc = createEmptyDocument();
+        const dispatcher = new ActionDispatcher(doc);
+        for (const type of NODE_TYPES) {
+            expect(dispatcher.dispatchAction(
+                new AddNodeAction(dispatcher.getDocument(), type, 0, 0, 10, 10)
+            ).success).toBe(true);
+        }
+        // The round trip is the actual guarantee, not the type check.
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+    });
+
+    test("loadDocument validates: the in-memory load path is guarded too", () => {
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const ghostRoot = createEmptyDocument();
+        ghostRoot.rootNodeUuids = ["does-not-exist"];
+
+        expect(() => dispatcher.loadDocument(ghostRoot)).toThrow("missing node");
+        // ...and the live document is untouched by the rejected load.
+        expect(dispatcher.getDocument().rootNodeUuids).toEqual([]);
     });
 });
 

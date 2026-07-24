@@ -130,6 +130,7 @@ is dead API surface, and "reserved" is a decision, not a declaration.
 | `opacity ∈ [0,1]`; `radius ≥ 0`; `fontSize > 0` | ✅ `validate()` | ✅ `validateDocumentIntegrity` |
 | `id` equals the `nodes` map key | — | ✅ throws on mismatch |
 | node shape (required fields/types) | ✅ by construction | ✅ `isValidNode` |
+| `type` ∈ `NODE_TYPES` | ✅ `AddNodeAction.validate()` | ✅ `isNodeType` |
 | `parent` resolves; no dangling refs | ✅ `AddNodeAction`/`ReparentNodeAction` | ✅ `validateDocumentIntegrity` |
 | `children` resolve, claimed once, back-point via `parent` | ✅ | ✅ |
 | roots exist, unique, parentless; parentless nodes are roots | ✅ | ✅ |
@@ -227,7 +228,7 @@ type LoadResult =
 
 Serializer.loadResult(): LoadResult   // distinguishes the three cases
 Serializer.load(): ProjectDocument | null   // back-compat: document or null
-Serializer.save(doc): void
+Serializer.save(doc): SaveResult   // { status: "saved" } | { status: "failed"; error }
 ```
 
 - Storage key `"vde-document"`; a corrupt payload is preserved to

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen for Milestone 0 · v0.0.5. Suite: `src/core/tests/document.test.ts` (97 tests).
+> 🔒 Frozen for Milestone 0 · v0.0.5. Suite: `src/core/tests/document.test.ts` (107 tests).
 
 ## Philosophy
 
@@ -17,7 +17,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 97 tests
+npm test                                   # jest (ts-jest), 107 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -28,7 +28,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (97 tests)
+## What is covered (107 tests)
 
 | Area | Representative cases |
 |------|----------------------|

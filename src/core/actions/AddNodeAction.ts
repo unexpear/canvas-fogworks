@@ -5,7 +5,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { Node, NodeType } from "../document/Node";
+import { Node, NodeType, isNodeType } from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 import { generateUUID } from "../ids/UUID";
 
@@ -53,7 +53,11 @@ export class AddNodeAction extends Action {
             return false;
         }
         return (
-            this.nodeType.length > 0 &&
+            // Membership, not just non-empty: TypeScript alone does not stop a cast,
+            // a plugin (M15) or an AI-emitted action (M14) from supplying a bogus
+            // type — and the LOAD path rejects it, so without this the engine can
+            // author a document it cannot reopen.
+            isNodeType(this.nodeType) &&
             Number.isFinite(this.x) && Number.isFinite(this.y) &&
             this.width > 0 && this.height > 0 &&
             Number.isFinite(this.width) && Number.isFinite(this.height)
