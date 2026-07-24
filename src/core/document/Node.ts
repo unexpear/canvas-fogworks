@@ -77,6 +77,25 @@ export interface Transform {
     origin?: { x: number; y: number };
 }
 
+/**
+ * Validity check for a transform, shared by the edit path (`UpdateNodeTransformAction`)
+ * and the load path (`validateDocumentIntegrity`) so the two CANNOT drift — the M0
+ * round-trip invariant applied to schema 2: anything one path rejects, the other must.
+ * Only present fields are checked (a partial patch). Returns an error string, or null.
+ */
+export function transformError(t: Partial<Transform>): string | null {
+    if ("rotation" in t && !Number.isFinite(t.rotation)) return "transform.rotation must be finite";
+    // Zero scale is non-invertible: toLocal/hit-testing would fail, so the node could
+    // never be selected. Negative scale (a flip) is legitimate.
+    if ("scaleX" in t && (!Number.isFinite(t.scaleX) || t.scaleX === 0)) return "transform.scaleX must be finite and non-zero";
+    if ("scaleY" in t && (!Number.isFinite(t.scaleY) || t.scaleY === 0)) return "transform.scaleY must be finite and non-zero";
+    if ("origin" in t) {
+        const o = t.origin;
+        if (!o || !Number.isFinite(o.x) || !Number.isFinite(o.y)) return "transform.origin must have finite x and y";
+    }
+    return null;
+}
+
 /** StateDefinition captures the properties of a node in a specific context (e.g., :hover). */
 export interface StateDefinition {
     [key: string]: any; // e.g., scale, opacity adjustments

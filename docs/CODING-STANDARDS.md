@@ -1,6 +1,6 @@
 # Coding Standards
 
-> 🔒 Frozen for Milestone 0 · v0.0.5. Conventions + the hard rules that protect the invariants.
+> 🔒 Frozen contract · schema v2 (app v0.0.5) · current through Milestone 1. Conventions + the hard rules that protect the invariants.
 
 ## Hard rules (never violate)
 

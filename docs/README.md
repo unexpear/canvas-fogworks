@@ -1,6 +1,6 @@
 # Visual Design Engine — Core Documentation
 
-> **Frozen for Milestone 0 · engine v0.0.5 · 2026-07-23.**
+> **Frozen contracts · schema v2 (app v0.0.5) · current through Milestone 1.**
 > These documents describe the *current, verified* implementation and lock the
 > contracts the rest of the engine builds on. See [`../MILESTONES.md`](../MILESTONES.md)
 > for the roadmap and where each layer fits.
@@ -44,7 +44,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 121, in `src/core/tests/document.test.ts`.
+- **Tests:** 123, in `src/core/tests/document.test.ts`.
 
 ## Source map
 

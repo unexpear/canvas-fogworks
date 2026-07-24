@@ -11,7 +11,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { Transform } from "../document/Node";
+import { Transform, transformError } from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 
 export class UpdateNodeTransformAction extends Action {
@@ -26,19 +26,8 @@ export class UpdateNodeTransformAction extends Action {
 
     public validate(): boolean {
         if (!this.document.nodes.has(this.nodeId)) return false;
-        const t = this.newTransform;
-        // Presence-based (see UpdateNodeGeometryAction): a present-but-undefined key
-        // must be rejected, not skipped, or Object.assign copies the undefined in.
-        if ("rotation" in t && !Number.isFinite(t.rotation)) return false;
-        // A zero scale collapses the node: it is non-invertible, so toLocal/hit-test
-        // would fail. Negative scale (a flip) is legitimate and allowed.
-        if ("scaleX" in t && (!Number.isFinite(t.scaleX) || t.scaleX === 0)) return false;
-        if ("scaleY" in t && (!Number.isFinite(t.scaleY) || t.scaleY === 0)) return false;
-        if ("origin" in t) {
-            const o = t.origin;
-            if (!o || !Number.isFinite(o.x) || !Number.isFinite(o.y)) return false;
-        }
-        return true;
+        // Shared with the load path — see `transformError` in Node.ts.
+        return transformError(this.newTransform) === null;
     }
 
     public execute(): MutationResult {

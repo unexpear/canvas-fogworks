@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen for Milestone 0 · v0.0.5. Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v2 (app v0.0.5) · current through Milestone 1. Types are in `src/core/document/`.
 
 ## ProjectDocument
 

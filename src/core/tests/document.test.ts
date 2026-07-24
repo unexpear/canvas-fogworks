@@ -1200,6 +1200,12 @@ describe("Matrix", () => {
 
         // A zero scale collapses the space: it must report failure, not Infinity.
         expect(invert(compose(0, 0, 0, 0, 1, 0, 0))).toBeNull();
+
+        // The guard honours its contract for the extreme cases too: a non-finite
+        // translation and a subnormal determinant both return null, never a poisoned
+        // (Infinity/NaN) matrix that would flow into toLocal / hit-testing.
+        expect(invert({ a: 1, b: 0, c: 0, d: 1, e: Infinity, f: 0 })).toBeNull();
+        expect(invert({ a: Number.MIN_VALUE, b: 0, c: 0, d: 1, e: 0, f: 0 })).toBeNull();
     });
 
     test("AABB of a rotated box uses all four corners", () => {
@@ -1312,6 +1318,24 @@ describe("UpdateNodeTransformAction", () => {
         expect(new UpdateNodeTransformAction(doc, "rectangle-001", { scaleX: -1 }).validate()).toBe(true); // flip ok
     });
 
+    // Round-trip closure for transform: the LOAD path must reject exactly what the
+    // edit path rejects, or a hand-edited schema-2 file produces a NaN/un-selectable node.
+    test("the load path rejects the same transforms the edit path does", () => {
+        // Raw JSON text, not JSON.stringify — the real attack vector is a hand-edited
+        // file, and stringify would coerce Infinity to null before it ever loaded.
+        const bad = (transformJson: string) =>
+            `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
+            + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
+            + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
+            + ` "style": { "fill": "#000", "opacity": 1 }, "layout": {}, "transform": ${transformJson} } } } }`;
+
+        expect(() => deserializeDocument(bad(`{ "scaleX": 0 }`))).toThrow("non-zero");
+        expect(() => deserializeDocument(bad(`{ "rotation": 1e999 }`))).toThrow("finite"); // JSON 1e999 → Infinity
+        expect(() => deserializeDocument(bad(`{ "origin": { "x": 0.5 } }`))).toThrow(); // caught by shape check
+        // A valid transform still loads.
+        expect(() => deserializeDocument(bad(`{ "rotation": 1, "scaleX": -2 }`))).not.toThrow();
+    });
+
     test("composes with a move in one transaction (patch is composable)", () => {
         const doc = createDocWithRectangle();
         const dispatcher = new ActionDispatcher(doc);
@@ -1393,6 +1417,36 @@ describe("GeometryEngine dirty tracking", () => {
             prev = incremental;
             dirty.clear();
         }
+    });
+
+    // The App's real render path unions PENDING keys (current + previous) into the
+    // dirty set; every test above passes pending=null, so that path was unguarded.
+    test("the pending (drag-preview) path also matches full compute, incrementally", () => {
+        const doc = createDocWithParentChild();
+        const dispatcher = new ActionDispatcher(doc);
+        const base = computeGeometry(dispatcher.getDocument());
+
+        // Drag the parent via a pending patch (no dispatch), as MoveTool does.
+        const pending = new Map([["parent-001", { x: 300 }]]);
+        const duringDrag = computeGeometry(dispatcher.getDocument(), pending, base, new Set(["parent-001"]));
+        expect(statesEqual(duringDrag, computeGeometry(dispatcher.getDocument(), pending))).toBe(true);
+
+        // The engine's OWN guarantee: a currently-pending node is treated as dirty even
+        // if the caller's dirty set omits it, so a live preview is never missed.
+        const engineOnly = computeGeometry(dispatcher.getDocument(), pending, base, new Set<string>());
+        expect(statesEqual(engineOnly, computeGeometry(dispatcher.getDocument(), pending))).toBe(true);
+
+        // Escape-cancel: pending cleared, NOTHING dispatched. The App recomputes the
+        // formerly-pending node only because it unions `prevPending` — verify the
+        // incremental result matches a full recompute...
+        const afterCancel = computeGeometry(dispatcher.getDocument(), null, duringDrag, new Set(["parent-001"]));
+        const full = computeGeometry(dispatcher.getDocument(), null);
+        expect(statesEqual(afterCancel, full)).toBe(true);
+
+        // ...and that OMITTING prevPending would reuse the stale preview — proving the
+        // prevPending union in App.tsx is load-bearing, not decoration.
+        const wrong = computeGeometry(dispatcher.getDocument(), null, duringDrag, new Set<string>());
+        expect(wrong.nodes.get("parent-001")!.world.e).not.toBe(full.nodes.get("parent-001")!.world.e);
     });
 
     test("an under-broad dirty set is CAUGHT (the test is not vacuous)", () => {

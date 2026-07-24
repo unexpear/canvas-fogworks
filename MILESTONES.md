@@ -65,7 +65,8 @@ truncation boundary and the starting document is pinned OUTSIDE the trimmable li
 reachable via `revertToOriginal()`) · revision system ·
 JSON serialization (schema version decoupled from app version) ·
 **validation** (Action-path `validate()` **and** `validateDocumentIntegrity` on load:
-ranges, dangling parents, ghost roots, cycles) · **121 automated tests**.
+ranges, dangling parents, ghost roots, cycles) · automated tests.
+(The suite is **123 tests total** across M0 and M1; the count is not M0's alone.)
 
 **Round-trip closure (what took M0 from "nearly" to done):** an adversarial audit found
 the engine could author a document it could not reopen — `AddNodeAction.validate()`
@@ -148,10 +149,12 @@ document layer independently, exactly as `ReparentNodeAction` predates grouping 
 
 **Dirty tracking is wired, not just present.** `computeGeometry`'s `previous`/`dirty`
 parameters are consumed by the app render path: `App` accumulates changed ids from every
-`MutationResult` and reuses untouched subtrees between frames. The safety net is a seeded
-fuzz test asserting `incremental === full` over 300 random ops (add/move/resize/rotate/
-reparent/undo/redo) — because an under-broad dirty set silently renders stale, this
-equivalence is the whole correctness basis, and a companion test proves it is not vacuous.
+`MutationResult` and reuses untouched subtrees between frames. The safety net is a seeded fuzz test asserting `incremental === full` over 300 random ops
+(add/move/resize/rotate/reparent/undo/redo), plus explicit tests for the **pending
+(drag-preview) path** that the fuzz does not cover — including that an Escape-cancelled
+drag recomputes the formerly-pending node, and that omitting the `prevPending` union
+would leave a stale preview on screen. Because an under-broad dirty set silently renders
+stale, this equivalence is the correctness basis; companion tests prove it is not vacuous.
 
 **Explicitly NOT in M1's scope:** `ComputedState` carries geometry only. Resolved style
 (M5 tokens) and layout output (M2) belong in it and are not there — each arrives with

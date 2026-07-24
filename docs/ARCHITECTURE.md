@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
 
-> 🔒 Frozen for Milestone 0 · v0.0.5. Describes the verified current implementation.
+> 🔒 Frozen contract · schema v2 (app v0.0.5) · current through Milestone 1. Describes the verified current implementation.
 
 ## 1. The five invariants
 

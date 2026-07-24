@@ -83,7 +83,7 @@ export function invert(m: Mat2D): Mat2D | null {
     const det = m.a * m.d - m.b * m.c;
     if (!Number.isFinite(det) || det === 0) return null;
     const inv = 1 / det;
-    return {
+    const r: Mat2D = {
         a: m.d * inv,
         b: -m.b * inv,
         c: -m.c * inv,
@@ -91,6 +91,13 @@ export function invert(m: Mat2D): Mat2D | null {
         e: (m.c * m.f - m.d * m.e) * inv,
         f: (m.b * m.e - m.a * m.f) * inv
     };
+    // The determinant guard alone is not enough to honor the contract above: a
+    // non-finite translation (e/f) passes it, and a subnormal `det` makes `1/det`
+    // overflow to Infinity. Reject any non-finite result so callers get null, never
+    // a poisoned matrix.
+    if (!Number.isFinite(r.a) || !Number.isFinite(r.b) || !Number.isFinite(r.c) ||
+        !Number.isFinite(r.d) || !Number.isFinite(r.e) || !Number.isFinite(r.f)) return null;
+    return r;
 }
 
 export function applyToPoint(m: Mat2D, x: number, y: number): { x: number; y: number } {

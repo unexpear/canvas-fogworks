@@ -12,6 +12,7 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
+import { transformError } from "./Node";
 
 function checkNodeRanges(node: ReadonlyNode): void {
     const g = node.geometry;
@@ -36,6 +37,14 @@ function checkNodeRanges(node: ReadonlyNode): void {
     }
     if (s.fontSize !== undefined && (!Number.isFinite(s.fontSize) || s.fontSize <= 0)) {
         throw new Error(`Invalid document: node "${node.id}" style.fontSize must be > 0 (got ${s.fontSize}).`);
+    }
+
+    // The load path must reject exactly the transforms the edit path rejects — a
+    // schema-2 file with scaleX:0 or rotation:Infinity would otherwise load clean and
+    // produce a NaN / non-invertible (un-selectable) node.
+    if (node.transform) {
+        const err = transformError(node.transform);
+        if (err) throw new Error(`Invalid document: node "${node.id}" ${err}.`);
     }
 }
 
