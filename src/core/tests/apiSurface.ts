@@ -33,7 +33,7 @@ import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/Sc
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
 import { layoutChildren, expandDirtyForLayout, isLayoutContainer } from "../geometry/LayoutEngine";
-import { Mat2D, Rect, IDENTITY, multiply, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, isTranslationOnly } from "../geometry/Matrix";
+import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
 import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot } from "../actions/types";
 import { applyMutationsToDocument } from "../actions/applyMutations";
@@ -120,6 +120,7 @@ export function __apiSurfacePin(): void {
     // Matrix primitive
     expectType<Mat2D>(IDENTITY);
     expectType<Mat2D>(multiply(IDENTITY, IDENTITY));
+    expectType<Mat2D>(translation(0, 0));
     expectType<Mat2D | null>(invert(IDENTITY));
     expectType<Mat2D>(compose(0, 0, 0, 1, 1, 0, 0));
     expectType<{ x: number; y: number }>(applyToPoint(IDENTITY, 0, 0));

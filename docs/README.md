@@ -1,6 +1,8 @@
 # Visual Design Engine — Core Documentation
 
-> **Frozen contracts · schema v2 (app v0.0.5) · current through Milestone 1.**
+<!-- describes: src/core/document/Document.ts, src/core/tests -->
+
+> **Frozen contracts · schema v3 (app v0.0.5) · current through Milestone 2 (auto-layout core).**
 > These documents describe the *current, verified* implementation and lock the
 > contracts the rest of the engine builds on. See [`../MILESTONES.md`](../MILESTONES.md)
 > for the roadmap and where each layer fits.
@@ -44,21 +46,25 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 123, in `src/core/tests/document.test.ts`.
+- **Tests:** 142, in `src/core/tests/document.test.ts`.
 
 ## Source map
 
 ```
 src/
   core/
-    document/   ProjectDocument, Node, Serializer      (the source of truth)
+    document/   ProjectDocument, Node, Serializer,     (the source of truth)
+                Integrity, SceneGraph
     actions/    Action + commands, Dispatcher,         (the only write path)
                 HistoryManager, applyMutations, types
+    geometry/   Matrix, GeometryEngine (M1),           (intent -> computed results)
+                LayoutEngine (M2 auto-layout)
     ids/        UUID
-    tests/      document.test.ts
+    tests/      document.test.ts, apiSurface.ts (compile-time API pin)
   editor/       EditorState + tools/ (Select/Move/Rectangle, ToolController)
   renderer/     SVGRenderer                            (read-only)
   app/          App.tsx + React bootstrap
   electron/     main.js (main process), preload.js (contextBridge)
 scripts/build.js   three esbuild builds -> dist/{app,electron}
+scripts/{check-module-headers,check-doc-drift}.js   lint + doc-staleness tripwire
 ```

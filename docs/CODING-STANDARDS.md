@@ -1,6 +1,8 @@
 # Coding Standards
 
-> 🔒 Frozen contract · schema v2 (app v0.0.5) · current through Milestone 1. Conventions + the hard rules that protect the invariants.
+<!-- describes: src/core/document/Document.ts -->
+
+> 🔒 Frozen contract · schema v3 (app v0.0.5) · current through Milestone 2 (auto-layout core). Conventions + the hard rules that protect the invariants.
 
 ## Hard rules (never violate)
 

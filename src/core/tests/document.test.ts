@@ -1872,6 +1872,28 @@ describe("M2 layout dirty-tracking — the sibling ripple", () => {
         expect(dirty.has("c2")).toBe(false);
         expect(statesEqualBounds(incremental, full)).toBe(true);
     });
+
+    // A resize handle on a laid-out child IS reachable (ToolController's resize mode
+    // does not skip laid-out children — unlike MoveTool — because resizing one is
+    // meaningful: its size is its own, only its position is computed). So the pending
+    // size must feed the layout so siblings reflow in the LIVE preview, before commit.
+    // This pins the `pending?.width` branch in layoutContainerPass, which every other
+    // test reaches only through the committed `?? geometry.width` fallback.
+    test("a PENDING resize of a laid-out child reflows its siblings in the live preview", () => {
+        const doc = mkContainerScene({ direction: "row" }, { c1: [50, 50], c2: [50, 50] });
+        const base = computeGeometry(doc);
+        expect(base.nodes.get("c2")!.bounds.x).toBe(50);
+
+        const pending = new Map([["c1", { width: 90 }]]); // as a resize-handle drag would produce
+        const preview = computeGeometry(doc, pending);
+        expect(preview.nodes.get("c1")!.bounds.width).toBe(90); // the previewed size
+        expect(preview.nodes.get("c2")!.bounds.x).toBe(90);     // sibling slid right (was 50) — non-vacuous
+
+        // App's render path unions pending keys into the dirty set; the incremental
+        // result must equal a full recompute of the same pending state.
+        const incremental = computeGeometry(doc, pending, base, new Set(["c1"]));
+        expect(statesEqualBounds(incremental, preview)).toBe(true);
+    });
 });
 
 /** Structural equality of two computed states over order + per-node bounds. */
