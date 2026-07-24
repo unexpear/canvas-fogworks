@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v14 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug/spans), constraints, absolute + per-side margins). Suite: `src/core/tests/document.test.ts` (225 tests).
+> 🔒 Frozen contract · schema v15 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Suite: `src/core/tests/document.test.ts` (238 tests).
 
 ## Philosophy
 
@@ -17,7 +17,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 225 tests
+npm test                                   # jest (ts-jest), 238 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -28,7 +28,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (225 tests)
+## What is covered (238 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -64,7 +64,10 @@ npm run check                              # typecheck + lint + test + build (th
 | **M2 flex wrap** | `breakFlexLines` break predicate (strict `>` keeps an exact fit; first-child-always-fits; margin/gap accumulation; empty → `[]`; nowrap → one line); a **`hugHeight` wrap row sizes its height to the stacked lines** and that equals the cells (the **fuzz-blind `cross-hug == Σ line heights`** structural check); **grow is distributed PER LINE**, not across the container; a **single wrap line still fills the container cross** (nowrap-preserving band); wrap is **inert under a hugged main axis**; **column-direction is symmetric**; a **grown wrap container wraps against its OWN main, not the stretched main** (the measure/position consistency guard); a **grown hug-MAIN wrap container still grows its children** (the measured-main override is gated on `effectiveWrap`, not `wrap` — review-found); a resize / **pending** drag that pushes a child onto a new line **grows the container incrementally**; schema-12 round-trip + a non-boolean `wrap` rejected on **both** paths |
 | **M2 grid spans** | `placeGridItems` sparse forward placement (a `rowSpan` pushes later items off occupied cells; **sparse — a gap is NOT backfilled**; derives `rows > ceil(n/cols)`); **`colSpan > cols` clamps** (and would otherwise loop forever — a totality guard); fractional/non-positive spans clamp to 1; empty / 0-column total; a pathological `rowSpan` **clamps to `GRID_SPAN_MAX`**, and — **review regression** — many WIDE-spanning children in a WIDE grid stay **bounded (no `Set`-cap throw)** via the column-count + derived-row caps, while a tall thin grid is not over-restricted; a **spanning cell covers its tracks + internal gaps**; a **spanning item does NOT drive `auto` sizing** (single-span only); a `rowSpan` **grows a `hugHeight` grid** and the height **== the cells** (fuzz-blind); deleting a spanning item **reflows survivors incrementally**; schema-13 round-trip + non-integer / out-of-range spans rejected on **both** paths |
 | **M2 per-side + grid-cell margins** | `resolveMargin` (a number is uniform; an object is per-side; omitted/negative sides → 0); per-side margins in a **ROW map left/right → main, top/bottom → cross** and a **COLUMN transposes** them; a **hug row's main size includes the asymmetric margins**; a **grid-cell margin insets the child within its cell**, and an **`auto` track grows to fit child + margins**; `breakFlexLines`'s `marginMain` **changes where lines break** (non-vacuous: same items wrap only once the margin is added); schema-14 round-trip + a negative side / non-object rejected on **both** paths |
-| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow/shrink, WRAP, GRID (per-row `rows`, `auto` tracks, grid-container hug, item `colSpan`/`rowSpan`), constraints, margins (uniform AND per-side objects), absolute escapes, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains; resize drives grow/shrink by sign, constraints from both sources, and — now that wrap and grid enter the measure pass — a child's size feeds its line/`auto` track and the container's own hug size; spans exercise the placement in both passes) |
+| **M2 align-content + wrap-reverse** | `alignContent` distributes wrapped lines in leftover cross space (start/center/end/space-between/space-around/stretch — exact offsets on a fixed-cross container); `stretch` grows each line's band (feeding `alignItems: stretch`); `wrapReverse` reflects the lines from the far edge; both are a **NO-OP on a cross-hug container and a single line** (`freeCross == 0`); validation + schema round-trip |
+| **M2 grid auto-flow** | **dense** backfills a gap sparse leaves empty; **column flow** fills down-then-across, deriving the column count (a `colSpan` under column flow spans COLUMNS — pins the transpose, which 1×1 items can't); a `hugWidth` column-flow grid derives its `auto` columns from the children; validation + round-trip |
+| **M2 grid explicit line placement** | a fully-pinned item takes its `[start,end)` lines and **auto items flow AROUND it**; lines span `end − start` tracks; single-axis placement **auto-flows** (deferred, and does not throw on the missing axis); a pin **grows a `hugHeight` grid to its row** (hug == cells); validation (`start<end`, integer, in-cap) + both-paths rejection |
+| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow/shrink, WRAP (+alignContent/wrapReverse), GRID (per-row `rows`, `auto` tracks, hug, `colSpan`/`rowSpan`, `autoFlow` row/column/dense, explicit `gridColumn`/`gridRow` pins), constraints, margins (uniform AND per-side), absolute escapes, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains; resize drives grow/shrink by sign, constraints from both sources, and — now that wrap and grid enter the measure pass — a child's size feeds its line/`auto` track and the container's own hug size; spans exercise the placement in both passes) |
 
 ## The API-surface pin
 

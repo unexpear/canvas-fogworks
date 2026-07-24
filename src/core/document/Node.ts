@@ -133,6 +133,15 @@ export interface Layout {
      */
     colSpan?: number;
     rowSpan?: number;
+    /**
+     * EXPLICIT grid line placement (Milestone 2). `[startLine, endLine]`, 1-indexed and end-
+     * EXCLUSIVE (CSS grid lines): `[2, 4]` pins the item to two tracks starting at index 1. An item
+     * is explicitly placed only when BOTH `gridColumn` AND `gridRow` are present — auto items then
+     * flow AROUND it. Supersedes `colSpan`/`rowSpan` on that axis (span = end − start). Lines in
+     * `[1, GRID_MAX_TRACKS + 1]`. Single-axis placement and explicit-under-column-flow are deferred.
+     */
+    gridColumn?: readonly [number, number];
+    gridRow?: readonly [number, number];
 }
 
 /** Upper bound on a grid `colSpan`/`rowSpan` — a per-item cap (bounds one item's cell block). */
@@ -205,6 +214,13 @@ export interface LayoutGrid {
      */
     hugWidth?: boolean;
     hugHeight?: boolean;
+    /**
+     * Auto-placement flow (Milestone 2). `"row"` (default) fixes the `columns` and derives the rows
+     * from the flow; `"column"` fixes the ROWS (from `rows`, default 1) and derives the columns
+     * (implicit columns beyond `columns` are `auto`-sized). `"dense"` backfills earlier gaps instead
+     * of the forward-only (sparse) cursor. Absent = `"row"`.
+     */
+    autoFlow?: "row" | "row dense" | "column" | "column dense";
     columnGap?: number;     // between columns (>= 0)
     rowGap?: number;        // between rows (>= 0)
     padding?: number;       // inset from the container's edges (>= 0)
@@ -230,6 +246,19 @@ export interface LayoutContainer {
      */
     wrap?: boolean;
     /**
+     * Cross-axis distribution of the wrapped LINES (Milestone 2), when they have leftover cross
+     * space (`Σ line sizes < inner cross`). Absent = `start`. A no-op for a single line or a
+     * cross-hug container (which sized itself to its lines). `stretch` grows each line's band
+     * (feeding `alignItems: stretch`); `space-between`/`space-around` distribute the gaps.
+     */
+    alignContent?: "start" | "center" | "end" | "space-between" | "space-around" | "stretch";
+    /**
+     * Flex WRAP-REVERSE (Milestone 2). When true, wrapped lines stack from the OPPOSITE cross
+     * edge (also flipping per-line `alignItems` and `alignContent`, like CSS `wrap-reverse`).
+     * Absent = false. Inert without `wrap` (or when the main axis hugs, which makes wrap inert).
+     */
+    wrapReverse?: boolean;
+    /**
      * Intrinsic ("hug") sizing (Milestone 2). When set, this container sizes the given
      * PHYSICAL axis to its contents instead of using its stored `geometry`: the hugged
      * width/height becomes a computed RESULT, exactly as a laid-out child's position is.
@@ -245,6 +274,8 @@ export interface LayoutContainer {
 
 const DIRECTIONS = new Set(["row", "column"]);
 const ALIGNMENTS = new Set(["start", "center", "end", "stretch"]);
+const ALIGN_CONTENT = new Set(["start", "center", "end", "space-between", "space-around", "stretch"]);
+const GRID_AUTO_FLOWS = new Set(["row", "row dense", "column", "column dense"]);
 const H_CONSTRAINTS = new Set(["left", "right", "left-right", "center", "scale"]);
 const V_CONSTRAINTS = new Set(["top", "bottom", "top-bottom", "center", "scale"]);
 
@@ -259,6 +290,15 @@ function marginError(m: unknown): string | null {
         const v = (m as Record<string, unknown>)[side];
         if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v < 0)) return `${side} must be finite and >= 0`;
     }
+    return null;
+}
+
+/** Validity check for a `[startLine, endLine]` grid-line pair — integers, `1 <= start < end <= GRID_MAX_TRACKS + 1`. */
+function gridLineError(v: unknown): string | null {
+    if (!Array.isArray(v) || v.length !== 2) return "must be a [start, end] pair";
+    const [s, e] = v as unknown[];
+    if (!Number.isInteger(s) || !Number.isInteger(e)) return "lines must be integers";
+    if ((s as number) < 1 || (e as number) > GRID_MAX_TRACKS + 1 || (s as number) >= (e as number)) return `must satisfy 1 <= start < end <= ${GRID_MAX_TRACKS + 1}`;
     return null;
 }
 
@@ -297,6 +337,8 @@ export function layoutError(l: Partial<Layout>): string | null {
     // (grid children have no container), so validate BEFORE the no-container early return.
     if (l.colSpan !== undefined && (!Number.isInteger(l.colSpan) || l.colSpan < 1 || l.colSpan > GRID_SPAN_MAX)) return `layout.colSpan must be an integer in [1, ${GRID_SPAN_MAX}]`;
     if (l.rowSpan !== undefined && (!Number.isInteger(l.rowSpan) || l.rowSpan < 1 || l.rowSpan > GRID_SPAN_MAX)) return `layout.rowSpan must be an integer in [1, ${GRID_SPAN_MAX}]`;
+    if (l.gridColumn !== undefined) { const e = gridLineError(l.gridColumn); if (e) return `layout.gridColumn ${e}`; }
+    if (l.gridRow !== undefined) { const e = gridLineError(l.gridRow); if (e) return `layout.gridRow ${e}`; }
     if (l.position !== undefined && l.position !== "absolute") return 'layout.position must be "absolute"';
     // Constraints + reference are independent per-child fields (like grow), so validate
     // them BEFORE the no-container early return — else a `{ constraints }` patch slips by.
@@ -335,6 +377,7 @@ export function layoutError(l: Partial<Layout>): string | null {
         }
         if (g.hugWidth !== undefined && typeof g.hugWidth !== "boolean") return "layout.grid.hugWidth must be a boolean";
         if (g.hugHeight !== undefined && typeof g.hugHeight !== "boolean") return "layout.grid.hugHeight must be a boolean";
+        if (g.autoFlow !== undefined && !GRID_AUTO_FLOWS.has(g.autoFlow)) return 'layout.grid.autoFlow must be "row" | "row dense" | "column" | "column dense"';
         if (g.columnGap !== undefined && (!Number.isFinite(g.columnGap) || g.columnGap < 0)) return "layout.grid.columnGap must be finite and >= 0";
         if (g.rowGap !== undefined && (!Number.isFinite(g.rowGap) || g.rowGap < 0)) return "layout.grid.rowGap must be finite and >= 0";
         if (g.padding !== undefined && (!Number.isFinite(g.padding) || g.padding < 0)) return "layout.grid.padding must be finite and >= 0";
@@ -350,6 +393,8 @@ export function layoutError(l: Partial<Layout>): string | null {
     if (c.hugWidth !== undefined && typeof c.hugWidth !== "boolean") return "layout.container.hugWidth must be a boolean";
     if (c.hugHeight !== undefined && typeof c.hugHeight !== "boolean") return "layout.container.hugHeight must be a boolean";
     if (c.wrap !== undefined && typeof c.wrap !== "boolean") return "layout.container.wrap must be a boolean";
+    if (c.alignContent !== undefined && !ALIGN_CONTENT.has(c.alignContent)) return "layout.container.alignContent is invalid";
+    if (c.wrapReverse !== undefined && typeof c.wrapReverse !== "boolean") return "layout.container.wrapReverse must be a boolean";
     return null;
 }
 

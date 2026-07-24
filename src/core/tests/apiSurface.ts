@@ -110,7 +110,7 @@ export function __apiSurfacePin(): void {
     expectType<Rect | null>(selectionBounds(computed, ["id"]));
 
     // --- M2 layout engine ---------------------------------------------------
-    const container: LayoutContainer = { direction: "row", gap: 0, padding: 0, alignItems: "start", wrap: true };
+    const container: LayoutContainer = { direction: "row", gap: 0, padding: 0, alignItems: "start", wrap: true, alignContent: "space-between", wrapReverse: true };
     expectType<LayoutContainer>(container);
     expectType<string | null>(layoutError({ container } as Partial<Layout>));
     expectType<Map<string, Rect>>(layoutChildren(container, { width: 1, height: 1 }, [{ id: "a", width: 1, height: 1 }]));
@@ -124,11 +124,11 @@ export function __apiSurfacePin(): void {
     expectType<Map<string, { width: number; height: number }>>(measureIntrinsicSizes(traverseSceneGraph(doc), null));
     const track: TrackSize = { fr: 1 };
     const autoTrack: TrackSize = { auto: true };
-    const grid: LayoutGrid = { columns: [{ px: 1 }, track, autoTrack], rowHeight: { px: 1 }, rows: [autoTrack], hugWidth: true, hugHeight: false, columnGap: 0, rowGap: 0, padding: 0 };
+    const grid: LayoutGrid = { columns: [{ px: 1 }, track, autoTrack], rowHeight: { px: 1 }, rows: [autoTrack], hugWidth: true, hugHeight: false, autoFlow: "column dense", columnGap: 0, rowGap: 0, padding: 0 };
     expectType<LayoutGrid>(grid);
     expectType<Map<string, Rect>>(layoutGridChildren(grid, { width: 1, height: 1 }, [{ id: "a", width: 1, height: 1, colSpan: 2, rowSpan: 1 }]));
     expectType<{ colWidths: number[]; rowHeights: number[]; cols: number; rows: number; cells: GridCell[] }>(resolveGridTracks(grid, [{ width: 1, height: 1, colSpan: 1 }], { width: 1, height: 1 }));
-    expectType<{ cells: GridCell[]; rows: number }>(placeGridItems([{ colSpan: 2, rowSpan: 1 }], 3));
+    expectType<{ cells: GridCell[]; rows: number; cols: number }>(placeGridItems([{ colSpan: 2, rowSpan: 1, gridColumn: [1, 3], gridRow: [1, 2] }], 3, { columnFlow: true, dense: true }));
     const constraints: Constraints = { horizontal: "right" as HConstraint, vertical: "center" as VConstraint };
     expectType<Constraints>(constraints);
     expectType<Rect>(resolveConstraints({ x: 0, y: 0, width: 1, height: 1 }, constraints, { width: 1, height: 1 }, { width: 2, height: 2 }));

@@ -215,6 +215,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "11") { raw = migrate_11_to_12(raw); version = "12"; }
     if (version === "12") { raw = migrate_12_to_13(raw); version = "13"; }
     if (version === "13") { raw = migrate_13_to_14(raw); version = "14"; }
+    if (version === "14") { raw = migrate_14_to_15(raw); version = "15"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -298,6 +299,11 @@ function migrate_12_to_13(raw: any): any {
 /** Schema 13 → 14: widens `Layout.margin` to `number | Margins` + grid-cell margins. Pass-through by content. */
 function migrate_13_to_14(raw: any): any {
     return { ...raw, version: "14" };
+}
+
+/** Schema 14 → 15: M2 close-out — alignContent/wrapReverse + grid autoFlow + gridColumn/gridRow. Pass-through by content. */
+function migrate_14_to_15(raw: any): any {
+    return { ...raw, version: "15" };
 }
 
 /**

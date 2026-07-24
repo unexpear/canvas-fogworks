@@ -1580,13 +1580,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "15" that has no 14→15 step: the
+        // Pretending the build has moved to a schema "16" that has no 15→16 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→14), and then REFUSED at "14" — never re-stamped straight to the current
-        // schema. The error naming "14" (not "1") is the proof the chain actually ran.
+        // (1→2→…→15), and then REFUSED at "15" — never re-stamped straight to the current
+        // schema. The error naming "15" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 13→14 landed for per-side margins.)
-        expect(() => migrateIfNeeded(legacy, "15")).toThrow('Migration not implemented for document schema "14"');
+        // time a real migration is added — here, when 14→15 landed for align-content.)
+        expect(() => migrateIfNeeded(legacy, "16")).toThrow('Migration not implemented for document schema "15"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -2037,21 +2037,22 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
                 const vMode = pick(["top", "bottom", "top-bottom", "center", "scale"]);
                 const r = rnd();
                 const rule = r < 0.3
-                    ? { container: { direction: pick([...dirs]), gap: rnd() * 12, padding: rnd() * 12, alignItems: pick([...aligns]), hugWidth: rnd() < 0.5, hugHeight: rnd() < 0.5, wrap: rnd() < 0.5 } }
+                    ? { container: { direction: pick([...dirs]), gap: rnd() * 12, padding: rnd() * 12, alignItems: pick([...aligns]), hugWidth: rnd() < 0.5, hugHeight: rnd() < 0.5, wrap: rnd() < 0.5, alignContent: pick(["start", "center", "end", "space-between", "space-around", "stretch"]), wrapReverse: rnd() < 0.5 } }
                     : r < 0.42
                         ? { container: undefined }
                         : r < 0.55
                             // grow (free > 0) and shrink (free < 0) — op-2 resizes drive both signs.
                             // colSpan/rowSpan are grid-child hints (inert under a flex parent) — a
                             // node that later becomes a grid child then spans multiple cells.
-                            ? { grow: rnd() < 0.4 ? 0 : rnd() * 3, shrink: rnd() < 0.4 ? 0 : rnd() * 3, colSpan: 1 + Math.floor(rnd() * 3), rowSpan: 1 + Math.floor(rnd() * 3) }
+                            // ...plus sometimes an EXPLICIT grid line pin (both axes) — auto items flow around it.
+                            ? { grow: rnd() < 0.4 ? 0 : rnd() * 3, shrink: rnd() < 0.4 ? 0 : rnd() * 3, colSpan: 1 + Math.floor(rnd() * 3), rowSpan: 1 + Math.floor(rnd() * 3), gridColumn: rnd() < 0.7 ? undefined : [1 + Math.floor(rnd() * 2), 3 + Math.floor(rnd() * 2)] as [number, number], gridRow: rnd() < 0.7 ? undefined : [1 + Math.floor(rnd() * 3), 4 + Math.floor(rnd() * 3)] as [number, number] }
                             : r < 0.72
                                 // grid: `track()` now also emits `auto` (content-sized) tracks, and
                             // the grid may HUG either axis — so a grid child's size feeds its
                             // track and the grid's own size, pulling grid into the measure pass.
                             // `rows` may be shorter/longer than the derived rows; all must
                             // reconcile incremental===full.
-                            ? { grid: { columns: Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), rowHeight: track(), rows: rnd() < 0.5 ? undefined : Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), hugWidth: rnd() < 0.4, hugHeight: rnd() < 0.4, columnGap: rnd() * 8, rowGap: rnd() * 8, padding: rnd() * 8 } }
+                            ? { grid: { columns: Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), rowHeight: track(), rows: rnd() < 0.5 ? undefined : Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), hugWidth: rnd() < 0.4, hugHeight: rnd() < 0.4, autoFlow: pick(["row", "row dense", "column", "column dense"]), columnGap: rnd() * 8, rowGap: rnd() * 8, padding: rnd() * 8 } }
                                 : r < 0.86
                                     // constraints: the action auto-captures constraintRef; op-2 resizes
                                     // (source a) and op-3 toggles + a later resize (source b) drive it.
@@ -2796,8 +2797,8 @@ describe("M2 grid spans", () => {
         expect(placeGridItems([{ colSpan: 99 }], 3).cells[0]).toEqual({ col: 0, row: 0, colSpan: 3, rowSpan: 1 });
         // fractional / non-positive spans clamp to 1; empty and 0-column grids are total.
         expect(placeGridItems([{ colSpan: 1.9, rowSpan: -5 }], 3).cells[0]).toMatchObject({ colSpan: 1, rowSpan: 1 });
-        expect(placeGridItems([], 3)).toEqual({ cells: [], rows: 0 });
-        expect(placeGridItems([{}], 0)).toEqual({ cells: [], rows: 0 });
+        expect(placeGridItems([], 3)).toEqual({ cells: [], rows: 0, cols: 3 });
+        expect(placeGridItems([{}], 0)).toEqual({ cells: [], rows: 0, cols: 0 });
         // OOM guard: a pathological rowSpan clamps to GRID_SPAN_MAX, never throws or explodes `rows`.
         const big = placeGridItems([{ rowSpan: 1e9 }], 1);
         expect(big.cells[0].rowSpan).toBe(GRID_SPAN_MAX);
@@ -2912,6 +2913,126 @@ describe("M2 grid spans", () => {
             + ` "style": { "fill": "#000", "opacity": 1 }, "layout": ${layout} } } } }`;
         expect(() => deserializeDocument(envelope(`{ "colSpan": 0 }`))).toThrow();
         expect(() => deserializeDocument(envelope(`{ "rowSpan": 1.5 }`))).toThrow();
+    });
+});
+
+describe("M2 grid auto-flow (dense + column)", () => {
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+
+    test("dense backfills an earlier gap that sparse leaves empty", () => {
+        // cols 2, items [A 1×1, B colSpan2, C 1×1]. Sparse: A(0,0), B wraps to row 1 (won't fit beside A),
+        // C flows forward to row 2 — the cell (0,1) beside A is left EMPTY. Dense re-scans from the origin,
+        // so C backfills (0,1).
+        expect(placeGridItems([{}, { colSpan: 2 }, {}], 2).cells[2]).toMatchObject({ col: 0, row: 2 }); // sparse: no backfill
+        expect(placeGridItems([{}, { colSpan: 2 }, {}], 2, { dense: true }).cells[2]).toMatchObject({ col: 1, row: 0 }); // dense
+    });
+
+    test("column flow fills down each column then across, deriving the column count", () => {
+        // 2 fixed rows, four 1×1 items -> col-major (0,0),(0,1),(1,0),(1,1); rows fixed 2, cols derived 2.
+        const g = placeGridItems([{}, {}, {}, {}], 2, { columnFlow: true });
+        expect(g.cells.map(c => [c.col, c.row])).toEqual([[0, 0], [0, 1], [1, 0], [1, 1]]);
+        expect(g.rows).toBe(2);
+        expect(g.cols).toBe(2);
+        // A `colSpan` in column flow must span COLUMNS (not rows) — this pins the transpose, which
+        // 1×1 items cannot (the transpose of a 1×1 is itself).
+        expect(placeGridItems([{ colSpan: 2 }], 2, { columnFlow: true }).cells[0]).toMatchObject({ col: 0, row: 0, colSpan: 2, rowSpan: 1 });
+        // Empty column-flow grid → 0×0 (padding-only hug), mirroring row flow.
+        expect(placeGridItems([], 2, { columnFlow: true })).toEqual({ cells: [], rows: 0, cols: 0 });
+        // TOTAL/bounded: column flow's occupancy is fixedRows × rowsCap ≤ GRID_MAX_TRACKS² (same as
+        // row flow), so a 1-row grid with a huge child count stays bounded — no throw, no hang.
+        const big = placeGridItems(Array.from({ length: 3000 }, () => ({})), 1, { columnFlow: true });
+        expect(big.cells).toHaveLength(3000);
+        expect(big.cols).toBeLessThanOrEqual(GRID_MAX_TRACKS * GRID_MAX_TRACKS); // derived, bounded
+        expect(big.rows).toBe(1);
+    });
+
+    test("a hugWidth column-flow grid derives auto columns from its children", () => {
+        const doc = createEmptyDocument();
+        // 1 fixed row (grid.rows absent), 3 items -> 3 derived columns, each auto-sized from its child.
+        doc.nodes.set("P", mk("P", null, ["c1", "c2", "c3"], { x: 0, y: 0, width: 999, height: 10 },
+            { grid: { columns: [{ auto: true }], rowHeight: { px: 10 }, autoFlow: "column", hugWidth: true, columnGap: 0, padding: 0 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 20, height: 5 }, {}));
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 30, height: 5 }, {}));
+        doc.nodes.set("c3", mk("c3", "P", [], { x: 0, y: 0, width: 25, height: 5 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        expect(cs.nodes.get("P")!.bounds.width).toBe(75); // 20 + 30 + 25 across 3 derived columns
+        expect(cs.nodes.get("c3")!.bounds).toMatchObject({ x: 50, width: 25 }); // third column
+    });
+
+    test("auto-flow is a write-path citizen: validation + schema round-trip", () => {
+        const d = createDocWithParentChild();
+        const ok = (grid: any) => new UpdateNodeLayoutAction(d, "parent-001", { grid }).validate();
+        expect(ok({ columns: [{ px: 1 }], rowHeight: { px: 1 }, autoFlow: "column dense" })).toBe(true);
+        expect(ok({ columns: [{ px: 1 }], rowHeight: { px: 1 }, autoFlow: "diagonal" })).toBe(false); // not a flow
+
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "parent-001", { grid: { columns: [{ px: 10 }], rowHeight: { px: 10 }, autoFlow: "column" } }));
+        expect(deserializeDocument(serializeDocument(dispatcher.getDocument())).nodes.get("parent-001")!.layout.grid!.autoFlow).toBe("column");
+    });
+});
+
+describe("M2 grid explicit line placement", () => {
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+
+    test("a fully-pinned item takes its lines (end-exclusive); auto items flow AROUND it", () => {
+        // cols 3. Item at index 1 pinned to column line [2,3] (col 1) and row line [2,3] (row 1) -> (1,1).
+        // Auto items A,C,D,E,F flow row-major; F would land at (1,1) but skips the pin to (1,2).
+        const items = [{}, { gridColumn: [2, 3] as [number, number], gridRow: [2, 3] as [number, number] }, {}, {}, {}, {}];
+        const { cells } = placeGridItems(items, 3);
+        expect(cells[1]).toMatchObject({ col: 1, row: 1, colSpan: 1, rowSpan: 1 }); // the pin
+        // [col,row] per index A,B,C,D,E,F: auto items fill row 0 (A,C,D), then row 1 flows AROUND the
+        // pin at (col1,row1) — E takes col0, F skips the pin to col2.
+        expect(cells.map(c => [c.col, c.row])).toEqual([[0, 0], [1, 1], [1, 0], [2, 0], [0, 1], [2, 1]]);
+    });
+
+    test("grid lines span the tracks between them (end - start)", () => {
+        // gridColumn [1,3] -> col 0, colSpan 2; gridRow [1,2] -> row 0, rowSpan 1.
+        const { cells } = placeGridItems([{ gridColumn: [1, 3] as [number, number], gridRow: [1, 2] as [number, number] }], 3);
+        expect(cells[0]).toEqual({ col: 0, row: 0, colSpan: 2, rowSpan: 1 });
+        // Single-axis placement is DEFERRED: a gridColumn WITHOUT gridRow auto-flows (colSpan 1), it
+        // is NOT treated as explicit — and it must not throw on the missing axis.
+        expect(placeGridItems([{ gridColumn: [2, 4] as [number, number] }], 3).cells[0]).toEqual({ col: 0, row: 0, colSpan: 1, rowSpan: 1 });
+    });
+
+    test("a pinned item grows a hugHeight grid to its row, and the hug equals the cells", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 20, height: 999 },
+            { grid: { columns: [{ px: 20 }], rowHeight: { px: 10 }, hugHeight: true, rowGap: 0 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 5, height: 5 }, { gridColumn: [1, 2], gridRow: [4, 5] })); // pinned to row 3
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 5, height: 5 }, {}));                                     // auto -> row 0
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // c1 at row 3 -> rows = 4 -> hugHeight = 40. c1 y = 30, c2 y = 0. Structural: hug == lowest cell edge.
+        expect(cs.nodes.get("P")!.bounds.height).toBe(40);
+        expect(cs.nodes.get("c1")!.bounds.y).toBe(30);
+        expect(cs.nodes.get("c2")!.bounds.y).toBe(0);
+    });
+
+    test("grid lines are write-path citizens: validation + schema round-trip", () => {
+        const d = createDocWithParentChild();
+        const ok = (l: any) => new UpdateNodeLayoutAction(d, "child-001", l).validate();
+        expect(ok({ gridColumn: [1, 3] })).toBe(true);
+        expect(ok({ gridRow: [2, 4] })).toBe(true);
+        expect(ok({ gridColumn: [3, 1] })).toBe(false);                    // start >= end
+        expect(ok({ gridColumn: [0, 2] })).toBe(false);                    // start < 1
+        expect(ok({ gridColumn: [1] })).toBe(false);                       // wrong length
+        expect(ok({ gridColumn: [1.5, 3] })).toBe(false);                  // non-integer
+        expect(ok({ gridColumn: [1, GRID_MAX_TRACKS + 2] })).toBe(false);  // end past the cap
+
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "child-001", { gridColumn: [2, 4], gridRow: [1, 3] }));
+        const l = deserializeDocument(serializeDocument(dispatcher.getDocument())).nodes.get("child-001")!.layout;
+        expect(l.gridColumn).toEqual([2, 4]);
+        expect(l.gridRow).toEqual([1, 3]);
+        // Load path rejects a malformed pair exactly as the edit path does.
+        const envelope = (layout: string) => `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
+            + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
+            + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
+            + ` "style": { "fill": "#000", "opacity": 1 }, "layout": ${layout} } } } }`;
+        expect(() => deserializeDocument(envelope(`{ "gridRow": [3, 1] }`))).toThrow();
     });
 });
 
@@ -3209,6 +3330,85 @@ describe("M2 flex wrap", () => {
             + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
             + ` "style": { "fill": "#000", "opacity": 1 }, "layout": ${layout} } } } }`;
         expect(() => deserializeDocument(envelope(`{ "container": { "direction": "row", "wrap": "yes" } }`))).toThrow();
+    });
+});
+
+describe("M2 align-content + wrap-reverse", () => {
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+    // A width-100 row that wraps each 60-wide child onto its own line (2 lines of cross 40, gap 10);
+    // the FIXED height 200 leaves freeCross = 200 - (40+40+10) = 110 for align-content to distribute.
+    const build = (extra: Partial<NonNullable<Node["layout"]["container"]>>) => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 100, height: 200 },
+            { container: { direction: "row", wrap: true, gap: 10, ...extra } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 60, height: 40 }, {}));
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 60, height: 40 }, {}));
+        doc.rootNodeUuids = ["P"];
+        return computeGeometry(doc);
+    };
+
+    test("align-content distributes the wrapped lines in the leftover cross space", () => {
+        // start (default): lines pack at the top — c1 y=0, c2 y = 40+10 = 50.
+        expect(build({}).nodes.get("c1")!.bounds.y).toBe(0);
+        expect(build({}).nodes.get("c2")!.bounds.y).toBe(50);
+        expect(build({ alignContent: "center" }).nodes.get("c1")!.bounds.y).toBe(55);          // leadOff 110/2
+        expect(build({ alignContent: "center" }).nodes.get("c2")!.bounds.y).toBe(105);
+        expect(build({ alignContent: "end" }).nodes.get("c1")!.bounds.y).toBe(110);            // leadOff 110
+        expect(build({ alignContent: "space-between" }).nodes.get("c2")!.bounds.y).toBe(160);  // gap += 110
+        expect(build({ alignContent: "space-around" }).nodes.get("c1")!.bounds.y).toBe(27.5);  // leadOff 110/4
+    });
+
+    test("align-content: stretch grows each line's band (feeding alignItems: stretch)", () => {
+        const cs = build({ alignContent: "stretch", alignItems: "stretch" });
+        // bandGrow = 110/2 = 55 -> band 95; alignItems:stretch fills it. c1 y=0 h95, c2 y = 95+10 = 105.
+        expect(cs.nodes.get("c1")!.bounds).toMatchObject({ y: 0, height: 95 });
+        expect(cs.nodes.get("c2")!.bounds).toMatchObject({ y: 105, height: 95 });
+    });
+
+    test("wrap-reverse reflects the lines across the container cross (line 0 to the far edge)", () => {
+        const cs = build({ wrapReverse: true });
+        // reflect: cross' = innerCross(200) - cross - crossSize. c1: 200-0-40 = 160; c2: 200-50-40 = 110.
+        expect(cs.nodes.get("c1")!.bounds.y).toBe(160); // line 0 now at the bottom
+        expect(cs.nodes.get("c2")!.bounds.y).toBe(110); // line 1 above it
+    });
+
+    test("align-content is a NO-OP on a cross-hug container (freeCross == 0) and on a single line", () => {
+        const hug = (alignContent: any) => {
+            const doc = createEmptyDocument();
+            doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 100, height: 999 },
+                { container: { direction: "row", wrap: true, hugHeight: true, gap: 10, alignContent } }));
+            doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 60, height: 40 }, {}));
+            doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 60, height: 40 }, {}));
+            doc.rootNodeUuids = ["P"];
+            return computeGeometry(doc);
+        };
+        // hugHeight -> measured height == the lines (40+40+10 = 90) -> freeCross 0 -> every value identical.
+        expect(hug("center").nodes.get("c1")!.bounds).toEqual(hug("space-between").nodes.get("c1")!.bounds);
+        expect(hug("end").nodes.get("c2")!.bounds).toEqual(hug("start").nodes.get("c2")!.bounds);
+        expect(hug("stretch").nodes.get("P")!.bounds.height).toBe(90); // hug == the cell union, unchanged
+        // single line: `end` must not shift the lone line off the top.
+        const single = createEmptyDocument();
+        single.nodes.set("P", mk("P", null, ["a"], { x: 0, y: 0, width: 200, height: 100 },
+            { container: { direction: "row", wrap: true, alignContent: "end" } }));
+        single.nodes.set("a", mk("a", "P", [], { x: 0, y: 0, width: 30, height: 10 }, {}));
+        single.rootNodeUuids = ["P"];
+        expect(computeGeometry(single).nodes.get("a")!.bounds.y).toBe(0);
+    });
+
+    test("align-content / wrap-reverse are write-path citizens: validation + schema-15 round-trip", () => {
+        const d = createDocWithParentChild();
+        const ok = (container: any) => new UpdateNodeLayoutAction(d, "parent-001", { container }).validate();
+        expect(ok({ direction: "row", alignContent: "space-around" })).toBe(true);
+        expect(ok({ direction: "row", alignContent: "space-evenly" })).toBe(false); // not a supported value
+        expect(ok({ direction: "row", wrapReverse: true })).toBe(true);
+        expect(ok({ direction: "row", wrapReverse: 1 })).toBe(false);               // non-boolean
+
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "parent-001", { container: { direction: "row", alignContent: "center", wrapReverse: true } }));
+        const c = deserializeDocument(serializeDocument(dispatcher.getDocument())).nodes.get("parent-001")!.layout.container!;
+        expect(c.alignContent).toBe("center");
+        expect(c.wrapReverse).toBe(true);
     });
 });
 

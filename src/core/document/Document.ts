@@ -101,8 +101,15 @@ export const CURRENT_VERSION: string =
  *         GRID children (cell inset), not just flex. A plain `number` is the old uniform
  *         margin, so `migrate_13_to_14` is a pass-through — but a schema-13 build would not
  *         understand a per-side object and would ignore a grid child's margin.
+ *
+ *   "15" — the M2 layout-engine close-out batch: `LayoutContainer.alignContent`/`wrapReverse`
+ *         (cross-axis line distribution + reverse stacking), `LayoutGrid.autoFlow`
+ *         ("row"/"column", dense), and `Layout.gridColumn`/`gridRow` (explicit line placement).
+ *         All optional (absent = start / false / "row" / auto-flow), so `migrate_14_to_15` is a
+ *         pass-through — but a schema-14 build would mis-distribute wrapped lines, flow a grid the
+ *         wrong way, or auto-place a pinned item at the wrong cell.
  */
-export const SCHEMA_VERSION = "14";
+export const SCHEMA_VERSION = "15";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

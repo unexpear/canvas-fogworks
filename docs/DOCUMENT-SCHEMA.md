@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v14 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug/spans), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v15 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -77,6 +77,8 @@ interface Layout {     // constraint intent, not absolute position (Milestone 2)
   margin?: number | Margins;                           // M2 flex spacing / grid-cell inset — LIVE (uniform or per-side)
   colSpan?: number;                                    // M2 grid item span — LIVE; integer [1, GRID_SPAN_MAX]
   rowSpan?: number;                                    // M2 grid item span — LIVE; integer [1, GRID_SPAN_MAX]
+  gridColumn?: readonly [number, number];              // M2 explicit grid line pin (schema 15); 1-indexed, end-exclusive
+  gridRow?: readonly [number, number];                 // M2 explicit grid line pin (schema 15); both needed to pin
 }
 
 interface Margins { top?: number; right?: number; bottom?: number; left?: number }  // per-side; any omitted side = 0
@@ -90,8 +92,10 @@ interface LayoutContainer {          // this node's DIRECT CHILDREN are auto-pos
   direction: "row" | "column";
   gap?: number;                      // between children AND between wrapped lines, >= 0
   padding?: number;                  // inset from the container's edges, >= 0
-  alignItems?: "start" | "center" | "end" | "stretch";  // cross-axis; stretch resizes
+  alignItems?: "start" | "center" | "end" | "stretch";  // cross-axis (per-line); stretch resizes
   wrap?: boolean;                    // multi-line flow (schema 12); cross-hug sizes to the lines
+  alignContent?: "start" | "center" | "end" | "space-between" | "space-around" | "stretch"; // line distribution (schema 15)
+  wrapReverse?: boolean;             // stack wrapped lines from the far cross edge (schema 15)
   hugWidth?: boolean;                // size width to contents (schema 4); absolute axis
   hugHeight?: boolean;               // size height to contents (schema 4); absolute axis
 }
@@ -104,6 +108,7 @@ interface LayoutGrid {               // children auto-flow row-major into cells 
   rows?: TrackSize[];                // explicit per-row tracks (schema 10); rowHeight is the fallback beyond the list
   hugWidth?: boolean;                // size width to the tracks (schema 11), like LayoutContainer hug
   hugHeight?: boolean;               // size height to the tracks (schema 11)
+  autoFlow?: "row" | "row dense" | "column" | "column dense";  // placement flow (schema 15); default "row"
   columnGap?: number; rowGap?: number; padding?: number;  // >= 0
 }
 
@@ -253,8 +258,7 @@ cross + gap·(lines−1)`. Constraints, all resolved acyclically:
 - Wrapping is measured against the container's OWN size; a parent that STRETCHES/grows the main
   axis wider does NOT re-flow into the extra space (a documented deferral that keeps the measure
   pass acyclic — both passes break against the same own-size, so they never disagree).
-- **align-content** (distributing lines in leftover cross space), wrap-reverse, and a separate
-  cross-gap are DEFERRED; lines pack from the leading cross edge.
+- **align-content**/wrap-reverse landed in schema 15 (below); a separate cross-gap stays deferred.
 - **Absent = nowrap**, so every schema-11 document is a valid schema-12 one — `migrate_11_to_12`
   is a pass-through; the bump is required because a schema-11 build would draw a wrapping
   container's children on one overflowing line and mis-size a cross-hug container. `wrap` is
@@ -373,10 +377,26 @@ plain number is the old behaviour, so `migrate_13_to_14` is a pass-through; the 
 because a schema-13 build would not understand a per-side object and would ignore a grid child's
 margin. Validated (number ≥ 0, or a `Margins` of finite ≥ 0 sides) on both paths.
 
-> **Still deferred (not in schema 14):** align-content / wrap-reverse,
-> responsive/breakpoint rules, the constrained-child re-baseline (above), and the grid tail
-> remainder (explicit line-based placement, dense packing, column auto-flow, `minmax()`/
-> `fit-content` tracks). These are M2's remaining deliverables — see
+**Layout close-out — schema 15 (Milestone 2).** The final layout-engine batch, all optional/
+additive (so `migrate_14_to_15` is a pass-through):
+- **`LayoutContainer.alignContent`** distributes the wrapped LINES in leftover cross space
+  (`start`/`center`/`end`/`space-between`/`space-around`/`stretch`) — a NO-OP for a single line or a
+  cross-hug container (`freeCross == 0`), so it needs no measure-fold change. **`wrapReverse`**
+  reflects the cross layout so lines stack from the far edge (also flipping alignItems + align-
+  content, as CSS). Both are pure position-pass arithmetic downstream of `breakFlexLines`.
+- **`LayoutGrid.autoFlow`** = `"row"` (default) / `"column"` / `+ " dense"`. Column flow fixes the
+  ROWS (from `rows`, default 1) and DERIVES the columns (implicit columns are `auto`) — implemented
+  as the exact TRANSPOSE of row flow, reusing the one placement kernel. Dense backfills earlier gaps.
+- **`Layout.gridColumn`/`gridRow`** (`[startLine, endLine]`, 1-indexed, end-exclusive) PIN an item
+  to fixed cells; a pre-pass marks the pinned cells so auto items flow around them. Both axes are
+  required to pin (single-axis placement is deferred); explicit-under-column-flow is deferred.
+- The bump is required because a schema-14 build would mis-distribute wrapped lines, flow a grid the
+  wrong way, or auto-place a pinned item. Everything is validated on both paths. **`minmax()`/
+  `fit-content` track sizing** stays deferred (a genuine iterative track-sizing algorithm).
+
+> **Still deferred (not in schema 15):** `minmax()`/`fit-content` tracks, single-axis explicit
+> placement, a separate cross-gap, responsive/breakpoint rules (→ M5), the constrained-child
+> re-baseline (→ M5 tool layer), drag-to-reorder (→ M4). See
 > [MILESTONES.md](../MILESTONES.md) § Milestone 2.
 
 > **It bumped `SCHEMA_VERSION` to `"2"`** — as the freeze rule required, with a
@@ -476,7 +496,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"14"`; chain: …11→12 flex wrap, 12→13 grid spans, 13→14 per-side/grid margins) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"15"`; chain: …12→13 grid spans, 13→14 per-side/grid margins, 14→15 align-content + auto-flow + line placement) | **only** when the persisted shape changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

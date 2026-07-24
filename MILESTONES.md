@@ -19,7 +19,7 @@ M0.5 Core Documentation      ✅   contracts frozen before building upward
       │
 M1  Computed State           ✅   stored intent -> calculated results
       │
-M2  Layout Engine            🚧   flex(+grow/shrink/wrap) + hug + grid(+rows/auto/hug/spans) + constraints + absolute; align-content/placement deferred
+M2  Layout Engine            ✅   flex(grow/shrink/wrap/align-content) + hug + grid(rows/auto/hug/spans/flow/pins) + constraints + absolute; minmax/fit-content deferred
       │
 M3  Renderer                 ⬜*  reads ComputedState only
       │
@@ -180,14 +180,19 @@ been missed.
 
 ## Phase 2 — Layout Engine
 
-### Milestone 2 — Layout Engine 🚧
+### Milestone 2 — Layout Engine ✅
 **Goal:** replace absolute positioning with layout computation — the document stores
 **"center inside parent"** instead of **`x = 240`**.
 
-M2 is deliberately marked **in progress, not done**: the milestone's full system list is
-large. **Auto-layout containers, intrinsic ("hug") sizing, flex-grow, and a grid** are
-built and verified; the rest is real work with its own weight, listed as deferred below
-rather than quietly folded in.
+M2's layout engine is **feature-complete**: flex (grow · shrink · wrap · align-content ·
+wrap-reverse · per-side margins · hug), grid (px/fr/auto tracks · per-row sizes · container
+hug · spans · dense/column auto-flow · explicit line placement · cell margins), constraints,
+and absolute escapes — all through one two-pass, `incremental === full` engine where every
+hugging container's size equals the geometry it lays out. Each feature landed as a verified
+slice (design panel → mutation-tested guards → adversarial review → schema bump), which
+repeatedly caught fuzz-blind bugs (a grid-placement OOM, a wrap grow-starve, a margin round-trip
+gap). What remains is a short, honestly-scoped list of **advanced/edge features and cross-
+milestone concerns** (below) — none a core-layout gap.
 
 ```
 Document → Geometry + Layout Engine → Computed State → Renderer
@@ -254,6 +259,19 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   held under a fuzz that varies `rows` shorter/longer than the derived rows). A single
   unequal-row test pins explicit-wins + implicit-fallback + prefix-sum row-Y +
   fr-after-px at once; all five guards mutation-tested and killed.
+- **Layout close-out (schema 15) — align-content/wrap-reverse, grid auto-flow, explicit
+  placement.** The final batch, scoped by a design panel that flagged what was tractable vs. a
+  genuine algorithm. **`alignContent`/`wrapReverse`** distribute + reflect wrapped lines — pure
+  position-pass arithmetic that is a NO-OP under a cross-hug (so the measure fold is untouched).
+  **`LayoutGrid.autoFlow`** adds dense packing and column flow — column flow is the exact
+  TRANSPOSE of row flow, reusing the one placement kernel rather than a second algorithm.
+  **`Layout.gridColumn`/`gridRow`** pin an item to explicit `[start,end)` lines via a pre-pass
+  that marks the cells so auto items flow around them. All optional/byte-identical-when-absent;
+  every guard mutation-tested (one column-flow guard needed a SPAN case to be observable — 1×1
+  items don't distinguish a transpose). Honestly DEFERRED as their own weight: **`minmax()`/
+  `fit-content` track sizing** (the CSS iterative freeze-and-reflow algorithm — the one piece
+  that would rewrite `resolveTracks` rather than thread a field through) and single-axis explicit
+  placement. This closes the M2 layout engine.
 - **Per-side + grid-cell margins.** `Layout.margin` widened from a uniform `number` to
   `number | Margins` (per-side top/right/bottom/left), and now applies to GRID children too
   (a cell inset; an `auto` track grows to fit the child + its margins). The flex math generalised
@@ -354,16 +372,17 @@ Document → Geometry + Layout Engine → Computed State → Renderer
 - **Schema cost, paid under the freeze rule.** `SCHEMA_VERSION` `"2"` → `"3"` (auto-layout)
   → `"4"` (hug) → `"5"` (grow) → `"6"` (grid) → `"7"` (constraints) → `"8"` (absolute +
   margin) → `"9"` (shrink) → `"10"` (grid per-row `rows`) → `"11"` (grid `auto` tracks +
-  hug) → `"12"` (flex wrap) → `"13"` (grid spans) → `"14"` (per-side/grid margins), each with a
-  pass-through migration, because an older build would draw the children at now-vestigial stored
-  geometry / unanchored / in-flow / unshrunk / at a uniform row height / not sized to content / on
-  one overflowing line / one cell each / with a uniform (or ignored, for grid) margin.
+  hug) → `"12"` (flex wrap) → `"13"` (grid spans) → `"14"` (per-side/grid margins) → `"15"`
+  (align-content + auto-flow + line placement), each with a pass-through migration, because an
+  older build would draw the children at now-vestigial stored geometry / unanchored / in-flow /
+  unshrunk / at a uniform row height / not sized to content / on one overflowing line / one cell
+  each / with a uniform (or ignored) margin / mis-distributed lines / the wrong flow / a mis-placed pin.
 
-**Deferred (each its own deliverable, NOT built):** align-content / wrap-reverse ·
-responsive / breakpoint rules · drag-to-reorder ·
-the constrained-child **re-baseline** (off-reference edits, an M5 tool-layer concern) ·
-the **grid tail remainder** (explicit line-based placement, dense packing, column auto-flow,
-`minmax()`/`fit-content` tracks).
+**Deferred (advanced/edge features and cross-milestone concerns — NOT core-layout gaps):**
+`minmax()`/`fit-content` track sizing (a genuine iterative track-sizing algorithm) ·
+single-axis explicit placement · a separate cross-gap · responsive / breakpoint rules (→ M5) ·
+drag-to-reorder (→ M4) · the constrained-child **re-baseline** (off-reference edits, → M5 tool
+layer).
 
 **Explicitly NOT in scope yet:** `ComputedState` still carries geometry only; resolved
 style (M5 tokens) is still absent. Layout output is expressed *as* geometry (computed

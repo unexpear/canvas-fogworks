@@ -131,13 +131,13 @@ export function measureIntrinsicSizes(
         // the position pass's filter or the auto-track flow indices would drift.
         const gr = node.layout.grid;
         if (gr && (gr.hugWidth || gr.hugHeight)) {
-            const inFlow: { width: number; height: number; colSpan?: number; rowSpan?: number; margin?: number | Margins }[] = [];
+            const inFlow: { width: number; height: number; colSpan?: number; rowSpan?: number; margin?: number | Margins; gridColumn?: readonly [number, number]; gridRow?: readonly [number, number] }[] = [];
             for (const childId of node.children) {
                 const childNode = byId.get(childId);
                 if (isAbsolute(childNode)) continue;
                 const own = measured.get(childId);
                 if (!own) continue;
-                inFlow.push({ width: own.width, height: own.height, colSpan: childNode?.layout.colSpan, rowSpan: childNode?.layout.rowSpan, margin: childNode?.layout.margin });
+                inFlow.push({ width: own.width, height: own.height, colSpan: childNode?.layout.colSpan, rowSpan: childNode?.layout.rowSpan, margin: childNode?.layout.margin, gridColumn: childNode?.layout.gridColumn, gridRow: childNode?.layout.gridRow });
             }
             const pad = gr.padding ?? 0;
             const { colWidths, rowHeights, cols, rows } = resolveGridTracks(gr, inFlow, { width, height });
@@ -265,8 +265,32 @@ export function layoutChildren(
     const lines = breakFlexLines(items, innerMain, gap, effectiveWrap);
     const singleLine = lines.length <= 1;
 
+    // ALIGN-CONTENT distributes the wrapped LINES in the leftover cross space — a no-op for a
+    // single line, or when the container CROSS-HUGS (freeCross == 0, since it sized itself to the
+    // lines). WRAP-REVERSE then reflects the whole cross layout so lines stack from the far edge
+    // (which also flips per-line alignItems and align-content, matching CSS). Both are pure
+    // position-pass arithmetic downstream of the shared `breakFlexLines` — the measure fold is
+    // untouched, so hug-size still equals the laid-out extent.
+    const alignContent = container.alignContent ?? "start";
+    const n = lines.length;
+    let contentCross = gap * Math.max(0, n - 1);
+    for (const ln of lines) contentCross += ln.cross;
+    const freeCross = Math.max(0, innerCross - contentCross);
+    let leadOff = 0;      // extra cross offset before the first line
+    let betweenExtra = 0; // extra cross spacing added between lines
+    let bandGrow = 0;     // extra cross size added to each line's band (align-content: stretch)
+    if (!singleLine && freeCross > 0) {
+        if (alignContent === "center") leadOff = freeCross / 2;
+        else if (alignContent === "end") leadOff = freeCross;
+        else if (alignContent === "space-between") betweenExtra = freeCross / (n - 1);
+        else if (alignContent === "space-around") { leadOff = freeCross / (2 * n); betweenExtra = freeCross / n; }
+        else if (alignContent === "stretch") bandGrow = freeCross / n;
+        // "start" → all zero (the pre-align-content behaviour)
+    }
+    const reverse = effectiveWrap && container.wrapReverse === true;
+
     const out = new Map<string, Rect>();
-    let crossCursor = pad; // cross-axis offset of the current line's leading edge
+    let crossCursor = pad + leadOff; // cross-axis offset of the current line's leading edge
     for (const line of lines) {
         // Free space drives grow (leftover) OR shrink (overflow), computed PER LINE — each
         // line distributes its own slack (CSS wrap behaviour). Each child's main margins
@@ -289,7 +313,7 @@ export function layoutChildren(
         // A SINGLE line fills the container's cross (nowrap-preserving, and CSS-correct — a
         // lone flex line stretches to the container); multi-line children sit in their own
         // line's cross band. This keeps every pre-wrap layout byte-identical.
-        const bandCross = singleLine ? innerCross : line.cross;
+        const bandCross = singleLine ? innerCross : line.cross + bandGrow;
 
         let cursor = pad; // main-axis offset, reset at each line
         for (const idx of line.items) {
@@ -309,7 +333,10 @@ export function layoutChildren(
             let crossOff = 0; // within the available cross, before the leading cross margin
             if (align === "center") crossOff = (availCross - crossSize) / 2;
             else if (align === "end") crossOff = availCross - crossSize;
-            const cross = crossCursor + lm.crossBefore + crossOff;
+            // WRAP-REVERSE reflects the child's whole cross rect across the container's inner cross.
+            const cross = reverse
+                ? 2 * pad + innerCross - (crossCursor + lm.crossBefore + crossOff) - crossSize
+                : crossCursor + lm.crossBefore + crossOff;
 
             cursor += lm.mainBefore; // leading main-axis margin
             out.set(c.id, row
@@ -318,7 +345,7 @@ export function layoutChildren(
 
             cursor += mainSize + lm.mainAfter + gap; // trailing main-axis margin, then the gap
         }
-        crossCursor += bandCross + gap; // next line stacks below this one (align-content deferred)
+        crossCursor += bandCross + gap + betweenExtra; // next line, plus any align-content spacing
     }
     return out;
 }
@@ -371,26 +398,46 @@ export interface GridCell {
  * Pure and TOTAL: reads only integers, uses a sparse `Set` (never `new Array(rows)`), and terminates
  * (each scan advances row-major within the cap); returns `{ cells: [], rows: 0 }` for a 0-column/empty grid.
  *
+ * `dense` backfills earlier gaps (each item scans from the origin rather than the forward cursor).
  * @returns `cells` index-aligned with `items`, and `rows` = `max(cell.row + cell.rowSpan)` (≤ GRID_MAX_TRACKS).
  */
-export function placeGridItems(
-    items: readonly { colSpan?: number; rowSpan?: number }[],
-    cols: number
+function placeRowMajor(
+    items: readonly { colSpan?: number; rowSpan?: number; explicit?: { col: number; colSpan: number; row: number; rowSpan: number } }[],
+    cols: number,
+    dense: boolean
 ): { cells: GridCell[]; rows: number } {
     if (cols <= 0) return { cells: [], rows: 0 };
     // The derived row count is bounded so `cols × rowsCap` (the occupancy) can't exhaust memory.
     const rowsCap = Math.max(1, Math.floor((GRID_MAX_TRACKS * GRID_MAX_TRACKS) / cols));
     const occ = new Set<number>();
-    const cells: GridCell[] = [];
+    const cells: GridCell[] = new Array(items.length); // pre-sized: explicit + auto passes fill by index
+    let rows = 0;
+    // PRE-PASS: pin EXPLICITLY-placed items first (clamped into the grid), so auto items flow AROUND
+    // them. Explicit items may overlap each other (CSS stacks them) — bounded by the same caps.
+    items.forEach((item, i) => {
+        const e = item.explicit;
+        if (!e) return;
+        const col = Math.min(Math.max(0, e.col), cols - 1);
+        const colSpan = Math.min(Math.max(1, e.colSpan), cols - col);
+        const rowSpan0 = Math.min(rowsCap, Math.max(1, e.rowSpan));
+        const row = Math.min(Math.max(0, e.row), rowsCap - rowSpan0);
+        const rowSpan = Math.min(rowSpan0, rowsCap - row);
+        for (let dr = 0; dr < rowSpan; dr++)
+            for (let dc = 0; dc < colSpan; dc++)
+                occ.add((row + dr) * cols + (col + dc));
+        cells[i] = { col, row, colSpan, rowSpan };
+        if (row + rowSpan > rows) rows = row + rowSpan;
+    });
+    // AUTO pass: place non-explicit items, skipping the already-marked explicit cells.
     let cursorRow = 0;
     let cursorCol = 0;
-    let rows = 0;
-    for (const item of items) {
+    items.forEach((item, i) => {
+        if (item.explicit) return; // already pinned above
         const cs = Math.min(cols, Math.max(1, Math.floor(item.colSpan ?? 1)));
         const rs = Math.min(rowsCap, Math.min(GRID_SPAN_MAX, Math.max(1, Math.floor(item.rowSpan ?? 1))));
-        // Scan row-major from the cursor for the first free cs×rs block.
-        let r = cursorRow;
-        let c = cursorCol;
+        // DENSE scans from the origin (backfilling earlier gaps); sparse scans from the forward cursor.
+        let r = dense ? 0 : cursorRow;
+        let c = dense ? 0 : cursorCol;
         let capped = false;
         for (; ;) {
             if (r + rs > rowsCap) { r = rowsCap - rs; c = 0; capped = true; break; } // cap: pile into the last band
@@ -408,14 +455,54 @@ export function placeGridItems(
             for (let dr = 0; dr < rs; dr++)
                 for (let dc = 0; dc < cs; dc++)
                     occ.add((r + dr) * cols + (c + dc));
-        cells.push({ col: c, row: r, colSpan: cs, rowSpan: rs });
+        cells[i] = { col: c, row: r, colSpan: cs, rowSpan: rs };
         if (r + rs > rows) rows = r + rs;
         // Advance the cursor forward-only, past the placed item (sparse — no backfill).
         cursorRow = r;
         cursorCol = c + cs;
         if (cursorCol >= cols) { cursorRow = r + 1; cursorCol = 0; }
-    }
+    });
     return { cells, rows };
+}
+
+/**
+ * Grid auto-placement, the single placement authority shared by the measure fold and the position
+ * pass. `primaryCount` is the FIXED-axis track count (columns for row-flow, rows for column-flow);
+ * the other axis is DERIVED and returned. COLUMN flow is the exact transpose of row flow — fill
+ * down-then-across == fill the transposed grid right-then-down — so it reuses `placeRowMajor`
+ * verbatim (swap colSpan↔rowSpan in, swap col↔row out) rather than a second algorithm.
+ *
+ * @returns `cells` index-aligned with `items`, plus BOTH `rows` and `cols` (one is `primaryCount`,
+ *   the other derived), so callers read whichever axis they need.
+ */
+export function placeGridItems(
+    items: readonly { colSpan?: number; rowSpan?: number; gridColumn?: readonly [number, number]; gridRow?: readonly [number, number] }[],
+    primaryCount: number,
+    opts?: { columnFlow?: boolean; dense?: boolean }
+): { cells: GridCell[]; rows: number; cols: number } {
+    const dense = opts?.dense === true;
+    if (opts?.columnFlow) {
+        // Explicit line placement is deferred under column flow — items auto-flow (spans transposed).
+        const transposed = items.map(it => ({ colSpan: it.rowSpan, rowSpan: it.colSpan }));
+        const k = placeRowMajor(transposed, primaryCount, dense); // primaryCount = FIXED row count
+        const cells = k.cells.map(cell => ({ col: cell.row, row: cell.col, colSpan: cell.rowSpan, rowSpan: cell.colSpan }));
+        // Empty grid → 0×0 (padding-only hug), mirroring row-flow's empty case; else the fixed row
+        // count stands and `k.rows` (the transpose's derived rows) is the derived COLUMN count.
+        return cells.length === 0 ? { cells, rows: 0, cols: 0 } : { cells, rows: primaryCount, cols: k.rows };
+    }
+    // Row flow: an item with BOTH grid lines is pinned (end-exclusive lines → 0-indexed col/row +
+    // span); placeRowMajor clamps to the grid and marks it before the auto items flow around it.
+    const resolved = items.map(it => (it.gridColumn && it.gridRow)
+        ? {
+            colSpan: it.colSpan, rowSpan: it.rowSpan,
+            explicit: {
+                col: it.gridColumn[0] - 1, colSpan: it.gridColumn[1] - it.gridColumn[0],
+                row: it.gridRow[0] - 1, rowSpan: it.gridRow[1] - it.gridRow[0],
+            },
+        }
+        : { colSpan: it.colSpan, rowSpan: it.rowSpan });
+    const k = placeRowMajor(resolved, primaryCount, dense); // primaryCount = FIXED column count
+    return { cells: k.cells, rows: k.rows, cols: primaryCount };
 }
 
 /**
@@ -434,15 +521,29 @@ export function placeGridItems(
  */
 export function resolveGridTracks(
     grid: LayoutGrid,
-    children: readonly { width: number; height: number; colSpan?: number; rowSpan?: number; margin?: number | Margins }[],
+    children: readonly { width: number; height: number; colSpan?: number; rowSpan?: number; margin?: number | Margins; gridColumn?: readonly [number, number]; gridRow?: readonly [number, number] }[],
     parentSize: { width: number; height: number }
 ): { colWidths: number[]; rowHeights: number[]; cols: number; rows: number; cells: GridCell[] } {
-    const cols = grid.columns.length;
-    if (cols === 0) return { colWidths: [], rowHeights: [], cols: 0, rows: 0, cells: [] };
-    const { cells, rows } = placeGridItems(children, cols);
+    if (grid.columns.length === 0) return { colWidths: [], rowHeights: [], cols: 0, rows: 0, cells: [] };
     const colGap = grid.columnGap ?? 0;
     const rowGap = grid.rowGap ?? 0;
     const pad = grid.padding ?? 0;
+    // auto-flow: "row" (default) fixes the columns and derives the rows; "column" fixes the rows
+    // (from `grid.rows`, default 1) and derives the columns; "dense" backfills gaps.
+    const flow = grid.autoFlow ?? "row";
+    const dense = flow.includes("dense");
+    const columnFlow = flow.startsWith("column");
+    const { cells, cols, rows } = columnFlow
+        ? placeGridItems(children, grid.rows?.length ?? 1, { columnFlow: true, dense })
+        : placeGridItems(children, grid.columns.length, { dense });
+
+    // Track sizes: leading columns from `grid.columns` then implicit `{ auto }` (for derived columns
+    // under column flow); each row is `rows[r] ?? rowHeight`. Under row flow this is byte-identical
+    // to the pre-auto-flow arrays (cols == grid.columns.length, so every column comes from `columns`).
+    const colTracks: TrackSize[] = [];
+    for (let c = 0; c < cols; c++) colTracks.push(grid.columns[c] ?? { auto: true });
+    const rowTracks: TrackSize[] = [];
+    for (let r = 0; r < rows; r++) rowTracks.push(grid.rows?.[r] ?? grid.rowHeight);
 
     const colAuto = new Array<number>(cols).fill(0);
     const rowAuto = new Array<number>(rows).fill(0);
@@ -450,19 +551,17 @@ export function resolveGridTracks(
         const cell = cells[i];
         // An `auto` track fits the SINGLE-span child PLUS its margins (so the inset cell in
         // layoutGridChildren gives the child its own size). A spanning item drives no auto track.
+        // Direction-agnostic: keys off `cell.col`/`cell.row`, identical for row and column flow.
         const pm = resolveMargin(ch.margin);
         if (cell.colSpan === 1 && ch.width + pm.left + pm.right > colAuto[cell.col]) colAuto[cell.col] = ch.width + pm.left + pm.right;
         if (cell.rowSpan === 1 && ch.height + pm.top + pm.bottom > rowAuto[cell.row]) rowAuto[cell.row] = ch.height + pm.top + pm.bottom;
     });
 
-    const rowTracks: TrackSize[] = [];
-    for (let r = 0; r < rows; r++) rowTracks.push(grid.rows?.[r] ?? grid.rowHeight);
-
     const availW = grid.hugWidth ? null : (parentSize.width - 2 * pad) - colGap * Math.max(0, cols - 1);
     const availH = grid.hugHeight ? null : (parentSize.height - 2 * pad) - rowGap * Math.max(0, rows - 1);
 
     return {
-        colWidths: resolveTracks(grid.columns, colAuto, availW),
+        colWidths: resolveTracks(colTracks, colAuto, availW),
         rowHeights: resolveTracks(rowTracks, rowAuto, availH),
         cols,
         rows,
@@ -480,17 +579,17 @@ export function resolveGridTracks(
 export function layoutGridChildren(
     grid: LayoutGrid,
     parentSize: { width: number; height: number },
-    children: readonly { id: string; width: number; height: number; colSpan?: number; rowSpan?: number; margin?: number | Margins }[]
+    children: readonly { id: string; width: number; height: number; colSpan?: number; rowSpan?: number; margin?: number | Margins; gridColumn?: readonly [number, number]; gridRow?: readonly [number, number] }[]
 ): Map<string, Rect> {
     const out = new Map<string, Rect>();
-    const cols = grid.columns.length;
-    if (cols === 0) return out;
+    if (grid.columns.length === 0) return out;
     const colGap = grid.columnGap ?? 0;
     const rowGap = grid.rowGap ?? 0;
     const pad = grid.padding ?? 0;
     // The SAME `resolveGridTracks` the hug fold used — reuse its placement `cells` so the cells
-    // laid out here match the container's hugged size exactly (no re-derivation, no drift).
-    const { colWidths, rowHeights, rows, cells } = resolveGridTracks(grid, children, parentSize);
+    // laid out here match the container's hugged size exactly (no re-derivation, no drift). Use its
+    // DERIVED `cols` (not `grid.columns.length`) — under column flow the real column count differs.
+    const { colWidths, rowHeights, cols, rows, cells } = resolveGridTracks(grid, children, parentSize);
 
     const colX: number[] = [];
     let x = pad;
