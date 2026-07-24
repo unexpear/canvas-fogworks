@@ -119,7 +119,7 @@ export function measureIntrinsicSizes(
 export function layoutChildren(
     container: LayoutContainer,
     parentSize: { width: number; height: number },
-    children: readonly { id: string; width: number; height: number; grow?: number; margin?: number }[]
+    children: readonly { id: string; width: number; height: number; grow?: number; shrink?: number; margin?: number }[]
 ): Map<string, Rect> {
     const gap = container.gap ?? 0;
     const pad = container.padding ?? 0;
@@ -130,29 +130,37 @@ export function layoutChildren(
     const innerMain = (row ? parentSize.width : parentSize.height) - 2 * pad;
     const innerCross = (row ? parentSize.height : parentSize.width) - 2 * pad;
 
-    // Flex-grow: share the LEFTOVER main-axis space among children in proportion to
-    // `grow`. No leftover (fixed content, or a main-axis hug where innerMain == used)
-    // means everyone keeps their base size; overflow (free < 0) is NOT shrunk here
-    // (flex-shrink is deferred). `margin` (uniform per child) is fixed spacing subtracted
-    // from the free space first — 2·margin on the main axis (before + after) — so grow
-    // fills only what margins leave. NOTE (intentional, differs from CSS): all free space
-    // is distributed by grow ratio, so a lone `grow: 0.5` still fills the row.
+    // Free space drives grow (leftover) OR shrink (overflow), never both — they are
+    // mutually exclusive by the sign of `free`. `margin` (uniform per child) is fixed
+    // spacing on the main axis (2·margin, before + after) counted into `used` FIRST, so it
+    // is never grown or shrunk. Grow distributes leftover by `grow` ratio (NOTE, differs
+    // from CSS: all of it, so a lone `grow: 0.5` still fills the row). Shrink distributes
+    // the DEFICIT weighted by `shrink × base-main` (CSS-style — bigger items give up more),
+    // clamped at 0. No grow/shrink factor ⇒ the child keeps its base size and overflows.
     let usedMain = gap * Math.max(0, children.length - 1);
     let growSum = 0;
+    let shrinkWeight = 0;
     for (const child of children) {
-        usedMain += 2 * (child.margin ?? 0) + (row ? child.width : child.height);
+        const baseMain = row ? child.width : child.height;
+        usedMain += 2 * (child.margin ?? 0) + baseMain;
         growSum += Math.max(0, child.grow ?? 0);
+        shrinkWeight += Math.max(0, child.shrink ?? 0) * baseMain;
     }
     const free = innerMain - usedMain;
-    const distribute = free > 0 && growSum > 0;
+    const growing = free > 0 && growSum > 0;
+    const shrinking = free < 0 && shrinkWeight > 0;
 
     const out = new Map<string, Rect>();
     let cursor = pad; // main-axis offset, starts after the leading padding
     for (const child of children) {
         const m = Math.max(0, child.margin ?? 0);
         const grow = Math.max(0, child.grow ?? 0);
+        const shrink = Math.max(0, child.shrink ?? 0);
         const baseMain = row ? child.width : child.height;
-        const mainSize = distribute && grow > 0 ? baseMain + free * (grow / growSum) : baseMain;
+        const mainSize =
+            growing && grow > 0 ? baseMain + free * (grow / growSum)
+                : shrinking && shrink > 0 ? Math.max(0, baseMain - (-free) * (shrink * baseMain / shrinkWeight))
+                    : baseMain;
         const ownCross = row ? child.height : child.width;
         // The child sits in a margin-inset slot: cross span is `innerCross − 2·margin`.
         const availCross = innerCross - 2 * m;

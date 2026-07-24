@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v8 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, grid, constraints, absolute + margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v9 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid, constraints, absolute + margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -69,6 +69,7 @@ interface Layout {     // constraint intent, not absolute position (Milestone 2)
   spacing?: number;                                    // reserved
   container?: LayoutContainer;                         // M2 auto-layout (flex) — LIVE
   grow?: number;                                       // M2 flex-grow (child hint) — LIVE
+  shrink?: number;                                     // M2 flex-shrink (child hint) — LIVE
   grid?: LayoutGrid;                                   // M2 grid — LIVE; EXCLUSIVE with container
   constraints?: Constraints;                           // M2 anchors (child of a PLAIN parent) — LIVE
   constraintRef?: { width: number; height: number };  // frozen parent-size reference for `constraints`
@@ -216,6 +217,17 @@ CSS `flex-grow`), and is consumed by the container parent during positioning.
   `migrate_4_to_5` is a pass-through. The bump is still required: a schema-4 build would
   draw a growing child at its base size instead of filled.
 
+**Flex-shrink — landed in schema 9 (Milestone 2).** The mirror of grow: when the flex
+children OVERFLOW (main-axis `free < 0`), a child with `Layout.shrink > 0` gives up a share
+of the deficit, **weighted by `shrink × base-main-size`** (CSS-style — a bigger item gives
+up more even at equal shrink), clamped so a child never goes below 0. Grow (`free > 0`) and
+shrink (`free < 0`) are mutually exclusive by the *sign* of the free space; margins are
+counted into `used` first, so they are never shrunk. Absent = 0 = never shrinks (the
+pre-schema-9 overflow behaviour), so `migrate_8_to_9` is a pass-through — the bump is
+required because a schema-8 build would draw an overflowing child at full size. (CSS would
+redistribute when a child hits 0; we accept the small overshoot — a documented
+simplification.)
+
 **Grid — landed in schema 6 (Milestone 2).** `Layout.grid` is an ALTERNATIVE to
 `container` (the two are **mutually exclusive**). A grid's direct children auto-flow
 row-major into `columns.length` columns × `ceil(count/columns)` rows and **fill their
@@ -282,7 +294,7 @@ in-flow / 0**, so every schema-7 document is a valid schema-8 document — `migr
 is a pass-through; the bump is required because a schema-7 build would lay an absolute child
 into the flow and ignore its margin.
 
-> **Still deferred (not in schema 8):** flex-shrink, wrap, per-side margins,
+> **Still deferred (not in schema 9):** wrap, per-side margins,
 > responsive/breakpoint rules, grid-cell margins, the constrained-child re-baseline (above),
 > and the grid tail (explicit placement/spans, `auto`/content tracks, per-row sizes, grid
 > hug). These are M2's remaining deliverables — see
@@ -385,7 +397,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"8"`; chain: …5→6 grid, 6→7 constraints, 7→8 absolute + margin) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"9"`; chain: …6→7 constraints, 7→8 absolute + margin, 8→9 flex-shrink) | **only** when the persisted shape changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

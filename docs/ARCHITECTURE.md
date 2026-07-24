@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
 
-> 🔒 Frozen contract · schema v8 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, grid, constraints, absolute + margins; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v9 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid, constraints, absolute + margins; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -121,6 +121,9 @@ container, so a deep resize re-lays-out every ancestor it actually moves. **Flex
 (`Layout.grow`) is the inverse of hug — children fill a fixed container's leftover
 main-axis space — and is applied purely in the position pass, so it needs no measure
 feedback and no new dirty-tracking (a growing sibling reflows through the same ripple).
+**Flex-shrink** (`Layout.shrink`) is its mirror: when the children overflow, it gives up
+the deficit weighted by `shrink × base-size` (grow and shrink are exclusive by the sign of
+free space) — likewise position-pass-only.
 **Grid** (`layoutGridChildren`) is likewise a position-pass producer: children auto-flow
 into px/fr cell tracks and fill them, so it reads no child sizes and reuses the same dirty
 machinery (once `isLayoutContainer` counts a grid as a container).

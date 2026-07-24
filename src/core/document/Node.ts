@@ -79,6 +79,14 @@ export interface Layout {
      */
     grow?: number;
     /**
+     * Flex-shrink (Milestone 2). When the flex children OVERFLOW their container's main
+     * axis, this node gives up a share of the DEFICIT, weighted (CSS-style) by
+     * `shrink × base-main-size`, clamped so it never shrinks below 0. `0`/absent = never
+     * shrinks (the pre-shrink overflow behaviour). Mutually exclusive with `grow` by sign:
+     * only one of grow (free > 0) / shrink (free < 0) applies on a given layout.
+     */
+    shrink?: number;
+    /**
      * Grid auto-layout (Milestone 2). An ALTERNATIVE to `container` (flex) — the two are
      * mutually exclusive. This node's direct children are auto-flowed row-major into a
      * grid of the given column tracks, each filling its cell. See `LayoutGrid`.
@@ -196,6 +204,7 @@ export function layoutError(l: Partial<Layout>): string | null {
     // `grow` is independent of `container` and must be checked BEFORE the no-container
     // early return, or a `{ grow: -5 }` patch would slip through unvalidated.
     if (l.grow !== undefined && (!Number.isFinite(l.grow) || l.grow < 0)) return "layout.grow must be finite and >= 0";
+    if (l.shrink !== undefined && (!Number.isFinite(l.shrink) || l.shrink < 0)) return "layout.shrink must be finite and >= 0";
     if (l.margin !== undefined && (!Number.isFinite(l.margin) || l.margin < 0)) return "layout.margin must be finite and >= 0";
     if (l.position !== undefined && l.position !== "absolute") return 'layout.position must be "absolute"';
     // Constraints + reference are independent per-child fields (like grow), so validate

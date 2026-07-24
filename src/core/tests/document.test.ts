@@ -1580,13 +1580,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "9" that has no 8→9 step: the
+        // Pretending the build has moved to a schema "10" that has no 9→10 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→8), and then REFUSED at "8" — never re-stamped straight to the current
-        // schema. The error naming "8" (not "1") is the proof the chain actually ran.
+        // (1→2→…→9), and then REFUSED at "9" — never re-stamped straight to the current
+        // schema. The error naming "9" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 7→8 landed for absolute + margin.)
-        expect(() => migrateIfNeeded(legacy, "9")).toThrow('Migration not implemented for document schema "8"');
+        // time a real migration is added — here, when 8→9 landed for flex-shrink.)
+        expect(() => migrateIfNeeded(legacy, "10")).toThrow('Migration not implemented for document schema "9"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -2041,7 +2041,8 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
                     : r < 0.42
                         ? { container: undefined }
                         : r < 0.55
-                            ? { grow: rnd() < 0.3 ? 0 : rnd() * 3 }
+                            // grow (free > 0) and shrink (free < 0) — op-2 resizes drive both signs.
+                            ? { grow: rnd() < 0.4 ? 0 : rnd() * 3, shrink: rnd() < 0.4 ? 0 : rnd() * 3 }
                             : r < 0.72
                                 ? { grid: { columns: Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), rowHeight: track(), columnGap: rnd() * 8, rowGap: rnd() * 8, padding: rnd() * 8 } }
                                 : r < 0.86
@@ -2792,5 +2793,88 @@ describe("M2 margins + absolute-position escape", () => {
             + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
             + ` "style": { "fill": "#000", "opacity": 1 }, "layout": { "margin": -3 } } } } }`;
         expect(() => deserializeDocument(bad)).toThrow();
+    });
+});
+
+describe("M2 flex-shrink", () => {
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+
+    test("layoutChildren shrinks overflow by shrink×base weight, clamped at 0", () => {
+        // Two 80-wide items, shrink 1 each, into 100: deficit 60 split evenly -> 50 each.
+        const even = layoutChildren({ direction: "row" }, { width: 100, height: 100 },
+            [{ id: "a", width: 80, height: 30, shrink: 1 }, { id: "b", width: 80, height: 30, shrink: 1 }]);
+        expect(even.get("a")).toMatchObject({ x: 0, width: 50 });
+        expect(even.get("b")).toMatchObject({ x: 50, width: 50 });
+
+        // Weighted: 100-wide items, shrink 1 vs 3, deficit 100 -> weights 100:300 -> −25 / −75.
+        const weighted = layoutChildren({ direction: "row" }, { width: 100, height: 100 },
+            [{ id: "a", width: 100, height: 30, shrink: 1 }, { id: "b", width: 100, height: 30, shrink: 3 }]);
+        expect(weighted.get("a")).toMatchObject({ width: 75 });
+        expect(weighted.get("b")).toMatchObject({ width: 25 });
+
+        // The weight is shrink×BASE (CSS-style: a bigger item gives up more even at equal
+        // shrink) — distinguishable only with UNEQUAL bases. width 150; a(100) b(200),
+        // shrink 1 each: weights 100:200, deficit 150 -> −50 / −100 -> 50 / 100 (NOT 25/125).
+        const byBase = layoutChildren({ direction: "row" }, { width: 150, height: 100 },
+            [{ id: "a", width: 100, height: 30, shrink: 1 }, { id: "b", width: 200, height: 30, shrink: 1 }]);
+        expect(byBase.get("a")).toMatchObject({ width: 50 });
+        expect(byBase.get("b")).toMatchObject({ width: 100 });
+
+        // Clamps at 0 (never negative) when a child's share exceeds its base.
+        const clamped = layoutChildren({ direction: "row" }, { width: 5, height: 100 },
+            [{ id: "a", width: 10, height: 30, shrink: 5 }, { id: "b", width: 10, height: 30, shrink: 0.1 }]);
+        expect(clamped.get("a")!.width).toBe(0);
+    });
+
+    test("shrink is inert without overflow, and a child without a shrink factor overflows unchanged", () => {
+        // Fits exactly / underflows: shrink does nothing.
+        const fits = layoutChildren({ direction: "row" }, { width: 200, height: 100 },
+            [{ id: "a", width: 50, height: 30, shrink: 1 }, { id: "b", width: 50, height: 30, shrink: 1 }]);
+        expect(fits.get("a")).toMatchObject({ x: 0, width: 50 });
+        expect(fits.get("b")).toMatchObject({ x: 50, width: 50 });
+
+        // Overflow but no shrink factor -> keeps base size, overflows.
+        const overflow = layoutChildren({ direction: "row" }, { width: 100, height: 100 },
+            [{ id: "a", width: 80, height: 30 }, { id: "b", width: 80, height: 30 }]);
+        expect(overflow.get("b")).toMatchObject({ x: 80, width: 80 });
+    });
+
+    test("grow and shrink are mutually exclusive by the sign of free space, incrementally", () => {
+        // c has BOTH grow and shrink; the container's size decides which applies.
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c"], { x: 0, y: 0, width: 100, height: 100 }, { container: { direction: "row" } }));
+        doc.nodes.set("c", mk("c", "P", [], { x: 0, y: 0, width: 50, height: 30 }, { grow: 1, shrink: 1 }));
+        doc.rootNodeUuids = ["P"];
+        const dispatcher = new ActionDispatcher(doc);
+        expect(computeGeometry(dispatcher.getDocument()).nodes.get("c")!.bounds.width).toBe(100); // free +50 -> grows to fill
+
+        const base = computeGeometry(dispatcher.getDocument());
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+        dispatcher.dispatchAction(new ResizeNodeAction(dispatcher.getDocument(), "P", 30, 100)); // now free = -20
+
+        const full = computeGeometry(dispatcher.getDocument());
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, dirty);
+        expect(full.nodes.get("c")!.bounds.width).toBe(30); // free −20 -> shrinks to fit
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+    });
+
+    test("shrink is a write-path citizen: schema-9 round-trip + both-paths validation", () => {
+        const d = createDocWithParentChild();
+        const ok = (l: any) => new UpdateNodeLayoutAction(d, "child-001", l).validate();
+        expect(ok({ shrink: 2 })).toBe(true);
+        expect(ok({ shrink: -1 })).toBe(false);
+        expect(ok({ shrink: NaN })).toBe(false);
+
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "child-001", { shrink: 3 }));
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+
+        const bad = `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
+            + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
+            + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
+            + ` "style": { "fill": "#000", "opacity": 1 }, "layout": { "shrink": -1 } } } } }`;
+        expect(() => deserializeDocument(bad)).toThrow("shrink");
     });
 });

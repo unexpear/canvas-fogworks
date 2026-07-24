@@ -71,8 +71,13 @@ export const CURRENT_VERSION: string =
  *         (flex flow spacing) for Milestone 2. Absent = in-flow / 0, so `migrate_7_to_8`
  *         is a pass-through — but a schema-7 build would lay an absolute child into the
  *         flow / ignore its margin, misstating the layout.
+ *
+ *   "9" — adds optional `Layout.shrink` (flex-shrink: give up a share of the overflow
+ *         deficit) for Milestone 2. Absent = 0 = never shrinks, so `migrate_8_to_9` is a
+ *         pass-through — but a schema-8 build would draw an overflowing child at full size
+ *         instead of shrunk, misstating the layout.
  */
-export const SCHEMA_VERSION = "8";
+export const SCHEMA_VERSION = "9";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

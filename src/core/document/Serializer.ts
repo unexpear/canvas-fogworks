@@ -209,6 +209,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "5") { raw = migrate_5_to_6(raw); version = "6"; }
     if (version === "6") { raw = migrate_6_to_7(raw); version = "7"; }
     if (version === "7") { raw = migrate_7_to_8(raw); version = "8"; }
+    if (version === "8") { raw = migrate_8_to_9(raw); version = "9"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -262,6 +263,11 @@ function migrate_6_to_7(raw: any): any {
 /** Schema 7 → 8: adds optional `Layout.position`/`Layout.margin`. Pass-through by content. */
 function migrate_7_to_8(raw: any): any {
     return { ...raw, version: "8" };
+}
+
+/** Schema 8 → 9: adds optional `Layout.shrink`. Pass-through by content. */
+function migrate_8_to_9(raw: any): any {
+    return { ...raw, version: "9" };
 }
 
 /**

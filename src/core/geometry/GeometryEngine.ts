@@ -212,12 +212,12 @@ function layoutContainerPass(
 
     const container = node.layout.container;
     if (!container) return;
-    const children: { id: string; width: number; height: number; grow?: number; margin?: number }[] = [];
+    const children: { id: string; width: number; height: number; grow?: number; shrink?: number; margin?: number }[] = [];
     for (const childId of node.children) {
         const child = doc.nodes.get(childId);
         if (!child || isAbsolute(child)) continue; // absolute children are out of the flow
         const own = measured.get(childId) ?? { width: child.geometry.width, height: child.geometry.height };
-        children.push({ id: childId, width: own.width, height: own.height, grow: child.layout.grow, margin: child.layout.margin });
+        children.push({ id: childId, width: own.width, height: own.height, grow: child.layout.grow, shrink: child.layout.shrink, margin: child.layout.margin });
     }
     for (const [id, rect] of layoutChildren(container, { width: parentLocal.width, height: parentLocal.height }, children)) {
         laidOut.set(id, rect);

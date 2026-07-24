@@ -19,7 +19,7 @@ M0.5 Core Documentation      ✅   contracts frozen before building upward
       │
 M1  Computed State           ✅   stored intent -> calculated results
       │
-M2  Layout Engine            🚧   auto-layout + hug + grow + grid + constraints; shrink/wrap deferred
+M2  Layout Engine            🚧   flex(+grow/shrink) + hug + grid + constraints + absolute; wrap/grid-tail deferred
       │
 M3  Renderer                 ⬜*  reads ComputedState only
       │
@@ -66,7 +66,7 @@ reachable via `revertToOriginal()`) · revision system ·
 JSON serialization (schema version decoupled from app version) ·
 **validation** (Action-path `validate()` **and** `validateDocumentIntegrity` on load:
 ranges, dangling parents, ghost roots, cycles) · automated tests.
-(M0 and M1 together contribute **123** of the suite's current **184** tests; the count is not M0's alone. M2 added the rest.)
+(M0 and M1 together contribute **123** of the suite's current **188** tests; the count is not M0's alone. M2 added the rest.)
 
 **Round-trip closure (what took M0 from "nearly" to done):** an adversarial audit found
 the engine could author a document it could not reopen — `AddNodeAction.validate()`
@@ -227,8 +227,14 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   a flex parent's *leftover* main-axis space, split proportionally among growing siblings.
   It is applied in the position pass only — it never feeds back into measure, so there is
   no cycle and **no new dirty-tracking** (a growing sibling reflows through the existing
-  ripple). It is inert where there is nothing to distribute: a hug-main container, or an
-  overflow (flex-shrink is deferred). Orthogonal to `stretch` (main vs cross axis).
+  ripple). It is inert where there is nothing to distribute: a hug-main container. Orthogonal
+  to `stretch` (main vs cross axis).
+- **Flex-shrink — grow's mirror.** `Layout.shrink` gives up a share of the *deficit* when
+  the children overflow, weighted `shrink × base-size` (CSS-style — a bigger item gives up
+  more), clamped at 0. Grow and shrink are mutually exclusive by the *sign* of the free
+  space; margins are counted first, so they are never shrunk. Same position-pass-only shape
+  as grow (no new dirty-tracking); all four guards mutation-tested — including a case with
+  UNEQUAL bases, without which a mutation dropping the `×base` weight would have survived.
 - **Grid.** `Layout.grid` is an ALTERNATIVE to `container` (the two are mutually exclusive,
   enforced on both write and read): children auto-flow row-major into `{ px }`/`{ fr }`
   column tracks + a uniform `rowHeight` and fill their cells (`layoutGridChildren`). Like
@@ -270,10 +276,10 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   engine correctly ignores the pending resize — but the handle is not yet hidden.)*
 - **Schema cost, paid under the freeze rule.** `SCHEMA_VERSION` `"2"` → `"3"` (auto-layout)
   → `"4"` (hug) → `"5"` (grow) → `"6"` (grid) → `"7"` (constraints) → `"8"` (absolute +
-  margin), each with a pass-through migration, because an older build would draw the children
-  at now-vestigial stored geometry / unanchored / in-flow.
+  margin) → `"9"` (shrink), each with a pass-through migration, because an older build would
+  draw the children at now-vestigial stored geometry / unanchored / in-flow / unshrunk.
 
-**Deferred (each its own deliverable, NOT built):** flex-shrink · wrap · **per-side**
+**Deferred (each its own deliverable, NOT built):** wrap · **per-side**
 margins · grid-cell margins · responsive / breakpoint rules · drag-to-reorder ·
 the constrained-child **re-baseline** (off-reference edits, an M5 tool-layer concern) ·
 the **grid tail** (explicit placement/spans, `auto`/content tracks, per-row sizes,
