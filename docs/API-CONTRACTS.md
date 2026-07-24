@@ -9,7 +9,7 @@
 
 ```ts
 const CURRENT_VERSION: string;               // app/display version, from package.json
-const SCHEMA_VERSION: string;                // "1" — persisted document schema (decoupled)
+const SCHEMA_VERSION: string;                // "2" — persisted document schema (decoupled)
 function createEmptyDocument(): ProjectDocument;
 
 // SceneGraph.ts — the ONLY correct node ordering (z-order / layer order)
@@ -18,14 +18,34 @@ function traverseSceneGraph(doc: ReadonlyDocument): ReadonlyNode[]; // depth-fir
 // Integrity.ts — structural + range validation (runs inside deserializeDocument)
 function validateDocumentIntegrity(doc: ReadonlyDocument): void;  // throws on the first problem
 
-// geometry/ComputedGeometry.ts — the Milestone 1 seam
-interface WorldRect { x: number; y: number; width: number; height: number }
-interface ComputedGeometry { order: string[]; rects: Map<string, WorldRect> }
-function computeWorldGeometry(
+// geometry/Matrix.ts — 2D affine primitive
+interface Mat2D { a: number; b: number; c: number; d: number; e: number; f: number }
+interface Rect { x: number; y: number; width: number; height: number }
+const IDENTITY: Mat2D;
+function multiply(outer: Mat2D, inner: Mat2D): Mat2D;      // outer ∘ inner
+function translation(tx: number, ty: number): Mat2D;
+function compose(x, y, rotation, scaleX, scaleY, pivotX, pivotY): Mat2D;
+function invert(m: Mat2D): Mat2D | null;                   // null when singular
+function applyToPoint(m: Mat2D, x: number, y: number): { x: number; y: number };
+function transformRectToAABB(m: Mat2D, rect: Rect): Rect;  // all four corners
+function unionRect(a: Rect, b: Rect): Rect;
+function toMatrixString(m: Mat2D): string;                 // SVG/Canvas ready
+function isTranslationOnly(m: Mat2D): boolean;
+
+// geometry/GeometryEngine.ts — Milestone 1: intent → computed results
+interface ComputedNode { world: Mat2D; local: Rect; bounds: Rect }
+interface ComputedState { order: string[]; nodes: Map<string, ComputedNode> }
+function computeGeometry(
   doc: ReadonlyDocument,
-  pending?: Map<string, Partial<Geometry>> | null   // drag previews are an INPUT
-): ComputedGeometry;
-function hitTest(computed: ComputedGeometry, x: number, y: number): string | null; // DOM-free
+  pending?: Map<string, Partial<Geometry>> | null,  // drag previews are an INPUT
+  previous?: ComputedState,                          // dirty-tracking reuse
+  dirty?: ReadonlySet<string>
+): ComputedState;
+function hitTest(computed: ComputedState, x: number, y: number): string | null; // local-space, DOM-free
+function toLocal(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;
+function toWorld(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;
+function subtreeBounds(doc: ReadonlyDocument, s: ComputedState, rootId: string): Rect | null;
+function selectionBounds(s: ComputedState, ids: readonly string[]): Rect | null;
 
 // Serializer.ts
 function serializeDocument(doc: ReadonlyDocument): string;
@@ -127,7 +147,7 @@ interface EditorState {
   activeTool: string;
   isDragging: boolean;
   previewRect: Rect | null;                 // rectangle-tool draw preview
-  pendingGeometry: Map<string, Partial<Geometry>> | null; // move/resize preview, fed INTO computeWorldGeometry
+  pendingGeometry: Map<string, Partial<Geometry>> | null; // move/resize preview, fed INTO computeGeometry
   viewport: { x: number; y: number; zoom: number };
 }
 function createEditorState(): EditorState;
@@ -158,7 +178,7 @@ interface RendererState {
   selectedNodeIds: string[];
   hoveredNodeId: string | null;
   previewRect?: Rect | null;
-  computed: ComputedGeometry;   // resolved world rects + draw order (required)
+  computed: ComputedState;      // world matrices + bounds + draw order (required)
   viewport: { x: number; y: number; zoom: number };
 }
 function renderSVG(container: HTMLElement, doc: ReadonlyDocument, state: RendererState): void;

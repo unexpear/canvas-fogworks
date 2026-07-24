@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen for Milestone 0 · v0.0.5. Suite: `src/core/tests/document.test.ts` (107 tests).
+> 🔒 Frozen for Milestone 0 · v0.0.5. Suite: `src/core/tests/document.test.ts` (116 tests).
 
 ## Philosophy
 
@@ -17,7 +17,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 107 tests
+npm test                                   # jest (ts-jest), 116 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -28,7 +28,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (107 tests)
+## What is covered (116 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -44,7 +44,7 @@ npm run check                              # typecheck + lint + test + build (th
 | Serializer | unknown schema throws, **newer schema** throws, **legacy semver accepted**, invalid JSON throws, malformed node / key-id mismatch, root-order comparison, variables & metadata round-trip |
 | `Serializer.loadResult` | empty vs loaded vs **corrupt** (with backup) — localStorage mocked |
 | `ActionDispatcher.loadDocument` | replaces doc, resets history |
-| **`ComputedGeometry`** | parent-relative → world composition; **pending patches propagate to children**; draw order; `hitTest` topmost / empty space |
+| **`Matrix` / `GeometryEngine`** | multiply order; inverse round-trip + singular→null; rotated AABB from all four corners; parent rotation propagates to children; `toLocal`/`toWorld` round-trip through a rotated ancestor; rotated hit-test uses true shape not AABB; subtree/selection bounds; dirty reuse by reference + descendant invalidation |
 | **Restore dirty set** | undo reports only the changed node, not the whole document |
 | **Document integrity (load path)** | rejects `opacity: 5`, negative size, dangling parent, ghost root, unclaimed child, parentless non-root; accepts a well-formed nested doc |
 
@@ -84,7 +84,7 @@ did not match — *unverified*, not passing). The survivors were real gaps:
 
 | Guard | Why nothing caught it |
 |---|---|
-| `MoveTool` selection-root filter | the test exercised `selectionRoots` + `computeWorldGeometry` directly, never `MoveTool` — so the CRITICAL parent+child double-apply could have been reintroduced silently |
+| `MoveTool` selection-root filter | the test exercised `selectionRoots` + `computeGeometry` directly, never `MoveTool` — so the CRITICAL parent+child double-apply could have been reintroduced silently |
 | coalesce anchored to the last commit | the existing test happened to land on `currentIndex === 0`, so a *different* guard was rejecting the merge; the anchor itself was never exercised |
 | legacy → schema-1 normalisation | `LEGACY_SCHEMA` and `SCHEMA_VERSION` are both `"1"` today, so correct and incorrect behaviour are indistinguishable until a future bump — exactly when it would bite |
 
@@ -96,7 +96,7 @@ Three tests were added to close them; the third required making the schema injec
 - Two produced false *survived* results — one changed an object field but not the local
   variable set on the next line; the other left the `try/catch` in place while claiming
   to remove listener isolation. Corrected, both were killed.
-- One produced a false ***killed*** result. The `ComputedGeometry` unresolved-parent
+- One produced a false ***killed*** result. The unresolved-parent
   mutation did not compile (dropping the `continue` leaves `parentRect` possibly
   undefined at the deref), so jest exited non-zero having run **zero tests** — and the
   harness read any non-zero exit as "a test caught it". Mutated validly, by restoring
@@ -159,8 +159,8 @@ test that was never seen to fail proves nothing.
   yet, so they are reachable only by constructing a delta directly — currently untested.
 - The same-node `TransactionAction` merge path is exercised indirectly but never
   asserted on directly.
-- `computeWorldGeometry` is translation-only, so there is no rotation/matrix coverage
-  yet — that arrives with the Milestone 1 `GeometryEngine`.
+- `ComputedState` carries geometry only. Resolved style (M5 tokens) and layout output
+  (M2) are not in it yet, so neither has coverage here.
 
 ## Conventions
 

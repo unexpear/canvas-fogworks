@@ -17,7 +17,7 @@ M0  Document Engine          ✅   the source of truth + reversible actions
       │
 M0.5 Core Documentation      ✅   contracts frozen before building upward
       │
-M1  Computed State           ⬜   separate stored intent from calculated results
+M1  Computed State           ✅   stored intent -> calculated results
       │
 M2  Layout Engine            ⬜   constraints replace absolute positions
       │
@@ -41,11 +41,13 @@ M17 Production Hardening      ⬜
 ```
 
 \* **Note on M3/M4:** a working **vertical-slice prototype** of the renderer, the
-editor tools, and the Electron shell already exists (originally built as "Phase 1").
-It proved the Document↔Renderer independence, but it currently reads node geometry
-**directly**. Under this plan it will be **re-derived to consume `ComputedState`**
-once M1–M2 land, at which point M3/M4 become "formalize + complete," not "build from
-zero." See `docs/ARCHITECTURE.md` § *Current vs. target data flow*.
+editor tools, and the Electron shell already exists (originally built as "Phase 1"),
+so functionality sits in M3/M4 territory while those milestones are still open.
+As of M1 it **does** consume `ComputedState` — the renderer reads world matrices and
+never composes coordinates itself — so M3/M4 are now "formalize + complete", not
+"re-derive". What is genuinely missing is scope, not plumbing: M3 lacks ellipses,
+lines, paths and any Canvas/WebGL backend; M4 lacks **panning**, box-select, rotate
+(now representable, but with no editor affordance), snapping and guides.
 
 ---
 
@@ -63,7 +65,7 @@ truncation boundary and the starting document is pinned OUTSIDE the trimmable li
 reachable via `revertToOriginal()`) · revision system ·
 JSON serialization (schema version decoupled from app version) ·
 **validation** (Action-path `validate()` **and** `validateDocumentIntegrity` on load:
-ranges, dangling parents, ghost roots, cycles) · **107 automated tests**.
+ranges, dangling parents, ghost roots, cycles) · **116 automated tests**.
 
 **Round-trip closure (what took M0 from "nearly" to done):** an adversarial audit found
 the engine could author a document it could not reopen — `AddNodeAction.validate()`
@@ -114,16 +116,33 @@ engine grows.
 
 ## Phase 1 — Computed State Pipeline
 
-### Milestone 1 — Computed State ⬜
+### Milestone 1 — Computed State ✅
 **Goal:** separate stored *intent* from calculated *results*.
 
 ```
 Document → Geometry Engine → Computed State → Renderer
 ```
 
-**Deliverables:** `ComputedState` · `GeometryEngine` · transform calculation ·
-parent↔child transforms · coordinate spaces · bounding boxes · matrix math ·
-dirty-state tracking · renderer adapter (may still be a stub). **No UI required.**
+**Deliverables (all present):** `ComputedState` (`{ order, nodes }`, per node a world
+matrix + local rect + rotation-aware world AABB) · `GeometryEngine` (`computeGeometry`) ·
+transform calculation and parent↔child propagation (schema-2 `Node.transform`:
+rotation/scale about a normalized origin) · coordinate spaces (`toLocal`/`toWorld` via
+real inverse matrices) · bounding boxes (`subtreeBounds`, `selectionBounds`) ·
+matrix math (`Matrix.ts` — multiply/invert/compose/AABB, singular matrices return
+`null` rather than `Infinity`) · dirty-state tracking (clean subtrees reuse their
+previous entry by reference; a dirty parent invalidates its descendants) · renderer
+adapter — **not** a stub: `SVGRenderer` emits the world matrix directly and hit-testing
+runs in local space, so a rotated node hits its true shape rather than its AABB.
+
+**Schema cost, paid under the freeze rule:** `Node.transform` changed the persisted
+shape, so `SCHEMA_VERSION` went `"1"` → `"2"` with a `migrate_1_to_2` step. The
+migration is a pass-through *by content* — absent means identity — but the bump was
+still required, because a schema-1 *build* would load a rotated node and draw it
+unrotated with no error.
+
+**Explicitly NOT in M1's scope:** `ComputedState` carries geometry only. Resolved style
+(M5 tokens) and layout output (M2) belong in it and are not there — each arrives with
+its own milestone rather than being pre-built here.
 
 #### Prerequisites — ✅ all met (the seam is in place)
 
@@ -131,14 +150,15 @@ dirty-state tracking · renderer adapter (may still be a stub). **No UI required
 |---|--------------|--------|
 | 1 | Scene-graph traversal helper used by renderer + layers panel | ✅ `traverseSceneGraph`; draw order is tree order, not `Map` order |
 | 2 | Coordinate-space rule written into the schema; transform reserved | ✅ **stored `x/y` is parent-relative**, world is computed; rotation reserved for a future optional `Node.transform` (see [DOCUMENT-SCHEMA.md](docs/DOCUMENT-SCHEMA.md#coordinate-space-the-m1-contract)) |
-| 3 | Drag previews as a computation **input**, not a renderer bypass | ✅ `EditorState.pendingGeometry` → `computeWorldGeometry(doc, pending)`; a parent drag now moves its children |
+| 3 | Drag previews as a computation **input**, not a renderer bypass | ✅ `EditorState.pendingGeometry` → `computeGeometry(doc, pending)`; a parent drag moves its children, and now inherits its rotation too |
 | 4 | Undo/redo reports a real dirty set | ✅ `restoreNotification` diffs outgoing vs restored; `fullReload` kept as an alias hint |
 | 5 | Hit-testing off computed state, not DOM | ✅ `hitTest(computed, x, y)`; `SelectTool` no longer reads `data-node-id` |
 
-**What M1 actually changes:** `computeWorldGeometry` is translation-only and
-geometry-only. `GeometryEngine` replaces it as the *producer* (matrices, rotation,
-bounds) and `ComputedGeometry` widens into `ComputedState`. Every consumer already
-reads the computed structure, so this is a producer swap, not a consumer rewrite.
+**How it landed:** exactly as predicted — a *producer swap*, not a consumer rewrite.
+Every consumer already read the computed structure, so replacing the translation-only
+producer with the matrix engine touched the renderer, `SelectTool` and `App` only where
+they name the type. The compile pin caught the one call site that would otherwise have
+been missed.
 
 ---
 

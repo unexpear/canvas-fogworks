@@ -36,7 +36,13 @@ function isValidNode(n: any): n is Node {
         (n.style.fontSize === undefined || typeof n.style.fontSize === "number") &&
         isPlainObject(n.layout) &&
         isOptionalString(n.text) && isOptionalString(n.src) && isOptionalString(n.name) &&
-        (n.states === undefined || isPlainObject(n.states));
+        (n.states === undefined || isPlainObject(n.states)) &&
+        (n.transform === undefined || (isPlainObject(n.transform) &&
+            (n.transform.rotation === undefined || typeof n.transform.rotation === "number") &&
+            (n.transform.scaleX === undefined || typeof n.transform.scaleX === "number") &&
+            (n.transform.scaleY === undefined || typeof n.transform.scaleY === "number") &&
+            (n.transform.origin === undefined || (isPlainObject(n.transform.origin) &&
+                typeof n.transform.origin.x === "number" && typeof n.transform.origin.y === "number"))));
 }
 
 /** The envelope wrapping a serialized document (JSON-accurate: date is a string). */
@@ -195,7 +201,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
 
     // 3. Migration chain, oldest first. Each step upgrades one schema and lets the
     //    next step run — do NOT return early from inside the chain.
-    // if (version === "1") { raw = migrate_1_to_2(raw); version = "2"; }
+    if (version === "1") { raw = migrate_1_to_2(raw); version = "2"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -206,6 +212,19 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
         `Migration not implemented for document schema "${version}". ` +
         `Current schema: "${currentSchema}".`
     );
+}
+
+/**
+ * Schema 1 → 2: adds the optional `Node.transform`.
+ *
+ * A pass-through by content: every schema-1 document is already a valid schema-2
+ * document with the field absent, and absent means identity. The step exists (rather
+ * than the gate simply accepting "1") so the chain stays explicit and the NEXT
+ * migration has something to follow — and because a schema-1 *build* must still
+ * refuse a schema-2 file, which is what the bump buys.
+ */
+function migrate_1_to_2(raw: any): any {
+    return { ...raw, version: "2" };
 }
 
 /**

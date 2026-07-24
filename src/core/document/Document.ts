@@ -36,8 +36,14 @@ export const CURRENT_VERSION: string =
  *         nested document existed, "1" would now mean two incompatible things.
  *         This is the precise case the shape-only trigger missed; the rule now
  *         keys on interpretation so the next one is caught.
+ *
+ *   "2" — adds the optional `Node.transform` (rotation/scale about a normalized
+ *         origin) for Milestone 1. Schema-1 documents are valid schema-2 documents
+ *         with the field absent, so `migrate_1_to_2` is a pass-through — but the
+ *         bump is still required: a schema-1 BUILD would load a rotated node and
+ *         draw it unrotated with no error, silently misstating the document.
  */
-export const SCHEMA_VERSION = "1";
+export const SCHEMA_VERSION = "2";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

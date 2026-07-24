@@ -15,7 +15,8 @@ import { UpdateNodeStyleAction } from "../actions/UpdateNodeStyleAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
-import { computeWorldGeometry, hitTest } from "../geometry/ComputedGeometry";
+import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds } from "../geometry/GeometryEngine";
+import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
 import { clampViewport, createEditorState } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
 import { Node, NODE_TYPES } from "../document/Node";
@@ -689,37 +690,37 @@ describe("Variables round-trip", () => {
 });
 
 // ─── M1 seam: computed world geometry, previews-as-input, hit-testing ───
-describe("ComputedGeometry", () => {
+describe("GeometryEngine", () => {
     test("stored geometry is parent-relative; world position composes down the tree", () => {
         const doc = createDocWithParentChild(); // parent at (0,0), children at (10,10)/(70,10)
         doc.nodes.get("parent-001")!.geometry.x = 100;
         doc.nodes.get("parent-001")!.geometry.y = 200;
 
-        const { rects } = computeWorldGeometry(doc);
-        expect(rects.get("parent-001")).toMatchObject({ x: 100, y: 200 });
+        const { nodes: rects } = computeGeometry(doc);
+        expect(rects.get("parent-001")!.bounds).toMatchObject({ x: 100, y: 200 });
         // Child stores (10,10) relative to its parent -> world (110, 210).
-        expect(rects.get("child-001")).toMatchObject({ x: 110, y: 210, width: 50, height: 50 });
-        expect(rects.get("child-002")).toMatchObject({ x: 170, y: 210 });
+        expect(rects.get("child-001")!.bounds).toMatchObject({ x: 110, y: 210, width: 50, height: 50 });
+        expect(rects.get("child-002")!.bounds).toMatchObject({ x: 170, y: 210 });
     });
 
     test("pending patches are an INPUT to composition, and propagate to children", () => {
         const doc = createDocWithParentChild();
         const pending = new Map([["parent-001", { x: 50, y: 5 }]]);
 
-        const { rects } = computeWorldGeometry(doc, pending);
-        expect(rects.get("parent-001")).toMatchObject({ x: 50, y: 5 });
+        const { nodes: rects } = computeGeometry(doc, pending);
+        expect(rects.get("parent-001")!.bounds).toMatchObject({ x: 50, y: 5 });
         // Dragging the parent moves the child too — impossible with a render-time override.
-        expect(rects.get("child-001")).toMatchObject({ x: 60, y: 15 });
+        expect(rects.get("child-001")!.bounds).toMatchObject({ x: 60, y: 15 });
     });
 
     test("draw order follows the scene graph", () => {
-        expect(computeWorldGeometry(createDocWithParentChild()).order)
+        expect(computeGeometry(createDocWithParentChild()).order)
             .toEqual(["parent-001", "child-001", "child-002"]);
     });
 
     test("hitTest returns the topmost node and null on empty space", () => {
         const doc = createDocWithParentChild();
-        const computed = computeWorldGeometry(doc);
+        const computed = computeGeometry(doc);
         // (20,20) is inside parent AND child-001; the child draws later, so it wins.
         expect(hitTest(computed, 20, 20)).toBe("child-001");
         expect(hitTest(computed, 350, 250)).toBe("parent-001"); // parent only
@@ -935,9 +936,9 @@ describe("Scene graph authoring", () => {
         expect(roots).toEqual(["parent-001"]);
 
         const pending = new Map(roots.map(id => [id, { x: doc.nodes.get(id)!.geometry.x + 50 }]));
-        const { rects } = computeWorldGeometry(doc, pending);
-        expect(rects.get("parent-001")!.x).toBe(50);
-        expect(rects.get("child-001")!.x).toBe(60); // 50 + stored 10, NOT 110
+        const { nodes: rects } = computeGeometry(doc, pending);
+        expect(rects.get("parent-001")!.bounds.x).toBe(50);
+        expect(rects.get("child-001")!.bounds.x).toBe(60); // 50 + stored 10, NOT 110
     });
 
     test("traverseSceneGraph returns tree order, not Map insertion order", () => {
@@ -1173,6 +1174,116 @@ describe("Rule-audit follow-ups", () => {
     });
 });
 
+// ─── M1: matrix primitive ───
+describe("Matrix", () => {
+    const approx = (a: number, b: number) => expect(a).toBeCloseTo(b, 10);
+
+    test("multiply is outer ∘ inner (inner applied first)", () => {
+        const t = translation(10, 0);
+        const r = compose(0, 0, Math.PI / 2, 1, 1, 0, 0); // 90° about the origin
+        // inner=translate then outer=rotate: (1,0) -> (11,0) -> rotated -> (0,11)
+        const p = applyToPoint(multiply(r, t), 1, 0);
+        approx(p.x, 0); approx(p.y, 11);
+        // Reversed order gives a different answer — proving order is not incidental.
+        const q = applyToPoint(multiply(t, r), 1, 0);
+        approx(q.x, 10); approx(q.y, 1);
+    });
+
+    test("invert round-trips a point, and returns null when singular", () => {
+        const m = compose(30, 40, Math.PI / 3, 2, 0.5, 5, 5);
+        const inv = invert(m)!;
+        expect(inv).not.toBeNull();
+        const p = applyToPoint(m, 7, -3);
+        const back = applyToPoint(inv, p.x, p.y);
+        approx(back.x, 7); approx(back.y, -3);
+
+        // A zero scale collapses the space: it must report failure, not Infinity.
+        expect(invert(compose(0, 0, 0, 0, 1, 0, 0))).toBeNull();
+    });
+
+    test("AABB of a rotated box uses all four corners", () => {
+        // 45° rotation of a 10x10 box about its centre: the AABB grows to 10√2.
+        const m = compose(0, 0, Math.PI / 4, 1, 1, 5, 5);
+        const aabb = transformRectToAABB(m, { x: 0, y: 0, width: 10, height: 10 });
+        approx(aabb.width, Math.SQRT2 * 10);
+        approx(aabb.height, Math.SQRT2 * 10);
+    });
+});
+
+// ─── M1: GeometryEngine — transforms, spaces, bounds, dirty reuse ───
+describe("GeometryEngine", () => {
+    const rotatedDoc = () => {
+        const doc = createDocWithParentChild();
+        doc.nodes.get("parent-001")!.transform = { rotation: Math.PI / 2 }; // 90° about centre
+        return doc;
+    };
+
+    test("a parent's rotation propagates to its children", () => {
+        const flat = computeGeometry(createDocWithParentChild());
+        const rotated = computeGeometry(rotatedDoc());
+        // The child moves because its parent's transform composes into it.
+        expect(rotated.nodes.get("child-001")!.bounds)
+            .not.toEqual(flat.nodes.get("child-001")!.bounds);
+        // ...while its STORED geometry is untouched — world position is computed.
+        expect(rotatedDoc().nodes.get("child-001")!.geometry.x).toBe(10);
+    });
+
+    test("toLocal / toWorld round-trip through a rotated ancestor", () => {
+        const state = computeGeometry(rotatedDoc());
+        const world = toWorld(state, "child-001", 3, 4)!;
+        const local = toLocal(state, "child-001", world.x, world.y)!;
+        expect(local.x).toBeCloseTo(3, 10);
+        expect(local.y).toBeCloseTo(4, 10);
+    });
+
+    test("hit-testing a rotated node uses its true shape, not its AABB", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("r", {
+            id: "r", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 20 },
+            style: { fill: "#000", opacity: 1 }, layout: {},
+            transform: { rotation: Math.PI / 4 }
+        });
+        doc.rootNodeUuids = ["r"];
+        const state = computeGeometry(doc);
+        const b = state.nodes.get("r")!.bounds;
+
+        // The AABB corner is well outside the rotated bar itself.
+        expect(hitTest(state, b.x + 1, b.y + 1)).toBeNull();
+        // The centre is inside it.
+        expect(hitTest(state, b.x + b.width / 2, b.y + b.height / 2)).toBe("r");
+    });
+
+    test("subtree and selection bounds enclose descendants", () => {
+        const doc = createDocWithParentChild();
+        const state = computeGeometry(doc);
+        const sub = subtreeBounds(doc, state, "parent-001")!;
+        const child = state.nodes.get("child-002")!.bounds;
+        expect(sub.x + sub.width).toBeGreaterThanOrEqual(child.x + child.width);
+
+        const sel = selectionBounds(state, ["child-001", "child-002"])!;
+        expect(sel.width).toBeGreaterThan(state.nodes.get("child-001")!.bounds.width);
+        expect(selectionBounds(state, ["nope"])).toBeNull();
+    });
+
+    test("dirty tracking reuses clean entries and recomputes dirty subtrees", () => {
+        const doc = createDocWithParentChild();
+        const first = computeGeometry(doc);
+
+        // Nothing dirty: every entry is reused BY REFERENCE.
+        const reused = computeGeometry(doc, null, first, new Set<string>());
+        expect(reused.nodes.get("child-002")).toBe(first.nodes.get("child-002"));
+
+        // Dirtying the parent must invalidate its descendants too, since a parent's
+        // transform composes downward.
+        doc.nodes.get("parent-001")!.geometry.x = 999;
+        const after = computeGeometry(doc, null, first, new Set(["parent-001"]));
+        expect(after.nodes.get("child-001")).not.toBe(first.nodes.get("child-001"));
+        expect(after.nodes.get("child-001")!.bounds.x)
+            .toBe(computeGeometry(doc).nodes.get("child-001")!.bounds.x); // matches a full recompute
+    });
+});
+
 // ─── M0 round-trip closure: the engine must not author what it cannot reopen ───
 describe("Edit path and load path agree", () => {
     test("AddNodeAction rejects a node type outside NODE_TYPES", () => {
@@ -1210,7 +1321,7 @@ describe("Edit path and load path agree", () => {
 // ─── Gaps found by mutation-testing the campaign's own guards ───
 describe("Guards the suite did not previously protect", () => {
     // Mutation "MoveTool selectionRoots filter" SURVIVED: the existing test exercised
-    // selectionRoots + computeWorldGeometry directly, never MoveTool — so the CRITICAL
+    // selectionRoots + computeGeometry directly, never MoveTool — so the CRITICAL
     // double-apply bug could have been reintroduced with no test failing.
     test("MoveTool patches only selection roots, so a parent+child drag applies once", () => {
         const doc = createDocWithParentChild();
@@ -1230,7 +1341,7 @@ describe("Guards the suite did not previously protect", () => {
 
         const live = dispatcher.getDocument();
         expect(live.nodes.get("child-001")!.geometry.x).toBe(10);           // stored: untouched
-        expect(computeWorldGeometry(live).rects.get("child-001")!.x).toBe(60); // world: +50 once, not +100
+        expect(computeGeometry(live).nodes.get("child-001")!.bounds.x).toBe(60); // world: +50 once, not +100
     });
 
     // Mutation "RS-7 unresolved-parent skip" reported KILLED, but the suite had never
@@ -1251,15 +1362,15 @@ describe("Guards the suite did not previously protect", () => {
         doc.nodes.set("P", mk("P", "Q", ["C"], 100, 100));
         doc.rootNodeUuids = ["Q"];
 
-        const computed = computeWorldGeometry(doc);
+        const computed = computeGeometry(doc);
         expect(computed.order.indexOf("C")).toBeLessThan(computed.order.indexOf("P"));
 
         // Absent rather than misplaced. Falling back to origin (0,0) would draw C at
         // (10,10) instead of (110,110) AND make hit-testing agree with the wrong
         // drawing — corruption with no visible symptom.
-        expect(computed.rects.has("C")).toBe(false);
+        expect(computed.nodes.has("C")).toBe(false);
         expect(hitTest(computed, 12, 12)).not.toBe("C");
-        expect(computed.rects.get("P")).toMatchObject({ x: 100, y: 100 });
+        expect(computed.nodes.get("P")!.bounds).toMatchObject({ x: 100, y: 100 });
     });
 
     // Mutation "coalesce anchored to last commit" SURVIVED: the existing test happened
@@ -1284,15 +1395,36 @@ describe("Guards the suite did not previously protect", () => {
     // Mutation "legacy re-stamp to schema 1" SURVIVED: today LEGACY_SCHEMA and
     // SCHEMA_VERSION are both "1", so the two behaviours are indistinguishable until a
     // future bump — exactly when the bug would bite. Injecting the schema exposes it now.
-    test("a legacy file is normalised to schema 1, not silently marked current", () => {
+    test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to schema "2": the legacy file is schema-1
-        // DATA, so with no 1→2 migration step it must be refused, never accepted as "2".
-        expect(() => migrateIfNeeded(legacy, "2")).toThrow('Migration not implemented for document schema "1"');
+        // Pretending the build has moved to a schema "3" that has no 2→3 step: the
+        // legacy file must be normalised to "1", carried through the real 1→2 step,
+        // and then REFUSED at "2" — never re-stamped straight to the current schema.
+        // The error naming "2" (not "1") is the proof the chain actually ran.
+        expect(() => migrateIfNeeded(legacy, "3")).toThrow('Migration not implemented for document schema "2"');
 
-        // At the current schema it still loads normally.
-        expect(migrateIfNeeded(legacy, "1").version).toBe("1");
+        // At the current schema it loads, having been migrated 0.0.4 → 1 → 2.
+        expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
+    });
+
+    test("a schema-1 document migrates forward and round-trips", () => {
+        const v1 = JSON.stringify({
+            version: "1",
+            document: {
+                metadata: { project_name: "Legacy v1" },
+                nodes: { n: {
+                    id: "n", type: "core.rectangle", parent: null, children: [],
+                    geometry: { x: 5, y: 6, width: 10, height: 10 },
+                    style: { fill: "#000", opacity: 1 }, layout: {}
+                } },
+                rootNodeUuids: ["n"], variables: {}
+            }
+        });
+        const doc = deserializeDocument(v1);
+        expect(doc.version).toBe(SCHEMA_VERSION);              // upgraded to "2"
+        expect(doc.nodes.get("n")!.transform).toBeUndefined();  // absent = identity
+        expect(() => deserializeDocument(serializeDocument(doc))).not.toThrow();
     });
 });
 

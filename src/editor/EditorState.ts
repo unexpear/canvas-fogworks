@@ -16,7 +16,7 @@ export interface EditorState {
     /**
      * Ephemeral per-node patches to STORED (parent-relative) geometry, used to
      * preview a move/resize drag WITHOUT mutating the document. These are fed
-     * into `computeWorldGeometry` as an input and composed like any other
+     * into `computeGeometry` as an input and composed like any other
      * geometry — not applied as a renderer-side override — so future layout
      * passes apply to previews too. The real action is dispatched on mouse-up.
      */

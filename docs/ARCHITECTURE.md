@@ -1,6 +1,6 @@
 # Architecture
 
-<!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry/ComputedGeometry.ts, src/renderer/SVGRenderer.ts -->
+<!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
 
 > 🔒 Frozen for Milestone 0 · v0.0.5. Describes the verified current implementation.
 
@@ -88,24 +88,21 @@ delta-driven listeners reload wholesale.
 The roadmap (M1/M2) inserts a computed layer. **The seam now exists:**
 
 ```
-target:   Document → GeometryEngine → ComputedState   → Renderer
-current:  Document → computeWorldGeometry → ComputedGeometry → Renderer
-                          ▲
-                          └── pending drag patches (previews are an INPUT)
+Document → GeometryEngine → ComputedState → Renderer
+                 ▲
+                 └── pending drag patches (previews are an INPUT)
 ```
 
-`computeWorldGeometry(doc, pending)` (`src/core/geometry/ComputedGeometry.ts`)
-resolves parent-relative stored intent into absolute world rects in scene-graph draw
-order. The renderer reads **only** `RendererState.computed` for positions and never
-composes coordinates itself; hit-testing runs off the same structure, so it does not
-depend on per-node DOM.
+`computeGeometry(doc, pending?, previous?, dirty?)`
+(`src/core/geometry/GeometryEngine.ts`) resolves parent-relative stored intent into a
+`ComputedState`: per node a **world matrix**, its **local rect**, and a rotation-aware
+**world AABB**, in scene-graph draw order. The renderer reads *only* that for
+positions and emits the matrix directly; hit-testing tests in each node's local space
+through the inverse matrix, so a rotated node hits against its true shape rather than
+its bounding box, and never touches the DOM.
 
-It is deliberately narrow — translation only, geometry only. **Milestone 1 replaces
-it in place**: `GeometryEngine` takes over composition (matrices, rotation, bounds)
-and `ComputedGeometry` widens into `ComputedState` (adding resolved style, and
-absorbing layout output in M2). Because every consumer already reads the computed
-structure rather than `node.geometry`, that swap is a change of *producer*, not a
-rewrite of the consumers.
+Still outstanding for the computed layer: **resolved style** (M5 tokens) and **layout
+output** (M2) both belong in `ComputedState` and are not there yet.
 
 ## 5. Module map
 
@@ -113,7 +110,7 @@ rewrite of the consumers.
 |-------|-------|----------------|
 | Document | `core/document/{Document,Node,Serializer}.ts`, `core/ids/UUID.ts` | Source of truth, types, (de)serialization, identity |
 | Document integrity | `core/document/{SceneGraph,Integrity}.ts` | Tree traversal/draw order; structural + range validation on load |
-| Computed geometry | `core/geometry/ComputedGeometry.ts` | Parent-relative → world composition, draw order, DOM-free hit-testing (**the M1 seam**) |
+| Computed state | `core/geometry/{Matrix,GeometryEngine}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**Milestone 1**) |
 | Actions | `core/actions/{Action,types,applyMutations}.ts` + `*Action.ts` | Declarative mutations + delta protocol |
 | Dispatch/History | `core/actions/{ActionDispatcher,HistoryManager}.ts` | Only write path; snapshot undo/redo |
 | Editor | `editor/EditorState.ts`, `editor/tools/*` | Ephemeral state; input → Actions |

@@ -10,7 +10,7 @@ import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document"
 import { Node } from "../core/document/Node";
 import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
-import { computeWorldGeometry } from "../core/geometry/ComputedGeometry";
+import { computeGeometry } from "../core/geometry/GeometryEngine";
 import { UpdateNodeGeometryAction } from "../core/actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../core/actions/UpdateNodeStyleAction";
 import { createEditorState, EditorState, clampViewport } from "../editor/EditorState";
@@ -139,7 +139,7 @@ export function App() {
                 selectedNodeIds: es.selectedNodeIds,
                 hoveredNodeId: es.hoveredNodeId,
                 previewRect: es.previewRect,
-                computed: computeWorldGeometry(dispatcher.getDocument(), es.pendingGeometry),
+                computed: computeGeometry(dispatcher.getDocument(), es.pendingGeometry),
                 viewport: es.viewport
             };
             renderSVG(canvasRef.current, dispatcher.getDocument(), rendererState);

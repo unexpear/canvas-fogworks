@@ -88,25 +88,35 @@ output*, never stored:
 world(node) = world(node.parent) + node.geometry.{x,y}      // root: world == stored
 ```
 
-- Resolved by `computeWorldGeometry(doc, pending?)` → `{ order, rects }`
-  (`src/core/geometry/ComputedGeometry.ts`), which walks the scene graph
-  parents-first and accumulates ancestor offsets.
+- Resolved by `computeGeometry(doc, pending?, previous?, dirty?)` → `ComputedState`
+  (`src/core/geometry/GeometryEngine.ts`), which walks the scene graph parents-first
+  and multiplies each node's local matrix into its parent's world matrix.
 - **Nothing outside that module may compose coordinates.** The renderer, hit-testing
   and tools all read the computed rects.
-- Today it is translation-only; Milestone 1's `GeometryEngine` replaces it with full
-  transform/matrix composition and grows it into `ComputedState`.
+- Composition is full 2D affine (`Mat2D`): rotation and scale propagate from parent to
+  child. World→local uses a real inverse matrix (`toLocal`), not subtraction.
 - **Reparenting keeps stored (relative) coordinates**, so a node moves with its new
   parent. World-position-preserving reparent is deferred to M2.
 
-**Rotation / skew — reserved, deliberately not yet in the type.** When transforms
-arrive they go in a **new optional `transform` field on `Node`**, *not* by widening
-`Geometry` (which stays a pure axis-aligned box that layout in M2 can compute).
-Nothing is added to the type until M1 populates it — a field no code reads or writes
-is dead API surface, and "reserved" is a decision, not a declaration.
+**Rotation / scale — landed in schema 2 (Milestone 1).** `Node.transform` is optional:
 
-> **Adding it bumps `SCHEMA_VERSION`** — it changes the persisted shape, so the
-> [freeze rule](README.md#the-freeze-rule) applies as written, with a matching
-> (initially no-op) `migrateIfNeeded` step from schema `"1"`.
+```ts
+interface Transform {
+  rotation?: number;                    // radians, clockwise
+  scaleX?: number; scaleY?: number;
+  origin?: { x: number; y: number };    // fraction of the node's box; default centre
+}
+```
+
+It is a separate field rather than a widening of `Geometry`, which stays a pure
+axis-aligned box so Milestone 2 layout can compute it. `origin` is normalized so the
+pivot survives a resize. **Absent means identity**, so every schema-1 document is a
+valid schema-2 document — which is exactly why `migrate_1_to_2` is a pass-through.
+
+> **It bumped `SCHEMA_VERSION` to `"2"`** — as the freeze rule required, with a
+> matching `migrate_1_to_2` step. The bump was necessary even though the migration is
+> a pass-through *by content*: without it a schema-1 **build** would load a rotated
+> node, pass the exact-match gate, and draw it unrotated with no error.
 >
 > Do not be tempted by "it's optional and additive, so old files still load." That
 > reasoning is backwards: the risk is not old *files*, it is old *builds*. Without a

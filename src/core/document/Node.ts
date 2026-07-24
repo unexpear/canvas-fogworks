@@ -27,6 +27,13 @@ export interface Node {
     geometry: Geometry;
     style: Style;
     layout: Layout;
+    /**
+     * Rotation / scale about a pivot. Optional and absent by default — a node with
+     * no `transform` is exactly a translated axis-aligned box, which is what every
+     * schema-1 document is. Deliberately NOT folded into `Geometry`, which stays a
+     * pure AABB so Milestone 2 layout can compute it.
+     */
+    transform?: Transform;
     states?: Record<string, StateDefinition>;
     text?: string;
     src?: string;
@@ -56,6 +63,18 @@ export interface Layout {
     horizontalAlignment?: "left" | "right" | "center";
     verticalAlignment?: "top" | "bottom" | "center";
     spacing?: number; // Gap size for children or siblings
+}
+
+/**
+ * Rotation and scale, applied about `origin` expressed as a fraction of the node's
+ * own box (0.5,0.5 = centre, the default). Normalized rather than absolute so the
+ * pivot survives a resize.
+ */
+export interface Transform {
+    rotation?: number;   // radians, clockwise
+    scaleX?: number;
+    scaleY?: number;
+    origin?: { x: number; y: number };
 }
 
 /** StateDefinition captures the properties of a node in a specific context (e.g., :hover). */

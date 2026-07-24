@@ -8,7 +8,7 @@
  */
 
 import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
-import { computeWorldGeometry, hitTest } from "../../core/geometry/ComputedGeometry";
+import { computeGeometry, hitTest } from "../../core/geometry/GeometryEngine";
 import { EditorState } from "../EditorState";
 import { Tool } from "./ToolController";
 
@@ -51,7 +51,7 @@ export class SelectTool implements Tool {
         const worldX = (e.clientX - canvasRect.left + vp.x) / zoom;
         const worldY = (e.clientY - canvasRect.top + vp.y) / zoom;
 
-        const computed = computeWorldGeometry(
+        const computed = computeGeometry(
             this.dispatcher.getDocument(),
             this.editorState.pendingGeometry
         );

@@ -12,7 +12,8 @@
 
 import { ReadonlyDocument } from "../core/document/Document";
 import { Node } from "../core/document/Node";
-import { ComputedGeometry } from "../core/geometry/ComputedGeometry";
+import { ComputedState } from "../core/geometry/GeometryEngine";
+import { toMatrixString, isTranslationOnly } from "../core/geometry/Matrix";
 
 const svgNS = "http://www.w3.org/2000/svg";
 const GRID_BASE = 20;
@@ -31,7 +32,7 @@ export interface RendererState {
      * positions — it never composes coordinates itself. In Milestone 1 this
      * becomes the full ComputedState.
      */
-    computed: ComputedGeometry;
+    computed: ComputedState;
     viewport: { x: number; y: number; zoom: number };
 }
 
@@ -132,17 +133,20 @@ function renderContent(
     contentGroup: SVGGElement,
     doc: ReadonlyDocument,
     z: number,
-    computed: ComputedGeometry
+    computed: ComputedState
 ): void {
     clearChildren(contentGroup);
 
     // Paint in computed draw order (scene-graph order), using resolved world rects.
     computed.order.forEach((id: string) => {
         const node = doc.nodes.get(id);
-        const geo = computed.rects.get(id);
-        if (!node || !geo) return;
+        const c = computed.nodes.get(id);
+        if (!node || !c) return;
         const sty = node.style;
-        if (!isFiniteGeometry(geo)) return;
+        if (!isFiniteGeometry(c.bounds)) return;
+        // The world matrix carries position/rotation/scale, so the shape itself is
+        // emitted at the local origin and placed by the transform attribute.
+        const geo = { x: 0, y: 0, width: c.local.width, height: c.local.height };
 
         let el: SVGElement | null = null;
 
@@ -199,6 +203,8 @@ function renderContent(
         }
 
         if (el) {
+            if (!isTranslationOnly(c.world)) el.setAttribute("transform", toMatrixString(c.world));
+            else el.setAttribute("transform", `translate(${c.world.e}, ${c.world.f})`);
             el.setAttribute("data-node-id", id);
             el.style.cursor = "pointer";
             contentGroup.appendChild(el);
@@ -213,8 +219,9 @@ function renderOverlay(overlayGroup: SVGGElement, doc: ReadonlyDocument, state: 
 
     // Selection + hover outlines, in the same computed draw order as the content.
     computed.order.forEach((id: string) => {
-        const geo = computed.rects.get(id);
-        if (!geo || !isFiniteGeometry(geo)) return;
+        const c = computed.nodes.get(id);
+        if (!c || !isFiniteGeometry(c.bounds)) return;
+        const geo = c.bounds;
 
         if (selectedSet.has(id)) {
             overlayGroup.appendChild(makeOutline(geo, 3 / z, "#00bfff", 1.5 / z));
@@ -229,8 +236,9 @@ function renderOverlay(overlayGroup: SVGGElement, doc: ReadonlyDocument, state: 
     // being 8px on screen — the opposite of what the clamp was for.
     const HS = HANDLE_SIZE_PX / z;
     state.selectedNodeIds.forEach(nodeId => {
-        const geo = computed.rects.get(nodeId);
-        if (!geo || !isFiniteGeometry(geo)) return;
+        const c = computed.nodes.get(nodeId);
+        if (!c || !isFiniteGeometry(c.bounds)) return;
+        const geo = c.bounds;
 
         const corners: Record<string, { cx: number; cy: number; cursor: string }> = {
             "nw": { cx: geo.x, cy: geo.y, cursor: "nwse-resize" },

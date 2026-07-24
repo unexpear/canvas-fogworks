@@ -54,7 +54,7 @@ export class MoveTool implements Tool {
         const dy = (e.clientY - this.startY) / zoom;
 
         // Preview as PENDING PATCHES to stored (parent-relative) geometry. These
-        // are composed by computeWorldGeometry like any other geometry; the
+        // are composed by computeGeometry like any other geometry; the
         // document is never touched until commit.
         const doc = this.dispatcher.getDocument();
         const overrides = new Map<string, Partial<Geometry>>();

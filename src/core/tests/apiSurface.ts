@@ -31,7 +31,8 @@ import {
 } from "../document/Serializer";
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
-import { computeWorldGeometry, hitTest, ComputedGeometry, WorldRect } from "../geometry/ComputedGeometry";
+import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
+import { Mat2D, Rect, IDENTITY, multiply, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
 import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot } from "../actions/types";
 import { applyMutationsToDocument } from "../actions/applyMutations";
@@ -96,10 +97,25 @@ export function __apiSurfacePin(): void {
     expectType<ReadonlyNode[]>(traverseSceneGraph(doc));
     expectType<string[]>(selectionRoots(doc, []));
     expectType<void>(validateDocumentIntegrity(doc));
-    const computed: ComputedGeometry = computeWorldGeometry(doc, null);
+    const computed: ComputedState = computeGeometry(doc, null);
     expectType<string[]>(computed.order);
-    expectType<Map<string, WorldRect>>(computed.rects);
+    expectType<Map<string, ComputedNode>>(computed.nodes);
     expectType<string | null>(hitTest(computed, 0, 0));
+    expectType<{ x: number; y: number } | null>(toLocal(computed, "id", 0, 0));
+    expectType<{ x: number; y: number } | null>(toWorld(computed, "id", 0, 0));
+    expectType<Rect | null>(subtreeBounds(doc, computed, "id"));
+    expectType<Rect | null>(selectionBounds(computed, ["id"]));
+
+    // Matrix primitive
+    expectType<Mat2D>(IDENTITY);
+    expectType<Mat2D>(multiply(IDENTITY, IDENTITY));
+    expectType<Mat2D | null>(invert(IDENTITY));
+    expectType<Mat2D>(compose(0, 0, 0, 1, 1, 0, 0));
+    expectType<{ x: number; y: number }>(applyToPoint(IDENTITY, 0, 0));
+    expectType<Rect>(transformRectToAABB(IDENTITY, { x: 0, y: 0, width: 1, height: 1 }));
+    expectType<Rect>(unionRect({ x: 0, y: 0, width: 1, height: 1 }, { x: 1, y: 1, width: 1, height: 1 }));
+    expectType<string>(toMatrixString(IDENTITY));
+    expectType<boolean>(isTranslationOnly(IDENTITY));
 
     // --- Actions ------------------------------------------------------------
     // The delta channel is a discriminated union, NOT Record<string, any>.
