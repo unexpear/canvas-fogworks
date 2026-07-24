@@ -92,8 +92,12 @@ export const CURRENT_VERSION: string =
  *         = nowrap (a single line), so `migrate_11_to_12` is a pass-through — but a schema-11
  *         build would draw a wrapping container's children on one overflowing line and
  *         mis-size a cross-hug container, misstating the layout.
+ *
+ *   "13" — adds `Layout.colSpan`/`rowSpan` (grid item spans) for Milestone 2. Absent = 1 (a
+ *         single cell), so `migrate_12_to_13` is a pass-through — but a schema-12 build would
+ *         ignore the spans and mis-place / mis-size the grid's cells.
  */
-export const SCHEMA_VERSION = "12";
+export const SCHEMA_VERSION = "13";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

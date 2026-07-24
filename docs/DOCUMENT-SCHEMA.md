@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v12 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug), constraints, absolute + margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v13 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug/spans), constraints, absolute + margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -75,6 +75,8 @@ interface Layout {     // constraint intent, not absolute position (Milestone 2)
   constraintRef?: { width: number; height: number };  // frozen parent-size reference for `constraints`
   position?: "absolute";                               // M2 out-of-flow escape — LIVE
   margin?: number;                                     // M2 uniform flex-flow spacing — LIVE
+  colSpan?: number;                                    // M2 grid item span — LIVE; integer [1, GRID_SPAN_MAX]
+  rowSpan?: number;                                    // M2 grid item span — LIVE; integer [1, GRID_SPAN_MAX]
 }
 
 interface Constraints {              // how this child responds when its PLAIN parent resizes
@@ -299,6 +301,23 @@ expected.
   `{ auto: true }` track or size a hugging grid to its contents. On a HUGGED axis `fr` tracks
   collapse to 0 (no definite size to share, so nothing to distribute). `{ auto: true }` (exactly
   `true`) and the boolean hug flags are validated on both paths.
+- **Grid spans (schema 13):** `Layout.colSpan`/`rowSpan` (per-child, default 1) make a grid item
+  occupy multiple cells. Placement is a CSS-style SPARSE auto-flow — a forward-only, row-major
+  cursor gives each item the next FREE `colSpan × rowSpan` block, skipping cells occupied by
+  earlier items' spans (`LayoutEngine.placeGridItems`, the single placement authority shared by
+  the measure fold and the position pass, so a hugging grid's size matches its cells). The row
+  COUNT is DERIVED from the placement (a `rowSpan` can push it past `ceil(count / cols)`); a
+  spanning cell covers its tracks + internal gaps. `colSpan` is clamped to the column count —
+  **this is load-bearing: an un-clamped `colSpan > cols` would never fit and loop forever** — and
+  both spans are validated as integers in `[1, GRID_SPAN_MAX]` on both paths. Because the
+  occupancy set is `Σ colSpan·rowSpan` (NOT the row count), the per-item span cap alone does not
+  bound memory; so the COLUMN count is capped at `GRID_MAX_TRACKS` (validated) and the DERIVED row
+  count is capped in placement, together bounding the occupancy to `GRID_MAX_TRACKS²` — a grid
+  larger than that is out of scope (use a flex column for a long list). A spanning item does NOT
+  drive `auto` track sizing (CSS's first sizing pass only — a documented simplification). Absent = 1, so every schema-12 document
+  is a valid schema-13 one (`migrate_12_to_13` pass-through); the bump is required because a
+  schema-12 build would ignore the spans and mis-place the cells. DEFERRED: explicit line-based
+  placement (`grid-column: 2 / 4`), dense packing, column auto-flow.
 
 **Constraints / anchors — landed in schema 7 (Milestone 2).** A child of a **plain**
 (non-flex, non-grid) parent uses `Layout.constraints` to pin to the parent's edges and
@@ -344,10 +363,10 @@ in-flow / 0**, so every schema-7 document is a valid schema-8 document — `migr
 is a pass-through; the bump is required because a schema-7 build would lay an absolute child
 into the flow and ignore its margin.
 
-> **Still deferred (not in schema 12):** align-content / wrap-reverse, per-side margins,
+> **Still deferred (not in schema 13):** align-content / wrap-reverse, per-side margins,
 > responsive/breakpoint rules, grid-cell margins, the constrained-child re-baseline (above),
-> and the grid tail remainder (explicit placement/spans, `minmax()`/`fit-content` tracks).
-> These are M2's remaining deliverables — see
+> and the grid tail remainder (explicit line-based placement, dense packing, column auto-flow,
+> `minmax()`/`fit-content` tracks). These are M2's remaining deliverables — see
 > [MILESTONES.md](../MILESTONES.md) § Milestone 2.
 
 > **It bumped `SCHEMA_VERSION` to `"2"`** — as the freeze rule required, with a
@@ -447,7 +466,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"12"`; chain: …9→10 grid per-row `rows`, 10→11 grid `auto` tracks + hug, 11→12 flex wrap) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"13"`; chain: …10→11 grid `auto` tracks + hug, 11→12 flex wrap, 12→13 grid spans) | **only** when the persisted shape changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

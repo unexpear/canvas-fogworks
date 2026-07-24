@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
 
-> 🔒 Frozen contract · schema v12 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug), constraints, absolute + margins; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v13 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug/spans), constraints, absolute + margins; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -141,7 +141,11 @@ no hug reads no child sizes. But an **`auto` track** (sizes to the max child con
 the measure fold and the position pass call the SAME `resolveGridTracks` off the SAME measured
 own-sizes, so a hugged grid's own size equals the sum of its cells by construction, and
 `containerHugs` recognises grid hug flags so a grid-child resize ripples up. On a hugged axis
-`fr` collapses to 0 (no definite size to share).
+`fr` collapses to 0 (no definite size to share). **Item spans** (`Layout.colSpan/rowSpan`) run a
+CSS-style sparse auto-placement (`placeGridItems`, called once inside `resolveGridTracks` so
+measure and position share it): a forward-only cursor gives each item the next free
+`colSpan × rowSpan` block, the row count is DERIVED (a `rowSpan` can grow the grid), and a
+spanning cell covers its tracks + internal gaps.
 
 **Constraints / anchors** (`resolveConstraints`) are the responsive-positioning model for
 children of a **plain** (non-flex/grid) parent: each child pins to the parent's edges and
@@ -164,9 +168,9 @@ measure. Both are small position-pass/measure additions with no new dirty-tracki
 
 Still outstanding for the computed layer: **resolved style** (M5 tokens) belongs in
 `ComputedState` and is not there yet; and M2's **remaining layout** — align-content /
-wrap-reverse, explicit grid placement/spans, `minmax()`/`fit-content` tracks — is deferred
-(see MILESTONES.md). Layout output today is expressed *as* geometry (computed local rects),
-not as a distinct channel.
+wrap-reverse, explicit grid line-based placement, dense packing, `minmax()`/`fit-content` tracks
+— is deferred (see MILESTONES.md). Layout output today is expressed *as* geometry (computed local
+rects), not as a distinct channel.
 
 ## 5. Module map
 

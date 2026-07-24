@@ -201,13 +201,13 @@ function layoutContainerPass(
     // container's hug size and its cells.
     const grid = node.layout.grid;
     if (grid) {
-        const children: { id: string; width: number; height: number }[] = [];
+        const children: { id: string; width: number; height: number; colSpan?: number; rowSpan?: number }[] = [];
         for (const childId of node.children) {
             const child = doc.nodes.get(childId);
             if (!child || isAbsolute(child)) continue;
             const own = measured.get(childId);
             if (!own) continue;
-            children.push({ id: childId, width: own.width, height: own.height });
+            children.push({ id: childId, width: own.width, height: own.height, colSpan: child.layout.colSpan, rowSpan: child.layout.rowSpan });
         }
         for (const [id, rect] of layoutGridChildren(grid, { width: parentLocal.width, height: parentLocal.height }, children)) {
             laidOut.set(id, rect);

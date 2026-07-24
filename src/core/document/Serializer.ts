@@ -213,6 +213,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "9") { raw = migrate_9_to_10(raw); version = "10"; }
     if (version === "10") { raw = migrate_10_to_11(raw); version = "11"; }
     if (version === "11") { raw = migrate_11_to_12(raw); version = "12"; }
+    if (version === "12") { raw = migrate_12_to_13(raw); version = "13"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -286,6 +287,11 @@ function migrate_10_to_11(raw: any): any {
 /** Schema 11 → 12: adds `LayoutContainer.wrap` (flex-wrap). Pass-through by content. */
 function migrate_11_to_12(raw: any): any {
     return { ...raw, version: "12" };
+}
+
+/** Schema 12 → 13: adds `Layout.colSpan`/`rowSpan` (grid item spans). Pass-through by content. */
+function migrate_12_to_13(raw: any): any {
+    return { ...raw, version: "13" };
 }
 
 /**

@@ -122,7 +122,27 @@ export interface Layout {
      * or a child of a plain parent (out of flow). >= 0.
      */
     margin?: number;
+    /**
+     * Grid SPAN (Milestone 2). How many columns / rows this node occupies in its GRID parent's
+     * auto-placement. Absent = 1 (a single cell). `colSpan` is clamped to the column count; a
+     * spanning item's cell covers its tracks plus the internal gaps. Integers in
+     * `[1, GRID_SPAN_MAX]`. Ignored by a flex/plain parent. A spanning item does NOT drive `auto`
+     * track sizing (a documented simplification — CSS's first sizing pass only).
+     */
+    colSpan?: number;
+    rowSpan?: number;
 }
+
+/** Upper bound on a grid `colSpan`/`rowSpan` — a per-item cap (bounds one item's cell block). */
+export const GRID_SPAN_MAX = 1000;
+/**
+ * Upper bound on a grid's COLUMN count and its DERIVED row count. Columns are capped on
+ * validation; the derived rows are capped in placement. Together they bound the placement's
+ * occupancy set to `GRID_MAX_TRACKS²` cells — so a hand-edited grid (huge columns, or many
+ * wide-spanning children) cannot exhaust memory. A grid larger than this is beyond scope (use a
+ * flex column for a long list).
+ */
+export const GRID_MAX_TRACKS = 1000;
 
 /** Horizontal anchor: pin left, pin right, pin both (stretch), keep centered, or scale. */
 export type HConstraint = "left" | "right" | "left-right" | "center" | "scale";
@@ -246,6 +266,10 @@ export function layoutError(l: Partial<Layout>): string | null {
     if (l.grow !== undefined && (!Number.isFinite(l.grow) || l.grow < 0)) return "layout.grow must be finite and >= 0";
     if (l.shrink !== undefined && (!Number.isFinite(l.shrink) || l.shrink < 0)) return "layout.shrink must be finite and >= 0";
     if (l.margin !== undefined && (!Number.isFinite(l.margin) || l.margin < 0)) return "layout.margin must be finite and >= 0";
+    // Grid spans: positive integers, capped so the derived row count cannot OOM. Per-child
+    // (grid children have no container), so validate BEFORE the no-container early return.
+    if (l.colSpan !== undefined && (!Number.isInteger(l.colSpan) || l.colSpan < 1 || l.colSpan > GRID_SPAN_MAX)) return `layout.colSpan must be an integer in [1, ${GRID_SPAN_MAX}]`;
+    if (l.rowSpan !== undefined && (!Number.isInteger(l.rowSpan) || l.rowSpan < 1 || l.rowSpan > GRID_SPAN_MAX)) return `layout.rowSpan must be an integer in [1, ${GRID_SPAN_MAX}]`;
     if (l.position !== undefined && l.position !== "absolute") return 'layout.position must be "absolute"';
     // Constraints + reference are independent per-child fields (like grow), so validate
     // them BEFORE the no-container early return — else a `{ constraints }` patch slips by.
@@ -269,13 +293,17 @@ export function layoutError(l: Partial<Layout>): string | null {
         const g = l.grid as LayoutGrid;
         if (typeof g !== "object" || g === null) return "layout.grid must be an object";
         if (l.container !== undefined) return "layout.grid and layout.container are mutually exclusive";
+        // Column count is capped (with the derived-row cap in placement) so the sparse
+        // auto-placement's occupancy set stays bounded — see GRID_MAX_TRACKS.
         if (!Array.isArray(g.columns) || g.columns.length === 0) return "layout.grid.columns must be a non-empty array";
+        if (g.columns.length > GRID_MAX_TRACKS) return `layout.grid.columns must have at most ${GRID_MAX_TRACKS} tracks`;
         for (const t of g.columns) { const e = trackError(t); if (e) return `layout.grid.columns track ${e}`; }
         const rhe = trackError(g.rowHeight); if (rhe) return `layout.grid.rowHeight ${rhe}`;
         // Explicit per-row tracks: optional, but if present a non-empty array of valid
         // tracks (omit it for "all rows use rowHeight"; `[]` would be a redundant no-op).
         if (g.rows !== undefined) {
             if (!Array.isArray(g.rows) || g.rows.length === 0) return "layout.grid.rows must be a non-empty array when present";
+            if (g.rows.length > GRID_MAX_TRACKS) return `layout.grid.rows must have at most ${GRID_MAX_TRACKS} tracks`;
             for (const t of g.rows) { const e = trackError(t); if (e) return `layout.grid.rows track ${e}`; }
         }
         if (g.hugWidth !== undefined && typeof g.hugWidth !== "boolean") return "layout.grid.hugWidth must be a boolean";

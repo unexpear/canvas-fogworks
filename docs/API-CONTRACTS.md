@@ -2,14 +2,14 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer/SVGRenderer.ts, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v12 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug), constraints, absolute + margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v13 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug/spans), constraints, absolute + margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
 
 ```ts
 const CURRENT_VERSION: string;               // app/display version, from package.json
-const SCHEMA_VERSION: string;                // "9" — persisted document schema (decoupled from app version)
+const SCHEMA_VERSION: string;                // persisted document schema (decoupled from app version)
 function createEmptyDocument(): ProjectDocument;
 
 // SceneGraph.ts — the ONLY correct node ordering (z-order / layer order)
@@ -66,16 +66,21 @@ function measureIntrinsicSizes(                    // bottom-up: resolved own-si
   scene: readonly ReadonlyNode[],
   pending: ReadonlyMap<string, Partial<Geometry>> | null | undefined
 ): Map<string, { width: number; height: number }>;
-function layoutGridChildren(                       // grid: children auto-flow into px/fr/auto cell tracks and fill them
+function layoutGridChildren(                       // grid: children auto-flow (with spans) into px/fr/auto cells and fill them
   grid: LayoutGrid,
   parentSize: { width: number; height: number },
-  children: readonly { id: string; width: number; height: number }[]  // own-sizes feed `auto` tracks
-): Map<string, Rect>;                             // childId → cell rect
+  children: readonly { id: string; width: number; height: number; colSpan?: number; rowSpan?: number }[]
+): Map<string, Rect>;                             // childId → cell rect (a span sums its tracks + internal gaps)
+interface GridCell { col: number; row: number; colSpan: number; rowSpan: number }
+function placeGridItems(                            // sparse auto-placement — the SINGLE placement authority
+  items: readonly { colSpan?: number; rowSpan?: number }[],
+  cols: number
+): { cells: GridCell[]; rows: number };           // cells index-aligned with items; rows derived (may exceed ceil(n/cols))
 function resolveGridTracks(                         // shared by the measure fold (hug) and the position pass (cells)
   grid: LayoutGrid,
-  children: readonly { width: number; height: number }[],
+  children: readonly { width: number; height: number; colSpan?: number; rowSpan?: number }[],
   parentSize: { width: number; height: number }
-): { colWidths: number[]; rowHeights: number[]; cols: number; rows: number };
+): { colWidths: number[]; rowHeights: number[]; cols: number; rows: number; cells: GridCell[] };
 function resolveConstraints(                       // anchors: reposition a plain parent's child on resize
   stored: Rect,
   constraints: Constraints | undefined,
@@ -84,8 +89,8 @@ function resolveConstraints(                       // anchors: reposition a plai
 ): Rect;                                          // offset = parentSize - ref; static if either absent
 function isAbsolute(node: { layout: { position?: unknown } } | undefined): boolean; // out-of-flow escape
 
-// Layout also carries per-child `margin` (uniform flex-flow spacing) and
-// `position: "absolute"` (out of flow, positioned by geometry + constraints).
+// Layout also carries per-child `margin` (uniform flex-flow spacing),
+// `position: "absolute"` (out of flow), and `colSpan`/`rowSpan` (grid item spans).
 
 // Serializer.ts
 function serializeDocument(doc: ReadonlyDocument): string;

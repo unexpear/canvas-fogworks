@@ -23,7 +23,7 @@
  */
 
 import { ReadonlyDocument } from "../document/Document";
-import { Constraints, Geometry, LayoutContainer, LayoutGrid, TrackSize } from "../document/Node";
+import { Constraints, Geometry, GRID_MAX_TRACKS, GRID_SPAN_MAX, LayoutContainer, LayoutGrid, TrackSize } from "../document/Node";
 import { ReadonlyNode } from "../document/SceneGraph";
 import { Rect } from "./Matrix";
 
@@ -130,13 +130,13 @@ export function measureIntrinsicSizes(
         // the position pass's filter or the auto-track flow indices would drift.
         const gr = node.layout.grid;
         if (gr && (gr.hugWidth || gr.hugHeight)) {
-            const inFlow: { width: number; height: number }[] = [];
+            const inFlow: { width: number; height: number; colSpan?: number; rowSpan?: number }[] = [];
             for (const childId of node.children) {
                 const childNode = byId.get(childId);
                 if (isAbsolute(childNode)) continue;
                 const own = measured.get(childId);
                 if (!own) continue;
-                inFlow.push(own);
+                inFlow.push({ width: own.width, height: own.height, colSpan: childNode?.layout.colSpan, rowSpan: childNode?.layout.rowSpan });
             }
             const pad = gr.padding ?? 0;
             const { colWidths, rowHeights, cols, rows } = resolveGridTracks(gr, inFlow, { width, height });
@@ -315,26 +315,99 @@ function resolveTracks(tracks: readonly TrackSize[], autoSizes: readonly number[
                 : (totalFr > 0 ? freeForFr * (Math.max(0, t.fr) / totalFr) : 0));
 }
 
+/** One item's grid placement: its top-left cell and how many columns/rows it occupies. */
+export interface GridCell {
+    col: number;
+    row: number;
+    colSpan: number;
+    rowSpan: number;
+}
+
+/**
+ * CSS-style SPARSE auto-placement — the single placement authority shared (via `resolveGridTracks`)
+ * by the measure fold and the position pass, so a hugging grid's row count and its laid-out cells
+ * cannot drift. A forward-only, row-major cursor gives each item the next FREE `colSpan × rowSpan`
+ * block, skipping cells already occupied by earlier items' spans; the cursor never backtracks
+ * (sparse packing — earlier gaps are not backfilled).
+ *
+ * `colSpan` is clamped to `[1, cols]`, `rowSpan` to `[1, GRID_SPAN_MAX]`, and the DERIVED row count is
+ * capped at `GRID_MAX_TRACKS` — so with the column count also capped on validation, the occupancy set
+ * stays bounded by `GRID_MAX_TRACKS²` and can never OOM or hit the runtime `Set`-size limit, even on a
+ * hand-edited grid with a huge column count or many wide-spanning children (which the per-item
+ * `GRID_SPAN_MAX` cap alone does NOT bound — the occupancy is `Σ colSpan·rowSpan`, not the row count).
+ * Items that would land past the cap are piled into the last band (bounded, deterministic, no mark).
+ * Pure and TOTAL: reads only integers, uses a sparse `Set` (never `new Array(rows)`), and terminates
+ * (each scan advances row-major within the cap); returns `{ cells: [], rows: 0 }` for a 0-column/empty grid.
+ *
+ * @returns `cells` index-aligned with `items`, and `rows` = `max(cell.row + cell.rowSpan)` (≤ GRID_MAX_TRACKS).
+ */
+export function placeGridItems(
+    items: readonly { colSpan?: number; rowSpan?: number }[],
+    cols: number
+): { cells: GridCell[]; rows: number } {
+    if (cols <= 0) return { cells: [], rows: 0 };
+    // The derived row count is bounded so `cols × rowsCap` (the occupancy) can't exhaust memory.
+    const rowsCap = Math.max(1, Math.floor((GRID_MAX_TRACKS * GRID_MAX_TRACKS) / cols));
+    const occ = new Set<number>();
+    const cells: GridCell[] = [];
+    let cursorRow = 0;
+    let cursorCol = 0;
+    let rows = 0;
+    for (const item of items) {
+        const cs = Math.min(cols, Math.max(1, Math.floor(item.colSpan ?? 1)));
+        const rs = Math.min(rowsCap, Math.min(GRID_SPAN_MAX, Math.max(1, Math.floor(item.rowSpan ?? 1))));
+        // Scan row-major from the cursor for the first free cs×rs block.
+        let r = cursorRow;
+        let c = cursorCol;
+        let capped = false;
+        for (; ;) {
+            if (r + rs > rowsCap) { r = rowsCap - rs; c = 0; capped = true; break; } // cap: pile into the last band
+            if (c + cs > cols) { r++; c = 0; continue; } // never straddle the right edge
+            let free = true;
+            for (let dr = 0; dr < rs && free; dr++)
+                for (let dc = 0; dc < cs; dc++)
+                    if (occ.has((r + dr) * cols + (c + dc))) { free = false; break; }
+            if (free) break;
+            c++;
+        }
+        // Skip marking a capped (piled) item — its cells are already occupied / an overflow band,
+        // so total marking stays bounded by GRID_MAX_TRACKS² regardless of the child count.
+        if (!capped)
+            for (let dr = 0; dr < rs; dr++)
+                for (let dc = 0; dc < cs; dc++)
+                    occ.add((r + dr) * cols + (c + dc));
+        cells.push({ col: c, row: r, colSpan: cs, rowSpan: rs });
+        if (r + rs > rows) rows = r + rs;
+        // Advance the cursor forward-only, past the placed item (sparse — no backfill).
+        cursorRow = r;
+        cursorCol = c + cs;
+        if (cursorCol >= cols) { cursorRow = r + 1; cursorCol = 0; }
+    }
+    return { cells, rows };
+}
+
 /**
  * Resolve a grid's column widths and row heights — the SINGLE source of truth, called by BOTH
  * the measure-pass hug fold (to size a hugging grid) and the position pass (to place cells), so
  * a hugged grid's own size is byte-identical to the sum of the cells it lays out.
  *
- * Children auto-flow row-major: child `i` is at column `i % cols`, row `floor(i / cols)`; row
- * COUNT is `ceil(count / cols)`. An `auto` COLUMN sizes to the max own-WIDTH of the children in
- * it, an `auto` ROW to the max own-HEIGHT (the children's PRE-fill measured sizes — never their
- * stretched cell size, which keeps this acyclic, exactly like flex hug). Rows are `rows[r] ??
- * rowHeight` (the schema-10 explicit/implicit split). A hugged axis passes `available = null`,
- * so its `fr` tracks collapse to 0; a non-hugged axis shares its inner size (net of padding+gaps).
+ * Children auto-flow via `placeGridItems` (sparse span-aware placement); row COUNT is DERIVED
+ * from that (a `rowSpan` can push it past `ceil(count / cols)`). An `auto` COLUMN sizes to the max
+ * own-WIDTH of the SINGLE-column-span children in it, an `auto` ROW to the max own-HEIGHT of the
+ * single-row-span children (a SPANNING item drives no auto track — CSS's first sizing pass; the
+ * children's PRE-fill measured sizes, never stretched, keep this acyclic like flex hug). Rows are
+ * `rows[r] ?? rowHeight` (the schema-10 split). A hugged axis passes `available = null`, so its `fr`
+ * tracks collapse to 0; a non-hugged axis shares its inner size (net of padding+gaps). Returns the
+ * placement `cells` so the position pass reuses this exact placement rather than re-deriving it.
  */
 export function resolveGridTracks(
     grid: LayoutGrid,
-    children: readonly { width: number; height: number }[],
+    children: readonly { width: number; height: number; colSpan?: number; rowSpan?: number }[],
     parentSize: { width: number; height: number }
-): { colWidths: number[]; rowHeights: number[]; cols: number; rows: number } {
+): { colWidths: number[]; rowHeights: number[]; cols: number; rows: number; cells: GridCell[] } {
     const cols = grid.columns.length;
-    if (cols === 0) return { colWidths: [], rowHeights: [], cols: 0, rows: 0 };
-    const rows = Math.ceil(children.length / cols);
+    if (cols === 0) return { colWidths: [], rowHeights: [], cols: 0, rows: 0, cells: [] };
+    const { cells, rows } = placeGridItems(children, cols);
     const colGap = grid.columnGap ?? 0;
     const rowGap = grid.rowGap ?? 0;
     const pad = grid.padding ?? 0;
@@ -342,10 +415,9 @@ export function resolveGridTracks(
     const colAuto = new Array<number>(cols).fill(0);
     const rowAuto = new Array<number>(rows).fill(0);
     children.forEach((ch, i) => {
-        const c = i % cols;
-        const r = Math.floor(i / cols);
-        if (ch.width > colAuto[c]) colAuto[c] = ch.width;
-        if (ch.height > rowAuto[r]) rowAuto[r] = ch.height;
+        const cell = cells[i];
+        if (cell.colSpan === 1 && ch.width > colAuto[cell.col]) colAuto[cell.col] = ch.width;
+        if (cell.rowSpan === 1 && ch.height > rowAuto[cell.row]) rowAuto[cell.row] = ch.height;
     });
 
     const rowTracks: TrackSize[] = [];
@@ -359,6 +431,7 @@ export function resolveGridTracks(
         rowHeights: resolveTracks(rowTracks, rowAuto, availH),
         cols,
         rows,
+        cells,
     };
 }
 
@@ -372,7 +445,7 @@ export function resolveGridTracks(
 export function layoutGridChildren(
     grid: LayoutGrid,
     parentSize: { width: number; height: number },
-    children: readonly { id: string; width: number; height: number }[]
+    children: readonly { id: string; width: number; height: number; colSpan?: number; rowSpan?: number }[]
 ): Map<string, Rect> {
     const out = new Map<string, Rect>();
     const cols = grid.columns.length;
@@ -380,7 +453,9 @@ export function layoutGridChildren(
     const colGap = grid.columnGap ?? 0;
     const rowGap = grid.rowGap ?? 0;
     const pad = grid.padding ?? 0;
-    const { colWidths, rowHeights, rows } = resolveGridTracks(grid, children, parentSize);
+    // The SAME `resolveGridTracks` the hug fold used — reuse its placement `cells` so the cells
+    // laid out here match the container's hugged size exactly (no re-derivation, no drift).
+    const { colWidths, rowHeights, rows, cells } = resolveGridTracks(grid, children, parentSize);
 
     const colX: number[] = [];
     let x = pad;
@@ -390,9 +465,13 @@ export function layoutGridChildren(
     for (let r = 0; r < rows; r++) { rowY[r] = y; y += rowHeights[r] + rowGap; }
 
     children.forEach((ch, i) => {
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        out.set(ch.id, { x: colX[col], y: rowY[row], width: colWidths[col], height: rowHeights[row] });
+        const cell = cells[i];
+        // A spanning cell covers its tracks PLUS the internal gaps between them.
+        let width = (cell.colSpan - 1) * colGap;
+        for (let k = 0; k < cell.colSpan; k++) width += colWidths[cell.col + k];
+        let height = (cell.rowSpan - 1) * rowGap;
+        for (let k = 0; k < cell.rowSpan; k++) height += rowHeights[cell.row + k];
+        out.set(ch.id, { x: colX[cell.col], y: rowY[cell.row], width, height });
     });
     return out;
 }

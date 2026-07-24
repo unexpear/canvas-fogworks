@@ -19,7 +19,7 @@ M0.5 Core Documentation      ✅   contracts frozen before building upward
       │
 M1  Computed State           ✅   stored intent -> calculated results
       │
-M2  Layout Engine            🚧   flex(+grow/shrink/wrap) + hug + grid(+rows/auto/hug) + constraints + absolute; spans/align-content deferred
+M2  Layout Engine            🚧   flex(+grow/shrink/wrap) + hug + grid(+rows/auto/hug/spans) + constraints + absolute; align-content/placement deferred
       │
 M3  Renderer                 ⬜*  reads ComputedState only
       │
@@ -254,6 +254,27 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   held under a fuzz that varies `rows` shorter/longer than the derived rows). A single
   unequal-row test pins explicit-wins + implicit-fallback + prefix-sum row-Y +
   fr-after-px at once; all five guards mutation-tested and killed.
+- **Grid spans — a real placement algorithm.** `Layout.colSpan`/`rowSpan` let a grid item
+  occupy multiple cells. A design panel (3 lenses converged) settled it around one shared
+  `placeGridItems` — CSS-style SPARSE auto-placement: a forward-only, row-major cursor gives each
+  item the next FREE `colSpan × rowSpan` block, skipping cells occupied by earlier spans (a `Set`
+  of flat `row*cols + col` indices). Called ONCE inside `resolveGridTracks` and its `cells`
+  reused by the position pass, so — the fourth application of the shared-resolver lesson — the
+  hugged grid size and its laid-out cells cannot drift (pinned by an explicit hug == cells test).
+  The row COUNT is DERIVED (a `rowSpan` grows the grid past `ceil(n/cols)`); a spanning cell
+  covers its tracks + internal gaps; a spanning item does NOT drive `auto` sizing (CSS's first
+  pass — a documented simplification). `colSpan` is clamped to the column count — **load-bearing:
+  mutation testing proved an un-clamped `colSpan > cols` loops FOREVER** (the block never fits) —
+  and spans are validated as integers in `[1, GRID_SPAN_MAX]`. All eight guards mutation-tested and
+  killed; the fuzz now emits spans and holds `incremental === full`. An adversarial read-only review
+  then found a real OOM the fuzz and units both missed: the occupancy set is `Σ colSpan·rowSpan`,
+  NOT the row count, so a *validated* grid (unbounded column count × many wide-spanning children)
+  blew the runtime `Set` cap — a hard `RangeError` near ~17 items. Fixed by capping the column count
+  (validation) and the derived row count (placement, piling overflow into the last band), bounding
+  the occupancy to `GRID_MAX_TRACKS²`; a regression test throws without the cap. My original
+  "the span cap bounds the row count against OOM" reasoning was simply wrong — the review earned its
+  keep. DEFERRED (own weight): explicit line-based placement (`grid-column: 2 / 4`), dense packing,
+  column auto-flow.
 - **Flex wrap — multi-line flow + per-line flex + cross-hug.** A design panel (2 lenses
   converged) settled it around one shared `breakFlexLines` (the flex analogue of
   `resolveGridTracks`), called by BOTH the position pass and the measure cross-hug fold — so a
@@ -320,14 +341,16 @@ Document → Geometry + Layout Engine → Computed State → Renderer
 - **Schema cost, paid under the freeze rule.** `SCHEMA_VERSION` `"2"` → `"3"` (auto-layout)
   → `"4"` (hug) → `"5"` (grow) → `"6"` (grid) → `"7"` (constraints) → `"8"` (absolute +
   margin) → `"9"` (shrink) → `"10"` (grid per-row `rows`) → `"11"` (grid `auto` tracks +
-  hug) → `"12"` (flex wrap), each with a pass-through migration, because an older build would
-  draw the children at now-vestigial stored geometry / unanchored / in-flow / unshrunk / at a
-  uniform row height / not sized to content / on one overflowing line.
+  hug) → `"12"` (flex wrap) → `"13"` (grid spans), each with a pass-through migration, because an
+  older build would draw the children at now-vestigial stored geometry / unanchored / in-flow /
+  unshrunk / at a uniform row height / not sized to content / on one overflowing line / one cell
+  each.
 
 **Deferred (each its own deliverable, NOT built):** align-content / wrap-reverse · **per-side**
 margins · grid-cell margins · responsive / breakpoint rules · drag-to-reorder ·
 the constrained-child **re-baseline** (off-reference edits, an M5 tool-layer concern) ·
-the **grid tail remainder** (explicit placement/spans, `minmax()`/`fit-content` tracks).
+the **grid tail remainder** (explicit line-based placement, dense packing, column auto-flow,
+`minmax()`/`fit-content` tracks).
 
 **Explicitly NOT in scope yet:** `ComputedState` still carries geometry only; resolved
 style (M5 tokens) is still absent. Layout output is expressed *as* geometry (computed
