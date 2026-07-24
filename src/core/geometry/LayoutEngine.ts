@@ -31,6 +31,11 @@ export function isLayoutContainer(node: HasLayout): boolean {
     return !!node && (node.layout.container !== undefined || node.layout.grid !== undefined);
 }
 
+/** True when this node opts OUT of its parent's flex/grid flow (positioned absolutely). */
+export function isAbsolute(node: HasLayout): boolean {
+    return !!node && (node.layout as { position?: unknown }).position === "absolute";
+}
+
 /** True when this node is a container that sizes at least one axis to its contents. */
 function containerHugs(node: HasLayout): boolean {
     const c = node && (node.layout.container as { hugWidth?: unknown; hugHeight?: unknown } | undefined);
@@ -61,6 +66,7 @@ export function measureIntrinsicSizes(
     pending: ReadonlyMap<string, Partial<Geometry>> | null | undefined
 ): Map<string, Size> {
     const measured = new Map<string, Size>();
+    const byId = new Map(scene.map(n => [n.id, n])); // for a hug child's margin / absolute flag
     // Reverse of parents-first = descendants before ancestors: exactly the order a hug
     // fold needs, reusing the single graph walk the caller already did.
     for (let i = scene.length - 1; i >= 0; i--) {
@@ -79,10 +85,13 @@ export function measureIntrinsicSizes(
             let crossMax = 0;
             let count = 0;
             for (const childId of node.children) {
-                const own = measured.get(childId); // already measured (bottom-up)
-                if (!own) continue;                // damaged/unmeasured child — skip (stays total)
-                mainSum += row ? own.width : own.height;
-                crossMax = Math.max(crossMax, row ? own.height : own.width);
+                const childNode = byId.get(childId);
+                if (isAbsolute(childNode)) continue; // out of flow — no contribution to hug size
+                const own = measured.get(childId);   // already measured (bottom-up)
+                if (!own) continue;                  // damaged/unmeasured child — skip (stays total)
+                const m2 = 2 * Math.max(0, childNode?.layout.margin ?? 0);
+                mainSum += m2 + (row ? own.width : own.height);
+                crossMax = Math.max(crossMax, m2 + (row ? own.height : own.width));
                 count++;
             }
             const mainHug = 2 * pad + mainSum + gap * Math.max(0, count - 1);
@@ -110,7 +119,7 @@ export function measureIntrinsicSizes(
 export function layoutChildren(
     container: LayoutContainer,
     parentSize: { width: number; height: number },
-    children: readonly { id: string; width: number; height: number; grow?: number }[]
+    children: readonly { id: string; width: number; height: number; grow?: number; margin?: number }[]
 ): Map<string, Rect> {
     const gap = container.gap ?? 0;
     const pad = container.padding ?? 0;
@@ -124,15 +133,14 @@ export function layoutChildren(
     // Flex-grow: share the LEFTOVER main-axis space among children in proportion to
     // `grow`. No leftover (fixed content, or a main-axis hug where innerMain == used)
     // means everyone keeps their base size; overflow (free < 0) is NOT shrunk here
-    // (flex-shrink is deferred). Runs before positioning so `cursor` advances by the
-    // grown size. NOTE (intentional, differs from CSS): all free space is distributed by
-    // grow ratio, so a lone `grow: 0.5` still fills the row — we do not reserve the
-    // (1 - Σgrow) fraction CSS leaves empty when Σgrow < 1. "grow" here means "take my
-    // share of the space", not "take my fraction of one unit".
+    // (flex-shrink is deferred). `margin` (uniform per child) is fixed spacing subtracted
+    // from the free space first — 2·margin on the main axis (before + after) — so grow
+    // fills only what margins leave. NOTE (intentional, differs from CSS): all free space
+    // is distributed by grow ratio, so a lone `grow: 0.5` still fills the row.
     let usedMain = gap * Math.max(0, children.length - 1);
     let growSum = 0;
     for (const child of children) {
-        usedMain += row ? child.width : child.height;
+        usedMain += 2 * (child.margin ?? 0) + (row ? child.width : child.height);
         growSum += Math.max(0, child.grow ?? 0);
     }
     const free = innerMain - usedMain;
@@ -141,22 +149,26 @@ export function layoutChildren(
     const out = new Map<string, Rect>();
     let cursor = pad; // main-axis offset, starts after the leading padding
     for (const child of children) {
+        const m = Math.max(0, child.margin ?? 0);
         const grow = Math.max(0, child.grow ?? 0);
         const baseMain = row ? child.width : child.height;
         const mainSize = distribute && grow > 0 ? baseMain + free * (grow / growSum) : baseMain;
         const ownCross = row ? child.height : child.width;
-        const crossSize = align === "stretch" ? Math.max(0, innerCross) : ownCross;
+        // The child sits in a margin-inset slot: cross span is `innerCross − 2·margin`.
+        const availCross = innerCross - 2 * m;
+        const crossSize = align === "stretch" ? Math.max(0, availCross) : ownCross;
 
-        let cross = pad;
-        if (align === "center") cross = pad + (innerCross - crossSize) / 2;
-        else if (align === "end") cross = pad + (innerCross - crossSize);
-        // "start" and "stretch" both begin at the padding edge.
+        let crossOff = 0; // within the available cross, before the leading cross margin
+        if (align === "center") crossOff = (availCross - crossSize) / 2;
+        else if (align === "end") crossOff = availCross - crossSize;
+        const cross = pad + m + crossOff;
 
+        cursor += m; // leading main-axis margin
         out.set(child.id, row
             ? { x: cursor, y: cross, width: mainSize, height: crossSize }
             : { x: cross, y: cursor, width: crossSize, height: mainSize });
 
-        cursor += mainSize + gap;
+        cursor += mainSize + m + gap; // trailing main-axis margin, then the gap
     }
     return out;
 }

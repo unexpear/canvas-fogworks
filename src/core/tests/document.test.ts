@@ -1580,13 +1580,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "8" that has no 7→8 step: the
+        // Pretending the build has moved to a schema "9" that has no 8→9 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→7), and then REFUSED at "7" — never re-stamped straight to the current
-        // schema. The error naming "7" (not "1") is the proof the chain actually ran.
+        // (1→2→…→8), and then REFUSED at "8" — never re-stamped straight to the current
+        // schema. The error naming "8" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 6→7 landed for constraints.)
-        expect(() => migrateIfNeeded(legacy, "8")).toThrow('Migration not implemented for document schema "7"');
+        // time a real migration is added — here, when 7→8 landed for absolute + margin.)
+        expect(() => migrateIfNeeded(legacy, "9")).toThrow('Migration not implemented for document schema "8"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -2038,16 +2038,18 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
                 const r = rnd();
                 const rule = r < 0.3
                     ? { container: { direction: pick([...dirs]), gap: rnd() * 12, padding: rnd() * 12, alignItems: pick([...aligns]), hugWidth: rnd() < 0.5, hugHeight: rnd() < 0.5 } }
-                    : r < 0.45
+                    : r < 0.42
                         ? { container: undefined }
-                        : r < 0.6
+                        : r < 0.55
                             ? { grow: rnd() < 0.3 ? 0 : rnd() * 3 }
-                            : r < 0.8
+                            : r < 0.72
                                 ? { grid: { columns: Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), rowHeight: track(), columnGap: rnd() * 8, rowGap: rnd() * 8, padding: rnd() * 8 } }
-                                // constraints: the action auto-captures constraintRef from the parent's
-                                // stored size; op-2 resizes (source a) and op-3 container/grid toggles + a
-                                // later grandparent resize (source b) then drive the response.
-                                : { constraints: { horizontal: hMode, vertical: vMode } };
+                                : r < 0.86
+                                    // constraints: the action auto-captures constraintRef; op-2 resizes
+                                    // (source a) and op-3 toggles + a later resize (source b) drive it.
+                                    ? { constraints: { horizontal: hMode, vertical: vMode } }
+                                    // absolute-escape (out of flow) and/or a flex margin.
+                                    : { position: rnd() < 0.5 ? "absolute" : undefined, margin: rnd() * 10 };
                 dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, pick(ids), rule as any));
             } else if (op === 4) {
                 dispatcher.dispatchAction(new ReparentNodeAction(doc, pick(ids), rnd() < 0.5 ? null : pick(ids)));
@@ -2668,6 +2670,108 @@ describe("M2 constraints / anchors", () => {
             + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
             + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
             + ` "style": { "fill": "#000", "opacity": 1 }, "layout": { "constraints": { "horizontal": "bogus" } } } } } }`;
+        expect(() => deserializeDocument(bad)).toThrow();
+    });
+});
+
+describe("M2 margins + absolute-position escape", () => {
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+
+    test("layoutChildren: uniform margin spaces on the main axis and insets on the cross axis", () => {
+        // row, no gap/pad. a: margin 10; b: margin 5.
+        const cells = layoutChildren({ direction: "row" }, { width: 300, height: 100 },
+            [{ id: "a", width: 50, height: 30, margin: 10 }, { id: "b", width: 60, height: 40, margin: 5 }]);
+        expect(cells.get("a")).toEqual({ x: 10, y: 10, width: 50, height: 30 });   // inset 10 on both axes
+        expect(cells.get("b")).toEqual({ x: 75, y: 5, width: 60, height: 40 });    // 10+50+10 + 5 lead = 75
+
+        // stretch insets the cross size by 2·margin.
+        const s = layoutChildren({ direction: "row", alignItems: "stretch" }, { width: 300, height: 100 },
+            [{ id: "a", width: 50, height: 30, margin: 10 }]);
+        expect(s.get("a")).toEqual({ x: 10, y: 10, width: 50, height: 80 });       // 100 − 2·10
+
+        // grow fills only the space margins leave: free = 200 − (2·10 + 50) = 130.
+        const g = layoutChildren({ direction: "row" }, { width: 200, height: 100 },
+            [{ id: "a", width: 50, height: 30, margin: 10, grow: 1 }]);
+        expect(g.get("a")).toMatchObject({ x: 10, width: 180 });
+    });
+
+    test("a hug container's size includes its children's margins", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c"], { x: 0, y: 0, width: 999, height: 999 }, { container: { direction: "row", hugWidth: true, hugHeight: true } }));
+        doc.nodes.set("c", mk("c", "P", [], { x: 0, y: 0, width: 50, height: 30 }, { margin: 10 }));
+        doc.rootNodeUuids = ["P"];
+        expect(computeGeometry(doc).nodes.get("P")!.local).toMatchObject({ width: 70, height: 50 }); // 2·10 + content
+    });
+
+    test("an absolute child is OUT of flow: siblings ignore it and it uses its stored geometry", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["abs", "b"], { x: 0, y: 0, width: 300, height: 100 }, { container: { direction: "row" } }));
+        doc.nodes.set("abs", mk("abs", "P", [], { x: 100, y: 20, width: 30, height: 30 }, { position: "absolute" }));
+        doc.nodes.set("b", mk("b", "P", [], { x: 0, y: 0, width: 50, height: 40 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        expect(cs.nodes.get("b")!.bounds.x).toBe(0);                                       // laid out first — abs took no slot
+        expect(cs.nodes.get("abs")!.bounds).toEqual({ x: 100, y: 20, width: 30, height: 30 }); // its stored geometry
+    });
+
+    test("an absolute child does not contribute to a hug container's size", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["inflow", "abs"], { x: 0, y: 0, width: 999, height: 100 }, { container: { direction: "row", hugWidth: true } }));
+        doc.nodes.set("inflow", mk("inflow", "P", [], { x: 0, y: 0, width: 50, height: 30 }, {}));
+        doc.nodes.set("abs", mk("abs", "P", [], { x: 0, y: 0, width: 999, height: 30 }, { position: "absolute" }));
+        doc.rootNodeUuids = ["P"];
+        expect(computeGeometry(doc).nodes.get("P")!.local.width).toBe(50); // the absolute 999 is excluded
+    });
+
+    test("an absolute child of a CONTAINER can still be constrained (out of flow → pins to the parent box)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["abs"], { x: 0, y: 0, width: 100, height: 100 }, { container: { direction: "row" } }));
+        doc.nodes.set("abs", mk("abs", "P", [], { x: 20, y: 0, width: 30, height: 30 }, { position: "absolute", constraints: { horizontal: "right" }, constraintRef: { width: 100, height: 100 } }));
+        doc.rootNodeUuids = ["P"];
+        const dispatcher = new ActionDispatcher(doc);
+        expect(computeGeometry(dispatcher.getDocument()).nodes.get("abs")!.bounds.x).toBe(20);
+        dispatcher.dispatchAction(new ResizeNodeAction(dispatcher.getDocument(), "P", 200, 100));
+        expect(computeGeometry(dispatcher.getDocument()).nodes.get("abs")!.bounds.x).toBe(120); // right-pinned even under a flex parent
+    });
+
+    test("MoveTool: an absolute child of a container stays draggable; an in-flow sibling does not", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["abs", "inf"], { x: 0, y: 0, width: 200, height: 100 }, { container: { direction: "row" } }));
+        doc.nodes.set("abs", mk("abs", "P", [], { x: 10, y: 10, width: 30, height: 30 }, { position: "absolute" }));
+        doc.nodes.set("inf", mk("inf", "P", [], { x: 0, y: 0, width: 50, height: 40 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        const tool = new MoveTool(dispatcher, es, () => { });
+        const at = (x: number) => ({ clientX: x, clientY: 0 } as MouseEvent);
+
+        es.selectedNodeIds = ["abs"];
+        tool.onMouseDown(at(0)); tool.onMouseMove(at(50));
+        expect([...(es.pendingGeometry?.keys() ?? [])]).toEqual(["abs"]); // out of flow → draggable
+
+        es.selectedNodeIds = ["inf"];
+        tool.onMouseDown(at(0)); tool.onMouseMove(at(50));
+        expect(es.pendingGeometry).toBeNull(); // in-flow (laid out) → not draggable
+    });
+
+    test("margin + position are write-path citizens: schema-8 round-trip + both-paths validation", () => {
+        const d = createDocWithParentChild();
+        const ok = (l: any) => new UpdateNodeLayoutAction(d, "child-001", l).validate();
+        expect(ok({ margin: 5 })).toBe(true);
+        expect(ok({ margin: -1 })).toBe(false);
+        expect(ok({ margin: NaN })).toBe(false);
+        expect(ok({ position: "absolute" })).toBe(true);
+        expect(ok({ position: "fixed" })).toBe(false);
+
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "child-001", { position: "absolute", margin: 8 }));
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+
+        const bad = `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
+            + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
+            + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
+            + ` "style": { "fill": "#000", "opacity": 1 }, "layout": { "margin": -3 } } } } }`;
         expect(() => deserializeDocument(bad)).toThrow();
     });
 });

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v7 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + grow + grid + constraints). Suite: `src/core/tests/document.test.ts` (176 tests).
+> 🔒 Frozen contract · schema v8 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, grid, constraints, absolute + margins). Suite: `src/core/tests/document.test.ts` (183 tests).
 
 ## Philosophy
 
@@ -17,7 +17,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 176 tests
+npm test                                   # jest (ts-jest), 183 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -28,7 +28,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (176 tests)
+## What is covered (183 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -58,7 +58,8 @@ npm run check                              # typecheck + lint + test + build (th
 | **M2 flex-grow** | `layoutChildren` distributes leftover main-axis space **proportional to `grow`** (single/multiple growers, gap+padding subtracted first); **inert** with no free space (exact fit or overflow — no shrink); a fixed container grows a child to fill while a **hug-main** container leaves nothing to grow; resizing one child **reflows a growing sibling** incrementally (non-vacuous, only the resized node reported); a **pending resize of a grow child previews the SAME layout as committing it** (regression for the review-found double-apply); **grow overrides hug** on a node that is both a hug container and a grow child; schema-5 round-trip + a negative `grow` rejected on **both** paths (incl. a `{grow}` patch with no container, guarding the early return) |
 | **M2 grid** | `layoutGridChildren` auto-flows row-major with fixed + **`fr`** column tracks (share leftover width), a uniform `rowHeight` (px or `fr` equal-share), gaps and padding; a grid **sizes children to cells** through `computeGeometry` (stored size ignored); deleting an item **reflows survivors** into earlier cells incrementally; **adding to an `fr`-row grid reflows every existing row's height** incrementally (pins the grid's dirty-climb path — a `px`-row grid or a delete cannot); `isLayoutContainer` recognises a grid; resizing a grid item **stays in its cell** (a pending patch on a laid-out child is absorbed, not leaked to its stored x/y — review regression); a transaction that sets **container then grid keeps the grid, not neither** (review regression); **grid ⊕ container mutual exclusivity** enforced in the write delta and on read; schema-6 round-trip + malformed `TrackSize` / both-set rejected on **both** paths |
 | **M2 constraints / anchors** | `resolveConstraints` per-mode math (left/right/left-right/center/scale × top/bottom/top-bottom/center/scale) on a grown parent; static fallback (absent, or `ref ≤ 0`); **source (a)** a direct `ResizeNodeAction` on a plain parent moves its right-pinned child incrementally (non-vacuous, only the parent reported); **source (b)** a flex-grow-driven parent resize moves its constrained grandchild (the responsive cascade); `UpdateNodeLayoutAction` **auto-captures `constraintRef`** from the parent's stored size; constraints **inert** under a flex/grid parent; a damaged-tree constrained child of a container parent stays static (the `!isLayoutContainer` gate); a **later mode edit does NOT re-capture the frozen `constraintRef`** (review regression — a second edit must not un-freeze the reference and teleport the anchored child); schema-7 round-trip + bad mode / non-positive `constraintRef` rejected on **both** paths |
-| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow, GRID, constraints, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains automatically; resize + layout toggles drive constraints from both sources) |
+| **M2 margins + absolute** | `layoutChildren` uniform margin spaces on the main axis and insets on the cross (incl. stretch − 2·margin and grow after margins); a **hug container's size includes child margins**; an **absolute child is out of flow** (siblings ignore it, it uses its stored geometry, and it does not contribute to hug size); an absolute child of a container **can still be constrained** (pins to the parent box); `MoveTool` keeps an absolute child **draggable** while an in-flow sibling is not; schema-8 round-trip + a negative `margin` / bad `position` rejected on **both** paths |
+| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow, GRID, constraints, margins, absolute escapes, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains; resize + layout toggles drive constraints from both sources) |
 
 ## The API-surface pin
 
@@ -198,6 +199,13 @@ it, zeroing the delta, and teleporting the anchored child back to its rest posit
 undermines the whole frozen-reference model. Fixed by capturing only on **first** opt-in
 (when the node has no existing `constraintRef`); an explicit ref in the patch (a deliberate
 re-baseline) still wins. A regression test was proven to fail on the unfixed code.
+
+**Margins + absolute pass — 5 guards, all killed.** Weakened: margin dropped from
+positioning (killed by the flow-math test), absolute not excluded from the flex flow (2
+tests), absolute not excluded from the hug measure, the constraint gate's `|| isAbsolute`
+allowance (the absolute-can-be-constrained test), and `MoveTool`'s `&& !isAbsolute` (the
+absolute-draggable test) — each killed by its targeted test. Both features degrade to the
+pre-M2 behaviour when absent (in-flow / margin 0), so every existing test was byte-identical.
 
 **Grid adversarial review — found TWO real bugs the fuzz was blind to.** A read-only
 multi-lens review (100k random grids and 400 fresh fuzz seeds found the cell math and all

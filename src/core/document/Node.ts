@@ -99,6 +99,21 @@ export interface Layout {
      * the resize path never rewrites it. Constraints are inert without it.
      */
     constraintRef?: { width: number; height: number };
+    /**
+     * Absolute-position escape (Milestone 2). `"absolute"` takes this node OUT of its
+     * flex/grid parent's flow: it takes no slot/cell, does not contribute to the parent's
+     * hug size or consume flex free space, and is positioned by its stored geometry +
+     * `constraints` relative to the parent's box (like CSS `position: absolute`). Absent =
+     * in-flow (normal).
+     */
+    position?: "absolute";
+    /**
+     * Per-child margin (Milestone 2), uniform on all sides, in a FLEX parent's flow: the
+     * child is spaced `margin` from its neighbours on the main axis and inset `margin` on
+     * the cross axis. Absent = 0. Ignored for a grid child, a constrained/absolute child,
+     * or a child of a plain parent (out of flow). >= 0.
+     */
+    margin?: number;
 }
 
 /** Horizontal anchor: pin left, pin right, pin both (stretch), keep centered, or scale. */
@@ -181,6 +196,8 @@ export function layoutError(l: Partial<Layout>): string | null {
     // `grow` is independent of `container` and must be checked BEFORE the no-container
     // early return, or a `{ grow: -5 }` patch would slip through unvalidated.
     if (l.grow !== undefined && (!Number.isFinite(l.grow) || l.grow < 0)) return "layout.grow must be finite and >= 0";
+    if (l.margin !== undefined && (!Number.isFinite(l.margin) || l.margin < 0)) return "layout.margin must be finite and >= 0";
+    if (l.position !== undefined && l.position !== "absolute") return 'layout.position must be "absolute"';
     // Constraints + reference are independent per-child fields (like grow), so validate
     // them BEFORE the no-container early return — else a `{ constraints }` patch slips by.
     if ("constraints" in l && l.constraints !== undefined) {

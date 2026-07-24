@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v7 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + grow + grid + constraints). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v8 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, grid, constraints, absolute + margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -72,6 +72,8 @@ interface Layout {     // constraint intent, not absolute position (Milestone 2)
   grid?: LayoutGrid;                                   // M2 grid — LIVE; EXCLUSIVE with container
   constraints?: Constraints;                           // M2 anchors (child of a PLAIN parent) — LIVE
   constraintRef?: { width: number; height: number };  // frozen parent-size reference for `constraints`
+  position?: "absolute";                               // M2 out-of-flow escape — LIVE
+  margin?: number;                                     // M2 uniform flex-flow spacing — LIVE
 }
 
 interface Constraints {              // how this child responds when its PLAIN parent resizes
@@ -260,10 +262,23 @@ constraints (inert).
   `migrate_6_to_7` is a pass-through. The bump is still required: a schema-6 build would
   draw a constrained child unanchored, misstating a responsive layout.
 
-> **Still deferred (not in schema 7):** flex-shrink, wrap, per-child margins,
-> absolute-position escapes, responsive/breakpoint rules, the constrained-child
-> re-baseline (above), and the grid tail (explicit placement/spans, `auto`/content tracks,
-> per-row sizes, grid hug). These are M2's remaining deliverables — see
+**Out-of-flow escapes + margins — landed in schema 8 (Milestone 2).** `Layout.position:
+"absolute"` takes a child OUT of its flex/grid parent's flow: it claims no slot/cell, does
+not contribute to the parent's hug size or consume flex free-space, and is positioned by
+its stored geometry + `constraints` relative to the parent's box (like CSS
+`position: absolute`) — so it stays draggable. `Layout.margin` (uniform, ≥ 0) is per-child
+spacing in a **flex** parent's flow: `margin` on the main axis before and after the child
+(folded into the grow free-space and the hug measure) and an inset on the cross axis.
+Margins are ignored for grid children, constrained/absolute children, and children of a
+plain parent (all out of the flex flow). Both are validated on both paths. **Absent means
+in-flow / 0**, so every schema-7 document is a valid schema-8 document — `migrate_7_to_8`
+is a pass-through; the bump is required because a schema-7 build would lay an absolute child
+into the flow and ignore its margin.
+
+> **Still deferred (not in schema 8):** flex-shrink, wrap, per-side margins,
+> responsive/breakpoint rules, grid-cell margins, the constrained-child re-baseline (above),
+> and the grid tail (explicit placement/spans, `auto`/content tracks, per-row sizes, grid
+> hug). These are M2's remaining deliverables — see
 > [MILESTONES.md](../MILESTONES.md) § Milestone 2.
 
 > **It bumped `SCHEMA_VERSION` to `"2"`** — as the freeze rule required, with a
@@ -363,7 +378,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"7"`; chain: …4→5 flex-grow, 5→6 grid, 6→7 constraints) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"8"`; chain: …5→6 grid, 6→7 constraints, 7→8 absolute + margin) | **only** when the persisted shape changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

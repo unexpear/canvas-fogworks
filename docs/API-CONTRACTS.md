@@ -2,14 +2,14 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer/SVGRenderer.ts, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v7 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + grow + grid + constraints). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v8 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, grid, constraints, absolute + margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
 
 ```ts
 const CURRENT_VERSION: string;               // app/display version, from package.json
-const SCHEMA_VERSION: string;                // "7" — persisted document schema (decoupled from app version)
+const SCHEMA_VERSION: string;                // "8" — persisted document schema (decoupled from app version)
 function createEmptyDocument(): ProjectDocument;
 
 // SceneGraph.ts — the ONLY correct node ordering (z-order / layer order)
@@ -72,6 +72,10 @@ function resolveConstraints(                       // anchors: reposition a plai
   ref: { width: number; height: number } | undefined,   // the FROZEN reference size
   parentSize: { width: number; height: number }
 ): Rect;                                          // offset = parentSize - ref; static if either absent
+function isAbsolute(node: { layout: { position?: unknown } } | undefined): boolean; // out-of-flow escape
+
+// Layout also carries per-child `margin` (uniform flex-flow spacing) and
+// `position: "absolute"` (out of flow, positioned by geometry + constraints).
 
 // Serializer.ts
 function serializeDocument(doc: ReadonlyDocument): string;

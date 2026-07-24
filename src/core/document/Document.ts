@@ -66,8 +66,13 @@ export const CURRENT_VERSION: string =
  *         repositions when its plain parent resizes) for Milestone 2. Absent = static
  *         (left/top), so `migrate_6_to_7` is a pass-through — but a schema-6 build would
  *         draw a constrained child unanchored, misstating a responsive layout.
+ *
+ *   "8" — adds optional `Layout.position` ("absolute": out of flow) and `Layout.margin`
+ *         (flex flow spacing) for Milestone 2. Absent = in-flow / 0, so `migrate_7_to_8`
+ *         is a pass-through — but a schema-7 build would lay an absolute child into the
+ *         flow / ignore its margin, misstating the layout.
  */
-export const SCHEMA_VERSION = "7";
+export const SCHEMA_VERSION = "8";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

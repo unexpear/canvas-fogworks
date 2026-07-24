@@ -66,7 +66,7 @@ reachable via `revertToOriginal()`) · revision system ·
 JSON serialization (schema version decoupled from app version) ·
 **validation** (Action-path `validate()` **and** `validateDocumentIntegrity` on load:
 ranges, dangling parents, ghost roots, cycles) · automated tests.
-(M0 and M1 together contribute **123** of the suite's current **176** tests; the count is not M0's alone. M2 added the rest.)
+(M0 and M1 together contribute **123** of the suite's current **183** tests; the count is not M0's alone. M2 added the rest.)
 
 **Round-trip closure (what took M0 from "nearly" to done):** an adversarial audit found
 the engine could author a document it could not reopen — `AddNodeAction.validate()`
@@ -257,17 +257,24 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   is for M1. `layoutError` is shared by the edit path and the load path (a non-boolean
   `hugWidth`, or a negative `grow`, is rejected identically), so round-trip closure holds:
   a hand-edited layout the loader would reject is one the editor could never author.
+- **Out-of-flow escapes + margins — the small tail wins.** `Layout.position: "absolute"`
+  removes a child from its flex/grid parent's flow (no slot/cell, excluded from hug size and
+  grow free-space), positioning it by stored geometry + constraints against the parent box —
+  so the constraint gate admits an absolute child of any parent and `MoveTool` leaves it
+  draggable. `Layout.margin` (uniform) is flex-flow spacing, folded into grow free-space and
+  the hug measure. Both reuse the existing machinery (no new dirty-tracking); all five new
+  guards were mutation-tested and killed.
 - **Direct-manipulation honesty.** A laid-out child has no meaningful free-drag, so
   `MoveTool` skips it (reorder-by-drag is M4). *(Known UI refinement, deferred to the tools
   milestone: a resize handle on a hug container's hugged axis is a visual no-op — the
   engine correctly ignores the pending resize — but the handle is not yet hidden.)*
 - **Schema cost, paid under the freeze rule.** `SCHEMA_VERSION` `"2"` → `"3"` (auto-layout)
-  → `"4"` (hug) → `"5"` (grow) → `"6"` (grid) → `"7"` (constraints), each with a pass-through
-  migration, because an older build would draw the children at now-vestigial stored
-  geometry / unanchored.
+  → `"4"` (hug) → `"5"` (grow) → `"6"` (grid) → `"7"` (constraints) → `"8"` (absolute +
+  margin), each with a pass-through migration, because an older build would draw the children
+  at now-vestigial stored geometry / unanchored / in-flow.
 
-**Deferred (each its own deliverable, NOT built):** flex-shrink · wrap · per-child
-margins · absolute-position escapes · responsive / breakpoint rules · drag-to-reorder ·
+**Deferred (each its own deliverable, NOT built):** flex-shrink · wrap · **per-side**
+margins · grid-cell margins · responsive / breakpoint rules · drag-to-reorder ·
 the constrained-child **re-baseline** (off-reference edits, an M5 tool-layer concern) ·
 the **grid tail** (explicit placement/spans, `auto`/content tracks, per-row sizes,
 grid-container hug).

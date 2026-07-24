@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document/Document.ts -->
 
-> 🔒 Frozen contract · schema v7 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + grow + grid + constraints). Conventions + the hard rules that protect the invariants.
+> 🔒 Frozen contract · schema v8 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, grid, constraints, absolute + margins). Conventions + the hard rules that protect the invariants.
 
 ## Hard rules (never violate)
 

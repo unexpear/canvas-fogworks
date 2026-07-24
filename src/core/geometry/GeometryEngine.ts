@@ -30,7 +30,7 @@
 import { DeepReadonly, ReadonlyDocument } from "../document/Document";
 import { Geometry, Node } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
-import { expandDirtyForLayout, isLayoutContainer, layoutChildren, layoutGridChildren, measureIntrinsicSizes, resolveConstraints } from "./LayoutEngine";
+import { expandDirtyForLayout, isAbsolute, isLayoutContainer, layoutChildren, layoutGridChildren, measureIntrinsicSizes, resolveConstraints } from "./LayoutEngine";
 import {
     Mat2D, IDENTITY, Rect, multiply, compose, invert, applyToPoint,
     transformRectToAABB, unionRect
@@ -142,8 +142,12 @@ export function computeGeometry(
             // vs the child's frozen `constraintRef`. Top-down, so the parent's local is
             // already computed; a resize of the parent (direct or layout-driven) dirties
             // it and the child inherits.
+            // Constraints resolve for a child of a PLAIN parent, OR for an `absolute` child
+            // of ANY parent (it is out of flow, so it positions against the parent box like
+            // a plain-parent child would). An in-flow child of a container never reaches
+            // here (it has a laidOut rect); the gate only guards damaged trees.
             const parentNode = node.layout.constraints && parentId != null ? doc.nodes.get(parentId) : undefined;
-            base = parentComputed && parentNode && !isLayoutContainer(parentNode)
+            base = parentComputed && parentNode && (!isLayoutContainer(parentNode) || isAbsolute(node))
                 ? resolveConstraints(stored, node.layout.constraints, node.layout.constraintRef, parentComputed.local)
                 : stored;
         }
@@ -192,10 +196,14 @@ function layoutContainerPass(
 ): void {
     // GRID: children fill cells regardless of their own size, so it needs only the child
     // ids (in order) and the container's resolved size — never the measured child sizes.
+    // An `absolute` child is out of flow: it takes no cell (and no flex slot below).
     const grid = node.layout.grid;
     if (grid) {
         const ids: string[] = [];
-        for (const childId of node.children) if (doc.nodes.get(childId)) ids.push(childId);
+        for (const childId of node.children) {
+            const child = doc.nodes.get(childId);
+            if (child && !isAbsolute(child)) ids.push(childId);
+        }
         for (const [id, rect] of layoutGridChildren(grid, { width: parentLocal.width, height: parentLocal.height }, ids)) {
             laidOut.set(id, rect);
         }
@@ -204,12 +212,12 @@ function layoutContainerPass(
 
     const container = node.layout.container;
     if (!container) return;
-    const children: { id: string; width: number; height: number; grow?: number }[] = [];
+    const children: { id: string; width: number; height: number; grow?: number; margin?: number }[] = [];
     for (const childId of node.children) {
         const child = doc.nodes.get(childId);
-        if (!child) continue;
+        if (!child || isAbsolute(child)) continue; // absolute children are out of the flow
         const own = measured.get(childId) ?? { width: child.geometry.width, height: child.geometry.height };
-        children.push({ id: childId, width: own.width, height: own.height, grow: child.layout.grow });
+        children.push({ id: childId, width: own.width, height: own.height, grow: child.layout.grow, margin: child.layout.margin });
     }
     for (const [id, rect] of layoutChildren(container, { width: parentLocal.width, height: parentLocal.height }, children)) {
         laidOut.set(id, rect);
