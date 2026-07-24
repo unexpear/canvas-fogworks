@@ -41,6 +41,7 @@ abstract class Action {
 | `UpdateNodeGeometryAction` | `{ kind: "patch", geometry: {…partial…} }` |
 | `UpdateNodeStyleAction` | `{ kind: "patch", style: {…partial…} }` |
 | `UpdateNodeTransformAction` | `{ kind: "patch", transform: {…partial…} }` — rotation/scale/origin |
+| `UpdateNodeLayoutAction` | `{ kind: "patch", layout: {…partial…} }` — M2 auto-layout `container` (set or `undefined` to remove) |
 | `ReparentNodeAction` | `{ kind: "patch", reparent: { parent, index? } }` |
 | `TransactionAction` | merges multiple actions into one atomic result + one revision |
 
@@ -65,8 +66,8 @@ type NodeDelta =
   | { kind: "add";    node: Node }
   | { kind: "delete" }
   | { kind: "patch";  reparent?: { parent: string | null; index?: number };
-                      geometry?: Partial<Geometry>; style?: Partial<Style>;
-                      layout?: Partial<Layout>;
+                      geometry?: Partial<Geometry>; transform?: Partial<Transform>;
+                      style?: Partial<Style>; layout?: Partial<Layout>;
                       text?: string; src?: string; name?: string };
 ```
 
@@ -91,6 +92,19 @@ that drops a node into a frame and repositions it emits exactly that).
 `reparent` detaches from the **destination** before inserting, so re-parenting a node
 the destination already lists (e.g. an `add` that baked the child into its new parent's
 `children`) cannot duplicate the entry.
+
+**`updatedNodeIds` under auto-layout (M2).** The dirty set must be a *superset* of the
+nodes whose **rendered** output changed — and once a parent is a layout container, that
+includes more than the node the action names, because a container's children are
+positioned *relative to each other*. So a **structural** change to a container's
+membership reports the container too: `ReparentNodeAction` adds both the **old and new**
+parent, and `DeleteNodeAction` adds the removed child's parent. (A change to a child's
+own size is handled by the engine's `expandDirtyForLayout`, which dirties the current
+parent; but neither the old parent of a move nor the vanished parent of a delete is
+derivable from the post-mutation document, so the *action* must report it.) Reporting a
+non-container parent is harmless — recomputing an unaffected node yields the same result.
+The `incremental === full` fuzz (see [TESTING.md](TESTING.md)) exercises exactly these
+cases; a mutation-testing pass proved each report load-bearing.
 
 ## 3. Dispatch lifecycle
 

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v2 (app v0.0.5) · current through Milestone 1. Suite: `src/core/tests/document.test.ts` (123 tests).
+> 🔒 Frozen contract · schema v3 (app v0.0.5) · current through Milestone 2 (auto-layout core). Suite: `src/core/tests/document.test.ts` (141 tests).
 
 ## Philosophy
 
@@ -17,7 +17,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 123 tests
+npm test                                   # jest (ts-jest), 141 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -28,7 +28,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (123 tests)
+## What is covered (141 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -49,6 +49,12 @@ npm run check                              # typecheck + lint + test + build (th
 | **GeometryEngine dirty tracking** | `incremental === full` over a 300-op seeded fuzz; the **pending/preview path** (Escape-cancel reuse, `prevPending` load-bearing, engine's own current-pending clause); a companion proves the equivalence is not vacuous |
 | **Restore dirty set** | undo reports only the changed node, not the whole document |
 | **Document integrity (load path)** | rejects `opacity: 5`, negative size, dangling parent, ghost root, unclaimed child, parentless non-root; accepts a well-formed nested doc |
+| **M2 `LayoutEngine`** (flex-stack math) | row/column packing; gap + padding; cross-axis `start`/`center`/`end` placement and `stretch` (resizes the child); defaults (no gap/pad, `start`); `isLayoutContainer` |
+| **M2 layout through `computeGeometry`** | children get computed positions **replacing stored `x/y`**; stretch changes the rendered local size and hit-tests at it; removing the container reverts to stored geometry; **nested containers** compose within a stretched size |
+| **M2 sibling ripple** | `expandDirtyForLayout` dirties a container from a dirty child (and does NOT drag in a non-container parent); resize / **reparent-out** / **delete** of a child reflows its siblings incrementally though only the acted-on node was reported (each non-vacuous: the sibling genuinely moves) |
+| **M2 `UpdateNodeLayoutAction`** | sets/removes a container, undoable, round-trips through the schema-3 loader; rejects invalid containers on the edit path **and the load path** (shared `layoutError`, raw-JSON `Infinity`) |
+| **M2 `MoveTool`** | a laid-out child records no pending move (position is computed); the container itself stays draggable |
+| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **container toggles, reparents and deletes** to the M1 op set |
 
 ## The API-surface pin
 
@@ -108,6 +114,20 @@ Three tests were added to close them; the third required making the schema injec
 > `Tests: 0 total`, or a non-zero exit with no failure count, as **unverified** — never
 > as a kill. A false *survived* prompts investigation; a false *killed* is silent, and
 > is the one that leaves a guard unprotected while looking green.
+
+**Milestone 2 pass — 6 guards, 1 survivor, closed.** The auto-layout guards were each
+weakened and the suite re-run: the dirty-ripple (`expandDirtyForLayout`), the reparent
+and delete dirty-reporting, the `MoveTool` laid-out-child guard, the load-path
+`layoutError`, and the flex-stack `gap` math. Five were killed immediately (2–3 tests
+each). One **survived**: disabling `ReparentNodeAction`'s old-parent reporting broke
+nothing — the 300-op fuzz, by chance, never reparented a child *out* of a multi-child
+container at this seed, and there was no targeted test. A deterministic
+reparent-out (and a matching delete) test was added; both now kill it. This is the whole
+point of the discipline: **a fuzz is a sampler, not a proof of coverage — a survivor is
+a missing test even when everything is green.** Two mutation attempts also reproduced the
+"does not compile → `Tests: 0 total`" trap (a short-circuited `&&` un-narrows the
+variable on the next line); per the harness rule they were re-authored to compile before
+being trusted.
 
 ## Doc-staleness tripwire (`npm run doc-drift`)
 

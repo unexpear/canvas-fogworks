@@ -64,9 +64,17 @@ interface Style {
 }
 
 interface Layout {     // constraint intent, not absolute position (Milestone 2)
-  horizontalAlignment?: "left" | "right" | "center";
-  verticalAlignment?: "top" | "bottom" | "center";
-  spacing?: number;
+  horizontalAlignment?: "left" | "right" | "center";  // reserved (constraints, deferred)
+  verticalAlignment?: "top" | "bottom" | "center";    // reserved (constraints, deferred)
+  spacing?: number;                                    // reserved
+  container?: LayoutContainer;                         // M2 auto-layout — LIVE
+}
+
+interface LayoutContainer {          // this node's DIRECT CHILDREN are auto-positioned
+  direction: "row" | "column";
+  gap?: number;                      // between children, >= 0
+  padding?: number;                  // inset from the container's edges, >= 0
+  alignItems?: "start" | "center" | "end" | "stretch";  // cross-axis; stretch resizes
 }
 
 interface StateDefinition { [key: string]: any; } // reserved for Milestone 7
@@ -116,6 +124,35 @@ rejected — it is non-invertible, so `toLocal`/hit-testing would break. **Absen
 identity**, so every schema-1 document is a
 valid schema-2 document — which is exactly why `migrate_1_to_2` is a pass-through.
 
+**Auto-layout — landed in schema 3 (Milestone 2, core).** When a node carries
+`layout.container`, its **direct children are positioned by the layout engine**: their
+stored `geometry.x/y` is *ignored* and replaced by a computed one (a row/column flex
+stack with `gap`, `padding`, and cross-axis `alignItems`). This is precisely what
+"store *center inside parent* instead of `x = 240`" means — for a laid-out child,
+position is a **result**, not stored intent. `alignItems: "stretch"` additionally
+overrides the child's cross-axis *size*. Containers nest: an inner container lays out
+within its own (possibly stretched) size.
+
+- Computed by `LayoutEngine.layoutChildren`, invoked *inside* `computeGeometry` when it
+  visits a container parent — so the result composes through the same matrix pipeline
+  and a laid-out child still inherits parent world position and transform.
+- **The stored `x/y` of a laid-out child is vestigial** but retained: removing the
+  container (`UpdateNodeLayoutAction` with `{ container: undefined }`) reverts the child
+  to honouring it again.
+- Settable via `UpdateNodeLayoutAction` (the write-path primitive; an M5 layout inspector
+  will invoke it). Validated by `layoutError`, **shared with the load path** so the
+  round-trip closure holds — a hand-edited container the loader rejects is one the editor
+  could never author.
+- **Absent means no auto-layout**, so every schema-2 document is a valid schema-3
+  document — which is why `migrate_2_to_3` is a pass-through. The bump is still required:
+  a schema-2 *build* would ignore the container and draw the children at their now-
+  vestigial stored `x/y`, silently misstating the document (the same "old build, not old
+  file" hazard as the schema-2 bump below).
+
+> **Deferred (not in schema 3):** constraints/anchors, flex-grow, wrap, grid, intrinsic
+> ("hug") sizing, per-child margins, absolute-position escapes, responsive rules. These
+> are M2's remaining deliverables — see [MILESTONES.md](../MILESTONES.md) § Milestone 2.
+
 > **It bumped `SCHEMA_VERSION` to `"2"`** — as the freeze rule required, with a
 > matching `migrate_1_to_2` step. The bump was necessary even though the migration is
 > a pass-through *by content*: without it a schema-1 **build** would load a rotated
@@ -154,9 +191,11 @@ of `deserializeDocument`, so a hand-edited or third-party file with `opacity: 5`
 `width: -10`, a dangling `parent`, or a ghost root now **fails loudly at the
 boundary** instead of corrupting state later.
 
-> **Reserved-but-unused today:** `states`, `layout` behavior, and token resolution of
+> **Reserved-but-unused today:** `states`, the `layout` *constraint* fields
+> (`horizontalAlignment` / `verticalAlignment` / `spacing`), and token resolution of
 > `fill` are part of the schema so later milestones don't require a breaking change,
-> but the current renderer/actions do not yet interpret them.
+> but the current renderer/actions do not yet interpret them. **`layout.container` is
+> the exception — it is live (M2 auto-layout).**
 
 ## VariableStore (design tokens — reserved for Milestone 5)
 
@@ -211,7 +250,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"1"`) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"3"`; chain: 1→2 transform, 2→3 auto-layout) | **only** when the persisted shape changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

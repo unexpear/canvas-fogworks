@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
 
-> 🔒 Frozen contract · schema v2 (app v0.0.5) · current through Milestone 1. Describes the verified current implementation.
+> 🔒 Frozen contract · schema v3 (app v0.0.5) · current through Milestone 2 (auto-layout core; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -88,7 +88,7 @@ delta-driven listeners reload wholesale.
 The roadmap (M1/M2) inserts a computed layer. **The seam now exists:**
 
 ```
-Document → GeometryEngine → ComputedState → Renderer
+Document → GeometryEngine ─(runs)→ LayoutEngine → ComputedState → Renderer
                  ▲
                  └── pending drag patches (previews are an INPUT)
 ```
@@ -101,8 +101,17 @@ positions and emits the matrix directly; hit-testing tests in each node's local 
 through the inverse matrix, so a rotated node hits against its true shape rather than
 its bounding box, and never touches the DOM.
 
-Still outstanding for the computed layer: **resolved style** (M5 tokens) and **layout
-output** (M2) both belong in `ComputedState` and are not there yet.
+**Layout runs *inside* that pass (M2).** When `computeGeometry` visits a node carrying
+`layout.container`, it calls `LayoutEngine` to position that node's children — so a
+laid-out child's local rect is a computed **result** (a row/column flex stack) that then
+composes through the same matrices. It is not a second engine or a second tree walk; it
+is a producer feeding the one `ComputedState`. Layout's cross-sibling dependency (moving
+one child shifts the others) is reconciled here too, via `expandDirtyForLayout`.
+
+Still outstanding for the computed layer: **resolved style** (M5 tokens) belongs in
+`ComputedState` and is not there yet; and M2's **richer layout** — constraints, grid,
+intrinsic sizing and the rest — is deferred (see MILESTONES.md). Layout output today is
+expressed *as* geometry (computed local rects), not as a distinct channel.
 
 ## 5. Module map
 
@@ -110,7 +119,7 @@ output** (M2) both belong in `ComputedState` and are not there yet.
 |-------|-------|----------------|
 | Document | `core/document/{Document,Node,Serializer}.ts`, `core/ids/UUID.ts` | Source of truth, types, (de)serialization, identity |
 | Document integrity | `core/document/{SceneGraph,Integrity}.ts` | Tree traversal/draw order; structural + range validation on load |
-| Computed state | `core/geometry/{Matrix,GeometryEngine}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**Milestone 1**) |
+| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers computed inside the same pass (**M2 core**) |
 | Actions | `core/actions/{Action,types,applyMutations}.ts` + `*Action.ts` | Declarative mutations + delta protocol |
 | Dispatch/History | `core/actions/{ActionDispatcher,HistoryManager}.ts` | Only write path; snapshot undo/redo |
 | Editor | `editor/EditorState.ts`, `editor/tools/*` | Ephemeral state; input → Actions |

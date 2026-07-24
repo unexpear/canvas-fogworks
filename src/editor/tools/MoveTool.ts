@@ -9,6 +9,7 @@ import { TransactionAction } from "../../core/actions/TransactionAction";
 import { EditorState } from "../EditorState";
 import { Geometry } from "../../core/document/Node";
 import { selectionRoots } from "../../core/document/SceneGraph";
+import { isLayoutContainer } from "../../core/geometry/LayoutEngine";
 import { Tool } from "./ToolController";
 
 export class MoveTool implements Tool {
@@ -34,9 +35,13 @@ export class MoveTool implements Tool {
         this.nodeStartPositions = new Map();
         for (const id of selectionRoots(doc, this.editorState.selectedNodeIds)) {
             const node = doc.nodes.get(id);
-            if (node) {
-                this.nodeStartPositions.set(id, { x: node.geometry.x, y: node.geometry.y });
-            }
+            if (!node) continue;
+            // A child of an auto-layout container has a COMPUTED position; its stored
+            // geometry.x/y is ignored, so dragging it would move nothing on screen.
+            // Free-dragging is disabled for laid-out children (reorder-by-drag is M4).
+            const parent = node.parent ? doc.nodes.get(node.parent) : undefined;
+            if (isLayoutContainer(parent)) continue;
+            this.nodeStartPositions.set(id, { x: node.geometry.x, y: node.geometry.y });
         }
         if (this.nodeStartPositions.size === 0) return;
 

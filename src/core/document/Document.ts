@@ -42,8 +42,13 @@ export const CURRENT_VERSION: string =
  *         with the field absent, so `migrate_1_to_2` is a pass-through — but the
  *         bump is still required: a schema-1 BUILD would load a rotated node and
  *         draw it unrotated with no error, silently misstating the document.
+ *
+ *   "3" — adds the optional `Layout.container` (auto-layout: a node's children are
+ *         positioned by a flex-stack rule) for Milestone 2. Absent = no auto-layout,
+ *         so `migrate_2_to_3` is a pass-through — but a schema-2 build would ignore
+ *         the container and draw the children at their now-vestigial stored x/y.
  */
-export const SCHEMA_VERSION = "2";
+export const SCHEMA_VERSION = "3";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

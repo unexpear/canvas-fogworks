@@ -14,9 +14,11 @@ import { UpdateNodeGeometryAction } from "../actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../actions/UpdateNodeStyleAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction";
+import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds } from "../geometry/GeometryEngine";
+import { layoutChildren, expandDirtyForLayout, isLayoutContainer } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
 import { clampViewport, createEditorState } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
@@ -1578,13 +1580,15 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "3" that has no 2→3 step: the
-        // legacy file must be normalised to "1", carried through the real 1→2 step,
-        // and then REFUSED at "2" — never re-stamped straight to the current schema.
-        // The error naming "2" (not "1") is the proof the chain actually ran.
-        expect(() => migrateIfNeeded(legacy, "3")).toThrow('Migration not implemented for document schema "2"');
+        // Pretending the build has moved to a schema "4" that has no 3→4 step: the
+        // legacy file must be normalised to "1", carried through every real step
+        // (1→2→3), and then REFUSED at "3" — never re-stamped straight to the current
+        // schema. The error naming "3" (not "1") is the proof the chain actually ran.
+        // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
+        // time a real migration is added — here, when 2→3 landed for M2.)
+        expect(() => migrateIfNeeded(legacy, "4")).toThrow('Migration not implemented for document schema "3"');
 
-        // At the current schema it loads, having been migrated 0.0.4 → 1 → 2.
+        // At the current schema it loads, having been migrated 0.0.4 → 1 → 2 → 3.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
     });
 
@@ -1602,7 +1606,7 @@ describe("Guards the suite did not previously protect", () => {
             }
         });
         const doc = deserializeDocument(v1);
-        expect(doc.version).toBe(SCHEMA_VERSION);              // upgraded to "2"
+        expect(doc.version).toBe(SCHEMA_VERSION);              // upgraded to current ("3")
         expect(doc.nodes.get("n")!.transform).toBeUndefined();  // absent = identity
         expect(() => deserializeDocument(serializeDocument(doc))).not.toThrow();
     });
@@ -1672,5 +1676,345 @@ describe("Metadata round-trip", () => {
         expect(loaded.metadata.created_by).toBe("tester");
         expect(loaded.metadata.date).toBeInstanceOf(Date);
         expect(loaded.metadata.date.getTime()).toBe(doc.metadata.date.getTime());
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Milestone 2 — auto-layout containers
+// ═══════════════════════════════════════════════════════════════════════════
+
+type ContainerRule = NonNullable<Node["layout"]["container"]>;
+
+/** A container `P` at (px,py) with two children of the given sizes. Children carry
+ * DELIBERATELY ABSURD stored x/y so any test that reads a real position proves the
+ * stored value was ignored in favour of the computed one. */
+function mkContainerScene(
+    container: ContainerRule,
+    opts: { px?: number; py?: number; c1?: [number, number]; c2?: [number, number] } = {}
+): ProjectDocument {
+    const { px = 0, py = 0, c1 = [50, 50], c2 = [60, 40] } = opts;
+    const doc = createEmptyDocument();
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+    doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: px, y: py, width: 400, height: 300 }, { container }));
+    doc.nodes.set("c1", mk("c1", "P", [], { x: 999, y: 999, width: c1[0], height: c1[1] }, {}));
+    doc.nodes.set("c2", mk("c2", "P", [], { x: -999, y: -999, width: c2[0], height: c2[1] }, {}));
+    doc.rootNodeUuids = ["P"];
+    return doc;
+}
+
+describe("M2 LayoutEngine — the flex-stack math", () => {
+    const kids = [{ id: "a", width: 50, height: 50 }, { id: "b", width: 60, height: 40 }];
+
+    test("row packs along x; column packs along y; gap and padding both apply", () => {
+        const row = layoutChildren({ direction: "row", gap: 10, padding: 20 }, { width: 400, height: 300 }, kids);
+        expect(row.get("a")).toEqual({ x: 20, y: 20, width: 50, height: 50 });   // pad, then item
+        expect(row.get("b")).toEqual({ x: 80, y: 20, width: 60, height: 40 });   // 20 + 50 + gap10
+
+        const col = layoutChildren({ direction: "column", gap: 10, padding: 20 }, { width: 400, height: 300 }, kids);
+        expect(col.get("a")).toEqual({ x: 20, y: 20, width: 50, height: 50 });
+        expect(col.get("b")).toEqual({ x: 20, y: 80, width: 60, height: 40 });   // 20 + 50 + gap10 down
+    });
+
+    test("cross-axis alignment: start / center / end place the item, stretch resizes it", () => {
+        // innerCross (row) = height 300 - 2*pad 20 = 260.
+        const at = (align: ContainerRule["alignItems"]) =>
+            layoutChildren({ direction: "row", padding: 20, alignItems: align }, { width: 400, height: 300 }, kids);
+
+        expect(at("start").get("a")!.y).toBe(20);                    // padding edge
+        expect(at("center").get("a")!.y).toBe(125);                  // 20 + (260-50)/2
+        expect(at("end").get("a")!.y).toBe(230);                     // 20 + (260-50)
+        // stretch fills the cross axis AND overrides the child's own cross-size.
+        expect(at("stretch").get("a")).toEqual({ x: 20, y: 20, width: 50, height: 260 });
+        expect(at("stretch").get("b")).toEqual({ x: 70, y: 20, width: 60, height: 260 });
+    });
+
+    test("defaults: no gap, no padding, alignItems 'start'", () => {
+        const d = layoutChildren({ direction: "row" }, { width: 400, height: 300 }, kids);
+        expect(d.get("a")).toEqual({ x: 0, y: 0, width: 50, height: 50 });
+        expect(d.get("b")).toEqual({ x: 50, y: 0, width: 60, height: 40 });
+    });
+
+    test("isLayoutContainer recognises only nodes with a container", () => {
+        expect(isLayoutContainer({ layout: { container: { direction: "row" } } })).toBe(true);
+        expect(isLayoutContainer({ layout: {} })).toBe(false);
+        expect(isLayoutContainer(undefined)).toBe(false);
+    });
+});
+
+describe("M2 layout through computeGeometry", () => {
+    test("a container computes its children's positions, replacing their stored x/y", () => {
+        const doc = mkContainerScene({ direction: "row", gap: 10, padding: 20 }, { px: 100, py: 100 });
+        const cs = computeGeometry(doc);
+        // World = P's world (100,100) + computed local. The absurd stored 999/-999
+        // never appears — position is a RESULT, not the stored intent.
+        expect(cs.nodes.get("c1")!.bounds).toMatchObject({ x: 120, y: 120, width: 50, height: 50 });
+        expect(cs.nodes.get("c2")!.bounds).toMatchObject({ x: 180, y: 120, width: 60, height: 40 });
+    });
+
+    test("stretch changes the rendered LOCAL size, and it hit-tests at that size", () => {
+        const doc = mkContainerScene({ direction: "row", padding: 20, alignItems: "stretch" });
+        const cs = computeGeometry(doc);
+        expect(cs.nodes.get("c1")!.local).toEqual({ x: 20, y: 20, width: 50, height: 260 });
+        // The stretched box is hit-testable along its full height (y up to 280).
+        expect(hitTest(cs, 40, 270)).toBe("c1");
+    });
+
+    test("removing the container reverts children to their own stored geometry", () => {
+        const doc = mkContainerScene({ direction: "row", padding: 20 }, { px: 100, py: 100 });
+        const dispatcher = new ActionDispatcher(doc);
+        expect(computeGeometry(dispatcher.getDocument()).nodes.get("c1")!.bounds.x).toBe(120); // laid out
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "P", { container: undefined }));
+        // Now the stored 999 is honoured again: world x = 100 + 999.
+        expect(computeGeometry(dispatcher.getDocument()).nodes.get("c1")!.bounds.x).toBe(1099);
+    });
+
+    test("nested containers: an inner container lays out within its stretched size", () => {
+        // P (column, stretch) makes its child C fill P's inner width; C (row) then packs
+        // ITS children across that stretched width.
+        const doc = createEmptyDocument();
+        const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+            ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+        doc.nodes.set("P", mk("P", null, ["C"], { x: 0, y: 0, width: 200, height: 200 }, { container: { direction: "column", padding: 10, alignItems: "stretch" } }));
+        doc.nodes.set("C", mk("C", "P", ["g"], { x: 0, y: 0, width: 1, height: 30 }, { container: { direction: "row", alignItems: "end" } }));
+        doc.nodes.set("g", mk("g", "C", [], { x: 0, y: 0, width: 20, height: 10 }, {}));
+        doc.rootNodeUuids = ["P"];
+
+        const cs = computeGeometry(doc);
+        // C is stretched to P's inner width 200 - 2*10 = 180, at local (10,10).
+        expect(cs.nodes.get("C")!.local).toEqual({ x: 10, y: 10, width: 180, height: 30 });
+        // g sits at C's world (10,10) plus its own local (x 0, y end-aligned within
+        // height 30 → 20): world (10, 30).
+        expect(cs.nodes.get("g")!.bounds).toMatchObject({ x: 10, y: 30, width: 20, height: 10 });
+    });
+});
+
+describe("M2 layout dirty-tracking — the sibling ripple", () => {
+    test("expandDirtyForLayout dirties a container when one of its children is dirty", () => {
+        const withContainer = mkContainerScene({ direction: "row" });
+        expect([...expandDirtyForLayout(withContainer, new Set(["c1"]))].sort()).toEqual(["P", "c1"]);
+
+        // A plain (non-container) parent is NOT dragged in — only real layout parents.
+        const plain = createDocWithParentChild();
+        expect([...expandDirtyForLayout(plain, new Set(["child-001"]))]).toEqual(["child-001"]);
+    });
+
+    test("resizing one child reflows its sibling, incrementally, though only the resized child was reported", () => {
+        const doc = mkContainerScene({ direction: "row" }, { c1: [50, 50], c2: [50, 50] });
+        const dispatcher = new ActionDispatcher(doc);
+        const base = computeGeometry(dispatcher.getDocument());
+        expect(base.nodes.get("c2")!.bounds.x).toBe(50); // packed right after c1(width 50)
+
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+        dispatcher.dispatchAction(new ResizeNodeAction(dispatcher.getDocument(), "c1", 80, 50));
+
+        const full = computeGeometry(dispatcher.getDocument());
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, dirty);
+
+        expect(full.nodes.get("c2")!.bounds.x).toBe(80);          // the sibling genuinely MOVED (non-vacuous)
+        expect(dirty.has("c2")).toBe(false);                      // ...yet nothing reported c2 as changed
+        expect(incremental.nodes.get("c2")!.bounds.x).toBe(80);   // the ripple recomputed it anyway
+    });
+
+    // These two exercise the case expandDirtyForLayout CANNOT reach on its own — the
+    // affected container is not the current parent of any reported node — so the
+    // structural actions must report it. The fuzz does not reliably hit this exact
+    // shape, so it is pinned deterministically.
+    test("reparenting a child OUT of a container reflows the siblings it left behind", () => {
+        const doc = mkContainerScene({ direction: "row" }, { c1: [50, 50], c2: [50, 50] });
+        const dispatcher = new ActionDispatcher(doc);
+        const base = computeGeometry(dispatcher.getDocument());
+        expect(base.nodes.get("c2")!.bounds.x).toBe(50);
+
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+        // Move c1 to the root; c2 is now the container's ONLY child and must slide to 0.
+        dispatcher.dispatchAction(new ReparentNodeAction(dispatcher.getDocument(), "c1", null));
+
+        const full = computeGeometry(dispatcher.getDocument());
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, dirty);
+        expect(full.nodes.get("c2")!.bounds.x).toBe(0);           // sibling slid left (non-vacuous)
+        expect(dirty.has("c2")).toBe(false);                      // c2 itself was never reported
+        expect(statesEqualBounds(incremental, full)).toBe(true);  // the old container was dirtied anyway
+    });
+
+    test("deleting a child of a container reflows the surviving siblings", () => {
+        const doc = mkContainerScene({ direction: "row" }, { c1: [50, 50], c2: [50, 50] });
+        const dispatcher = new ActionDispatcher(doc);
+        const base = computeGeometry(dispatcher.getDocument());
+
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "c1"));
+
+        const full = computeGeometry(dispatcher.getDocument());
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, dirty);
+        expect(full.nodes.get("c2")!.bounds.x).toBe(0);           // c2 slid into c1's old slot
+        expect(dirty.has("c2")).toBe(false);
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+    });
+});
+
+/** Structural equality of two computed states over order + per-node bounds. */
+function statesEqualBounds(a: ReturnType<typeof computeGeometry>, b: ReturnType<typeof computeGeometry>): true | string {
+    if (a.order.join("|") !== b.order.join("|")) return `order: ${a.order} vs ${b.order}`;
+    if (a.nodes.size !== b.nodes.size) return `size ${a.nodes.size} vs ${b.nodes.size}`;
+    for (const [id, an] of a.nodes) {
+        const bn = b.nodes.get(id);
+        if (!bn) return `missing ${id}`;
+        for (const k of ["x", "y", "width", "height"] as const) {
+            if (Math.abs(an.bounds[k] - bn.bounds[k]) > 1e-9) return `${id}.bounds.${k}: ${an.bounds[k]} vs ${bn.bounds[k]}`;
+        }
+    }
+    return true;
+}
+
+describe("M2 UpdateNodeLayoutAction — write path", () => {
+    test("sets a container, is undoable, round-trips through the schema-3 loader", () => {
+        const doc = createDocWithParentChild();
+        const dispatcher = new ActionDispatcher(doc);
+        const rule: ContainerRule = { direction: "row", gap: 5, padding: 10, alignItems: "center" };
+        expect(dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, "parent-001", { container: rule })).success).toBe(true);
+        expect(dispatcher.getDocument().nodes.get("parent-001")!.layout.container).toEqual(rule);
+
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.get("parent-001")!.layout.container).toBeUndefined();
+    });
+
+    test("rejects invalid containers on the EDIT path", () => {
+        const doc = createDocWithParentChild();
+        const bad = (c: any) => new UpdateNodeLayoutAction(doc, "parent-001", { container: c }).validate();
+        expect(bad({ direction: "diagonal" })).toBe(false);
+        expect(bad({ direction: "row", gap: -5 })).toBe(false);
+        expect(bad({ direction: "row", padding: NaN })).toBe(false);
+        expect(bad({ direction: "row", alignItems: "middle" })).toBe(false);
+        expect(bad({ direction: "row", gap: 5, padding: 10, alignItems: "center" })).toBe(true);
+        expect(new UpdateNodeLayoutAction(doc, "no-such-node", { container: { direction: "row" } }).validate()).toBe(false);
+    });
+
+    // Round-trip closure for layout: the LOAD path must reject exactly what the edit
+    // path does, or a hand-edited schema-3 file yields a document the editor could
+    // never have authored. Raw JSON (not JSON.stringify) is the real attack vector.
+    test("the LOAD path rejects the same containers the edit path does", () => {
+        const bad = (layoutJson: string) =>
+            `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
+            + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
+            + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
+            + ` "style": { "fill": "#000", "opacity": 1 }, "layout": ${layoutJson} } } } }`;
+
+        expect(() => deserializeDocument(bad(`{ "container": { "direction": "diagonal" } }`))).toThrow();
+        expect(() => deserializeDocument(bad(`{ "container": { "direction": "row", "gap": -5 } }`))).toThrow();
+        expect(() => deserializeDocument(bad(`{ "container": { "direction": "row", "padding": 1e999 } }`))).toThrow("finite"); // JSON 1e999 → Infinity
+        // A valid container still loads.
+        expect(() => deserializeDocument(bad(`{ "container": { "direction": "row", "gap": 5, "alignItems": "center" } }`))).not.toThrow();
+    });
+});
+
+describe("M2 MoveTool — laid-out children are not free-draggable", () => {
+    const at = (x: number) => ({ clientX: x, clientY: 0 } as MouseEvent);
+
+    test("dragging a container's child records no pending move (its position is computed)", () => {
+        const doc = mkContainerScene({ direction: "row" });
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        es.selectedNodeIds = ["c1"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+
+        tool.onMouseDown(at(0));
+        tool.onMouseMove(at(50));
+        expect(es.pendingGeometry).toBeNull(); // the drag never armed — nothing to move
+    });
+
+    test("the container itself (not laid out by anyone) stays draggable", () => {
+        const doc = mkContainerScene({ direction: "row" });
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        es.selectedNodeIds = ["P"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+
+        tool.onMouseDown(at(0));
+        tool.onMouseMove(at(50));
+        expect([...(es.pendingGeometry?.keys() ?? [])]).toEqual(["P"]);
+    });
+});
+
+describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mix", () => {
+    type CS = ReturnType<typeof computeGeometry>;
+    const statesEqual = (a: CS, b: CS): true | string => {
+        if (a.order.join("|") !== b.order.join("|")) return `order: ${a.order} vs ${b.order}`;
+        if (a.nodes.size !== b.nodes.size) return `size ${a.nodes.size} vs ${b.nodes.size}`;
+        for (const [id, an] of a.nodes) {
+            const bn = b.nodes.get(id);
+            if (!bn) return `missing ${id}`;
+            for (const k of ["a", "b", "c", "d", "e", "f"] as const) {
+                if (Math.abs(an.world[k] - bn.world[k]) > 1e-9) return `${id}.world.${k}`;
+            }
+            for (const k of ["x", "y", "width", "height"] as const) {
+                if (Math.abs(an.bounds[k] - bn.bounds[k]) > 1e-9) return `${id}.bounds.${k}`;
+                if (Math.abs(an.local[k] - bn.local[k]) > 1e-9) return `${id}.local.${k}`;
+            }
+        }
+        return true;
+    };
+
+    test("300 random ops — add / move / resize / reparent / delete / toggle-container / undo / redo", () => {
+        let seed = 0x1234abcd;
+        const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+        const pick = <T,>(a: T[]): T => a[Math.floor(rnd() * a.length)];
+
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+
+        let prev = computeGeometry(dispatcher.getDocument());
+        const ids: string[] = [];
+        let counter = 0;
+
+        const dirs = ["row", "column"] as const;
+        const aligns = ["start", "center", "end", "stretch"] as const;
+
+        for (let step = 0; step < 300; step++) {
+            const doc = dispatcher.getDocument();
+            const op = ids.length === 0 ? 0 : Math.floor(rnd() * 8);
+            if (op === 0) {
+                const id = "n" + (counter++);
+                const parent = ids.length && rnd() < 0.5 ? pick(ids) : null;
+                if (dispatcher.dispatchAction(new AddNodeAction(doc, "core.rectangle",
+                    rnd() * 100, rnd() * 100, 1 + rnd() * 60, 1 + rnd() * 60, "#fff", id, parent)).success) ids.push(id);
+            } else if (op === 1) {
+                dispatcher.dispatchAction(new MoveNodeAction(doc, pick(ids), rnd() * 200 - 100, rnd() * 200 - 100));
+            } else if (op === 2) {
+                dispatcher.dispatchAction(new ResizeNodeAction(doc, pick(ids), 1 + rnd() * 80, 1 + rnd() * 80));
+            } else if (op === 3) {
+                // Toggle auto-layout on a random node: half the time a real container,
+                // half the time removed. This is the op that makes positions computed.
+                const rule = rnd() < 0.5
+                    ? { container: { direction: pick([...dirs]), gap: rnd() * 12, padding: rnd() * 12, alignItems: pick([...aligns]) } }
+                    : { container: undefined };
+                dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, pick(ids), rule));
+            } else if (op === 4) {
+                dispatcher.dispatchAction(new ReparentNodeAction(doc, pick(ids), rnd() < 0.5 ? null : pick(ids)));
+            } else if (op === 5) {
+                dispatcher.dispatchAction(new DeleteNodeAction(doc, pick(ids)));
+                // The id may now be gone; prune lazily so later picks stay valid.
+                for (let i = ids.length - 1; i >= 0; i--) if (!dispatcher.getDocument().nodes.has(ids[i])) ids.splice(i, 1);
+            } else if (op === 6) {
+                dispatcher.undo();
+            } else {
+                dispatcher.redo();
+            }
+
+            const live = dispatcher.getDocument();
+            const full = computeGeometry(live);
+            const incremental = computeGeometry(live, null, prev, dirty);
+            const eq = statesEqual(incremental, full);
+            expect(eq).toBe(true); // names the exact node/field/step on any divergence
+
+            prev = incremental;
+            dirty.clear();
+        }
     });
 });

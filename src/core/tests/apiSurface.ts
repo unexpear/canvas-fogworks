@@ -24,7 +24,7 @@ import {
     ProjectDocument, ReadonlyDocument, createEmptyDocument,
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
-import { Node, NodeType, NODE_TYPES, isNodeType } from "../document/Node";
+import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, layoutError, Layout } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
@@ -32,6 +32,7 @@ import {
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
+import { layoutChildren, expandDirtyForLayout, isLayoutContainer } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
 import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot } from "../actions/types";
@@ -46,6 +47,7 @@ import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { UpdateNodeGeometryAction } from "../actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../actions/UpdateNodeStyleAction";
 import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction";
+import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { createEditorState, clampViewport, EditorState } from "../../editor/EditorState";
 import { renderSVG, RendererState } from "../../renderer/SVGRenderer";
@@ -107,6 +109,14 @@ export function __apiSurfacePin(): void {
     expectType<Rect | null>(subtreeBounds(doc, computed, "id"));
     expectType<Rect | null>(selectionBounds(computed, ["id"]));
 
+    // --- M2 layout engine ---------------------------------------------------
+    const container: LayoutContainer = { direction: "row", gap: 0, padding: 0, alignItems: "start" };
+    expectType<LayoutContainer>(container);
+    expectType<string | null>(layoutError({ container } as Partial<Layout>));
+    expectType<Map<string, Rect>>(layoutChildren(container, { width: 1, height: 1 }, [{ id: "a", width: 1, height: 1 }]));
+    expectType<Set<string>>(expandDirtyForLayout(doc, new Set<string>()));
+    expectType<boolean>(isLayoutContainer(doc.nodes.get("id")));
+
     // Matrix primitive
     expectType<Mat2D>(IDENTITY);
     expectType<Mat2D>(multiply(IDENTITY, IDENTITY));
@@ -131,7 +141,8 @@ export function __apiSurfacePin(): void {
         new ReparentNodeAction(doc, "id", null, 0),
         new UpdateNodeGeometryAction(doc, "id", { x: 0 }),
         new UpdateNodeStyleAction(doc, "id", { opacity: 1 }),
-        new UpdateNodeTransformAction(doc, "id", { rotation: 0 })
+        new UpdateNodeTransformAction(doc, "id", { rotation: 0 }),
+        new UpdateNodeLayoutAction(doc, "id", { container: { direction: "row" } })
     ];
     expectType<TransactionAction>(new TransactionAction(doc, "label", actions));
     expectType<MutationResult>(actions[0].execute());

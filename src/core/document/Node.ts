@@ -63,6 +63,41 @@ export interface Layout {
     horizontalAlignment?: "left" | "right" | "center";
     verticalAlignment?: "top" | "bottom" | "center";
     spacing?: number; // Gap size for children or siblings
+    /**
+     * Auto-layout (Milestone 2). When set, this node's DIRECT CHILDREN are POSITIONED
+     * by the layout engine — their stored `geometry.x/y` is ignored and computed from
+     * the stack rule. This is what "store 'center inside parent' instead of x=240" means.
+     */
+    container?: LayoutContainer;
+}
+
+/** A flex-stack: children packed along one axis, with padding, gap and cross-align. */
+export interface LayoutContainer {
+    direction: "row" | "column";
+    gap?: number;        // space between children (>= 0)
+    padding?: number;    // inset from the container's edges (>= 0)
+    /** Cross-axis placement; "stretch" also sets each child's cross-size to fill. */
+    alignItems?: "start" | "center" | "end" | "stretch";
+}
+
+const DIRECTIONS = new Set(["row", "column"]);
+const ALIGNMENTS = new Set(["start", "center", "end", "stretch"]);
+
+/**
+ * Validity check for a layout patch, shared by the edit path (`UpdateNodeLayoutAction`)
+ * and the load path (`validateDocumentIntegrity`) so the two cannot drift — the same
+ * round-trip discipline transform uses. Only present fields are checked. Returns an
+ * error string, or null.
+ */
+export function layoutError(l: Partial<Layout>): string | null {
+    if (!("container" in l) || l.container === undefined) return null;
+    const c = l.container;
+    if (typeof c !== "object" || c === null) return "layout.container must be an object";
+    if (!DIRECTIONS.has(c.direction)) return 'layout.container.direction must be "row" or "column"';
+    if (c.gap !== undefined && (!Number.isFinite(c.gap) || c.gap < 0)) return "layout.container.gap must be finite and >= 0";
+    if (c.padding !== undefined && (!Number.isFinite(c.padding) || c.padding < 0)) return "layout.container.padding must be finite and >= 0";
+    if (c.alignItems !== undefined && !ALIGNMENTS.has(c.alignItems)) return "layout.container.alignItems is invalid";
+    return null;
 }
 
 /**

@@ -12,7 +12,7 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError } from "./Node";
+import { transformError, layoutError } from "./Node";
 
 function checkNodeRanges(node: ReadonlyNode): void {
     const g = node.geometry;
@@ -46,6 +46,8 @@ function checkNodeRanges(node: ReadonlyNode): void {
         const err = transformError(node.transform);
         if (err) throw new Error(`Invalid document: node "${node.id}" ${err}.`);
     }
+    const layoutErr = layoutError(node.layout);
+    if (layoutErr) throw new Error(`Invalid document: node "${node.id}" ${layoutErr}.`);
 }
 
 /**

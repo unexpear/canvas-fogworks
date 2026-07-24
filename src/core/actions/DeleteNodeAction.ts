@@ -49,8 +49,16 @@ export class DeleteNodeAction extends Action {
             deltas.set(id, { kind: "delete" });
         }
 
+        // Under auto-layout, removing a direct child reflows its container's
+        // surviving children, so the container must be dirtied even though its own
+        // stored data is unchanged. Only the deleted ROOT's parent can be a surviving
+        // container — every descendant's parent is deleted alongside it.
+        const parentOfRoot = this.document.nodes.get(this.nodeId)?.parent ?? null;
+        const updatedNodeIds = new Set(this.deletedNodeIds);
+        if (parentOfRoot) updatedNodeIds.add(parentOfRoot);
+
         return {
-            updatedNodeIds: new Set(this.deletedNodeIds),
+            updatedNodeIds,
             propertyDeltas: deltas,
             success: true
         };

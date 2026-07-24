@@ -27,9 +27,10 @@
  * caller only needs to list the directly-changed ids, not their subtrees.
  */
 
-import { ReadonlyDocument } from "../document/Document";
-import { Geometry } from "../document/Node";
+import { DeepReadonly, ReadonlyDocument } from "../document/Document";
+import { Geometry, Node } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
+import { expandDirtyForLayout, layoutChildren } from "./LayoutEngine";
 import {
     Mat2D, IDENTITY, Rect, multiply, compose, invert, applyToPoint,
     transformRectToAABB, unionRect
@@ -80,6 +81,12 @@ export function computeGeometry(
     const nodes = new Map<string, ComputedNode>();
     // A node is recomputed if it, or any ancestor, is dirty.
     const dirtySubtree = new Set<string>();
+    // Layout ripple: a change to a container's child moves its SIBLINGS, so a dirty
+    // child must dirty its whole container. The engine handles this so callers can
+    // keep reporting only directly-changed nodes.
+    const effectiveDirty = dirty ? expandDirtyForLayout(doc, dirty) : dirty;
+    // childId → parent-relative rect computed by the parent's auto-layout.
+    const laidOut = new Map<string, Rect>();
 
     for (const node of traverseSceneGraph(doc)) {
         const id = node.id;
@@ -91,7 +98,7 @@ export function computeGeometry(
         const parentComputed = parentId != null ? nodes.get(parentId) : undefined;
         if (parentId != null && !parentComputed) continue;
 
-        const selfDirty = !previous || !dirty || dirty.has(id) || pending?.has(id) === true;
+        const selfDirty = !previous || !effectiveDirty || effectiveDirty.has(id) || pending?.has(id) === true;
         const inherited = parentId != null && dirtySubtree.has(parentId);
         if (selfDirty || inherited) dirtySubtree.add(id);
 
@@ -99,14 +106,20 @@ export function computeGeometry(
         if (!selfDirty && !inherited && reusable) {
             order.push(id);
             nodes.set(id, reusable);
+            layoutContainerPass(doc, node, reusable.local, laidOut, pending);
             continue;
         }
 
         const patch = pending?.get(id);
         const g = node.geometry;
+        // A child of an auto-layout container gets its position (and, when stretched,
+        // size) from the parent — replacing stored x/y with a computed one. A pending
+        // drag patch still wins, so a laid-out node can be previewed if a tool allows it.
+        const computedLocal = laidOut.get(id);
+        const base = computedLocal ?? { x: g.x, y: g.y, width: g.width, height: g.height };
         const local: Rect = patch
-            ? { x: patch.x ?? g.x, y: patch.y ?? g.y, width: patch.width ?? g.width, height: patch.height ?? g.height }
-            : { x: g.x, y: g.y, width: g.width, height: g.height };
+            ? { x: patch.x ?? base.x, y: patch.y ?? base.y, width: patch.width ?? base.width, height: patch.height ?? base.height }
+            : base;
 
         if (!isFiniteRect(local)) continue;
 
@@ -118,9 +131,42 @@ export function computeGeometry(
 
         order.push(id);
         nodes.set(id, { world, local, bounds: transformRectToAABB(world, boxAtOrigin) });
+        layoutContainerPass(doc, node, local, laidOut, pending);
     }
 
     return { order, nodes };
+}
+
+/**
+ * If `node` is an auto-layout container, compute its direct children's parent-relative
+ * rects and record them in `laidOut`. Runs when the PARENT is visited; because the
+ * scene graph is walked parents-first, each child then reads its computed rect before
+ * it is itself processed. Child sizes reflect any pending patch, so a live resize
+ * reflows its siblings.
+ */
+function layoutContainerPass(
+    doc: ReadonlyDocument,
+    node: DeepReadonly<Node>,
+    parentLocal: Rect,
+    laidOut: Map<string, Rect>,
+    pending: PendingGeometry
+): void {
+    const container = node.layout.container;
+    if (!container) return;
+    const children: { id: string; width: number; height: number }[] = [];
+    for (const childId of node.children) {
+        const child = doc.nodes.get(childId);
+        if (!child) continue;
+        const p = pending?.get(childId);
+        children.push({
+            id: childId,
+            width: p?.width ?? child.geometry.width,
+            height: p?.height ?? child.geometry.height,
+        });
+    }
+    for (const [id, rect] of layoutChildren(container, { width: parentLocal.width, height: parentLocal.height }, children)) {
+        laidOut.set(id, rect);
+    }
 }
 
 /** World-space AABB of a node and everything beneath it. */

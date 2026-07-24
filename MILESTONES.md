@@ -19,7 +19,7 @@ M0.5 Core Documentation      ✅   contracts frozen before building upward
       │
 M1  Computed State           ✅   stored intent -> calculated results
       │
-M2  Layout Engine            ⬜   constraints replace absolute positions
+M2  Layout Engine            🚧   auto-layout containers (core); constraints/grid deferred
       │
 M3  Renderer                 ⬜*  reads ComputedState only
       │
@@ -180,14 +180,56 @@ been missed.
 
 ## Phase 2 — Layout Engine
 
-### Milestone 2 — Layout Engine ⬜
-**Goal:** replace absolute positioning with layout computation.
+### Milestone 2 — Layout Engine 🚧
+**Goal:** replace absolute positioning with layout computation — the document stores
+**"center inside parent"** instead of **`x = 240`**.
 
-**Systems:** constraints · anchors · alignment · margins · padding · containers ·
-flex · grid · intrinsic sizing · responsive rules.
+M2 is deliberately marked **in progress, not done**: the milestone's full system list is
+large, and only the **auto-layout container core** is built. The rest is real work with
+its own weight, listed as deferred below rather than quietly folded in.
 
-The document stores **"center inside parent"** instead of **`x = 240`**.
-(The `Node.layout` field already reserves the shape for this — see the schema doc.)
+```
+Document → Geometry + Layout Engine → Computed State → Renderer
+```
+
+**Built (the core — verified by suite + mutation testing):**
+- **Auto-layout containers.** `Layout.container` (`{ direction: row|column, gap?,
+  padding?, alignItems: start|center|end|stretch }`) makes a node's direct children a
+  flex stack: their stored `geometry.x/y` is **ignored** and their position becomes a
+  computed **result** (`LayoutEngine.layoutChildren`). `stretch` also overrides the
+  child's cross-axis size. Nested containers compose (an inner container lays out within
+  its own stretched size).
+- **A producer inside the geometry pass, not a second engine.** `computeGeometry` runs
+  the layout when it visits a container parent (parents-first, so each child reads its
+  computed rect before it is processed), then composes it through the same matrix
+  pipeline — so a laid-out child still inherits parent transforms and world position.
+- **The dirty-ripple.** Resizing one child moves its *siblings*, but a per-node mutation
+  only reports the one node. `expandDirtyForLayout` dirties a container when any child is
+  dirty; structural changes that alter membership report the affected container(s)
+  directly (`ReparentNodeAction` reports old **and** new parent; `DeleteNodeAction` the
+  removed child's parent). The `incremental === full` fuzz now includes container toggles,
+  reparents and deletes — and a mutation-testing pass **found and closed** a real gap
+  (reparent-*out*-of-a-container) the fuzz alone had missed.
+- **A full document citizen.** `UpdateNodeLayoutAction` is the write-path primitive
+  (authorable, undoable, serializable, validated), exactly as `UpdateNodeTransformAction`
+  is for M1. `layoutError` is shared by the edit path and the load path, so the round-trip
+  closure holds: a hand-edited container the loader would reject is one the editor could
+  never author.
+- **Direct-manipulation honesty.** A laid-out child has no meaningful free-drag, so
+  `MoveTool` skips it (reorder-by-drag is M4).
+- **Schema cost, paid under the freeze rule.** `SCHEMA_VERSION` `"2"` → `"3"` with a
+  `migrate_2_to_3` pass-through, because a schema-2 build would draw a container's children
+  at their now-vestigial stored `x/y`.
+
+**Deferred (each its own deliverable, NOT built):** constraints · anchors (pin to
+edges) · flex-grow / space-distribution · wrap · grid · **intrinsic / "hug" sizing**
+(a container sized to its contents — needs a bottom-up pass, and would break the
+one-level dirty-ripple, which is why it is explicitly out) · per-child margins ·
+absolute-position escapes · responsive / breakpoint rules · drag-to-reorder.
+
+**Explicitly NOT in scope yet:** `ComputedState` still carries geometry only; resolved
+style (M5 tokens) is still absent. Layout output is expressed *as* geometry (computed
+local rects), not as a separate channel.
 
 ---
 

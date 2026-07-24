@@ -70,8 +70,18 @@ export class ReparentNodeAction extends Action {
             );
         }
 
+        // Under auto-layout a move reflows BOTH the container it leaves and the one
+        // it joins — their child stacks change even though only `nodeId`'s stored
+        // data does. Both parents must enter the dirty set or a surviving sibling
+        // renders at a stale computed position. (Harmless when a parent is not a
+        // container: recomputing an unaffected node yields the same result.)
+        const oldParent = this.document.nodes.get(this.nodeId)?.parent ?? null;
+        const updatedNodeIds = new Set([this.nodeId]);
+        if (oldParent) updatedNodeIds.add(oldParent);
+        if (this.newParentId) updatedNodeIds.add(this.newParentId);
+
         return {
-            updatedNodeIds: new Set([this.nodeId]),
+            updatedNodeIds,
             propertyDeltas: new Map([[
                 this.nodeId,
                 { kind: "patch", reparent: { parent: this.newParentId, index: this.index } } as const

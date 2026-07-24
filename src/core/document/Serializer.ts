@@ -35,6 +35,7 @@ function isValidNode(n: any): n is Node {
         (n.style.radius === undefined || typeof n.style.radius === "number") &&
         (n.style.fontSize === undefined || typeof n.style.fontSize === "number") &&
         isPlainObject(n.layout) &&
+        (n.layout.container === undefined || isPlainObject(n.layout.container)) &&
         isOptionalString(n.text) && isOptionalString(n.src) && isOptionalString(n.name) &&
         (n.states === undefined || isPlainObject(n.states)) &&
         (n.transform === undefined || (isPlainObject(n.transform) &&
@@ -202,6 +203,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     // 3. Migration chain, oldest first. Each step upgrades one schema and lets the
     //    next step run — do NOT return early from inside the chain.
     if (version === "1") { raw = migrate_1_to_2(raw); version = "2"; }
+    if (version === "2") { raw = migrate_2_to_3(raw); version = "3"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -225,6 +227,11 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
  */
 function migrate_1_to_2(raw: any): any {
     return { ...raw, version: "2" };
+}
+
+/** Schema 2 → 3: adds the optional `Layout.container`. Pass-through by content. */
+function migrate_2_to_3(raw: any): any {
+    return { ...raw, version: "3" };
 }
 
 /**

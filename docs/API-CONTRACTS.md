@@ -2,14 +2,14 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer/SVGRenderer.ts, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v2 (app v0.0.5) · current through Milestone 1. The public surface each layer depends on.
+> 🔒 Frozen contract · schema v3 (app v0.0.5) · current through Milestone 2 (auto-layout core). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
 
 ```ts
 const CURRENT_VERSION: string;               // app/display version, from package.json
-const SCHEMA_VERSION: string;                // "2" — persisted document schema (decoupled from app version)
+const SCHEMA_VERSION: string;                // "3" — persisted document schema (decoupled from app version)
 function createEmptyDocument(): ProjectDocument;
 
 // SceneGraph.ts — the ONLY correct node ordering (z-order / layer order)
@@ -47,6 +47,17 @@ function toWorld(s: ComputedState, nodeId: string, x: number, y: number): { x: n
 function subtreeBounds(doc: ReadonlyDocument, s: ComputedState, rootId: string): Rect | null;
 function selectionBounds(s: ComputedState, ids: readonly string[]): Rect | null;
 
+// geometry/LayoutEngine.ts — Milestone 2 core: auto-layout containers.
+// Runs INSIDE computeGeometry; a container's children get a computed local rect.
+function layoutChildren(                          // pure flex-stack math
+  container: LayoutContainer,
+  parentSize: { width: number; height: number },
+  children: readonly { id: string; width: number; height: number }[]
+): Map<string, Rect>;                             // childId → parent-relative rect
+function isLayoutContainer(node: { layout: { container?: unknown } } | undefined): boolean;
+function expandDirtyForLayout(doc: ReadonlyDocument, dirty: ReadonlySet<string>): Set<string>;
+                                                  // dirties a container when a child is dirty (sibling ripple)
+
 // Serializer.ts
 function serializeDocument(doc: ReadonlyDocument): string;
 function deserializeDocument(json: string): ProjectDocument;   // throws on invalid JSON / bad envelope / foreign version
@@ -60,9 +71,11 @@ const Serializer: {
 ```
 
 Types: `ProjectDocument`, `DocumentMetadata`, `SerializedMetadata`, `VariableStore`,
-`Node`, `NodeType`, `Geometry`, `Style`, `Layout`, `StateDefinition`, `SerializedDocument`,
-`DeepReadonly`, `ReadonlyDocument`, `ReadonlyNode`,
-`LoadResult`, `SaveResult`, `NODE_TYPES`/`isNodeType`. See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
+`Node`, `NodeType`, `Geometry`, `Style`, `Layout`, `LayoutContainer`, `Transform`,
+`StateDefinition`, `SerializedDocument`, `DeepReadonly`, `ReadonlyDocument`, `ReadonlyNode`,
+`LoadResult`, `SaveResult`, `NODE_TYPES`/`isNodeType`. Shared validators
+`transformError(t)` / `layoutError(l)` return an error string or `null`, and are used by
+BOTH the edit path and the load path. See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
 
 ## Actions (`core/actions/`)
 
@@ -78,13 +91,14 @@ abstract class Action {
 // Command constructors
 new AddNodeAction(doc, type: NodeType, x, y, width, height,
                   fill?: string /* "#cccccc" */, id?: string, parentId?: string | null);
-new ReparentNodeAction(doc, nodeId: string, newParentId: string | null, index?: number);
-new DeleteNodeAction(doc, nodeId: string);
+new ReparentNodeAction(doc, nodeId: string, newParentId: string | null, index?: number); // reports old+new parent dirty (layout)
+new DeleteNodeAction(doc, nodeId: string);                                               // reports removed child's parent dirty (layout)
 new MoveNodeAction(doc, nodeId: string, newX: number, newY: number);
 new ResizeNodeAction(doc, nodeId: string, newWidth: number, newHeight: number);
 new UpdateNodeGeometryAction(doc, nodeId: string, geometry: Partial<Geometry>);
 new UpdateNodeStyleAction(doc, nodeId: string, style: Partial<Style>);
 new UpdateNodeTransformAction(doc, nodeId: string, transform: Partial<Transform>); // rotation/scale/origin
+new UpdateNodeLayoutAction(doc, nodeId: string, layout: Partial<Layout>);          // M2 auto-layout container
 new TransactionAction(doc, label: string, actions: Action[]);
 
 // applyMutations.ts — the single mutation site
