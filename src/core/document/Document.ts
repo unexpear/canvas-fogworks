@@ -87,8 +87,13 @@ export const CURRENT_VERSION: string =
  *         measure-integration. Absent auto / hug false = a fixed-size grid of px/fr tracks,
  *         so `migrate_10_to_11` is a pass-through — but a schema-10 build would not
  *         understand an `auto` track or size a hugging grid to its contents.
+ *
+ *   "12" — adds `LayoutContainer.wrap` (flex-wrap: multi-line flow) for Milestone 2. Absent
+ *         = nowrap (a single line), so `migrate_11_to_12` is a pass-through — but a schema-11
+ *         build would draw a wrapping container's children on one overflowing line and
+ *         mis-size a cross-hug container, misstating the layout.
  */
-export const SCHEMA_VERSION = "11";
+export const SCHEMA_VERSION = "12";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

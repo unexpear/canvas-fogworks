@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
 
-> 🔒 Frozen contract · schema v11 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid (+rows/auto/hug), constraints, absolute + margins; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v12 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug), constraints, absolute + margins; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -124,6 +124,13 @@ feedback and no new dirty-tracking (a growing sibling reflows through the same r
 **Flex-shrink** (`Layout.shrink`) is its mirror: when the children overflow, it gives up
 the deficit weighted by `shrink × base-size` (grow and shrink are exclusive by the sign of
 free space) — likewise position-pass-only.
+**Flex wrap** (`LayoutContainer.wrap`) breaks children into multiple lines when they overflow
+the main axis. Like grid-hug, it pulls flex INTO the measure pass: a single shared
+`breakFlexLines` is called by both the position pass and the measure cross-hug fold (a
+cross-hug container sizes its cross to the stacked lines), so the container's own size equals
+the lines it lays out. Each line flexes its own grow/shrink; wrap is inert under a hugged main
+axis, and breaks against the container's OWN size (a parent-stretched main is not re-flowed
+into — a documented deferral that keeps the fold acyclic).
 **Grid** (`layoutGridChildren`) auto-flows children into cell tracks and fills them, reusing
 the same dirty machinery (once `isLayoutContainer` counts a grid as a container). Both axes
 size through one shared `resolveGridTracks`: columns, and per-row tracks (`LayoutGrid.rows` —
@@ -156,9 +163,10 @@ constraint gate admits an absolute child of any parent, and `MoveTool` leaves it
 measure. Both are small position-pass/measure additions with no new dirty-tracking.
 
 Still outstanding for the computed layer: **resolved style** (M5 tokens) belongs in
-`ComputedState` and is not there yet; and M2's **remaining layout** — flex wrap, explicit grid
-placement/spans, `minmax()`/`fit-content` tracks — is deferred (see MILESTONES.md). Layout
-output today is expressed *as* geometry (computed local rects), not as a distinct channel.
+`ComputedState` and is not there yet; and M2's **remaining layout** — align-content /
+wrap-reverse, explicit grid placement/spans, `minmax()`/`fit-content` tracks — is deferred
+(see MILESTONES.md). Layout output today is expressed *as* geometry (computed local rects),
+not as a distinct channel.
 
 ## 5. Module map
 

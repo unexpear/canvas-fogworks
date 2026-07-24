@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer/SVGRenderer.ts, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v11 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid (+rows/auto/hug), constraints, absolute + margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v12 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug), constraints, absolute + margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -49,11 +49,16 @@ function selectionBounds(s: ComputedState, ids: readonly string[]): Rect | null;
 
 // geometry/LayoutEngine.ts — Milestone 2 core: auto-layout containers.
 // Runs INSIDE computeGeometry; a container's children get a computed local rect.
-function layoutChildren(                          // pure flex-stack math
+function layoutChildren(                          // pure flex-stack math (multi-line when wrap)
   container: LayoutContainer,
   parentSize: { width: number; height: number },
   children: readonly { id: string; width: number; height: number }[]
 ): Map<string, Rect>;                             // childId → parent-relative rect
+interface FlexLine { items: number[]; cross: number }  // indices into the input + the line's cross size
+function breakFlexLines(                           // shared by the position pass + the measure cross-hug fold
+  items: readonly { main: number; cross: number; margin: number }[],
+  innerMain: number, gap: number, wrap: boolean
+): FlexLine[];
 function isLayoutContainer(node: { layout: { container?: unknown } } | undefined): boolean;
 function expandDirtyForLayout(doc: ReadonlyDocument, dirty: ReadonlySet<string>): Set<string>;
                                                   // climbs a change up the hug chain to the first fixed container

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v11 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid (+rows/auto/hug), constraints, absolute + margins). Suite: `src/core/tests/document.test.ts` (201 tests).
+> 🔒 Frozen contract · schema v12 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug), constraints, absolute + margins). Suite: `src/core/tests/document.test.ts` (212 tests).
 
 ## Philosophy
 
@@ -17,7 +17,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 201 tests
+npm test                                   # jest (ts-jest), 212 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -28,7 +28,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (201 tests)
+## What is covered (212 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -61,7 +61,8 @@ npm run check                              # typecheck + lint + test + build (th
 | **M2 margins + absolute** | `layoutChildren` uniform margin spaces on the main axis and insets on the cross (incl. stretch − 2·margin and grow after margins); a **hug container's size includes child margins**; an **absolute child is out of flow** (siblings ignore it, it uses its stored geometry, and it does not contribute to hug size); an absolute child of a container **can still be constrained** (pins to the parent box); `MoveTool` keeps an absolute child **draggable** while an in-flow sibling is not; schema-8 round-trip + a negative `margin` / bad `position` rejected on **both** paths |
 | **M2 flex-shrink** | `layoutChildren` shrinks overflow weighted by **`shrink × base`** (even/weighted/**unequal-base** cases — the last distinguishes `×base` from `shrink`-alone), clamped at 0; **inert** without overflow, and a child with no shrink factor overflows unchanged; grow and shrink are **mutually exclusive by the sign of free space** (a child with both grows when it fits, shrinks when it overflows) incrementally; schema-9 round-trip + a negative `shrink` rejected on **both** paths |
 | **M2 grid measure-integration** | `auto` COLUMN sizes to the **max child own-width** (a narrower child stretches to fill), `auto` ROW to the max own-height; `auto` + `fr` coexist (**fr shares the leftover AFTER auto's content**); **`hugWidth`/`hugHeight` size the grid to `2·pad + Σtracks + gaps`**, pinned by the **fuzz-blind `hug-size == sum-of-cells`** structural check; **`fr` collapses to 0 on a hugged axis**; a resize / a **pending** drag of a grid child in an `auto` column **ripples the grid's hug up to a hug-flex root incrementally** (guards the `containerHugs` grid arm — the climb), and a non-hug grid reflows its column; an empty hugging grid stays **total**; `resolveGridTracks` never throws on an `auto` track (the `"px" in t` footgun) and clamps a 0-column grid; schema-11 round-trip + `{auto:false}` / non-boolean hug flag rejected on **both** paths |
-| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow/shrink, GRID (per-row `rows`, `auto` tracks, and grid-container hug), constraints, margins, absolute escapes, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains; resize drives grow/shrink by sign, constraints from both sources, and — now that grid enters the measure pass — a grid child's size feeds its `auto` track and the grid's own hug size) |
+| **M2 flex wrap** | `breakFlexLines` break predicate (strict `>` keeps an exact fit; first-child-always-fits; margin/gap accumulation; empty → `[]`; nowrap → one line); a **`hugHeight` wrap row sizes its height to the stacked lines** and that equals the cells (the **fuzz-blind `cross-hug == Σ line heights`** structural check); **grow is distributed PER LINE**, not across the container; a **single wrap line still fills the container cross** (nowrap-preserving band); wrap is **inert under a hugged main axis**; **column-direction is symmetric**; a **grown wrap container wraps against its OWN main, not the stretched main** (the measure/position consistency guard); a **grown hug-MAIN wrap container still grows its children** (the measured-main override is gated on `effectiveWrap`, not `wrap` — review-found); a resize / **pending** drag that pushes a child onto a new line **grows the container incrementally**; schema-12 round-trip + a non-boolean `wrap` rejected on **both** paths |
+| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow/shrink, WRAP, GRID (per-row `rows`, `auto` tracks, and grid-container hug), constraints, margins, absolute escapes, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains; resize drives grow/shrink by sign, constraints from both sources, and — now that wrap and grid enter the measure pass — a child's size feeds its line/`auto` track and the container's own hug size) |
 
 ## The API-surface pin
 

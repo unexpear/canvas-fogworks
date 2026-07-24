@@ -10,15 +10,16 @@
  * the document.
  *
  * SCOPE: a flex stack — row/column, gap, padding, per-child margin, cross-axis align
- * (start/center/end/stretch), intrinsic ("hug") sizing (a container sizes an axis to
+ * (start/center/end/stretch), WRAP (multi-line flow, per-line grow/shrink, cross-hug summing
+ * the lines — `breakFlexLines`), intrinsic ("hug") sizing (a container sizes an axis to
  * its contents; see `measureIntrinsicSizes`), flex-grow/shrink (children fill leftover /
  * give up overflow main-axis space), constraints/anchors (`resolveConstraints`),
  * absolute-position escapes (`isAbsolute`), AND a grid (`layoutGridChildren` — auto-flow
- * into px/fr/auto cell tracks with explicit per-row sizes and grid-container hug). Grid
- * `auto` tracks and grid-hug pull grid INTO the bottom-up measure pass (`resolveGridTracks`
- * is the single track-resolver shared by the measure fold and the position pass). DEFERRED
- * with their own milestone weight: flex wrap, explicit grid placement/spans, minmax/
- * fit-content tracks. See MILESTONES.md.
+ * into px/fr/auto cell tracks with explicit per-row sizes and grid-container hug). Wrap and
+ * grid `auto`/hug pull flex/grid INTO the bottom-up measure pass, each via a single resolver
+ * (`breakFlexLines` / `resolveGridTracks`) shared by the measure fold and the position pass.
+ * DEFERRED with their own milestone weight: align-content / wrap-reverse, explicit grid
+ * placement/spans, minmax/fit-content tracks. See MILESTONES.md.
  */
 
 import { ReadonlyDocument } from "../document/Document";
@@ -86,21 +87,36 @@ export function measureIntrinsicSizes(
             const row = c.direction === "row";
             const gap = c.gap ?? 0;
             const pad = c.padding ?? 0;
+            const items: { main: number; cross: number; margin: number }[] = [];
             let mainSum = 0;
-            let crossMax = 0;
-            let count = 0;
             for (const childId of node.children) {
                 const childNode = byId.get(childId);
                 if (isAbsolute(childNode)) continue; // out of flow — no contribution to hug size
                 const own = measured.get(childId);   // already measured (bottom-up)
                 if (!own) continue;                  // damaged/unmeasured child — skip (stays total)
-                const m2 = 2 * Math.max(0, childNode?.layout.margin ?? 0);
-                mainSum += m2 + (row ? own.width : own.height);
-                crossMax = Math.max(crossMax, m2 + (row ? own.height : own.width));
-                count++;
+                const m = Math.max(0, childNode?.layout.margin ?? 0);
+                const cm = row ? own.width : own.height;
+                const cc = row ? own.height : own.width;
+                items.push({ main: cm, cross: cc, margin: m });
+                mainSum += 2 * m + cm;
             }
-            const mainHug = 2 * pad + mainSum + gap * Math.max(0, count - 1);
-            const crossHug = 2 * pad + crossMax; // empty container → 2*pad
+            const mainHug = 2 * pad + mainSum + gap * Math.max(0, items.length - 1);
+            // WRAP: the cross axis hugs the STACKED lines. Inert when the MAIN axis hugs (no
+            // definite main to wrap against). Uses the SAME `breakFlexLines` the position pass
+            // uses, against the container's OWN (pre-override) main size — so crossHug equals
+            // the laid-out stack by construction. Non-wrap keeps today's single-line crossMax.
+            const effectiveWrap = c.wrap === true && !(row ? c.hugWidth : c.hugHeight);
+            let crossHug: number;
+            if (effectiveWrap) {
+                const lines = breakFlexLines(items, (row ? width : height) - 2 * pad, gap, true);
+                let crossSum = 0;
+                for (const ln of lines) crossSum += ln.cross;
+                crossHug = 2 * pad + crossSum + gap * Math.max(0, lines.length - 1);
+            } else {
+                let crossMax = 0;
+                for (const it of items) crossMax = Math.max(crossMax, 2 * it.margin + it.cross);
+                crossHug = 2 * pad + crossMax; // empty container → 2*pad
+            }
             // Overwrite ONLY the hugged PHYSICAL axis; the other keeps pending ?? stored.
             if (c.hugWidth) width = row ? mainHug : crossHug;
             if (c.hugHeight) height = row ? crossHug : mainHug;
@@ -132,16 +148,66 @@ export function measureIntrinsicSizes(
     return measured;
 }
 
+/** One wrapped flex line: indices into the caller's item list, and the line's cross extent. */
+export interface FlexLine {
+    /** indices into the `items` array passed to `breakFlexLines`, in packing order. */
+    items: number[];
+    /** the line's cross size = max over its items of `2·margin + item.cross`. */
+    cross: number;
+}
+
+/**
+ * Break flex children into lines — the SINGLE line-breaker shared by the measure cross-hug
+ * fold and the position pass, so a wrapping container's own cross size equals the stack it
+ * lays out (the grid lesson: one resolver called both places cannot drift).
+ *
+ * Children pack along the main axis in order; a new line starts when the current line is
+ * NON-EMPTY and adding the next item (its `2·margin + main`, plus one `gap`) would exceed
+ * `innerMain` (strict `>`, so an exact fit stays). The FIRST item on a line always stays, even
+ * if it alone overflows. `wrap === false` returns a single line holding every item — the
+ * nowrap path, byte-identical to the pre-wrap single stack. Pure and TOTAL (never throws): an
+ * empty list returns `[]`, and every line has ≥1 item, so there is no division or bounds hazard.
+ */
+export function breakFlexLines(
+    items: readonly { main: number; cross: number; margin: number }[],
+    innerMain: number,
+    gap: number,
+    wrap: boolean
+): FlexLine[] {
+    const lineIdx: number[][] = [];
+    let cur: number[] | null = null;
+    let curMain = 0;
+    for (let i = 0; i < items.length; i++) {
+        const itemMain = 2 * Math.max(0, items[i].margin) + items[i].main;
+        if (cur === null) {
+            cur = [i]; curMain = itemMain; lineIdx.push(cur);
+        } else if (wrap && curMain + gap + itemMain > innerMain) {
+            cur = [i]; curMain = itemMain; lineIdx.push(cur);   // start a new line
+        } else {
+            cur.push(i); curMain += gap + itemMain;
+        }
+    }
+    return lineIdx.map(idxs => {
+        let cross = 0;
+        for (const idx of idxs) {
+            const c = 2 * Math.max(0, items[idx].margin) + items[idx].cross;
+            if (c > cross) cross = c;
+        }
+        return { items: idxs, cross };
+    });
+}
+
 /**
  * Compute the parent-relative rect for each direct child of a container.
  *
  * @param container the parent's layout rule
  * @param parentSize the container's own width/height (already resolved by the measure
- *   pass, so a hug container's size reflects its contents)
+ *   pass, so a hug container's size reflects its contents; for a WRAP container the caller
+ *   passes the container's MEASURED own main so line-breaking matches the measure fold)
  * @param children the child nodes in `parent.children` order, each with its base
- *   (measured) size and optional flex `grow`
- * @returns child id → computed local rect (position always; main size grown to fill
- *   leftover space; cross size only when stretched, else the child's own)
+ *   (measured) size and optional flex `grow`/`shrink`/`margin`
+ * @returns child id → computed local rect (position always; main size grown/shrunk per line;
+ *   cross size only when stretched, else the child's own)
  */
 export function layoutChildren(
     container: LayoutContainer,
@@ -156,54 +222,71 @@ export function layoutChildren(
     // Axis abstraction: "main" is the packing axis, "cross" is the other.
     const innerMain = (row ? parentSize.width : parentSize.height) - 2 * pad;
     const innerCross = (row ? parentSize.height : parentSize.width) - 2 * pad;
+    const mainOf = (c: { width: number; height: number }) => row ? c.width : c.height;
+    const crossOf = (c: { width: number; height: number }) => row ? c.height : c.width;
 
-    // Free space drives grow (leftover) OR shrink (overflow), never both — they are
-    // mutually exclusive by the sign of `free`. `margin` (uniform per child) is fixed
-    // spacing on the main axis (2·margin, before + after) counted into `used` FIRST, so it
-    // is never grown or shrunk. Grow distributes leftover by `grow` ratio (NOTE, differs
-    // from CSS: all of it, so a lone `grow: 0.5` still fills the row). Shrink distributes
-    // the DEFICIT weighted by `shrink × base-main` (CSS-style — bigger items give up more),
-    // clamped at 0. No grow/shrink factor ⇒ the child keeps its base size and overflows.
-    let usedMain = gap * Math.max(0, children.length - 1);
-    let growSum = 0;
-    let shrinkWeight = 0;
-    for (const child of children) {
-        const baseMain = row ? child.width : child.height;
-        usedMain += 2 * (child.margin ?? 0) + baseMain;
-        growSum += Math.max(0, child.grow ?? 0);
-        shrinkWeight += Math.max(0, child.shrink ?? 0) * baseMain;
-    }
-    const free = innerMain - usedMain;
-    const growing = free > 0 && growSum > 0;
-    const shrinking = free < 0 && shrinkWeight > 0;
+    // WRAP is inert when the MAIN axis hugs — a hugged main has no definite size to wrap
+    // against (like `grow` under a hugged main); the same expression the measure fold uses,
+    // so both passes break into the SAME lines.
+    const effectiveWrap = container.wrap === true && !(row ? container.hugWidth : container.hugHeight);
+    const items = children.map(c => ({ main: mainOf(c), cross: crossOf(c), margin: Math.max(0, c.margin ?? 0) }));
+    const lines = breakFlexLines(items, innerMain, gap, effectiveWrap);
+    const singleLine = lines.length <= 1;
 
     const out = new Map<string, Rect>();
-    let cursor = pad; // main-axis offset, starts after the leading padding
-    for (const child of children) {
-        const m = Math.max(0, child.margin ?? 0);
-        const grow = Math.max(0, child.grow ?? 0);
-        const shrink = Math.max(0, child.shrink ?? 0);
-        const baseMain = row ? child.width : child.height;
-        const mainSize =
-            growing && grow > 0 ? baseMain + free * (grow / growSum)
-                : shrinking && shrink > 0 ? Math.max(0, baseMain - (-free) * (shrink * baseMain / shrinkWeight))
-                    : baseMain;
-        const ownCross = row ? child.height : child.width;
-        // The child sits in a margin-inset slot: cross span is `innerCross − 2·margin`.
-        const availCross = innerCross - 2 * m;
-        const crossSize = align === "stretch" ? Math.max(0, availCross) : ownCross;
+    let crossCursor = pad; // cross-axis offset of the current line's leading edge
+    for (const line of lines) {
+        // Free space drives grow (leftover) OR shrink (overflow), computed PER LINE — each
+        // line distributes its own slack (CSS wrap behaviour). `margin` (2·margin, before +
+        // after) is counted into `used` FIRST, so it is never grown or shrunk. Grow takes all
+        // the leftover by `grow` ratio (differs from CSS: a lone `grow: 0.5` still fills the
+        // line); shrink gives up the DEFICIT weighted by `shrink × base-main`, clamped at 0.
+        let usedMain = gap * Math.max(0, line.items.length - 1);
+        let growSum = 0;
+        let shrinkWeight = 0;
+        for (const idx of line.items) {
+            const c = children[idx];
+            const baseMain = mainOf(c);
+            usedMain += 2 * Math.max(0, c.margin ?? 0) + baseMain;
+            growSum += Math.max(0, c.grow ?? 0);
+            shrinkWeight += Math.max(0, c.shrink ?? 0) * baseMain;
+        }
+        const free = innerMain - usedMain;
+        const growing = free > 0 && growSum > 0;
+        const shrinking = free < 0 && shrinkWeight > 0;
+        // A SINGLE line fills the container's cross (nowrap-preserving, and CSS-correct — a
+        // lone flex line stretches to the container); multi-line children sit in their own
+        // line's cross band. This keeps every pre-wrap layout byte-identical.
+        const bandCross = singleLine ? innerCross : line.cross;
 
-        let crossOff = 0; // within the available cross, before the leading cross margin
-        if (align === "center") crossOff = (availCross - crossSize) / 2;
-        else if (align === "end") crossOff = availCross - crossSize;
-        const cross = pad + m + crossOff;
+        let cursor = pad; // main-axis offset, reset at each line
+        for (const idx of line.items) {
+            const c = children[idx];
+            const m = Math.max(0, c.margin ?? 0);
+            const grow = Math.max(0, c.grow ?? 0);
+            const shrink = Math.max(0, c.shrink ?? 0);
+            const baseMain = mainOf(c);
+            const mainSize =
+                growing && grow > 0 ? baseMain + free * (grow / growSum)
+                    : shrinking && shrink > 0 ? Math.max(0, baseMain - (-free) * (shrink * baseMain / shrinkWeight))
+                        : baseMain;
+            const ownCross = crossOf(c);
+            const availCross = bandCross - 2 * m;
+            const crossSize = align === "stretch" ? Math.max(0, availCross) : ownCross;
 
-        cursor += m; // leading main-axis margin
-        out.set(child.id, row
-            ? { x: cursor, y: cross, width: mainSize, height: crossSize }
-            : { x: cross, y: cursor, width: crossSize, height: mainSize });
+            let crossOff = 0; // within the available cross, before the leading cross margin
+            if (align === "center") crossOff = (availCross - crossSize) / 2;
+            else if (align === "end") crossOff = availCross - crossSize;
+            const cross = crossCursor + m + crossOff;
 
-        cursor += mainSize + m + gap; // trailing main-axis margin, then the gap
+            cursor += m; // leading main-axis margin
+            out.set(c.id, row
+                ? { x: cursor, y: cross, width: mainSize, height: crossSize }
+                : { x: cross, y: cursor, width: crossSize, height: mainSize });
+
+            cursor += mainSize + m + gap; // trailing main-axis margin, then the gap
+        }
+        crossCursor += bandCross + gap; // next line stacks below this one (align-content deferred)
     }
     return out;
 }

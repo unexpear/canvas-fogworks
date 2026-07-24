@@ -32,7 +32,7 @@ import {
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
-import { layoutChildren, layoutGridChildren, resolveGridTracks, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
+import { layoutChildren, layoutGridChildren, resolveGridTracks, breakFlexLines, FlexLine, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
 import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot } from "../actions/types";
@@ -110,10 +110,11 @@ export function __apiSurfacePin(): void {
     expectType<Rect | null>(selectionBounds(computed, ["id"]));
 
     // --- M2 layout engine ---------------------------------------------------
-    const container: LayoutContainer = { direction: "row", gap: 0, padding: 0, alignItems: "start" };
+    const container: LayoutContainer = { direction: "row", gap: 0, padding: 0, alignItems: "start", wrap: true };
     expectType<LayoutContainer>(container);
     expectType<string | null>(layoutError({ container } as Partial<Layout>));
     expectType<Map<string, Rect>>(layoutChildren(container, { width: 1, height: 1 }, [{ id: "a", width: 1, height: 1 }]));
+    expectType<FlexLine[]>(breakFlexLines([{ main: 1, cross: 1, margin: 0 }], 1, 0, true));
     expectType<Set<string>>(expandDirtyForLayout(doc, new Set<string>()));
     expectType<boolean>(isLayoutContainer(doc.nodes.get("id")));
     expectType<boolean>(isAbsolute(doc.nodes.get("id")));

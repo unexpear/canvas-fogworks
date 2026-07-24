@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document/Document.ts, src/core/tests -->
 
-> **Frozen contracts · schema v11 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid (+rows/auto/hug), constraints, absolute + margins).**
+> **Frozen contracts · schema v12 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug), constraints, absolute + margins).**
 > These documents describe the *current, verified* implementation and lock the
 > contracts the rest of the engine builds on. See [`../MILESTONES.md`](../MILESTONES.md)
 > for the roadmap and where each layer fits.

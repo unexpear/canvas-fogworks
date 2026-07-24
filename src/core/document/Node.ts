@@ -183,10 +183,22 @@ export interface LayoutGrid {
 /** A flex-stack: children packed along one axis, with padding, gap and cross-align. */
 export interface LayoutContainer {
     direction: "row" | "column";
-    gap?: number;        // space between children (>= 0)
+    gap?: number;        // space between children (>= 0) — used BETWEEN items AND between wrapped lines
     padding?: number;    // inset from the container's edges (>= 0)
     /** Cross-axis placement; "stretch" also sets each child's cross-size to fill. */
     alignItems?: "start" | "center" | "end" | "stretch";
+    /**
+     * Flex WRAP (Milestone 2). When true, children that overflow the container's inner MAIN
+     * axis wrap onto new lines (the first child on a line always stays even if it alone
+     * overflows). Each line distributes its OWN grow/shrink free space; lines stack on the
+     * cross axis separated by `gap`; `alignItems` aligns each child within its line's cross
+     * band. A cross-axis-hug container sizes its cross to the stacked lines. Absent = nowrap
+     * (a single line, today's behaviour). Inert when the MAIN axis hugs (no definite main to
+     * wrap against — like `grow` under a hugged main). Wrapping is measured against the
+     * container's OWN size; extra space from a parent that STRETCHES the main axis is not
+     * re-wrapped into (a documented deferral that keeps the measure pass acyclic).
+     */
+    wrap?: boolean;
     /**
      * Intrinsic ("hug") sizing (Milestone 2). When set, this container sizes the given
      * PHYSICAL axis to its contents instead of using its stored `geometry`: the hugged
@@ -282,6 +294,7 @@ export function layoutError(l: Partial<Layout>): string | null {
     if (c.alignItems !== undefined && !ALIGNMENTS.has(c.alignItems)) return "layout.container.alignItems is invalid";
     if (c.hugWidth !== undefined && typeof c.hugWidth !== "boolean") return "layout.container.hugWidth must be a boolean";
     if (c.hugHeight !== undefined && typeof c.hugHeight !== "boolean") return "layout.container.hugHeight must be a boolean";
+    if (c.wrap !== undefined && typeof c.wrap !== "boolean") return "layout.container.wrap must be a boolean";
     return null;
 }
 

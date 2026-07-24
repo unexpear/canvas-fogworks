@@ -19,7 +19,7 @@ M0.5 Core Documentation      ✅   contracts frozen before building upward
       │
 M1  Computed State           ✅   stored intent -> calculated results
       │
-M2  Layout Engine            🚧   flex(+grow/shrink) + hug + grid(+rows/auto/hug) + constraints + absolute; wrap/spans deferred
+M2  Layout Engine            🚧   flex(+grow/shrink/wrap) + hug + grid(+rows/auto/hug) + constraints + absolute; spans/align-content deferred
       │
 M3  Renderer                 ⬜*  reads ComputedState only
       │
@@ -254,6 +254,23 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   held under a fuzz that varies `rows` shorter/longer than the derived rows). A single
   unequal-row test pins explicit-wins + implicit-fallback + prefix-sum row-Y +
   fr-after-px at once; all five guards mutation-tested and killed.
+- **Flex wrap — multi-line flow + per-line flex + cross-hug.** A design panel (2 lenses
+  converged) settled it around one shared `breakFlexLines` (the flex analogue of
+  `resolveGridTracks`), called by BOTH the position pass and the measure cross-hug fold — so a
+  cross-hug wrap container's own size equals the stack it lays out, the fuzz-blind property
+  pinned by an explicit `cross-hug == Σ line heights` test. A new line starts when the next
+  child would overflow the inner main (strict `>`; first-child-always-fits); each line flexes
+  its OWN grow/shrink; a single line still fills the container cross (nowrap byte-identical).
+  Wrap is inert under a hugged main axis, and — the subtle consistency guard — both passes
+  break against the container's OWN (measured) main, so a parent that grows/stretches it wider
+  never splits measure from position (that extra space is a documented deferral). All nine
+  guards mutation-tested and killed; the 300-op fuzz now emits `wrap` and holds
+  `incremental === full`. An adversarial read-only review then found a real bug the fuzz and
+  units both missed: the position-pass measured-main override was gated on `wrap` rather than
+  `effectiveWrap`, so a hug-MAIN wrap container that a parent GREW was laid out against its
+  un-grown intrinsic main — starving its grow children (240 → 60). Fixed (gate on
+  `effectiveWrap`) with a proven regression test. DEFERRED (own weight): align-content,
+  wrap-reverse, a separate cross-gap, wrapping against a stretched main.
 - **Grid measure-integration — `auto` tracks + grid-container hug.** The hard half of the
   grid tail, resolved by a design panel (3 independent lenses converged): grid finally enters
   the bottom-up measure pass, the way flex hug does. An `auto` `TrackSize` (`{ auto: true }`,
@@ -303,11 +320,11 @@ Document → Geometry + Layout Engine → Computed State → Renderer
 - **Schema cost, paid under the freeze rule.** `SCHEMA_VERSION` `"2"` → `"3"` (auto-layout)
   → `"4"` (hug) → `"5"` (grow) → `"6"` (grid) → `"7"` (constraints) → `"8"` (absolute +
   margin) → `"9"` (shrink) → `"10"` (grid per-row `rows`) → `"11"` (grid `auto` tracks +
-  hug), each with a pass-through migration, because an older build would draw the children at
-  now-vestigial stored geometry / unanchored / in-flow / unshrunk / at a uniform row height /
-  not sized to content.
+  hug) → `"12"` (flex wrap), each with a pass-through migration, because an older build would
+  draw the children at now-vestigial stored geometry / unanchored / in-flow / unshrunk / at a
+  uniform row height / not sized to content / on one overflowing line.
 
-**Deferred (each its own deliverable, NOT built):** wrap · **per-side**
+**Deferred (each its own deliverable, NOT built):** align-content / wrap-reverse · **per-side**
 margins · grid-cell margins · responsive / breakpoint rules · drag-to-reorder ·
 the constrained-child **re-baseline** (off-reference edits, an M5 tool-layer concern) ·
 the **grid tail remainder** (explicit placement/spans, `minmax()`/`fit-content` tracks).

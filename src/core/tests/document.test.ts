@@ -18,7 +18,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds } from "../geometry/GeometryEngine";
-import { layoutChildren, layoutGridChildren, resolveGridTracks, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
+import { layoutChildren, layoutGridChildren, resolveGridTracks, breakFlexLines, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
 import { clampViewport, createEditorState } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
@@ -1580,13 +1580,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "12" that has no 11→12 step: the
+        // Pretending the build has moved to a schema "13" that has no 12→13 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→11), and then REFUSED at "11" — never re-stamped straight to the current
-        // schema. The error naming "11" (not "1") is the proof the chain actually ran.
+        // (1→2→…→12), and then REFUSED at "12" — never re-stamped straight to the current
+        // schema. The error naming "12" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 10→11 landed for grid auto+hug.)
-        expect(() => migrateIfNeeded(legacy, "12")).toThrow('Migration not implemented for document schema "11"');
+        // time a real migration is added — here, when 11→12 landed for flex wrap.)
+        expect(() => migrateIfNeeded(legacy, "13")).toThrow('Migration not implemented for document schema "12"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -2037,7 +2037,7 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
                 const vMode = pick(["top", "bottom", "top-bottom", "center", "scale"]);
                 const r = rnd();
                 const rule = r < 0.3
-                    ? { container: { direction: pick([...dirs]), gap: rnd() * 12, padding: rnd() * 12, alignItems: pick([...aligns]), hugWidth: rnd() < 0.5, hugHeight: rnd() < 0.5 } }
+                    ? { container: { direction: pick([...dirs]), gap: rnd() * 12, padding: rnd() * 12, alignItems: pick([...aligns]), hugWidth: rnd() < 0.5, hugHeight: rnd() < 0.5, wrap: rnd() < 0.5 } }
                     : r < 0.42
                         ? { container: undefined }
                         : r < 0.55
@@ -2773,6 +2773,202 @@ describe("M2 grid measure-integration (auto tracks + grid hug)", () => {
         // Load path rejects an `{auto:false}` track and a non-boolean hug flag, exactly as the edit path does.
         expect(() => deserializeDocument(envelope(`{ "grid": { "columns": [{ "auto": false }], "rowHeight": { "px": 10 } } }`))).toThrow();
         expect(() => deserializeDocument(envelope(`{ "grid": { "columns": [{ "px": 10 }], "rowHeight": { "px": 10 }, "hugWidth": "yes" } }`))).toThrow();
+    });
+});
+
+describe("M2 flex wrap", () => {
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+
+    test("breakFlexLines: break predicate, first-fits, margins, empty, nowrap", () => {
+        const it = (main: number, cross: number, margin = 0) => ({ main, cross, margin });
+        // innerMain 100, gap 10: [40,40] = 40+10+40 = 90 ≤ 100 stays; +40 -> 140 > 100 wraps.
+        const l = breakFlexLines([it(40, 5), it(40, 8), it(40, 5)], 100, 10, true);
+        expect(l.map(x => x.items)).toEqual([[0, 1], [2]]);
+        expect(l[0].cross).toBe(8);   // max(5, 8) on line 0
+        expect(l[1].cross).toBe(5);
+        // exact fit stays on the line (strict `>`): 45 + 10 + 45 = 100, not > 100.
+        expect(breakFlexLines([it(45, 1), it(45, 1)], 100, 10, true)).toHaveLength(1);
+        // first child always fits even if it alone overflows.
+        expect(breakFlexLines([it(200, 1)], 100, 0, true)).toEqual([{ items: [0], cross: 1 }]);
+        // margins count into the item main: (40 + 2·5) each, gap 0 -> [0,1] then [2].
+        expect(breakFlexLines([it(40, 1, 5), it(40, 1, 5), it(40, 1, 5)], 100, 0, true).map(x => x.items)).toEqual([[0, 1], [2]]);
+        expect(breakFlexLines([], 100, 0, true)).toEqual([]);                       // empty -> []
+        expect(breakFlexLines([it(40, 1), it(40, 1), it(40, 1)], 100, 10, false)).toHaveLength(1); // nowrap -> one line
+    });
+
+    test("a hugHeight wrap row sizes its height to the stacked lines — and that equals the cells", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2", "c3"], { x: 0, y: 0, width: 100, height: 999 },
+            { container: { direction: "row", wrap: true, hugHeight: true, gap: 10 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 40, height: 20 }, {}));
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 40, height: 30 }, {}));
+        doc.nodes.set("c3", mk("c3", "P", [], { x: 0, y: 0, width: 40, height: 25 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // line0 = [c1,c2] (40+10+40=90 ≤ 100), line1 = [c3]. crossHug = (max(20,30)) + (25) + gap·1 = 30+25+10 = 65.
+        expect(cs.nodes.get("P")!.bounds.height).toBe(65); // NOT the stored 999
+        expect(cs.nodes.get("c2")!.bounds).toMatchObject({ y: 0, height: 30 });   // line 0
+        expect(cs.nodes.get("c3")!.bounds).toMatchObject({ y: 40, height: 25 });  // line 1 (0 + 30 + gap 10)
+        // FUZZ-BLIND structural check: the container's own height == the lowest cell edge + padding.
+        const bottom = Math.max(...["c1", "c2", "c3"].map(id => { const b = cs.nodes.get(id)!.bounds; return b.y + b.height; }));
+        expect(bottom + 0).toBe(cs.nodes.get("P")!.bounds.height);
+    });
+
+    test("grow is distributed PER LINE, not across the whole container", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2", "c3"], { x: 0, y: 0, width: 100, height: 100 },
+            { container: { direction: "row", wrap: true, gap: 0 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 40, height: 10 }, { grow: 1 }));
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 40, height: 10 }, { grow: 1 }));
+        doc.nodes.set("c3", mk("c3", "P", [], { x: 0, y: 0, width: 40, height: 10 }, { grow: 1 }));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // line0 = [c1,c2] (free 20 shared -> 50 each); line1 = [c3] (free 60 -> fills to 100).
+        // A whole-container computation would see free = 100 - 120 = -20 < 0 and grow NOTHING.
+        expect(cs.nodes.get("c1")!.bounds.width).toBe(50);
+        expect(cs.nodes.get("c2")!.bounds.width).toBe(50);
+        expect(cs.nodes.get("c3")!.bounds.width).toBe(100);
+    });
+
+    test("a single wrap line still fills the container cross (nowrap-preserving band)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 100, height: 40 },
+            { container: { direction: "row", wrap: true, alignItems: "stretch", gap: 0 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 30, height: 5 }, {}));
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 30, height: 5 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // 60 ≤ 100 -> one line; the single line's band is innerCross (40), NOT its own cross (5),
+        // so stretch fills the container exactly as a nowrap container does.
+        expect(cs.nodes.get("c1")!.bounds.height).toBe(40);
+        expect(cs.nodes.get("c2")!.bounds.height).toBe(40);
+    });
+
+    test("wrap is INERT when the main axis hugs (no definite main to wrap against)", () => {
+        const doc = createEmptyDocument();
+        // Small STORED width (50): if wrap were NOT disabled under hug-main, the measure fold
+        // would break cross against 50 into 3 lines and mis-size the height, while the position
+        // pass (breaking against the 140 hug width) stays one line — the exact measure/position
+        // split the `!mainHugs` guard prevents. hugHeight makes that height observable.
+        doc.nodes.set("P", mk("P", null, ["c1", "c2", "c3"], { x: 0, y: 0, width: 50, height: 999 },
+            { container: { direction: "row", hugWidth: true, hugHeight: true, wrap: true, gap: 10 } }));
+        for (const [id, w] of [["c1", 40], ["c2", 40], ["c3", 40]] as const) doc.nodes.set(id, mk(id, "P", [], { x: 0, y: 0, width: w, height: 10 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // hug-main -> single line -> width = 3·40 + 2·gap = 140; height = single-line max = 10.
+        expect(cs.nodes.get("P")!.bounds.width).toBe(140);
+        expect(cs.nodes.get("P")!.bounds.height).toBe(10); // NOT a 3-line stack
+    });
+
+    test("a grown wrap container wraps against its OWN main, not the stretched main", () => {
+        // Consistency guard: the wrap container G is GROWN by its parent from 100 to 200, so
+        // its computed local width (200) differs from its measured own width (100). Line-breaking
+        // must use the measured own width in BOTH passes, or the cross-hug height (measured, 2
+        // lines) would not match the laid-out stack (position). A fuzz-blind split — pinned here
+        // by absolute geometry.
+        const doc = createEmptyDocument();
+        doc.nodes.set("O", mk("O", null, ["G"], { x: 0, y: 0, width: 200, height: 100 },
+            { container: { direction: "row", gap: 0 } }));
+        doc.nodes.set("G", mk("G", "O", ["c1", "c2"], { x: 0, y: 0, width: 100, height: 999 },
+            { container: { direction: "row", wrap: true, hugHeight: true, gap: 0 }, grow: 1 }));
+        doc.nodes.set("c1", mk("c1", "G", [], { x: 0, y: 0, width: 60, height: 10 }, {}));
+        doc.nodes.set("c2", mk("c2", "G", [], { x: 0, y: 0, width: 60, height: 10 }, {}));
+        doc.rootNodeUuids = ["O"];
+        const cs = computeGeometry(doc);
+        expect(cs.nodes.get("G")!.bounds.width).toBe(200);  // grown by O from its own 100
+        expect(cs.nodes.get("G")!.bounds.height).toBe(20);  // but wraps against its OWN 100 -> 2 lines
+        expect(cs.nodes.get("c2")!.bounds).toMatchObject({ x: 0, y: 10 }); // c2 wrapped to line 2, NOT beside c1
+    });
+
+    test("column-direction wrap is symmetric: hugWidth sizes to the stacked columns", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2", "c3"], { x: 0, y: 0, width: 999, height: 100 },
+            { container: { direction: "column", wrap: true, hugWidth: true, gap: 10 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 20, height: 40 }, {}));
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 30, height: 40 }, {}));
+        doc.nodes.set("c3", mk("c3", "P", [], { x: 0, y: 0, width: 25, height: 40 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // line0 = [c1,c2] (40+10+40=90 ≤ 100), line1 = [c3]. hugWidth = max(20,30) + 25 + gap = 30+25+10 = 65.
+        expect(cs.nodes.get("P")!.bounds.width).toBe(65);
+        expect(cs.nodes.get("c3")!.bounds).toMatchObject({ x: 40, width: 25 }); // second column
+    });
+
+    test("re-wrapping (a resize that pushes a child onto a new line) grows the container, incrementally", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2", "c3"], { x: 0, y: 0, width: 100, height: 999 },
+            { container: { direction: "row", wrap: true, hugHeight: true, gap: 0 } }));
+        for (const id of ["c1", "c2", "c3"]) doc.nodes.set(id, mk(id, "P", [], { x: 0, y: 0, width: 30, height: 10 }, {}));
+        doc.rootNodeUuids = ["P"];
+
+        const dispatcher = new ActionDispatcher(doc);
+        const base = computeGeometry(dispatcher.getDocument());
+        expect(base.nodes.get("P")!.bounds.height).toBe(10); // 90 ≤ 100 -> one line
+
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+        dispatcher.dispatchAction(new ResizeNodeAction(dispatcher.getDocument(), "c1", 60, 10)); // 60+30=90, +30 -> wraps
+
+        const full = computeGeometry(dispatcher.getDocument());
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, dirty);
+        expect(full.nodes.get("P")!.bounds.height).toBe(20); // non-vacuous: a new line, 10 -> 20
+        expect(dirty.has("P")).toBe(false);                  // only c1 reported; the climb found P
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+    });
+
+    test("a PENDING resize re-wraps in the live preview, incrementally", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2", "c3"], { x: 0, y: 0, width: 100, height: 999 },
+            { container: { direction: "row", wrap: true, hugHeight: true, gap: 0 } }));
+        for (const id of ["c1", "c2", "c3"]) doc.nodes.set(id, mk(id, "P", [], { x: 0, y: 0, width: 30, height: 10 }, {}));
+        doc.rootNodeUuids = ["P"];
+
+        const base = computeGeometry(doc);
+        const pending = new Map([["c1", { x: 0, y: 0, width: 60, height: 10 }]]);
+        const full = computeGeometry(doc, pending);
+        const incremental = computeGeometry(doc, pending, base, new Set<string>());
+        expect(full.nodes.get("P")!.bounds.height).toBe(20); // the drag pushes c3 to a new line, container grows
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+    });
+
+    test("a grown hug-MAIN wrap container still grows its children (the override is gated on effectiveWrap)", () => {
+        // Review-found: the position-pass measured-main override must fire only for a REALLY-
+        // wrapping container (wrap AND main not hugged), NOT on `wrap === true`. G hugs its main
+        // (hugWidth, row) so wrap is inert, but a growing parent enlarges it 120 -> 300. If the
+        // override wrongly substituted G's un-grown intrinsic main (120), its grow child would be
+        // scaled against 120 (free 0, stays 60) instead of the grown 300 (free 180, -> 240).
+        const doc = createEmptyDocument();
+        doc.nodes.set("O", mk("O", null, ["G"], { x: 0, y: 0, width: 300, height: 100 },
+            { container: { direction: "row", gap: 0 } }));
+        doc.nodes.set("G", mk("G", "O", ["c1", "c2"], { x: 0, y: 0, width: 100, height: 50 },
+            { container: { direction: "row", wrap: true, hugWidth: true, gap: 0 }, grow: 1 }));
+        doc.nodes.set("c1", mk("c1", "G", [], { x: 0, y: 0, width: 60, height: 10 }, { grow: 1 }));
+        doc.nodes.set("c2", mk("c2", "G", [], { x: 0, y: 0, width: 60, height: 10 }, {}));
+        doc.rootNodeUuids = ["O"];
+        const cs = computeGeometry(doc);
+        expect(cs.nodes.get("G")!.bounds.width).toBe(300); // O grows G from its 120 hug to 300
+        expect(cs.nodes.get("c1")!.bounds.width).toBe(240); // c1 grows into the GROWN 300, not the 120 hug
+        expect(cs.nodes.get("c2")!.bounds).toMatchObject({ x: 240, width: 60 });
+    });
+
+    test("wrap is a write-path citizen: validation, schema-12 round-trip, both-paths rejection", () => {
+        const d = createDocWithParentChild();
+        const ok = (container: any) => new UpdateNodeLayoutAction(d, "parent-001", { container }).validate();
+        expect(ok({ direction: "row", wrap: true })).toBe(true);
+        expect(ok({ direction: "row", wrap: false })).toBe(true);
+        expect(ok({ direction: "row", wrap: "yes" })).toBe(false); // non-boolean
+
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "parent-001", { container: { direction: "row", wrap: true, hugHeight: true } }));
+        const reloaded = deserializeDocument(serializeDocument(dispatcher.getDocument()));
+        expect(reloaded.nodes.get("parent-001")!.layout.container!.wrap).toBe(true);
+
+        const envelope = (layout: string) => `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
+            + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
+            + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
+            + ` "style": { "fill": "#000", "opacity": 1 }, "layout": ${layout} } } } }`;
+        expect(() => deserializeDocument(envelope(`{ "container": { "direction": "row", "wrap": "yes" } }`))).toThrow();
     });
 });
 

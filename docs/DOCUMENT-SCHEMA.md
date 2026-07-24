@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v11 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid (+rows/auto/hug), constraints, absolute + margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v12 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap, grid (+rows/auto/hug), constraints, absolute + margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -84,9 +84,10 @@ interface Constraints {              // how this child responds when its PLAIN p
 
 interface LayoutContainer {          // this node's DIRECT CHILDREN are auto-positioned
   direction: "row" | "column";
-  gap?: number;                      // between children, >= 0
+  gap?: number;                      // between children AND between wrapped lines, >= 0
   padding?: number;                  // inset from the container's edges, >= 0
   alignItems?: "start" | "center" | "end" | "stretch";  // cross-axis; stretch resizes
+  wrap?: boolean;                    // multi-line flow (schema 12); cross-hug sizes to the lines
   hugWidth?: boolean;                // size width to contents (schema 4); absolute axis
   hugHeight?: boolean;               // size height to contents (schema 4); absolute axis
 }
@@ -231,6 +232,30 @@ required because a schema-8 build would draw an overflowing child at full size. 
 redistribute when a child hits 0; we accept the small overshoot — a documented
 simplification.)
 
+**Flex wrap — landed in schema 12 (Milestone 2).** `LayoutContainer.wrap` makes children
+that overflow the container's inner MAIN axis flow onto new lines. A single shared
+`breakFlexLines` (the flex analogue of `resolveGridTracks`) is called by BOTH the position
+pass and the measure cross-hug fold, so a cross-hug container's own size equals the stack it
+lays out — the fuzz-blind property the grid slice taught us to pin directly. A new line starts
+when the current line is non-empty and the next child (its `2·margin + main`, plus one `gap`)
+would exceed the inner main (strict `>`, so an exact fit stays); the first child on a line
+always stays even if it alone overflows. Each line distributes its OWN grow/shrink free space;
+lines stack on the cross axis separated by `gap` (reused for both axes); `alignItems` aligns
+each child within its line's cross band, except a SINGLE line fills the whole container cross
+(keeping nowrap byte-identical). A cross-axis-hug container sizes its cross to `2·pad + Σ line
+cross + gap·(lines−1)`. Constraints, all resolved acyclically:
+- Wrap is **inert when the MAIN axis hugs** (no definite main to wrap against — the direct
+  analogue of `grow` under a hugged main); the layout stays a single line.
+- Wrapping is measured against the container's OWN size; a parent that STRETCHES/grows the main
+  axis wider does NOT re-flow into the extra space (a documented deferral that keeps the measure
+  pass acyclic — both passes break against the same own-size, so they never disagree).
+- **align-content** (distributing lines in leftover cross space), wrap-reverse, and a separate
+  cross-gap are DEFERRED; lines pack from the leading cross edge.
+- **Absent = nowrap**, so every schema-11 document is a valid schema-12 one — `migrate_11_to_12`
+  is a pass-through; the bump is required because a schema-11 build would draw a wrapping
+  container's children on one overflowing line and mis-size a cross-hug container. `wrap` is
+  validated (a boolean) on both paths.
+
 **Grid — landed in schema 6 (Milestone 2).** `Layout.grid` is an ALTERNATIVE to
 `container` (the two are **mutually exclusive**). A grid's direct children auto-flow
 row-major into `columns.length` columns × `ceil(count/columns)` rows and **fill their
@@ -319,7 +344,7 @@ in-flow / 0**, so every schema-7 document is a valid schema-8 document — `migr
 is a pass-through; the bump is required because a schema-7 build would lay an absolute child
 into the flow and ignore its margin.
 
-> **Still deferred (not in schema 11):** wrap, per-side margins,
+> **Still deferred (not in schema 12):** align-content / wrap-reverse, per-side margins,
 > responsive/breakpoint rules, grid-cell margins, the constrained-child re-baseline (above),
 > and the grid tail remainder (explicit placement/spans, `minmax()`/`fit-content` tracks).
 > These are M2's remaining deliverables — see
@@ -422,7 +447,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"11"`; chain: …8→9 flex-shrink, 9→10 grid per-row `rows`, 10→11 grid `auto` tracks + hug) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"12"`; chain: …9→10 grid per-row `rows`, 10→11 grid `auto` tracks + hug, 11→12 flex wrap) | **only** when the persisted shape changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

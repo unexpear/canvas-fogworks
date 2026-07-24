@@ -224,7 +224,24 @@ function layoutContainerPass(
         const own = measured.get(childId) ?? { width: child.geometry.width, height: child.geometry.height };
         children.push({ id: childId, width: own.width, height: own.height, grow: child.layout.grow, shrink: child.layout.shrink, margin: child.layout.margin });
     }
-    for (const [id, rect] of layoutChildren(container, { width: parentLocal.width, height: parentLocal.height }, children)) {
+    // A REALLY-wrapping container must break lines against its OWN (measured) MAIN size — the
+    // same size the measure cross-hug fold used — NOT the container's computed local rect, which
+    // a grow/stretch/grid-cell parent may have enlarged. Otherwise measure and position would
+    // wrap differently and a cross-hug container's size would not match its laid-out lines (a
+    // fuzz-blind bug). The cross axis still uses the real local rect. (Extra main space from a
+    // stretching parent is a documented deferral — wrap does not re-flow into it.)
+    //
+    // Gate on `effectiveWrap` (wrap AND main not hugged) — the SAME condition `layoutChildren`
+    // and the measure fold use — NOT `wrap === true`. A hug-MAIN container is inert (a single
+    // line either way), so it must keep the parent's actual (possibly grown) main; substituting
+    // its un-grown intrinsic main there would starve its grow/shrink children. (Review-found.)
+    const own = measured.get(node.id);
+    const row = container.direction === "row";
+    const effectiveWrap = container.wrap === true && !(row ? container.hugWidth : container.hugHeight);
+    const parentSize = effectiveWrap && own
+        ? { width: row ? own.width : parentLocal.width, height: row ? parentLocal.height : own.height }
+        : { width: parentLocal.width, height: parentLocal.height };
+    for (const [id, rect] of layoutChildren(container, parentSize, children)) {
         laidOut.set(id, rect);
     }
 }
