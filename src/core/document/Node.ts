@@ -78,6 +78,18 @@ export interface LayoutContainer {
     padding?: number;    // inset from the container's edges (>= 0)
     /** Cross-axis placement; "stretch" also sets each child's cross-size to fill. */
     alignItems?: "start" | "center" | "end" | "stretch";
+    /**
+     * Intrinsic ("hug") sizing (Milestone 2). When set, this container sizes the given
+     * PHYSICAL axis to its contents instead of using its stored `geometry`: the hugged
+     * width/height becomes a computed RESULT, exactly as a laid-out child's position is.
+     *   - `hugWidth`  → width  = (row: sum of child widths + gaps; column: max child width) + 2·padding
+     *   - `hugHeight` → height = (row: max child height; column: sum of child heights + gaps) + 2·padding
+     * Absolute axes (not main/cross) on purpose: flipping `direction` must never
+     * silently re-interpret which axis hugs. Hug composes — a hug container inside a hug
+     * container ripples upward — which is why sizing needs a bottom-up measure pass.
+     */
+    hugWidth?: boolean;
+    hugHeight?: boolean;
 }
 
 const DIRECTIONS = new Set(["row", "column"]);
@@ -97,6 +109,8 @@ export function layoutError(l: Partial<Layout>): string | null {
     if (c.gap !== undefined && (!Number.isFinite(c.gap) || c.gap < 0)) return "layout.container.gap must be finite and >= 0";
     if (c.padding !== undefined && (!Number.isFinite(c.padding) || c.padding < 0)) return "layout.container.padding must be finite and >= 0";
     if (c.alignItems !== undefined && !ALIGNMENTS.has(c.alignItems)) return "layout.container.alignItems is invalid";
+    if (c.hugWidth !== undefined && typeof c.hugWidth !== "boolean") return "layout.container.hugWidth must be a boolean";
+    if (c.hugHeight !== undefined && typeof c.hugHeight !== "boolean") return "layout.container.hugHeight must be a boolean";
     return null;
 }
 

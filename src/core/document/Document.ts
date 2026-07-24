@@ -47,8 +47,13 @@ export const CURRENT_VERSION: string =
  *         positioned by a flex-stack rule) for Milestone 2. Absent = no auto-layout,
  *         so `migrate_2_to_3` is a pass-through — but a schema-2 build would ignore
  *         the container and draw the children at their now-vestigial stored x/y.
+ *
+ *   "4" — adds optional `LayoutContainer.hugWidth`/`hugHeight` (intrinsic sizing: a
+ *         container sizes an axis to its contents) for Milestone 2. Absent = fixed
+ *         size, so `migrate_3_to_4` is a pass-through — but a schema-3 build would draw
+ *         a hug container at its now-vestigial stored width/height, misstating the doc.
  */
-export const SCHEMA_VERSION = "3";
+export const SCHEMA_VERSION = "4";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

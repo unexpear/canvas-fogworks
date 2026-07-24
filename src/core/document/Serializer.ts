@@ -204,6 +204,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     //    next step run — do NOT return early from inside the chain.
     if (version === "1") { raw = migrate_1_to_2(raw); version = "2"; }
     if (version === "2") { raw = migrate_2_to_3(raw); version = "3"; }
+    if (version === "3") { raw = migrate_3_to_4(raw); version = "4"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -232,6 +233,11 @@ function migrate_1_to_2(raw: any): any {
 /** Schema 2 → 3: adds the optional `Layout.container`. Pass-through by content. */
 function migrate_2_to_3(raw: any): any {
     return { ...raw, version: "3" };
+}
+
+/** Schema 3 → 4: adds optional `LayoutContainer.hugWidth`/`hugHeight`. Pass-through by content. */
+function migrate_3_to_4(raw: any): any {
+    return { ...raw, version: "4" };
 }
 
 /**

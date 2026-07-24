@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
 
-> 🔒 Frozen contract · schema v3 (app v0.0.5) · current through Milestone 2 (auto-layout core; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v4 (app v0.0.5) · current through Milestone 2 (auto-layout + intrinsic sizing; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -108,6 +108,17 @@ composes through the same matrices. It is not a second engine or a second tree w
 is a producer feeding the one `ComputedState`. Layout's cross-sibling dependency (moving
 one child shifts the others) is reconciled here too, via `expandDirtyForLayout`.
 
+**Intrinsic ("hug") sizing makes it two passes.** A container may size an axis to its
+contents, and hug **composes upward** (a hug parent of a hug child depends on the
+grandchildren). So `computeGeometry` first runs `measureIntrinsicSizes` — a **bottom-up**
+fold over the same scene walk (reversed) that resolves every node's own size, folding a
+hug container's hugged axis from its children — then the existing **top-down** position
+pass consumes those sizes. The measure pass is deliberately run *fully* on every compute
+(never memoized): that makes the size layer byte-identical between a full and an
+incremental recompute, so the `incremental === full` invariant reduces to the dirty walk.
+That walk (`expandDirtyForLayout`) climbs a change **up the hug chain** to the first fixed
+container, so a deep resize re-lays-out every ancestor it actually moves.
+
 Still outstanding for the computed layer: **resolved style** (M5 tokens) belongs in
 `ComputedState` and is not there yet; and M2's **richer layout** — constraints, grid,
 intrinsic sizing and the rest — is deferred (see MILESTONES.md). Layout output today is
@@ -119,7 +130,7 @@ expressed *as* geometry (computed local rects), not as a distinct channel.
 |-------|-------|----------------|
 | Document | `core/document/{Document,Node,Serializer}.ts`, `core/ids/UUID.ts` | Source of truth, types, (de)serialization, identity |
 | Document integrity | `core/document/{SceneGraph,Integrity}.ts` | Tree traversal/draw order; structural + range validation on load |
-| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers computed inside the same pass (**M2 core**) |
+| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**) |
 | Actions | `core/actions/{Action,types,applyMutations}.ts` + `*Action.ts` | Declarative mutations + delta protocol |
 | Dispatch/History | `core/actions/{ActionDispatcher,HistoryManager}.ts` | Only write path; snapshot undo/redo |
 | Editor | `editor/EditorState.ts`, `editor/tools/*` | Ephemeral state; input → Actions |

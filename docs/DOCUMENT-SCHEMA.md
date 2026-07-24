@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v3 (app v0.0.5) · current through Milestone 2 (auto-layout core). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v4 (app v0.0.5) · current through Milestone 2 (auto-layout + intrinsic sizing). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -75,6 +75,8 @@ interface LayoutContainer {          // this node's DIRECT CHILDREN are auto-pos
   gap?: number;                      // between children, >= 0
   padding?: number;                  // inset from the container's edges, >= 0
   alignItems?: "start" | "center" | "end" | "stretch";  // cross-axis; stretch resizes
+  hugWidth?: boolean;                // size width to contents (schema 4); absolute axis
+  hugHeight?: boolean;               // size height to contents (schema 4); absolute axis
 }
 
 interface StateDefinition { [key: string]: any; } // reserved for Milestone 7
@@ -149,9 +151,30 @@ within its own (possibly stretched) size.
   vestigial stored `x/y`, silently misstating the document (the same "old build, not old
   file" hazard as the schema-2 bump below).
 
-> **Deferred (not in schema 3):** constraints/anchors, flex-grow, wrap, grid, intrinsic
-> ("hug") sizing, per-child margins, absolute-position escapes, responsive rules. These
-> are M2's remaining deliverables — see [MILESTONES.md](../MILESTONES.md) § Milestone 2.
+**Intrinsic ("hug") sizing — landed in schema 4 (Milestone 2).** A container may set
+`hugWidth` / `hugHeight` to size a **physical** axis to its contents instead of using
+its stored `geometry`: the hugged width/height becomes a computed *result*, exactly as
+a laid-out child's position is.
+
+- `hugWidth` → width = (row: Σ child widths + gaps; column: max child width) + 2·padding.
+  `hugHeight` is the same on the other axis. Absolute axes (not "main"/"cross") on
+  purpose — flipping `direction` must never silently re-interpret which axis hugs, which
+  is exactly the kind of interpretation change the freeze rule exists to catch.
+- Hug **composes**: a hug container inside a hug container ripples upward until a fixed
+  ancestor absorbs it. So sizing needs a **bottom-up measure pass** (`measureIntrinsicSizes`)
+  that runs before positioning — see [ARCHITECTURE.md](ARCHITECTURE.md). The measure reads
+  only stored/pending sizes and container rules (never a child's *stretched* size), so it
+  is an acyclic fold: `hugHeight` + `alignItems: "stretch"` are coherent (a container hugs
+  to its children's pre-stretch cross-size, then stretches them to fill it).
+- Validated by the shared `layoutError` on both the edit and load paths (a non-boolean
+  `hugWidth` is rejected identically), and settable via `UpdateNodeLayoutAction`.
+- **Absent means fixed size**, so every schema-3 document is a valid schema-4 document —
+  hence `migrate_3_to_4` is a pass-through. The bump is still required: a schema-3 *build*
+  would draw a hug container at its now-vestigial stored width/height, misstating the doc.
+
+> **Still deferred (not in schema 4):** constraints/anchors, flex-grow, wrap, grid,
+> per-child margins, absolute-position escapes, responsive rules. These are M2's
+> remaining deliverables — see [MILESTONES.md](../MILESTONES.md) § Milestone 2.
 
 > **It bumped `SCHEMA_VERSION` to `"2"`** — as the freeze rule required, with a
 > matching `migrate_1_to_2` step. The bump was necessary even though the migration is
@@ -250,7 +273,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"3"`; chain: 1→2 transform, 2→3 auto-layout) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"4"`; chain: 1→2 transform, 2→3 auto-layout, 3→4 hug sizing) | **only** when the persisted shape changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

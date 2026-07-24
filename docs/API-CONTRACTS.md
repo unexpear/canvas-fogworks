@@ -2,14 +2,14 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer/SVGRenderer.ts, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v3 (app v0.0.5) · current through Milestone 2 (auto-layout core). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v4 (app v0.0.5) · current through Milestone 2 (auto-layout + intrinsic sizing). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
 
 ```ts
 const CURRENT_VERSION: string;               // app/display version, from package.json
-const SCHEMA_VERSION: string;                // "3" — persisted document schema (decoupled from app version)
+const SCHEMA_VERSION: string;                // "4" — persisted document schema (decoupled from app version)
 function createEmptyDocument(): ProjectDocument;
 
 // SceneGraph.ts — the ONLY correct node ordering (z-order / layer order)
@@ -56,7 +56,11 @@ function layoutChildren(                          // pure flex-stack math
 ): Map<string, Rect>;                             // childId → parent-relative rect
 function isLayoutContainer(node: { layout: { container?: unknown } } | undefined): boolean;
 function expandDirtyForLayout(doc: ReadonlyDocument, dirty: ReadonlySet<string>): Set<string>;
-                                                  // dirties a container when a child is dirty (sibling ripple)
+                                                  // climbs a change up the hug chain to the first fixed container
+function measureIntrinsicSizes(                    // bottom-up: resolved own-size per node, hug folded from children
+  scene: readonly ReadonlyNode[],
+  pending: ReadonlyMap<string, Partial<Geometry>> | null | undefined
+): Map<string, { width: number; height: number }>;
 
 // Serializer.ts
 function serializeDocument(doc: ReadonlyDocument): string;

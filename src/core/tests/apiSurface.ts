@@ -32,7 +32,7 @@ import {
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
-import { layoutChildren, expandDirtyForLayout, isLayoutContainer } from "../geometry/LayoutEngine";
+import { layoutChildren, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
 import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot } from "../actions/types";
@@ -116,6 +116,7 @@ export function __apiSurfacePin(): void {
     expectType<Map<string, Rect>>(layoutChildren(container, { width: 1, height: 1 }, [{ id: "a", width: 1, height: 1 }]));
     expectType<Set<string>>(expandDirtyForLayout(doc, new Set<string>()));
     expectType<boolean>(isLayoutContainer(doc.nodes.get("id")));
+    expectType<Map<string, { width: number; height: number }>>(measureIntrinsicSizes(traverseSceneGraph(doc), null));
 
     // Matrix primitive
     expectType<Mat2D>(IDENTITY);

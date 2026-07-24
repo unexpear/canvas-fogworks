@@ -30,7 +30,7 @@
 import { DeepReadonly, ReadonlyDocument } from "../document/Document";
 import { Geometry, Node } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
-import { expandDirtyForLayout, layoutChildren } from "./LayoutEngine";
+import { expandDirtyForLayout, layoutChildren, measureIntrinsicSizes } from "./LayoutEngine";
 import {
     Mat2D, IDENTITY, Rect, multiply, compose, invert, applyToPoint,
     transformRectToAABB, unionRect
@@ -81,14 +81,26 @@ export function computeGeometry(
     const nodes = new Map<string, ComputedNode>();
     // A node is recomputed if it, or any ancestor, is dirty.
     const dirtySubtree = new Set<string>();
-    // Layout ripple: a change to a container's child moves its SIBLINGS, so a dirty
-    // child must dirty its whole container. The engine handles this so callers can
-    // keep reporting only directly-changed nodes.
-    const effectiveDirty = dirty ? expandDirtyForLayout(doc, dirty) : dirty;
+    // One scene walk, shared by the measure pass (reversed = bottom-up) and the
+    // position pass (forward = top-down).
+    const scene = traverseSceneGraph(doc);
+    // MEASURE PASS: resolved own-size per node, with hug containers folded from their
+    // children. Always full (never memoized), so the size layer is identical between a
+    // full and an incremental compute — the invariant then rests only on the climb.
+    const measured = measureIntrinsicSizes(scene, pending);
+    // Layout ripple: a change to a container's child (or a pending size preview) moves
+    // its SIBLINGS and can resize hug ancestors, so climb the dirty set up the
+    // layout/hug chain. Pending keys join the seed so a live resize ripples up too.
+    let effectiveDirty = dirty;
+    if (dirty) {
+        const seed = new Set(dirty);
+        if (pending) for (const k of pending.keys()) seed.add(k);
+        effectiveDirty = expandDirtyForLayout(doc, seed);
+    }
     // childId → parent-relative rect computed by the parent's auto-layout.
     const laidOut = new Map<string, Rect>();
 
-    for (const node of traverseSceneGraph(doc)) {
+    for (const node of scene) {
         const id = node.id;
         const parentId = node.parent ?? null;
 
@@ -106,7 +118,7 @@ export function computeGeometry(
         if (!selfDirty && !inherited && reusable) {
             order.push(id);
             nodes.set(id, reusable);
-            layoutContainerPass(doc, node, reusable.local, laidOut, pending);
+            layoutContainerPass(doc, node, reusable.local, laidOut, measured);
             continue;
         }
 
@@ -115,8 +127,12 @@ export function computeGeometry(
         // A child of an auto-layout container gets its position (and, when stretched,
         // size) from the parent — replacing stored x/y with a computed one. A pending
         // drag patch still wins, so a laid-out node can be previewed if a tool allows it.
+        // A node's OWN size comes from the measure pass (its stored size, or a hug
+        // container's computed size); the parent's layout already used that same measured
+        // size, so a laid-out child (`computedLocal`) and a root agree.
         const computedLocal = laidOut.get(id);
-        const base = computedLocal ?? { x: g.x, y: g.y, width: g.width, height: g.height };
+        const m = measured.get(id);
+        const base = computedLocal ?? { x: g.x, y: g.y, width: m?.width ?? g.width, height: m?.height ?? g.height };
         const local: Rect = patch
             ? { x: patch.x ?? base.x, y: patch.y ?? base.y, width: patch.width ?? base.width, height: patch.height ?? base.height }
             : base;
@@ -131,7 +147,7 @@ export function computeGeometry(
 
         order.push(id);
         nodes.set(id, { world, local, bounds: transformRectToAABB(world, boxAtOrigin) });
-        layoutContainerPass(doc, node, local, laidOut, pending);
+        layoutContainerPass(doc, node, local, laidOut, measured);
     }
 
     return { order, nodes };
@@ -141,15 +157,15 @@ export function computeGeometry(
  * If `node` is an auto-layout container, compute its direct children's parent-relative
  * rects and record them in `laidOut`. Runs when the PARENT is visited; because the
  * scene graph is walked parents-first, each child then reads its computed rect before
- * it is itself processed. Child sizes reflect any pending patch, so a live resize
- * reflows its siblings.
+ * it is itself processed. Child sizes come from the MEASURE pass, so they already
+ * reflect any pending patch (a live resize reflows siblings) and any child's own hug.
  */
 function layoutContainerPass(
     doc: ReadonlyDocument,
     node: DeepReadonly<Node>,
     parentLocal: Rect,
     laidOut: Map<string, Rect>,
-    pending: PendingGeometry
+    measured: ReadonlyMap<string, { width: number; height: number }>
 ): void {
     const container = node.layout.container;
     if (!container) return;
@@ -157,12 +173,8 @@ function layoutContainerPass(
     for (const childId of node.children) {
         const child = doc.nodes.get(childId);
         if (!child) continue;
-        const p = pending?.get(childId);
-        children.push({
-            id: childId,
-            width: p?.width ?? child.geometry.width,
-            height: p?.height ?? child.geometry.height,
-        });
+        const own = measured.get(childId) ?? { width: child.geometry.width, height: child.geometry.height };
+        children.push({ id: childId, width: own.width, height: own.height });
     }
     for (const [id, rect] of layoutChildren(container, { width: parentLocal.width, height: parentLocal.height }, children)) {
         laidOut.set(id, rect);

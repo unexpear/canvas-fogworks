@@ -18,7 +18,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds } from "../geometry/GeometryEngine";
-import { layoutChildren, expandDirtyForLayout, isLayoutContainer } from "../geometry/LayoutEngine";
+import { layoutChildren, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
 import { clampViewport, createEditorState } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
@@ -1580,15 +1580,15 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "4" that has no 3→4 step: the
+        // Pretending the build has moved to a schema "5" that has no 4→5 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→3), and then REFUSED at "3" — never re-stamped straight to the current
-        // schema. The error naming "3" (not "1") is the proof the chain actually ran.
+        // (1→2→3→4), and then REFUSED at "4" — never re-stamped straight to the current
+        // schema. The error naming "4" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 2→3 landed for M2.)
-        expect(() => migrateIfNeeded(legacy, "4")).toThrow('Migration not implemented for document schema "3"');
+        // time a real migration is added — here, when 3→4 landed for hug sizing.)
+        expect(() => migrateIfNeeded(legacy, "5")).toThrow('Migration not implemented for document schema "4"');
 
-        // At the current schema it loads, having been migrated 0.0.4 → 1 → 2 → 3.
+        // At the current schema it loads, having been migrated 0.0.4 → 1 → 2 → 3 → 4.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
     });
 
@@ -2029,10 +2029,11 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
             } else if (op === 2) {
                 dispatcher.dispatchAction(new ResizeNodeAction(doc, pick(ids), 1 + rnd() * 80, 1 + rnd() * 80));
             } else if (op === 3) {
-                // Toggle auto-layout on a random node: half the time a real container,
-                // half the time removed. This is the op that makes positions computed.
+                // Toggle auto-layout on a random node: half the time a real container
+                // (with independently-random HUG flags, which build multi-level hug
+                // chains as op 0 nests and op 4 reparents), half the time removed.
                 const rule = rnd() < 0.5
-                    ? { container: { direction: pick([...dirs]), gap: rnd() * 12, padding: rnd() * 12, alignItems: pick([...aligns]) } }
+                    ? { container: { direction: pick([...dirs]), gap: rnd() * 12, padding: rnd() * 12, alignItems: pick([...aligns]), hugWidth: rnd() < 0.5, hugHeight: rnd() < 0.5 } }
                     : { container: undefined };
                 dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, pick(ids), rule));
             } else if (op === 4) {
@@ -2056,5 +2057,162 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
             prev = incremental;
             dirty.clear();
         }
+    });
+});
+
+describe("M2 intrinsic (hug) sizing", () => {
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+
+    test("measureIntrinsicSizes folds a hug container's axis from its children", () => {
+        // row, gap 10, pad 20: main(width) = 50+60 + 10 + 40 = 160; cross(height) = max(50,40) + 40 = 90.
+        const doc = mkContainerScene({ direction: "row", gap: 10, padding: 20, hugWidth: true, hugHeight: true }, { c1: [50, 50], c2: [60, 40] });
+        const m = measureIntrinsicSizes(traverseSceneGraph(doc), null);
+        expect(m.get("P")).toEqual({ width: 160, height: 90 });
+        expect(m.get("c1")).toEqual({ width: 50, height: 50 }); // a leaf measures to its own size
+
+        // column, only hugHeight: main(height) = 50+40 + gap5 + pad20 = 115; width stays stored (400).
+        const col = mkContainerScene({ direction: "column", gap: 5, padding: 10, hugHeight: true }, { c1: [50, 50], c2: [60, 40] });
+        expect(measureIntrinsicSizes(traverseSceneGraph(col), null).get("P")).toEqual({ width: 400, height: 115 });
+
+        // an empty hug container collapses to just its padding.
+        const empty = createEmptyDocument();
+        empty.nodes.set("E", mk("E", null, [], { x: 0, y: 0, width: 333, height: 333 }, { container: { direction: "row", padding: 12, hugWidth: true, hugHeight: true } }));
+        empty.rootNodeUuids = ["E"];
+        expect(measureIntrinsicSizes(traverseSceneGraph(empty), null).get("E")).toEqual({ width: 24, height: 24 });
+    });
+
+    test("a hug container is SIZED to its contents through computeGeometry (stored size ignored)", () => {
+        const doc = mkContainerScene({ direction: "row", gap: 10, padding: 20, hugWidth: true, hugHeight: true }, { c1: [50, 50], c2: [60, 40] });
+        const cs = computeGeometry(doc);
+        expect(cs.nodes.get("P")!.local).toEqual({ x: 0, y: 0, width: 160, height: 90 }); // stored 400x300 vestigial
+        expect(cs.nodes.get("c1")!.bounds).toMatchObject({ x: 20, y: 20, width: 50, height: 50 });
+        expect(cs.nodes.get("c2")!.bounds).toMatchObject({ x: 80, y: 20, width: 60, height: 40 });
+    });
+
+    test("hug-cross + stretch is coherent (measure uses PRE-stretch sizes, so no cycle)", () => {
+        const doc = mkContainerScene({ direction: "row", padding: 0, alignItems: "stretch", hugHeight: true }, { c1: [50, 50], c2: [60, 40] });
+        const cs = computeGeometry(doc);
+        // P hugs height to the max OWN (pre-stretch) cross = max(50,40) = 50; width unhugged.
+        expect(cs.nodes.get("P")!.local.height).toBe(50);
+        expect(cs.nodes.get("P")!.local.width).toBe(400);
+        // children then stretch to fill that hugged inner-cross (c2 grows 40 -> 50). No cycle.
+        expect(cs.nodes.get("c1")!.local.height).toBe(50);
+        expect(cs.nodes.get("c2")!.local.height).toBe(50);
+    });
+
+    // A fixed root over a hug chain, with a SIBLING of the chain under the fixed
+    // container: top(fixed) > fix(fixed)[hugB, sib] > hugB(hug) > hugA(hug) > leaf.
+    // "sib" is what makes "add the first fixed container" load-bearing — it must reflow
+    // when the hug chain grows, and it only recomputes if "fix" enters the dirty set.
+    function hugChain(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("top", mk("top", null, ["fix"], { x: 0, y: 0, width: 500, height: 500 }, { container: { direction: "row" } }));
+        doc.nodes.set("fix", mk("fix", "top", ["hugB", "sib"], { x: 0, y: 0, width: 300, height: 300 }, { container: { direction: "row" } }));
+        doc.nodes.set("hugB", mk("hugB", "fix", ["hugA"], { x: 0, y: 0, width: 999, height: 100 }, { container: { direction: "row", hugWidth: true } }));
+        doc.nodes.set("hugA", mk("hugA", "hugB", ["leaf"], { x: 0, y: 0, width: 999, height: 100 }, { container: { direction: "row", hugWidth: true } }));
+        doc.nodes.set("leaf", mk("leaf", "hugA", [], { x: 0, y: 0, width: 30, height: 30 }, {}));
+        doc.nodes.set("sib", mk("sib", "fix", [], { x: 0, y: 0, width: 40, height: 40 }, {}));
+        doc.rootNodeUuids = ["top"];
+        return doc;
+    }
+
+    test("a size change ripples up the whole hug chain, halts at the first FIXED container, and reflows its siblings", () => {
+        const doc = hugChain();
+
+        // The climb dirties every hug ancestor AND the first fixed container ("fix"),
+        // and STOPS there — "top" above it is not dragged in. (The sibling "sib" is not
+        // in the climb output; it recomputes by inheriting fix's dirtiness downward.)
+        expect([...expandDirtyForLayout(doc, new Set(["leaf"]))].sort()).toEqual(["fix", "hugA", "hugB", "leaf"]);
+
+        const dispatcher = new ActionDispatcher(doc);
+        const base = computeGeometry(dispatcher.getDocument());
+        expect(base.nodes.get("hugB")!.local.width).toBe(30); // hugged to leaf(30) two levels down
+        expect(base.nodes.get("sib")!.bounds.x).toBe(30);      // packed right after hugB(30)
+
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+        dispatcher.dispatchAction(new ResizeNodeAction(dispatcher.getDocument(), "leaf", 80, 30));
+
+        const full = computeGeometry(dispatcher.getDocument());
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, dirty);
+        expect(full.nodes.get("hugB")!.local.width).toBe(80);   // grew 30 -> 80, TWO levels up (non-vacuous)
+        expect(full.nodes.get("sib")!.bounds.x).toBe(80);       // sibling slid right with the chain
+        expect(dirty.has("hugB")).toBe(false);                  // only "leaf" was ever reported
+        expect(dirty.has("sib")).toBe(false);
+        expect(statesEqualBounds(incremental, full)).toBe(true);// the multi-level climb caught all of it
+    });
+
+    test("a PENDING resize of a hug chain's leaf resizes the whole chain in the live preview", () => {
+        const doc = hugChain();
+        const base = computeGeometry(doc);
+        expect(base.nodes.get("hugB")!.local.width).toBe(30);
+
+        // A live resize preview of the deep leaf: pending only, never dispatched, and
+        // deliberately NOT reported in the dirty set. The chain must still hug to it,
+        // which only works because pending keys join the climb seed.
+        const pending = new Map([["leaf", { width: 80 }]]);
+        const preview = computeGeometry(doc, pending);
+        expect(preview.nodes.get("hugB")!.local.width).toBe(80);
+
+        const incremental = computeGeometry(doc, pending, base, new Set<string>()); // empty dirty set
+        expect(statesEqualBounds(incremental, preview)).toBe(true);
+    });
+
+    test("reparenting into and out of a hug container resizes it (both parent chains ripple)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("F", mk("F", null, ["H", "b"], { x: 0, y: 0, width: 400, height: 400 }, { container: { direction: "row" } }));
+        doc.nodes.set("H", mk("H", "F", ["a"], { x: 0, y: 0, width: 999, height: 100 }, { container: { direction: "row", hugWidth: true } }));
+        doc.nodes.set("a", mk("a", "H", [], { x: 0, y: 0, width: 30, height: 30 }, {}));
+        doc.nodes.set("b", mk("b", "F", [], { x: 0, y: 0, width: 40, height: 40 }, {}));
+        doc.rootNodeUuids = ["F"];
+
+        const dispatcher = new ActionDispatcher(doc);
+        let prev = computeGeometry(dispatcher.getDocument());
+        expect(prev.nodes.get("H")!.local.width).toBe(30);
+
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+
+        // INTO: b joins H -> H hugs to a(30) + b(40) = 70.
+        dispatcher.dispatchAction(new ReparentNodeAction(dispatcher.getDocument(), "b", "H"));
+        let full = computeGeometry(dispatcher.getDocument());
+        let incremental = computeGeometry(dispatcher.getDocument(), null, prev, dirty);
+        expect(full.nodes.get("H")!.local.width).toBe(70);
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+
+        prev = incremental; dirty.clear();
+
+        // OUT: b leaves H -> H shrinks back to 30. The OLD parent (H) chain must ripple.
+        dispatcher.dispatchAction(new ReparentNodeAction(dispatcher.getDocument(), "b", "F"));
+        full = computeGeometry(dispatcher.getDocument());
+        incremental = computeGeometry(dispatcher.getDocument(), null, prev, dirty);
+        expect(full.nodes.get("H")!.local.width).toBe(30);
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+    });
+
+    test("measure stays TOTAL: a hug container with a missing child collapses to padding, no throw", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["ghost"], { x: 0, y: 0, width: 333, height: 333 }, { container: { direction: "row", padding: 5, hugWidth: true, hugHeight: true } }));
+        doc.rootNodeUuids = ["P"];
+        expect(() => computeGeometry(doc)).not.toThrow();
+        expect(measureIntrinsicSizes(traverseSceneGraph(doc), null).get("P")).toEqual({ width: 10, height: 10 });
+    });
+
+    test("hug flags are write-path citizens: schema-4 round-trip + both-paths validation", () => {
+        const d = createDocWithParentChild();
+        expect(new UpdateNodeLayoutAction(d, "parent-001", { container: { direction: "row", hugWidth: "yes" as any } }).validate()).toBe(false);
+        expect(new UpdateNodeLayoutAction(d, "parent-001", { container: { direction: "row", hugWidth: true, hugHeight: false } }).validate()).toBe(true);
+
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "parent-001", { container: { direction: "column", hugHeight: true } }));
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+
+        // Load path rejects a non-boolean hug flag exactly as the edit path does.
+        const bad = `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
+            + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
+            + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
+            + ` "style": { "fill": "#000", "opacity": 1 }, "layout": { "container": { "direction": "row", "hugWidth": "yes" } } } } } }`;
+        expect(() => deserializeDocument(bad)).toThrow("boolean");
     });
 });

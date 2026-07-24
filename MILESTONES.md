@@ -19,7 +19,7 @@ M0.5 Core Documentation      ✅   contracts frozen before building upward
       │
 M1  Computed State           ✅   stored intent -> calculated results
       │
-M2  Layout Engine            🚧   auto-layout containers (core); constraints/grid deferred
+M2  Layout Engine            🚧   auto-layout + hug sizing; constraints/grid deferred
       │
 M3  Renderer                 ⬜*  reads ComputedState only
       │
@@ -66,7 +66,7 @@ reachable via `revertToOriginal()`) · revision system ·
 JSON serialization (schema version decoupled from app version) ·
 **validation** (Action-path `validate()` **and** `validateDocumentIntegrity` on load:
 ranges, dangling parents, ghost roots, cycles) · automated tests.
-(M0 and M1 together contribute **123** of the suite's current **142** tests; the count is not M0's alone. M2 added the rest.)
+(M0 and M1 together contribute **123** of the suite's current **151** tests; the count is not M0's alone. M2 added the rest.)
 
 **Round-trip closure (what took M0 from "nearly" to done):** an adversarial audit found
 the engine could author a document it could not reopen — `AddNodeAction.validate()`
@@ -185,8 +185,9 @@ been missed.
 **"center inside parent"** instead of **`x = 240`**.
 
 M2 is deliberately marked **in progress, not done**: the milestone's full system list is
-large, and only the **auto-layout container core** is built. The rest is real work with
-its own weight, listed as deferred below rather than quietly folded in.
+large. **Auto-layout containers and intrinsic ("hug") sizing** are built and verified;
+the rest is real work with its own weight, listed as deferred below rather than quietly
+folded in.
 
 ```
 Document → Geometry + Layout Engine → Computed State → Renderer
@@ -203,28 +204,40 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   the layout when it visits a container parent (parents-first, so each child reads its
   computed rect before it is processed), then composes it through the same matrix
   pipeline — so a laid-out child still inherits parent transforms and world position.
-- **The dirty-ripple.** Resizing one child moves its *siblings*, but a per-node mutation
-  only reports the one node. `expandDirtyForLayout` dirties a container when any child is
-  dirty; structural changes that alter membership report the affected container(s)
-  directly (`ReparentNodeAction` reports old **and** new parent; `DeleteNodeAction` the
-  removed child's parent). The `incremental === full` fuzz now includes container toggles,
-  reparents and deletes — and a mutation-testing pass **found and closed** a real gap
-  (reparent-*out*-of-a-container) the fuzz alone had missed.
+- **Intrinsic ("hug") sizing.** `LayoutContainer.hugWidth`/`hugHeight` size a physical
+  axis to the contents (`measureIntrinsicSizes`), so the hugged width/height is a computed
+  *result* like a laid-out child's position. Hug **composes upward**, so `computeGeometry`
+  is now **two passes**: a bottom-up MEASURE fold feeding the existing top-down POSITION
+  pass. Measure is run fully every compute (never memoized) — that keeps the size layer
+  identical between a full and an incremental recompute, so `incremental === full` reduces
+  to the dirty walk. It reads only pre-stretch sizes, so `hugHeight` + `stretch` are
+  coherent (no cycle).
+- **The dirty-ripple — now a hug-chain climb.** Resizing one child moves its *siblings*
+  and can resize its hug *ancestors*, but a per-node mutation only reports the one node.
+  `expandDirtyForLayout` climbs the change **up the hug chain** to the first fixed
+  container (adding every container it passes, so siblings at each level reflow); with no
+  hug flags it degenerates to the original one-level bump. Structural changes that alter
+  membership report the affected container(s) directly (`ReparentNodeAction` reports old
+  **and** new parent; `DeleteNodeAction` the removed child's parent), and pending keys join
+  the climb seed so a live resize ripples up too. The `incremental === full` fuzz now
+  includes hug flags, container toggles, reparents and deletes; mutation-testing found and
+  closed a real gap (reparent-*out*-of-a-container) the fuzz alone had missed, and each hug
+  guard (the multi-level climb, the fold, the pending seed) was independently killed.
 - **A full document citizen.** `UpdateNodeLayoutAction` is the write-path primitive
   (authorable, undoable, serializable, validated), exactly as `UpdateNodeTransformAction`
-  is for M1. `layoutError` is shared by the edit path and the load path, so the round-trip
-  closure holds: a hand-edited container the loader would reject is one the editor could
-  never author.
+  is for M1. `layoutError` is shared by the edit path and the load path (a non-boolean
+  `hugWidth` is rejected identically), so round-trip closure holds: a hand-edited container
+  the loader would reject is one the editor could never author.
 - **Direct-manipulation honesty.** A laid-out child has no meaningful free-drag, so
-  `MoveTool` skips it (reorder-by-drag is M4).
-- **Schema cost, paid under the freeze rule.** `SCHEMA_VERSION` `"2"` → `"3"` with a
-  `migrate_2_to_3` pass-through, because a schema-2 build would draw a container's children
-  at their now-vestigial stored `x/y`.
+  `MoveTool` skips it (reorder-by-drag is M4). *(Known UI refinement, deferred to the tools
+  milestone: a resize handle on a hug container's hugged axis is a visual no-op — the
+  engine correctly ignores the pending resize — but the handle is not yet hidden.)*
+- **Schema cost, paid under the freeze rule.** `SCHEMA_VERSION` `"2"` → `"3"` (auto-layout)
+  → `"4"` (hug), each with a pass-through migration, because an older build would draw a
+  container's children / a hug container at now-vestigial stored geometry.
 
 **Deferred (each its own deliverable, NOT built):** constraints · anchors (pin to
-edges) · flex-grow / space-distribution · wrap · grid · **intrinsic / "hug" sizing**
-(a container sized to its contents — needs a bottom-up pass, and would break the
-one-level dirty-ripple, which is why it is explicitly out) · per-child margins ·
+edges) · flex-grow / space-distribution · wrap · grid · per-child margins ·
 absolute-position escapes · responsive / breakpoint rules · drag-to-reorder.
 
 **Explicitly NOT in scope yet:** `ComputedState` still carries geometry only; resolved
