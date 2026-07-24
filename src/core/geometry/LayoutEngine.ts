@@ -19,7 +19,7 @@
  */
 
 import { ReadonlyDocument } from "../document/Document";
-import { Geometry, LayoutContainer, LayoutGrid, TrackSize } from "../document/Node";
+import { Constraints, Geometry, LayoutContainer, LayoutGrid, TrackSize } from "../document/Node";
 import { ReadonlyNode } from "../document/SceneGraph";
 import { Rect } from "./Matrix";
 
@@ -214,6 +214,50 @@ export function layoutGridChildren(
         out.set(id, { x: colX[col], y: pad + row * (rowH + rowGap), width: colWidths[col], height: rowH });
     });
     return out;
+}
+
+/** Normalised anchor kind, shared by the horizontal and vertical axes. */
+type AxisKind = "start" | "end" | "both" | "center" | "scale";
+const H_KIND: Record<string, AxisKind> = { left: "start", right: "end", "left-right": "both", center: "center", scale: "scale" };
+const V_KIND: Record<string, AxisKind> = { top: "start", bottom: "end", "top-bottom": "both", center: "center", scale: "scale" };
+
+/**
+ * One axis of a constraint. `p0`/`s0` are the child's stored position/size on that axis,
+ * `R` the FROZEN reference parent extent, `C` the current parent extent. Returns
+ * `[position, size]`. `R <= 0` falls back to static (and guards `scale`'s divide).
+ */
+function resolveAxis(kind: AxisKind, p0: number, s0: number, R: number, C: number): [number, number] {
+    if (!(R > 0)) return [p0, s0];
+    const d = C - R;
+    switch (kind) {
+        case "end": return [p0 + d, s0];               // pin the trailing edge — move with it
+        case "both": return [p0, Math.max(0, s0 + d)]; // pin both edges — stretch
+        case "center": return [p0 + d / 2, s0];        // keep centred
+        case "scale": { const f = C / R; return [p0 * f, Math.max(0, s0 * f)]; }
+        default: return [p0, s0];                      // "start" — pin the leading edge (static)
+    }
+}
+
+/**
+ * Reposition a constrained child of a PLAIN parent. `stored` is the child's rest rect;
+ * `ref` the frozen parent size it is at rest against; `parentSize` the parent's CURRENT
+ * resolved size. `delta = parentSize − ref`, so a child responds to a parent resize from
+ * EITHER source (a direct resize moves the parent's computed size while `ref` stays; a
+ * layout-driven resize does the same) — one formula, no stored-vs-computed ambiguity.
+ * Constraints/ref absent → `stored` unchanged (static left/top = the pre-M2 behavior).
+ */
+export function resolveConstraints(
+    stored: Rect,
+    constraints: Constraints | undefined,
+    ref: { width: number; height: number } | undefined,
+    parentSize: { width: number; height: number }
+): Rect {
+    if (!constraints || !ref) return stored;
+    const hk = H_KIND[constraints.horizontal ?? "left"] ?? "start";
+    const vk = V_KIND[constraints.vertical ?? "top"] ?? "start";
+    const [x, width] = resolveAxis(hk, stored.x, stored.width, ref.width, parentSize.width);
+    const [y, height] = resolveAxis(vk, stored.y, stored.height, ref.height, parentSize.height);
+    return { x, y, width, height };
 }
 
 /**

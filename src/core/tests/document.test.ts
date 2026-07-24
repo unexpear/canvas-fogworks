@@ -18,7 +18,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds } from "../geometry/GeometryEngine";
-import { layoutChildren, layoutGridChildren, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes } from "../geometry/LayoutEngine";
+import { layoutChildren, layoutGridChildren, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
 import { clampViewport, createEditorState } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
@@ -1580,13 +1580,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "7" that has no 6→7 step: the
+        // Pretending the build has moved to a schema "8" that has no 7→8 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→6), and then REFUSED at "6" — never re-stamped straight to the current
-        // schema. The error naming "6" (not "1") is the proof the chain actually ran.
+        // (1→2→…→7), and then REFUSED at "7" — never re-stamped straight to the current
+        // schema. The error naming "7" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 5→6 landed for grid.)
-        expect(() => migrateIfNeeded(legacy, "7")).toThrow('Migration not implemented for document schema "6"');
+        // time a real migration is added — here, when 6→7 landed for constraints.)
+        expect(() => migrateIfNeeded(legacy, "8")).toThrow('Migration not implemented for document schema "7"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -2033,15 +2033,22 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
                 // OR remove the container, OR set a flex `grow`, OR make it a GRID (which
                 // clears any container — mutual exclusivity — and lays children into cells).
                 const track = () => rnd() < 0.5 ? { px: rnd() * 40 } : { fr: 1 + rnd() * 2 };
+                const hMode = pick(["left", "right", "left-right", "center", "scale"]);
+                const vMode = pick(["top", "bottom", "top-bottom", "center", "scale"]);
                 const r = rnd();
-                const rule = r < 0.35
+                const rule = r < 0.3
                     ? { container: { direction: pick([...dirs]), gap: rnd() * 12, padding: rnd() * 12, alignItems: pick([...aligns]), hugWidth: rnd() < 0.5, hugHeight: rnd() < 0.5 } }
-                    : r < 0.5
+                    : r < 0.45
                         ? { container: undefined }
-                        : r < 0.7
+                        : r < 0.6
                             ? { grow: rnd() < 0.3 ? 0 : rnd() * 3 }
-                            : { grid: { columns: Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), rowHeight: track(), columnGap: rnd() * 8, rowGap: rnd() * 8, padding: rnd() * 8 } };
-                dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, pick(ids), rule));
+                            : r < 0.8
+                                ? { grid: { columns: Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), rowHeight: track(), columnGap: rnd() * 8, rowGap: rnd() * 8, padding: rnd() * 8 } }
+                                // constraints: the action auto-captures constraintRef from the parent's
+                                // stored size; op-2 resizes (source a) and op-3 container/grid toggles + a
+                                // later grandparent resize (source b) then drive the response.
+                                : { constraints: { horizontal: hMode, vertical: vMode } };
+                dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, pick(ids), rule as any));
             } else if (op === 4) {
                 dispatcher.dispatchAction(new ReparentNodeAction(doc, pick(ids), rnd() < 0.5 ? null : pick(ids)));
             } else if (op === 5) {
@@ -2523,5 +2530,144 @@ describe("M2 grid", () => {
         expect(() => deserializeDocument(envelope(`{ "grid": { "columns": [{ "fr": 0 }], "rowHeight": { "px": 10 } } }`))).toThrow();
         // ...and a document carrying BOTH grid and container.
         expect(() => deserializeDocument(envelope(`{ "container": { "direction": "row" }, "grid": { "columns": [{ "px": 10 }], "rowHeight": { "px": 10 } } }`))).toThrow("mutually exclusive");
+    });
+});
+
+describe("M2 constraints / anchors", () => {
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+
+    test("resolveConstraints: per-mode math on a parent grown +100 wide / +60 tall", () => {
+        const stored = { x: 10, y: 10, width: 50, height: 30 };
+        const ref = { width: 100, height: 100 };
+        const wide = { width: 200, height: 100 };   // width +100, height +0
+        const tall = { width: 100, height: 160 };   // width +0,   height +60
+
+        expect(resolveConstraints(stored, { horizontal: "left" }, ref, wide)).toEqual({ x: 10, y: 10, width: 50, height: 30 });
+        expect(resolveConstraints(stored, { horizontal: "right" }, ref, wide)).toEqual({ x: 110, y: 10, width: 50, height: 30 });
+        expect(resolveConstraints(stored, { horizontal: "left-right" }, ref, wide)).toEqual({ x: 10, y: 10, width: 150, height: 30 });
+        expect(resolveConstraints(stored, { horizontal: "center" }, ref, wide)).toEqual({ x: 60, y: 10, width: 50, height: 30 });
+        expect(resolveConstraints(stored, { horizontal: "scale" }, ref, wide)).toEqual({ x: 20, y: 10, width: 100, height: 30 });
+
+        expect(resolveConstraints(stored, { vertical: "bottom" }, ref, tall)).toEqual({ x: 10, y: 70, width: 50, height: 30 });
+        expect(resolveConstraints(stored, { vertical: "center" }, ref, tall)).toEqual({ x: 10, y: 40, width: 50, height: 30 });
+        expect(resolveConstraints(stored, { vertical: "top-bottom" }, ref, tall)).toEqual({ x: 10, y: 10, width: 50, height: 90 });
+    });
+
+    test("resolveConstraints: absent constraints/ref, or R<=0, is static (returns stored)", () => {
+        const stored = { x: 10, y: 10, width: 50, height: 30 };
+        const ref = { width: 100, height: 100 };
+        const P = { width: 200, height: 200 };
+        expect(resolveConstraints(stored, undefined, ref, P)).toEqual(stored);
+        expect(resolveConstraints(stored, { horizontal: "right" }, undefined, P)).toEqual(stored);
+        // A zero-width reference cannot scale/inset horizontally -> static x/width (guards the divide).
+        expect(resolveConstraints(stored, { horizontal: "scale" }, { width: 0, height: 100 }, P)).toEqual(stored);
+    });
+
+    test("source (a): directly resizing a plain parent moves its right-pinned child, incrementally", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["C"], { x: 0, y: 0, width: 100, height: 100 }, {})); // plain parent
+        doc.nodes.set("C", mk("C", "P", [], { x: 20, y: 0, width: 30, height: 30 }, { constraints: { horizontal: "right" }, constraintRef: { width: 100, height: 100 } }));
+        doc.rootNodeUuids = ["P"];
+
+        const dispatcher = new ActionDispatcher(doc);
+        const base = computeGeometry(dispatcher.getDocument());
+        expect(base.nodes.get("C")!.bounds.x).toBe(20); // parent at reference -> no delta
+
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+        dispatcher.dispatchAction(new ResizeNodeAction(dispatcher.getDocument(), "P", 200, 100)); // +100 wide
+
+        const full = computeGeometry(dispatcher.getDocument());
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, dirty);
+        expect(full.nodes.get("C")!.bounds.x).toBe(120); // moved with the right edge (non-vacuous)
+        expect(dirty.has("C")).toBe(false);              // only "P" was reported; C inherited
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+    });
+
+    test("source (b): a layout-driven parent resize (flex-grow) moves its constrained grandchild", () => {
+        // G (flex row) grows F to fill it; F is a PLAIN parent whose right-pinned child C
+        // then responds to F's *computed* size — the responsive cascade, no direct resize.
+        const doc = createEmptyDocument();
+        doc.nodes.set("G", mk("G", null, ["F"], { x: 0, y: 0, width: 300, height: 100 }, { container: { direction: "row" } }));
+        doc.nodes.set("F", mk("F", "G", ["C"], { x: 0, y: 0, width: 100, height: 100 }, { grow: 1 })); // grows in G; plain for C
+        doc.nodes.set("C", mk("C", "F", [], { x: 20, y: 0, width: 30, height: 30 }, { constraints: { horizontal: "right" }, constraintRef: { width: 100, height: 100 } }));
+        doc.rootNodeUuids = ["G"];
+
+        const cs = computeGeometry(doc);
+        expect(cs.nodes.get("F")!.local.width).toBe(300); // flex grew F from 100 to 300
+        expect(cs.nodes.get("C")!.bounds.x).toBe(220);    // right-pinned: 20 + (300 - 100)
+    });
+
+    test("UpdateNodeLayoutAction auto-captures constraintRef from the parent's stored size", () => {
+        const doc = createDocWithParentChild(); // parent-001 is 400x300
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, "child-001", { constraints: { horizontal: "right" } }));
+        expect(dispatcher.getDocument().nodes.get("child-001")!.layout.constraintRef).toEqual({ width: 400, height: 300 });
+    });
+
+    test("constraints are inert under a flex/grid parent (the child is laid out)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["C"], { x: 0, y: 0, width: 200, height: 100 }, { container: { direction: "row" } }));
+        doc.nodes.set("C", mk("C", "P", [], { x: 20, y: 5, width: 30, height: 30 }, { constraints: { horizontal: "right" }, constraintRef: { width: 50, height: 50 } }));
+        doc.rootNodeUuids = ["P"];
+        // Flex places C at the padding edge (x=0); the constraint is ignored, not applied.
+        expect(computeGeometry(doc).nodes.get("C")!.bounds.x).toBe(0);
+    });
+
+    test("a later constraints edit does NOT re-capture the frozen constraintRef (review regression)", () => {
+        // Review-found bug: the auto-capture guard looked only at the incoming patch, so a
+        // second mode edit re-captured ref from the parent's CURRENT (grown) size, zeroing
+        // the delta and teleporting the anchored child back to its rest x.
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["C"], { x: 0, y: 0, width: 100, height: 100 }, {}));
+        doc.nodes.set("C", mk("C", "P", [], { x: 20, y: 0, width: 30, height: 30 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const dispatcher = new ActionDispatcher(doc);
+
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "C", { constraints: { horizontal: "right" } }));
+        expect(dispatcher.getDocument().nodes.get("C")!.layout.constraintRef).toEqual({ width: 100, height: 100 });
+
+        dispatcher.dispatchAction(new ResizeNodeAction(dispatcher.getDocument(), "P", 300, 100)); // grow parent
+        expect(computeGeometry(dispatcher.getDocument()).nodes.get("C")!.bounds.x).toBe(220); // right-pinned: anchored
+
+        // A second edit (change the mode) must NOT re-freeze the reference at the grown size.
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "C", { constraints: { horizontal: "right", vertical: "top" } }));
+        expect(dispatcher.getDocument().nodes.get("C")!.layout.constraintRef).toEqual({ width: 100, height: 100 }); // still frozen at 100
+        expect(computeGeometry(dispatcher.getDocument()).nodes.get("C")!.bounds.x).toBe(220);                       // still anchored, not teleported to 20
+    });
+
+    test("a constrained child of a CONTAINER parent that does NOT lay it out stays static (gate)", () => {
+        // Defensive: a container's child is normally laid out (computedLocal set), so the
+        // constraint branch is only reached for a damaged tree — here C claims container P
+        // but P does not list it, so P never lays C out. The `!isLayoutContainer` gate keeps
+        // constraints OFF such a child (constraints are for PLAIN parents only), so it stays
+        // at its stored x rather than being repositioned to P's 200-wide box.
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, [], { x: 0, y: 0, width: 200, height: 100 }, { container: { direction: "row" } }));
+        doc.nodes.set("C", mk("C", "P", [], { x: 20, y: 0, width: 30, height: 30 }, { constraints: { horizontal: "right" }, constraintRef: { width: 100, height: 100 } }));
+        doc.rootNodeUuids = ["P"];
+        expect(computeGeometry(doc).nodes.get("C")!.bounds.x).toBe(20);
+    });
+
+    test("constraints are write-path citizens: schema-7 round-trip + both-paths validation", () => {
+        const d = createDocWithParentChild();
+        const ok = (l: any) => new UpdateNodeLayoutAction(d, "child-001", l).validate();
+        expect(ok({ constraints: { horizontal: "right", vertical: "center" } })).toBe(true);
+        expect(ok({ constraints: { horizontal: "bogus" } })).toBe(false);
+        expect(ok({ constraints: { vertical: "sideways" } })).toBe(false);
+        expect(ok({ constraintRef: { width: 0, height: 100 } })).toBe(false);   // width must be > 0
+        expect(ok({ constraintRef: { width: 100, height: NaN } })).toBe(false);
+
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "child-001", { constraints: { horizontal: "scale" } }));
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+
+        // Load path rejects a bad constraint even with no container (guards the early return).
+        const bad = `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
+            + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
+            + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
+            + ` "style": { "fill": "#000", "opacity": 1 }, "layout": { "constraints": { "horizontal": "bogus" } } } } } }`;
+        expect(() => deserializeDocument(bad)).toThrow();
     });
 });

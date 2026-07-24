@@ -24,7 +24,7 @@ import {
     ProjectDocument, ReadonlyDocument, createEmptyDocument,
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
-import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, layoutError, Layout } from "../document/Node";
+import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, layoutError, Layout } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
@@ -32,7 +32,7 @@ import {
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
-import { layoutChildren, layoutGridChildren, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes } from "../geometry/LayoutEngine";
+import { layoutChildren, layoutGridChildren, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
 import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot } from "../actions/types";
@@ -121,6 +121,9 @@ export function __apiSurfacePin(): void {
     const grid: LayoutGrid = { columns: [{ px: 1 }, track], rowHeight: { px: 1 }, columnGap: 0, rowGap: 0, padding: 0 };
     expectType<LayoutGrid>(grid);
     expectType<Map<string, Rect>>(layoutGridChildren(grid, { width: 1, height: 1 }, ["a"]));
+    const constraints: Constraints = { horizontal: "right" as HConstraint, vertical: "center" as VConstraint };
+    expectType<Constraints>(constraints);
+    expectType<Rect>(resolveConstraints({ x: 0, y: 0, width: 1, height: 1 }, constraints, { width: 1, height: 1 }, { width: 2, height: 2 }));
 
     // Matrix primitive
     expectType<Mat2D>(IDENTITY);

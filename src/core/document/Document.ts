@@ -61,8 +61,13 @@ export const CURRENT_VERSION: string =
  *   "6" — adds optional `Layout.grid` (grid auto-layout: children flow into a cell grid)
  *         for Milestone 2. Absent = no grid, so `migrate_5_to_6` is a pass-through — but a
  *         schema-5 build would ignore the grid and draw the children at their stored x/y.
+ *
+ *   "7" — adds optional `Layout.constraints` + `Layout.constraintRef` (anchors: a child
+ *         repositions when its plain parent resizes) for Milestone 2. Absent = static
+ *         (left/top), so `migrate_6_to_7` is a pass-through — but a schema-6 build would
+ *         draw a constrained child unanchored, misstating a responsive layout.
  */
-export const SCHEMA_VERSION = "6";
+export const SCHEMA_VERSION = "7";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

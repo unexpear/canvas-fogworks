@@ -50,6 +50,18 @@ export class UpdateNodeLayoutAction extends Action {
         const layout: Partial<Layout> = { ...this.newLayout };
         if (layout.grid !== undefined) layout.container = undefined;
         if (layout.container !== undefined) layout.grid = undefined;
+        // Freeze the constraint reference at FIRST opt-in: capture the parent's CURRENT
+        // stored size so a static parent (computed == stored) causes no jump. Only when the
+        // node has NO existing reference and the caller supplied none — never re-capture on
+        // a later mode edit, which would un-freeze the reference (delta -> 0) and teleport
+        // the child back to its rest position. An explicit `constraintRef` in the patch
+        // (a deliberate re-baseline) skips this and is honoured as-is.
+        const node = this.document.nodes.get(this.nodeId);
+        if (layout.constraints !== undefined && layout.constraintRef === undefined && node?.layout.constraintRef === undefined) {
+            const parentId = node?.parent;
+            const parent = parentId ? this.document.nodes.get(parentId) : undefined;
+            if (parent) layout.constraintRef = { width: parent.geometry.width, height: parent.geometry.height };
+        }
         return {
             updatedNodeIds: new Set([this.nodeId]),
             propertyDeltas: new Map([[this.nodeId, { kind: "patch", layout } as const]]),

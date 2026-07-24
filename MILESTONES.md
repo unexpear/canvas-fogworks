@@ -19,7 +19,7 @@ M0.5 Core Documentation      ✅   contracts frozen before building upward
       │
 M1  Computed State           ✅   stored intent -> calculated results
       │
-M2  Layout Engine            🚧   auto-layout + hug + grow + grid; constraints deferred
+M2  Layout Engine            🚧   auto-layout + hug + grow + grid + constraints; shrink/wrap deferred
       │
 M3  Renderer                 ⬜*  reads ComputedState only
       │
@@ -66,7 +66,7 @@ reachable via `revertToOriginal()`) · revision system ·
 JSON serialization (schema version decoupled from app version) ·
 **validation** (Action-path `validate()` **and** `validateDocumentIntegrity` on load:
 ranges, dangling parents, ghost roots, cycles) · automated tests.
-(M0 and M1 together contribute **123** of the suite's current **167** tests; the count is not M0's alone. M2 added the rest.)
+(M0 and M1 together contribute **123** of the suite's current **176** tests; the count is not M0's alone. M2 added the rest.)
 
 **Round-trip closure (what took M0 from "nearly" to done):** an adversarial audit found
 the engine could author a document it could not reopen — `AddNodeAction.validate()`
@@ -238,6 +238,20 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   row heights depend on the item COUNT, so **adding** an item (which reports only the new
   node) must reflow the existing rows — pinned by a deterministic `incremental === full`
   test, since a `px`-row grid or a delete could not exercise the grid's climb path.
+- **Constraints / anchors — the responsive model.** A child of a **plain** (non-flex/grid)
+  parent pins to the parent's edges (`Layout.constraints`: left/right/left-right/center/
+  scale × top/bottom/top-bottom/center/scale) and repositions when the parent resizes.
+  The stateless engine resolves this against a **frozen per-child reference**
+  (`constraintRef`, captured once at opt-in) rather than a resize delta — so `offset =
+  parentComputed − constraintRef` responds to BOTH a direct resize (stored moves, ref
+  frozen) AND a layout-driven one (a grown/stretched/celled frame's computed moves, ref
+  frozen): the responsive cascade. Pure top-down — **no measure feedback, no
+  `expandDirtyForLayout` change** — a parent size change dirties the parent and the child
+  inherits. A design panel resolved the reference-size tension (per-child frozen ref beats
+  per-parent, which would jump siblings); mutation testing found the defensive
+  container-gate was untested and added a damaged-tree pin. *Known limitation, deferred to
+  the M5 tool layer: editing a constrained child while its parent is off-reference writes
+  geometry in the wrong frame — the re-baseline is not built.*
 - **A full document citizen.** `UpdateNodeLayoutAction` is the write-path primitive
   (authorable, undoable, serializable, validated), exactly as `UpdateNodeTransformAction`
   is for M1. `layoutError` is shared by the edit path and the load path (a non-boolean
@@ -248,13 +262,15 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   milestone: a resize handle on a hug container's hugged axis is a visual no-op — the
   engine correctly ignores the pending resize — but the handle is not yet hidden.)*
 - **Schema cost, paid under the freeze rule.** `SCHEMA_VERSION` `"2"` → `"3"` (auto-layout)
-  → `"4"` (hug) → `"5"` (grow) → `"6"` (grid), each with a pass-through migration, because
-  an older build would draw the children at now-vestigial stored geometry.
+  → `"4"` (hug) → `"5"` (grow) → `"6"` (grid) → `"7"` (constraints), each with a pass-through
+  migration, because an older build would draw the children at now-vestigial stored
+  geometry / unanchored.
 
-**Deferred (each its own deliverable, NOT built):** constraints · anchors (pin to
-edges) · flex-shrink · wrap · per-child margins · absolute-position escapes ·
-responsive / breakpoint rules · drag-to-reorder · the **grid tail** (explicit
-placement/spans, `auto`/content tracks, per-row sizes, grid-container hug).
+**Deferred (each its own deliverable, NOT built):** flex-shrink · wrap · per-child
+margins · absolute-position escapes · responsive / breakpoint rules · drag-to-reorder ·
+the constrained-child **re-baseline** (off-reference edits, an M5 tool-layer concern) ·
+the **grid tail** (explicit placement/spans, `auto`/content tracks, per-row sizes,
+grid-container hug).
 
 **Explicitly NOT in scope yet:** `ComputedState` still carries geometry only; resolved
 style (M5 tokens) is still absent. Layout output is expressed *as* geometry (computed

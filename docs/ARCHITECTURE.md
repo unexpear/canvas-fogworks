@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
 
-> 🔒 Frozen contract · schema v6 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + flex-grow + grid; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v7 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + grow + grid + constraints; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -124,6 +124,18 @@ feedback and no new dirty-tracking (a growing sibling reflows through the same r
 **Grid** (`layoutGridChildren`) is likewise a position-pass producer: children auto-flow
 into px/fr cell tracks and fill them, so it reads no child sizes and reuses the same dirty
 machinery (once `isLayoutContainer` counts a grid as a container).
+
+**Constraints / anchors** (`resolveConstraints`) are the responsive-positioning model for
+children of a **plain** (non-flex/grid) parent: each child pins to the parent's edges and
+repositions when the parent resizes. The stateless engine resolves this against a **frozen
+per-child reference** (`Layout.constraintRef`, captured once at opt-in) rather than a
+resize delta — `offset = parentComputed.local.size − constraintRef` is non-zero for BOTH a
+direct `ResizeNodeAction` (stored size moves, ref frozen) and a layout-driven resize (a
+grown/stretched/celled frame's computed size moves, ref frozen). It is pure top-down (no
+measure feedback, no `expandDirtyForLayout` change): a parent size change dirties the
+parent and the child inherits. *Known limitation (an M5 tool-layer concern): editing a
+constrained child while its parent is off-reference writes geometry in the wrong frame; the
+re-baseline is not yet built.*
 
 Still outstanding for the computed layer: **resolved style** (M5 tokens) belongs in
 `ComputedState` and is not there yet; and M2's **remaining layout** — constraints/anchors,

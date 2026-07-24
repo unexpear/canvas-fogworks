@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v6 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + flex-grow + grid). Suite: `src/core/tests/document.test.ts` (167 tests).
+> 🔒 Frozen contract · schema v7 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + grow + grid + constraints). Suite: `src/core/tests/document.test.ts` (176 tests).
 
 ## Philosophy
 
@@ -17,7 +17,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 167 tests
+npm test                                   # jest (ts-jest), 176 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -28,7 +28,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (167 tests)
+## What is covered (176 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -57,7 +57,8 @@ npm run check                              # typecheck + lint + test + build (th
 | **M2 intrinsic (hug) sizing** | `measureIntrinsicSizes` folds a hug axis from children (row/column, one-axis, empty→padding); a hug container is **sized to its contents** through `computeGeometry` (stored size vestigial); **hug-cross + stretch** is coherent (pre-stretch measure, no cycle); a size change **ripples up a 3-deep hug chain, halts at the first FIXED container, and reflows its siblings** (incremental === full, non-vacuous); **pending** resize of a deep leaf hugs the chain in the live preview (pins the pending→seed union); reparent **into/out of** a hug container resizes it; measure stays **total** on a missing child; current-schema round-trip + a non-boolean hug flag rejected on **both** paths |
 | **M2 flex-grow** | `layoutChildren` distributes leftover main-axis space **proportional to `grow`** (single/multiple growers, gap+padding subtracted first); **inert** with no free space (exact fit or overflow — no shrink); a fixed container grows a child to fill while a **hug-main** container leaves nothing to grow; resizing one child **reflows a growing sibling** incrementally (non-vacuous, only the resized node reported); a **pending resize of a grow child previews the SAME layout as committing it** (regression for the review-found double-apply); **grow overrides hug** on a node that is both a hug container and a grow child; schema-5 round-trip + a negative `grow` rejected on **both** paths (incl. a `{grow}` patch with no container, guarding the early return) |
 | **M2 grid** | `layoutGridChildren` auto-flows row-major with fixed + **`fr`** column tracks (share leftover width), a uniform `rowHeight` (px or `fr` equal-share), gaps and padding; a grid **sizes children to cells** through `computeGeometry` (stored size ignored); deleting an item **reflows survivors** into earlier cells incrementally; **adding to an `fr`-row grid reflows every existing row's height** incrementally (pins the grid's dirty-climb path — a `px`-row grid or a delete cannot); `isLayoutContainer` recognises a grid; resizing a grid item **stays in its cell** (a pending patch on a laid-out child is absorbed, not leaked to its stored x/y — review regression); a transaction that sets **container then grid keeps the grid, not neither** (review regression); **grid ⊕ container mutual exclusivity** enforced in the write delta and on read; schema-6 round-trip + malformed `TrackSize` / both-set rejected on **both** paths |
-| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow, GRID, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains automatically) |
+| **M2 constraints / anchors** | `resolveConstraints` per-mode math (left/right/left-right/center/scale × top/bottom/top-bottom/center/scale) on a grown parent; static fallback (absent, or `ref ≤ 0`); **source (a)** a direct `ResizeNodeAction` on a plain parent moves its right-pinned child incrementally (non-vacuous, only the parent reported); **source (b)** a flex-grow-driven parent resize moves its constrained grandchild (the responsive cascade); `UpdateNodeLayoutAction` **auto-captures `constraintRef`** from the parent's stored size; constraints **inert** under a flex/grid parent; a damaged-tree constrained child of a container parent stays static (the `!isLayoutContainer` gate); a **later mode edit does NOT re-capture the frozen `constraintRef`** (review regression — a second edit must not un-freeze the reference and teleport the anchored child); schema-7 round-trip + bad mode / non-positive `constraintRef` rejected on **both** paths |
+| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow, GRID, constraints, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains automatically; resize + layout toggles drive constraints from both sources) |
 
 ## The API-surface pin
 
@@ -176,6 +177,27 @@ don't resize on count — so mutation testing exposed a missing case: an `fr`-ro
 heights depend on the item count, so **adding** an item (which reports only the new node)
 must reflow existing rows via the climb. A deterministic `incremental === full` test was
 added and now co-kills the mutation — the same "a survivor is a missing test" lesson.
+
+**Constraints pass — 4 guards, one survived (a defensive gate), pinned.** Killed
+immediately: the reference delta (`d = C − R` → `d = 0`, killed by the per-mode math + both
+source tests), the `constraintRef` auto-capture, and the `layoutError` mode check. The
+`!isLayoutContainer` gate **survived** — a valid container child has `computedLocal` and
+never reaches the constraint branch, so no test exercised the gate (it only fires for a
+damaged tree: a child claiming a container parent that does not list it). Added a
+deterministic damaged-tree test (the child stays static, not repositioned to the container's
+box) that now kills it — the gate is defensive but no longer unprotected.
+
+**Constraints adversarial review — math clean, one write-path bug.** A read-only review
+(a reference reimplementation matched `resolveConstraints` over 30,375 mode×size cases;
+400+ constraint-heavy fuzz seeds with transforms and pending overlays found no
+`incremental === full` divergence; all five design claims held) confirmed one medium
+defect: the `constraintRef` auto-capture guard inspected only the incoming patch, so a
+**second** constraints edit (a mode change, or an M5 inspector setting the two axes in
+separate patches) re-captured the reference from the parent's *current* size — un-freezing
+it, zeroing the delta, and teleporting the anchored child back to its rest position, which
+undermines the whole frozen-reference model. Fixed by capturing only on **first** opt-in
+(when the node has no existing `constraintRef`); an explicit ref in the patch (a deliberate
+re-baseline) still wins. A regression test was proven to fail on the unfixed code.
 
 **Grid adversarial review — found TWO real bugs the fuzz was blind to.** A read-only
 multi-lens review (100k random grids and 400 fresh fuzz seeds found the cell math and all

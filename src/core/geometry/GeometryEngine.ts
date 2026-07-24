@@ -30,7 +30,7 @@
 import { DeepReadonly, ReadonlyDocument } from "../document/Document";
 import { Geometry, Node } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
-import { expandDirtyForLayout, layoutChildren, layoutGridChildren, measureIntrinsicSizes } from "./LayoutEngine";
+import { expandDirtyForLayout, isLayoutContainer, layoutChildren, layoutGridChildren, measureIntrinsicSizes, resolveConstraints } from "./LayoutEngine";
 import {
     Mat2D, IDENTITY, Rect, multiply, compose, invert, applyToPoint,
     transformRectToAABB, unionRect
@@ -132,7 +132,21 @@ export function computeGeometry(
         // size, so a laid-out child (`computedLocal`) and a root agree.
         const computedLocal = laidOut.get(id);
         const m = measured.get(id);
-        const base = computedLocal ?? { x: g.x, y: g.y, width: m?.width ?? g.width, height: m?.height ?? g.height };
+        let base: Rect;
+        if (computedLocal) {
+            base = computedLocal;
+        } else {
+            const stored = { x: g.x, y: g.y, width: m?.width ?? g.width, height: m?.height ?? g.height };
+            // CONSTRAINTS: a child of a PLAIN parent (never a flex/grid one — those set
+            // `computedLocal`) repositions relative to the parent's CURRENT resolved size
+            // vs the child's frozen `constraintRef`. Top-down, so the parent's local is
+            // already computed; a resize of the parent (direct or layout-driven) dirties
+            // it and the child inherits.
+            const parentNode = node.layout.constraints && parentId != null ? doc.nodes.get(parentId) : undefined;
+            base = parentComputed && parentNode && !isLayoutContainer(parentNode)
+                ? resolveConstraints(stored, node.layout.constraints, node.layout.constraintRef, parentComputed.local)
+                : stored;
+        }
         // A laid-out child's WHOLE rect is a layout RESULT: its position is the slot/cell,
         // and its size already folded any pending size via the MEASURE pass (a flex child
         // resizes through measure; a grid child fills its cell). So a raw pending patch

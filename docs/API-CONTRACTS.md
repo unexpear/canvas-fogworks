@@ -2,14 +2,14 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer/SVGRenderer.ts, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v6 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + flex-grow + grid). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v7 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + grow + grid + constraints). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
 
 ```ts
 const CURRENT_VERSION: string;               // app/display version, from package.json
-const SCHEMA_VERSION: string;                // "6" — persisted document schema (decoupled from app version)
+const SCHEMA_VERSION: string;                // "7" — persisted document schema (decoupled from app version)
 function createEmptyDocument(): ProjectDocument;
 
 // SceneGraph.ts — the ONLY correct node ordering (z-order / layer order)
@@ -66,6 +66,12 @@ function layoutGridChildren(                       // grid: children auto-flow i
   parentSize: { width: number; height: number },
   childIds: readonly string[]
 ): Map<string, Rect>;                             // childId → cell rect
+function resolveConstraints(                       // anchors: reposition a plain parent's child on resize
+  stored: Rect,
+  constraints: Constraints | undefined,
+  ref: { width: number; height: number } | undefined,   // the FROZEN reference size
+  parentSize: { width: number; height: number }
+): Rect;                                          // offset = parentSize - ref; static if either absent
 
 // Serializer.ts
 function serializeDocument(doc: ReadonlyDocument): string;
@@ -81,7 +87,7 @@ const Serializer: {
 
 Types: `ProjectDocument`, `DocumentMetadata`, `SerializedMetadata`, `VariableStore`,
 `Node`, `NodeType`, `Geometry`, `Style`, `Layout`, `LayoutContainer`, `LayoutGrid`,
-`TrackSize`, `Transform`,
+`TrackSize`, `Constraints`, `HConstraint`, `VConstraint`, `Transform`,
 `StateDefinition`, `SerializedDocument`, `DeepReadonly`, `ReadonlyDocument`, `ReadonlyNode`,
 `LoadResult`, `SaveResult`, `NODE_TYPES`/`isNodeType`. Shared validators
 `transformError(t)` / `layoutError(l)` return an error string or `null`, and are used by

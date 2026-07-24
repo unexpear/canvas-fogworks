@@ -84,6 +84,32 @@ export interface Layout {
      * grid of the given column tracks, each filling its cell. See `LayoutGrid`.
      */
     grid?: LayoutGrid;
+    /**
+     * Constraints / anchors (Milestone 2). How THIS node repositions when its PLAIN
+     * (non-flex, non-grid) parent's size differs from `constraintRef`. A per-child hint
+     * (like `grow`); ignored when the parent lays this node out (flex/grid). Absent =
+     * `left`/`top` = today's static behavior. See `Constraints`.
+     */
+    constraints?: Constraints;
+    /**
+     * The parent size this node's stored geometry is "at rest" against — a FROZEN
+     * reference, decoupled from the parent's stored AND computed size, so a constraint
+     * responds to BOTH a direct parent resize and a layout-driven one. Auto-captured from
+     * the parent's stored size when `constraints` is first set (`UpdateNodeLayoutAction`);
+     * the resize path never rewrites it. Constraints are inert without it.
+     */
+    constraintRef?: { width: number; height: number };
+}
+
+/** Horizontal anchor: pin left, pin right, pin both (stretch), keep centered, or scale. */
+export type HConstraint = "left" | "right" | "left-right" | "center" | "scale";
+/** Vertical anchor: pin top, pin bottom, pin both (stretch), keep centered, or scale. */
+export type VConstraint = "top" | "bottom" | "top-bottom" | "center" | "scale";
+
+/** Per-axis anchor modes for a child of a plain (non-auto-layout) parent. */
+export interface Constraints {
+    horizontal?: HConstraint;
+    vertical?: VConstraint;
 }
 
 /** A grid track size: a fixed pixel size, or a fraction of the leftover space (`fr`). */
@@ -129,6 +155,8 @@ export interface LayoutContainer {
 
 const DIRECTIONS = new Set(["row", "column"]);
 const ALIGNMENTS = new Set(["start", "center", "end", "stretch"]);
+const H_CONSTRAINTS = new Set(["left", "right", "left-right", "center", "scale"]);
+const V_CONSTRAINTS = new Set(["top", "bottom", "top-bottom", "center", "scale"]);
 
 /** Validity check for one grid `TrackSize` — exactly one of `px` (≥0) or `fr` (>0). */
 function trackError(t: unknown): string | null {
@@ -153,6 +181,22 @@ export function layoutError(l: Partial<Layout>): string | null {
     // `grow` is independent of `container` and must be checked BEFORE the no-container
     // early return, or a `{ grow: -5 }` patch would slip through unvalidated.
     if (l.grow !== undefined && (!Number.isFinite(l.grow) || l.grow < 0)) return "layout.grow must be finite and >= 0";
+    // Constraints + reference are independent per-child fields (like grow), so validate
+    // them BEFORE the no-container early return — else a `{ constraints }` patch slips by.
+    if ("constraints" in l && l.constraints !== undefined) {
+        const c = l.constraints;
+        if (typeof c !== "object" || c === null) return "layout.constraints must be an object";
+        if (c.horizontal !== undefined && !H_CONSTRAINTS.has(c.horizontal)) return "layout.constraints.horizontal is invalid";
+        if (c.vertical !== undefined && !V_CONSTRAINTS.has(c.vertical)) return "layout.constraints.vertical is invalid";
+    }
+    if ("constraintRef" in l && l.constraintRef !== undefined) {
+        const r = l.constraintRef;
+        if (typeof r !== "object" || r === null) return "layout.constraintRef must be an object";
+        // > 0 (not just finite): a zero/negative reference would make `scale`'s C/R divide
+        // by zero or flip sign; the engine also treats R <= 0 as static, so this is belt-and-braces.
+        if (!Number.isFinite(r.width) || r.width <= 0) return "layout.constraintRef.width must be finite and > 0";
+        if (!Number.isFinite(r.height) || r.height <= 0) return "layout.constraintRef.height must be finite and > 0";
+    }
     // Grid is independent of `container` (and mutually exclusive with it), so validate it
     // BEFORE the no-container early return — else a `{ grid: <bad> }` patch would slip by.
     if ("grid" in l && l.grid !== undefined) {

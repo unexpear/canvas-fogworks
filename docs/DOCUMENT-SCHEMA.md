@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v6 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + flex-grow + grid). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v7 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + grow + grid + constraints). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -70,6 +70,13 @@ interface Layout {     // constraint intent, not absolute position (Milestone 2)
   container?: LayoutContainer;                         // M2 auto-layout (flex) — LIVE
   grow?: number;                                       // M2 flex-grow (child hint) — LIVE
   grid?: LayoutGrid;                                   // M2 grid — LIVE; EXCLUSIVE with container
+  constraints?: Constraints;                           // M2 anchors (child of a PLAIN parent) — LIVE
+  constraintRef?: { width: number; height: number };  // frozen parent-size reference for `constraints`
+}
+
+interface Constraints {              // how this child responds when its PLAIN parent resizes
+  horizontal?: "left" | "right" | "left-right" | "center" | "scale";  // default "left"
+  vertical?: "top" | "bottom" | "top-bottom" | "center" | "scale";    // default "top"
 }
 
 interface LayoutContainer {          // this node's DIRECT CHILDREN are auto-positioned
@@ -229,10 +236,35 @@ inner height). `columnGap`/`rowGap`/`padding` inset as expected.
   `migrate_5_to_6` is a pass-through. The bump is still required: a schema-5 build would
   ignore the grid and draw the children at their stored `x/y`.
 
-> **Still deferred (not in schema 6):** constraints/anchors, flex-shrink, wrap, per-child
-> margins, absolute-position escapes, responsive rules, and the grid tail (explicit
-> placement/spans, `auto`/content tracks, per-row sizes, grid hug). These are M2's
-> remaining deliverables — see [MILESTONES.md](../MILESTONES.md) § Milestone 2.
+**Constraints / anchors — landed in schema 7 (Milestone 2).** A child of a **plain**
+(non-flex, non-grid) parent uses `Layout.constraints` to pin to the parent's edges and
+respond when the parent resizes: `left`/`right`/`left-right`(stretch)/`center`/`scale`
+horizontally, and `top`/`bottom`/`top-bottom`/`center`/`scale` vertically. Absent =
+`left`/`top` = the pre-M2 static behavior. Flex/grid children are laid out and ignore
+constraints (inert).
+
+- The response is resolved **statelessly** in `computeGeometry` (`resolveConstraints`)
+  against a **frozen** reference `Layout.constraintRef` — the parent size the child's
+  geometry is "at rest" against, captured ONCE when `constraints` is first set (from the
+  parent's stored size) and never rewritten by resize. `offset = parentCurrentSize −
+  constraintRef` is therefore non-zero for a **direct** resize (parent's stored size moves,
+  ref frozen) AND a **layout-driven** one (a grown/stretched/celled frame's computed size
+  moves, ref frozen) — one formula, both sources. `scale` guards `ref > 0` (validated).
+- A per-CHILD reference (not per-parent) means authoring one child never re-baselines its
+  siblings. Constraints need **no new dirty machinery**: a parent size change dirties the
+  parent and the child inherits top-down.
+- **Known limitation (M5 tool-layer):** moving/resizing a constrained child while its
+  parent is off-reference writes geometry in the wrong frame; the re-baseline (rewrite the
+  child's rect + reset `constraintRef` to the parent's current size) is not yet built.
+- **Absent means static**, so every schema-6 document is a valid schema-7 document —
+  `migrate_6_to_7` is a pass-through. The bump is still required: a schema-6 build would
+  draw a constrained child unanchored, misstating a responsive layout.
+
+> **Still deferred (not in schema 7):** flex-shrink, wrap, per-child margins,
+> absolute-position escapes, responsive/breakpoint rules, the constrained-child
+> re-baseline (above), and the grid tail (explicit placement/spans, `auto`/content tracks,
+> per-row sizes, grid hug). These are M2's remaining deliverables — see
+> [MILESTONES.md](../MILESTONES.md) § Milestone 2.
 
 > **It bumped `SCHEMA_VERSION` to `"2"`** — as the freeze rule required, with a
 > matching `migrate_1_to_2` step. The bump was necessary even though the migration is
@@ -331,7 +363,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"6"`; chain: 1→2 transform, 2→3 auto-layout, 3→4 hug, 4→5 flex-grow, 5→6 grid) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"7"`; chain: …4→5 flex-grow, 5→6 grid, 6→7 constraints) | **only** when the persisted shape changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved
