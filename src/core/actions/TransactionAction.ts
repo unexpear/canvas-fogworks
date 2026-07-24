@@ -34,6 +34,8 @@ function mergePatch(target: PatchDelta, source: PatchDelta): PatchDelta {
         reparent: source.reparent ?? target.reparent,
         geometry: (source.geometry || target.geometry)
             ? { ...target.geometry, ...source.geometry } : undefined,
+        transform: (source.transform || target.transform)
+            ? { ...target.transform, ...source.transform } : undefined,
         style: (source.style || target.style)
             ? { ...target.style, ...source.style } : undefined,
         layout: (source.layout || target.layout)

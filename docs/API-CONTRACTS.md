@@ -84,6 +84,7 @@ new MoveNodeAction(doc, nodeId: string, newX: number, newY: number);
 new ResizeNodeAction(doc, nodeId: string, newWidth: number, newHeight: number);
 new UpdateNodeGeometryAction(doc, nodeId: string, geometry: Partial<Geometry>);
 new UpdateNodeStyleAction(doc, nodeId: string, style: Partial<Style>);
+new UpdateNodeTransformAction(doc, nodeId: string, transform: Partial<Transform>); // rotation/scale/origin
 new TransactionAction(doc, label: string, actions: Action[]);
 
 // applyMutations.ts — the single mutation site
@@ -99,7 +100,8 @@ type NodeDelta =
   | { kind: "add"; node: Node }
   | { kind: "delete" }
   | { kind: "patch"; reparent?: { parent: string | null; index?: number };
-      geometry?: Partial<Geometry>; style?: Partial<Style>; layout?: Partial<Layout>;
+      geometry?: Partial<Geometry>; transform?: Partial<Transform>;
+      style?: Partial<Style>; layout?: Partial<Layout>;
       text?: string; src?: string; name?: string };
 ```
 

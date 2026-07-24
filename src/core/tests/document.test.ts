@@ -13,6 +13,7 @@ import { ResizeNodeAction } from "../actions/ResizeNodeAction";
 import { UpdateNodeGeometryAction } from "../actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../actions/UpdateNodeStyleAction";
 import { TransactionAction } from "../actions/TransactionAction";
+import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds } from "../geometry/GeometryEngine";
@@ -1281,6 +1282,131 @@ describe("GeometryEngine", () => {
         expect(after.nodes.get("child-001")).not.toBe(first.nodes.get("child-001"));
         expect(after.nodes.get("child-001")!.bounds.x)
             .toBe(computeGeometry(doc).nodes.get("child-001")!.bounds.x); // matches a full recompute
+    });
+});
+
+// ─── M1: transform is authorable through the write path ───
+describe("UpdateNodeTransformAction", () => {
+    test("sets rotation/scale, is undoable, and round-trips", () => {
+        const doc = createDocWithRectangle();
+        const dispatcher = new ActionDispatcher(doc);
+        const r = dispatcher.dispatchAction(
+            new UpdateNodeTransformAction(doc, "rectangle-001", { rotation: Math.PI / 4, scaleX: 2 })
+        );
+        expect(r.success).toBe(true);
+        const t = dispatcher.getDocument().nodes.get("rectangle-001")!.transform!;
+        expect(t.rotation).toBeCloseTo(Math.PI / 4);
+        expect(t.scaleX).toBe(2);
+        // round-trips through the schema-2 loader
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+        // undoable
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.get("rectangle-001")!.transform).toBeUndefined();
+    });
+
+    test("rejects a zero scale (non-invertible) and non-finite rotation", () => {
+        const doc = createDocWithRectangle();
+        expect(new UpdateNodeTransformAction(doc, "rectangle-001", { scaleX: 0 }).validate()).toBe(false);
+        expect(new UpdateNodeTransformAction(doc, "rectangle-001", { rotation: Infinity }).validate()).toBe(false);
+        expect(new UpdateNodeTransformAction(doc, "rectangle-001", { rotation: NaN }).validate()).toBe(false);
+        expect(new UpdateNodeTransformAction(doc, "rectangle-001", { scaleX: -1 }).validate()).toBe(true); // flip ok
+    });
+
+    test("composes with a move in one transaction (patch is composable)", () => {
+        const doc = createDocWithRectangle();
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new TransactionAction(doc, "rotate+move", [
+            new UpdateNodeTransformAction(doc, "rectangle-001", { rotation: 1 }),
+            new MoveNodeAction(doc, "rectangle-001", 40, 50)
+        ]));
+        const n = dispatcher.getDocument().nodes.get("rectangle-001")!;
+        expect(n.transform!.rotation).toBe(1);
+        expect(n.geometry).toMatchObject({ x: 40, y: 50 }); // both landed
+    });
+});
+
+// ─── M1: incremental (dirty) compute must equal a full recompute, always ───
+describe("GeometryEngine dirty tracking", () => {
+    type CS = ReturnType<typeof computeGeometry>;
+    const statesEqual = (a: CS, b: CS): true | string => {
+        if (a.order.join("|") !== b.order.join("|")) return `order: ${a.order} vs ${b.order}`;
+        if (a.nodes.size !== b.nodes.size) return `size ${a.nodes.size} vs ${b.nodes.size}`;
+        for (const [id, an] of a.nodes) {
+            const bn = b.nodes.get(id);
+            if (!bn) return `missing ${id}`;
+            for (const k of ["a", "b", "c", "d", "e", "f"] as const) {
+                if (Math.abs(an.world[k] - bn.world[k]) > 1e-9) return `${id}.world.${k}`;
+            }
+            for (const k of ["x", "y", "width", "height"] as const) {
+                if (Math.abs(an.bounds[k] - bn.bounds[k]) > 1e-9) return `${id}.bounds.${k}`;
+                if (Math.abs(an.local[k] - bn.local[k]) > 1e-9) return `${id}.local.${k}`;
+            }
+        }
+        return true;
+    };
+
+    test("a dirty-set recompute matches a from-scratch recompute over a random sequence", () => {
+        // Seeded LCG so any failure reproduces exactly.
+        let seed = 0x9e3779b9;
+        const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+        const pick = <T>(a: T[]): T => a[Math.floor(rnd() * a.length)];
+
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+
+        let prev = computeGeometry(dispatcher.getDocument());
+        const ids: string[] = [];
+        let counter = 0;
+
+        for (let step = 0; step < 300; step++) {
+            const doc = dispatcher.getDocument();
+            const op = ids.length === 0 ? 0 : Math.floor(rnd() * 7);
+            if (op === 0) {
+                const id = "n" + (counter++);
+                const parent = ids.length && rnd() < 0.4 ? pick(ids) : null;
+                if (dispatcher.dispatchAction(new AddNodeAction(doc, "core.rectangle",
+                    rnd() * 100, rnd() * 100, 1 + rnd() * 60, 1 + rnd() * 60, "#fff", id, parent)).success) ids.push(id);
+            } else if (op === 1) {
+                dispatcher.dispatchAction(new MoveNodeAction(doc, pick(ids), rnd() * 200 - 100, rnd() * 200 - 100));
+            } else if (op === 2) {
+                dispatcher.dispatchAction(new ResizeNodeAction(doc, pick(ids), 1 + rnd() * 80, 1 + rnd() * 80));
+            } else if (op === 3) {
+                // Rotation/scale through the write path — the thing that most stresses composition.
+                dispatcher.dispatchAction(new UpdateNodeTransformAction(doc, pick(ids), {
+                    rotation: rnd() * Math.PI * 2, scaleX: 0.5 + rnd() * 2, scaleY: 0.5 + rnd() * 2
+                }));
+            } else if (op === 4) {
+                dispatcher.dispatchAction(new ReparentNodeAction(doc, pick(ids), rnd() < 0.5 ? null : pick(ids)));
+            } else if (op === 5) {
+                dispatcher.undo();
+            } else {
+                dispatcher.redo();
+            }
+
+            const live = dispatcher.getDocument();
+            const full = computeGeometry(live);
+            const incremental = computeGeometry(live, null, prev, dirty);
+            const eq = statesEqual(incremental, full);
+            expect(eq).toBe(true); // if this ever fails, `eq` names the exact node/field at seed-derived step
+
+            prev = incremental;
+            dirty.clear();
+        }
+    });
+
+    test("an under-broad dirty set is CAUGHT (the test is not vacuous)", () => {
+        const doc = createDocWithRectangle();
+        const dispatcher = new ActionDispatcher(doc);
+        const prev = computeGeometry(dispatcher.getDocument());
+
+        dispatcher.dispatchAction(new MoveNodeAction(dispatcher.getDocument(), "rectangle-001", 500, 500));
+        // Deliberately omit the changed node from the dirty set.
+        const stale = computeGeometry(dispatcher.getDocument(), null, prev, new Set<string>());
+        const full = computeGeometry(dispatcher.getDocument());
+        // The stale entry is reused, so incremental DIVERGES — proving the equivalence
+        // assertion above has teeth.
+        expect(stale.nodes.get("rectangle-001")!.world.e).not.toBe(full.nodes.get("rectangle-001")!.world.e);
     });
 });
 

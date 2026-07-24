@@ -40,6 +40,7 @@ abstract class Action {
 | `ResizeNodeAction` | `{ kind: "patch", geometry: { width, height } }` |
 | `UpdateNodeGeometryAction` | `{ kind: "patch", geometry: {…partial…} }` |
 | `UpdateNodeStyleAction` | `{ kind: "patch", style: {…partial…} }` |
+| `UpdateNodeTransformAction` | `{ kind: "patch", transform: {…partial…} }` — rotation/scale/origin |
 | `ReparentNodeAction` | `{ kind: "patch", reparent: { parent, index? } }` |
 | `TransactionAction` | merges multiple actions into one atomic result + one revision |
 
@@ -75,6 +76,7 @@ type NodeDelta =
 | `delete` | remove a node | detach from `parent.children`, `nodes.delete`, drop from `rootNodeUuids` |
 | `patch.reparent` | move within the tree | resolve the destination first, detach from **both** the source and the destination, then insert at `index` (appended if omitted) |
 | `patch.geometry` / `.style` / `.layout` | patch | `Object.assign(node.<field>, …)` |
+| `patch.transform` | patch | `node.transform = { ...node.transform, ...delta.transform }` (created if absent) |
 | `patch.text` / `.src` / `.name` | scalar set | assigned when not `undefined` |
 
 `applyMutationsToDocument` switches exhaustively on `kind`; adding a variant without

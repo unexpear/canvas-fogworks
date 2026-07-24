@@ -3,7 +3,7 @@
  * @description Shared types used across all Actions and History tracking.
  */
 
-import { Node, Geometry, Style, Layout } from "../document/Node";
+import { Node, Geometry, Style, Layout, Transform } from "../document/Node";
 import { ProjectDocument, SerializedMetadata } from "../document/Document";
 
 /**
@@ -27,6 +27,7 @@ export type NodeDelta =
         /** Move within the tree. Applied before the property patches below. */
         reparent?: { parent: string | null; index?: number };
         geometry?: Partial<Geometry>;
+        transform?: Partial<Transform>;
         style?: Partial<Style>;
         layout?: Partial<Layout>;
         text?: string;

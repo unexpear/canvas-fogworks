@@ -94,6 +94,7 @@ export function applyMutationsToDocument(
                 }
 
                 if (delta.geometry) Object.assign(node.geometry, delta.geometry);
+                if (delta.transform) node.transform = { ...node.transform, ...delta.transform };
                 if (delta.style) Object.assign(node.style, delta.style);
                 if (delta.layout) Object.assign(node.layout, delta.layout);
                 if (delta.text !== undefined) node.text = delta.text;

@@ -17,10 +17,14 @@
  *      transforms (and, from M2, layout) instead of bypassing them.
  *
  * DIRTY TRACKING: `compute` accepts a previous ComputedState and a dirty set. A node
- * whose subtree is untouched reuses its previous entry by reference. Correctness does
- * not depend on the dirty set being right — an over-broad set only costs time — but a
- * node is treated as dirty if it OR ANY ANCESTOR changed, because a parent's transform
- * propagates down.
+ * whose subtree is untouched reuses its previous entry by reference. The dirty set
+ * must be a SUPERSET of the nodes whose stored geometry/transform changed since
+ * `previous` was computed: an over-broad set only costs time, but an UNDER-broad set
+ * silently reuses a stale entry and renders the node in the wrong place. Callers own
+ * that guarantee; the invariant that keeps them honest is `incremental === full`
+ * (property-tested). Descendant propagation is handled here: a node is recomputed if
+ * it OR ANY ANCESTOR is dirty, because a parent's transform composes downward — so a
+ * caller only needs to list the directly-changed ids, not their subtrees.
  */
 
 import { ReadonlyDocument } from "../document/Document";

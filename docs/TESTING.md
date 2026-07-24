@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen for Milestone 0 · v0.0.5. Suite: `src/core/tests/document.test.ts` (116 tests).
+> 🔒 Frozen for Milestone 0 · v0.0.5. Suite: `src/core/tests/document.test.ts` (121 tests).
 
 ## Philosophy
 
@@ -17,7 +17,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 116 tests
+npm test                                   # jest (ts-jest), 121 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -28,7 +28,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (116 tests)
+## What is covered (121 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -45,6 +45,8 @@ npm run check                              # typecheck + lint + test + build (th
 | `Serializer.loadResult` | empty vs loaded vs **corrupt** (with backup) — localStorage mocked |
 | `ActionDispatcher.loadDocument` | replaces doc, resets history |
 | **`Matrix` / `GeometryEngine`** | multiply order; inverse round-trip + singular→null; rotated AABB from all four corners; parent rotation propagates to children; `toLocal`/`toWorld` round-trip through a rotated ancestor; rotated hit-test uses true shape not AABB; subtree/selection bounds; dirty reuse by reference + descendant invalidation |
+| **`UpdateNodeTransformAction`** | sets rotation/scale, undoable, round-trips, rejects zero-scale/non-finite, allows flip, composes with a move in one transaction |
+| **GeometryEngine dirty tracking** | `incremental === full` over a 300-op seeded fuzz (add/move/resize/rotate/reparent/undo/redo); a companion test proves the equivalence is not vacuous |
 | **Restore dirty set** | undo reports only the changed node, not the whole document |
 | **Document integrity (load path)** | rejects `opacity: 5`, negative size, dangling parent, ghost root, unclaimed child, parentless non-root; accepts a well-formed nested doc |
 

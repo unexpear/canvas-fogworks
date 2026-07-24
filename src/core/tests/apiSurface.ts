@@ -45,6 +45,7 @@ import { ResizeNodeAction } from "../actions/ResizeNodeAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { UpdateNodeGeometryAction } from "../actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../actions/UpdateNodeStyleAction";
+import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { createEditorState, clampViewport, EditorState } from "../../editor/EditorState";
 import { renderSVG, RendererState } from "../../renderer/SVGRenderer";
@@ -129,7 +130,8 @@ export function __apiSurfacePin(): void {
         new ResizeNodeAction(doc, "id", 1, 1),
         new ReparentNodeAction(doc, "id", null, 0),
         new UpdateNodeGeometryAction(doc, "id", { x: 0 }),
-        new UpdateNodeStyleAction(doc, "id", { opacity: 1 })
+        new UpdateNodeStyleAction(doc, "id", { opacity: 1 }),
+        new UpdateNodeTransformAction(doc, "id", { rotation: 0 })
     ];
     expectType<TransactionAction>(new TransactionAction(doc, "label", actions));
     expectType<MutationResult>(actions[0].execute());

@@ -10,7 +10,7 @@ import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document"
 import { Node } from "../core/document/Node";
 import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
-import { computeGeometry } from "../core/geometry/GeometryEngine";
+import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
 import { UpdateNodeGeometryAction } from "../core/actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../core/actions/UpdateNodeStyleAction";
 import { createEditorState, EditorState, clampViewport } from "../editor/EditorState";
@@ -50,6 +50,14 @@ export function App() {
     const canvasRef = useRef<HTMLDivElement>(null);
     const currentFilePathRef = useRef<string | null>(null);
     const confirmedOverwriteRef = useRef(false);
+    // Dirty-state tracking (M1): the previous ComputedState to reuse clean subtrees
+    // from, the ids changed by document mutations since it was computed, and the
+    // node ids that carried a drag preview last frame (so releasing a drag recomputes
+    // them). The invariant `incremental === full` is property-tested — this is the
+    // producer of the dirty set the engine consumes.
+    const prevComputedRef = useRef<ComputedState | null>(null);
+    const dirtyNodesRef = useRef<Set<string>>(new Set());
+    const prevPendingRef = useRef<Set<string>>(new Set());
     const editorStateRef = useRef<EditorState | null>(null);
     if (!editorStateRef.current) editorStateRef.current = createEditorState();
     const es = editorStateRef.current;
@@ -135,21 +143,41 @@ export function App() {
 
     useEffect(() => {
         if (canvasRef.current) {
+            const doc = dispatcher.getDocument();
+            const pendingKeys = new Set(es.pendingGeometry ? [...es.pendingGeometry.keys()] : []);
+
+            // The dirty set the engine consumes must be a SUPERSET of everything whose
+            // geometry changed since `prevComputed`: document edits (accumulated by
+            // onChange), nodes with a preview now, and nodes that had one last frame
+            // (a released/cancelled drag). The engine propagates to descendants itself.
+            const computed = prevComputedRef.current
+                ? computeGeometry(doc, es.pendingGeometry, prevComputedRef.current,
+                    new Set([...dirtyNodesRef.current, ...pendingKeys, ...prevPendingRef.current]))
+                : computeGeometry(doc, es.pendingGeometry);
+
+            prevComputedRef.current = computed;
+            prevPendingRef.current = pendingKeys;
+            dirtyNodesRef.current = new Set();
+
             const rendererState: RendererState = {
                 selectedNodeIds: es.selectedNodeIds,
                 hoveredNodeId: es.hoveredNodeId,
                 previewRect: es.previewRect,
-                computed: computeGeometry(dispatcher.getDocument(), es.pendingGeometry),
+                computed,
                 viewport: es.viewport
             };
-            renderSVG(canvasRef.current, dispatcher.getDocument(), rendererState);
+            renderSVG(canvasRef.current, doc, rendererState);
         }
     }, [ui.tick, dispatcher]);
 
-    // Repaint whenever the DOCUMENT changes, from any source. Ephemeral editor
-    // state (selection, hover, viewport, drag previews) doesn't flow through the
-    // dispatcher, so tools still call `refresh()` directly for those.
-    useEffect(() => dispatcher.onChange(refresh), [dispatcher, refresh]);
+    // Repaint whenever the DOCUMENT changes, from any source, and record which nodes
+    // changed so the next compute can reuse the untouched ones. Ephemeral editor state
+    // (selection, hover, viewport, drag previews) doesn't flow through the dispatcher,
+    // so tools call `refresh()` directly for those (no document nodes are dirtied).
+    useEffect(() => dispatcher.onChange(result => {
+        result.updatedNodeIds.forEach(id => dirtyNodesRef.current.add(id));
+        refresh();
+    }), [dispatcher, refresh]);
 
     // Bridge the Electron native File menu (no-op in the browser build).
     useEffect(() => {

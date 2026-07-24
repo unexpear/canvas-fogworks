@@ -65,7 +65,7 @@ truncation boundary and the starting document is pinned OUTSIDE the trimmable li
 reachable via `revertToOriginal()`) · revision system ·
 JSON serialization (schema version decoupled from app version) ·
 **validation** (Action-path `validate()` **and** `validateDocumentIntegrity` on load:
-ranges, dangling parents, ghost roots, cycles) · **116 automated tests**.
+ranges, dangling parents, ghost roots, cycles) · **121 automated tests**.
 
 **Round-trip closure (what took M0 from "nearly" to done):** an adversarial audit found
 the engine could author a document it could not reopen — `AddNodeAction.validate()`
@@ -139,6 +139,19 @@ shape, so `SCHEMA_VERSION` went `"1"` → `"2"` with a `migrate_1_to_2` step. Th
 migration is a pass-through *by content* — absent means identity — but the bump was
 still required, because a schema-1 *build* would load a rotated node and draw it
 unrotated with no error.
+
+**Transform is a full document citizen, not a dead field.** `UpdateNodeTransformAction`
+is the write-path primitive that sets rotation/scale/origin — so `transform` is
+authorable, undoable, serializable and validated through the dispatcher, not only by
+hand-editing a file. (The M4 rotate handle will invoke it; the action exists at the
+document layer independently, exactly as `ReparentNodeAction` predates grouping UI.)
+
+**Dirty tracking is wired, not just present.** `computeGeometry`'s `previous`/`dirty`
+parameters are consumed by the app render path: `App` accumulates changed ids from every
+`MutationResult` and reuses untouched subtrees between frames. The safety net is a seeded
+fuzz test asserting `incremental === full` over 300 random ops (add/move/resize/rotate/
+reparent/undo/redo) — because an under-broad dirty set silently renders stale, this
+equivalence is the whole correctness basis, and a companion test proves it is not vacuous.
 
 **Explicitly NOT in M1's scope:** `ComputedState` carries geometry only. Resolved style
 (M5 tokens) and layout output (M2) belong in it and are not there — each arrives with

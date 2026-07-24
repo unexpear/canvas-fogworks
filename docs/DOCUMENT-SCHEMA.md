@@ -110,7 +110,10 @@ interface Transform {
 
 It is a separate field rather than a widening of `Geometry`, which stays a pure
 axis-aligned box so Milestone 2 layout can compute it. `origin` is normalized so the
-pivot survives a resize. **Absent means identity**, so every schema-1 document is a
+pivot survives a resize, and is settable via `UpdateNodeTransformAction`
+(the write-path primitive; the M4 rotate handle will invoke it). A zero scale is
+rejected — it is non-invertible, so `toLocal`/hit-testing would break. **Absent means
+identity**, so every schema-1 document is a
 valid schema-2 document — which is exactly why `migrate_1_to_2` is a pass-through.
 
 > **It bumped `SCHEMA_VERSION` to `"2"`** — as the freeze rule required, with a
