@@ -2,14 +2,14 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer/SVGRenderer.ts, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v4 (app v0.0.5) · current through Milestone 2 (auto-layout + intrinsic sizing). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v5 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + flex-grow). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
 
 ```ts
 const CURRENT_VERSION: string;               // app/display version, from package.json
-const SCHEMA_VERSION: string;                // "4" — persisted document schema (decoupled from app version)
+const SCHEMA_VERSION: string;                // "5" — persisted document schema (decoupled from app version)
 function createEmptyDocument(): ProjectDocument;
 
 // SceneGraph.ts — the ONLY correct node ordering (z-order / layer order)

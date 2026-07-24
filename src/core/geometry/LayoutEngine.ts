@@ -10,10 +10,10 @@
  * the document.
  *
  * SCOPE: a flex stack — row/column, gap, padding, cross-axis align
- * (start/center/end/stretch), AND intrinsic ("hug") sizing (a container sizes an axis
- * to its contents; see `measureIntrinsicSizes`). DEFERRED with their own milestone
- * weight: flex-grow, wrap, grid, per-child margins, absolute-position escapes,
- * constraints/anchors. See MILESTONES.md § Milestone 2.
+ * (start/center/end/stretch), intrinsic ("hug") sizing (a container sizes an axis to
+ * its contents; see `measureIntrinsicSizes`), AND flex-grow (children fill leftover
+ * main-axis space). DEFERRED with their own milestone weight: flex-shrink, wrap, grid,
+ * per-child margins, absolute-position escapes, constraints/anchors. See MILESTONES.md.
  */
 
 import { ReadonlyDocument } from "../document/Document";
@@ -98,15 +98,17 @@ export function measureIntrinsicSizes(
  * Compute the parent-relative rect for each direct child of a container.
  *
  * @param container the parent's layout rule
- * @param parentSize the container's own width/height (fixed-size for now)
- * @param children the child nodes, in `parent.children` order
- * @returns child id → computed local rect (x/y always; width/height only when
- *   stretched on the cross axis, else the child keeps its own size)
+ * @param parentSize the container's own width/height (already resolved by the measure
+ *   pass, so a hug container's size reflects its contents)
+ * @param children the child nodes in `parent.children` order, each with its base
+ *   (measured) size and optional flex `grow`
+ * @returns child id → computed local rect (position always; main size grown to fill
+ *   leftover space; cross size only when stretched, else the child's own)
  */
 export function layoutChildren(
     container: LayoutContainer,
     parentSize: { width: number; height: number },
-    children: readonly { id: string; width: number; height: number }[]
+    children: readonly { id: string; width: number; height: number; grow?: number }[]
 ): Map<string, Rect> {
     const gap = container.gap ?? 0;
     const pad = container.padding ?? 0;
@@ -114,12 +116,32 @@ export function layoutChildren(
     const row = container.direction === "row";
 
     // Axis abstraction: "main" is the packing axis, "cross" is the other.
+    const innerMain = (row ? parentSize.width : parentSize.height) - 2 * pad;
     const innerCross = (row ? parentSize.height : parentSize.width) - 2 * pad;
+
+    // Flex-grow: share the LEFTOVER main-axis space among children in proportion to
+    // `grow`. No leftover (fixed content, or a main-axis hug where innerMain == used)
+    // means everyone keeps their base size; overflow (free < 0) is NOT shrunk here
+    // (flex-shrink is deferred). Runs before positioning so `cursor` advances by the
+    // grown size. NOTE (intentional, differs from CSS): all free space is distributed by
+    // grow ratio, so a lone `grow: 0.5` still fills the row — we do not reserve the
+    // (1 - Σgrow) fraction CSS leaves empty when Σgrow < 1. "grow" here means "take my
+    // share of the space", not "take my fraction of one unit".
+    let usedMain = gap * Math.max(0, children.length - 1);
+    let growSum = 0;
+    for (const child of children) {
+        usedMain += row ? child.width : child.height;
+        growSum += Math.max(0, child.grow ?? 0);
+    }
+    const free = innerMain - usedMain;
+    const distribute = free > 0 && growSum > 0;
 
     const out = new Map<string, Rect>();
     let cursor = pad; // main-axis offset, starts after the leading padding
     for (const child of children) {
-        const mainSize = row ? child.width : child.height;
+        const grow = Math.max(0, child.grow ?? 0);
+        const baseMain = row ? child.width : child.height;
+        const mainSize = distribute && grow > 0 ? baseMain + free * (grow / growSum) : baseMain;
         const ownCross = row ? child.height : child.width;
         const crossSize = align === "stretch" ? Math.max(0, innerCross) : ownCross;
 

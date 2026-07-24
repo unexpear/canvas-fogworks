@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
 
-> 🔒 Frozen contract · schema v4 (app v0.0.5) · current through Milestone 2 (auto-layout + intrinsic sizing; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v5 (app v0.0.5) · current through Milestone 2 (auto-layout + intrinsic sizing; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -117,7 +117,10 @@ pass consumes those sizes. The measure pass is deliberately run *fully* on every
 (never memoized): that makes the size layer byte-identical between a full and an
 incremental recompute, so the `incremental === full` invariant reduces to the dirty walk.
 That walk (`expandDirtyForLayout`) climbs a change **up the hug chain** to the first fixed
-container, so a deep resize re-lays-out every ancestor it actually moves.
+container, so a deep resize re-lays-out every ancestor it actually moves. **Flex-grow**
+(`Layout.grow`) is the inverse of hug — children fill a fixed container's leftover
+main-axis space — and is applied purely in the position pass, so it needs no measure
+feedback and no new dirty-tracking (a growing sibling reflows through the same ripple).
 
 Still outstanding for the computed layer: **resolved style** (M5 tokens) belongs in
 `ComputedState` and is not there yet; and M2's **richer layout** — constraints, grid,

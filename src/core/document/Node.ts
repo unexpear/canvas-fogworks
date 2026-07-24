@@ -69,6 +69,15 @@ export interface Layout {
      * the stack rule. This is what "store 'center inside parent' instead of x=240" means.
      */
     container?: LayoutContainer;
+    /**
+     * Flex-grow (Milestone 2). This node's share of the LEFTOVER main-axis space in its
+     * flex-container parent, distributed in proportion to siblings' `grow`. `0`/absent =
+     * fixed to its own (base) main size. Only takes effect when the parent is a container
+     * with free space — a parent that HUGS its main axis has none, so `grow` is inert
+     * there. A property of the CHILD, consumed by its container parent (like CSS
+     * `flex-grow`), so it lives on the node's own `Layout`, not on `LayoutContainer`.
+     */
+    grow?: number;
 }
 
 /** A flex-stack: children packed along one axis, with padding, gap and cross-align. */
@@ -102,6 +111,9 @@ const ALIGNMENTS = new Set(["start", "center", "end", "stretch"]);
  * error string, or null.
  */
 export function layoutError(l: Partial<Layout>): string | null {
+    // `grow` is independent of `container` and must be checked BEFORE the no-container
+    // early return, or a `{ grow: -5 }` patch would slip through unvalidated.
+    if (l.grow !== undefined && (!Number.isFinite(l.grow) || l.grow < 0)) return "layout.grow must be finite and >= 0";
     if (!("container" in l) || l.container === undefined) return null;
     const c = l.container;
     if (typeof c !== "object" || c === null) return "layout.container must be an object";

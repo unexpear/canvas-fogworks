@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v4 (app v0.0.5) · current through Milestone 2 (auto-layout + intrinsic sizing). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v5 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + flex-grow). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -68,6 +68,7 @@ interface Layout {     // constraint intent, not absolute position (Milestone 2)
   verticalAlignment?: "top" | "bottom" | "center";    // reserved (constraints, deferred)
   spacing?: number;                                    // reserved
   container?: LayoutContainer;                         // M2 auto-layout — LIVE
+  grow?: number;                                       // M2 flex-grow (child hint) — LIVE
 }
 
 interface LayoutContainer {          // this node's DIRECT CHILDREN are auto-positioned
@@ -172,7 +173,32 @@ a laid-out child's position is.
   hence `migrate_3_to_4` is a pass-through. The bump is still required: a schema-3 *build*
   would draw a hug container at its now-vestigial stored width/height, misstating the doc.
 
-> **Still deferred (not in schema 4):** constraints/anchors, flex-grow, wrap, grid,
+**Flex-grow — landed in schema 5 (Milestone 2).** A child sets `Layout.grow` (a number,
+default 0) to claim a share of its flex parent's **leftover main-axis space**, split
+among siblings in proportion to their `grow`. It lives on the child's own `Layout` (like
+CSS `flex-grow`), and is consumed by the container parent during positioning.
+
+- Applied in the **position pass only** — it never feeds back into the bottom-up measure
+  pass, so there is no cycle and a growing child does not change a hug ancestor's size.
+- **Inert when there is no free space:** a *standalone* container that hugs its main axis,
+  or one whose children already overflow, has nothing to distribute (overflow is *not*
+  shrunk — flex-shrink is deferred). `grow` and `alignItems: "stretch"` are orthogonal
+  (main vs cross axis).
+- **grow wins over hug on a shared axis.** A node can be both a hug *container* and a grow
+  *child*: it hugs its own content, but if its parent grows it, the grown size wins and its
+  children lay out within the grown box (matching CSS `flex-grow` overriding content size).
+- **Intentional divergence from CSS:** all free space is distributed by `grow` ratio, so a
+  lone `grow: 0.5` still fills the row — the `(1 − Σgrow)` fraction CSS leaves empty when
+  `Σgrow < 1` is *not* reserved. `grow` means "my share of the space", not "my fraction of
+  one unit".
+- Validated by the shared `layoutError` on both paths (`grow` must be finite and ≥ 0);
+  because a `{ grow }` patch may carry no `container`, the check runs *before* the
+  no-container early return. Settable via `UpdateNodeLayoutAction`.
+- **Absent means 0**, so every schema-4 document is a valid schema-5 document —
+  `migrate_4_to_5` is a pass-through. The bump is still required: a schema-4 build would
+  draw a growing child at its base size instead of filled.
+
+> **Still deferred (not in schema 5):** constraints/anchors, flex-shrink, wrap, grid,
 > per-child margins, absolute-position escapes, responsive rules. These are M2's
 > remaining deliverables — see [MILESTONES.md](../MILESTONES.md) § Milestone 2.
 
@@ -273,7 +299,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"4"`; chain: 1→2 transform, 2→3 auto-layout, 3→4 hug sizing) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"5"`; chain: 1→2 transform, 2→3 auto-layout, 3→4 hug sizing, 4→5 flex-grow) | **only** when the persisted shape changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

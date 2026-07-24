@@ -1580,15 +1580,15 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "5" that has no 4→5 step: the
+        // Pretending the build has moved to a schema "6" that has no 5→6 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→3→4), and then REFUSED at "4" — never re-stamped straight to the current
-        // schema. The error naming "4" (not "1") is the proof the chain actually ran.
+        // (1→2→3→4→5), and then REFUSED at "5" — never re-stamped straight to the current
+        // schema. The error naming "5" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 3→4 landed for hug sizing.)
-        expect(() => migrateIfNeeded(legacy, "5")).toThrow('Migration not implemented for document schema "4"');
+        // time a real migration is added — here, when 4→5 landed for flex-grow.)
+        expect(() => migrateIfNeeded(legacy, "6")).toThrow('Migration not implemented for document schema "5"');
 
-        // At the current schema it loads, having been migrated 0.0.4 → 1 → 2 → 3 → 4.
+        // At the current schema it loads, having been migrated 0.0.4 → 1 → 2 → 3 → 4 → 5.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
     });
 
@@ -1606,7 +1606,7 @@ describe("Guards the suite did not previously protect", () => {
             }
         });
         const doc = deserializeDocument(v1);
-        expect(doc.version).toBe(SCHEMA_VERSION);              // upgraded to current ("3")
+        expect(doc.version).toBe(SCHEMA_VERSION);              // upgraded to the current schema
         expect(doc.nodes.get("n")!.transform).toBeUndefined();  // absent = identity
         expect(() => deserializeDocument(serializeDocument(doc))).not.toThrow();
     });
@@ -2029,12 +2029,15 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
             } else if (op === 2) {
                 dispatcher.dispatchAction(new ResizeNodeAction(doc, pick(ids), 1 + rnd() * 80, 1 + rnd() * 80));
             } else if (op === 3) {
-                // Toggle auto-layout on a random node: half the time a real container
-                // (with independently-random HUG flags, which build multi-level hug
-                // chains as op 0 nests and op 4 reparents), half the time removed.
-                const rule = rnd() < 0.5
+                // Change a random node's layout: a container (with independently-random
+                // HUG flags, which build multi-level hug chains as op 0 nests and op 4
+                // reparents), OR remove the container, OR set a flex `grow` factor.
+                const r = rnd();
+                const rule = r < 0.4
                     ? { container: { direction: pick([...dirs]), gap: rnd() * 12, padding: rnd() * 12, alignItems: pick([...aligns]), hugWidth: rnd() < 0.5, hugHeight: rnd() < 0.5 } }
-                    : { container: undefined };
+                    : r < 0.6
+                        ? { container: undefined }
+                        : { grow: rnd() < 0.3 ? 0 : rnd() * 3 };
                 dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, pick(ids), rule));
             } else if (op === 4) {
                 dispatcher.dispatchAction(new ReparentNodeAction(doc, pick(ids), rnd() < 0.5 ? null : pick(ids)));
@@ -2214,5 +2217,144 @@ describe("M2 intrinsic (hug) sizing", () => {
             + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
             + ` "style": { "fill": "#000", "opacity": 1 }, "layout": { "container": { "direction": "row", "hugWidth": "yes" } } } } } }`;
         expect(() => deserializeDocument(bad)).toThrow("boolean");
+    });
+});
+
+describe("M2 flex-grow", () => {
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+
+    test("layoutChildren distributes leftover main-axis space in proportion to grow", () => {
+        // One grower fills the rest: free = 200 - (50+50) = 100 -> b = 50 + 100 = 150.
+        const one = layoutChildren({ direction: "row" }, { width: 200, height: 100 },
+            [{ id: "a", width: 50, height: 50 }, { id: "b", width: 50, height: 50, grow: 1 }]);
+        expect(one.get("a")).toMatchObject({ x: 0, width: 50 });
+        expect(one.get("b")).toMatchObject({ x: 50, width: 150 });
+
+        // Two growers split proportionally 1:3 of the free 100 -> +25 / +75.
+        const two = layoutChildren({ direction: "row" }, { width: 200, height: 100 },
+            [{ id: "a", width: 50, height: 50, grow: 1 }, { id: "b", width: 50, height: 50, grow: 3 }]);
+        expect(two.get("a")).toMatchObject({ x: 0, width: 75 });
+        expect(two.get("b")).toMatchObject({ x: 75, width: 125 });
+
+        // Gap + padding are subtracted from the free space first: inner = 200-40 = 160,
+        // used = 30+30+gap10 = 70, free = 90 -> b = 30 + 90 = 120 at x = 20+30+10 = 60.
+        const padded = layoutChildren({ direction: "row", gap: 10, padding: 20 }, { width: 200, height: 100 },
+            [{ id: "a", width: 30, height: 30 }, { id: "b", width: 30, height: 30, grow: 1 }]);
+        expect(padded.get("a")).toMatchObject({ x: 20, width: 30 });
+        expect(padded.get("b")).toMatchObject({ x: 60, width: 120 });
+    });
+
+    test("grow is inert with no leftover space (exact fit or overflow — no shrink)", () => {
+        // Overflow: used 100 > inner 80 -> free < 0 -> b keeps its base size, overflows.
+        const overflow = layoutChildren({ direction: "row" }, { width: 80, height: 100 },
+            [{ id: "a", width: 50, height: 50 }, { id: "b", width: 50, height: 50, grow: 1 }]);
+        expect(overflow.get("b")).toMatchObject({ x: 50, width: 50 });
+    });
+
+    test("a fixed container grows a child to fill; a hug-main container leaves nothing to grow", () => {
+        // Fixed 200-wide row: c2 grows from 50 to 150.
+        const fixed = createEmptyDocument();
+        fixed.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 200, height: 100 }, { container: { direction: "row" } }));
+        fixed.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 50, height: 50 }, {}));
+        fixed.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 50, height: 50 }, { grow: 1 }));
+        fixed.rootNodeUuids = ["P"];
+        const cs = computeGeometry(fixed);
+        expect(cs.nodes.get("c1")!.bounds).toMatchObject({ x: 0, width: 50 });
+        expect(cs.nodes.get("c2")!.bounds).toMatchObject({ x: 50, width: 150 });
+
+        // Same tree but the container HUGS its main axis: it sizes to content (100), so
+        // there is zero free space and grow does nothing.
+        const hug = createEmptyDocument();
+        hug.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 999, height: 100 }, { container: { direction: "row", hugWidth: true } }));
+        hug.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 50, height: 50 }, {}));
+        hug.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 50, height: 50 }, { grow: 1 }));
+        hug.rootNodeUuids = ["P"];
+        const hcs = computeGeometry(hug);
+        expect(hcs.nodes.get("P")!.local.width).toBe(100);        // hugged to content
+        expect(hcs.nodes.get("c2")!.bounds).toMatchObject({ x: 50, width: 50 }); // grow inert
+    });
+
+    test("resizing one child reflows a growing SIBLING (free space shrinks), incrementally", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 200, height: 100 }, { container: { direction: "row" } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 50, height: 50 }, { grow: 1 }));
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 50, height: 50 }, { grow: 1 }));
+        doc.rootNodeUuids = ["P"];
+
+        const dispatcher = new ActionDispatcher(doc);
+        const base = computeGeometry(dispatcher.getDocument());
+        expect(base.nodes.get("c2")!.bounds.width).toBe(100); // free 100 split evenly -> +50 each
+
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+        dispatcher.dispatchAction(new ResizeNodeAction(dispatcher.getDocument(), "c1", 80, 50));
+
+        const full = computeGeometry(dispatcher.getDocument());
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, dirty);
+        // free = 200 - (80+50) = 70, split evenly -> c2 = 50 + 35 = 85 (was 100).
+        expect(full.nodes.get("c2")!.bounds.width).toBe(85); // growing sibling shrank (non-vacuous)
+        expect(dirty.has("c2")).toBe(false);                 // only c1 was reported
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+    });
+
+    test("a PENDING resize of a grow child previews the SAME layout as committing it (no double-apply)", () => {
+        // P fixed row 200; c1 and c2 both base 50, grow 1. Resizing c1's base to 80 makes
+        // free = 200-(80+50) = 70, split evenly -> c1 grows to 115, c2 to 85 at x=115.
+        const build = (c1w: number) => {
+            const doc = createEmptyDocument();
+            doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 200, height: 100 }, { container: { direction: "row" } }));
+            doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: c1w, height: 50 }, { grow: 1 }));
+            doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 50, height: 50 }, { grow: 1 }));
+            doc.rootNodeUuids = ["P"];
+            return doc;
+        };
+        // The COMMITTED truth: c1's stored width is 80.
+        const committed = computeGeometry(build(80));
+        // The PREVIEW: c1 stored 50, pending resize to 80 (exactly what a resize handle passes).
+        const preview = computeGeometry(build(50), new Map([["c1", { width: 80 }]]));
+
+        // Preview must equal commit — a grow child is grown PAST its pending base (to 115),
+        // not clamped back to 80 with a 35px hole before c2.
+        expect(preview.nodes.get("c1")!.bounds).toEqual(committed.nodes.get("c1")!.bounds);
+        expect(preview.nodes.get("c2")!.bounds).toEqual(committed.nodes.get("c2")!.bounds);
+        expect(preview.nodes.get("c1")!.bounds).toMatchObject({ x: 0, width: 115 });
+        expect(preview.nodes.get("c2")!.bounds).toMatchObject({ x: 115, width: 85 });
+    });
+
+    test("grow OVERRIDES hug on a node that is both a hug container and a grow child", () => {
+        // C hugs its own content (a 20-wide leaf) but is ALSO a grow child of a fixed
+        // parent. Intended (CSS-like) semantics: grow wins on the shared axis — C is
+        // stretched to fill the parent (200), past its hugged content, and its own child
+        // then lays out within the GROWN size. (Locks the semantics; not a bug.)
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["C"], { x: 0, y: 0, width: 200, height: 100 }, { container: { direction: "row" } }));
+        doc.nodes.set("C", mk("C", "P", ["leaf"], { x: 0, y: 0, width: 999, height: 60 }, { container: { direction: "row", hugWidth: true }, grow: 1 }));
+        doc.nodes.set("leaf", mk("leaf", "C", [], { x: 0, y: 0, width: 20, height: 20 }, {}));
+        doc.rootNodeUuids = ["P"];
+
+        const cs = computeGeometry(doc);
+        expect(cs.nodes.get("C")!.local.width).toBe(200);              // grown to fill, NOT hugged to 20
+        expect(cs.nodes.get("leaf")!.bounds).toMatchObject({ x: 0, width: 20 }); // content stays its own size
+    });
+
+    test("grow is a write-path citizen: schema-5 round-trip + both-paths validation", () => {
+        const d = createDocWithParentChild();
+        expect(new UpdateNodeLayoutAction(d, "child-001", { grow: -1 }).validate()).toBe(false);
+        expect(new UpdateNodeLayoutAction(d, "child-001", { grow: NaN }).validate()).toBe(false);
+        expect(new UpdateNodeLayoutAction(d, "child-001", { grow: 2 }).validate()).toBe(true);
+
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "child-001", { grow: 3 }));
+        expect(dispatcher.getDocument().nodes.get("child-001")!.layout.grow).toBe(3);
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+
+        // Load path rejects a negative grow exactly as the edit path does — and note the
+        // patch has NO container, so this also guards the pre-container early return.
+        const bad = `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
+            + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
+            + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
+            + ` "style": { "fill": "#000", "opacity": 1 }, "layout": { "grow": -1 } } } } }`;
+        expect(() => deserializeDocument(bad)).toThrow("grow");
     });
 });

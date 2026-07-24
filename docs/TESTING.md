@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v4 (app v0.0.5) · current through Milestone 2 (auto-layout + intrinsic sizing). Suite: `src/core/tests/document.test.ts` (151 tests).
+> 🔒 Frozen contract · schema v5 (app v0.0.5) · current through Milestone 2 (auto-layout + hug + flex-grow). Suite: `src/core/tests/document.test.ts` (158 tests).
 
 ## Philosophy
 
@@ -17,7 +17,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 151 tests
+npm test                                   # jest (ts-jest), 158 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -28,7 +28,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (151 tests)
+## What is covered (158 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -52,10 +52,11 @@ npm run check                              # typecheck + lint + test + build (th
 | **M2 `LayoutEngine`** (flex-stack math) | row/column packing; gap + padding; cross-axis `start`/`center`/`end` placement and `stretch` (resizes the child); defaults (no gap/pad, `start`); `isLayoutContainer` |
 | **M2 layout through `computeGeometry`** | children get computed positions **replacing stored `x/y`**; stretch changes the rendered local size and hit-tests at it; removing the container reverts to stored geometry; **nested containers** compose within a stretched size; a laid-out child **composes through the container's transform** (2× scale scales its computed position + size), so layout does not bypass the matrix pipeline |
 | **M2 sibling ripple** | `expandDirtyForLayout` dirties a container from a dirty child (and does NOT drag in a non-container parent); resize / **reparent-out** / **delete** of a child reflows its siblings incrementally though only the acted-on node was reported (each non-vacuous: the sibling genuinely moves); a **pending** resize of a laid-out child reflows siblings in the live preview (pins the `pending?.width` branch, not just the committed fallback) |
-| **M2 `UpdateNodeLayoutAction`** | sets/removes a container, undoable, round-trips through the schema-4 loader; rejects invalid containers on the edit path **and the load path** (shared `layoutError`, raw-JSON `Infinity`) |
+| **M2 `UpdateNodeLayoutAction`** | sets/removes a container, undoable, round-trips through the current-schema loader; rejects invalid containers on the edit path **and the load path** (shared `layoutError`, raw-JSON `Infinity`) |
 | **M2 `MoveTool`** | a laid-out child records no pending move (position is computed); the container itself stays draggable |
-| **M2 intrinsic (hug) sizing** | `measureIntrinsicSizes` folds a hug axis from children (row/column, one-axis, empty→padding); a hug container is **sized to its contents** through `computeGeometry` (stored size vestigial); **hug-cross + stretch** is coherent (pre-stretch measure, no cycle); a size change **ripples up a 3-deep hug chain, halts at the first FIXED container, and reflows its siblings** (incremental === full, non-vacuous); **pending** resize of a deep leaf hugs the chain in the live preview (pins the pending→seed union); reparent **into/out of** a hug container resizes it; measure stays **total** on a missing child; schema-4 round-trip + a non-boolean hug flag rejected on **both** paths |
-| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains automatically) |
+| **M2 intrinsic (hug) sizing** | `measureIntrinsicSizes` folds a hug axis from children (row/column, one-axis, empty→padding); a hug container is **sized to its contents** through `computeGeometry` (stored size vestigial); **hug-cross + stretch** is coherent (pre-stretch measure, no cycle); a size change **ripples up a 3-deep hug chain, halts at the first FIXED container, and reflows its siblings** (incremental === full, non-vacuous); **pending** resize of a deep leaf hugs the chain in the live preview (pins the pending→seed union); reparent **into/out of** a hug container resizes it; measure stays **total** on a missing child; current-schema round-trip + a non-boolean hug flag rejected on **both** paths |
+| **M2 flex-grow** | `layoutChildren` distributes leftover main-axis space **proportional to `grow`** (single/multiple growers, gap+padding subtracted first); **inert** with no free space (exact fit or overflow — no shrink); a fixed container grows a child to fill while a **hug-main** container leaves nothing to grow; resizing one child **reflows a growing sibling** incrementally (non-vacuous, only the resized node reported); a **pending resize of a grow child previews the SAME layout as committing it** (regression for the review-found double-apply); **grow overrides hug** on a node that is both a hug container and a grow child; schema-5 round-trip + a negative `grow` rejected on **both** paths (incl. a `{grow}` patch with no container, guarding the early return) |
+| **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains automatically) |
 
 ## The API-surface pin
 
@@ -141,6 +142,28 @@ builds a 2-deep hug chain with a bottom resize — and was caught only by the pi
 deterministic chain test, the same fuzz-is-a-sampler lesson as the M2 reparent-out gap.
 The one-level and add-order mutations again hit the unreachable-code `Tests: 0` trap and
 were re-authored to compile before being trusted.
+
+**Flex-grow pass — 4 guards, all killed.** (1) not applying the distribution → killed by
+3 tests; (2) dropping the `free > 0` guard so an overflow would shrink to a negative size
+→ killed precisely by the overflow test; (3) moving the `grow` validation *after*
+`layoutError`'s no-container early return (so a `{grow:-1}` patch with no container slips
+through) → killed by the write-path test, which deliberately validates a container-less
+patch; (4) `layoutContainerPass` dropping the child's `grow` → killed by the integration
+tests (the pure `layoutChildren` unit tests still pass, since they feed `grow` directly).
+
+**Adversarial agent review found one real bug the fuzz could not.** A multi-lens review of
+flex-grow confirmed a preview-only defect: a **pending resize of a grow child** was
+double-applied — the pending width fed the measure pass (so the child grew *past* it),
+then the position-pass override clamped it back, leaving a gap before its sibling. The
+`incremental === full` fuzz cannot see it (the override is in the shared path; the fuzz
+passes `pending=null`), and the one prior pending-resize test used a non-grow child where
+the override is a coincidental no-op. Fixed by having a pending patch on a laid-out child
+preview **position only** (its size is already the layout's result); a regression test
+proves preview == commit and fails without the fix. The review pass itself also perturbed
+the working tree and dropped the `grow` wiring in `layoutContainerPass`; the same new test
+caught that too. *Lesson: an agent review catches semantic/interaction bugs the property
+fuzz is structurally blind to — but re-run the full gate afterward, because the review can
+disturb the tree.*
 
 ## Doc-staleness tripwire (`npm run doc-drift`)
 

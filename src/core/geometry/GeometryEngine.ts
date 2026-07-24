@@ -134,7 +134,18 @@ export function computeGeometry(
         const m = measured.get(id);
         const base = computedLocal ?? { x: g.x, y: g.y, width: m?.width ?? g.width, height: m?.height ?? g.height };
         const local: Rect = patch
-            ? { x: patch.x ?? base.x, y: patch.y ?? base.y, width: patch.width ?? base.width, height: patch.height ?? base.height }
+            ? {
+                x: patch.x ?? base.x,
+                y: patch.y ?? base.y,
+                // A laid-out child's SIZE is a layout RESULT that already folded THIS
+                // node's pending size in via the measure pass (a grow child fed its
+                // pending base is then grown PAST it). Re-imposing patch.width/height here
+                // would double-count — clamping the child back below its grown size and
+                // leaving a gap before its already-positioned sibling. So a pending patch
+                // on a laid-out child previews only POSITION; its size stays the layout's.
+                width: computedLocal ? base.width : (patch.width ?? base.width),
+                height: computedLocal ? base.height : (patch.height ?? base.height),
+            }
             : base;
 
         if (!isFiniteRect(local)) continue;
@@ -169,12 +180,12 @@ function layoutContainerPass(
 ): void {
     const container = node.layout.container;
     if (!container) return;
-    const children: { id: string; width: number; height: number }[] = [];
+    const children: { id: string; width: number; height: number; grow?: number }[] = [];
     for (const childId of node.children) {
         const child = doc.nodes.get(childId);
         if (!child) continue;
         const own = measured.get(childId) ?? { width: child.geometry.width, height: child.geometry.height };
-        children.push({ id: childId, width: own.width, height: own.height });
+        children.push({ id: childId, width: own.width, height: own.height, grow: child.layout.grow });
     }
     for (const [id, rect] of layoutChildren(container, { width: parentLocal.width, height: parentLocal.height }, children)) {
         laidOut.set(id, rect);
