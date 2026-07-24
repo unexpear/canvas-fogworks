@@ -9,13 +9,14 @@
  * inside `computeGeometry` as a producer into `ComputedState` — nothing here mutates
  * the document.
  *
- * SCOPE: a flex stack — row/column, gap, padding, cross-axis align
+ * SCOPE: a flex stack — row/column, gap, padding, per-child margin, cross-axis align
  * (start/center/end/stretch), intrinsic ("hug") sizing (a container sizes an axis to
- * its contents; see `measureIntrinsicSizes`), flex-grow (children fill leftover main-axis
- * space), AND a grid (`layoutGridChildren` — auto-flow into px/fr cell tracks). DEFERRED
- * with their own milestone weight: flex-shrink, wrap, explicit grid placement/spans,
- * auto/content tracks, per-child margins, absolute-position escapes, constraints/anchors.
- * See MILESTONES.md.
+ * its contents; see `measureIntrinsicSizes`), flex-grow/shrink (children fill leftover /
+ * give up overflow main-axis space), constraints/anchors (`resolveConstraints`),
+ * absolute-position escapes (`isAbsolute`), AND a grid (`layoutGridChildren` — auto-flow
+ * into px/fr cell tracks with explicit per-row track sizes). DEFERRED with their own
+ * milestone weight: flex wrap, grid auto/content tracks + grid-container hug (the
+ * measure-integration slice), explicit grid placement/spans. See MILESTONES.md.
  */
 
 import { ReadonlyDocument } from "../document/Document";
@@ -201,10 +202,11 @@ function resolveTracks(tracks: readonly TrackSize[], available: number): number[
 /**
  * Compute the cell rect for each child of a GRID container. Children auto-flow row-major
  * into `columns.length` columns × `ceil(count/cols)` rows and STRETCH to fill their cell,
- * so their stored size is ignored (like a laid-out flex child's position). `fr` column
- * tracks share the leftover inner width; a uniform `rowHeight` is either fixed px or an
- * `fr` equal-share of the inner height. Unlike flex, this never reads child sizes, so it
- * is a pure position-pass producer with no measure dependency.
+ * so their stored size is ignored (like a laid-out flex child's position). Both axes size
+ * through the same `resolveTracks`: `fr` column tracks share the leftover inner width, and
+ * each row is sized by `rows[r] ?? rowHeight` (explicit per-row tracks, else the implicit
+ * uniform `rowHeight`) with `fr` rows sharing the leftover inner height. Unlike flex, this
+ * never reads child sizes, so it is a pure position-pass producer with no measure dependency.
  */
 export function layoutGridChildren(
     grid: LayoutGrid,
@@ -220,18 +222,29 @@ export function layoutGridChildren(
     const rows = Math.ceil(childIds.length / cols);
 
     const colWidths = resolveTracks(grid.columns, (parentSize.width - 2 * pad) - colGap * (cols - 1));
-    // Uniform row height: fixed px, or fr = equal share of the inner height across rows.
+    // Rows resolve exactly like columns: build one track per DERIVED row (count from the
+    // child count), each `rows[r]` if given else the implicit `rowHeight`, then share the
+    // inner height (px rows take their size; fr rows split what's left). With no `rows` this
+    // is a uniform-`rowHeight` list — the same layout the pre-tail equal-share / fixed-px
+    // code produced (numerically within a ULP for non-dyadic fr shares, since it now shares
+    // through `resolveTracks` rather than a single divide — invisible to determinism, which
+    // runs this same code on both the full and incremental paths).
     const innerH = (parentSize.height - 2 * pad) - rowGap * Math.max(0, rows - 1);
-    const rowH = "px" in grid.rowHeight ? Math.max(0, grid.rowHeight.px) : (rows > 0 ? Math.max(0, innerH) / rows : 0);
+    const rowTracks: TrackSize[] = [];
+    for (let r = 0; r < rows; r++) rowTracks.push(grid.rows?.[r] ?? grid.rowHeight);
+    const rowHeights = resolveTracks(rowTracks, innerH);
 
     const colX: number[] = [];
     let x = pad;
     for (let c = 0; c < cols; c++) { colX[c] = x; x += colWidths[c] + colGap; }
+    const rowY: number[] = [];
+    let y = pad;
+    for (let r = 0; r < rows; r++) { rowY[r] = y; y += rowHeights[r] + rowGap; }
 
     childIds.forEach((id, i) => {
         const col = i % cols;
         const row = Math.floor(i / cols);
-        out.set(id, { x: colX[col], y: pad + row * (rowH + rowGap), width: colWidths[col], height: rowH });
+        out.set(id, { x: colX[col], y: rowY[row], width: colWidths[col], height: rowHeights[row] });
     });
     return out;
 }

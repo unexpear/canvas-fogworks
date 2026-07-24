@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
 
-> 🔒 Frozen contract · schema v9 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid, constraints, absolute + margins; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v10 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid+rows, constraints, absolute + margins; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -126,7 +126,10 @@ the deficit weighted by `shrink × base-size` (grow and shrink are exclusive by 
 free space) — likewise position-pass-only.
 **Grid** (`layoutGridChildren`) is likewise a position-pass producer: children auto-flow
 into px/fr cell tracks and fill them, so it reads no child sizes and reuses the same dirty
-machinery (once `isLayoutContainer` counts a grid as a container).
+machinery (once `isLayoutContainer` counts a grid as a container). Both axes size through the
+same `resolveTracks`: columns, and per-row tracks (`LayoutGrid.rows` — explicit sizes for the
+leading rows, `rowHeight` the implicit fallback for the rest). Row COUNT is still derived from
+the child count, so an `fr`-row grid resizes on add/delete through that same dirty climb.
 
 **Constraints / anchors** (`resolveConstraints`) are the responsive-positioning model for
 children of a **plain** (non-flex/grid) parent: each child pins to the parent's edges and
@@ -148,9 +151,10 @@ constraint gate admits an absolute child of any parent, and `MoveTool` leaves it
 measure. Both are small position-pass/measure additions with no new dirty-tracking.
 
 Still outstanding for the computed layer: **resolved style** (M5 tokens) belongs in
-`ComputedState` and is not there yet; and M2's **remaining layout** — flex-shrink, wrap,
-explicit grid placement — is deferred (see MILESTONES.md). Layout output today is expressed
-*as* geometry (computed local rects), not as a distinct channel.
+`ComputedState` and is not there yet; and M2's **remaining layout** — flex wrap, grid
+auto/content tracks + grid-container hug (the measure-integration slice), explicit grid
+placement/spans — is deferred (see MILESTONES.md). Layout output today is expressed *as*
+geometry (computed local rects), not as a distinct channel.
 
 ## 5. Module map
 

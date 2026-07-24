@@ -1580,13 +1580,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "10" that has no 9→10 step: the
+        // Pretending the build has moved to a schema "11" that has no 10→11 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→9), and then REFUSED at "9" — never re-stamped straight to the current
-        // schema. The error naming "9" (not "1") is the proof the chain actually ran.
+        // (1→2→…→10), and then REFUSED at "10" — never re-stamped straight to the current
+        // schema. The error naming "10" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 8→9 landed for flex-shrink.)
-        expect(() => migrateIfNeeded(legacy, "10")).toThrow('Migration not implemented for document schema "9"');
+        // time a real migration is added — here, when 9→10 landed for the grid `rows` tail.)
+        expect(() => migrateIfNeeded(legacy, "11")).toThrow('Migration not implemented for document schema "10"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -2044,7 +2044,10 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
                             // grow (free > 0) and shrink (free < 0) — op-2 resizes drive both signs.
                             ? { grow: rnd() < 0.4 ? 0 : rnd() * 3, shrink: rnd() < 0.4 ? 0 : rnd() * 3 }
                             : r < 0.72
-                                ? { grid: { columns: Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), rowHeight: track(), columnGap: rnd() * 8, rowGap: rnd() * 8, padding: rnd() * 8 } }
+                                // grid: sometimes with explicit per-row tracks (the tail) — row
+                            // count is derived from child count, so `rows` may be shorter or
+                            // longer than the actual rows; both must reconcile incremental===full.
+                            ? { grid: { columns: Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), rowHeight: track(), rows: rnd() < 0.5 ? undefined : Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), columnGap: rnd() * 8, rowGap: rnd() * 8, padding: rnd() * 8 } }
                                 : r < 0.86
                                     // constraints: the action auto-captures constraintRef; op-2 resizes
                                     // (source a) and op-3 toggles + a later resize (source b) drive it.
@@ -2404,6 +2407,34 @@ describe("M2 grid", () => {
         expect(frRows.get("c")).toMatchObject({ y: 60, height: 60 });
     });
 
+    test("explicit per-row tracks size each row; rowHeight is the IMPLICIT fallback beyond the list", () => {
+        // 1 col, 3 items -> 3 rows. rows sizes only the first two ([20px, 1fr]); the 3rd row
+        // falls back to the implicit rowHeight (30px). Over height 200: fixed = 20 + 30, the
+        // lone fr row takes the leftover 150. This single case pins THREE behaviours at once:
+        //  - explicit wins   : row 0 is 20 (from rows[0]), NOT the 30px rowHeight;
+        //  - implicit fallback: row 2 is 30 (rowHeight), NOT rows[0] (a repeat would give 20);
+        //  - per-row Y is a PREFIX SUM: row 1 at y=20, row 2 at y=170 — not a uniform stride;
+        //  - fr rows share the leftover AFTER the px rows: 200 − 20 − 30 = 150.
+        const cells = layoutGridChildren(
+            { columns: [{ px: 100 }], rowHeight: { px: 30 }, rows: [{ px: 20 }, { fr: 1 }] },
+            { width: 100, height: 200 }, ["a", "b", "c"]);
+        expect(cells.get("a")).toEqual({ x: 0, y: 0, width: 100, height: 20 });    // r0: rows[0]
+        expect(cells.get("b")).toEqual({ x: 0, y: 20, width: 100, height: 150 });  // r1: lone fr = leftover
+        expect(cells.get("c")).toEqual({ x: 0, y: 170, width: 100, height: 30 });  // r2: implicit rowHeight
+    });
+
+    test("rows absent reproduces the uniform-rowHeight layout (backward compat)", () => {
+        // The refactor routes rows through resolveTracks; with `rows` absent every row track
+        // IS rowHeight, so a mixed fixed+fr grid must produce the pre-tail layout. (The share
+        // here is an exact 1/2, so the values are bit-exact; the equivalence is numerical —
+        // within a ULP — for non-dyadic fr shares, which is invisible to determinism.)
+        const g = { columns: [{ px: 100 }, { px: 100 }] as const, rowHeight: { fr: 1 } as const, rowGap: 10 };
+        const cells = layoutGridChildren(g, { width: 200, height: 130 }, ["a", "b", "c", "d"]);
+        // 2 rows, rowGap 10 -> inner 120 split equally = 60 each; row 1 at y = 60 + 10.
+        expect(cells.get("a")).toMatchObject({ y: 0, height: 60 });
+        expect(cells.get("c")).toMatchObject({ y: 70, height: 60 });
+    });
+
     test("a grid sizes its children to cells through computeGeometry (stored size ignored)", () => {
         const doc = createEmptyDocument();
         doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 200, height: 80 }, { grid: { columns: [{ fr: 1 }, { fr: 1 }], rowHeight: { px: 40 } } }));
@@ -2511,7 +2542,7 @@ describe("M2 grid", () => {
         expect(new UpdateNodeLayoutAction(doc, "parent-001", { container: { direction: "row" }, grid: { columns: [{ px: 10 }], rowHeight: { px: 10 } } }).validate()).toBe(false);
     });
 
-    test("grid is a write-path citizen: validation, schema-6 round-trip, both-paths rejection", () => {
+    test("grid is a write-path citizen: validation, current-schema round-trip, both-paths rejection", () => {
         const d = createDocWithParentChild();
         const ok = (grid: any) => new UpdateNodeLayoutAction(d, "parent-001", { grid }).validate();
         expect(ok({ columns: [{ px: 50 }], rowHeight: { px: 40 } })).toBe(true);
@@ -2520,10 +2551,18 @@ describe("M2 grid", () => {
         expect(ok({ columns: [{ fr: 0 }], rowHeight: { px: 40 } })).toBe(false);        // fr must be > 0
         expect(ok({ columns: [{ px: 5, fr: 1 }], rowHeight: { px: 40 } })).toBe(false); // both px + fr
         expect(ok({ columns: [{ px: 50 }], rowHeight: { fr: -1 } })).toBe(false);       // bad rowHeight
+        // explicit per-row tracks: valid list ok; empty or malformed rejected.
+        expect(ok({ columns: [{ px: 50 }], rowHeight: { px: 40 }, rows: [{ px: 10 }, { fr: 1 }] })).toBe(true);
+        expect(ok({ columns: [{ px: 50 }], rowHeight: { px: 40 }, rows: [] })).toBe(false);          // empty rows
+        expect(ok({ columns: [{ px: 50 }], rowHeight: { px: 40 }, rows: [{ fr: 0 }] })).toBe(false);  // fr must be > 0
+        expect(ok({ columns: [{ px: 50 }], rowHeight: { px: 40 }, rows: [{ px: -5 }] })).toBe(false); // px < 0
 
         const dispatcher = new ActionDispatcher(d);
-        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "parent-001", { grid: { columns: [{ px: 50 }, { fr: 1 }], rowHeight: { px: 40 }, columnGap: 4 } }));
-        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+        // Round-trip a grid WITH explicit per-row `rows` — a positive path through serialize →
+        // deserialize → layoutError, not just the rejection cases below.
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "parent-001", { grid: { columns: [{ px: 50 }, { fr: 1 }], rowHeight: { px: 40 }, rows: [{ px: 30 }, { fr: 1 }], columnGap: 4 } }));
+        const reloaded = deserializeDocument(serializeDocument(dispatcher.getDocument()));
+        expect(reloaded.nodes.get("parent-001")!.layout.grid!.rows).toEqual([{ px: 30 }, { fr: 1 }]);
 
         const envelope = (layout: string) => `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
             + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
@@ -2531,6 +2570,8 @@ describe("M2 grid", () => {
             + ` "style": { "fill": "#000", "opacity": 1 }, "layout": ${layout} } } } }`;
         // Load path rejects a malformed track exactly as the edit path does.
         expect(() => deserializeDocument(envelope(`{ "grid": { "columns": [{ "fr": 0 }], "rowHeight": { "px": 10 } } }`))).toThrow();
+        // ...an empty explicit-rows array (a present-but-meaningless list)...
+        expect(() => deserializeDocument(envelope(`{ "grid": { "columns": [{ "px": 10 }], "rowHeight": { "px": 10 }, "rows": [] } }`))).toThrow();
         // ...and a document carrying BOTH grid and container.
         expect(() => deserializeDocument(envelope(`{ "container": { "direction": "row" }, "grid": { "columns": [{ "px": 10 }], "rowHeight": { "px": 10 } } }`))).toThrow("mutually exclusive");
     });

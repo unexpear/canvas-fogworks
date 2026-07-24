@@ -149,7 +149,16 @@ export type TrackSize = { px: number } | { fr: number };
  */
 export interface LayoutGrid {
     columns: readonly TrackSize[];   // ≥1 column tracks; defines the column count
-    rowHeight: TrackSize;   // uniform height for every auto-flowed row (px, or fr = equal share)
+    rowHeight: TrackSize;   // IMPLICIT row size — used for every row NOT sized by `rows` (px, or fr = share)
+    /**
+     * EXPLICIT per-row track sizes (Milestone 2 grid tail), the mirror of `columns`. Row
+     * `r` is sized by `rows[r]` when present, else falls back to `rowHeight` (like CSS
+     * `grid-template-rows` + `grid-auto-rows`: `rows` sizes the leading rows, `rowHeight`
+     * the implicit overflow rows). `fr` rows share the leftover inner height after the `px`
+     * rows, exactly as columns do. Absent = every row is `rowHeight` (the pre-tail
+     * behaviour). Row COUNT is still derived from the child count — `rows` only sizes them.
+     */
+    rows?: readonly TrackSize[];
     columnGap?: number;     // between columns (>= 0)
     rowGap?: number;        // between rows (>= 0)
     padding?: number;       // inset from the container's edges (>= 0)
@@ -232,6 +241,12 @@ export function layoutError(l: Partial<Layout>): string | null {
         if (!Array.isArray(g.columns) || g.columns.length === 0) return "layout.grid.columns must be a non-empty array";
         for (const t of g.columns) { const e = trackError(t); if (e) return `layout.grid.columns track ${e}`; }
         const rhe = trackError(g.rowHeight); if (rhe) return `layout.grid.rowHeight ${rhe}`;
+        // Explicit per-row tracks: optional, but if present a non-empty array of valid
+        // tracks (omit it for "all rows use rowHeight"; `[]` would be a redundant no-op).
+        if (g.rows !== undefined) {
+            if (!Array.isArray(g.rows) || g.rows.length === 0) return "layout.grid.rows must be a non-empty array when present";
+            for (const t of g.rows) { const e = trackError(t); if (e) return `layout.grid.rows track ${e}`; }
+        }
         if (g.columnGap !== undefined && (!Number.isFinite(g.columnGap) || g.columnGap < 0)) return "layout.grid.columnGap must be finite and >= 0";
         if (g.rowGap !== undefined && (!Number.isFinite(g.rowGap) || g.rowGap < 0)) return "layout.grid.rowGap must be finite and >= 0";
         if (g.padding !== undefined && (!Number.isFinite(g.padding) || g.padding < 0)) return "layout.grid.padding must be finite and >= 0";

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v9 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid, constraints, absolute + margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v10 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid+rows, constraints, absolute + margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -95,7 +95,8 @@ type TrackSize = { px: number } | { fr: number };     // fixed px, or a share of
 
 interface LayoutGrid {               // children auto-flow row-major into cells and fill them
   columns: TrackSize[];              // ≥1 column tracks; defines the column count
-  rowHeight: TrackSize;              // uniform per-row height (px, or fr = equal share)
+  rowHeight: TrackSize;              // IMPLICIT row size — used for rows not sized by rows[] (px, or fr = share)
+  rows?: TrackSize[];                // explicit per-row tracks (schema 10); rowHeight is the fallback beyond the list
   columnGap?: number; rowGap?: number; padding?: number;  // >= 0
 }
 
@@ -232,14 +233,20 @@ simplification.)
 `container` (the two are **mutually exclusive**). A grid's direct children auto-flow
 row-major into `columns.length` columns × `ceil(count/columns)` rows and **fill their
 cell** — their stored size is ignored, like a laid-out flex child's position. Column
-tracks are fixed `{ px }` or `{ fr }` (sharing the leftover inner width); `rowHeight` is a
-single uniform track applied to every row (`{ px }` fixed, or `{ fr }` = equal share of the
-inner height). `columnGap`/`rowGap`/`padding` inset as expected.
+tracks are fixed `{ px }` or `{ fr }` (sharing the leftover inner width). Rows size the same
+way: **explicit per-row `rows[]` tracks** (landed in schema 10) give each row its size, with
+`rowHeight` as the IMPLICIT fallback for any row past the `rows[]` list (CSS
+`grid-template-rows` + `grid-auto-rows`); with `rows` absent every row is `rowHeight`. Both
+axes run through one `resolveTracks`, so `fr` rows share the leftover inner height after the
+`px` rows, exactly as columns do. Row COUNT is still derived from the child count — `rows[]`
+only *sizes* the rows, it does not add or place them. `columnGap`/`rowGap`/`padding` inset as
+expected.
 
 - Like flex-grow, grid is a **position-pass** producer (`LayoutEngine.layoutGridChildren`):
   it reads no child sizes, so it needs no measure feedback and reuses the same dirty
-  machinery (`isLayoutContainer` counts a grid as a container). Grid-container hug, explicit
-  per-row `rows[]`, `auto`/content tracks, spans and explicit placement are deferred.
+  machinery (`isLayoutContainer` counts a grid as a container). Grid-container hug,
+  `auto`/content tracks (the measure-integration slice), spans and explicit placement are
+  deferred; explicit per-row `rows[]` sizes landed in schema 10.
 - **Mutual exclusivity is enforced on write** (`UpdateNodeLayoutAction` carries the clear
   IN its delta — setting one emits the other as `undefined` — so even a transaction that
   merges a container-set and a grid-set resolves last-wins rather than dropping both) AND
@@ -249,6 +256,11 @@ inner height). `columnGap`/`rowGap`/`padding` inset as expected.
 - **Absent means no grid**, so every schema-5 document is a valid schema-6 document —
   `migrate_5_to_6` is a pass-through. The bump is still required: a schema-5 build would
   ignore the grid and draw the children at their stored `x/y`.
+- **Per-row `rows[]` (schema 10):** absent = every row is `rowHeight`, so every schema-9
+  document is a valid schema-10 one — `migrate_9_to_10` is a pass-through; the bump is
+  required because a schema-9 build would ignore the per-row tracks and lay every row out at
+  `rowHeight`. `rows[]` is validated (a non-empty array of valid `TrackSize`, when present)
+  on both paths.
 
 **Constraints / anchors — landed in schema 7 (Milestone 2).** A child of a **plain**
 (non-flex, non-grid) parent uses `Layout.constraints` to pin to the parent's edges and
@@ -294,10 +306,10 @@ in-flow / 0**, so every schema-7 document is a valid schema-8 document — `migr
 is a pass-through; the bump is required because a schema-7 build would lay an absolute child
 into the flow and ignore its margin.
 
-> **Still deferred (not in schema 9):** wrap, per-side margins,
+> **Still deferred (not in schema 10):** wrap, per-side margins,
 > responsive/breakpoint rules, grid-cell margins, the constrained-child re-baseline (above),
-> and the grid tail (explicit placement/spans, `auto`/content tracks, per-row sizes, grid
-> hug). These are M2's remaining deliverables — see
+> and the grid tail remainder (explicit placement/spans, `auto`/content tracks + grid-container
+> hug — the measure-integration slice). These are M2's remaining deliverables — see
 > [MILESTONES.md](../MILESTONES.md) § Milestone 2.
 
 > **It bumped `SCHEMA_VERSION` to `"2"`** — as the freeze rule required, with a
@@ -397,7 +409,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"9"`; chain: …6→7 constraints, 7→8 absolute + margin, 8→9 flex-shrink) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"10"`; chain: …7→8 absolute + margin, 8→9 flex-shrink, 9→10 grid per-row `rows`) | **only** when the persisted shape changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

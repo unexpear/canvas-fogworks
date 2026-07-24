@@ -210,6 +210,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "6") { raw = migrate_6_to_7(raw); version = "7"; }
     if (version === "7") { raw = migrate_7_to_8(raw); version = "8"; }
     if (version === "8") { raw = migrate_8_to_9(raw); version = "9"; }
+    if (version === "9") { raw = migrate_9_to_10(raw); version = "10"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -268,6 +269,11 @@ function migrate_7_to_8(raw: any): any {
 /** Schema 8 → 9: adds optional `Layout.shrink`. Pass-through by content. */
 function migrate_8_to_9(raw: any): any {
     return { ...raw, version: "9" };
+}
+
+/** Schema 9 → 10: adds optional `LayoutGrid.rows` (explicit per-row tracks). Pass-through by content. */
+function migrate_9_to_10(raw: any): any {
+    return { ...raw, version: "10" };
 }
 
 /**

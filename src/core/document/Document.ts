@@ -76,8 +76,13 @@ export const CURRENT_VERSION: string =
  *         deficit) for Milestone 2. Absent = 0 = never shrinks, so `migrate_8_to_9` is a
  *         pass-through — but a schema-8 build would draw an overflowing child at full size
  *         instead of shrunk, misstating the layout.
+ *
+ *   "10" — adds optional `LayoutGrid.rows` (explicit per-row grid track sizes) for the
+ *         Milestone 2 grid tail. Absent = every row uses the uniform `rowHeight`, so
+ *         `migrate_9_to_10` is a pass-through — but a schema-9 build would ignore the
+ *         per-row tracks and lay every row out at `rowHeight`, misstating the grid.
  */
-export const SCHEMA_VERSION = "9";
+export const SCHEMA_VERSION = "10";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
