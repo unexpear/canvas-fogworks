@@ -81,8 +81,14 @@ export const CURRENT_VERSION: string =
  *         Milestone 2 grid tail. Absent = every row uses the uniform `rowHeight`, so
  *         `migrate_9_to_10` is a pass-through — but a schema-9 build would ignore the
  *         per-row tracks and lay every row out at `rowHeight`, misstating the grid.
+ *
+ *   "11" — adds the `auto` grid `TrackSize` (`{ auto: true }`, sizes to content) and
+ *         `LayoutGrid.hugWidth`/`hugHeight` (grid-container hug) for the Milestone 2 grid
+ *         measure-integration. Absent auto / hug false = a fixed-size grid of px/fr tracks,
+ *         so `migrate_10_to_11` is a pass-through — but a schema-10 build would not
+ *         understand an `auto` track or size a hugging grid to its contents.
  */
-export const SCHEMA_VERSION = "10";
+export const SCHEMA_VERSION = "11";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

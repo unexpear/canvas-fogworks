@@ -19,7 +19,7 @@ M0.5 Core Documentation      ✅   contracts frozen before building upward
       │
 M1  Computed State           ✅   stored intent -> calculated results
       │
-M2  Layout Engine            🚧   flex(+grow/shrink) + hug + grid(+rows) + constraints + absolute; wrap/grid-tail deferred
+M2  Layout Engine            🚧   flex(+grow/shrink) + hug + grid(+rows/auto/hug) + constraints + absolute; wrap/spans deferred
       │
 M3  Renderer                 ⬜*  reads ComputedState only
       │
@@ -237,23 +237,39 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   UNEQUAL bases, without which a mutation dropping the `×base` weight would have survived.
 - **Grid.** `Layout.grid` is an ALTERNATIVE to `container` (the two are mutually exclusive,
   enforced on both write and read): children auto-flow row-major into `{ px }`/`{ fr }`
-  column tracks + a uniform `rowHeight` and fill their cells (`layoutGridChildren`). Like
-  grow it is a position-pass-only producer — it reads no child sizes, so it needs no
-  measure feedback and reuses the dirty machinery once `isLayoutContainer` counts a grid as
-  a container. Mutation testing surfaced a coverage gap it then closed: an `fr`-row grid's
+  column tracks + a uniform `rowHeight` and fill their cells (`layoutGridChildren`). In this
+  schema-6 core (px/fr, no hug) it is a position-pass-only producer — it reads no child sizes,
+  so it needs no measure feedback and reuses the dirty machinery once `isLayoutContainer`
+  counts a grid as a container. (The later `auto`/hug slice changes that — see below.)
+  Mutation testing surfaced a coverage gap it then closed: an `fr`-row grid's
   row heights depend on the item COUNT, so **adding** an item (which reports only the new
   node) must reflow the existing rows — pinned by a deterministic `incremental === full`
   test, since a `px`-row grid or a delete could not exercise the grid's climb path.
 - **Grid per-row tracks — the tractable half of the grid tail.** `LayoutGrid.rows` gives
   explicit per-row track sizes (the mirror of `columns`), with `rowHeight` demoted to the
   IMPLICIT fallback for any row past the `rows[]` list (CSS `grid-template-rows` +
-  `grid-auto-rows`). Both axes now run through one `resolveTracks`, so `fr` rows share the
+  `grid-auto-rows`). Both axes now run through one track resolver, so `fr` rows share the
   leftover inner height after the `px` rows exactly as columns do; row COUNT is still derived
   from the child count, so it stays a pure position-pass producer (`incremental === full`
   held under a fuzz that varies `rows` shorter/longer than the derived rows). A single
   unequal-row test pins explicit-wins + implicit-fallback + prefix-sum row-Y +
-  fr-after-px at once; all five guards mutation-tested and killed. The measure-integration
-  half — `auto`/content tracks + grid-container hug — stays deferred as its own slice.
+  fr-after-px at once; all five guards mutation-tested and killed.
+- **Grid measure-integration — `auto` tracks + grid-container hug.** The hard half of the
+  grid tail, resolved by a design panel (3 independent lenses converged): grid finally enters
+  the bottom-up measure pass, the way flex hug does. An `auto` `TrackSize` (`{ auto: true }`,
+  chosen over the string `"auto"` because `"px" in "auto"` throws in the must-never-throw
+  measure path) sizes a track to the **max measured own-size** of the children flowed into it;
+  `LayoutGrid.hugWidth/hugHeight` sizes the grid's own axis to `2·pad + Σtracks + gaps`. The
+  keystone is ONE shared `resolveGridTracks` called by BOTH the measure fold (hug size) and
+  the position pass (cells) off the SAME measured sizes — so a hugged grid's own size equals
+  the sum of its cells *by construction*, the exact property the `incremental === full` fuzz
+  is structurally blind to (a grid opens no dirty ripple, so both compute paths would be wrong
+  together). It stays acyclic (reads children's PRE-fill own-sizes, never their filled cells)
+  and total; `fr` collapses to 0 on a hugged axis; `containerHugs` gains a grid arm so a
+  grid-child resize ripples up a hugging chain. All eleven guards mutation-tested and killed —
+  including the fuzz-blind `hug-size == sum-of-cells` and the `containerHugs` climb; two
+  independent adversarial read-only reviews verified it. DEFERRED (own weight): explicit
+  placement / spans, `minmax()`/`fit-content`.
 - **Constraints / anchors — the responsive model.** A child of a **plain** (non-flex/grid)
   parent pins to the parent's edges (`Layout.constraints`: left/right/left-right/center/
   scale × top/bottom/top-bottom/center/scale) and repositions when the parent resizes.
@@ -286,15 +302,15 @@ Document → Geometry + Layout Engine → Computed State → Renderer
   engine correctly ignores the pending resize — but the handle is not yet hidden.)*
 - **Schema cost, paid under the freeze rule.** `SCHEMA_VERSION` `"2"` → `"3"` (auto-layout)
   → `"4"` (hug) → `"5"` (grow) → `"6"` (grid) → `"7"` (constraints) → `"8"` (absolute +
-  margin) → `"9"` (shrink) → `"10"` (grid per-row `rows`), each with a pass-through
-  migration, because an older build would draw the children at now-vestigial stored geometry
-  / unanchored / in-flow / unshrunk / at a uniform row height.
+  margin) → `"9"` (shrink) → `"10"` (grid per-row `rows`) → `"11"` (grid `auto` tracks +
+  hug), each with a pass-through migration, because an older build would draw the children at
+  now-vestigial stored geometry / unanchored / in-flow / unshrunk / at a uniform row height /
+  not sized to content.
 
 **Deferred (each its own deliverable, NOT built):** wrap · **per-side**
 margins · grid-cell margins · responsive / breakpoint rules · drag-to-reorder ·
 the constrained-child **re-baseline** (off-reference edits, an M5 tool-layer concern) ·
-the **grid tail remainder** (explicit placement/spans, `auto`/content tracks +
-grid-container hug — the measure-integration slice).
+the **grid tail remainder** (explicit placement/spans, `minmax()`/`fit-content` tracks).
 
 **Explicitly NOT in scope yet:** `ComputedState` still carries geometry only; resolved
 style (M5 tokens) is still absent. Layout output is expressed *as* geometry (computed

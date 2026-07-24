@@ -211,6 +211,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "7") { raw = migrate_7_to_8(raw); version = "8"; }
     if (version === "8") { raw = migrate_8_to_9(raw); version = "9"; }
     if (version === "9") { raw = migrate_9_to_10(raw); version = "10"; }
+    if (version === "10") { raw = migrate_10_to_11(raw); version = "11"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -274,6 +275,11 @@ function migrate_8_to_9(raw: any): any {
 /** Schema 9 → 10: adds optional `LayoutGrid.rows` (explicit per-row tracks). Pass-through by content. */
 function migrate_9_to_10(raw: any): any {
     return { ...raw, version: "10" };
+}
+
+/** Schema 10 → 11: adds the `auto` TrackSize + `LayoutGrid.hugWidth/hugHeight`. Pass-through by content. */
+function migrate_10_to_11(raw: any): any {
+    return { ...raw, version: "11" };
 }
 
 /**

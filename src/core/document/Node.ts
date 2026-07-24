@@ -135,21 +135,28 @@ export interface Constraints {
     vertical?: VConstraint;
 }
 
-/** A grid track size: a fixed pixel size, or a fraction of the leftover space (`fr`). */
-export type TrackSize = { px: number } | { fr: number };
+/**
+ * A grid track size: a fixed pixel size (`px`), a fraction of the leftover space (`fr`),
+ * or `auto` — sized to the MAX intrinsic (measured own-) size of the children auto-flowed
+ * into that track. `auto` is the object `{ auto: true }`, NOT the string `"auto"`, so that
+ * every track stays an object and the `"px" in t` discriminant (used in the engine's
+ * must-never-throw measure pass) can never hit the `in`-on-a-primitive `TypeError`.
+ */
+export type TrackSize = { px: number } | { fr: number } | { auto: true };
 
 /**
  * A CSS-grid-like container: children auto-flow row-major into cells and STRETCH to fill
  * them (their stored size is ignored, like a laid-out flex child's position). Row count is
  * derived from the child count (`ceil(count / columns)`); every row uses `rowHeight`.
  *
- * Grid is a POSITION-pass concern only — items fill cells regardless of their own size, so
- * it needs no measure feedback. `fr` tracks share the container's leftover inner size
- * (grid-container hug is deferred, so the container's own size is fixed/from its parent).
+ * `auto` tracks (and grid-container hug, below) pull grid INTO the bottom-up measure pass —
+ * an `auto` track sizes to the max measured own-size of its children, so grid reads child
+ * sizes exactly as flex hug does. `fr` tracks share the container's leftover inner size on
+ * a NON-hugged axis (on a hugged axis there is no definite size to share, so `fr` → 0).
  */
 export interface LayoutGrid {
     columns: readonly TrackSize[];   // ≥1 column tracks; defines the column count
-    rowHeight: TrackSize;   // IMPLICIT row size — used for every row NOT sized by `rows` (px, or fr = share)
+    rowHeight: TrackSize;   // IMPLICIT row size — used for every row NOT sized by `rows` (px, fr, or auto)
     /**
      * EXPLICIT per-row track sizes (Milestone 2 grid tail), the mirror of `columns`. Row
      * `r` is sized by `rows[r]` when present, else falls back to `rowHeight` (like CSS
@@ -159,6 +166,15 @@ export interface LayoutGrid {
      * behaviour). Row COUNT is still derived from the child count — `rows` only sizes them.
      */
     rows?: readonly TrackSize[];
+    /**
+     * Grid-container HUG (Milestone 2 grid tail), mirroring `LayoutContainer.hugWidth/Height`.
+     * When set, this axis sizes to the grid's own tracks: `2·padding + Σtracks + gaps`, with
+     * `auto` tracks folded from the children's measured sizes in the bottom-up measure pass.
+     * On a hugged axis `fr` tracks collapse to 0 (no definite size to share). Absent = the
+     * grid's own size on that axis is fixed / inherited (the pre-hug behaviour).
+     */
+    hugWidth?: boolean;
+    hugHeight?: boolean;
     columnGap?: number;     // between columns (>= 0)
     rowGap?: number;        // between rows (>= 0)
     padding?: number;       // inset from the container's edges (>= 0)
@@ -190,16 +206,19 @@ const ALIGNMENTS = new Set(["start", "center", "end", "stretch"]);
 const H_CONSTRAINTS = new Set(["left", "right", "left-right", "center", "scale"]);
 const V_CONSTRAINTS = new Set(["top", "bottom", "top-bottom", "center", "scale"]);
 
-/** Validity check for one grid `TrackSize` — exactly one of `px` (≥0) or `fr` (>0). */
+/** Validity check for one grid `TrackSize` — exactly one of `px` (≥0), `fr` (>0), or `auto` (true). */
 function trackError(t: unknown): string | null {
     if (typeof t !== "object" || t === null) return "must be an object";
     const hasPx = "px" in t;
     const hasFr = "fr" in t;
-    if (hasPx === hasFr) return "must have exactly one of px or fr";
+    const hasAuto = "auto" in t;
+    if ((hasPx ? 1 : 0) + (hasFr ? 1 : 0) + (hasAuto ? 1 : 0) !== 1) return "must have exactly one of px, fr or auto";
     const px = (t as { px?: unknown }).px;
     const fr = (t as { fr?: unknown }).fr;
+    const auto = (t as { auto?: unknown }).auto;
     if (hasPx && (typeof px !== "number" || !Number.isFinite(px) || px < 0)) return "px must be finite and >= 0";
     if (hasFr && (typeof fr !== "number" || !Number.isFinite(fr) || fr <= 0)) return "fr must be finite and > 0";
+    if (hasAuto && auto !== true) return "auto must be true";
     return null;
 }
 
@@ -247,6 +266,8 @@ export function layoutError(l: Partial<Layout>): string | null {
             if (!Array.isArray(g.rows) || g.rows.length === 0) return "layout.grid.rows must be a non-empty array when present";
             for (const t of g.rows) { const e = trackError(t); if (e) return `layout.grid.rows track ${e}`; }
         }
+        if (g.hugWidth !== undefined && typeof g.hugWidth !== "boolean") return "layout.grid.hugWidth must be a boolean";
+        if (g.hugHeight !== undefined && typeof g.hugHeight !== "boolean") return "layout.grid.hugHeight must be a boolean";
         if (g.columnGap !== undefined && (!Number.isFinite(g.columnGap) || g.columnGap < 0)) return "layout.grid.columnGap must be finite and >= 0";
         if (g.rowGap !== undefined && (!Number.isFinite(g.rowGap) || g.rowGap < 0)) return "layout.grid.rowGap must be finite and >= 0";
         if (g.padding !== undefined && (!Number.isFinite(g.padding) || g.padding < 0)) return "layout.grid.padding must be finite and >= 0";

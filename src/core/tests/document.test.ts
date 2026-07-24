@@ -18,7 +18,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds } from "../geometry/GeometryEngine";
-import { layoutChildren, layoutGridChildren, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
+import { layoutChildren, layoutGridChildren, resolveGridTracks, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
 import { clampViewport, createEditorState } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
@@ -1580,13 +1580,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "11" that has no 10→11 step: the
+        // Pretending the build has moved to a schema "12" that has no 11→12 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→10), and then REFUSED at "10" — never re-stamped straight to the current
-        // schema. The error naming "10" (not "1") is the proof the chain actually ran.
+        // (1→2→…→11), and then REFUSED at "11" — never re-stamped straight to the current
+        // schema. The error naming "11" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 9→10 landed for the grid `rows` tail.)
-        expect(() => migrateIfNeeded(legacy, "11")).toThrow('Migration not implemented for document schema "10"');
+        // time a real migration is added — here, when 10→11 landed for grid auto+hug.)
+        expect(() => migrateIfNeeded(legacy, "12")).toThrow('Migration not implemented for document schema "11"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -2032,7 +2032,7 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
                 // Change a random node's layout: a flex container (with random HUG flags),
                 // OR remove the container, OR set a flex `grow`, OR make it a GRID (which
                 // clears any container — mutual exclusivity — and lays children into cells).
-                const track = () => rnd() < 0.5 ? { px: rnd() * 40 } : { fr: 1 + rnd() * 2 };
+                const track = () => { const q = rnd(); return q < 0.4 ? { px: rnd() * 40 } : q < 0.7 ? { fr: 1 + rnd() * 2 } : { auto: true as const }; };
                 const hMode = pick(["left", "right", "left-right", "center", "scale"]);
                 const vMode = pick(["top", "bottom", "top-bottom", "center", "scale"]);
                 const r = rnd();
@@ -2044,10 +2044,12 @@ describe("M2 fuzz — incremental compute stays exact WITH auto-layout in the mi
                             // grow (free > 0) and shrink (free < 0) — op-2 resizes drive both signs.
                             ? { grow: rnd() < 0.4 ? 0 : rnd() * 3, shrink: rnd() < 0.4 ? 0 : rnd() * 3 }
                             : r < 0.72
-                                // grid: sometimes with explicit per-row tracks (the tail) — row
-                            // count is derived from child count, so `rows` may be shorter or
-                            // longer than the actual rows; both must reconcile incremental===full.
-                            ? { grid: { columns: Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), rowHeight: track(), rows: rnd() < 0.5 ? undefined : Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), columnGap: rnd() * 8, rowGap: rnd() * 8, padding: rnd() * 8 } }
+                                // grid: `track()` now also emits `auto` (content-sized) tracks, and
+                            // the grid may HUG either axis — so a grid child's size feeds its
+                            // track and the grid's own size, pulling grid into the measure pass.
+                            // `rows` may be shorter/longer than the derived rows; all must
+                            // reconcile incremental===full.
+                            ? { grid: { columns: Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), rowHeight: track(), rows: rnd() < 0.5 ? undefined : Array.from({ length: 1 + Math.floor(rnd() * 3) }, track), hugWidth: rnd() < 0.4, hugHeight: rnd() < 0.4, columnGap: rnd() * 8, rowGap: rnd() * 8, padding: rnd() * 8 } }
                                 : r < 0.86
                                     // constraints: the action auto-captures constraintRef; op-2 resizes
                                     // (source a) and op-3 toggles + a later resize (source b) drive it.
@@ -2378,12 +2380,16 @@ describe("M2 flex-grow", () => {
 describe("M2 grid", () => {
     const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
         ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+    // Grid children carry a size (used only by `auto` tracks); these px/fr cases don't hit an
+    // auto track, so any size works. Auto-track tests pass real sizes explicitly.
+    const kids = (...specs: (string | { id: string; width: number; height: number })[]) =>
+        specs.map(s => typeof s === "string" ? { id: s, width: 0, height: 0 } : s);
 
     test("layoutGridChildren auto-flows row-major with fixed tracks, gaps and padding", () => {
         // 2 cols 40px, colGap 10, rowGap 8, pad 5, rowHeight 30; 4 items -> 2 rows.
         const cells = layoutGridChildren(
             { columns: [{ px: 40 }, { px: 40 }], rowHeight: { px: 30 }, columnGap: 10, rowGap: 8, padding: 5 },
-            { width: 200, height: 200 }, ["a", "b", "c", "d"]);
+            { width: 200, height: 200 }, kids("a", "b", "c", "d"));
         expect(cells.get("a")).toEqual({ x: 5, y: 5, width: 40, height: 30 });   // r0c0
         expect(cells.get("b")).toEqual({ x: 55, y: 5, width: 40, height: 30 });  // r0c1 (5+40+10)
         expect(cells.get("c")).toEqual({ x: 5, y: 43, width: 40, height: 30 });  // r1c0 (5+30+8)
@@ -2394,7 +2400,7 @@ describe("M2 grid", () => {
         // [50px, 1fr, 1fr] over width 250 -> fr tracks split the leftover 200 -> 100 each.
         const frCols = layoutGridChildren(
             { columns: [{ px: 50 }, { fr: 1 }, { fr: 1 }], rowHeight: { px: 40 } },
-            { width: 250, height: 100 }, ["a", "b", "c"]);
+            { width: 250, height: 100 }, kids("a", "b", "c"));
         expect(frCols.get("a")).toMatchObject({ x: 0, width: 50 });
         expect(frCols.get("b")).toMatchObject({ x: 50, width: 100 });
         expect(frCols.get("c")).toMatchObject({ x: 150, width: 100 });
@@ -2402,7 +2408,7 @@ describe("M2 grid", () => {
         // rowHeight fr over height 120, 4 items in 2 cols -> 2 rows of 60 each.
         const frRows = layoutGridChildren(
             { columns: [{ px: 100 }, { px: 100 }], rowHeight: { fr: 1 } },
-            { width: 200, height: 120 }, ["a", "b", "c", "d"]);
+            { width: 200, height: 120 }, kids("a", "b", "c", "d"));
         expect(frRows.get("a")).toMatchObject({ y: 0, height: 60 });
         expect(frRows.get("c")).toMatchObject({ y: 60, height: 60 });
     });
@@ -2417,7 +2423,7 @@ describe("M2 grid", () => {
         //  - fr rows share the leftover AFTER the px rows: 200 − 20 − 30 = 150.
         const cells = layoutGridChildren(
             { columns: [{ px: 100 }], rowHeight: { px: 30 }, rows: [{ px: 20 }, { fr: 1 }] },
-            { width: 100, height: 200 }, ["a", "b", "c"]);
+            { width: 100, height: 200 }, kids("a", "b", "c"));
         expect(cells.get("a")).toEqual({ x: 0, y: 0, width: 100, height: 20 });    // r0: rows[0]
         expect(cells.get("b")).toEqual({ x: 0, y: 20, width: 100, height: 150 });  // r1: lone fr = leftover
         expect(cells.get("c")).toEqual({ x: 0, y: 170, width: 100, height: 30 });  // r2: implicit rowHeight
@@ -2429,7 +2435,7 @@ describe("M2 grid", () => {
         // here is an exact 1/2, so the values are bit-exact; the equivalence is numerical —
         // within a ULP — for non-dyadic fr shares, which is invisible to determinism.)
         const g = { columns: [{ px: 100 }, { px: 100 }] as const, rowHeight: { fr: 1 } as const, rowGap: 10 };
-        const cells = layoutGridChildren(g, { width: 200, height: 130 }, ["a", "b", "c", "d"]);
+        const cells = layoutGridChildren(g, { width: 200, height: 130 }, kids("a", "b", "c", "d"));
         // 2 rows, rowGap 10 -> inner 120 split equally = 60 each; row 1 at y = 60 + 10.
         expect(cells.get("a")).toMatchObject({ y: 0, height: 60 });
         expect(cells.get("c")).toMatchObject({ y: 70, height: 60 });
@@ -2574,6 +2580,199 @@ describe("M2 grid", () => {
         expect(() => deserializeDocument(envelope(`{ "grid": { "columns": [{ "px": 10 }], "rowHeight": { "px": 10 }, "rows": [] } }`))).toThrow();
         // ...and a document carrying BOTH grid and container.
         expect(() => deserializeDocument(envelope(`{ "container": { "direction": "row" }, "grid": { "columns": [{ "px": 10 }], "rowHeight": { "px": 10 } } }`))).toThrow("mutually exclusive");
+    });
+});
+
+describe("M2 grid measure-integration (auto tracks + grid hug)", () => {
+    const mk = (id: string, parent: string | null, children: string[], g: Node["geometry"], layout: Node["layout"]): Node =>
+        ({ id, type: "core.rectangle", parent, children, geometry: g, style: { fill: "#000", opacity: 1 }, layout });
+
+    test("an auto column sizes to the MAX child own-width; a narrower child stretches to fill it", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 200, height: 100 }, { grid: { columns: [{ auto: true }], rowHeight: { px: 20 } } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 30, height: 5 }, {})); // col0 row0 — narrower
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 50, height: 5 }, {})); // col0 row1 — widest
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // Track = max(30, 50) = 50; the narrower child STRETCHES from its own 30 to the 50 cell.
+        expect(cs.nodes.get("c1")!.bounds).toEqual({ x: 0, y: 0, width: 50, height: 20 });
+        expect(cs.nodes.get("c2")!.bounds).toEqual({ x: 0, y: 20, width: 50, height: 20 });
+    });
+
+    test("auto and fr columns coexist: fr shares the leftover AFTER the auto track's content", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 200, height: 50 }, { grid: { columns: [{ auto: true }, { fr: 1 }], rowHeight: { px: 10 } } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 40, height: 5 }, {}));   // col0 (auto) -> track 40
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 999, height: 5 }, {}));  // col1 (fr) -> width ignored
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        expect(cs.nodes.get("c1")!.bounds.width).toBe(40);   // auto = content
+        expect(cs.nodes.get("c2")!.bounds.x).toBe(40);
+        expect(cs.nodes.get("c2")!.bounds.width).toBe(160);  // fr = 200 - 40 (auto counted into `fixed`)
+    });
+
+    test("hugWidth sizes the grid to 2·pad + Σtracks + gaps — and that equals the sum of the cells", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 999, height: 40 },
+            { grid: { columns: [{ px: 20 }, { auto: true }], rowHeight: { px: 10 }, hugWidth: true, columnGap: 5, padding: 3 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 999, height: 5 }, {})); // col0 (px20) -> ignored
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 50, height: 5 }, {}));  // col1 (auto) -> 50
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // hug = 2*3 + (20 + 50) + 5*(2-1) = 81 — NOT the stored 999.
+        expect(cs.nodes.get("P")!.bounds.width).toBe(81);
+        expect(cs.nodes.get("c1")!.bounds.width).toBe(20);
+        expect(cs.nodes.get("c2")!.bounds.width).toBe(50);
+        // The fuzz-blind structural invariant: the container's own size == where the last cell ends + padding.
+        const c2 = cs.nodes.get("c2")!.bounds;
+        expect(c2.x + c2.width + 3).toBe(cs.nodes.get("P")!.bounds.width);
+    });
+
+    test("fr tracks collapse to 0 on a HUGGED axis (no definite size to share)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 999, height: 20 },
+            { grid: { columns: [{ auto: true }, { fr: 1 }], rowHeight: { px: 10 }, hugWidth: true } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 40, height: 5 }, {}));
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 999, height: 5 }, {}));
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // Without the fr->0-under-hug rule, fr would grab `stored - auto` = 959 and the grid would stay ~999.
+        expect(cs.nodes.get("P")!.bounds.width).toBe(40);
+        expect(cs.nodes.get("c2")!.bounds.width).toBe(0);
+        expect(cs.nodes.get("c2")!.bounds.x).toBe(40);
+    });
+
+    test("hugHeight sizes the grid to its auto ROWS", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 30, height: 999 },
+            { grid: { columns: [{ px: 10 }], rowHeight: { auto: true }, hugHeight: true, rowGap: 4 } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 5, height: 20 }, {})); // row0 (auto) -> 20
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 5, height: 35 }, {})); // row1 (auto) -> 35
+        doc.rootNodeUuids = ["P"];
+        const cs = computeGeometry(doc);
+        // hug height = 0 + (20 + 35) + 4*(2-1) = 59.
+        expect(cs.nodes.get("P")!.bounds.height).toBe(59);
+        expect(cs.nodes.get("c1")!.bounds.height).toBe(20);
+        expect(cs.nodes.get("c2")!.bounds.height).toBe(35);
+    });
+
+    test("an auto/hug grid nested in a hug FLEX ripples a child resize up to the flex root, incrementally", () => {
+        // The keystone incremental test: a grid child resize changes the grid's OWN (hug) size,
+        // which must ripple to the hug-flex grandparent. That climb only happens because
+        // `containerHugs` recognises a grid's hug flags — without it the flex root reuses a stale
+        // size on the incremental path while a full recompute grows it.
+        const doc = createEmptyDocument();
+        doc.nodes.set("Root", mk("Root", null, ["G"], { x: 0, y: 0, width: 0, height: 0 },
+            { container: { direction: "row", hugWidth: true, hugHeight: true } }));
+        doc.nodes.set("G", mk("G", "Root", ["c1"], { x: 0, y: 0, width: 999, height: 999 },
+            { grid: { columns: [{ auto: true }], rowHeight: { px: 10 }, hugWidth: true, hugHeight: true } }));
+        doc.nodes.set("c1", mk("c1", "G", [], { x: 0, y: 0, width: 30, height: 10 }, {}));
+        doc.rootNodeUuids = ["Root"];
+
+        const dispatcher = new ActionDispatcher(doc);
+        const base = computeGeometry(dispatcher.getDocument());
+        expect(base.nodes.get("Root")!.bounds.width).toBe(30); // G hugs to c1's 30; Root hugs to G
+
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+        dispatcher.dispatchAction(new ResizeNodeAction(dispatcher.getDocument(), "c1", 70, 10));
+
+        const full = computeGeometry(dispatcher.getDocument());
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, dirty);
+        expect(full.nodes.get("Root")!.bounds.width).toBe(70); // non-vacuous: 30 -> 70, two hug levels up
+        expect(dirty.has("Root")).toBe(false);                 // only c1 was reported; the climb found Root
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+    });
+
+    test("a PENDING drag of a grid child in an auto column ripples the hug up, incrementally", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("Root", mk("Root", null, ["G"], { x: 0, y: 0, width: 0, height: 0 },
+            { container: { direction: "row", hugWidth: true, hugHeight: true } }));
+        doc.nodes.set("G", mk("G", "Root", ["c1"], { x: 0, y: 0, width: 999, height: 999 },
+            { grid: { columns: [{ auto: true }], rowHeight: { px: 10 }, hugWidth: true, hugHeight: true } }));
+        doc.nodes.set("c1", mk("c1", "G", [], { x: 0, y: 0, width: 30, height: 10 }, {}));
+        doc.rootNodeUuids = ["Root"];
+
+        const base = computeGeometry(doc);
+        const pending = new Map([["c1", { x: 0, y: 0, width: 70, height: 10 }]]);
+        const full = computeGeometry(doc, pending);
+        // Non-null (empty) dirty so the pending keys join the seed and the grid-aware climb runs.
+        const incremental = computeGeometry(doc, pending, base, new Set<string>());
+        expect(full.nodes.get("Root")!.bounds.width).toBe(70); // the live drag grows the whole chain
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+    });
+
+    test("resizing a child in an auto column of a NON-hug grid reflows the whole column, incrementally", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", mk("P", null, ["c1", "c2"], { x: 0, y: 0, width: 200, height: 20 },
+            { grid: { columns: [{ auto: true }, { fr: 1 }], rowHeight: { px: 10 } } }));
+        doc.nodes.set("c1", mk("c1", "P", [], { x: 0, y: 0, width: 30, height: 5 }, {}));  // col0 (auto)
+        doc.nodes.set("c2", mk("c2", "P", [], { x: 0, y: 0, width: 5, height: 5 }, {}));   // col1 (fr)
+        doc.rootNodeUuids = ["P"];
+
+        const dispatcher = new ActionDispatcher(doc);
+        const base = computeGeometry(dispatcher.getDocument());
+        expect(base.nodes.get("c2")!.bounds).toMatchObject({ x: 30, width: 170 }); // fr = 200 - auto 30
+
+        const dirty = new Set<string>();
+        dispatcher.onChange(r => r.updatedNodeIds.forEach(id => dirty.add(id)));
+        dispatcher.dispatchAction(new ResizeNodeAction(dispatcher.getDocument(), "c1", 80, 5));
+
+        const full = computeGeometry(dispatcher.getDocument());
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, dirty);
+        expect(full.nodes.get("c2")!.bounds).toMatchObject({ x: 80, width: 120 }); // auto 30->80, fr 170->120
+        expect(dirty.has("c2")).toBe(false);                                        // only c1 reported
+        expect(statesEqualBounds(incremental, full)).toBe(true);
+    });
+
+    test("an empty hugging grid sizes to its padding + fixed/auto tracks + gaps (total, no throw)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("G", mk("G", null, [], { x: 0, y: 0, width: 999, height: 999 },
+            { grid: { columns: [{ px: 20 }, { auto: true }], rowHeight: { px: 10 }, hugWidth: true, hugHeight: true, padding: 3, columnGap: 5 } }));
+        doc.rootNodeUuids = ["G"];
+        const cs = computeGeometry(doc);
+        // No children: auto col -> 0, rows = ceil(0/2) = 0. width = 2*3 + (20 + 0) + 5*(2-1) = 31; height = 2*3 = 6.
+        expect(cs.nodes.get("G")!.bounds.width).toBe(31);
+        expect(cs.nodes.get("G")!.bounds.height).toBe(6);
+    });
+
+    test("resolveGridTracks never throws on an auto track (the `\"px\" in t` footgun) and returns numbers", () => {
+        // auto MUST be an object: `\"px\" in \"auto\"` would be a TypeError inside this must-never-throw path.
+        expect(() => resolveGridTracks(
+            { columns: [{ auto: true }, { px: 5 }], rowHeight: { auto: true } },
+            [{ width: 7, height: 9 }], { width: 100, height: 100 })).not.toThrow();
+        const r = resolveGridTracks({ columns: [{ auto: true }], rowHeight: { auto: true } }, [{ width: 7, height: 9 }], { width: 100, height: 100 });
+        expect(r.colWidths[0]).toBe(7);   // auto col = child own-width
+        expect(r.rowHeights[0]).toBe(9);  // auto row = child own-height
+        // Totality: a damaged 0-column grid must not divide-by-zero (ceil(n/0) -> Infinity -> RangeError).
+        expect(() => resolveGridTracks({ columns: [], rowHeight: { px: 1 } }, [{ width: 1, height: 1 }], { width: 10, height: 10 })).not.toThrow();
+    });
+
+    test("auto + hug are write-path citizens: validation, schema-11 round-trip, both-paths rejection", () => {
+        const d = createDocWithParentChild();
+        const ok = (grid: any) => new UpdateNodeLayoutAction(d, "parent-001", { grid }).validate();
+        expect(ok({ columns: [{ auto: true }], rowHeight: { px: 10 } })).toBe(true);
+        expect(ok({ columns: [{ px: 10 }], rowHeight: { auto: true } })).toBe(true);
+        expect(ok({ columns: [{ px: 10 }], rowHeight: { px: 10 }, hugWidth: true, hugHeight: false })).toBe(true);
+        expect(ok({ columns: [{ auto: false }], rowHeight: { px: 10 } })).toBe(false);          // auto must be true
+        expect(ok({ columns: [{ auto: 1 }], rowHeight: { px: 10 } })).toBe(false);              // auto must be true
+        expect(ok({ columns: [{ px: 1, auto: true }], rowHeight: { px: 10 } })).toBe(false);    // exactly one kind
+        expect(ok({ columns: [{ px: 10 }], rowHeight: { px: 10 }, hugWidth: "yes" })).toBe(false); // non-boolean flag
+
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, "parent-001", { grid: { columns: [{ auto: true }, { fr: 1 }], rowHeight: { auto: true }, hugWidth: true } }));
+        const reloaded = deserializeDocument(serializeDocument(dispatcher.getDocument()));
+        const g = reloaded.nodes.get("parent-001")!.layout.grid!;
+        expect(g.columns[0]).toEqual({ auto: true });
+        expect(g.hugWidth).toBe(true);
+
+        const envelope = (layout: string) => `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "rootNodeUuids": ["n"], "variables": {},`
+            + ` "nodes": { "n": { "id": "n", "type": "core.rectangle", "parent": null, "children": [],`
+            + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
+            + ` "style": { "fill": "#000", "opacity": 1 }, "layout": ${layout} } } } }`;
+        // Load path rejects an `{auto:false}` track and a non-boolean hug flag, exactly as the edit path does.
+        expect(() => deserializeDocument(envelope(`{ "grid": { "columns": [{ "auto": false }], "rowHeight": { "px": 10 } } }`))).toThrow();
+        expect(() => deserializeDocument(envelope(`{ "grid": { "columns": [{ "px": 10 }], "rowHeight": { "px": 10 }, "hugWidth": "yes" } }`))).toThrow();
     });
 });
 

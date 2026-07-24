@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer/SVGRenderer.ts, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v10 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid+rows, constraints, absolute + margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v11 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, grid (+rows/auto/hug), constraints, absolute + margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -61,11 +61,16 @@ function measureIntrinsicSizes(                    // bottom-up: resolved own-si
   scene: readonly ReadonlyNode[],
   pending: ReadonlyMap<string, Partial<Geometry>> | null | undefined
 ): Map<string, { width: number; height: number }>;
-function layoutGridChildren(                       // grid: children auto-flow into px/fr cell tracks and fill them
+function layoutGridChildren(                       // grid: children auto-flow into px/fr/auto cell tracks and fill them
   grid: LayoutGrid,
   parentSize: { width: number; height: number },
-  childIds: readonly string[]
+  children: readonly { id: string; width: number; height: number }[]  // own-sizes feed `auto` tracks
 ): Map<string, Rect>;                             // childId → cell rect
+function resolveGridTracks(                         // shared by the measure fold (hug) and the position pass (cells)
+  grid: LayoutGrid,
+  children: readonly { width: number; height: number }[],
+  parentSize: { width: number; height: number }
+): { colWidths: number[]; rowHeights: number[]; cols: number; rows: number };
 function resolveConstraints(                       // anchors: reposition a plain parent's child on resize
   stored: Rect,
   constraints: Constraints | undefined,

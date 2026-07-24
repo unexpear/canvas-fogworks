@@ -14,9 +14,11 @@
  * its contents; see `measureIntrinsicSizes`), flex-grow/shrink (children fill leftover /
  * give up overflow main-axis space), constraints/anchors (`resolveConstraints`),
  * absolute-position escapes (`isAbsolute`), AND a grid (`layoutGridChildren` — auto-flow
- * into px/fr cell tracks with explicit per-row track sizes). DEFERRED with their own
- * milestone weight: flex wrap, grid auto/content tracks + grid-container hug (the
- * measure-integration slice), explicit grid placement/spans. See MILESTONES.md.
+ * into px/fr/auto cell tracks with explicit per-row sizes and grid-container hug). Grid
+ * `auto` tracks and grid-hug pull grid INTO the bottom-up measure pass (`resolveGridTracks`
+ * is the single track-resolver shared by the measure fold and the position pass). DEFERRED
+ * with their own milestone weight: flex wrap, explicit grid placement/spans, minmax/
+ * fit-content tracks. See MILESTONES.md.
  */
 
 import { ReadonlyDocument } from "../document/Document";
@@ -37,10 +39,12 @@ export function isAbsolute(node: HasLayout): boolean {
     return !!node && (node.layout as { position?: unknown }).position === "absolute";
 }
 
-/** True when this node is a container that sizes at least one axis to its contents. */
+/** True when this node is a container (flex OR grid) that sizes at least one axis to its contents. */
 function containerHugs(node: HasLayout): boolean {
     const c = node && (node.layout.container as { hugWidth?: unknown; hugHeight?: unknown } | undefined);
-    return !!c && (c.hugWidth === true || c.hugHeight === true);
+    if (c && (c.hugWidth === true || c.hugHeight === true)) return true;
+    const g = node && (node.layout.grid as { hugWidth?: unknown; hugHeight?: unknown } | undefined);
+    return !!g && (g.hugWidth === true || g.hugHeight === true);
 }
 
 /** A resolved own-size. */
@@ -100,6 +104,28 @@ export function measureIntrinsicSizes(
             // Overwrite ONLY the hugged PHYSICAL axis; the other keeps pending ?? stored.
             if (c.hugWidth) width = row ? mainHug : crossHug;
             if (c.hugHeight) height = row ? crossHug : mainHug;
+        }
+
+        // GRID hug: a grid sizes a hugged axis to 2·padding + Σ tracks + gaps, with `auto`
+        // tracks folded from the children's measured own-sizes — grid entering the measure
+        // pass, exactly like flex hug. Uses the SAME `resolveGridTracks` the position pass
+        // uses, so the container's own size equals the sum of the cells it will lay out. The
+        // in-flow child set (skip absolute, skip unmeasured, in `children` order) MUST match
+        // the position pass's filter or the auto-track flow indices would drift.
+        const gr = node.layout.grid;
+        if (gr && (gr.hugWidth || gr.hugHeight)) {
+            const inFlow: { width: number; height: number }[] = [];
+            for (const childId of node.children) {
+                const childNode = byId.get(childId);
+                if (isAbsolute(childNode)) continue;
+                const own = measured.get(childId);
+                if (!own) continue;
+                inFlow.push(own);
+            }
+            const pad = gr.padding ?? 0;
+            const { colWidths, rowHeights, cols, rows } = resolveGridTracks(gr, inFlow, { width, height });
+            if (gr.hugWidth) width = 2 * pad + colWidths.reduce((a, b) => a + b, 0) + (gr.columnGap ?? 0) * Math.max(0, cols - 1);
+            if (gr.hugHeight) height = 2 * pad + rowHeights.reduce((a, b) => a + b, 0) + (gr.rowGap ?? 0) * Math.max(0, rows - 1);
         }
         measured.set(node.id, { width, height });
     }
@@ -183,35 +209,87 @@ export function layoutChildren(
 }
 
 /**
- * Resolve grid track sizes to pixels: fixed `px` tracks take their size; `fr` tracks
- * share `available` (already net of gaps) in proportion to their fraction. Negative
- * `available` clamps `fr` tracks to 0 (fixed tracks still take their px and may overflow).
+ * Resolve ONE axis of grid tracks to pixels. `px` tracks take their size; `auto` tracks take
+ * their content size (`autoSizes[i]`, the max measured own-size of the children in that track);
+ * `fr` tracks share what's left of `available` in proportion to their fraction. `available` is
+ * already net of gaps AND of the px/auto tracks conceptually — a NULL `available` means the
+ * axis HUGS (no definite size to share), so every `fr` collapses to 0 while px/auto keep their
+ * intrinsic size. A negative `available` clamps `fr` to 0 (px/auto still take their size and
+ * may overflow). This is the single kernel behind `resolveGridTracks`.
  */
-function resolveTracks(tracks: readonly TrackSize[], available: number): number[] {
+function resolveTracks(tracks: readonly TrackSize[], autoSizes: readonly number[], available: number | null): number[] {
     let fixed = 0;
     let totalFr = 0;
-    for (const t of tracks) {
+    tracks.forEach((t, i) => {
         if ("px" in t) fixed += Math.max(0, t.px);
+        else if ("auto" in t) fixed += Math.max(0, autoSizes[i] ?? 0);
         else totalFr += Math.max(0, t.fr);
-    }
-    const freeForFr = Math.max(0, available - fixed);
-    return tracks.map(t =>
-        "px" in t ? Math.max(0, t.px) : (totalFr > 0 ? freeForFr * (Math.max(0, t.fr) / totalFr) : 0));
+    });
+    const freeForFr = available === null ? 0 : Math.max(0, available - fixed);
+    return tracks.map((t, i) =>
+        "px" in t ? Math.max(0, t.px)
+            : "auto" in t ? Math.max(0, autoSizes[i] ?? 0)
+                : (totalFr > 0 ? freeForFr * (Math.max(0, t.fr) / totalFr) : 0));
 }
 
 /**
- * Compute the cell rect for each child of a GRID container. Children auto-flow row-major
- * into `columns.length` columns × `ceil(count/cols)` rows and STRETCH to fill their cell,
- * so their stored size is ignored (like a laid-out flex child's position). Both axes size
- * through the same `resolveTracks`: `fr` column tracks share the leftover inner width, and
- * each row is sized by `rows[r] ?? rowHeight` (explicit per-row tracks, else the implicit
- * uniform `rowHeight`) with `fr` rows sharing the leftover inner height. Unlike flex, this
- * never reads child sizes, so it is a pure position-pass producer with no measure dependency.
+ * Resolve a grid's column widths and row heights — the SINGLE source of truth, called by BOTH
+ * the measure-pass hug fold (to size a hugging grid) and the position pass (to place cells), so
+ * a hugged grid's own size is byte-identical to the sum of the cells it lays out.
+ *
+ * Children auto-flow row-major: child `i` is at column `i % cols`, row `floor(i / cols)`; row
+ * COUNT is `ceil(count / cols)`. An `auto` COLUMN sizes to the max own-WIDTH of the children in
+ * it, an `auto` ROW to the max own-HEIGHT (the children's PRE-fill measured sizes — never their
+ * stretched cell size, which keeps this acyclic, exactly like flex hug). Rows are `rows[r] ??
+ * rowHeight` (the schema-10 explicit/implicit split). A hugged axis passes `available = null`,
+ * so its `fr` tracks collapse to 0; a non-hugged axis shares its inner size (net of padding+gaps).
+ */
+export function resolveGridTracks(
+    grid: LayoutGrid,
+    children: readonly { width: number; height: number }[],
+    parentSize: { width: number; height: number }
+): { colWidths: number[]; rowHeights: number[]; cols: number; rows: number } {
+    const cols = grid.columns.length;
+    if (cols === 0) return { colWidths: [], rowHeights: [], cols: 0, rows: 0 };
+    const rows = Math.ceil(children.length / cols);
+    const colGap = grid.columnGap ?? 0;
+    const rowGap = grid.rowGap ?? 0;
+    const pad = grid.padding ?? 0;
+
+    const colAuto = new Array<number>(cols).fill(0);
+    const rowAuto = new Array<number>(rows).fill(0);
+    children.forEach((ch, i) => {
+        const c = i % cols;
+        const r = Math.floor(i / cols);
+        if (ch.width > colAuto[c]) colAuto[c] = ch.width;
+        if (ch.height > rowAuto[r]) rowAuto[r] = ch.height;
+    });
+
+    const rowTracks: TrackSize[] = [];
+    for (let r = 0; r < rows; r++) rowTracks.push(grid.rows?.[r] ?? grid.rowHeight);
+
+    const availW = grid.hugWidth ? null : (parentSize.width - 2 * pad) - colGap * Math.max(0, cols - 1);
+    const availH = grid.hugHeight ? null : (parentSize.height - 2 * pad) - rowGap * Math.max(0, rows - 1);
+
+    return {
+        colWidths: resolveTracks(grid.columns, colAuto, availW),
+        rowHeights: resolveTracks(rowTracks, rowAuto, availH),
+        cols,
+        rows,
+    };
+}
+
+/**
+ * Compute the cell rect for each child of a GRID container. Children auto-flow row-major and
+ * STRETCH to fill their cell, so their stored POSITION is ignored (like a laid-out flex child).
+ * Track sizes come from `resolveGridTracks`, which reads the children's measured OWN-sizes for
+ * `auto` tracks — so unlike the pre-tail grid this DOES depend on the measure pass (the same
+ * `measured` sizes the hug fold used), keeping cells and the container's hug size in lock-step.
  */
 export function layoutGridChildren(
     grid: LayoutGrid,
     parentSize: { width: number; height: number },
-    childIds: readonly string[]
+    children: readonly { id: string; width: number; height: number }[]
 ): Map<string, Rect> {
     const out = new Map<string, Rect>();
     const cols = grid.columns.length;
@@ -219,20 +297,7 @@ export function layoutGridChildren(
     const colGap = grid.columnGap ?? 0;
     const rowGap = grid.rowGap ?? 0;
     const pad = grid.padding ?? 0;
-    const rows = Math.ceil(childIds.length / cols);
-
-    const colWidths = resolveTracks(grid.columns, (parentSize.width - 2 * pad) - colGap * (cols - 1));
-    // Rows resolve exactly like columns: build one track per DERIVED row (count from the
-    // child count), each `rows[r]` if given else the implicit `rowHeight`, then share the
-    // inner height (px rows take their size; fr rows split what's left). With no `rows` this
-    // is a uniform-`rowHeight` list — the same layout the pre-tail equal-share / fixed-px
-    // code produced (numerically within a ULP for non-dyadic fr shares, since it now shares
-    // through `resolveTracks` rather than a single divide — invisible to determinism, which
-    // runs this same code on both the full and incremental paths).
-    const innerH = (parentSize.height - 2 * pad) - rowGap * Math.max(0, rows - 1);
-    const rowTracks: TrackSize[] = [];
-    for (let r = 0; r < rows; r++) rowTracks.push(grid.rows?.[r] ?? grid.rowHeight);
-    const rowHeights = resolveTracks(rowTracks, innerH);
+    const { colWidths, rowHeights, rows } = resolveGridTracks(grid, children, parentSize);
 
     const colX: number[] = [];
     let x = pad;
@@ -241,10 +306,10 @@ export function layoutGridChildren(
     let y = pad;
     for (let r = 0; r < rows; r++) { rowY[r] = y; y += rowHeights[r] + rowGap; }
 
-    childIds.forEach((id, i) => {
+    children.forEach((ch, i) => {
         const col = i % cols;
         const row = Math.floor(i / cols);
-        out.set(id, { x: colX[col], y: rowY[row], width: colWidths[col], height: rowHeights[row] });
+        out.set(ch.id, { x: colX[col], y: rowY[row], width: colWidths[col], height: rowHeights[row] });
     });
     return out;
 }

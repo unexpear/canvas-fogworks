@@ -32,7 +32,7 @@ import {
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
-import { layoutChildren, layoutGridChildren, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
+import { layoutChildren, layoutGridChildren, resolveGridTracks, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
 import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot } from "../actions/types";
@@ -119,9 +119,11 @@ export function __apiSurfacePin(): void {
     expectType<boolean>(isAbsolute(doc.nodes.get("id")));
     expectType<Map<string, { width: number; height: number }>>(measureIntrinsicSizes(traverseSceneGraph(doc), null));
     const track: TrackSize = { fr: 1 };
-    const grid: LayoutGrid = { columns: [{ px: 1 }, track], rowHeight: { px: 1 }, columnGap: 0, rowGap: 0, padding: 0 };
+    const autoTrack: TrackSize = { auto: true };
+    const grid: LayoutGrid = { columns: [{ px: 1 }, track, autoTrack], rowHeight: { px: 1 }, rows: [autoTrack], hugWidth: true, hugHeight: false, columnGap: 0, rowGap: 0, padding: 0 };
     expectType<LayoutGrid>(grid);
-    expectType<Map<string, Rect>>(layoutGridChildren(grid, { width: 1, height: 1 }, ["a"]));
+    expectType<Map<string, Rect>>(layoutGridChildren(grid, { width: 1, height: 1 }, [{ id: "a", width: 1, height: 1 }]));
+    expectType<{ colWidths: number[]; rowHeights: number[]; cols: number; rows: number }>(resolveGridTracks(grid, [{ width: 1, height: 1 }], { width: 1, height: 1 }));
     const constraints: Constraints = { horizontal: "right" as HConstraint, vertical: "center" as VConstraint };
     expectType<Constraints>(constraints);
     expectType<Rect>(resolveConstraints({ x: 0, y: 0, width: 1, height: 1 }, constraints, { width: 1, height: 1 }, { width: 2, height: 2 }));

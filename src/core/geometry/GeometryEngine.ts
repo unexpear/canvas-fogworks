@@ -194,17 +194,22 @@ function layoutContainerPass(
     laidOut: Map<string, Rect>,
     measured: ReadonlyMap<string, { width: number; height: number }>
 ): void {
-    // GRID: children fill cells regardless of their own size, so it needs only the child
-    // ids (in order) and the container's resolved size — never the measured child sizes.
-    // An `absolute` child is out of flow: it takes no cell (and no flex slot below).
+    // GRID: children fill cells, but `auto` tracks size to the children's measured own-sizes,
+    // so the grid now needs those sizes (the SAME `measured` map the hug fold read). The
+    // in-flow filter — skip absolute (out of flow, no cell) and skip unmeasured — MUST match
+    // the measure fold's grid branch, or the auto-track flow indices would drift between the
+    // container's hug size and its cells.
     const grid = node.layout.grid;
     if (grid) {
-        const ids: string[] = [];
+        const children: { id: string; width: number; height: number }[] = [];
         for (const childId of node.children) {
             const child = doc.nodes.get(childId);
-            if (child && !isAbsolute(child)) ids.push(childId);
+            if (!child || isAbsolute(child)) continue;
+            const own = measured.get(childId);
+            if (!own) continue;
+            children.push({ id: childId, width: own.width, height: own.height });
         }
-        for (const [id, rect] of layoutGridChildren(grid, { width: parentLocal.width, height: parentLocal.height }, ids)) {
+        for (const [id, rect] of layoutGridChildren(grid, { width: parentLocal.width, height: parentLocal.height }, children)) {
             laidOut.set(id, rect);
         }
         return;
