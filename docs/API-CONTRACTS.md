@@ -118,7 +118,7 @@ new ResizeNodeAction(doc, nodeId: string, newWidth: number, newHeight: number);
 new UpdateNodeGeometryAction(doc, nodeId: string, geometry: Partial<Geometry>);
 new UpdateNodeStyleAction(doc, nodeId: string, style: Partial<Style>);
 new UpdateNodeTransformAction(doc, nodeId: string, transform: Partial<Transform>); // rotation/scale/origin
-new UpdateNodeLayoutAction(doc, nodeId: string, layout: Partial<Layout>);          // M2 auto-layout container
+new UpdateNodeLayoutAction(doc, nodeId: string, layout: Partial<Layout>);          // M2 layout (container/grid/grow/constraints/position/margin)
 new TransactionAction(doc, label: string, actions: Action[]);
 
 // applyMutations.ts — the single mutation site

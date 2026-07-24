@@ -41,7 +41,7 @@ abstract class Action {
 | `UpdateNodeGeometryAction` | `{ kind: "patch", geometry: {…partial…} }` |
 | `UpdateNodeStyleAction` | `{ kind: "patch", style: {…partial…} }` |
 | `UpdateNodeTransformAction` | `{ kind: "patch", transform: {…partial…} }` — rotation/scale/origin |
-| `UpdateNodeLayoutAction` | `{ kind: "patch", layout: {…partial…} }` — M2 auto-layout `container` (set or `undefined` to remove) |
+| `UpdateNodeLayoutAction` | `{ kind: "patch", layout: {…partial…} }` — M2 layout (container/grid/grow/constraints/position/margin). Carries grid⊕container exclusivity IN the delta, and auto-captures `constraintRef` from a NON-container parent's stored size on first opt-in |
 | `ReparentNodeAction` | `{ kind: "patch", reparent: { parent, index? } }` |
 | `TransactionAction` | merges multiple actions into one atomic result + one revision |
 
