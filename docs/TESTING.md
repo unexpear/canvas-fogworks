@@ -1,17 +1,18 @@
 # Testing Strategy
 
-<!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, jest.config.js, scripts/check-module-headers.js -->
+<!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v17 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types. Suites: `src/core/tests/document.test.ts` (261) + `src/renderer/RenderModel.test.ts` (51) = 312 tests.
+> 🔒 Frozen contract · schema v17 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend. Suites: `src/core/tests/document.test.ts` (261) + `src/renderer/RenderModel.test.ts` (51) + `src/renderer/emitCanvas.test.ts` (16) = 328 tests.
 
 ## Philosophy
 
 The engine's correctness lives in the **core** (document, actions, dispatcher, history,
 serializer) — the layer every other layer trusts. That layer is deterministic, pure,
 and has no DOM, so it is tested exhaustively with fast unit tests. The renderer's
-**pure model** (`buildRenderModel → DisplayList`) is DOM-free too and is now unit-tested
-the same way; only the DOM/canvas **backend** (`emitSVG`) stays validated by targeted
-browser smoke tests during development, since it does nothing but transcribe the model.
+**pure model** (`buildRenderModel → DisplayList`) is DOM-free too and unit-tested the same
+way; the **Canvas backend** (`emitCanvas`) is unit-tested via a recording-mock ctx (its call
+sequence IS its output). Only `emitSVG`'s DOM output and pixel-level SVG↔canvas parity stay
+validated by targeted browser smoke tests during development.
 
 **Milestone 0 bar:** no change to a frozen contract lands without a test. Regressions get
 a test that is proven to fail before the fix and pass after (see *regression discipline*).
@@ -19,7 +20,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 312 tests
+npm test                                   # jest (ts-jest), 328 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -30,7 +31,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (312 tests)
+## What is covered (328 tests)
 
 | Area | Representative cases |
 |------|----------------------|

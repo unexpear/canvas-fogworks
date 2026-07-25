@@ -21,7 +21,7 @@ M1  Computed State           ✅   stored intent -> calculated results
       │
 M2  Layout Engine            ✅   flex(grow/shrink/wrap/align-content) + hug + grid(rows/auto/hug/spans/flow/pins) + constraints + absolute; minmax/fit-content deferred
       │
-M3  Renderer                 🚧*  render-model + culling + shapes (rect/ellipse/line/path/text/image); effects/canvas remain
+M3  Renderer                 🚧*  SVG renderer complete (shapes + culling) + Canvas backend (unwired); effects remain
       │
 M4  Editor                   ⬜*  viewport, selection, manipulation, guides
       │
@@ -438,9 +438,28 @@ is **deferred to a future SVG-import feature** (where foreign-`d` ingestion actu
 core type clean and fully validatable. `path?` is optional (absent = empty path, renders nothing) so generic
 creation works; geometry stays the type-agnostic box (tight path bounds deferred). Every guard mutation-tested.
 
-**Remaining:** **effects** (shadow/blur — plumbing lives in the emitters); the **Canvas/WebGL backend** (a
-second emitter over the same `DisplayList` — its text wrapping/metrics and rasterization
-parity are genuine milestone weight and may split into their own milestone).
+**Landed (slice 5 — Canvas backend):** `emitCanvas(ctx, model, dpr?)` — the immediate-mode twin
+of `emitSVG` over the SAME `DisplayList` (grid + content + overlay). A dumb per-kind transcriber
+that does NO coordinate arithmetic: it sets the viewport CTM once (DPR folded in — `setTransform`
+resets the CTM) then brackets each content item in `save()`/`transform(world…6 raw numbers)`/
+`restore()`, since `ctx.transform` post-multiplies (= V∘world = the SVG nesting), so the *canvas*
+composes and no `Matrix.multiply` enters the backend. Verified by a **recording-mock
+`CanvasRenderingContext2D`** (immediate-mode's output IS its call sequence — zero deps, runs in the
+node suite; 16 tests, every branch mutation-tested); pixel-level SVG↔canvas parity stays a browser
+smoke test. **Not wired into the app** — the resize-handle hit-test still reads the SVG overlay DOM,
+so making canvas the live editing backend needs DOM-free handle picking (M4); this is the same
+lower-layer-capability-predates-its-editor-affordance pattern as `ReparentNodeAction` (M0) and
+`UpdateNodeTransformAction` (M1), and it ships WITH tests, not as a dead flag. First-pass gaps
+(all documented as inherent SVG-vs-canvas rasterizer differences, deferred like text wrapping): text
+is single-line `fillText` (no HTML wrapping/metrics); image is deferred (draws nothing — `drawImage`
+needs a decoded bitmap); **opacity** is per-op `globalAlpha` not SVG *group* opacity, so a
+translucent stroked shape shows a fill-tinted ≈1px hairline in the stroke's inner half (true group
+opacity needs an offscreen layer); rounded-rect radius clamping differs from SVG for an over-large
+radius; and the `renderCanvas` DOM shim (canvas sizing / `getContext` / DPR read) lands with the M4 wiring.
+
+**Remaining:** **effects** (shadow/blur — plumbing lives in the emitters). The SVG renderer is
+otherwise complete (rect/ellipse/line/path/text/image + culling), and the Canvas backend exists and
+is tested; wiring canvas as a live editing surface is an M4 editor concern (DOM-free handle picking).
 
 ---
 

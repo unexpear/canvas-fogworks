@@ -53,6 +53,7 @@ import { createEditorState, clampViewport, EditorState } from "../../editor/Edit
 import { renderSVG, RendererState } from "../../renderer/SVGRenderer";
 import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, commandsToPathData } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
+import { emitCanvas } from "../../renderer/emitCanvas";
 
 /**
  * Assert an expression is ASSIGNABLE to the documented type.
@@ -215,4 +216,5 @@ export function __apiSurfacePin(): void {
     expectType<Paint>(model.content[0].paint);
     expectType<Mat2D | null>(model.content[0].world);
     expectType<(c: HTMLElement, m: DisplayList) => void>(emitSVG);
+    expectType<(ctx: CanvasRenderingContext2D, m: DisplayList, dpr?: number) => void>(emitCanvas);
 }

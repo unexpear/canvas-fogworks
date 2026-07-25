@@ -279,7 +279,8 @@ function buildRenderModel(
   size: { width: number; height: number },
   doc: ReadonlyDocument, state: RendererState, prev?: DisplayList | null
 ): DisplayList;                                          // pure, deterministic
-function emitSVG(container: HTMLElement, model: DisplayList): void;   // DOM transcription
+function emitSVG(container: HTMLElement, model: DisplayList): void;   // SVG DOM transcription
+function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dpr?: number): void; // Canvas 2D transcription
 function renderSVG(container: HTMLElement, doc: ReadonlyDocument, state: RendererState): void; // buildRenderModel ∘ emitSVG
 ```
 
@@ -289,8 +290,13 @@ function renderSVG(container: HTMLElement, doc: ReadonlyDocument, state: Rendere
   supplies only type/style/text/src.
 - `renderSVG` stays the app entry point: it measures the container, threads the previous
   `DisplayList` (so an unchanged grid reuses its lines by reference), then calls `emitSVG`.
-- `DisplayList` is plain, serializable data — asserted directly in unit tests; `emitSVG`
-  is the untested DOM boundary, covered by the browser smoke tests.
+- `DisplayList` is plain, serializable data — asserted directly in unit tests. `emitSVG`
+  and `emitCanvas` are backend transcribers over the SAME list; each does zero coordinate
+  arithmetic (canvas folds DPR into the base CTM then post-multiplies `world` via
+  `ctx.transform`). `emitCanvas` is verified by a recording-mock ctx (its call sequence is
+  its output); pixel-level SVG↔canvas parity stays a browser smoke test. `emitCanvas` is
+  **not wired into the app** yet — making canvas the live editing backend needs DOM-free
+  resize-handle picking (M4). First-pass canvas gaps: single-line text, image deferred.
 - **Viewport culling:** `content` holds only nodes whose world bounds intersect the visible
   world rect `{x: vp.x/z, y: vp.y/z, w: (size.w||800)/z, h: (size.h||600)/z}` (the same
   screen→world region the viewport transform maps, inclusive edges). So `content` depends
