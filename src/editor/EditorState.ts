@@ -43,6 +43,33 @@ export function clampViewport(vp: EditorState["viewport"]): void {
     vp.y = Math.max(-limit, Math.min(limit, vp.y));
 }
 
+/**
+ * Pan by a SCREEN-pixel delta (the pointer's frame movement), zoom-independent — a drag
+ * of `dx` px moves the content `dx` px so it tracks the pointer. The viewport transform is
+ * `screen = z·world − vp`, so following a `+dx` pointer move (raising a point's screen x)
+ * means LOWERING `vp.x`. Re-clamps.
+ */
+export function panBy(vp: EditorState["viewport"], dx: number, dy: number): void {
+    vp.x -= dx;
+    vp.y -= dy;
+    clampViewport(vp);
+}
+
+/**
+ * Zoom by `factor` about a CURSOR point (canvas-relative screen px), keeping the world point
+ * under the cursor fixed. From `screen = z·world − vp`, the world at the cursor is
+ * `(cursor + vp)/z`; holding it fixed under the new zoom gives `vp' = f·vp + (f−1)·cursor`,
+ * where `f` is the ACTUAL factor after the zoom clamp (so a clamped zoom doesn't drift the anchor).
+ */
+export function zoomAt(vp: EditorState["viewport"], factor: number, cursorX: number, cursorY: number): void {
+    const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, vp.zoom * factor));
+    const f = newZoom / vp.zoom;
+    vp.zoom = newZoom;
+    vp.x = f * vp.x + (f - 1) * cursorX;
+    vp.y = f * vp.y + (f - 1) * cursorY;
+    clampViewport(vp);
+}
+
 export function createEditorState(): EditorState {
     return {
         selectedNodeIds: [],

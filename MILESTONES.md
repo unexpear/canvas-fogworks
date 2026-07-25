@@ -21,9 +21,9 @@ M1  Computed State           ✅   stored intent -> calculated results
       │
 M2  Layout Engine            ✅   flex(grow/shrink/wrap/align-content) + hug + grid(rows/auto/hug/spans/flow/pins) + constraints + absolute; minmax/fit-content deferred
       │
-M3  Renderer                 🚧*  SVG renderer complete (shapes + culling + effects) + Canvas backend (unwired, tested)
+M3  Renderer                 ✅   SVG renderer (shapes + culling + effects) + Canvas backend (tested); canvas wiring → M4
       │
-M4  Editor                   ⬜*  viewport, selection, manipulation, guides
+M4  Editor                   🚧*  pan/zoom landed; box-select, DOM-free handles+rotate, canvas wiring, guides remain
       │
 M5  Variables & Tokens       ⬜
 M6  Components                ⬜
@@ -392,10 +392,17 @@ local rects), not as a separate channel.
 
 ## Phase 3 — Rendering Pipeline
 
-### Milestone 3 — Renderer 🚧
+### Milestone 3 — Renderer ✅
 Build the renderer for real. **SVG renderer:** rectangles · ellipses · lines · paths ·
 text · images. **Canvas/WebGL renderer:** large scenes · shadows · blur · massive
 documents. **The renderer only reads `ComputedState`.**
+
+**Done (schema 18):** a pure `buildRenderModel → DisplayList` + thin `emitSVG`/`emitCanvas` backends.
+The SVG renderer is complete — rect/ellipse/line/path/text/image, viewport culling, drop shadow +
+gaussian blur — over a node-tested model. The Canvas backend (`emitCanvas`) is a complete, recording-
+mock-tested second emitter over the same list. Wiring canvas as the live *editing* backend (needs
+DOM-free resize-handle picking) and richer effects (multiple/inner shadows, blend modes) are M4/future,
+not the renderer. See the slice notes below.
 
 **Landed (slice 1 — render-model extraction, no behavior change):** the renderer is now
 a pure `buildRenderModel(size, doc, state) → DisplayList` (all draw decisions: content
@@ -483,10 +490,23 @@ effects (multiple shadows, inner shadow, blend modes) are future scope.
 
 ## Phase 4 — Editor
 
-### Milestone 4 — Editor ⬜
+### Milestone 4 — Editor 🚧
 **Viewport:** pan · zoom · infinite canvas. **Selection:** click · multi-select ·
 box select. **Manipulation:** drag · resize · rotate. **Guides:** snapping · alignment
 guides · smart guides · rulers.
+
+Already present from earlier prototypes: click + shift-multi-select (DOM-free `hitTest`), drag (`MoveTool`),
+resize (`ToolController`, but DOM-`data-resize-handle`-based — the canvas-wiring blocker), delete, and
+origin-anchored wheel zoom. Slice plan: **(1) pan/zoom** — pure `panBy`/`zoomAt` viewport math (node-tested)
++ cursor-anchored wheel zoom + space/middle-mouse pan; **(2) box-select** (marquee + hit-in-rect);
+**(3) DOM-free handle hit-testing + rotate** (moves resize-handle picking off the SVG DOM — unblocks canvas
+— and adds the rotate affordance over `UpdateNodeTransformAction`); **(4) canvas wiring** (a backend selector,
+now that handles are DOM-free); **(5) snapping / alignment guides**.
+
+**Landed (slice 1 — pan/zoom):** pure `panBy(vp, dx, dy)` + `zoomAt(vp, factor, cursorX, cursorY)` viewport
+math in `EditorState` (node-tested like `clampViewport`); the wheel now zooms **cursor-anchored** (the world
+point under the pointer stays fixed), and **space+drag / middle-mouse drag** pans (a `ToolController` mode
+intercepting before the active tool, like resize). Screen-space pan (zoom-independent); both re-clamp.
 
 ---
 

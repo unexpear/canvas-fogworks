@@ -13,7 +13,7 @@ import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
 import { UpdateNodeGeometryAction } from "../core/actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../core/actions/UpdateNodeStyleAction";
-import { createEditorState, EditorState, clampViewport } from "../editor/EditorState";
+import { createEditorState, EditorState, zoomAt } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
@@ -116,12 +116,13 @@ export function App() {
         };
         const handleMouseUp = (e: MouseEvent) => toolController.onMouseUp(e);
         const handleKeyDown = (e: KeyboardEvent) => toolController.onKeyDown(e);
+        const handleKeyUp = (e: KeyboardEvent) => toolController.onKeyUp(e);
         const handleWheel = (e: WheelEvent) => {
             e.preventDefault();
             const rect = target.getBoundingClientRect();
+            // Zoom about the cursor (the world point under the pointer stays fixed).
             const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-            es.viewport.zoom *= zoomFactor;
-            clampViewport(es.viewport);
+            zoomAt(es.viewport, zoomFactor, e.clientX - rect.left, e.clientY - rect.top);
             toolController.onWheel(e, rect);
             refresh(); // repaint at the new zoom (wheel doesn't go through a tool commit)
         };
@@ -130,6 +131,7 @@ export function App() {
         window.addEventListener("mousemove", handleMouseMove);
         window.addEventListener("mouseup", handleMouseUp);
         window.addEventListener("keydown", handleKeyDown);
+        window.addEventListener("keyup", handleKeyUp);
         target.addEventListener("wheel", handleWheel, { passive: false });
 
         return () => {
@@ -137,6 +139,7 @@ export function App() {
             window.removeEventListener("mousemove", handleMouseMove);
             window.removeEventListener("mouseup", handleMouseUp);
             window.removeEventListener("keydown", handleKeyDown);
+            window.removeEventListener("keyup", handleKeyUp);
             target.removeEventListener("wheel", handleWheel);
         };
     }, [toolController]);

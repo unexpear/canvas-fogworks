@@ -7,7 +7,7 @@ import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
 import { UpdateNodeGeometryAction } from "../../core/actions/UpdateNodeGeometryAction";
 import { DeleteNodeAction } from "../../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../../core/actions/TransactionAction";
-import { EditorState } from "../EditorState";
+import { EditorState, panBy } from "../EditorState";
 import { selectionRoots } from "../../core/document/SceneGraph";
 
 export interface Tool {
@@ -15,8 +15,12 @@ export interface Tool {
     onMouseMove?(e: MouseEvent, canvasRect?: DOMRect): void;
     onMouseUp?(e: MouseEvent): void;
     onKeyDown?(e: KeyboardEvent): void;
+    onKeyUp?(e: KeyboardEvent): void;
     onWheel?(e: WheelEvent, canvasRect?: DOMRect): void;
 }
+
+/** Middle mouse button (per the MouseEvent.button spec). */
+const MIDDLE_BUTTON = 1;
 
 export class ToolController {
     private activeTool: Tool | null = null;
@@ -27,6 +31,13 @@ export class ToolController {
     private resizePreview: { x: number; y: number; width: number; height: number } | null = null;
     private resizeStartX = 0;
     private resizeStartY = 0;
+
+    // Viewport pan (space+drag or middle-mouse) — a mode that intercepts before the tool,
+    // like resize. The gesture is screen-space, so it applies at any zoom and any tool.
+    private spaceHeld = false;
+    private panMode = false;
+    private panLastX = 0;
+    private panLastY = 0;
 
     private dispatcher: ActionDispatcher;
     private editorState: EditorState;
@@ -43,6 +54,17 @@ export class ToolController {
     }
 
     onMouseDown(e: MouseEvent, canvasRect: DOMRect): void {
+        // Pan takes precedence over everything (any tool, node, or handle): hold Space and drag,
+        // or drag with the middle mouse button.
+        if (this.spaceHeld || e.button === MIDDLE_BUTTON) {
+            this.panMode = true;
+            this.panLastX = e.clientX;
+            this.panLastY = e.clientY;
+            this.editorState.isDragging = true;
+            e.preventDefault();
+            return;
+        }
+
         const target = e.target as HTMLElement;
         const nodeId = target.getAttribute("data-node-id");
         const handle = target.getAttribute("data-resize-handle");
@@ -71,6 +93,14 @@ export class ToolController {
     }
 
     onMouseMove(e: MouseEvent, canvasRect: DOMRect): void {
+        if (this.panMode) {
+            panBy(this.editorState.viewport, e.clientX - this.panLastX, e.clientY - this.panLastY);
+            this.panLastX = e.clientX;
+            this.panLastY = e.clientY;
+            this.refresh();
+            return;
+        }
+
         if (this.resizeMode && this.resizeNodeId && this.resizeHandle && this.resizeOrigin) {
             const zoom = Math.max(0.01, this.editorState.viewport.zoom);
             const dx = (e.clientX - this.resizeStartX) / zoom;
@@ -92,6 +122,13 @@ export class ToolController {
     }
 
     onMouseUp(e: MouseEvent): void {
+        if (this.panMode) {
+            this.panMode = false;
+            this.editorState.isDragging = false;
+            this.refresh();
+            return;
+        }
+
         if (this.resizeMode && this.resizeNodeId) {
             const doc = this.dispatcher.getDocument();
             if (this.resizePreview && doc.nodes.has(this.resizeNodeId)) {
@@ -114,6 +151,13 @@ export class ToolController {
         const tag = target.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
 
+        // Hold Space to pan on the next drag; swallow it so the page doesn't scroll.
+        if (e.key === " ") {
+            this.spaceHeld = true;
+            e.preventDefault();
+            return;
+        }
+
         if (e.key === "Escape") {
             if (this.resizeMode) {
                 this.resetResize();
@@ -128,6 +172,13 @@ export class ToolController {
         }
 
         this.activeTool?.onKeyDown?.(e);
+    }
+
+    onKeyUp(e: KeyboardEvent): void {
+        // Releasing Space stops the NEXT drag from panning; a pan already in progress
+        // keeps going until mouse-up (the usual behaviour).
+        if (e.key === " ") this.spaceHeld = false;
+        this.activeTool?.onKeyUp?.(e);
     }
 
     /**

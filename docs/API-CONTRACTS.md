@@ -214,19 +214,24 @@ interface EditorState {
 }
 function createEditorState(): EditorState;
 function clampViewport(vp): void;            // zoom ∈ [0.05, 20]; pan ±10000 WORLD units (scaled by zoom)
+// Pure viewport math (node-tested); each mutates vp then re-clamps.
+function panBy(vp, dx: number, dy: number): void;                 // SCREEN-px pan (zoom-independent)
+function zoomAt(vp, factor: number, cursorX: number, cursorY: number): void; // cursor-anchored zoom
 
 interface Tool {                             // all methods optional
   onMouseDown?(e: MouseEvent, canvasRect?: DOMRect): void;
   onMouseMove?(e: MouseEvent, canvasRect?: DOMRect): void;
   onMouseUp?(e: MouseEvent): void;
   onKeyDown?(e: KeyboardEvent): void;
+  onKeyUp?(e: KeyboardEvent): void;
   onWheel?(e: WheelEvent, canvasRect?: DOMRect): void;
 }
 
 class ToolController {
   constructor(dispatcher: ActionDispatcher, editorState: EditorState, refresh: () => void);
   setTool(tool: Tool): void;
-  // routes pointer/key events; owns corner-resize, Delete/Backspace, Escape
+  // routes pointer/key events; owns viewport PAN (space+drag / middle-mouse), corner-resize,
+  // Delete/Backspace, Escape — each a mode that intercepts before the active tool
 }
 ```
 

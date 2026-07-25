@@ -49,7 +49,7 @@ import { UpdateNodeStyleAction } from "../actions/UpdateNodeStyleAction";
 import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction";
 import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
-import { createEditorState, clampViewport, EditorState } from "../../editor/EditorState";
+import { createEditorState, clampViewport, panBy, zoomAt, EditorState } from "../../editor/EditorState";
 import { renderSVG, RendererState } from "../../renderer/SVGRenderer";
 import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
@@ -202,6 +202,8 @@ export function __apiSurfacePin(): void {
     const es: EditorState = createEditorState();
     expectType<Map<string, Partial<Node["geometry"]>> | null>(es.pendingGeometry);
     expectType<void>(clampViewport(es.viewport));
+    expectType<void>(panBy(es.viewport, 0, 0));
+    expectType<void>(zoomAt(es.viewport, 1.1, 0, 0));
     const rendererState: RendererState = {
         selectedNodeIds: [], hoveredNodeId: null, computed, viewport: es.viewport
     };

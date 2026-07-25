@@ -20,8 +20,9 @@ import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds } from "../geometry/GeometryEngine";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
-import { clampViewport, createEditorState } from "../../editor/EditorState";
+import { clampViewport, createEditorState, panBy, zoomAt } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
+import { ToolController } from "../../editor/tools/ToolController";
 import { Node, NODE_TYPES, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow } from "../document/Node";
 
 function createDocWithRectangle(): ProjectDocument {
@@ -1238,6 +1239,67 @@ describe("Rule-audit follow-ups", () => {
         const vp = { x: 9000, y: 0, zoom: 20 };
         clampViewport(vp);
         expect(vp.x).toBe(9000); // previously clamped to 10000 screen px = world 500
+    });
+
+    test("panBy moves the viewport by a SCREEN delta (zoom-independent), then clamps", () => {
+        const vp = { x: 0, y: 0, zoom: 1 };
+        panBy(vp, 10, 5);
+        expect(vp).toEqual({ x: -10, y: -5, zoom: 1 }); // content follows the +10,+5 pointer drag
+        const vp2 = { x: 0, y: 0, zoom: 4 };
+        panBy(vp2, 10, 5);
+        expect(vp2.x).toBe(-10); // same screen px regardless of zoom
+    });
+
+    // The world point under the cursor must stay fixed across a zoom. screen = z·world − vp,
+    // so world-at-cursor = (cursor + vp) / z; assert it's unchanged after zoomAt.
+    const worldAtCursor = (vp: { x: number; y: number; zoom: number }, c: number, axis: "x" | "y") =>
+        (c + vp[axis]) / vp.zoom;
+
+    test("zoomAt keeps the world point under the cursor fixed", () => {
+        const vp = { x: 0, y: 0, zoom: 1 };
+        const wx = worldAtCursor(vp, 100, "x"), wy = worldAtCursor(vp, 50, "y");
+        zoomAt(vp, 2, 100, 50);
+        expect(vp.zoom).toBe(2);
+        expect(worldAtCursor(vp, 100, "x")).toBeCloseTo(wx, 10);
+        expect(worldAtCursor(vp, 50, "y")).toBeCloseTo(wy, 10);
+    });
+
+    test("zoomAt uses the ACTUAL post-clamp factor so a clamped zoom doesn't drift the anchor", () => {
+        const vp = { x: 0, y: 0, zoom: 19 };
+        const wx = worldAtCursor(vp, 200, "x");
+        zoomAt(vp, 2, 200, 0);       // ×2 would be 38; clamps to MAX_ZOOM 20 (factor 20/19)
+        expect(vp.zoom).toBe(20);
+        expect(worldAtCursor(vp, 200, "x")).toBeCloseTo(wx, 10); // anchor still holds
+    });
+
+    test("ToolController pan mode: space+drag and middle-mouse pan; a plain drag does not", () => {
+        const es = createEditorState();
+        const tc = new ToolController(new ActionDispatcher(createEmptyDocument()), es, () => { });
+        const rect = { left: 0, top: 0 } as DOMRect;
+        const md = (x: number, y: number, button = 0) =>
+            ({ clientX: x, clientY: y, button, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        const key = (k: string) =>
+            ({ key: k, target: { tagName: "BODY", isContentEditable: false }, preventDefault() { } } as unknown as KeyboardEvent);
+
+        // A plain left-drag on empty canvas (no active tool) must NOT pan.
+        tc.onMouseDown(md(0, 0), rect);
+        tc.onMouseMove(md(30, 20), rect);
+        expect(es.viewport).toMatchObject({ x: 0, y: 0 });
+        tc.onMouseUp(md(30, 20));
+
+        // Hold Space → the next drag pans; content follows the pointer, so vp = −delta.
+        tc.onKeyDown(key(" "));
+        tc.onMouseDown(md(0, 0), rect);
+        tc.onMouseMove(md(30, 20), rect);
+        expect(es.viewport).toMatchObject({ x: -30, y: -20 });
+        tc.onMouseUp(md(30, 20));
+        tc.onKeyUp(key(" "));
+
+        // Middle mouse pans without Space (incremental from the current viewport).
+        tc.onMouseDown(md(0, 0, 1), rect);
+        tc.onMouseMove(md(5, 0, 1), rect);
+        expect(es.viewport.x).toBe(-35);
+        tc.onMouseUp(md(5, 0, 1));
     });
 });
 

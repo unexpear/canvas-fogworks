@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects. Suites: `src/core/tests/document.test.ts` (265) + `src/renderer/RenderModel.test.ts` (55) + `src/renderer/emitCanvas.test.ts` (20) = 340 tests.
+> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom. Suites: `src/core/tests/document.test.ts` (269) + `src/renderer/RenderModel.test.ts` (56) + `src/renderer/emitCanvas.test.ts` (20) = 345 tests.
 
 ## Philosophy
 
@@ -20,7 +20,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 340 tests
+npm test                                   # jest (ts-jest), 345 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -31,7 +31,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (340 tests)
+## What is covered (345 tests)
 
 | Area | Representative cases |
 |------|----------------------|
