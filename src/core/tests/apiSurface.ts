@@ -31,7 +31,7 @@ import {
 } from "../document/Serializer";
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
-import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
+import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, GridCell, breakFlexLines, FlexLine, resolveMargin, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
@@ -117,6 +117,7 @@ export function __apiSurfacePin(): void {
     expectType<Map<string, ComputedNode>>(computed.nodes);
     expectType<string | null>(hitTest(computed, 0, 0));
     expectType<string | null>(hitTest(computed, 0, 0, 4)); // optional world-space pick tolerance
+    expectType<string[]>(nodesInRect(computed, { x: 0, y: 0, width: 1, height: 1 })); // marquee (box) select
     expectType<{ x: number; y: number } | null>(toLocal(computed, "id", 0, 0));
     expectType<{ x: number; y: number } | null>(toWorld(computed, "id", 0, 0));
     expectType<Rect | null>(subtreeBounds(doc, computed, "id"));
@@ -201,6 +202,7 @@ export function __apiSurfacePin(): void {
     // --- Editor & renderer --------------------------------------------------
     const es: EditorState = createEditorState();
     expectType<Map<string, Partial<Node["geometry"]>> | null>(es.pendingGeometry);
+    expectType<{ x: number; y: number; width: number; height: number } | null>(es.marqueeRect);
     expectType<void>(clampViewport(es.viewport));
     expectType<void>(panBy(es.viewport, 0, 0));
     expectType<void>(zoomAt(es.viewport, 1.1, 0, 0));

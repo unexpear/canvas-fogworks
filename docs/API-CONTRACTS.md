@@ -42,6 +42,7 @@ function computeGeometry(
   dirty?: ReadonlySet<string>
 ): ComputedState;
 function hitTest(computed: ComputedState, x: number, y: number, tolerance?: number): string | null; // local-space, DOM-free; `tolerance` (world units, default 0) is a pick halo so thin/zero-extent targets (an axis-aligned line) stay selectable
+function nodesInRect(computed: ComputedState, rect: Rect): string[]; // marquee (box) select: ids whose WORLD bounds OVERLAP rect (touch, not containment), in draw order; DOM-free
 function toLocal(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;
 function toWorld(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;
 function subtreeBounds(doc: ReadonlyDocument, s: ComputedState, rootId: string): Rect | null;
@@ -209,6 +210,7 @@ interface EditorState {
   activeTool: string;
   isDragging: boolean;
   previewRect: Rect | null;                 // rectangle-tool draw preview
+  marqueeRect: Rect | null;                 // box-select marquee (WORLD coords), drawn as an overlay
   pendingGeometry: Map<string, Partial<Geometry>> | null; // move/resize preview, fed INTO computeGeometry
   viewport: { x: number; y: number; zoom: number };
 }
@@ -237,6 +239,10 @@ class ToolController {
 
 Tools: `SelectTool`, `MoveTool`, `RectangleTool` (all implement `Tool`). Tools construct
 Actions and dispatch them; they mutate only `EditorState`, never the document.
+`SelectTool` also owns box-select: a drag begun on empty space draws a marquee
+(`EditorState.marqueeRect`) and, on release, selects `nodesInRect` (shift = additive); a
+plain click with no drag deselects. Picking is world-space (`hitTest`/`nodesInRect`), never
+the DOM, so selection works under any renderer backend.
 
 ## Renderer (`renderer/`)
 
@@ -250,6 +256,7 @@ interface RendererState {
   selectedNodeIds: string[];
   hoveredNodeId: string | null;
   previewRect?: Rect | null;
+  marqueeRect?: Rect | null;    // box-select marquee (world coords), drawn as an overlay
   computed: ComputedState;      // world matrices + bounds + draw order (required)
   viewport: { x: number; y: number; zoom: number };
 }
@@ -269,7 +276,7 @@ interface Paint {
   radius: number | null; cursor: string | null; pointerEvents: boolean;
   shadow: Shadow | null; blur: number | null;   // schema-18 effects (world units), resolved from Style
 }
-type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview";
+type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview" | "marquee";
 interface DrawItem {
   shape: Shape; paint: Paint;
   world: Mat2D | null;          // null → the backend emits no transform

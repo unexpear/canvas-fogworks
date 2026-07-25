@@ -17,11 +17,12 @@ import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction"
 import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
-import { computeGeometry, hitTest, toLocal, toWorld, subtreeBounds, selectionBounds } from "../geometry/GeometryEngine";
+import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
-import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
+import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
+import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
 import { Node, NODE_TYPES, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow } from "../document/Node";
 
@@ -764,6 +765,206 @@ describe("hitTest pick tolerance", () => {
         expect(hitTest(cs, 25, 25)).toBe("R");    // inside
         expect(hitTest(cs, 55, 25)).toBeNull();   // 5 units outside, no tolerance → miss
         expect(hitTest(cs, 55, 25, 8)).toBe("R"); // ...but inside an 8-unit halo → hit
+    });
+});
+
+// ─── M4: marquee (box) selection — the pure geometry query ───
+describe("nodesInRect (box select)", () => {
+    // Three 50×50 rects: A at origin, B to the right (x 100), C below (y 100).
+    function boxDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number, y: number) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        mk("A", 0, 0); mk("B", 100, 0); mk("C", 0, 100);
+        doc.rootNodeUuids = ["A", "B", "C"];
+        return doc;
+    }
+
+    test("selects only nodes whose bounds overlap the marquee, in draw order", () => {
+        const cs = computeGeometry(boxDoc());
+        expect(nodesInRect(cs, { x: -10, y: -10, width: 70, height: 70 })).toEqual(["A"]);
+        expect(nodesInRect(cs, { x: -10, y: -10, width: 300, height: 300 })).toEqual(["A", "B", "C"]);
+        expect(nodesInRect(cs, { x: 500, y: 500, width: 10, height: 10 })).toEqual([]);
+        // A band along y∈[100,150] reaches C (below) but not A/B (both entirely above it):
+        // isolates the "node-bottom ≥ marquee-top" term.
+        expect(nodesInRect(cs, { x: -10, y: 100, width: 300, height: 50 })).toEqual(["C"]);
+    });
+
+    test("touch semantics: a marquee fully INSIDE a node still selects it (overlap, not containment)", () => {
+        const cs = computeGeometry(boxDoc());
+        expect(nodesInRect(cs, { x: 10, y: 10, width: 5, height: 5 })).toEqual(["A"]);
+    });
+
+    test("edges are inclusive: a marquee flush against a node's edge selects it, and stops there", () => {
+        const cs = computeGeometry(boxDoc());
+        // x∈[60,100] reaches B's left edge (x=100) exactly and does NOT reach A (right edge x=50).
+        expect(nodesInRect(cs, { x: 60, y: 0, width: 40, height: 10 })).toEqual(["B"]);
+    });
+
+    test("non-finite bounds are skipped, never thrown", () => {
+        const ok: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 } };
+        const bad: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: NaN, y: 0, width: 10, height: 10 } };
+        const cs: ComputedState = { order: ["bad", "ok"], nodes: new Map([["bad", bad], ["ok", ok]]) };
+        expect(nodesInRect(cs, { x: -100, y: -100, width: 1000, height: 1000 })).toEqual(["ok"]);
+    });
+});
+
+// ─── M4: SelectTool marquee gesture (drag empty space to box-select) ───
+describe("SelectTool marquee", () => {
+    const rect = { left: 0, top: 0 } as DOMRect;
+    // `buttons` defaults to 1 (left held) — the marquee abandons on a move with no button held.
+    const md = (x: number, y: number, shift = false, buttons = 1) =>
+        ({ clientX: x, clientY: y, button: 0, buttons, shiftKey: shift, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+    const key = (k: string) => ({ key: k } as unknown as KeyboardEvent);
+
+    function harness() {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        mk("A", 0); mk("B", 100);
+        doc.rootNodeUuids = ["A", "B"];
+        const es = createEditorState();
+        const tool = new SelectTool(new ActionDispatcher(doc), es, () => { });
+        return { es, tool };
+    }
+
+    test("a click on a node selects it (pick resolves in world space, no marquee)", () => {
+        const { es, tool } = harness();
+        tool.onMouseDown(md(10, 10), rect); // inside A (x 0..50)
+        tool.onMouseUp(md(10, 10));
+        expect(es.selectedNodeIds).toEqual(["A"]);
+        expect(es.marqueeRect).toBeNull();
+    });
+
+    test("a drag on empty space selects the nodes in the box and clears the marquee", () => {
+        const { es, tool } = harness();
+        tool.onMouseDown(md(-5, -5), rect);
+        tool.onMouseMove(md(60, 40), rect);
+        expect(es.marqueeRect).toMatchObject({ x: -5, y: -5, width: 65, height: 45 }); // shown mid-drag
+        tool.onMouseUp(md(60, 40));
+        expect(es.selectedNodeIds).toEqual(["A"]); // B starts at x=100, outside the box
+        expect(es.marqueeRect).toBeNull();          // cleared on release
+    });
+
+    test("a plain click (no move fired) on empty space deselects", () => {
+        const { es, tool } = harness();
+        es.selectedNodeIds = ["A"];
+        tool.onMouseDown(md(300, 300), rect);
+        tool.onMouseUp(md(300, 300)); // no onMouseMove → no marquee rect → treated as a click
+        expect(es.selectedNodeIds).toEqual([]);
+    });
+
+    test("shift + marquee adds to the existing selection instead of replacing it", () => {
+        const { es, tool } = harness();
+        es.selectedNodeIds = ["B"];
+        tool.onMouseDown(md(-5, -5, true), rect);
+        tool.onMouseMove(md(60, 40, true), rect);
+        tool.onMouseUp(md(60, 40, true));
+        expect(es.selectedNodeIds).toEqual(["B", "A"]); // B kept, A added
+    });
+
+    test("maps SCREEN pixels to WORLD under a non-identity zoom AND pan", () => {
+        const { es, tool } = harness();
+        es.viewport = { x: 100, y: 50, zoom: 2 };
+        const r = { left: 40, top: 20 } as DOMRect;
+        // world = (clientX − left + vp.x) / zoom. Drag client (−60,−40) → (20,80):
+        // start world (0,−5), end (40,55) — pins every term (drop /zoom, wrong vp sign, or drop left → wrong rect).
+        tool.onMouseDown(md(-60, -40), r);
+        tool.onMouseMove(md(20, 80), r);
+        expect(es.marqueeRect).toMatchObject({ x: 0, y: -5, width: 40, height: 60 });
+        tool.onMouseUp(md(20, 80));
+        expect(es.selectedNodeIds).toEqual(["A"]); // world box [0,40]×[−5,55] overlaps A, not B
+    });
+
+    test("shift-click on empty space with no drag keeps the selection", () => {
+        const { es, tool } = harness();
+        es.selectedNodeIds = ["B"];
+        tool.onMouseDown(md(300, 300, true), rect);
+        tool.onMouseUp(md(300, 300, true)); // no move; shift held → keep, do not deselect
+        expect(es.selectedNodeIds).toEqual(["B"]);
+    });
+
+    test("a reverse-direction (up-left) drag normalizes to the same rect and hits", () => {
+        const { es, tool } = harness();
+        tool.onMouseDown(md(60, 40), rect);
+        tool.onMouseMove(md(-5, -5), rect);
+        expect(es.marqueeRect).toMatchObject({ x: -5, y: -5, width: 65, height: 45 }); // Math.min/abs normalize
+        tool.onMouseUp(md(-5, -5));
+        expect(es.selectedNodeIds).toEqual(["A"]);
+    });
+
+    test("a press just outside a node edge (within the pick halo) selects it, no marquee", () => {
+        const { es, tool } = harness();
+        tool.onMouseDown(md(52, 25), rect); // 2px past A's right edge (x=50), inside the 4px halo
+        tool.onMouseUp(md(52, 25));
+        expect(es.selectedNodeIds).toEqual(["A"]);
+        expect(es.marqueeRect).toBeNull(); // pick won → no marquee started
+    });
+
+    test("shift-marquee re-covering an already-selected node does not duplicate it", () => {
+        const { es, tool } = harness();
+        es.selectedNodeIds = ["A"];
+        tool.onMouseDown(md(-10, -10, true), rect);
+        tool.onMouseMove(md(160, 60, true), rect); // box covers A AND B
+        tool.onMouseUp(md(160, 60, true));
+        expect(es.selectedNodeIds).toEqual(["A", "B"]); // A kept once (Set dedup), B added
+    });
+
+    test("a non-additive marquee replaces the prior selection", () => {
+        const { es, tool } = harness();
+        es.selectedNodeIds = ["B"];
+        tool.onMouseDown(md(-5, -5), rect);
+        tool.onMouseMove(md(60, 40), rect); // box over A only
+        tool.onMouseUp(md(60, 40));
+        expect(es.selectedNodeIds).toEqual(["A"]); // B replaced, not unioned
+    });
+
+    test("a click in a rotated node's AABB-corner margin deselects (threshold guards the pick/AABB gap)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("r", { id: "r", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 100, height: 20 }, style: { fill: "#000", opacity: 1 }, layout: {}, transform: { rotation: Math.PI / 4 } });
+        doc.rootNodeUuids = ["r"];
+        const es = createEditorState();
+        es.selectedNodeIds = ["r"];
+        const tool = new SelectTool(new ActionDispatcher(doc), es, () => { });
+        const b = computeGeometry(doc).nodes.get("r")!.bounds;
+        // The AABB corner sits ~10px from the rotated bar — outside the 4px halo, so pick misses and
+        // a marquee begins; a 1px wobble must NOT let the AABB overlap re-select it (that is the bug
+        // the threshold prevents). pick uses the exact shape; nodesInRect uses the (larger) AABB.
+        tool.onMouseDown(md(b.x, b.y), rect);
+        tool.onMouseMove(md(b.x + 1, b.y + 1), rect);
+        tool.onMouseUp(md(b.x + 1, b.y + 1));       // 1px < threshold → a click, not a marquee
+        expect(es.selectedNodeIds).toEqual([]);      // deselected, not re-selected via the AABB touch
+    });
+
+    test("Escape cancels an in-flight marquee without changing the selection", () => {
+        const { es, tool } = harness();
+        es.selectedNodeIds = ["B"];
+        tool.onMouseDown(md(-5, -5), rect);
+        tool.onMouseMove(md(60, 40), rect);
+        expect(es.marqueeRect).not.toBeNull();
+        tool.onKeyDown(key("Escape"));
+        expect(es.marqueeRect).toBeNull();          // overlay cleared
+        tool.onMouseUp(md(60, 40));                 // the release no longer commits a selection
+        expect(es.selectedNodeIds).toEqual(["B"]);  // selection untouched
+    });
+
+    test("a marquee stranded by a missed mouse-up does not hijack the next click", () => {
+        const { es, tool } = harness();
+        tool.onMouseDown(md(-5, -5), rect);
+        tool.onMouseMove(md(60, 40), rect); // marquee active + rect set; NO mouse-up is delivered
+        tool.onMouseDown(md(120, 10), rect); // now click node B — must start from a clean slate
+        tool.onMouseUp(md(120, 10));
+        expect(es.selectedNodeIds).toEqual(["B"]); // B, not the stale box's contents (A)
+        expect(es.marqueeRect).toBeNull();
+    });
+
+    test("a move with no button held abandons the marquee (dropped mouse-up)", () => {
+        const { es, tool } = harness();
+        tool.onMouseDown(md(-5, -5), rect);
+        tool.onMouseMove(md(60, 40), rect);        // buttons:1 → tracks
+        expect(es.marqueeRect).not.toBeNull();
+        tool.onMouseMove(md(70, 50, false, 0), rect); // buttons:0 → the drag is over
+        expect(es.marqueeRect).toBeNull();
     });
 });
 

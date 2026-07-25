@@ -320,3 +320,26 @@ export function hitTest(state: ComputedState, x: number, y: number, tolerance: n
     }
     return null;
 }
+
+/**
+ * Marquee (box) selection: every node whose WORLD bounds OVERLAP `rect` (world units),
+ * returned in draw order (back to front). Overlap — "touch" semantics — not containment:
+ * a node the marquee merely grazes counts, so you needn't fully enclose a target (the
+ * Illustrator/Sketch default; the Figma-style directional contain-vs-touch is a later
+ * refinement). The test is the rotation-aware AABB (`bounds`), like `hitTest`'s cheap
+ * reject — a fuzzy affordance, so an AABB rather than the exact rotated shape is fine.
+ * Inclusive edges: a rect flush against a node's edge selects it. Non-finite bounds
+ * fail every comparison (NaN), so a degenerate node is silently skipped, never thrown.
+ */
+export function nodesInRect(state: ComputedState, rect: Rect): string[] {
+    const hits: string[] = [];
+    const rx2 = rect.x + rect.width;
+    const ry2 = rect.y + rect.height;
+    for (const id of state.order) {
+        const c = state.nodes.get(id);
+        if (!c) continue;
+        const b = c.bounds;
+        if (b.x <= rx2 && b.x + b.width >= rect.x && b.y <= ry2 && b.y + b.height >= rect.y) hits.push(id);
+    }
+    return hits;
+}

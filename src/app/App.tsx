@@ -166,6 +166,7 @@ export function App() {
                 selectedNodeIds: es.selectedNodeIds,
                 hoveredNodeId: es.hoveredNodeId,
                 previewRect: es.previewRect,
+                marqueeRect: es.marqueeRect,
                 computed,
                 viewport: es.viewport
             };

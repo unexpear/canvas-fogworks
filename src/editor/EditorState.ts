@@ -14,6 +14,12 @@ export interface EditorState {
     /** Ephemeral rectangle-tool drag preview, drawn by the renderer; never persisted. */
     previewRect: { x: number; y: number; width: number; height: number } | null;
     /**
+     * Ephemeral box-select marquee in WORLD coordinates, drawn by the renderer as an
+     * overlay (so it composes with the viewport transform like any world-space item);
+     * never persisted. Non-null only while a marquee drag is in flight.
+     */
+    marqueeRect: { x: number; y: number; width: number; height: number } | null;
+    /**
      * Ephemeral per-node patches to STORED (parent-relative) geometry, used to
      * preview a move/resize drag WITHOUT mutating the document. These are fed
      * into `computeGeometry` as an input and composed like any other
@@ -77,6 +83,7 @@ export function createEditorState(): EditorState {
         activeTool: "select",
         isDragging: false,
         previewRect: null,
+        marqueeRect: null,
         pendingGeometry: null,
         viewport: { x: 0, y: 0, zoom: 1 }
     };

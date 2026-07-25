@@ -1,24 +1,43 @@
 /**
  * @module SelectTool
- * @description Click to select nodes. Click empty space to deselect.
+ * @description Click to select a node; drag empty space to box-select (marquee).
+ * Click empty space (no drag) to deselect. Shift adds to the selection. Escape cancels
+ * an in-flight marquee.
  *
- * Hit-testing runs against computed world geometry, NOT against per-node DOM
- * elements: the Milestone 3 Canvas/WebGL renderer has no `data-node-id` to read,
- * so selection must not depend on the SVG backend.
+ * Hit-testing and marquee both run against computed world geometry, NOT against
+ * per-node DOM elements: the Milestone 3 Canvas/WebGL renderer has no `data-node-id`
+ * to read, so selection must not depend on the SVG backend.
  */
 
 import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
-import { computeGeometry, hitTest } from "../../core/geometry/GeometryEngine";
+import { computeGeometry, hitTest, nodesInRect } from "../../core/geometry/GeometryEngine";
 import { EditorState } from "../EditorState";
 import { Tool } from "./ToolController";
 
 /** Pick halo in SCREEN pixels — converted to world (÷ zoom) so thin/hairline targets stay grabbable. */
 const PICK_RADIUS_PX = 4;
+/**
+ * A press→release whose pointer moved less than this (SCREEN px, per axis) is a CLICK, not a
+ * marquee. It is load-bearing for ROTATED/sheared nodes: `pick` rejects against the EXACT
+ * rotated shape, but `nodesInRect` overlaps the world AABB, which bulges past a rotated shape.
+ * A click in that AABB-corner margin gives `pick === null` (so a marquee begins), yet a 1px
+ * hardware wobble would make the resulting ~0-size box overlap the AABB and SELECT the node —
+ * contradicting "click deselects". The threshold collapses that wobble back to a click. (For
+ * axis-aligned nodes AABB == shape, so the halo alone would suffice; rotation is why it stays.)
+ */
+const MARQUEE_THRESHOLD_PX = 3;
 
 export class SelectTool implements Tool {
     private dispatcher: ActionDispatcher;
     private editorState: EditorState;
     private refresh: () => void;
+
+    // Box-select marquee (a drag begun on empty space). Selection is left untouched until
+    // mouse-up, so a plain click deselects and a shift-click keeps the selection.
+    private marqueeActive = false;
+    private marqueeStartWorld = { x: 0, y: 0 };
+    private marqueeStartScreenX = 0;
+    private marqueeStartScreenY = 0;
 
     constructor(dispatcher: ActionDispatcher, editorState: EditorState, refresh: () => void) {
         this.dispatcher = dispatcher;
@@ -27,8 +46,11 @@ export class SelectTool implements Tool {
     }
 
     onMouseDown(e: MouseEvent, canvasRect?: DOMRect): void {
-        const nodeId = this.pick(e, canvasRect);
+        // A new gesture supersedes any marquee stranded by a missed mouse-up (release off-window,
+        // alt-tab) — clear it first so stale state can never hijack this gesture's selection.
+        this.resetMarquee();
 
+        const nodeId = this.pick(e, canvasRect);
         if (nodeId) {
             if (e.shiftKey) {
                 const idx = this.editorState.selectedNodeIds.indexOf(nodeId);
@@ -40,24 +62,107 @@ export class SelectTool implements Tool {
             } else {
                 this.editorState.selectedNodeIds = [nodeId];
             }
-        } else {
+            this.refresh();
+            return;
+        }
+
+        // Empty space: begin a marquee, finalized on mouse-up.
+        const w = this.screenToWorld(e, canvasRect);
+        if (!w) {
+            // No canvas frame → can't marquee; fall back to the plain deselect.
+            this.editorState.selectedNodeIds = [];
+            this.refresh();
+            return;
+        }
+        this.marqueeActive = true;
+        this.marqueeStartWorld = w;
+        this.marqueeStartScreenX = e.clientX;
+        this.marqueeStartScreenY = e.clientY;
+    }
+
+    onMouseMove(e: MouseEvent, canvasRect?: DOMRect): void {
+        if (!this.marqueeActive) return;
+        // No button held → a mouse-up was missed (released off-window): abandon the drag rather
+        // than tracking a phantom box and later committing a stale selection.
+        if ((e.buttons & 1) === 0) {
+            this.resetMarquee();
+            this.refresh();
+            return;
+        }
+        const w = this.screenToWorld(e, canvasRect);
+        if (!w) return;
+        this.editorState.marqueeRect = {
+            x: Math.min(this.marqueeStartWorld.x, w.x),
+            y: Math.min(this.marqueeStartWorld.y, w.y),
+            width: Math.abs(w.x - this.marqueeStartWorld.x),
+            height: Math.abs(w.y - this.marqueeStartWorld.y)
+        };
+        this.refresh();
+    }
+
+    onMouseUp(e: MouseEvent): void {
+        if (!this.marqueeActive) return;
+        this.marqueeActive = false;
+        const rect = this.editorState.marqueeRect;
+        this.editorState.marqueeRect = null;
+        const additive = e.shiftKey;
+
+        // Moved far enough to be a deliberate box (see MARQUEE_THRESHOLD_PX) → select; else a click.
+        const dragged =
+            Math.abs(e.clientX - this.marqueeStartScreenX) > MARQUEE_THRESHOLD_PX ||
+            Math.abs(e.clientY - this.marqueeStartScreenY) > MARQUEE_THRESHOLD_PX;
+
+        if (dragged && rect) {
+            const computed = computeGeometry(this.dispatcher.getDocument(), this.editorState.pendingGeometry);
+            const hits = nodesInRect(computed, rect);
+            if (additive) {
+                const set = new Set(this.editorState.selectedNodeIds);
+                hits.forEach(id => set.add(id));
+                this.editorState.selectedNodeIds = [...set];
+            } else {
+                this.editorState.selectedNodeIds = hits;
+            }
+        } else if (!additive) {
+            // A plain click on empty space deselects; a shift-click keeps the selection.
             this.editorState.selectedNodeIds = [];
         }
         this.refresh();
     }
 
+    onKeyDown(e: KeyboardEvent): void {
+        // Escape cancels an in-flight marquee (parity with move/resize/draw); selection is left as-is.
+        if (e.key === "Escape" && this.marqueeActive) {
+            this.resetMarquee();
+            this.refresh();
+        }
+    }
+
+    /** Drop any in-flight marquee (both the gesture flag and the drawn overlay rect). */
+    private resetMarquee(): void {
+        this.marqueeActive = false;
+        this.editorState.marqueeRect = null;
+    }
+
     /** Topmost node under the pointer, resolved in world space. */
     private pick(e: MouseEvent, canvasRect?: DOMRect): string | null {
-        if (!canvasRect) return null;
-        const vp = this.editorState.viewport;
-        const zoom = Math.max(0.01, vp.zoom);
-        const worldX = (e.clientX - canvasRect.left + vp.x) / zoom;
-        const worldY = (e.clientY - canvasRect.top + vp.y) / zoom;
-
+        const w = this.screenToWorld(e, canvasRect);
+        if (!w) return null;
+        const zoom = Math.max(0.01, this.editorState.viewport.zoom);
         const computed = computeGeometry(
             this.dispatcher.getDocument(),
             this.editorState.pendingGeometry
         );
-        return hitTest(computed, worldX, worldY, PICK_RADIUS_PX / zoom);
+        return hitTest(computed, w.x, w.y, PICK_RADIUS_PX / zoom);
+    }
+
+    /** Canvas-relative screen pixels → world coordinates (`screen = z·world − vp`). */
+    private screenToWorld(e: MouseEvent, canvasRect?: DOMRect): { x: number; y: number } | null {
+        if (!canvasRect) return null;
+        const vp = this.editorState.viewport;
+        const zoom = Math.max(0.01, vp.zoom);
+        return {
+            x: (e.clientX - canvasRect.left + vp.x) / zoom,
+            y: (e.clientY - canvasRect.top + vp.y) / zoom
+        };
     }
 }

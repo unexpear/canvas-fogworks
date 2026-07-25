@@ -186,6 +186,22 @@ describe("buildRenderModel — overlay", () => {
         const zero = buildRenderModel(SIZE, doc, stateFor(doc, { previewRect: { x: 0, y: 0, width: 0, height: 30 } }));
         expect(zero.overlay.filter(i => i.role === "preview").length).toBe(0);
     });
+
+    test("box-select marquee renders a world-space overlay rect when present, and nothing when absent", () => {
+        const doc = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1 } });
+        const shown = buildRenderModel(SIZE, doc, stateFor(doc, { marqueeRect: { x: 3, y: 4, width: 20, height: 10 } }));
+        const marquees = shown.overlay.filter(i => i.role === "marquee");
+        expect(marquees.length).toBe(1);
+        expect(marquees[0].shape).toEqual({ kind: "rect", x: 3, y: 4, width: 20, height: 10 });
+        expect(marquees[0].paint).toMatchObject({ fill: "#00bfff22", stroke: "#00bfff", strokeDash: null, pointerEvents: false });
+        expect(marquees[0].world).toBeNull(); // world-space (drawn under the viewport transform)
+
+        const count = (over: Partial<RendererState>) =>
+            buildRenderModel(SIZE, doc, stateFor(doc, over)).overlay.filter(i => i.role === "marquee").length;
+        expect(count({})).toBe(0);                                                    // absent
+        expect(count({ marqueeRect: { x: 0, y: 0, width: 0, height: 20 } })).toBe(0);  // zero-area → dropped (like preview)
+        expect(count({ marqueeRect: { x: NaN, y: 0, width: 10, height: 10 } })).toBe(0); // non-finite → dropped, never NaN attrs
+    });
 });
 
 // ─── Grid ────────────────────────────────────────────────────────────────────

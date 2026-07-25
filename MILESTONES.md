@@ -23,7 +23,7 @@ M2  Layout Engine            ✅   flex(grow/shrink/wrap/align-content) + hug + 
       │
 M3  Renderer                 ✅   SVG renderer (shapes + culling + effects) + Canvas backend (tested); canvas wiring → M4
       │
-M4  Editor                   🚧*  pan/zoom landed; box-select, DOM-free handles+rotate, canvas wiring, guides remain
+M4  Editor                   🚧*  pan/zoom + box-select landed; DOM-free handles+rotate, canvas wiring, guides remain
       │
 M5  Variables & Tokens       ⬜
 M6  Components                ⬜
@@ -45,9 +45,10 @@ editor tools, and the Electron shell already exists (originally built as "Phase 
 so functionality sits in M3/M4 territory while those milestones are still open.
 As of M1 it **does** consume `ComputedState` — the renderer reads world matrices and
 never composes coordinates itself — so M3/M4 are now "formalize + complete", not
-"re-derive". What is genuinely missing is scope, not plumbing: M3 lacks ellipses,
-lines, paths and any Canvas/WebGL backend; M4 lacks **panning**, box-select, rotate
-(now representable, but with no editor affordance), snapping and guides.
+"re-derive". What was genuinely missing was scope, not plumbing: M3's scope has since landed
+(ellipses, lines, paths, the Canvas backend); M4 has **pan/zoom** and **box-select**, and
+still lacks a **rotate** editor affordance (now representable), DOM-free handle picking,
+canvas wiring, snapping and guides.
 
 ---
 
@@ -507,6 +508,17 @@ now that handles are DOM-free); **(5) snapping / alignment guides**.
 math in `EditorState` (node-tested like `clampViewport`); the wheel now zooms **cursor-anchored** (the world
 point under the pointer stays fixed), and **space+drag / middle-mouse drag** pans (a `ToolController` mode
 intercepting before the active tool, like resize). Screen-space pan (zoom-independent); both re-clamp.
+
+**Landed (slice 2 — box-select):** a pure `nodesInRect(computed, rect)` query (world-bounds OVERLAP —
+"touch", not containment — in draw order; DOM-free like `hitTest`) plus a `SelectTool` **marquee**: a drag
+begun on empty space draws `EditorState.marqueeRect` (a world-space overlay, `role: "marquee"`) and selects
+the touched nodes on release (**shift = additive**, `Set`-deduped); a click below a small pixel **threshold**
+deselects, and **Escape** cancels an in-flight marquee. The threshold is load-bearing for ROTATED nodes:
+`pick` rejects against the exact rotated shape but `nodesInRect` overlaps the (larger) world AABB, so without
+it a 1px wobble in a rotated node's AABB-corner margin would select instead of deselect. A missed mouse-up
+(release off-window) can't strand the gesture — a new mouse-down resets it and a move with no button held
+abandons it. Picking never reads the DOM, so it composes with a future Canvas backend. *(All 14 findings from
+an adversarial multi-agent review were addressed; the removed-then-restored threshold was the key catch.)*
 
 ---
 

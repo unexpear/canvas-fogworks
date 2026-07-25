@@ -123,7 +123,7 @@ export function effectFilterId(shadow: Shadow | null, blur: number | null): stri
     return id;
 }
 
-export type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview";
+export type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview" | "marquee";
 
 /** One resolved primitive: a shape, its paint, its world placement, and hit-test tags. */
 export interface DrawItem {
@@ -428,6 +428,23 @@ function buildOverlay(state: RendererState, z: number): DrawItem[] {
             world: null,
             nodeId: null,
             role: "preview"
+        });
+    }
+
+    // Box-select marquee (world-space; drawn once the drag has positive extent). Dropping
+    // zero-area rects matches the preview emitter and keeps a degenerate box (e.g. a strict
+    // horizontal drag → height 0, which canvas would stroke as a line) out of the dumb backend.
+    const marquee = state.marqueeRect;
+    if (marquee && isFiniteRect(marquee) && marquee.width > 0 && marquee.height > 0) {
+        items.push({
+            shape: { kind: "rect", x: marquee.x, y: marquee.y, width: marquee.width, height: marquee.height },
+            paint: {
+                fill: "#00bfff22", opacity: null, stroke: "#00bfff", strokeWidth: 1 / z,
+                strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
+            },
+            world: null,
+            nodeId: null,
+            role: "marquee"
         });
     }
 

@@ -14,6 +14,8 @@ export interface RendererState {
     selectedNodeIds: string[];
     hoveredNodeId: string | null;
     previewRect?: Rect | null;
+    /** Box-select marquee in world coordinates (drawn as an overlay); absent when not dragging. */
+    marqueeRect?: Rect | null;
     /**
      * Resolved world geometry + draw order. The renderer reads ONLY this for
      * positions — it never composes coordinates itself.
