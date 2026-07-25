@@ -21,7 +21,7 @@ M1  Computed State           ✅   stored intent -> calculated results
       │
 M2  Layout Engine            ✅   flex(grow/shrink/wrap/align-content) + hug + grid(rows/auto/hug/spans/flow/pins) + constraints + absolute; minmax/fit-content deferred
       │
-M3  Renderer                 🚧*  pure render-model extracted; shapes/effects/canvas remain
+M3  Renderer                 🚧*  pure render-model + viewport culling; shapes/effects/canvas remain
       │
 M4  Editor                   ⬜*  viewport, selection, manipulation, guides
       │
@@ -409,9 +409,18 @@ container, threads the previous list so the grid cache survives), so `App.tsx` i
 unchanged. See [ARCHITECTURE.md](docs/ARCHITECTURE.md) §1 and
 [API-CONTRACTS.md](docs/API-CONTRACTS.md) § Renderer.
 
+**Landed (slice 2 — viewport culling):** `buildRenderModel` now drops any content item
+whose world AABB (`c.bounds`) does not inclusively intersect the viewport's world-space
+visible rect, so a large document only pays for what is on screen. Content-only — overlay
+and grid are not culled (each bounds its own visible range). This is the first M3 slice
+that is deliberately **not** byte-identical to the prior renderer (off-screen content
+leaves the DOM); safety was pre-verified (hit-testing is DOM-free; the tool layer reads
+`data-node-id`/`data-resize-handle` only on overlay handles; the flat per-node list means
+an off-screen parent never drops an on-screen child), the cull rect shares the exact
+screen→world definition `emitSVG` uses, and every guard is mutation-tested.
+
 **Remaining:** shape kinds `ellipse` / `line` / `path` (each blocked on a `NODE_TYPES` +
-schema bump in the document layer, then trivial on the render-model side); viewport
-**culling** (a pure predicate in the builder, benefits both backends); **effects**
+schema bump in the document layer, then trivial on the render-model side); **effects**
 (shadow/blur — plumbing lives in the emitters); and the **Canvas/WebGL backend** (a
 second emitter over the same `DisplayList` — its text wrapping/metrics and rasterization
 parity are genuine milestone weight and may split into their own milestone).

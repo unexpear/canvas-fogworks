@@ -101,7 +101,10 @@ Document → GeometryEngine ─(runs)→ LayoutEngine → ComputedState → Rend
 **world AABB**, in scene-graph draw order. The renderer reads *only* that for
 positions and emits the matrix directly; hit-testing tests in each node's local space
 through the inverse matrix, so a rotated node hits against its true shape rather than
-its bounding box, and never touches the DOM.
+its bounding box, and never touches the DOM. The renderer's `buildRenderModel` also
+uses that world AABB to **cull** off-screen content — dropping any node whose bounds
+don't intersect the viewport's world rect — so a large document only pays for what is
+on screen (content only; overlay and grid are not culled).
 
 **Layout runs *inside* that pass (M2).** When `computeGeometry` visits a node carrying
 `layout.container`, it calls `LayoutEngine` to position that node's children — so a

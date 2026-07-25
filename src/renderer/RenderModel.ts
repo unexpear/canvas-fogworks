@@ -93,9 +93,21 @@ export interface DisplayList {
     overlay: DrawItem[];
 }
 
-function isFiniteRect(r: { x: number; y: number; width: number; height: number }): boolean {
+type Box = { x: number; y: number; width: number; height: number };
+
+function isFiniteRect(r: Box): boolean {
     return Number.isFinite(r.x) && Number.isFinite(r.y) &&
         Number.isFinite(r.width) && Number.isFinite(r.height);
+}
+
+/**
+ * Inclusive AABB overlap. Edges that merely touch (zero-area overlap) count as
+ * intersecting, so a node straddling the viewport boundary — or a zero-height
+ * hairline whose box sits exactly on it — is kept, not culled.
+ */
+function rectsIntersect(a: Box, b: Box): boolean {
+    return a.x <= b.x + b.width && a.x + a.width >= b.x &&
+        a.y <= b.y + b.height && a.y + a.height >= b.y;
 }
 
 function lineItem(x1: number, y1: number, x2: number, y2: number, stroke: string, strokeWidth: number): DrawItem {
@@ -150,7 +162,13 @@ function buildGrid(
     return { sig, lines, unchanged: false };
 }
 
-function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number): DrawItem[] {
+/**
+ * `visible` is the world-space visible rect (see `buildRenderModel`); content whose
+ * world bounds don't overlap it is culled, so a large document only pays for what is
+ * on screen. This is why content depends on `viewport`/`size`, not just `z`: the
+ * "one item per in-flow node" shape now holds only for the on-screen subset.
+ */
+function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number, visible: Box): DrawItem[] {
     const items: DrawItem[] = [];
 
     // Paint in computed draw order (scene-graph order), using resolved world rects.
@@ -159,6 +177,13 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number)
         const c = computed.nodes.get(id);
         if (!node || !c) return;
         if (!isFiniteRect(c.bounds)) return;
+        // Viewport culling. Each node is tested against its OWN world AABB (`c.bounds`),
+        // and content is a flat, per-node list, so an off-screen parent never drops an
+        // on-screen child. Inclusive-edge (see rectsIntersect) keeps straddling/touching
+        // nodes; a node whose box is strictly outside by less than a stroke half-width
+        // (~0.5 screen px) can have its stroke sliver clipped — an accepted sub-pixel
+        // deferral a margin would close.
+        if (!rectsIntersect(c.bounds, visible)) return;
         const sty = node.style;
         // The world matrix carries position/rotation/scale, so the shape itself is
         // emitted at the local origin and placed by the transform.
@@ -298,10 +323,21 @@ export function buildRenderModel(
     prev?: DisplayList | null
 ): DisplayList {
     const z = Math.max(0.01, state.viewport.zoom);
+    // The world-space region emitSVG's `translate(-x,-y) scale(z)` maps onto screen
+    // [0,W]x[0,H] — the SAME definition (and ||800/||600 fallback) the grid uses, so the
+    // cull rect and the actual transform cannot disagree. Culls content only; overlay and
+    // grid bound their own visible range.
+    const vp = state.viewport;
+    const visible: Box = {
+        x: vp.x / z,
+        y: vp.y / z,
+        width: (size.width || 800) / z,
+        height: (size.height || 600) / z
+    };
     return {
         viewport: state.viewport,
         grid: buildGrid(size, state.viewport, z, prev),
-        content: buildContent(doc, state.computed, z),
+        content: buildContent(doc, state.computed, z, visible),
         overlay: buildOverlay(state, z)
     };
 }

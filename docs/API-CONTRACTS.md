@@ -285,6 +285,11 @@ function renderSVG(container: HTMLElement, doc: ReadonlyDocument, state: Rendere
   `DisplayList` (so an unchanged grid reuses its lines by reference), then calls `emitSVG`.
 - `DisplayList` is plain, serializable data — asserted directly in unit tests; `emitSVG`
   is the untested DOM boundary, covered by the browser smoke tests.
+- **Viewport culling:** `content` holds only nodes whose world bounds intersect the visible
+  world rect `{x: vp.x/z, y: vp.y/z, w: (size.w||800)/z, h: (size.h||600)/z}` (the same
+  screen→world region the viewport transform maps, inclusive edges). So `content` depends
+  on `viewport`/`size`, not just draw order — the "one item per in-flow node" shape holds
+  only for the on-screen subset. Content-only: `overlay` and `grid` are never culled.
 - DOM structure `svg > g#viewport-transform > { g#grid, g#content, g#overlay }`, reused
   across calls (not torn down). Grid is capped at 300 lines/axis and skipped when its
   `sig` is unchanged.

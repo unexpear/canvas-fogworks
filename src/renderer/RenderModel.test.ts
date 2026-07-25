@@ -238,7 +238,7 @@ describe("buildRenderModel — invariants", () => {
         return doc;
     }
 
-    test("exactly one content item per drawable id, in computed order, world by reference", () => {
+    test("exactly one content item per drawable id (all on-screen), in computed order, world by reference", () => {
         const doc = docTree();
         const state = stateFor(doc);
         const model = buildRenderModel(SIZE, doc, state);
@@ -255,5 +255,106 @@ describe("buildRenderModel — invariants", () => {
         const a = buildRenderModel(SIZE, doc, state);
         const b = buildRenderModel(SIZE, doc, state);
         expect(b).toEqual(a);
+    });
+});
+
+// ─── Viewport culling ────────────────────────────────────────────────────────
+// The visible world rect at SIZE {800,600} is {x: vp.x/z, y: vp.y/z, w: 800/z, h: 600/z}.
+// Content whose world bounds don't (inclusively) overlap it is dropped. Boundaries are
+// pinned EXACTLY (800/0/600, +1 outside); the /z factor is only exercised by the zoom
+// and pan+zoom cases; the width/height swap only by the asymmetric bands.
+describe("buildRenderModel — culling", () => {
+    /** Root rectangles: for a root with no transform, world bounds === its geometry. */
+    function rects(specs: { id: string; x: number; y: number; width: number; height: number }[]): ProjectDocument {
+        const doc = createEmptyDocument();
+        for (const s of specs) {
+            doc.nodes.set(s.id, { id: s.id, type: "core.rectangle", parent: null, children: [], geometry: { x: s.x, y: s.y, width: s.width, height: s.height }, style: { fill: "#fff", opacity: 1 }, layout: {} });
+        }
+        doc.rootNodeUuids = specs.map(s => s.id);
+        return doc;
+    }
+    const one = (x: number, y: number, width = 50, height = 50) => rects([{ id: "n1", x, y, width, height }]);
+    function contentIds(doc: ProjectDocument, over?: Partial<RendererState>): string[] {
+        return buildRenderModel(SIZE, doc, stateFor(doc, over)).content.map(i => i.nodeId!);
+    }
+
+    test("T2 fully inside → present", () => expect(contentIds(one(100, 100))).toEqual(["n1"]));
+    test("T3 fully outside on x → absent", () => expect(contentIds(one(1000, 100))).toEqual([]));
+    test("T4 fully outside on y → absent (exercises the y inequalities)", () => expect(contentIds(one(100, 1000))).toEqual([]));
+    test("T5 straddling the right edge → present", () => expect(contentIds(one(780, 100))).toEqual(["n1"]));
+
+    // Exact-boundary pairs pin each comparison to <= / >= (a strict mutant drops the touch case).
+    test("T6 edge-touch right (bounds.x === 800) → present", () => expect(contentIds(one(800, 100))).toEqual(["n1"]));
+    test("T7 just outside right (+1) → absent", () => expect(contentIds(one(801, 100))).toEqual([]));
+    test("T8 edge-touch left (bounds.right === 0) → present", () => expect(contentIds(one(-50, 100))).toEqual(["n1"]));
+    test("T9 just outside left (-1) → absent", () => expect(contentIds(one(-51, 100))).toEqual([]));
+    test("T10 edge-touch bottom (bounds.y === 600) → present", () => expect(contentIds(one(100, 600))).toEqual(["n1"]));
+    test("T11 edge-touch top (bounds.bottom === 0) → present; +1 past → absent", () => {
+        expect(contentIds(one(100, -50))).toEqual(["n1"]);
+        expect(contentIds(one(100, 601))).toEqual([]);
+    });
+
+    // Width/height swap guard: asymmetric bands (600,800] — a near-origin node is blind to the swap.
+    test("T12 x in the (600,800] band → present (swapped width 600 would cull it)", () => expect(contentIds(one(700, 100))).toEqual(["n1"]));
+    test("T13 y in the (600,800] band → absent (swapped height 800 would keep it)", () => expect(contentIds(one(100, 700))).toEqual([]));
+
+    test("T14 zoom-in shrinks the visible world rect (kills dropped /z on extent)", () => {
+        // vp{0,0,2} → visible {0,0,400,300}. Only B (inside) survives.
+        const doc = rects([{ id: "B", x: 100, y: 100, width: 50, height: 50 }, { id: "A", x: 500, y: 100, width: 50, height: 50 }, { id: "C", x: 100, y: 400, width: 50, height: 50 }]);
+        expect(contentIds(doc, { viewport: { x: 0, y: 0, zoom: 2 } })).toEqual(["B"]);
+    });
+    test("T15 zoom-out grows it (kills dropped /z from the other side)", () => {
+        // vp{0,0,0.5} → visible {0,0,1600,1200}; a node at x=1000 (outside un-zoomed 800) is now visible.
+        expect(contentIds(one(1000, 100), { viewport: { x: 0, y: 0, zoom: 0.5 } })).toEqual(["n1"]);
+    });
+    test("T16 pan offsets the visible origin (kills origin→0)", () => {
+        // vp{1000,0,1} → visible [1000,1800]. Only ON survives.
+        const doc = rects([{ id: "OFF", x: 100, y: 100, width: 50, height: 50 }, { id: "ON", x: 1200, y: 100, width: 50, height: 50 }]);
+        expect(contentIds(doc, { viewport: { x: 1000, y: 0, zoom: 1 } })).toEqual(["ON"]);
+    });
+    test("T17 pan+zoom — the ONLY case that catches a dropped /z on the origin", () => {
+        // vp{1000,0,2} → visible origin x=1000/2=500, width=400 → [500,900]. Only mid survives.
+        const doc = rects([{ id: "near", x: 100, y: 100, width: 50, height: 50 }, { id: "mid", x: 600, y: 100, width: 50, height: 50 }, { id: "far", x: 950, y: 100, width: 50, height: 50 }]);
+        expect(contentIds(doc, { viewport: { x: 1000, y: 0, zoom: 2 } })).toEqual(["mid"]);
+    });
+    test("T18 axis-distinct pan (kills an x/y axis swap in the predicate)", () => {
+        // vp{1000,2000,1} → visible x[1000,1800], y[2000,2600].
+        const doc = rects([{ id: "OFF", x: 100, y: 100, width: 50, height: 50 }, { id: "ON", x: 1200, y: 2100, width: 50, height: 50 }]);
+        expect(contentIds(doc, { viewport: { x: 1000, y: 2000, zoom: 1 } })).toEqual(["ON"]);
+    });
+
+    test("T19 overlay is NOT culled for an off-screen SELECTED node (content-only scope)", () => {
+        const doc = one(2000, 2000);
+        const model = buildRenderModel(SIZE, doc, stateFor(doc, { selectedNodeIds: ["n1"] }));
+        expect(model.content.length).toBe(0); // content culled...
+        expect(model.overlay.filter(i => i.role === "outline").length).toBe(1); // ...but overlay kept
+        expect(model.overlay.filter(i => i.role === "handle").length).toBe(4);
+    });
+    test("T20 the grid is NOT culled when all content is off-screen", () => {
+        const doc = one(2000, 2000);
+        const model = buildRenderModel(SIZE, doc, stateFor(doc));
+        expect(model.content.length).toBe(0);
+        expect(model.grid.lines.length).toBe(74);
+    });
+    test("T21 size-0 falls back to 800×600 (else everything would cull)", () => {
+        const doc = one(100, 100);
+        expect(buildRenderModel({ width: 0, height: 0 }, doc, stateFor(doc)).content.map(i => i.nodeId)).toEqual(["n1"]);
+    });
+    test("T22 culling introduces no nondeterminism (mixed on/off scene)", () => {
+        const doc = rects([{ id: "in", x: 100, y: 100, width: 50, height: 50 }, { id: "out", x: 1000, y: 100, width: 50, height: 50 }]);
+        const state = stateFor(doc);
+        expect(buildRenderModel(SIZE, doc, state)).toEqual(buildRenderModel(SIZE, doc, state));
+    });
+
+    test("culling reads the WORLD bounds, not the local origin box", () => {
+        // Hand-built: local box sits at the origin (would look 'inside'), but world bounds are far off-screen.
+        const node = { id: "x", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 40, height: 40 }, style: { fill: "#fff", opacity: 1 }, layout: {} } as unknown as Node;
+        const doc = { nodes: new Map([["x", node]]) } as unknown as ReadonlyDocument;
+        const computed: ComputedState = {
+            order: ["x"],
+            nodes: new Map([["x", { world: { ...IDENTITY, e: 2000, f: 2000 }, local: { x: 0, y: 0, width: 40, height: 40 }, bounds: { x: 2000, y: 2000, width: 40, height: 40 } }]])
+        };
+        const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed, viewport: { x: 0, y: 0, zoom: 1 } };
+        expect(buildRenderModel(SIZE, doc, state).content.length).toBe(0);
     });
 });
