@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 188, in `src/core/tests/document.test.ts`.
+- **Tests:** 255 — `src/core/tests/document.test.ts` (238) + `src/renderer/RenderModel.test.ts` (17).
 
 ## Source map
 
@@ -62,7 +62,8 @@ src/
     ids/        UUID
     tests/      document.test.ts, apiSurface.ts (compile-time API pin)
   editor/       EditorState + tools/ (Select/Move/Rectangle, ToolController)
-  renderer/     SVGRenderer                            (read-only)
+  renderer/     RenderModel (pure display list) + emitSVG   (read-only)
+                backend + SVGRenderer entry point
   app/          App.tsx + React bootstrap
   electron/     main.js (main process), preload.js (contextBridge)
 scripts/build.js   three esbuild builds -> dist/{app,electron}
