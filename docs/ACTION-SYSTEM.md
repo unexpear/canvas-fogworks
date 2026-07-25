@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions -->
 
-> 🔒 Frozen contract · schema v16 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Code in `src/core/actions/`.
+> 🔒 Frozen contract · schema v17 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Code in `src/core/actions/`.
 
 The action system is the engine's spine: it is **the only way the document changes**,
 and it is what makes undo/redo, and later AI, plugins, and collaboration, safe.

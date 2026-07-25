@@ -15,7 +15,7 @@
  */
 
 import { toMatrixString, isTranslationOnly } from "../core/geometry/Matrix";
-import { DisplayList, DrawItem, Paint } from "./RenderModel";
+import { DisplayList, DrawItem, Paint, commandsToPathData } from "./RenderModel";
 
 const svgNS = "http://www.w3.org/2000/svg";
 
@@ -86,6 +86,13 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         if (paint.stroke !== null) el.setAttribute("stroke", paint.stroke);
         if (paint.strokeWidth !== null) el.setAttribute("stroke-width", String(paint.strokeWidth));
         if (paint.opacity !== null) el.setAttribute("opacity", String(paint.opacity));
+        applyTail(el, item);
+        group.appendChild(el);
+    } else if (shape.kind === "path") {
+        const el = document.createElementNS(svgNS, "path");
+        const d = commandsToPathData(shape.commands); // pure, unit-tested join
+        if (d) el.setAttribute("d", d);               // omit for an empty path (mirrors image's href)
+        applyRectPaint(el, paint);                    // radius is null → no `rx`
         applyTail(el, item);
         group.appendChild(el);
     } else if (shape.kind === "text") {

@@ -21,7 +21,7 @@ M1  Computed State           ✅   stored intent -> calculated results
       │
 M2  Layout Engine            ✅   flex(grow/shrink/wrap/align-content) + hug + grid(rows/auto/hug/spans/flow/pins) + constraints + absolute; minmax/fit-content deferred
       │
-M3  Renderer                 🚧*  render-model + culling + ellipse/line; path/effects/canvas remain
+M3  Renderer                 🚧*  render-model + culling + shapes (rect/ellipse/line/path/text/image); effects/canvas remain
       │
 M4  Editor                   ⬜*  viewport, selection, manipulation, guides
       │
@@ -426,13 +426,19 @@ so they cannot drift) — rect/ellipse/text/image need a positive box; a `core.l
 DIAGONAL and may collapse ONE axis (a horizontal/vertical line), not both. Render side (trivial as
 predicted): an `ellipse` Shape (fills its box) and a `line` Shape (diagonal, colour = `stroke ?? fill`).
 Every guard mutation-tested (11 mutations, all killed). Deferred: a settable line width (hairline `1/z`
-for now), "/" orientation (via a flip transform), and a **pick tolerance** so a zero-extent (axis-aligned)
-line is selectable — today bbox hit-testing collapses to zero area for such a line (a diagonal line, with
-positive-area bounds, selects fine), so thin-target selection is an M4 editor-layer concern.
+for now) and "/" orientation (via a flip transform). (A follow-up added a `hitTest` **pick tolerance** so
+a zero-extent axis-aligned line is selectable — bbox hit-testing otherwise collapses to zero area.)
 
-**Remaining:** shape kind `path` (blocked on a `NODE_TYPES` + schema bump plus a real
-relative→absolute normalizer — the genuine hard part of M3's SVG half); **effects**
-(shadow/blur — plumbing lives in the emitters); and the **Canvas/WebGL backend** (a
+**Landed (slice 4 — `core.path`, schema 17):** an SVG path node storing **structured absolute**
+commands (`Node.path?: PathCommand[]` = `M`/`L`/`C`/`Q`/`Z`), NOT a raw `d` string — so the render model
+maps them directly (a pure, unit-tested `commandsToPathData` join feeds `emitSVG`; the structured form is
+also canvas-ready) and a shared `pathError` (load path + future edit action) validates them field-by-field
+with a `PATH_MAX_COMMANDS` OOM cap. The genuine SVG-`d` PARSER + relative→absolute/shorthand/arc normalizer
+is **deferred to a future SVG-import feature** (where foreign-`d` ingestion actually belongs), keeping the
+core type clean and fully validatable. `path?` is optional (absent = empty path, renders nothing) so generic
+creation works; geometry stays the type-agnostic box (tight path bounds deferred). Every guard mutation-tested.
+
+**Remaining:** **effects** (shadow/blur — plumbing lives in the emitters); the **Canvas/WebGL backend** (a
 second emitter over the same `DisplayList` — its text wrapping/metrics and rasterization
 parity are genuine milestone weight and may split into their own milestone).
 

@@ -9,7 +9,7 @@
  * it, and both validation paths check membership against it — so adding a type is
  * one edit, and an unknown type cannot slip in through a hand-edited file.
  */
-export const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line"] as const;
+export const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path"] as const;
 export type NodeType = typeof NODE_TYPES[number];
 
 export function isNodeType(value: unknown): value is NodeType {
@@ -27,12 +27,73 @@ export function isNodeType(value: unknown): value is NodeType {
  */
 export function dimensionError(type: NodeType, width: number, height: number): string | null {
     if (!Number.isFinite(width) || !Number.isFinite(height)) return "must have finite dimensions";
-    if (type === "core.line") {
-        if (width < 0 || height < 0) return "line dimensions must be >= 0";
-        if (width === 0 && height === 0) return "line must have a non-zero length on at least one axis";
+    // A `core.line` (box diagonal) and a `core.path` (drawn from its commands, box is just the
+    // declared bbox) may collapse ONE axis — a horizontal/vertical line, or a flat path bbox.
+    if (type === "core.line" || type === "core.path") {
+        if (width < 0 || height < 0) return "dimensions must be >= 0";
+        if (width === 0 && height === 0) return "must have a non-zero extent on at least one axis";
         return null;
     }
     if (width <= 0 || height <= 0) return "must have positive dimensions";
+    return null;
+}
+
+/** Upper bound on a path's command count — the OOM guard on a hand-editable unbounded field,
+ *  mirroring `GRID_MAX_TRACKS`. A path's cost is LINEAR (one `<path>`, a `d` string of
+ *  O(commands) length) unlike a grid's quadratic occupancy, so the cap is looser while still
+ *  rejecting a millions-of-commands file. */
+export const PATH_MAX_COMMANDS = 100_000;
+
+/**
+ * One command of a `core.path`, in ABSOLUTE coordinates in the node's LOCAL box space
+ * (drawn at the local origin, placed by the world matrix like every other shape). Only the
+ * explicit absolute subset SVG rendering reduces to — relative/shorthand (`h`/`v`/`s`/`t`)
+ * and arcs (`A`) are deferred to a future SVG-import normalizer whose output feeds this same
+ * type through `pathError`.
+ */
+export type PathCommand =
+    | { c: "M"; x: number; y: number }
+    | { c: "L"; x: number; y: number }
+    | { c: "C"; x1: number; y1: number; x2: number; y2: number; x: number; y: number }
+    | { c: "Q"; x1: number; y1: number; x: number; y: number }
+    | { c: "Z" };
+
+/** Required finite-numeric fields per command letter (`Z` carries none). */
+const PATH_COMMAND_COORDS: Record<string, readonly string[]> = {
+    M: ["x", "y"], L: ["x", "y"],
+    C: ["x1", "y1", "x2", "y2", "x", "y"], Q: ["x1", "y1", "x", "y"], Z: []
+};
+
+/**
+ * Validity check for `Node.path`, keyed on type and SHARED by the load path (`Integrity`)
+ * and a future path-edit action — the same closure discipline `dimensionError`/`layoutError`
+ * use. An absent path is always fine (a `core.path` with no commands draws nothing, like an
+ * absent `text`/`src`); only a `core.path` may carry path data; a present path must be a
+ * non-empty, bounded array opening with `M`, every command a known letter with finite coords.
+ */
+export function pathError(type: NodeType, path: unknown): string | null {
+    if (path === undefined) return null;
+    if (type !== "core.path") return "only a core.path node may carry path data";
+    if (!Array.isArray(path)) return "path must be an array of commands";
+    if (path.length === 0) return "path must have at least one command";
+    if (path.length > PATH_MAX_COMMANDS) return `path must have at most ${PATH_MAX_COMMANDS} commands`;
+    // Must open with a moveto: without a current point the first draw is undefined.
+    const first = path[0] as { c?: unknown };
+    if (typeof first !== "object" || first === null || first.c !== "M") return 'path must start with an "M" (moveto) command';
+    for (let i = 0; i < path.length; i++) {
+        const cmd = path[i];
+        if (typeof cmd !== "object" || cmd === null || Array.isArray(cmd)) return `path command ${i} must be an object`;
+        const c = (cmd as { c?: unknown }).c;
+        // OWN-property check, not `c in …`: `in` walks the prototype chain, so a command
+        // named "toString"/"constructor"/"__proto__" would read as known and then crash the
+        // for-of on the inherited function (a validator must never throw). Same family as the
+        // grid `"px" in t` throw hazard.
+        if (typeof c !== "string" || !Object.prototype.hasOwnProperty.call(PATH_COMMAND_COORDS, c)) return `path command ${i} has an unknown command "${String(c)}"`;
+        for (const key of PATH_COMMAND_COORDS[c]) {
+            const v = (cmd as Record<string, unknown>)[key];
+            if (typeof v !== "number" || !Number.isFinite(v)) return `path command ${i} (${c}) ${key} must be a finite number`;
+        }
+    }
     return null;
 }
 
@@ -57,6 +118,8 @@ export interface Node {
     states?: Record<string, StateDefinition>;
     text?: string;
     src?: string;
+    /** `core.path` drawing commands (absolute, local-space). Absent = an empty path. See `PathCommand`. */
+    path?: PathCommand[];
     name?: string;
 }
 

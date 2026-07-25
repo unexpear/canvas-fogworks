@@ -16,6 +16,7 @@
  */
 
 import { ReadonlyDocument } from "../core/document/Document";
+import { PathCommand } from "../core/document/Node";
 import { ComputedState } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
 import { RendererState } from "./RendererState";
@@ -36,8 +37,32 @@ export type Shape =
     | { kind: "rect"; x: number; y: number; width: number; height: number }
     | { kind: "ellipse"; cx: number; cy: number; rx: number; ry: number }
     | { kind: "line"; x1: number; y1: number; x2: number; y2: number }
+    | { kind: "path"; commands: readonly PathCommand[] }
     | { kind: "text"; x: number; y: number; width: number; height: number; text: string; fontSize: number }
     | { kind: "image"; x: number; y: number; width: number; height: number; href: string | null };
+
+/** Compile error if a `PathCommand` variant is ever added without a `commandsToPathData` case. */
+function assertNever(x: never): never {
+    throw new Error(`unhandled path command: ${JSON.stringify(x)}`);
+}
+
+/**
+ * Serialize absolute path commands to an SVG `d` string. Pure (like `toMatrixString`) so the
+ * one string-build the backend can't get wrong is unit-tested in the `node` env. Single-space
+ * separated, no leading/trailing space; numbers emitted verbatim; empty list → `""`.
+ */
+export function commandsToPathData(commands: readonly PathCommand[]): string {
+    return commands.map(cmd => {
+        switch (cmd.c) {
+            case "M": return `M ${cmd.x} ${cmd.y}`;
+            case "L": return `L ${cmd.x} ${cmd.y}`;
+            case "C": return `C ${cmd.x1} ${cmd.y1} ${cmd.x2} ${cmd.y2} ${cmd.x} ${cmd.y}`;
+            case "Q": return `Q ${cmd.x1} ${cmd.y1} ${cmd.x} ${cmd.y}`;
+            case "Z": return "Z";
+            default: return assertNever(cmd);
+        }
+    }).join(" ");
+}
 
 /**
  * Resolved appearance. A `null` field is ABSENT (the backend emits no attribute);
@@ -246,6 +271,21 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             paint = {
                 fill: null, opacity: sty.opacity, stroke: null, strokeWidth: null,
                 strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true
+            };
+        } else if (node.type === "core.path") {
+            // Drawn ONLY from its commands (the first shape whose ink is independent of the
+            // box); absent path → empty commands (draws nothing) but still one item, so the
+            // node's box keeps its selection/handles/culling. Filled like a rect (no radius).
+            shape = { kind: "path", commands: node.path ?? [] };
+            paint = {
+                fill: sty.fill,
+                opacity: sty.opacity,
+                stroke: sty.stroke ? sty.stroke : null,
+                strokeWidth: sty.stroke ? 1 / z : null,
+                strokeDash: null,
+                radius: null,
+                cursor: "pointer",
+                pointerEvents: true
             };
         } else {
             // Unknown type: magenta debug rect (no opacity attr — matches the old renderer).

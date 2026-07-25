@@ -238,7 +238,8 @@ export function App() {
         "core.text": "Text",
         "core.image": "Image",
         "core.ellipse": "Ellipse",
-        "core.line": "Line"
+        "core.line": "Line",
+        "core.path": "Path"
     };
 
     return (

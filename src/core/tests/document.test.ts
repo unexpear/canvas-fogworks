@@ -22,7 +22,7 @@ import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, 
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
 import { clampViewport, createEditorState } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
-import { Node, NODE_TYPES, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType } from "../document/Node";
+import { Node, NODE_TYPES, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand } from "../document/Node";
 
 function createDocWithRectangle(): ProjectDocument {
     const doc = createEmptyDocument();
@@ -841,9 +841,9 @@ describe("Document integrity validation", () => {
 
     test("rejects a zero-length line (a degenerate point) and a negative line", () => {
         expect(() => deserializeDocument(envelope({ a: node("a", { type: "core.line", geometry: { x: 0, y: 0, width: 0, height: 0 } }) }, ["a"])))
-            .toThrow("non-zero length");
+            .toThrow("non-zero extent");
         expect(() => deserializeDocument(envelope({ a: node("a", { type: "core.line", geometry: { x: 0, y: 0, width: -5, height: 10 } }) }, ["a"])))
-            .toThrow("line dimensions must be >= 0");
+            .toThrow("dimensions must be >= 0");
     });
 
     test("rejects a dangling parent", () => {
@@ -1645,13 +1645,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "17" that has no 16→17 step: the
+        // Pretending the build has moved to a schema "18" that has no 17→18 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→16), and then REFUSED at "16" — never re-stamped straight to the current
-        // schema. The error naming "16" (not "1") is the proof the chain actually ran.
+        // (1→2→…→17), and then REFUSED at "17" — never re-stamped straight to the current
+        // schema. The error naming "17" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 15→16 landed for ellipse/line.)
-        expect(() => migrateIfNeeded(legacy, "17")).toThrow('Migration not implemented for document schema "16"');
+        // time a real migration is added — here, when 16→17 landed for core.path.)
+        expect(() => migrateIfNeeded(legacy, "18")).toThrow('Migration not implemented for document schema "17"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -3901,5 +3901,74 @@ describe("Node types: ellipse + line (schema 16)", () => {
         expect(computed.nodes.get("a")!.bounds.x).toBe(0);
         expect(computed.nodes.get("b")!.bounds.x).toBe(60);  // 50 + gap 10
         expect(computed.nodes.get("c")!.bounds.x).toBe(120); // 110 + gap 10
+    });
+});
+
+// ─── Schema 17: core.path node type ───
+describe("Node type: path (schema 17)", () => {
+    const M: PathCommand = { c: "M", x: 0, y: 0 };
+    const L: PathCommand = { c: "L", x: 10, y: 10 };
+
+    test("NODE_TYPES includes core.path; isNodeType accepts it", () => {
+        expect(NODE_TYPES).toContain("core.path");
+        expect(isNodeType("core.path")).toBe(true);
+    });
+
+    test("dimensionError treats core.path like a line — a flat bbox may collapse one axis", () => {
+        expect(dimensionError("core.path", 100, 0)).toBeNull();
+        expect(dimensionError("core.path", 0, 0)).not.toBeNull();
+        expect(dimensionError("core.path", -1, 10)).not.toBeNull();
+    });
+
+    test("pathError: an absent path is fine on any node; only core.path may carry one", () => {
+        expect(pathError("core.rectangle", undefined)).toBeNull();
+        expect(pathError("core.path", undefined)).toBeNull();
+        expect(pathError("core.rectangle", [M])).not.toBeNull(); // a rect must not carry path data
+    });
+
+    test("pathError: a present path must be a non-empty array opening with M, with finite coords", () => {
+        expect(pathError("core.path", [M, L, { c: "Z" }])).toBeNull();
+        expect(pathError("core.path", [M, { c: "C", x1: 1, y1: 2, x2: 3, y2: 4, x: 5, y: 6 }, { c: "Q", x1: 1, y1: 2, x: 3, y: 4 }])).toBeNull();
+        expect(pathError("core.path", "M 0 0")).not.toBeNull();            // not an array (rejects rep-A strings)
+        expect(pathError("core.path", [])).toMatch(/at least one command/); // empty (specific message pins the guard)
+        expect(pathError("core.path", [L])).not.toBeNull();                // must start with M
+        expect(pathError("core.path", [M, { c: "A" }])).not.toBeNull();    // unknown command
+        // A prototype-named command must be REJECTED cleanly, never crash the validator
+        // (`in` would walk the prototype chain and then throw on the inherited member).
+        expect(pathError("core.path", [M, { c: "toString", x: 0, y: 0 }])).toMatch(/unknown command/);
+        expect(pathError("core.path", [M, { c: "__proto__" }])).toMatch(/unknown command/);
+        expect(pathError("core.path", [M, { c: "L", x: NaN, y: 0 }])).not.toBeNull();     // non-finite coord
+        expect(pathError("core.path", [M, { c: "L", x: 1 }])).not.toBeNull();             // missing a coord
+    });
+
+    test("pathError: the command count is capped (OOM guard)", () => {
+        const huge = [M, ...Array.from({ length: PATH_MAX_COMMANDS }, () => L)]; // cap + 1
+        expect(huge.length).toBe(PATH_MAX_COMMANDS + 1);
+        expect(pathError("core.path", huge)).not.toBeNull();
+        // Exactly at the cap is fine.
+        expect(pathError("core.path", [M, ...Array.from({ length: PATH_MAX_COMMANDS - 1 }, () => L)])).toBeNull();
+    });
+
+    test("load path: a valid path loads; a bad path and a rect-with-path are rejected", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("p", { id: "p", type: "core.path", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {}, path: [M, L, { c: "Z" }] });
+        doc.rootNodeUuids = ["p"];
+        const round = deserializeDocument(serializeDocument(doc));
+        expect(round.nodes.get("p")!.path).toEqual([M, L, { c: "Z" }]);
+        expect(round.version).toBe(SCHEMA_VERSION);
+
+        const badJson = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["p"], variables: {}, nodes: { p: { id: "p", type: "core.path", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {}, path: [{ c: "L", x: 1, y: 2 }] } } } });
+        expect(() => deserializeDocument(badJson)).toThrow('must start with an "M"');
+
+        const rectWithPath = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["r"], variables: {}, nodes: { r: { id: "r", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {}, path: [M] } } } });
+        expect(() => deserializeDocument(rectWithPath)).toThrow("only a core.path node may carry path data");
+    });
+
+    test("AddNodeAction can create a core.path (empty path — a pen tool populates it later)", () => {
+        const doc = createEmptyDocument();
+        expect(new AddNodeAction(doc, "core.path", 0, 0, 40, 40).validate()).toBe(true);
+        const d = new ActionDispatcher(doc);
+        expect(d.dispatchAction(new AddNodeAction(d.getDocument(), "core.path", 0, 0, 40, 40, "#000", "P")).success).toBe(true);
+        expect(d.getDocument().nodes.get("P")!.path).toBeUndefined(); // empty, renders nothing until edited
     });
 });

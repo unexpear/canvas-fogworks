@@ -10,7 +10,7 @@
  * layer, asserted on plain data in the `node` environment like the layout engine.
  */
 
-import { buildRenderModel, DisplayList, HANDLE_SIZE_PX } from "./RenderModel";
+import { buildRenderModel, DisplayList, HANDLE_SIZE_PX, commandsToPathData } from "./RenderModel";
 import { RendererState } from "./RendererState";
 import { createEmptyDocument, ProjectDocument, ReadonlyDocument } from "../core/document/Document";
 import { Node } from "../core/document/Node";
@@ -406,5 +406,47 @@ describe("buildRenderModel — ellipse + line", () => {
         const doc = docWith({ type: "core.line", geometry: { x: 0, y: 0, width: 120, height: 0 }, style: { fill: "#000", opacity: 1 } });
         const item = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
         expect(item.shape).toEqual({ kind: "line", x1: 0, y1: 0, x2: 120, y2: 0 });
+    });
+});
+
+// ─── Paths ───────────────────────────────────────────────────────────────────
+describe("commandsToPathData (pure d-string join)", () => {
+    test("joins each command verbatim, single-space separated", () => {
+        expect(commandsToPathData([{ c: "M", x: 1, y: 2 }, { c: "L", x: 3, y: 4 }, { c: "Z" }])).toBe("M 1 2 L 3 4 Z");
+    });
+    test("cubic and quadratic emit their control points in order", () => {
+        expect(commandsToPathData([{ c: "M", x: 0, y: 0 }, { c: "C", x1: 1, y1: 2, x2: 3, y2: 4, x: 5, y: 6 }])).toBe("M 0 0 C 1 2 3 4 5 6");
+        expect(commandsToPathData([{ c: "M", x: 0, y: 0 }, { c: "Q", x1: 1, y1: 2, x: 3, y: 4 }])).toBe("M 0 0 Q 1 2 3 4");
+    });
+    test("an empty command list is the empty string", () => {
+        expect(commandsToPathData([])).toBe("");
+    });
+});
+
+describe("buildRenderModel — path", () => {
+    test("path → one path Shape carrying the exact commands, rect-like paint (no rx)", () => {
+        const cmds = [{ c: "M" as const, x: 0, y: 0 }, { c: "L" as const, x: 10, y: 10 }, { c: "Z" as const }];
+        const doc = docWith({ type: "core.path", path: cmds, style: { fill: "#abc", opacity: 0.6, stroke: "#111" } });
+        const item = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
+        expect(item.shape).toEqual({ kind: "path", commands: cmds });
+        expect(item.paint.fill).toBe("#abc");
+        expect(item.paint.opacity).toBe(0.6);
+        expect(item.paint.stroke).toBe("#111");
+        expect(item.paint.strokeWidth).toBe(1);
+        expect(item.paint.radius).toBeNull();
+    });
+
+    test("path without stroke omits it", () => {
+        const doc = docWith({ type: "core.path", path: [{ c: "M", x: 0, y: 0 }], style: { fill: "#fff", opacity: 1 } });
+        const item = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
+        expect(item.paint.stroke).toBeNull();
+        expect(item.paint.strokeWidth).toBeNull();
+    });
+
+    test("an absent path → an empty command list, still ONE content item (box keeps its handles)", () => {
+        const doc = docWith({ type: "core.path", style: { fill: "#fff", opacity: 1 } });
+        const model = buildRenderModel(SIZE, doc, stateFor(doc));
+        expect(model.content.length).toBe(1);
+        expect(model.content[0].shape).toEqual({ kind: "path", commands: [] });
     });
 });

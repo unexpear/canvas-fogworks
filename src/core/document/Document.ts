@@ -113,8 +113,14 @@ export const CURRENT_VERSION: string =
  *         documents contain neither, so `migrate_15_to_16` is a pass-through — but a schema-15
  *         build would reject an ellipse/line as an unknown type on load, and would not know that a
  *         `core.line` may collapse one geometry axis (a horizontal/vertical line).
+ *
+ *   "17" — adds the `core.path` node type + `Node.path` (structured absolute drawing commands,
+ *         `PathCommand[]`). Existing documents contain none, so `migrate_16_to_17` is a pass-through
+ *         — but a schema-16 build would reject a path as an unknown type on load, and would not
+ *         understand the `path` command array. Raw SVG-`d`-string parsing is deferred to a future
+ *         import feature; the stored form is always explicit absolute commands.
  */
-export const SCHEMA_VERSION = "16";
+export const SCHEMA_VERSION = "17";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

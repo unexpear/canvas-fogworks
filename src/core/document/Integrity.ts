@@ -12,7 +12,7 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError, layoutError, dimensionError } from "./Node";
+import { transformError, layoutError, dimensionError, pathError } from "./Node";
 
 function checkNodeRanges(node: ReadonlyNode): void {
     const g = node.geometry;
@@ -47,6 +47,10 @@ function checkNodeRanges(node: ReadonlyNode): void {
     }
     const layoutErr = layoutError(node.layout);
     if (layoutErr) throw new Error(`Invalid document: node "${node.id}" ${layoutErr}.`);
+    // `path` is a hand-editable, unbounded field — validate it (and reject it on a non-path
+    // node) wherever it appears, sharing `pathError` with the edit path.
+    const pathErr = pathError(node.type, node.path);
+    if (pathErr) throw new Error(`Invalid document: node "${node.id}" ${pathErr}.`);
 }
 
 /**

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v16 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v17 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -115,10 +115,12 @@ Types: `ProjectDocument`, `DocumentMetadata`, `SerializedMetadata`, `VariableSto
 `TrackSize`, `Constraints`, `HConstraint`, `VConstraint`, `Margins`, `Transform`,
 `StateDefinition`, `SerializedDocument`, `DeepReadonly`, `ReadonlyDocument`, `ReadonlyNode`,
 `LoadResult`, `SaveResult`, `NODE_TYPES`/`isNodeType`. Shared validators
-`transformError(t)` / `layoutError(l)` / `dimensionError(type, w, h)` return an error string
-or `null`, and are used by BOTH the edit path and the load path — `dimensionError` is per-type
-(rect/ellipse/text/image need a positive box; a `core.line` may collapse one axis, not both).
-See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
+`transformError(t)` / `layoutError(l)` / `dimensionError(type, w, h)` / `pathError(type, path)`
+return an error string or `null`, and are used by BOTH the edit path and the load path.
+`dimensionError` is per-type (rect/ellipse/text/image need a positive box; `core.line`/`core.path`
+may collapse one axis, not both). `pathError` (+ `PathCommand`, `PATH_MAX_COMMANDS`) validates a
+`core.path`'s commands (present ⇒ non-empty, opens with `M`, finite coords, ≤ cap) and rejects
+path data on any other type. See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
 
 ## Actions (`core/actions/`)
 
@@ -251,6 +253,7 @@ type Shape =
   | { kind: "rect"; x; y; width; height }
   | { kind: "ellipse"; cx; cy; rx; ry }
   | { kind: "line"; x1; y1; x2; y2 }
+  | { kind: "path"; commands: readonly PathCommand[] }  // structured (canvas-ready), NOT a `d` string
   | { kind: "text"; x; y; width; height; text: string; fontSize: number }
   | { kind: "image"; x; y; width; height; href: string | null };
 // A null Paint field = absent attribute; pointerEvents:false = pointer-events:none.

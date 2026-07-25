@@ -37,6 +37,9 @@ function isValidNode(n: any): n is Node {
         isPlainObject(n.layout) &&
         (n.layout.container === undefined || isPlainObject(n.layout.container)) &&
         isOptionalString(n.text) && isOptionalString(n.src) && isOptionalString(n.name) &&
+        // Shallow structural gate only (array of command objects); the semantic rules
+        // (first M, finite coords, command cap) live once in `pathError` (Integrity).
+        (n.path === undefined || (Array.isArray(n.path) && n.path.every((c: any) => c !== null && typeof c === "object" && !Array.isArray(c)))) &&
         (n.states === undefined || isPlainObject(n.states)) &&
         (n.transform === undefined || (isPlainObject(n.transform) &&
             (n.transform.rotation === undefined || typeof n.transform.rotation === "number") &&
@@ -217,6 +220,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "13") { raw = migrate_13_to_14(raw); version = "14"; }
     if (version === "14") { raw = migrate_14_to_15(raw); version = "15"; }
     if (version === "15") { raw = migrate_15_to_16(raw); version = "16"; }
+    if (version === "16") { raw = migrate_16_to_17(raw); version = "17"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -310,6 +314,11 @@ function migrate_14_to_15(raw: any): any {
 /** Schema 15 → 16: adds the `core.ellipse` and `core.line` node types. Pass-through by content. */
 function migrate_15_to_16(raw: any): any {
     return { ...raw, version: "16" };
+}
+
+/** Schema 16 → 17: adds the `core.path` node type + `Node.path` commands. Pass-through by content. */
+function migrate_16_to_17(raw: any): any {
+    return { ...raw, version: "17" };
 }
 
 /**

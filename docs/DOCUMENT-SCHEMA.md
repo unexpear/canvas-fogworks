@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v16 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v17 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -34,12 +34,21 @@ interface DocumentMetadata {       // runtime shape (date is a live Date)
 Every object in `nodes` (`Node.ts`). **Nodes are never mutated directly — only via Actions.**
 
 ```ts
-const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line"] as const;
+const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path"] as const;
 type NodeType = typeof NODE_TYPES[number];   // derived — one edit adds a type
 function isNodeType(v: unknown): v is NodeType;  // membership, checked on BOTH paths
-// core.ellipse fills its box (cx=w/2 …). core.line is the box DIAGONAL (0,0)→(w,h),
-// so it may collapse ONE axis (a horizontal/vertical line); see dimensionError.
+// core.ellipse fills its box (cx=w/2 …). core.line is the box DIAGONAL (0,0)→(w,h); core.path
+// is drawn from its `path` commands (the box is just the declared bbox). line + path may collapse
+// ONE box axis (a horizontal/vertical line, or a flat path bbox); see dimensionError.
 function dimensionError(type: NodeType, width: number, height: number): string | null; // shared edit+load
+function pathError(type: NodeType, path: unknown): string | null;                      // shared edit+load
+
+// core.path drawing commands: ABSOLUTE, explicit, local-space. Relative/shorthand/arcs are
+// deferred to a future SVG-import normalizer (whose output feeds this same type through pathError).
+type PathCommand =
+  | { c: "M"; x; y } | { c: "L"; x; y }
+  | { c: "C"; x1; y1; x2; y2; x; y } | { c: "Q"; x1; y1; x; y } | { c: "Z" };
+const PATH_MAX_COMMANDS = 100_000;  // OOM cap on the hand-editable path array (mirrors GRID_MAX_TRACKS)
 
 interface Node {
   id: string;                       // UUID, equals the map key
@@ -52,6 +61,7 @@ interface Node {
   states?: Record<string, StateDefinition>; // reserved for Milestone 7
   text?: string;                    // core.text
   src?: string;                     // core.image
+  path?: PathCommand[];             // core.path (absent = empty path, draws nothing)
   name?: string;                    // display name
 }
 

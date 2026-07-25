@@ -24,7 +24,7 @@ import {
     ProjectDocument, ReadonlyDocument, createEmptyDocument,
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
-import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, Layout } from "../document/Node";
+import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, Layout } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
@@ -51,7 +51,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { createEditorState, clampViewport, EditorState } from "../../editor/EditorState";
 import { renderSVG, RendererState } from "../../renderer/SVGRenderer";
-import { buildRenderModel, DisplayList, DrawItem, Shape, Paint } from "../../renderer/RenderModel";
+import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, commandsToPathData } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
 
 /**
@@ -85,6 +85,11 @@ export function __apiSurfacePin(): void {
     expectType<readonly NodeType[]>(NODE_TYPES);
     expectType<boolean>(isNodeType("core.rectangle"));
     expectType<string | null>(dimensionError("core.line", 1, 0));
+    expectType<string | null>(pathError("core.path", []));
+    expectType<number>(PATH_MAX_COMMANDS);
+    const pathCmd: PathCommand = { c: "M", x: 0, y: 0 };
+    expectType<PathCommand>(pathCmd);
+    expectType<string>(commandsToPathData([{ c: "M", x: 0, y: 0 }, { c: "Z" }]));
 
     // getDocument() is READ-ONLY — asserted in BOTH directions, so the guarantee
     // cannot be silently weakened back to a mutable document.
