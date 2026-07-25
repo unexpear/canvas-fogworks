@@ -48,6 +48,14 @@ function toWorld(s: ComputedState, nodeId: string, x: number, y: number): { x: n
 function subtreeBounds(doc: ReadonlyDocument, s: ComputedState, rootId: string): Rect | null;
 function selectionBounds(s: ComputedState, ids: readonly string[]): Rect | null;
 
+// geometry/SelectionHandles.ts — DOM-free resize-handle geometry, SHARED by the renderer
+// (draws) and the editor (hit-tests) so they cannot drift.
+const HANDLE_SIZE_PX: number;                          // handle square edge, SCREEN px
+type HandleId = "nw" | "ne" | "sw" | "se";
+interface SelectionHandle { nodeId: string; handle: HandleId; cx: number; cy: number; cursor: string } // center in WORLD
+function selectionHandles(s: ComputedState, selectedNodeIds: readonly string[]): SelectionHandle[]; // 4 AABB corners per selected node, in order
+function handleAtPoint(s: ComputedState, selectedNodeIds: readonly string[], x: number, y: number, sizeWorld: number): SelectionHandle | null; // handle under a world point (sizeWorld = HANDLE_SIZE_PX/zoom); back-to-front
+
 // geometry/LayoutEngine.ts — Milestone 2 core: auto-layout containers.
 // Runs INSIDE computeGeometry; a container's children get a computed local rect.
 function layoutChildren(                          // pure flex-stack math (multi-line when wrap)
@@ -219,6 +227,7 @@ function clampViewport(vp): void;            // zoom ∈ [0.05, 20]; pan ±10000
 // Pure viewport math (node-tested); each mutates vp then re-clamps.
 function panBy(vp, dx: number, dy: number): void;                 // SCREEN-px pan (zoom-independent)
 function zoomAt(vp, factor: number, cursorX: number, cursorY: number): void; // cursor-anchored zoom
+function screenToWorld(vp, canvasRect: { left: number; top: number }, clientX: number, clientY: number): { x: number; y: number }; // the one sanctioned screen→world inverse, shared by all tools
 
 interface Tool {                             // all methods optional
   onMouseDown?(e: MouseEvent, canvasRect?: DOMRect): void;
@@ -232,7 +241,8 @@ interface Tool {                             // all methods optional
 class ToolController {
   constructor(dispatcher: ActionDispatcher, editorState: EditorState, refresh: () => void);
   setTool(tool: Tool): void;
-  // routes pointer/key events; owns viewport PAN (space+drag / middle-mouse), corner-resize,
+  // routes pointer/key events; owns viewport PAN (space+drag / middle-mouse), corner-resize
+  // (via DOM-free `handleAtPoint` over the selection, NOT `data-resize-handle`),
   // Delete/Backspace, Escape — each a mode that intercepts before the active tool
 }
 ```

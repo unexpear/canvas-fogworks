@@ -8,10 +8,11 @@
  * layout engine. The backends (`emitSVG`, later `emitCanvas`) are dumb: they
  * transcribe this list to DOM/canvas API calls and do no arithmetic.
  *
- * Renderer invariant (mechanically enforced): this module imports ONLY the
- * `Mat2D` *type* from the geometry layer — never `multiply`/`compose`. Positions
- * come straight from `ComputedState` (`world`/`local`/`bounds`); the model never
- * composes coordinates. It reads shape params from `local.width/height`, places
+ * Renderer invariant (mechanically enforced): this module imports no coordinate-
+ * composition from the geometry layer — only the `Mat2D` *type* and `selectionHandles`
+ * (which itself only reads precomputed `bounds` corners), never `multiply`/`compose`.
+ * Positions come straight from `ComputedState` (`world`/`local`/`bounds`); the model
+ * never composes coordinates. It reads shape params from `local.width/height`, places
  * by the pre-computed `world`, and outlines/handles from world-space `bounds`.
  */
 
@@ -19,12 +20,13 @@ import { ReadonlyDocument } from "../core/document/Document";
 import { PathCommand, Shadow } from "../core/document/Node";
 import { ComputedState } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
+import { selectionHandles, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
 import { RendererState } from "./RendererState";
 
 const GRID_BASE = 20;
 const GRID_MAX_LINES_PER_AXIS = 300; // density cap: coarsen the grid instead of exploding line count
-/** Resize-handle size in SCREEN pixels (converted to world by dividing by zoom). */
-export const HANDLE_SIZE_PX = 8;
+/** Resize-handle size in SCREEN pixels (converted to world by dividing by zoom). Re-exported for backends/tools. */
+export { HANDLE_SIZE_PX };
 
 /** Container pixel size, read from the DOM by the thin `renderSVG` shim and passed in. */
 export interface Size {
@@ -389,30 +391,21 @@ function buildOverlay(state: RendererState, z: number): DrawItem[] {
         }
     });
 
-    // Resize handles (world-space). Clamp in SCREEN pixels, convert to world once.
+    // Resize handles (world-space). Positions come from the SHARED `selectionHandles` (the
+    // same source the editor hit-tests), so drawing and picking cannot drift. The square is
+    // HANDLE_SIZE_PX on screen, converted to world once.
     const HS = HANDLE_SIZE_PX / z;
-    state.selectedNodeIds.forEach(nodeId => {
-        const c = computed.nodes.get(nodeId);
-        if (!c || !isFiniteRect(c.bounds)) return;
-        const geo = c.bounds;
-        const corners: { handle: string; cx: number; cy: number; cursor: string }[] = [
-            { handle: "nw", cx: geo.x, cy: geo.y, cursor: "nwse-resize" },
-            { handle: "ne", cx: geo.x + geo.width, cy: geo.y, cursor: "nesw-resize" },
-            { handle: "sw", cx: geo.x, cy: geo.y + geo.height, cursor: "nesw-resize" },
-            { handle: "se", cx: geo.x + geo.width, cy: geo.y + geo.height, cursor: "nwse-resize" }
-        ];
-        corners.forEach(({ handle, cx, cy, cursor }) => {
-            items.push({
-                shape: { kind: "rect", x: cx - HS / 2, y: cy - HS / 2, width: HS, height: HS },
-                paint: {
-                    fill: "#ffffff", opacity: null, stroke: "#00bfff", strokeWidth: 1 / z,
-                    strokeDash: null, radius: null, cursor, pointerEvents: true, shadow: null, blur: null
-                },
-                world: null,
-                nodeId,
-                handle,
-                role: "handle"
-            });
+    selectionHandles(computed, state.selectedNodeIds).forEach(({ nodeId, handle, cx, cy, cursor }) => {
+        items.push({
+            shape: { kind: "rect", x: cx - HS / 2, y: cy - HS / 2, width: HS, height: HS },
+            paint: {
+                fill: "#ffffff", opacity: null, stroke: "#00bfff", strokeWidth: 1 / z,
+                strokeDash: null, radius: null, cursor, pointerEvents: true, shadow: null, blur: null
+            },
+            world: null,
+            nodeId,
+            handle,
+            role: "handle"
         });
     });
 

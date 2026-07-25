@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer -->
 
-> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -103,8 +103,14 @@ positions and emits the matrix directly; hit-testing tests in each node's local 
 through the inverse matrix, so a rotated node hits against its true shape rather than
 its bounding box, and never touches the DOM. `hitTest` takes an optional world-space
 `tolerance` (a pick halo, `screen-px / zoom`) that inflates the test, so a zero-extent
-target — an axis-aligned `core.line` whose box has zero area — stays selectable. The
-renderer's `buildRenderModel` also
+target — an axis-aligned `core.line` whose box has zero area — stays selectable.
+**All picking is DOM-free** (M4): point selection (`hitTest`), marquee/box-select
+(`nodesInRect` — the nodes whose world AABB overlaps a rect), and resize-handle
+grabbing (`handleAtPoint` over `selectionHandles`, the SAME handle geometry the renderer
+draws, so pick and draw can't drift). Tools convert the pointer once via the shared
+`screenToWorld` (the inverse of `screen = z·world − vp`). Because nothing reads
+`data-node-id`/`data-resize-handle`, the editor works unchanged under the Canvas backend.
+The renderer's `buildRenderModel` also
 uses that world AABB to **cull** off-screen content — dropping any node whose bounds
 don't intersect the viewport's world rect — so a large document only pays for what is
 on screen (content only; overlay and grid are not culled).

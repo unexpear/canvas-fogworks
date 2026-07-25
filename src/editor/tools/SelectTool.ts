@@ -10,8 +10,8 @@
  */
 
 import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
-import { computeGeometry, hitTest, nodesInRect } from "../../core/geometry/GeometryEngine";
-import { EditorState } from "../EditorState";
+import { computeGeometry, hitTest, nodesInRect, ComputedState } from "../../core/geometry/GeometryEngine";
+import { EditorState, screenToWorld } from "../EditorState";
 import { Tool } from "./ToolController";
 
 /** Pick halo in SCREEN pixels — converted to world (÷ zoom) so thin/hairline targets stay grabbable. */
@@ -45,12 +45,12 @@ export class SelectTool implements Tool {
         this.refresh = refresh;
     }
 
-    onMouseDown(e: MouseEvent, canvasRect?: DOMRect): void {
+    onMouseDown(e: MouseEvent, canvasRect?: DOMRect, computed?: ComputedState): void {
         // A new gesture supersedes any marquee stranded by a missed mouse-up (release off-window,
         // alt-tab) — clear it first so stale state can never hijack this gesture's selection.
         this.resetMarquee();
 
-        const nodeId = this.pick(e, canvasRect);
+        const nodeId = this.pick(e, canvasRect, computed);
         if (nodeId) {
             if (e.shiftKey) {
                 const idx = this.editorState.selectedNodeIds.indexOf(nodeId);
@@ -143,26 +143,22 @@ export class SelectTool implements Tool {
         this.editorState.marqueeRect = null;
     }
 
-    /** Topmost node under the pointer, resolved in world space. */
-    private pick(e: MouseEvent, canvasRect?: DOMRect): string | null {
+    /** Topmost node under the pointer, resolved in world space. Reuses `computed` when the
+     * controller already resolved it (a resize hit-test that missed), else computes it. */
+    private pick(e: MouseEvent, canvasRect?: DOMRect, computed?: ComputedState): string | null {
         const w = this.screenToWorld(e, canvasRect);
         if (!w) return null;
         const zoom = Math.max(0.01, this.editorState.viewport.zoom);
-        const computed = computeGeometry(
+        const cs = computed ?? computeGeometry(
             this.dispatcher.getDocument(),
             this.editorState.pendingGeometry
         );
-        return hitTest(computed, w.x, w.y, PICK_RADIUS_PX / zoom);
+        return hitTest(cs, w.x, w.y, PICK_RADIUS_PX / zoom);
     }
 
-    /** Canvas-relative screen pixels → world coordinates (`screen = z·world − vp`). */
+    /** Canvas-relative screen pixels → world coordinates (null when there's no canvas frame). */
     private screenToWorld(e: MouseEvent, canvasRect?: DOMRect): { x: number; y: number } | null {
         if (!canvasRect) return null;
-        const vp = this.editorState.viewport;
-        const zoom = Math.max(0.01, vp.zoom);
-        return {
-            x: (e.clientX - canvasRect.left + vp.x) / zoom,
-            y: (e.clientY - canvasRect.top + vp.y) / zoom
-        };
+        return screenToWorld(this.editorState.viewport, canvasRect, e.clientX, e.clientY);
     }
 }

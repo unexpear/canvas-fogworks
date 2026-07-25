@@ -76,6 +76,24 @@ export function zoomAt(vp: EditorState["viewport"], factor: number, cursorX: num
     clampViewport(vp);
 }
 
+/**
+ * Canvas-relative SCREEN pixels → WORLD coordinates — the exact inverse of the render
+ * transform `screen = z·world − vp`. The single sanctioned conversion, shared by every
+ * tool so the picking math can't drift (zoom is floored like `clampViewport`'s minimum).
+ */
+export function screenToWorld(
+    vp: EditorState["viewport"],
+    canvasRect: { left: number; top: number },
+    clientX: number,
+    clientY: number
+): { x: number; y: number } {
+    const zoom = Math.max(0.01, vp.zoom);
+    return {
+        x: (clientX - canvasRect.left + vp.x) / zoom,
+        y: (clientY - canvasRect.top + vp.y) / zoom
+    };
+}
+
 export function createEditorState(): EditorState {
     return {
         selectedNodeIds: [],

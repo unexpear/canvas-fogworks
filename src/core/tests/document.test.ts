@@ -20,7 +20,8 @@ import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
-import { clampViewport, createEditorState, panBy, zoomAt } from "../../editor/EditorState";
+import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
+import { selectionHandles, handleAtPoint, HANDLE_SIZE_PX } from "../geometry/SelectionHandles";
 import { MoveTool } from "../../editor/tools/MoveTool";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
@@ -965,6 +966,180 @@ describe("SelectTool marquee", () => {
         expect(es.marqueeRect).not.toBeNull();
         tool.onMouseMove(md(70, 50, false, 0), rect); // buttons:0 → the drag is over
         expect(es.marqueeRect).toBeNull();
+    });
+});
+
+// ─── M4: DOM-free selection handles (shared draw/pick geometry) ───
+describe("selectionHandles + handleAtPoint", () => {
+    function handleDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number, y: number) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        mk("A", 0, 0); mk("B", 50, 50); // B's nw corner coincides with A's se corner
+        doc.rootNodeUuids = ["A", "B"];
+        return doc;
+    }
+
+    test("a selected node yields its four AABB-corner handles with matching cursors", () => {
+        const cs = computeGeometry(handleDoc());
+        const hs = selectionHandles(cs, ["A"]);
+        expect(hs.map(h => h.handle)).toEqual(["nw", "ne", "sw", "se"]);
+        expect(hs.map(h => [h.cx, h.cy])).toEqual([[0, 0], [50, 0], [0, 50], [50, 50]]);
+        expect(hs.find(h => h.handle === "ne")!.cursor).toBe("nesw-resize");
+        expect(hs.find(h => h.handle === "se")!.cursor).toBe("nwse-resize");
+        expect(selectionHandles(cs, [])).toEqual([]); // nothing selected → no handles
+        expect(selectionHandles(cs, ["A", "B"]).length).toBe(8); // 4 per node
+    });
+
+    test("selectionHandles skips a node with non-finite bounds, never throws", () => {
+        const ok: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 } };
+        const bad: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: NaN, y: 0, width: 10, height: 10 } };
+        const cs: ComputedState = { order: ["bad", "ok"], nodes: new Map([["bad", bad], ["ok", ok]]) };
+        expect(selectionHandles(cs, ["bad", "ok"]).map(h => h.nodeId)).toEqual(["ok", "ok", "ok", "ok"]);
+    });
+
+    test("handleAtPoint returns the handle under a point, null between them, and scales with size", () => {
+        const cs = computeGeometry(handleDoc());
+        const hs = HANDLE_SIZE_PX; // half = 4 at zoom 1
+        expect(handleAtPoint(cs, ["A"], 0, 0, hs)!.handle).toBe("nw");
+        expect(handleAtPoint(cs, ["A"], 50, 0, hs)!.handle).toBe("ne");
+        expect(handleAtPoint(cs, ["A"], 25, 25, hs)).toBeNull();   // node centre — no corner near
+        // Each point is out of nw's square by ONE bound only (isolates all four comparisons):
+        expect(handleAtPoint(cs, ["A"], 5, 0, hs)).toBeNull();     // +x past the right edge
+        expect(handleAtPoint(cs, ["A"], -5, 0, hs)).toBeNull();    // −x past the left edge
+        expect(handleAtPoint(cs, ["A"], 0, 5, hs)).toBeNull();     // +y past the bottom edge
+        expect(handleAtPoint(cs, ["A"], 0, -5, hs)).toBeNull();    // −y past the top edge
+        expect(handleAtPoint(cs, ["A"], 3, 0, hs)!.handle).toBe("nw"); // 3 < half → hit
+        expect(handleAtPoint(cs, ["A"], 5, 0, 12)!.handle).toBe("nw"); // bigger square → grabbable further
+        expect(handleAtPoint(cs, ["A"], 50, 50, hs)!.handle).toBe("se"); // A only
+    });
+
+    test("handleAtPoint lets a later-drawn handle win an overlap (scan is back to front)", () => {
+        const cs = computeGeometry(handleDoc());
+        // At (50,50): A's se and B's nw coincide; B is selected after A, so B wins.
+        const hit = handleAtPoint(cs, ["A", "B"], 50, 50, HANDLE_SIZE_PX)!;
+        expect([hit.nodeId, hit.handle]).toEqual(["B", "nw"]);
+    });
+});
+
+// ─── M4: screenToWorld — the one sanctioned screen→world inverse ───
+describe("screenToWorld", () => {
+    test("inverts screen = z·world − vp under zoom, pan, and a canvas offset", () => {
+        const vp = { x: 100, y: 50, zoom: 2 };
+        // world = (clientX − left + vp.x)/zoom : (500−40+100)/2 = 280
+        expect(screenToWorld(vp, { left: 40, top: 20 }, 500, 80)).toEqual({ x: 280, y: 55 });
+        // Round-trips the render transform: world → screen (z·w − vp + left) → back.
+        const w = { x: 123.5, y: -47 };
+        const cx = vp.zoom * w.x - vp.x + 40, cy = vp.zoom * w.y - vp.y + 20;
+        expect(screenToWorld(vp, { left: 40, top: 20 }, cx, cy)).toEqual(w);
+    });
+});
+
+// ─── M4: ToolController corner-resize now hit-tests handles WITHOUT the DOM ───
+describe("ToolController DOM-free resize", () => {
+    const rect = { left: 0, top: 0 } as DOMRect;
+    const md = (x: number, y: number) =>
+        ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+
+    function harness(selected: string[]) {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["A"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        es.selectedNodeIds = selected;
+        const tc = new ToolController(dispatcher, es, () => { });
+        return { dispatcher, es, tc };
+    }
+    const geomOf = (d: ActionDispatcher) => d.getDocument().nodes.get("A")!.geometry;
+
+    test("dragging the SE handle resizes the node — the target came from geometry, not the DOM", () => {
+        const { dispatcher, tc } = harness(["A"]);
+        tc.onMouseDown(md(50, 50), rect); // se handle sits at world (50,50); e.target has no attributes
+        tc.onMouseMove(md(70, 70), rect);
+        tc.onMouseUp(md(70, 70));
+        expect(geomOf(dispatcher)).toMatchObject({ x: 0, y: 0, width: 70, height: 70 });
+    });
+
+    test("a press that is NOT on a handle does not start a resize", () => {
+        const { dispatcher, tc } = harness(["A"]);
+        tc.onMouseDown(md(25, 25), rect); // node centre — no handle
+        tc.onMouseMove(md(45, 45), rect);
+        tc.onMouseUp(md(45, 45));
+        expect(geomOf(dispatcher)).toMatchObject({ x: 0, y: 0, width: 50, height: 50 }); // unchanged
+    });
+
+    test("with nothing selected there are no handles, so a corner press does not resize", () => {
+        const { dispatcher, tc } = harness([]);
+        tc.onMouseDown(md(50, 50), rect);
+        tc.onMouseMove(md(70, 70), rect);
+        tc.onMouseUp(md(70, 70));
+        expect(geomOf(dispatcher)).toMatchObject({ x: 0, y: 0, width: 50, height: 50 }); // unchanged
+    });
+
+    test("resize hit-test AND drag math hold under a non-identity zoom + pan + canvas offset", () => {
+        const { dispatcher, es, tc } = harness(["A"]);
+        es.viewport = { x: 100, y: 50, zoom: 2 };
+        const r = { left: 40, top: 20 } as DOMRect;
+        // A's SE world corner (50,50) maps to screen (2·50−100+40, 2·50−50+20) = (40,70).
+        tc.onMouseDown(md(40, 70), r);
+        tc.onMouseMove(md(80, 110), r); // +40 screen px each axis = +20 world at zoom 2
+        tc.onMouseUp(md(80, 110));
+        // Drops /zoom on the move delta → width 90; mishandles pan/offset → misses the handle → 50.
+        expect(geomOf(dispatcher)).toMatchObject({ x: 0, y: 0, width: 70, height: 70 });
+    });
+
+    test("a handle press is intercepted before the active tool; a body press falls through to it", () => {
+        const { tc } = harness(["A"]);
+        const calls: string[] = [];
+        tc.setTool({ onMouseDown: () => calls.push("down") });
+        tc.onMouseDown(md(25, 25), rect); // body centre → not a handle → the tool sees it
+        expect(calls).toEqual(["down"]);
+        tc.onMouseDown(md(50, 50), rect); // SE handle → resize intercepts → the tool is NOT called
+        expect(calls).toEqual(["down"]);  // unchanged
+    });
+
+    test("pan wins over a handle: a corner press with Space held pans instead of resizing", () => {
+        const { dispatcher, es, tc } = harness(["A"]);
+        const key = (k: string) => ({ key: k, target: { tagName: "BODY", isContentEditable: false }, preventDefault() { } } as unknown as KeyboardEvent);
+        tc.onKeyDown(key(" "));
+        tc.onMouseDown(md(50, 50), rect); // on the SE handle, but Space is held → the pan branch wins
+        tc.onMouseMove(md(70, 60), rect);
+        tc.onMouseUp(md(70, 60));
+        expect(geomOf(dispatcher)).toMatchObject({ x: 0, y: 0, width: 50, height: 50 }); // NOT resized
+        expect(es.viewport).toMatchObject({ x: -20, y: -10 }); // panned (screen −delta) instead
+    });
+
+    test("multi-select: the front node's overlapping handle wins, and only that node resizes", () => {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number, y: number) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        mk("A", 0, 0); mk("B", 50, 50); // A's SE corner and B's NW corner both at (50,50)
+        doc.rootNodeUuids = ["A", "B"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        tc.onMouseDown(md(50, 50), rect); // shared corner → B (drawn last) wins its NW
+        tc.onMouseMove(md(60, 60), rect);
+        tc.onMouseUp(md(60, 60));
+        expect(dispatcher.getDocument().nodes.get("B")!.geometry).toMatchObject({ x: 60, y: 60, width: 40, height: 40 });
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry).toMatchObject({ x: 0, y: 0, width: 50, height: 50 }); // untouched
+    });
+
+    test("handles and resize follow a child's WORLD AABB under a translated parent (bounds, not local)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 100, y: 200, width: 200, height: 200 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 10, y: 10, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P"];
+        // C's world bounds are (110,210,50,50); its NW handle is at WORLD (110,210), not local (10,10).
+        expect(selectionHandles(computeGeometry(doc), ["C"])[0]).toMatchObject({ handle: "nw", cx: 110, cy: 210 });
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["C"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        tc.onMouseDown(md(160, 260), rect); // C's SE world corner (110+50, 210+50)
+        tc.onMouseMove(md(180, 280), rect);
+        tc.onMouseUp(md(180, 280));
+        expect(dispatcher.getDocument().nodes.get("C")!.geometry).toMatchObject({ width: 70, height: 70 });
     });
 });
 

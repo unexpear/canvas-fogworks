@@ -10,11 +10,14 @@
  * layer, asserted on plain data in the `node` environment like the layout engine.
  */
 
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import { buildRenderModel, DisplayList, HANDLE_SIZE_PX, commandsToPathData, effectFilterId } from "./RenderModel";
 import { RendererState } from "./RendererState";
 import { createEmptyDocument, ProjectDocument, ReadonlyDocument } from "../core/document/Document";
 import { Node } from "../core/document/Node";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
+import { handleAtPoint } from "../core/geometry/SelectionHandles";
 import { IDENTITY } from "../core/geometry/Matrix";
 
 const SIZE = { width: 800, height: 600 };
@@ -156,6 +159,30 @@ describe("buildRenderModel — overlay", () => {
         expect(handles.every(h => h.nodeId === "n1")).toBe(true);
         expect(handles[1].paint.cursor).toBe("nesw-resize");
         expect(handles[0].paint.cursor).toBe("nwse-resize");
+    });
+
+    test("handles scale with zoom, and the DRAWN square equals the GRABBABLE square", () => {
+        const doc = docWith({ type: "core.rectangle", geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#fff", opacity: 1 } });
+        const z = 2;
+        const model = buildRenderModel(SIZE, doc, stateFor(doc, { selectedNodeIds: ["n1"], viewport: { x: 0, y: 0, zoom: z } }));
+        const nw = model.overlay.find(i => i.role === "handle" && i.handle === "nw")!;
+        const shape = nw.shape as { kind: "rect"; x: number; y: number; width: number; height: number };
+        expect(shape.width).toBe(HANDLE_SIZE_PX / z); // drawn edge scales 1/z (not tested elsewhere — all other handle asserts are z=1)
+        expect(nw.paint.strokeWidth).toBe(1 / z);
+        // Drawn square must equal the grab square: picking with the SAME 1/z size at the drawn
+        // edge hits, one epsilon past misses — so draw and pick can't drift at any zoom.
+        const cs = computeGeometry(doc); // world geometry is zoom-independent; nw centre = (0,0)
+        const cx = shape.x + shape.width / 2, half = shape.width / 2;
+        expect(handleAtPoint(cs, ["n1"], cx + half, 0, HANDLE_SIZE_PX / z)!.handle).toBe("nw");
+        expect(handleAtPoint(cs, ["n1"], cx + half + 0.01, 0, HANDLE_SIZE_PX / z)).toBeNull();
+    });
+
+    test("RenderModel composes no coordinates — its Matrix import is the Mat2D TYPE only (invariant, mechanically checked)", () => {
+        const src = readFileSync(resolve(__dirname, "RenderModel.ts"), "utf8");
+        const m = src.match(/import\s*\{([^}]*)\}\s*from\s*"\.\.\/core\/geometry\/Matrix"/);
+        expect(m).not.toBeNull(); // it must import Mat2D from Matrix…
+        const names = m![1].split(",").map(s => s.trim().replace(/^type\s+/, "")).filter(Boolean);
+        expect(names).toEqual(["Mat2D"]); // …and NOTHING else (no multiply/compose/etc.), or the model could compose coordinates
     });
 
     test("hovered (not selected) → a fainter outline, no handles", () => {

@@ -7,11 +7,15 @@ import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
 import { UpdateNodeGeometryAction } from "../../core/actions/UpdateNodeGeometryAction";
 import { DeleteNodeAction } from "../../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../../core/actions/TransactionAction";
-import { EditorState, panBy } from "../EditorState";
+import { EditorState, panBy, screenToWorld } from "../EditorState";
+import { computeGeometry, ComputedState } from "../../core/geometry/GeometryEngine";
+import { handleAtPoint, HANDLE_SIZE_PX } from "../../core/geometry/SelectionHandles";
 import { selectionRoots } from "../../core/document/SceneGraph";
 
 export interface Tool {
-    onMouseDown?(e: MouseEvent, canvasRect?: DOMRect): void;
+    // `computed` is the geometry the controller already resolved for its handle hit-test;
+    // a tool that needs geometry should reuse it rather than recompute (see SelectTool.pick).
+    onMouseDown?(e: MouseEvent, canvasRect?: DOMRect, computed?: ComputedState): void;
     onMouseMove?(e: MouseEvent, canvasRect?: DOMRect): void;
     onMouseUp?(e: MouseEvent): void;
     onKeyDown?(e: KeyboardEvent): void;
@@ -65,31 +69,39 @@ export class ToolController {
             return;
         }
 
-        const target = e.target as HTMLElement;
-        const nodeId = target.getAttribute("data-node-id");
-        const handle = target.getAttribute("data-resize-handle");
-
-        if (nodeId && handle) {
-            const doc = this.dispatcher.getDocument();
-            const node = doc.nodes.get(nodeId);
-            if (!node) { this.resetResize(); return; }
-
-            this.resizeMode = true;
-            this.resizeNodeId = nodeId;
-            this.resizeHandle = handle;
-            this.resizeStartX = e.clientX;
-            this.resizeStartY = e.clientY;
-            this.resizeOrigin = {
-                x: node.geometry.x,
-                y: node.geometry.y,
-                width: node.geometry.width,
-                height: node.geometry.height
-            };
-            e.preventDefault();
-            return;
+        // Resize: hit-test the selection's corner handles in WORLD space — no DOM read, so it
+        // works under any backend (the Canvas surface has no `data-resize-handle` element).
+        // Geometry is resolved once here and handed to the active tool on fall-through, so a
+        // plain click that misses the handles doesn't recompute it in `SelectTool.pick`.
+        const sel = this.editorState.selectedNodeIds;
+        let computed: ComputedState | undefined;
+        if (sel.length > 0) {
+            const vp = this.editorState.viewport;
+            const zoom = Math.max(0.01, vp.zoom);
+            const w = screenToWorld(vp, canvasRect, e.clientX, e.clientY);
+            computed = computeGeometry(this.dispatcher.getDocument(), this.editorState.pendingGeometry);
+            const hit = handleAtPoint(computed, sel, w.x, w.y, HANDLE_SIZE_PX / zoom);
+            if (hit) {
+                const node = this.dispatcher.getDocument().nodes.get(hit.nodeId);
+                if (node) {
+                    this.resizeMode = true;
+                    this.resizeNodeId = hit.nodeId;
+                    this.resizeHandle = hit.handle;
+                    this.resizeStartX = e.clientX;
+                    this.resizeStartY = e.clientY;
+                    this.resizeOrigin = {
+                        x: node.geometry.x,
+                        y: node.geometry.y,
+                        width: node.geometry.width,
+                        height: node.geometry.height
+                    };
+                    e.preventDefault();
+                    return;
+                }
+            }
         }
 
-        this.activeTool?.onMouseDown?.(e, canvasRect);
+        this.activeTool?.onMouseDown?.(e, canvasRect, computed);
     }
 
     onMouseMove(e: MouseEvent, canvasRect: DOMRect): void {

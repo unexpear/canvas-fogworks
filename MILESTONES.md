@@ -500,9 +500,9 @@ Already present from earlier prototypes: click + shift-multi-select (DOM-free `h
 resize (`ToolController`, but DOM-`data-resize-handle`-based — the canvas-wiring blocker), delete, and
 origin-anchored wheel zoom. Slice plan: **(1) pan/zoom** — pure `panBy`/`zoomAt` viewport math (node-tested)
 + cursor-anchored wheel zoom + space/middle-mouse pan; **(2) box-select** (marquee + hit-in-rect);
-**(3) DOM-free handle hit-testing + rotate** (moves resize-handle picking off the SVG DOM — unblocks canvas
-— and adds the rotate affordance over `UpdateNodeTransformAction`); **(4) canvas wiring** (a backend selector,
-now that handles are DOM-free); **(5) snapping / alignment guides**.
+**(3) DOM-free handle hit-testing [3a DONE] + rotate [3b]** (moves resize-handle picking off the SVG DOM —
+unblocks canvas — and adds the rotate affordance over `UpdateNodeTransformAction`); **(4) canvas wiring** (a
+backend selector, now that handles are DOM-free); **(5) snapping / alignment guides**.
 
 **Landed (slice 1 — pan/zoom):** pure `panBy(vp, dx, dy)` + `zoomAt(vp, factor, cursorX, cursorY)` viewport
 math in `EditorState` (node-tested like `clampViewport`); the wheel now zooms **cursor-anchored** (the world
@@ -519,6 +519,18 @@ it a 1px wobble in a rotated node's AABB-corner margin would select instead of d
 (release off-window) can't strand the gesture — a new mouse-down resets it and a move with no button held
 abandons it. Picking never reads the DOM, so it composes with a future Canvas backend. *(All 14 findings from
 an adversarial multi-agent review were addressed; the removed-then-restored threshold was the key catch.)*
+
+**Landed (slice 3a — DOM-free handle picking, the last DOM dependency in the editor):** resize-handle
+grabbing no longer reads `data-resize-handle`/`data-node-id` off the SVG. A shared pure
+`selectionHandles(computed, selectedNodeIds)` (the four world-AABB corners per selected node) is the SINGLE
+source of truth — the renderer draws from it and the editor hit-tests it via `handleAtPoint(…, sizeWorld)`
+(`HANDLE_SIZE_PX/zoom`, back-to-front), so draw and pick can't drift. `ToolController.onMouseDown` now enters
+resize from that hit-test, which also makes the corner-resize gesture node-testable for the first time (fake
+events, no DOM). Extracted the one screen→world inverse into a shared `screenToWorld(vp, rect, x, y)` used by
+`SelectTool` and `ToolController`. With select (`hitTest`), box-select (`nodesInRect`), and resize
+(`handleAtPoint`) all DOM-free — and hover unwired — **nothing in the editor reads the SVG DOM**, so the
+Canvas backend can now be wired as a live editing surface (slice 4). No schema change. Remaining in slice 3:
+**3b — rotate** (a rotate handle + gesture over `UpdateNodeTransformAction`).
 
 ---
 

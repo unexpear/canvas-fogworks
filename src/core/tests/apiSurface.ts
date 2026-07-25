@@ -49,7 +49,8 @@ import { UpdateNodeStyleAction } from "../actions/UpdateNodeStyleAction";
 import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction";
 import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
-import { createEditorState, clampViewport, panBy, zoomAt, EditorState } from "../../editor/EditorState";
+import { createEditorState, clampViewport, panBy, zoomAt, screenToWorld, EditorState } from "../../editor/EditorState";
+import { selectionHandles, handleAtPoint, SelectionHandle, HANDLE_SIZE_PX } from "../geometry/SelectionHandles";
 import { renderSVG, RendererState } from "../../renderer/SVGRenderer";
 import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
@@ -206,6 +207,10 @@ export function __apiSurfacePin(): void {
     expectType<void>(clampViewport(es.viewport));
     expectType<void>(panBy(es.viewport, 0, 0));
     expectType<void>(zoomAt(es.viewport, 1.1, 0, 0));
+    expectType<{ x: number; y: number }>(screenToWorld(es.viewport, { left: 0, top: 0 }, 0, 0));
+    expectType<number>(HANDLE_SIZE_PX);
+    expectType<SelectionHandle[]>(selectionHandles(computed, ["id"]));
+    expectType<SelectionHandle | null>(handleAtPoint(computed, ["id"], 0, 0, 8));
     const rendererState: RendererState = {
         selectedNodeIds: [], hoveredNodeId: null, computed, viewport: es.viewport
     };
