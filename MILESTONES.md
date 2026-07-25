@@ -23,7 +23,7 @@ M2  Layout Engine            ✅   flex(grow/shrink/wrap/align-content) + hug + 
       │
 M3  Renderer                 ✅   SVG renderer (shapes + culling + effects) + Canvas backend (tested); canvas wiring → M4
       │
-M4  Editor                   🚧*  pan/zoom + box-select + DOM-free handles + rotate landed; canvas wiring, guides remain
+M4  Editor                   🚧*  pan/zoom + box-select + DOM-free handles + rotate + canvas wiring landed; guides remain
       │
 M5  Variables & Tokens       ⬜
 M6  Components                ⬜
@@ -502,7 +502,7 @@ origin-anchored wheel zoom. Slice plan: **(1) pan/zoom** — pure `panBy`/`zoomA
 + cursor-anchored wheel zoom + space/middle-mouse pan; **(2) box-select** (marquee + hit-in-rect);
 **(3) DOM-free handle hit-testing [3a] + rotate [3b] — DONE** (moved resize-handle picking off the SVG DOM —
 unblocks canvas — and added the rotate affordance over `UpdateNodeTransformAction`); **(4) canvas wiring** (a
-backend selector, now that handles are DOM-free); **(5) snapping / alignment guides**.
+backend selector, now that handles are DOM-free) — **DONE**; **(5) snapping / alignment guides**.
 
 **Landed (slice 1 — pan/zoom):** pure `panBy(vp, dx, dy)` + `zoomAt(vp, factor, cursorX, cursorY)` viewport
 math in `EditorState` (node-tested like `clampViewport`); the wheel now zooms **cursor-anchored** (the world
@@ -546,6 +546,26 @@ within the window merge — inherent, acceptable). No schema change (rotation is
 it), group-rotate for multi-select, rotate about a non-centre origin, and the cosmetic knob-slide as a rotating
 node's AABB grows/shrinks (the handles are AABB-based). This closes M4 slice 3; next is **slice 4 — canvas
 wiring**, now unblocked.
+
+**Landed (slice 4 — canvas wiring; the Canvas backend is now a LIVE editing surface):** a `renderScene(container,
+doc, state, backend)` selector dispatches each frame to `renderSVG` or the new `renderCanvas` shim (sizes a
+`<canvas>` for the device pixel ratio — model in CSS px, backing store in device px, DPR handed to `emitCanvas`).
+On a backend switch it clears the container and drops the SVG grid cache (`clearRenderState`, exported for this),
+so the swap is clean; `renderCanvas` also self-heals if it finds a foreign element. A toolbar **Backend: SVG/Canvas**
+toggle drives it (App `backend` state). No schema change, no new unit tests (the shims are DOM plumbing over the
+already-tested `emitCanvas` + `buildRenderModel`) — but **live browser smoke-verified end-to-end**: on the Canvas
+backend the background, grid, a drawn rectangle (correct fill/position), and the selection outline + handles all
+rasterize; drawing a node on canvas re-renders on canvas; toggling SVG↔Canvas swaps the element cleanly and the
+node + selection persist. All picking being DOM-free (slice 3) is what makes the two backends interchangeable.
+An adversarial review (3 confirmed, all low/medium, zero correctness bugs) prompted one fix — App now repaints on
+container-resize / DPR-change (a `ResizeObserver` + a resolution media query), since the fixed-CSS-px canvas
+(unlike the SVG root's `100%`) needs an explicit trigger to keep filling the pane / stay sharp (live-verified:
+`renderCanvas` re-sizes to the new container at dpr 2.4, backing store = CSS × dpr). Deferred: inherent
+canvas-vs-SVG rasterizer gaps from the emitCanvas slice (single-line text, image, group-opacity, per-op shadow),
+plus a NEW canvas gap the review found — **per-region hover cursor** (`paint.cursor`): a resize/rotate handle
+doesn't switch the pointer on canvas (one element, no per-region cursor), though the handles still FUNCTION
+(DOM-free picking); wiring it needs a hover system the editor doesn't have yet. Next is **slice 5 — snapping /
+alignment guides**.
 
 ---
 

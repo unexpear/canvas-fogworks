@@ -33,3 +33,12 @@ export function renderSVG(
     prevByContainer.set(container, model);
     emitSVG(container, model);
 }
+
+/**
+ * Drop the cached previous frame for a container. Call this when the container's DOM is
+ * cleared out from under the renderer (e.g. switching to the Canvas backend), or the grid's
+ * `unchanged` cache would skip re-drawing a grid that no longer exists in the DOM.
+ */
+export function clearRenderState(container: HTMLElement): void {
+    prevByContainer.delete(container);
+}

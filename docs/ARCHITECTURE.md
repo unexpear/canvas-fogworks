@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer -->
 
-> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, live SVG/Canvas backends). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -24,9 +24,11 @@ Everything in the engine — now and in every future milestone — rests on thes
    than teleporting, and `revertToOriginal()` is the explicit way back.
 5. **The renderer is completely independent, and split into a pure model + a backend.**
    `buildRenderModel(size, document, RendererState) → DisplayList` is a pure, DOM-free
-   read (testable in the `node` env like the layout engine); a backend (`emitSVG`)
-   transcribes the display list to the screen. `renderSVG` composes the two. Nothing
-   here holds a reference to the dispatcher, and nothing can write.
+   read (testable in the `node` env like the layout engine); a backend transcribes the
+   display list to the screen — `emitSVG` to DOM elements, or `emitCanvas` to a 2D context.
+   `renderScene` picks the live backend (`renderSVG`/`renderCanvas` compose model + backend);
+   picking is DOM-free, so both are interchangeable. Nothing here holds a reference to the
+   dispatcher, and nothing can write.
 
 ## 2. Layered design
 
@@ -49,8 +51,9 @@ Everything in the engine — now and in every future milestone — rests on thes
                 │ read-only
                 ▼
         ┌───────────────┐   onChange   ┌──────────────┐
-        │  SVGRenderer   │◀────────────│   App (React)│
-        └───────────────┘   re-render  └──────────────┘
+        │  renderScene   │◀────────────│   App (React)│
+        │ (SVG / Canvas) │   re-render  └──────────────┘
+        └───────────────┘
 ```
 
 - **Editor** turns pointer/keyboard input into `Action` objects and dispatches them.
@@ -59,7 +62,8 @@ Everything in the engine — now and in every future milestone — rests on thes
 - **Dispatcher** enforces the lifecycle and is the sole mutator.
 - **Document** is passive data.
 - **HistoryManager** stores snapshots and serves undo/redo.
-- **Renderer** reads the document plus `EditorState`-derived `RendererState` and paints SVG.
+- **Renderer** reads the document plus `EditorState`-derived `RendererState` and paints via the
+  selected backend (SVG or Canvas).
 - **App (React)** wires the pieces and re-renders on a tick. It subscribes to
   `dispatcher.onChange` so **document** changes repaint from any source. It is also a
   second input surface: the inspector constructs and dispatches Actions directly, and
@@ -78,8 +82,8 @@ Everything in the engine — now and in every future milestone — rests on thes
    apply/commit stage (`applyMutations` → `serialize` → `commitRevision`) is wrapped
    with a **rollback to the last committed revision**, so a throw there cannot leave
    the live document ahead of history. Failures are always `{ success: false }`.
-4. React's `onChange` subscriber bumps a render tick; the effect calls `renderSVG`.
-   (Ephemeral editor-state changes bump the same tick via `refresh()` directly.)
+4. React's `onChange` subscriber bumps a render tick; the effect calls `renderScene`
+   (SVG or Canvas). (Ephemeral editor-state changes bump the same tick via `refresh()` directly.)
 
 Undo/redo: `historyManager.undo()/redo()` returns a **deep-cloned** snapshot;
 the dispatcher swaps `currentDocumentState` and notifies with `fullReload: true` so
@@ -204,7 +208,7 @@ Layout output today is expressed *as* geometry (computed local rects), not as a 
 | Actions | `core/actions/{Action,types,applyMutations}.ts` + `*Action.ts` | Declarative mutations + delta protocol |
 | Dispatch/History | `core/actions/{ActionDispatcher,HistoryManager}.ts` | Only write path; snapshot undo/redo |
 | Editor | `editor/EditorState.ts`, `editor/tools/*` | Ephemeral state; input → Actions |
-| Renderer | `renderer/{RenderModel,emitSVG,emitCanvas,SVGRenderer}.ts` | Pure `(doc, state) → DisplayList`, then thin SVG + Canvas backends |
+| Renderer | `renderer/{RenderModel,emitSVG,emitCanvas,SVGRenderer,CanvasRenderer,renderScene}.ts` | Pure `(doc, state) → DisplayList`, then thin SVG + Canvas backends; `renderScene` selects the live backend |
 | App | `app/App.tsx`, `app/index.tsx`, `app/index.html` | React shell + wiring |
 | Shell | `electron/{main.js,preload.js}` | Native window, menus, file IO via IPC |
 | Build | `scripts/build.js` | Three esbuild bundles → `dist/` |

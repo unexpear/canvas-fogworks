@@ -62,8 +62,8 @@ src/
     ids/        UUID
     tests/      document.test.ts, apiSurface.ts (compile-time API pin)
   editor/       EditorState + tools/ (Select/Move/Rectangle, ToolController)
-  renderer/     RenderModel (pure display list) + emitSVG   (read-only)
-                backend + SVGRenderer entry point
+  renderer/     RenderModel (pure display list) + emitSVG /  (read-only)
+                emitCanvas backends + renderScene selector (SVG/Canvas)
   app/          App.tsx + React bootstrap
   electron/     main.js (main process), preload.js (contextBridge)
 scripts/build.js   three esbuild builds -> dist/{app,electron}

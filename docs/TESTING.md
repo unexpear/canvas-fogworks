@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate. Suites: `src/core/tests/document.test.ts` (306) + `src/renderer/RenderModel.test.ts` (59) + `src/renderer/emitCanvas.test.ts` (20) = 385 tests.
+> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend. Suites: `src/core/tests/document.test.ts` (306) + `src/renderer/RenderModel.test.ts` (59) + `src/renderer/emitCanvas.test.ts` (20) = 385 tests.
 
 ## Philosophy
 
@@ -11,8 +11,10 @@ serializer) — the layer every other layer trusts. That layer is deterministic,
 and has no DOM, so it is tested exhaustively with fast unit tests. The renderer's
 **pure model** (`buildRenderModel → DisplayList`) is DOM-free too and unit-tested the same
 way; the **Canvas backend** (`emitCanvas`) is unit-tested via a recording-mock ctx (its call
-sequence IS its output). Only `emitSVG`'s DOM output and pixel-level SVG↔canvas parity stay
-validated by targeted browser smoke tests during development.
+sequence IS its output). Only the DOM shims — `emitSVG`'s output, the `renderSVG`/`renderCanvas`/
+`renderScene` wiring, and pixel-level SVG↔canvas parity — stay validated by targeted browser
+smoke tests (the Canvas backend was live-verified end-to-end: background, grid, a drawn rect,
+selection overlay, and a clean SVG↔Canvas toggle).
 
 **Milestone 0 bar:** no change to a frozen contract lands without a test. Regressions get
 a test that is proven to fail before the fix and pass after (see *regression discipline*).
@@ -291,8 +293,9 @@ test that was never seen to fail proves nothing.
 ## Gaps / not yet automated (tracked, not silently ignored)
 
 - **Renderer & tools** have no automated **DOM** tests: the renderer's pure model is
-  unit-tested (`RenderModel.test.ts`), but the `emitSVG` backend and the DOM plumbing of
-  the move/draw tools are validated by browser smoke tests. Tool *logic* that is DOM-free
+  unit-tested (`RenderModel.test.ts`), but the `emitSVG` backend, the `renderSVG`/
+  `renderCanvas`/`renderScene` shims (canvas sizing, DPR, the backend switch), and the DOM
+  plumbing of the move/draw tools are validated by browser smoke tests. Tool *logic* that is DOM-free
   is node-tested with fake events — the viewport math (`panBy`/`zoomAt`/`screenToWorld`),
   the `ToolController` pan-mode intercept, its **DOM-free corner-resize AND rotate** (handle
   picked by `handleAtPoint`; resize drives geometry, rotate spins about the AABB centre and

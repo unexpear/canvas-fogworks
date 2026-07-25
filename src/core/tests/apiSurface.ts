@@ -51,7 +51,9 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { createEditorState, clampViewport, panBy, zoomAt, screenToWorld, EditorState } from "../../editor/EditorState";
 import { selectionHandles, handleAtPoint, SelectionHandle, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
-import { renderSVG, RendererState } from "../../renderer/SVGRenderer";
+import { renderSVG, clearRenderState, RendererState } from "../../renderer/SVGRenderer";
+import { renderCanvas } from "../../renderer/CanvasRenderer";
+import { renderScene, RenderBackend } from "../../renderer/renderScene";
 import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
 import { emitCanvas } from "../../renderer/emitCanvas";
@@ -217,6 +219,10 @@ export function __apiSurfacePin(): void {
     };
     expectType<RendererState>(rendererState);
     expectType<(c: HTMLElement, d: ReadonlyDocument, s: RendererState) => void>(renderSVG);
+    expectType<(c: HTMLElement, d: ReadonlyDocument, s: RendererState) => void>(renderCanvas);
+    expectType<(c: HTMLElement, d: ReadonlyDocument, s: RendererState, b: RenderBackend) => void>(renderScene);
+    expectType<(c: HTMLElement) => void>(clearRenderState);
+    expectType<RenderBackend>("svg"); expectType<RenderBackend>("canvas");
 
     // M3 render model: pure display list + backend seam.
     const model: DisplayList = buildRenderModel({ width: 800, height: 600 }, doc, rendererState);

@@ -18,7 +18,8 @@ import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
 import { RectangleTool } from "../editor/tools/RectangleTool";
-import { renderSVG, RendererState } from "../renderer/SVGRenderer";
+import { RendererState } from "../renderer/SVGRenderer";
+import { renderScene, RenderBackend } from "../renderer/renderScene";
 
 declare global {
     interface Window {
@@ -41,6 +42,7 @@ const startedFromCorruptSave = initialLoad.status === "corrupt";
 
 export function App() {
     const [toolName, setToolName] = useState<string>("select");
+    const [backend, setBackend] = useState<RenderBackend>("svg");
     // Consolidated UI state — one setState per refresh (React batches it into a
     // single commit). `tick` drives the imperative canvas repaint effect.
     const [ui, setUi] = useState<{ tick: number; selectedNodeId: string | null; canUndo: boolean; canRedo: boolean; truncated: boolean }>({
@@ -170,9 +172,35 @@ export function App() {
                 computed,
                 viewport: es.viewport
             };
-            renderSVG(canvasRef.current, doc, rendererState);
+            renderScene(canvasRef.current, doc, rendererState, backend);
         }
-    }, [ui.tick, dispatcher]);
+    }, [ui.tick, dispatcher, backend]);
+
+    // Repaint on container-resize and DPR change. The SVG root is width/height=100% so it
+    // auto-fills the pane, but the Canvas backend is sized in fixed CSS px (and its backing
+    // store in device px), so without an explicit repaint it would leave a blank gutter when
+    // the pane grows, or go blurry when the device pixel ratio changes (e.g. moving the window
+    // to a different-density monitor). renderCanvas re-reads clientWidth/dpr each frame, so a
+    // refresh() is all that's needed.
+    useEffect(() => {
+        const el = canvasRef.current;
+        if (!el) return;
+        const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => refresh()) : null;
+        observer?.observe(el);
+
+        // A DPR change need not change the container size, so watch the resolution media query
+        // too, re-subscribing after each change (the matched query is pinned to the old value).
+        let mql: MediaQueryList | null = null;
+        const onDprChange = () => { mql?.removeEventListener("change", onDprChange); refresh(); watchDpr(); };
+        const watchDpr = () => {
+            if (typeof window.matchMedia !== "function") return;
+            mql = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+            mql.addEventListener("change", onDprChange);
+        };
+        watchDpr();
+
+        return () => { observer?.disconnect(); mql?.removeEventListener("change", onDprChange); };
+    }, [refresh]);
 
     // Repaint whenever the DOCUMENT changes, from any source, and record which nodes
     // changed so the next compute can reuse the untouched ones. Ephemeral editor state
@@ -276,6 +304,13 @@ export function App() {
                     />
                 )}
                 <div style={{ flex: 1 }} />
+                <button
+                    title="Switch the rendering backend (both draw the same display list)"
+                    onClick={() => setBackend(b => (b === "svg" ? "canvas" : "svg"))}
+                    style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
+                >
+                    Backend: {backend === "svg" ? "SVG" : "Canvas"}
+                </button>
                 {startedFromCorruptSave && (
                     <span
                         title={`The previous autosave could not be read and was kept at "${CORRUPT_BACKUP_KEY}". Saving now will replace it.`}
