@@ -1,6 +1,6 @@
 # API Contracts
 
-<!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer/SVGRenderer.ts, src/electron/preload.js, scripts/build.js -->
+<!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
 > 🔒 Frozen contract · schema v15 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
@@ -228,7 +228,12 @@ class ToolController {
 Tools: `SelectTool`, `MoveTool`, `RectangleTool` (all implement `Tool`). Tools construct
 Actions and dispatch them; they mutate only `EditorState`, never the document.
 
-## Renderer (`renderer/SVGRenderer.ts`)
+## Renderer (`renderer/`)
+
+The renderer is a pure display-list builder plus a thin backend. `buildRenderModel`
+turns `(size, doc, state)` into a plain-data `DisplayList`; a backend transcribes it to
+the screen. Every draw decision lives in the model (unit-tested in the `node` env like
+the layout engine); the backend does no arithmetic.
 
 ```ts
 interface RendererState {
@@ -238,14 +243,51 @@ interface RendererState {
   computed: ComputedState;      // world matrices + bounds + draw order (required)
   viewport: { x: number; y: number; zoom: number };
 }
-function renderSVG(container: HTMLElement, doc: ReadonlyDocument, state: RendererState): void;
+
+// Pure model (renderer/RenderModel.ts) — no DOM; imports only the Mat2D *type*.
+type Shape =
+  | { kind: "rect"; x; y; width; height }
+  | { kind: "line"; x1; y1; x2; y2 }
+  | { kind: "text"; x; y; width; height; text: string; fontSize: number }
+  | { kind: "image"; x; y; width; height; href: string | null };
+// A null Paint field = absent attribute; pointerEvents:false = pointer-events:none.
+interface Paint {
+  fill: string | null; opacity: number | null;
+  stroke: string | null; strokeWidth: number | null; strokeDash: string | null;
+  radius: number | null; cursor: string | null; pointerEvents: boolean;
+}
+type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview";
+interface DrawItem {
+  shape: Shape; paint: Paint;
+  world: Mat2D | null;          // null → the backend emits no transform
+  nodeId: string | null;        // data-node-id; handle? → data-resize-handle
+  handle?: string; role: DrawRole;
+}
+interface GridModel { sig: string; lines: DrawItem[]; unchanged: boolean }
+interface DisplayList {
+  viewport: { x: number; y: number; zoom: number };
+  grid: GridModel; content: DrawItem[]; overlay: DrawItem[];
+}
+
+function buildRenderModel(
+  size: { width: number; height: number },
+  doc: ReadonlyDocument, state: RendererState, prev?: DisplayList | null
+): DisplayList;                                          // pure, deterministic
+function emitSVG(container: HTMLElement, model: DisplayList): void;   // DOM transcription
+function renderSVG(container: HTMLElement, doc: ReadonlyDocument, state: RendererState): void; // buildRenderModel ∘ emitSVG
 ```
 
 - Pure read of `(doc, state)`; no dispatcher reference, cannot write.
-- Reads **all positions from `state.computed`**; `doc` supplies only type/style/text/src.
-  M1 narrows this to ComputedState alone.
+- `buildRenderModel` reads **all positions from `state.computed`** (world/local/bounds)
+  and never composes coordinates — enforced by importing only the `Mat2D` *type*. `doc`
+  supplies only type/style/text/src.
+- `renderSVG` stays the app entry point: it measures the container, threads the previous
+  `DisplayList` (so an unchanged grid reuses its lines by reference), then calls `emitSVG`.
+- `DisplayList` is plain, serializable data — asserted directly in unit tests; `emitSVG`
+  is the untested DOM boundary, covered by the browser smoke tests.
 - DOM structure `svg > g#viewport-transform > { g#grid, g#content, g#overlay }`, reused
-  across calls (not torn down). Grid is capped at 300 lines/axis.
+  across calls (not torn down). Grid is capped at 300 lines/axis and skipped when its
+  `sig` is unchanged.
 
 ## Electron bridge
 

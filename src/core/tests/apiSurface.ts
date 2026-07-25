@@ -51,6 +51,8 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { createEditorState, clampViewport, EditorState } from "../../editor/EditorState";
 import { renderSVG, RendererState } from "../../renderer/SVGRenderer";
+import { buildRenderModel, DisplayList, DrawItem, Shape, Paint } from "../../renderer/RenderModel";
+import { emitSVG } from "../../renderer/emitSVG";
 
 /**
  * Assert an expression is ASSIGNABLE to the documented type.
@@ -194,4 +196,16 @@ export function __apiSurfacePin(): void {
     };
     expectType<RendererState>(rendererState);
     expectType<(c: HTMLElement, d: ReadonlyDocument, s: RendererState) => void>(renderSVG);
+
+    // M3 render model: pure display list + backend seam.
+    const model: DisplayList = buildRenderModel({ width: 800, height: 600 }, doc, rendererState);
+    expectType<DrawItem[]>(model.content);
+    expectType<DrawItem[]>(model.overlay);
+    expectType<DrawItem[]>(model.grid.lines);
+    expectType<string>(model.grid.sig);
+    expectType<boolean>(model.grid.unchanged);
+    expectType<Shape>(model.content[0].shape);
+    expectType<Paint>(model.content[0].paint);
+    expectType<Mat2D | null>(model.content[0].world);
+    expectType<(c: HTMLElement, m: DisplayList) => void>(emitSVG);
 }

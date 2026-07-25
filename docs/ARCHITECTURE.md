@@ -1,6 +1,6 @@
 # Architecture
 
-<!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer/SVGRenderer.ts -->
+<!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer -->
 
 > 🔒 Frozen contract · schema v15 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables). Describes the verified current implementation.
 
@@ -22,9 +22,11 @@ Everything in the engine — now and in every future milestone — rests on thes
    state is deep-cloned so it can never alias the history stack. Retention is bounded
    by *memory* rather than a step count; at the truncation boundary undo stops rather
    than teleporting, and `revertToOriginal()` is the explicit way back.
-5. **The renderer is completely independent.** `renderSVG` is a pure read of
-   `(document, RendererState) → DOM`. It has no reference to the dispatcher and cannot
-   write.
+5. **The renderer is completely independent, and split into a pure model + a backend.**
+   `buildRenderModel(size, document, RendererState) → DisplayList` is a pure, DOM-free
+   read (testable in the `node` env like the layout engine); a backend (`emitSVG`)
+   transcribes the display list to the screen. `renderSVG` composes the two. Nothing
+   here holds a reference to the dispatcher, and nothing can write.
 
 ## 2. Layered design
 
@@ -189,7 +191,7 @@ Layout output today is expressed *as* geometry (computed local rects), not as a 
 | Actions | `core/actions/{Action,types,applyMutations}.ts` + `*Action.ts` | Declarative mutations + delta protocol |
 | Dispatch/History | `core/actions/{ActionDispatcher,HistoryManager}.ts` | Only write path; snapshot undo/redo |
 | Editor | `editor/EditorState.ts`, `editor/tools/*` | Ephemeral state; input → Actions |
-| Renderer | `renderer/SVGRenderer.ts` | Read-only `(doc, state) → SVG` |
+| Renderer | `renderer/{RenderModel,emitSVG,SVGRenderer}.ts` | Pure `(doc, state) → DisplayList`, then a thin SVG backend |
 | App | `app/App.tsx`, `app/index.tsx`, `app/index.html` | React shell + wiring |
 | Shell | `electron/{main.js,preload.js}` | Native window, menus, file IO via IPC |
 | Build | `scripts/build.js` | Three esbuild bundles → `dist/` |

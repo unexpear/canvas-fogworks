@@ -21,7 +21,7 @@ M1  Computed State           ✅   stored intent -> calculated results
       │
 M2  Layout Engine            ✅   flex(grow/shrink/wrap/align-content) + hug + grid(rows/auto/hug/spans/flow/pins) + constraints + absolute; minmax/fit-content deferred
       │
-M3  Renderer                 ⬜*  reads ComputedState only
+M3  Renderer                 🚧*  pure render-model extracted; shapes/effects/canvas remain
       │
 M4  Editor                   ⬜*  viewport, selection, manipulation, guides
       │
@@ -392,10 +392,29 @@ local rects), not as a separate channel.
 
 ## Phase 3 — Rendering Pipeline
 
-### Milestone 3 — Renderer ⬜
+### Milestone 3 — Renderer 🚧
 Build the renderer for real. **SVG renderer:** rectangles · ellipses · lines · paths ·
 text · images. **Canvas/WebGL renderer:** large scenes · shadows · blur · massive
 documents. **The renderer only reads `ComputedState`.**
+
+**Landed (slice 1 — render-model extraction, no behavior change):** the renderer is now
+a pure `buildRenderModel(size, doc, state) → DisplayList` (all draw decisions: content
+shapes, resolved paint, world placement, overlay outlines/handles/preview, grid `sig` +
+by-reference reuse) plus a thin `emitSVG` backend that only transcribes the list to DOM.
+This is the renderer's first automated coverage — the `DisplayList` is asserted on plain
+data in the `node` env exactly like the layout engine, and the extraction was verified
+**byte-identical** to the previous renderer via a differential DOM oracle over a battery
+of content/overlay/grid cases. `renderSVG` stays the app entry point (measures the
+container, threads the previous list so the grid cache survives), so `App.tsx` is
+unchanged. See [ARCHITECTURE.md](docs/ARCHITECTURE.md) §1 and
+[API-CONTRACTS.md](docs/API-CONTRACTS.md) § Renderer.
+
+**Remaining:** shape kinds `ellipse` / `line` / `path` (each blocked on a `NODE_TYPES` +
+schema bump in the document layer, then trivial on the render-model side); viewport
+**culling** (a pure predicate in the builder, benefits both backends); **effects**
+(shadow/blur — plumbing lives in the emitters); and the **Canvas/WebGL backend** (a
+second emitter over the same `DisplayList` — its text wrapping/metrics and rasterization
+parity are genuine milestone weight and may split into their own milestone).
 
 ---
 
