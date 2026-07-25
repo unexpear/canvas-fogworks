@@ -22,7 +22,7 @@ import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, 
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
 import { clampViewport, createEditorState } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
-import { Node, NODE_TYPES, GRID_SPAN_MAX, GRID_MAX_TRACKS } from "../document/Node";
+import { Node, NODE_TYPES, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType } from "../document/Node";
 
 function createDocWithRectangle(): ProjectDocument {
     const doc = createEmptyDocument();
@@ -780,6 +780,35 @@ describe("Document integrity validation", () => {
     test("rejects negative dimensions", () => {
         expect(() => deserializeDocument(envelope({ a: node("a", { geometry: { x: 0, y: 0, width: -10, height: 5 } }) }, ["a"])))
             .toThrow("positive dimensions");
+    });
+
+    test("rejects a zero-height rectangle (the strict rule survives the line relaxation)", () => {
+        expect(() => deserializeDocument(envelope({ a: node("a", { geometry: { x: 0, y: 0, width: 10, height: 0 } }) }, ["a"])))
+            .toThrow("positive dimensions");
+    });
+
+    test("accepts an ellipse like a rectangle", () => {
+        const doc = deserializeDocument(envelope({ a: node("a", { type: "core.ellipse" }) }, ["a"]));
+        expect(doc.nodes.get("a")!.type).toBe("core.ellipse");
+    });
+
+    test("rejects a zero-height ellipse (ellipse needs a positive box)", () => {
+        expect(() => deserializeDocument(envelope({ a: node("a", { type: "core.ellipse", geometry: { x: 0, y: 0, width: 10, height: 0 } }) }, ["a"])))
+            .toThrow("positive dimensions");
+    });
+
+    test("accepts a horizontal line (height 0) and a vertical line (width 0)", () => {
+        const h = deserializeDocument(envelope({ a: node("a", { type: "core.line", geometry: { x: 0, y: 0, width: 100, height: 0 } }) }, ["a"]));
+        expect(h.nodes.get("a")!.geometry.height).toBe(0);
+        const v = deserializeDocument(envelope({ a: node("a", { type: "core.line", geometry: { x: 0, y: 0, width: 0, height: 100 } }) }, ["a"]));
+        expect(v.nodes.get("a")!.geometry.width).toBe(0);
+    });
+
+    test("rejects a zero-length line (a degenerate point) and a negative line", () => {
+        expect(() => deserializeDocument(envelope({ a: node("a", { type: "core.line", geometry: { x: 0, y: 0, width: 0, height: 0 } }) }, ["a"])))
+            .toThrow("non-zero length");
+        expect(() => deserializeDocument(envelope({ a: node("a", { type: "core.line", geometry: { x: 0, y: 0, width: -5, height: 10 } }) }, ["a"])))
+            .toThrow("line dimensions must be >= 0");
     });
 
     test("rejects a dangling parent", () => {
@@ -1574,19 +1603,20 @@ describe("Guards the suite did not previously protect", () => {
         expect(dispatcher.getDocument().nodes.get("rectangle-001")!.style.opacity).toBe(0.5);
     });
 
-    // Mutation "legacy re-stamp to schema 1" SURVIVED: today LEGACY_SCHEMA and
-    // SCHEMA_VERSION are both "1", so the two behaviours are indistinguishable until a
-    // future bump — exactly when the bug would bite. Injecting the schema exposes it now.
+    // Mutation "legacy re-stamp straight to the current schema" would be invisible if
+    // LEGACY_SCHEMA equalled SCHEMA_VERSION (as it did at schema 1) — the two behaviours
+    // are indistinguishable then. Injecting a hypothetical next schema exposes it: a legacy
+    // file must reach the current schema via the CHAIN, never by a direct re-stamp.
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "16" that has no 15→16 step: the
+        // Pretending the build has moved to a schema "17" that has no 16→17 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→15), and then REFUSED at "15" — never re-stamped straight to the current
-        // schema. The error naming "15" (not "1") is the proof the chain actually ran.
+        // (1→2→…→16), and then REFUSED at "16" — never re-stamped straight to the current
+        // schema. The error naming "16" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 14→15 landed for align-content.)
-        expect(() => migrateIfNeeded(legacy, "16")).toThrow('Migration not implemented for document schema "15"');
+        // time a real migration is added — here, when 15→16 landed for ellipse/line.)
+        expect(() => migrateIfNeeded(legacy, "17")).toThrow('Migration not implemented for document schema "16"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -3752,5 +3782,89 @@ describe("M2 flex-shrink", () => {
             + ` "geometry": { "x": 0, "y": 0, "width": 10, "height": 10 },`
             + ` "style": { "fill": "#000", "opacity": 1 }, "layout": { "shrink": -1 } } } } }`;
         expect(() => deserializeDocument(bad)).toThrow("shrink");
+    });
+});
+
+// ─── Schema 16: core.ellipse + core.line node types ───
+describe("Node types: ellipse + line (schema 16)", () => {
+    test("NODE_TYPES includes the new shapes; isNodeType accepts them", () => {
+        expect(NODE_TYPES).toContain("core.ellipse");
+        expect(NODE_TYPES).toContain("core.line");
+        expect(isNodeType("core.ellipse")).toBe(true);
+        expect(isNodeType("core.line")).toBe(true);
+        expect(isNodeType("core.bogus")).toBe(false);
+    });
+
+    test("dimensionError: rect/ellipse/text/image need a positive box", () => {
+        for (const t of ["core.rectangle", "core.ellipse", "core.text", "core.image"] as const) {
+            expect(dimensionError(t, 10, 10)).toBeNull();
+            expect(dimensionError(t, 0, 10)).not.toBeNull();
+            expect(dimensionError(t, 10, 0)).not.toBeNull();
+            expect(dimensionError(t, -1, 10)).not.toBeNull();
+        }
+    });
+
+    test("dimensionError: a line may collapse ONE axis, not both, and not go negative or non-finite", () => {
+        expect(dimensionError("core.line", 100, 0)).toBeNull();  // horizontal
+        expect(dimensionError("core.line", 0, 100)).toBeNull();  // vertical
+        expect(dimensionError("core.line", 100, 50)).toBeNull(); // diagonal
+        expect(dimensionError("core.line", 0, 0)).not.toBeNull();     // degenerate point
+        expect(dimensionError("core.line", -1, 100)).not.toBeNull();  // negative
+        expect(dimensionError("core.line", 100, NaN)).not.toBeNull(); // non-finite
+    });
+
+    test("AddNodeAction: ellipse/line create; a horizontal line is allowed; degenerate/strict rejected", () => {
+        const doc = createEmptyDocument();
+        expect(new AddNodeAction(doc, "core.ellipse", 0, 0, 20, 10).validate()).toBe(true);
+        expect(new AddNodeAction(doc, "core.line", 0, 0, 100, 0).validate()).toBe(true);       // horizontal
+        expect(new AddNodeAction(doc, "core.line", 0, 0, 0, 100).validate()).toBe(true);       // vertical
+        expect(new AddNodeAction(doc, "core.line", 0, 0, 0, 0).validate()).toBe(false);        // degenerate point
+        expect(new AddNodeAction(doc, "core.rectangle", 0, 0, 10, 0).validate()).toBe(false);  // rect stays strict
+        expect(new AddNodeAction(doc, "core.ellipse", 0, 0, 10, 0).validate()).toBe(false);    // ellipse stays strict
+    });
+
+    test("ResizeNodeAction: a line may collapse an axis, a rect may not", () => {
+        const d = new ActionDispatcher(createEmptyDocument());
+        d.dispatchAction(new AddNodeAction(d.getDocument(), "core.line", 0, 0, 50, 50, "#000", "L"));
+        d.dispatchAction(new AddNodeAction(d.getDocument(), "core.rectangle", 0, 0, 50, 50, "#000", "R"));
+        expect(new ResizeNodeAction(d.getDocument(), "L", 100, 0).validate()).toBe(true);
+        expect(new ResizeNodeAction(d.getDocument(), "L", 0, 0).validate()).toBe(false);
+        expect(new ResizeNodeAction(d.getDocument(), "R", 100, 0).validate()).toBe(false);
+    });
+
+    test("UpdateNodeGeometryAction merges the patch over current geometry for the per-type rule", () => {
+        const d = new ActionDispatcher(createEmptyDocument());
+        d.dispatchAction(new AddNodeAction(d.getDocument(), "core.line", 0, 0, 50, 50, "#000", "L"));
+        d.dispatchAction(new AddNodeAction(d.getDocument(), "core.rectangle", 0, 0, 50, 50, "#000", "R"));
+        expect(new UpdateNodeGeometryAction(d.getDocument(), "L", { width: 0 }).validate()).toBe(true);  // merged height 50 > 0
+        expect(new UpdateNodeGeometryAction(d.getDocument(), "L", { width: 0, height: 0 }).validate()).toBe(false); // both zero
+        expect(new UpdateNodeGeometryAction(d.getDocument(), "R", { height: 0 }).validate()).toBe(false); // rect strict
+        expect(new UpdateNodeGeometryAction(d.getDocument(), "R", { width: undefined as any }).validate()).toBe(false); // present-undefined
+    });
+
+    test("ellipse, diagonal line, and horizontal line round-trip through serialize/deserialize", () => {
+        const d = new ActionDispatcher(createEmptyDocument());
+        d.dispatchAction(new AddNodeAction(d.getDocument(), "core.ellipse", 0, 0, 40, 20, "#f0f", "E"));
+        d.dispatchAction(new AddNodeAction(d.getDocument(), "core.line", 0, 0, 60, 30, "#0ff", "D"));
+        d.dispatchAction(new AddNodeAction(d.getDocument(), "core.line", 10, 10, 80, 0, "#00f", "H")); // horizontal
+        const round = deserializeDocument(serializeDocument(d.getDocument()));
+        expect(round.version).toBe(SCHEMA_VERSION);
+        expect(round.nodes.get("E")!.type).toBe("core.ellipse");
+        expect(round.nodes.get("H")!.geometry.height).toBe(0);
+        expect(compareDocuments(d.getDocument(), round)).toBe(true);
+    });
+
+    test("ellipse/line participate in layout exactly like a rectangle (type-agnostic geometry)", () => {
+        const doc = createEmptyDocument();
+        const d = new ActionDispatcher(doc);
+        d.dispatchAction(new AddNodeAction(doc, "core.rectangle", 0, 0, 300, 100, "#fff", "P"));
+        d.dispatchAction(new UpdateNodeLayoutAction(d.getDocument(), "P", { container: { direction: "row", gap: 10, padding: 0 } }));
+        d.dispatchAction(new AddNodeAction(d.getDocument(), "core.rectangle", 0, 0, 50, 40, "#f00", "a", "P"));
+        d.dispatchAction(new AddNodeAction(d.getDocument(), "core.ellipse", 0, 0, 50, 40, "#0f0", "b", "P"));
+        d.dispatchAction(new AddNodeAction(d.getDocument(), "core.line", 0, 0, 50, 40, "#00f", "c", "P"));
+        const computed = computeGeometry(d.getDocument());
+        expect(computed.nodes.get("a")!.bounds.x).toBe(0);
+        expect(computed.nodes.get("b")!.bounds.x).toBe(60);  // 50 + gap 10
+        expect(computed.nodes.get("c")!.bounds.x).toBe(120); // 110 + gap 10
     });
 });

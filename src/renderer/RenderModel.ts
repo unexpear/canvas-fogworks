@@ -34,6 +34,7 @@ export interface Size {
 /** A draw primitive in the node's LOCAL space (world placement lives on the item). */
 export type Shape =
     | { kind: "rect"; x: number; y: number; width: number; height: number }
+    | { kind: "ellipse"; cx: number; cy: number; rx: number; ry: number }
     | { kind: "line"; x1: number; y1: number; x2: number; y2: number }
     | { kind: "text"; x: number; y: number; width: number; height: number; text: string; fontSize: number }
     | { kind: "image"; x: number; y: number; width: number; height: number; href: string | null };
@@ -201,6 +202,36 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 strokeWidth: sty.stroke ? 1 / z : null,
                 strokeDash: null,
                 radius: sty.radius ? sty.radius : null,
+                cursor: "pointer",
+                pointerEvents: true
+            };
+        } else if (node.type === "core.ellipse") {
+            // Fills its local box: centre + radii from the box (no corner radius).
+            shape = { kind: "ellipse", cx: width / 2, cy: height / 2, rx: width / 2, ry: height / 2 };
+            paint = {
+                fill: sty.fill,
+                opacity: sty.opacity,
+                stroke: sty.stroke ? sty.stroke : null,
+                strokeWidth: sty.stroke ? 1 / z : null,
+                strokeDash: null,
+                radius: null,
+                cursor: "pointer",
+                pointerEvents: true
+            };
+        } else if (node.type === "core.line") {
+            // The box diagonal, top-left → bottom-right (a collapsed axis gives a
+            // horizontal/vertical line). Drawn with a stroke; falls back to `fill` as
+            // the line colour so a line authored with only a fill is still visible.
+            shape = { kind: "line", x1: 0, y1: 0, x2: width, y2: height };
+            paint = {
+                fill: null,
+                opacity: sty.opacity,
+                // `||` not `??`: an empty-string stroke also falls back to `fill`, so a line
+                // is never invisible (a line's stroke IS its body, unlike a rect's border).
+                stroke: sty.stroke || sty.fill,
+                strokeWidth: 1 / z,
+                strokeDash: null,
+                radius: null,
                 cursor: "pointer",
                 pointerEvents: true
             };

@@ -12,7 +12,7 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError, layoutError } from "./Node";
+import { transformError, layoutError, dimensionError } from "./Node";
 
 function checkNodeRanges(node: ReadonlyNode): void {
     const g = node.geometry;
@@ -21,11 +21,10 @@ function checkNodeRanges(node: ReadonlyNode): void {
             throw new Error(`Invalid document: node "${node.id}" geometry.${field} is not a finite number.`);
         }
     }
-    if (g.width <= 0 || g.height <= 0) {
-        throw new Error(
-            `Invalid document: node "${node.id}" must have positive dimensions ` +
-            `(got ${g.width}x${g.height}).`
-        );
+    // Shared with the edit path so the two cannot drift; a `core.line` may collapse one axis.
+    const dimErr = dimensionError(node.type, g.width, g.height);
+    if (dimErr) {
+        throw new Error(`Invalid document: node "${node.id}" ${dimErr} (got ${g.width}x${g.height}).`);
     }
 
     const s = node.style;

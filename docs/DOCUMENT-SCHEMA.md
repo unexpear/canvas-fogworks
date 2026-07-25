@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v15 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v16 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -34,9 +34,12 @@ interface DocumentMetadata {       // runtime shape (date is a live Date)
 Every object in `nodes` (`Node.ts`). **Nodes are never mutated directly — only via Actions.**
 
 ```ts
-const NODE_TYPES = ["core.rectangle", "core.text", "core.image"] as const;
+const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line"] as const;
 type NodeType = typeof NODE_TYPES[number];   // derived — one edit adds a type
 function isNodeType(v: unknown): v is NodeType;  // membership, checked on BOTH paths
+// core.ellipse fills its box (cx=w/2 …). core.line is the box DIAGONAL (0,0)→(w,h),
+// so it may collapse ONE axis (a horizontal/vertical line); see dimensionError.
+function dimensionError(type: NodeType, width: number, height: number): string | null; // shared edit+load
 
 interface Node {
   id: string;                       // UUID, equals the map key
@@ -422,7 +425,7 @@ additive (so `migrate_14_to_15` is a pass-through):
 
 | Invariant | Action path | Load path (`deserializeDocument`) |
 |-----------|-------------|-----------------------------------|
-| `geometry.*` finite; `width`/`height` `> 0` | ✅ `validate()` | ✅ `validateDocumentIntegrity` |
+| `geometry.*` finite; `width`/`height` `> 0` (a `core.line` may collapse ONE axis, not both) | ✅ `validate()` / `dimensionError` | ✅ `validateDocumentIntegrity` / `dimensionError` |
 | `opacity ∈ [0,1]`; `radius ≥ 0`; `fontSize > 0` | ✅ `validate()` | ✅ `validateDocumentIntegrity` |
 | `id` equals the `nodes` map key | — | ✅ throws on mismatch |
 | node shape (required fields/types) | ✅ by construction | ✅ `isValidNode` |

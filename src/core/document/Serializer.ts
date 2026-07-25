@@ -216,6 +216,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "12") { raw = migrate_12_to_13(raw); version = "13"; }
     if (version === "13") { raw = migrate_13_to_14(raw); version = "14"; }
     if (version === "14") { raw = migrate_14_to_15(raw); version = "15"; }
+    if (version === "15") { raw = migrate_15_to_16(raw); version = "16"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -304,6 +305,11 @@ function migrate_13_to_14(raw: any): any {
 /** Schema 14 → 15: M2 close-out — alignContent/wrapReverse + grid autoFlow + gridColumn/gridRow. Pass-through by content. */
 function migrate_14_to_15(raw: any): any {
     return { ...raw, version: "15" };
+}
+
+/** Schema 15 → 16: adds the `core.ellipse` and `core.line` node types. Pass-through by content. */
+function migrate_15_to_16(raw: any): any {
+    return { ...raw, version: "16" };
 }
 
 /**

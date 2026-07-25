@@ -5,6 +5,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
+import { dimensionError } from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 
 export class ResizeNodeAction extends Action {
@@ -20,9 +21,10 @@ export class ResizeNodeAction extends Action {
     }
 
     public validate(): boolean {
-        return this.document.nodes.has(this.nodeId) &&
-            Number.isFinite(this.newWidth) && Number.isFinite(this.newHeight) &&
-            this.newWidth > 0 && this.newHeight > 0;
+        const node = this.document.nodes.get(this.nodeId);
+        if (!node) return false;
+        // Shared, per-type dimension rule (a line may collapse one axis).
+        return dimensionError(node.type, this.newWidth, this.newHeight) === null;
     }
 
     public execute(): MutationResult {

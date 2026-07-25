@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions -->
 
-> 🔒 Frozen contract · schema v15 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Code in `src/core/actions/`.
+> 🔒 Frozen contract · schema v16 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Code in `src/core/actions/`.
 
 The action system is the engine's spine: it is **the only way the document changes**,
 and it is what makes undo/redo, and later AI, plugins, and collaboration, safe.
@@ -44,6 +44,11 @@ abstract class Action {
 | `UpdateNodeLayoutAction` | `{ kind: "patch", layout: {…partial…} }` — M2 layout (container/grid/grow/constraints/position/margin). Carries grid⊕container exclusivity IN the delta, and auto-captures `constraintRef` from a NON-container parent's stored size on first opt-in |
 | `ReparentNodeAction` | `{ kind: "patch", reparent: { parent, index? } }` |
 | `TransactionAction` | merges multiple actions into one atomic result + one revision |
+
+`AddNodeAction`/`ResizeNodeAction`/`UpdateNodeGeometryAction` validate dimensions through the
+shared per-type `dimensionError` (so the edit and load paths cannot drift) — rect/ellipse/text/image
+need a positive box; a `core.line` may collapse one axis (a horizontal/vertical line), not both.
+`UpdateNodeGeometryAction` merges its partial patch over the current geometry before the check.
 
 ## 2. MutationResult & the delta protocol
 

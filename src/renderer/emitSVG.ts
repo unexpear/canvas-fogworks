@@ -68,6 +68,15 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         applyRectPaint(el, paint);
         applyTail(el, item);
         group.appendChild(el);
+    } else if (shape.kind === "ellipse") {
+        const el = document.createElementNS(svgNS, "ellipse");
+        el.setAttribute("cx", String(shape.cx));
+        el.setAttribute("cy", String(shape.cy));
+        el.setAttribute("rx", String(shape.rx));
+        el.setAttribute("ry", String(shape.ry));
+        applyRectPaint(el, paint); // paint.radius is null for ellipses, so no conflicting `rx` attr
+        applyTail(el, item);
+        group.appendChild(el);
     } else if (shape.kind === "line") {
         const el = document.createElementNS(svgNS, "line");
         el.setAttribute("x1", String(shape.x1));
@@ -76,6 +85,7 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         el.setAttribute("y2", String(shape.y2));
         if (paint.stroke !== null) el.setAttribute("stroke", paint.stroke);
         if (paint.strokeWidth !== null) el.setAttribute("stroke-width", String(paint.strokeWidth));
+        if (paint.opacity !== null) el.setAttribute("opacity", String(paint.opacity));
         applyTail(el, item);
         group.appendChild(el);
     } else if (shape.kind === "text") {

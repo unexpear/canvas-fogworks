@@ -5,7 +5,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { Node, NodeType, isNodeType } from "../document/Node";
+import { Node, NodeType, isNodeType, dimensionError } from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 import { generateUUID } from "../ids/UUID";
 
@@ -59,8 +59,8 @@ export class AddNodeAction extends Action {
             // author a document it cannot reopen.
             isNodeType(this.nodeType) &&
             Number.isFinite(this.x) && Number.isFinite(this.y) &&
-            this.width > 0 && this.height > 0 &&
-            Number.isFinite(this.width) && Number.isFinite(this.height)
+            // Shared with the load path (per-type: a line may collapse one axis).
+            dimensionError(this.nodeType, this.width, this.height) === null
         );
     }
 

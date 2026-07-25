@@ -232,10 +232,13 @@ export function App() {
             ? (es.isDragging ? "grabbing" : "grab")
             : "default";
 
+    // One friendly label per NODE_TYPES entry (the `|| n.type` fallback keeps this graceful).
     const nodeTypeLabels: Record<string, string> = {
         "core.rectangle": "Rectangle",
         "core.text": "Text",
-        "core.image": "Image"
+        "core.image": "Image",
+        "core.ellipse": "Ellipse",
+        "core.line": "Line"
     };
 
     return (

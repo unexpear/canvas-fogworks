@@ -108,8 +108,13 @@ export const CURRENT_VERSION: string =
  *         All optional (absent = start / false / "row" / auto-flow), so `migrate_14_to_15` is a
  *         pass-through — but a schema-14 build would mis-distribute wrapped lines, flow a grid the
  *         wrong way, or auto-place a pinned item at the wrong cell.
+ *
+ *   "16" — adds the `core.ellipse` and `core.line` node types (Milestone 3 renderer). Existing
+ *         documents contain neither, so `migrate_15_to_16` is a pass-through — but a schema-15
+ *         build would reject an ellipse/line as an unknown type on load, and would not know that a
+ *         `core.line` may collapse one geometry axis (a horizontal/vertical line).
  */
-export const SCHEMA_VERSION = "15";
+export const SCHEMA_VERSION = "16";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

@@ -24,7 +24,7 @@ import {
     ProjectDocument, ReadonlyDocument, createEmptyDocument,
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
-import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, Layout } from "../document/Node";
+import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, Layout } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
@@ -84,6 +84,7 @@ export function __apiSurfacePin(): void {
     expectType<string>(SCHEMA_VERSION);
     expectType<readonly NodeType[]>(NODE_TYPES);
     expectType<boolean>(isNodeType("core.rectangle"));
+    expectType<string | null>(dimensionError("core.line", 1, 0));
 
     // getDocument() is READ-ONLY — asserted in BOTH directions, so the guarantee
     // cannot be silently weakened back to a mutable document.

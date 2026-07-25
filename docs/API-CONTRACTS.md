@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v15 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v16 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -115,8 +115,10 @@ Types: `ProjectDocument`, `DocumentMetadata`, `SerializedMetadata`, `VariableSto
 `TrackSize`, `Constraints`, `HConstraint`, `VConstraint`, `Margins`, `Transform`,
 `StateDefinition`, `SerializedDocument`, `DeepReadonly`, `ReadonlyDocument`, `ReadonlyNode`,
 `LoadResult`, `SaveResult`, `NODE_TYPES`/`isNodeType`. Shared validators
-`transformError(t)` / `layoutError(l)` return an error string or `null`, and are used by
-BOTH the edit path and the load path. See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
+`transformError(t)` / `layoutError(l)` / `dimensionError(type, w, h)` return an error string
+or `null`, and are used by BOTH the edit path and the load path — `dimensionError` is per-type
+(rect/ellipse/text/image need a positive box; a `core.line` may collapse one axis, not both).
+See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
 
 ## Actions (`core/actions/`)
 
@@ -247,6 +249,7 @@ interface RendererState {
 // Pure model (renderer/RenderModel.ts) — no DOM; imports only the Mat2D *type*.
 type Shape =
   | { kind: "rect"; x; y; width; height }
+  | { kind: "ellipse"; cx; cy; rx; ry }
   | { kind: "line"; x1; y1; x2; y2 }
   | { kind: "text"; x; y; width; height; text: string; fontSize: number }
   | { kind: "image"; x; y; width; height; href: string | null };

@@ -9,11 +9,31 @@
  * it, and both validation paths check membership against it — so adding a type is
  * one edit, and an unknown type cannot slip in through a hand-edited file.
  */
-export const NODE_TYPES = ["core.rectangle", "core.text", "core.image"] as const;
+export const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line"] as const;
 export type NodeType = typeof NODE_TYPES[number];
 
 export function isNodeType(value: unknown): value is NodeType {
     return typeof value === "string" && (NODE_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Validity check for a node's dimensions, keyed on type and SHARED by the edit path
+ * (`AddNode`/`Resize`/`UpdateNodeGeometry`) and the load path (`Integrity`) so the two
+ * cannot drift — the same round-trip discipline `layoutError`/`transformError` use.
+ *
+ * Most shapes need a positive box. A `core.line` is the box DIAGONAL, so it may collapse
+ * ONE axis (a horizontal line has height 0, a vertical line width 0) — but not both (a
+ * zero-length line is a degenerate point). Returns an error string, or null.
+ */
+export function dimensionError(type: NodeType, width: number, height: number): string | null {
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return "must have finite dimensions";
+    if (type === "core.line") {
+        if (width < 0 || height < 0) return "line dimensions must be >= 0";
+        if (width === 0 && height === 0) return "line must have a non-zero length on at least one axis";
+        return null;
+    }
+    if (width <= 0 || height <= 0) return "must have positive dimensions";
+    return null;
 }
 
 /**

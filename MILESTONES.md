@@ -21,7 +21,7 @@ M1  Computed State           ✅   stored intent -> calculated results
       │
 M2  Layout Engine            ✅   flex(grow/shrink/wrap/align-content) + hug + grid(rows/auto/hug/spans/flow/pins) + constraints + absolute; minmax/fit-content deferred
       │
-M3  Renderer                 🚧*  pure render-model + viewport culling; shapes/effects/canvas remain
+M3  Renderer                 🚧*  render-model + culling + ellipse/line; path/effects/canvas remain
       │
 M4  Editor                   ⬜*  viewport, selection, manipulation, guides
       │
@@ -419,8 +419,19 @@ leaves the DOM); safety was pre-verified (hit-testing is DOM-free; the tool laye
 an off-screen parent never drops an on-screen child), the cull rect shares the exact
 screen→world definition `emitSVG` uses, and every guard is mutation-tested.
 
-**Remaining:** shape kinds `ellipse` / `line` / `path` (each blocked on a `NODE_TYPES` +
-schema bump in the document layer, then trivial on the render-model side); **effects**
+**Landed (slice 3 — `core.ellipse` + `core.line`, schema 16):** two new node types. The
+document-layer work: `NODE_TYPES` + validation + serializer migration + a schema bump, and a
+shared per-type `dimensionError` (used by the load path AND `AddNode`/`Resize`/`UpdateNodeGeometry`
+so they cannot drift) — rect/ellipse/text/image need a positive box; a `core.line` is the box
+DIAGONAL and may collapse ONE axis (a horizontal/vertical line), not both. Render side (trivial as
+predicted): an `ellipse` Shape (fills its box) and a `line` Shape (diagonal, colour = `stroke ?? fill`).
+Every guard mutation-tested (11 mutations, all killed). Deferred: a settable line width (hairline `1/z`
+for now), "/" orientation (via a flip transform), and a **pick tolerance** so a zero-extent (axis-aligned)
+line is selectable — today bbox hit-testing collapses to zero area for such a line (a diagonal line, with
+positive-area bounds, selects fine), so thin-target selection is an M4 editor-layer concern.
+
+**Remaining:** shape kind `path` (blocked on a `NODE_TYPES` + schema bump plus a real
+relative→absolute normalizer — the genuine hard part of M3's SVG half); **effects**
 (shadow/blur — plumbing lives in the emitters); and the **Canvas/WebGL backend** (a
 second emitter over the same `DisplayList` — its text wrapping/metrics and rasterization
 parity are genuine milestone weight and may split into their own milestone).

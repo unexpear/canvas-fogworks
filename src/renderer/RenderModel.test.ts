@@ -358,3 +358,53 @@ describe("buildRenderModel — culling", () => {
         expect(buildRenderModel(SIZE, doc, state).content.length).toBe(0);
     });
 });
+
+// ─── Shape kinds: ellipse + line ─────────────────────────────────────────────
+describe("buildRenderModel — ellipse + line", () => {
+    test("ellipse → centre + radii from its box, rect-like paint (no rx)", () => {
+        const doc = docWith({ type: "core.ellipse", style: { fill: "#f0f", opacity: 0.8, stroke: "#111" } });
+        const item = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
+        expect(item.shape).toEqual({ kind: "ellipse", cx: 100, cy: 50, rx: 100, ry: 50 }); // box 200×100
+        expect(item.paint.fill).toBe("#f0f");
+        expect(item.paint.opacity).toBe(0.8);
+        expect(item.paint.stroke).toBe("#111");
+        expect(item.paint.strokeWidth).toBe(1); // 1/z at z=1
+        expect(item.paint.radius).toBeNull(); // no `rx` — would collide with the ellipse's x-radius
+    });
+
+    test("ellipse without stroke omits it", () => {
+        const doc = docWith({ type: "core.ellipse", style: { fill: "#fff", opacity: 1 } });
+        const item = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
+        expect(item.paint.stroke).toBeNull();
+        expect(item.paint.strokeWidth).toBeNull();
+    });
+
+    test("line → box diagonal (0,0)→(w,h); colour falls back to fill when no stroke", () => {
+        const doc = docWith({ type: "core.line", style: { fill: "#0ff", opacity: 1 } });
+        const item = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
+        expect(item.shape).toEqual({ kind: "line", x1: 0, y1: 0, x2: 200, y2: 100 });
+        expect(item.paint.stroke).toBe("#0ff"); // fill as the line colour
+        expect(item.paint.fill).toBeNull();
+        expect(item.paint.strokeWidth).toBe(1);
+        expect(item.paint.opacity).toBe(1);
+    });
+
+    test("line uses an explicit stroke over the fill fallback, and carries opacity", () => {
+        const doc = docWith({ type: "core.line", style: { fill: "#0ff", stroke: "#f00", opacity: 0.4 } });
+        const item = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
+        expect(item.paint.stroke).toBe("#f00");
+        expect(item.paint.opacity).toBe(0.4);
+    });
+
+    test("line with an EMPTY-string stroke still falls back to fill (|| not ??)", () => {
+        const doc = docWith({ type: "core.line", style: { fill: "#0ff", stroke: "", opacity: 1 } });
+        const item = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
+        expect(item.paint.stroke).toBe("#0ff");
+    });
+
+    test("a horizontal line (height 0) → a flat diagonal, still one content item", () => {
+        const doc = docWith({ type: "core.line", geometry: { x: 0, y: 0, width: 120, height: 0 }, style: { fill: "#000", opacity: 1 } });
+        const item = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
+        expect(item.shape).toEqual({ kind: "line", x1: 0, y1: 0, x2: 120, y2: 0 });
+    });
+});
