@@ -105,9 +105,10 @@ its bounding box, and never touches the DOM. `hitTest` takes an optional world-s
 `tolerance` (a pick halo, `screen-px / zoom`) that inflates the test, so a zero-extent
 target — an axis-aligned `core.line` whose box has zero area — stays selectable.
 **All picking is DOM-free** (M4): point selection (`hitTest`), marquee/box-select
-(`nodesInRect` — the nodes whose world AABB overlaps a rect), and resize-handle
+(`nodesInRect` — the nodes whose world AABB overlaps a rect), and resize/rotate-handle
 grabbing (`handleAtPoint` over `selectionHandles`, the SAME handle geometry the renderer
-draws, so pick and draw can't drift). Tools convert the pointer once via the shared
+draws, so pick and draw can't drift). Rotate spins the node about its world-AABB centre and
+live-commits a coalesced `UpdateNodeTransformAction` (a continuous drag = one undo). Tools convert the pointer once via the shared
 `screenToWorld` (the inverse of `screen = z·world − vp`). Because nothing reads
 `data-node-id`/`data-resize-handle`, the editor works unchanged under the Canvas backend.
 The renderer's `buildRenderModel` also

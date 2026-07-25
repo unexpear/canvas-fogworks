@@ -51,10 +51,13 @@ function selectionBounds(s: ComputedState, ids: readonly string[]): Rect | null;
 // geometry/SelectionHandles.ts — DOM-free resize-handle geometry, SHARED by the renderer
 // (draws) and the editor (hit-tests) so they cannot drift.
 const HANDLE_SIZE_PX: number;                          // handle square edge, SCREEN px
-type HandleId = "nw" | "ne" | "sw" | "se";
+const ROTATE_OFFSET_PX: number;                        // rotate knob's height above the box top, SCREEN px
+type HandleId = "nw" | "ne" | "sw" | "se" | "rotate";
 interface SelectionHandle { nodeId: string; handle: HandleId; cx: number; cy: number; cursor: string } // center in WORLD
-function selectionHandles(s: ComputedState, selectedNodeIds: readonly string[]): SelectionHandle[]; // 4 AABB corners per selected node, in order
-function handleAtPoint(s: ComputedState, selectedNodeIds: readonly string[], x: number, y: number, sizeWorld: number): SelectionHandle | null; // handle under a world point (sizeWorld = HANDLE_SIZE_PX/zoom); back-to-front
+// `zoom` places the rotate knob (fixed screen px above the box) and, for handleAtPoint, sizes the grab square
+// (HANDLE_SIZE_PX/floored-zoom) — the SAME square the renderer draws, so grab==draw at every zoom.
+function selectionHandles(s: ComputedState, selectedNodeIds: readonly string[], zoom: number): SelectionHandle[]; // 4 corners + rotate per selected node
+function handleAtPoint(s: ComputedState, selectedNodeIds: readonly string[], x: number, y: number, zoom: number): SelectionHandle | null; // handle under a world point; back-to-front (rotate beats a grazed corner)
 
 // geometry/LayoutEngine.ts — Milestone 2 core: auto-layout containers.
 // Runs INSIDE computeGeometry; a container's children get a computed local rect.
@@ -241,9 +244,10 @@ interface Tool {                             // all methods optional
 class ToolController {
   constructor(dispatcher: ActionDispatcher, editorState: EditorState, refresh: () => void);
   setTool(tool: Tool): void;
-  // routes pointer/key events; owns viewport PAN (space+drag / middle-mouse), corner-resize
-  // (via DOM-free `handleAtPoint` over the selection, NOT `data-resize-handle`),
-  // Delete/Backspace, Escape — each a mode that intercepts before the active tool
+  // routes pointer/key events; owns viewport PAN (space+drag / middle-mouse), corner-RESIZE and
+  // ROTATE (both via DOM-free `handleAtPoint` over the selection, NOT `data-resize-handle`; rotate
+  // spins about the node's world-AABB centre and live-commits a coalesced `UpdateNodeTransformAction`
+  // = one undo per continuous drag), Delete/Backspace, Escape — each a mode that intercepts before the active tool
 }
 ```
 

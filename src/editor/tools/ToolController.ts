@@ -1,15 +1,16 @@
 /**
  * @module ToolController
- * @description Routes pointer events to the active tool. Handles resize mode.
+ * @description Routes pointer events to the active tool. Handles pan, resize, and rotate modes.
  */
 
 import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
 import { UpdateNodeGeometryAction } from "../../core/actions/UpdateNodeGeometryAction";
+import { UpdateNodeTransformAction } from "../../core/actions/UpdateNodeTransformAction";
 import { DeleteNodeAction } from "../../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../../core/actions/TransactionAction";
 import { EditorState, panBy, screenToWorld } from "../EditorState";
 import { computeGeometry, ComputedState } from "../../core/geometry/GeometryEngine";
-import { handleAtPoint, HANDLE_SIZE_PX } from "../../core/geometry/SelectionHandles";
+import { handleAtPoint } from "../../core/geometry/SelectionHandles";
 import { selectionRoots } from "../../core/document/SceneGraph";
 
 export interface Tool {
@@ -35,6 +36,16 @@ export class ToolController {
     private resizePreview: { x: number; y: number; width: number; height: number } | null = null;
     private resizeStartX = 0;
     private resizeStartY = 0;
+
+    // Rotate mode — grabbing the rotate knob spins the node about its world-AABB centre.
+    // Each move live-commits a coalesced UpdateNodeTransformAction, so a CONTINUOUS drag is one
+    // undo step (subject to the history coalesce window, exactly like a slider drag).
+    private rotateMode = false;
+    private rotateNodeId: string | null = null;
+    private rotateCenterX = 0;
+    private rotateCenterY = 0;
+    private rotateStartAngle = 0;   // pointer angle about the centre at grab
+    private rotateInitial = 0;      // the node's rotation at grab
 
     // Viewport pan (space+drag or middle-mouse) — a mode that intercepts before the tool,
     // like resize. The gesture is screen-space, so it applies at any zoom and any tool.
@@ -77,27 +88,37 @@ export class ToolController {
         let computed: ComputedState | undefined;
         if (sel.length > 0) {
             const vp = this.editorState.viewport;
-            const zoom = Math.max(0.01, vp.zoom);
             const w = screenToWorld(vp, canvasRect, e.clientX, e.clientY);
             computed = computeGeometry(this.dispatcher.getDocument(), this.editorState.pendingGeometry);
-            const hit = handleAtPoint(computed, sel, w.x, w.y, HANDLE_SIZE_PX / zoom);
-            if (hit) {
-                const node = this.dispatcher.getDocument().nodes.get(hit.nodeId);
-                if (node) {
-                    this.resizeMode = true;
-                    this.resizeNodeId = hit.nodeId;
-                    this.resizeHandle = hit.handle;
-                    this.resizeStartX = e.clientX;
-                    this.resizeStartY = e.clientY;
-                    this.resizeOrigin = {
-                        x: node.geometry.x,
-                        y: node.geometry.y,
-                        width: node.geometry.width,
-                        height: node.geometry.height
-                    };
+            const hit = handleAtPoint(computed, sel, w.x, w.y, vp.zoom);
+            const c = hit ? computed.nodes.get(hit.nodeId) : undefined;
+            const node = hit ? this.dispatcher.getDocument().nodes.get(hit.nodeId) : undefined;
+            if (hit && c && node) {
+                if (hit.handle === "rotate") {
+                    // Spin about the world-AABB centre (= the default centre transform-origin).
+                    this.rotateMode = true;
+                    this.rotateNodeId = hit.nodeId;
+                    this.rotateCenterX = c.bounds.x + c.bounds.width / 2;
+                    this.rotateCenterY = c.bounds.y + c.bounds.height / 2;
+                    this.rotateInitial = node.transform?.rotation ?? 0;
+                    this.rotateStartAngle = Math.atan2(w.y - this.rotateCenterY, w.x - this.rotateCenterX);
+                    this.editorState.isDragging = true;
                     e.preventDefault();
                     return;
                 }
+                this.resizeMode = true;
+                this.resizeNodeId = hit.nodeId;
+                this.resizeHandle = hit.handle;
+                this.resizeStartX = e.clientX;
+                this.resizeStartY = e.clientY;
+                this.resizeOrigin = {
+                    x: node.geometry.x,
+                    y: node.geometry.y,
+                    width: node.geometry.width,
+                    height: node.geometry.height
+                };
+                e.preventDefault();
+                return;
             }
         }
 
@@ -110,6 +131,19 @@ export class ToolController {
             this.panLastX = e.clientX;
             this.panLastY = e.clientY;
             this.refresh();
+            return;
+        }
+
+        if (this.rotateMode && this.rotateNodeId) {
+            const doc = this.dispatcher.getDocument();
+            // The node vanished mid-drag (e.g. deleted by a keyboard shortcut): end the gesture
+            // AND clear the drag-cursor flag, or it stays stuck on "grabbing".
+            if (!doc.nodes.has(this.rotateNodeId)) { this.resetRotate(); this.editorState.isDragging = false; this.refresh(); return; }
+            const w = screenToWorld(this.editorState.viewport, canvasRect, e.clientX, e.clientY);
+            const angle = Math.atan2(w.y - this.rotateCenterY, w.x - this.rotateCenterX);
+            const rotation = this.rotateInitial + (angle - this.rotateStartAngle);
+            // Live-commit, coalesced → a continuous drag is one undo step; onChange repaints.
+            this.dispatcher.dispatchAction(new UpdateNodeTransformAction(doc, this.rotateNodeId, { rotation }), { coalesce: true });
             return;
         }
 
@@ -136,6 +170,14 @@ export class ToolController {
     onMouseUp(e: MouseEvent): void {
         if (this.panMode) {
             this.panMode = false;
+            this.editorState.isDragging = false;
+            this.refresh();
+            return;
+        }
+
+        if (this.rotateMode) {
+            // The rotation was already live-committed (coalesced) during the drag; just end.
+            this.resetRotate();
             this.editorState.isDragging = false;
             this.refresh();
             return;
@@ -233,6 +275,11 @@ export class ToolController {
         this.resizeOrigin = null;
         this.resizePreview = null;
         this.editorState.pendingGeometry = null;
+    }
+
+    private resetRotate(): void {
+        this.rotateMode = false;
+        this.rotateNodeId = null;
     }
 
     private deleteSelectedNodes(): void {

@@ -23,7 +23,7 @@ M2  Layout Engine            ✅   flex(grow/shrink/wrap/align-content) + hug + 
       │
 M3  Renderer                 ✅   SVG renderer (shapes + culling + effects) + Canvas backend (tested); canvas wiring → M4
       │
-M4  Editor                   🚧*  pan/zoom + box-select landed; DOM-free handles+rotate, canvas wiring, guides remain
+M4  Editor                   🚧*  pan/zoom + box-select + DOM-free handles + rotate landed; canvas wiring, guides remain
       │
 M5  Variables & Tokens       ⬜
 M6  Components                ⬜
@@ -500,8 +500,8 @@ Already present from earlier prototypes: click + shift-multi-select (DOM-free `h
 resize (`ToolController`, but DOM-`data-resize-handle`-based — the canvas-wiring blocker), delete, and
 origin-anchored wheel zoom. Slice plan: **(1) pan/zoom** — pure `panBy`/`zoomAt` viewport math (node-tested)
 + cursor-anchored wheel zoom + space/middle-mouse pan; **(2) box-select** (marquee + hit-in-rect);
-**(3) DOM-free handle hit-testing [3a DONE] + rotate [3b]** (moves resize-handle picking off the SVG DOM —
-unblocks canvas — and adds the rotate affordance over `UpdateNodeTransformAction`); **(4) canvas wiring** (a
+**(3) DOM-free handle hit-testing [3a] + rotate [3b] — DONE** (moved resize-handle picking off the SVG DOM —
+unblocks canvas — and added the rotate affordance over `UpdateNodeTransformAction`); **(4) canvas wiring** (a
 backend selector, now that handles are DOM-free); **(5) snapping / alignment guides**.
 
 **Landed (slice 1 — pan/zoom):** pure `panBy(vp, dx, dy)` + `zoomAt(vp, factor, cursorX, cursorY)` viewport
@@ -531,6 +531,21 @@ events, no DOM). Extracted the one screen→world inverse into a shared `screenT
 (`handleAtPoint`) all DOM-free — and hover unwired — **nothing in the editor reads the SVG DOM**, so the
 Canvas backend can now be wired as a live editing surface (slice 4). No schema change. Remaining in slice 3:
 **3b — rotate** (a rotate handle + gesture over `UpdateNodeTransformAction`).
+
+**Landed (slice 3b — rotate; slice 3 COMPLETE):** the shared `selectionHandles` now also emits a **rotate
+knob** — a circle a fixed `ROTATE_OFFSET_PX` screen px above the box's top-centre (so `selectionHandles`/
+`handleAtPoint` gained a `zoom` param; deriving both the grab size and the rotate offset in ONE place also
+removed the last draw-vs-pick size-drift risk). Grabbing the knob spins the node about its **world-AABB centre**
+(= the default centre transform-origin; correct even for nested/rotated nodes since a parallelogram's AABB is
+centred on its centroid): the pointer's angle-delta about the centre is added to the node's existing rotation,
+and each move **live-commits a coalesced `UpdateNodeTransformAction`** — live feedback, and a CONTINUOUS drag
+coalesces into ONE undo step (reusing the existing `actionId:nodeId` coalescing rather than adding pending-
+transform plumbing; like any slider drag, a >window pause mid-gesture splits it, and two flicks on the same node
+within the window merge — inherent, acceptable). No schema change (rotation is the existing
+`Node.transform.rotation`, schema 2). Deferred: a stalk line to the knob, Escape-to-cancel-rotate (undo covers
+it), group-rotate for multi-select, rotate about a non-centre origin, and the cosmetic knob-slide as a rotating
+node's AABB grows/shrinks (the handles are AABB-based). This closes M4 slice 3; next is **slice 4 — canvas
+wiring**, now unblocked.
 
 ---
 

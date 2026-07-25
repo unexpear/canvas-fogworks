@@ -21,7 +21,7 @@ import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds,
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
-import { selectionHandles, handleAtPoint, HANDLE_SIZE_PX } from "../geometry/SelectionHandles";
+import { selectionHandles, handleAtPoint, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
 import { MoveTool } from "../../editor/tools/MoveTool";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
@@ -980,44 +980,52 @@ describe("selectionHandles + handleAtPoint", () => {
         return doc;
     }
 
-    test("a selected node yields its four AABB-corner handles with matching cursors", () => {
+    test("a selected node yields its four AABB-corner handles plus a rotate knob", () => {
         const cs = computeGeometry(handleDoc());
-        const hs = selectionHandles(cs, ["A"]);
-        expect(hs.map(h => h.handle)).toEqual(["nw", "ne", "sw", "se"]);
-        expect(hs.map(h => [h.cx, h.cy])).toEqual([[0, 0], [50, 0], [0, 50], [50, 50]]);
+        const hs = selectionHandles(cs, ["A"], 1);
+        expect(hs.map(h => h.handle)).toEqual(["nw", "ne", "sw", "se", "rotate"]);
+        expect(hs.slice(0, 4).map(h => [h.cx, h.cy])).toEqual([[0, 0], [50, 0], [0, 50], [50, 50]]);
+        expect(hs[4]).toMatchObject({ handle: "rotate", cx: 25, cy: -ROTATE_OFFSET_PX, cursor: "grab" }); // top-centre, offset up
         expect(hs.find(h => h.handle === "ne")!.cursor).toBe("nesw-resize");
         expect(hs.find(h => h.handle === "se")!.cursor).toBe("nwse-resize");
-        expect(selectionHandles(cs, [])).toEqual([]); // nothing selected → no handles
-        expect(selectionHandles(cs, ["A", "B"]).length).toBe(8); // 4 per node
+        expect(selectionHandles(cs, [], 1)).toEqual([]); // nothing selected → no handles
+        expect(selectionHandles(cs, ["A", "B"], 1).length).toBe(10); // 5 per node
+    });
+
+    test("the rotate knob sits a fixed SCREEN distance above the box (its world offset scales with zoom)", () => {
+        const cs = computeGeometry(handleDoc());
+        expect(selectionHandles(cs, ["A"], 1)[4].cy).toBe(-ROTATE_OFFSET_PX);
+        expect(selectionHandles(cs, ["A"], 2)[4].cy).toBe(-ROTATE_OFFSET_PX / 2); // half the world offset at 2× zoom
     });
 
     test("selectionHandles skips a node with non-finite bounds, never throws", () => {
         const ok: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 } };
         const bad: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: NaN, y: 0, width: 10, height: 10 } };
         const cs: ComputedState = { order: ["bad", "ok"], nodes: new Map([["bad", bad], ["ok", ok]]) };
-        expect(selectionHandles(cs, ["bad", "ok"]).map(h => h.nodeId)).toEqual(["ok", "ok", "ok", "ok"]);
+        expect(selectionHandles(cs, ["bad", "ok"], 1).map(h => h.nodeId)).toEqual(["ok", "ok", "ok", "ok", "ok"]); // 5 for ok, none for bad
     });
 
-    test("handleAtPoint returns the handle under a point, null between them, and scales with size", () => {
+    test("handleAtPoint returns the handle under a point, null between them, and scales with zoom", () => {
         const cs = computeGeometry(handleDoc());
-        const hs = HANDLE_SIZE_PX; // half = 4 at zoom 1
-        expect(handleAtPoint(cs, ["A"], 0, 0, hs)!.handle).toBe("nw");
-        expect(handleAtPoint(cs, ["A"], 50, 0, hs)!.handle).toBe("ne");
-        expect(handleAtPoint(cs, ["A"], 25, 25, hs)).toBeNull();   // node centre — no corner near
+        // zoom 1 → grab half = HANDLE_SIZE_PX/2 = 4
+        expect(handleAtPoint(cs, ["A"], 0, 0, 1)!.handle).toBe("nw");
+        expect(handleAtPoint(cs, ["A"], 50, 0, 1)!.handle).toBe("ne");
+        expect(handleAtPoint(cs, ["A"], 25, 25, 1)).toBeNull();   // node centre — no corner near
         // Each point is out of nw's square by ONE bound only (isolates all four comparisons):
-        expect(handleAtPoint(cs, ["A"], 5, 0, hs)).toBeNull();     // +x past the right edge
-        expect(handleAtPoint(cs, ["A"], -5, 0, hs)).toBeNull();    // −x past the left edge
-        expect(handleAtPoint(cs, ["A"], 0, 5, hs)).toBeNull();     // +y past the bottom edge
-        expect(handleAtPoint(cs, ["A"], 0, -5, hs)).toBeNull();    // −y past the top edge
-        expect(handleAtPoint(cs, ["A"], 3, 0, hs)!.handle).toBe("nw"); // 3 < half → hit
-        expect(handleAtPoint(cs, ["A"], 5, 0, 12)!.handle).toBe("nw"); // bigger square → grabbable further
-        expect(handleAtPoint(cs, ["A"], 50, 50, hs)!.handle).toBe("se"); // A only
+        expect(handleAtPoint(cs, ["A"], 5, 0, 1)).toBeNull();     // +x past the right edge
+        expect(handleAtPoint(cs, ["A"], -5, 0, 1)).toBeNull();    // −x past the left edge
+        expect(handleAtPoint(cs, ["A"], 0, 5, 1)).toBeNull();     // +y past the bottom edge
+        expect(handleAtPoint(cs, ["A"], 0, -5, 1)).toBeNull();    // −y past the top edge
+        expect(handleAtPoint(cs, ["A"], 3, 0, 1)!.handle).toBe("nw"); // 3 < half → hit
+        expect(handleAtPoint(cs, ["A"], 5, 0, 0.5)!.handle).toBe("nw"); // zoom 0.5 → half 8 → grabbable further
+        expect(handleAtPoint(cs, ["A"], 25, -ROTATE_OFFSET_PX, 1)!.handle).toBe("rotate"); // the rotate knob
+        expect(handleAtPoint(cs, ["A"], 50, 50, 1)!.handle).toBe("se"); // A only
     });
 
     test("handleAtPoint lets a later-drawn handle win an overlap (scan is back to front)", () => {
         const cs = computeGeometry(handleDoc());
         // At (50,50): A's se and B's nw coincide; B is selected after A, so B wins.
-        const hit = handleAtPoint(cs, ["A", "B"], 50, 50, HANDLE_SIZE_PX)!;
+        const hit = handleAtPoint(cs, ["A", "B"], 50, 50, 1)!;
         expect([hit.nodeId, hit.handle]).toEqual(["B", "nw"]);
     });
 });
@@ -1132,7 +1140,7 @@ describe("ToolController DOM-free resize", () => {
         doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 10, y: 10, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
         doc.rootNodeUuids = ["P"];
         // C's world bounds are (110,210,50,50); its NW handle is at WORLD (110,210), not local (10,10).
-        expect(selectionHandles(computeGeometry(doc), ["C"])[0]).toMatchObject({ handle: "nw", cx: 110, cy: 210 });
+        expect(selectionHandles(computeGeometry(doc), ["C"], 1)[0]).toMatchObject({ handle: "nw", cx: 110, cy: 210 });
         const dispatcher = new ActionDispatcher(doc);
         const es = createEditorState(); es.selectedNodeIds = ["C"];
         const tc = new ToolController(dispatcher, es, () => { });
@@ -1140,6 +1148,74 @@ describe("ToolController DOM-free resize", () => {
         tc.onMouseMove(md(180, 280), rect);
         tc.onMouseUp(md(180, 280));
         expect(dispatcher.getDocument().nodes.get("C")!.geometry).toMatchObject({ width: 70, height: 70 });
+    });
+});
+
+// ─── M4: ToolController rotate — grab the knob to spin about the node's centre ───
+describe("ToolController rotate", () => {
+    const rect = { left: 0, top: 0 } as DOMRect;
+    const md = (x: number, y: number) =>
+        ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+
+    function harness(rotation?: number) {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {}, ...(rotation !== undefined ? { transform: { rotation } } : {}) });
+        doc.rootNodeUuids = ["A"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        return { dispatcher, es, tc };
+    }
+    const rotOf = (d: ActionDispatcher) => d.getDocument().nodes.get("A")!.transform?.rotation ?? 0;
+
+    test("dragging the knob spins about the centre, and the whole drag is ONE undo step", () => {
+        const { dispatcher, tc } = harness();
+        // A is 100×100 at origin → centre (50,50); the knob is at (50, −ROTATE_OFFSET_PX), straight up.
+        tc.onMouseDown(md(50, -ROTATE_OFFSET_PX), rect); // grab: pointer angle −90° about the centre
+        tc.onMouseMove(md(90, 10), rect);                // an intermediate frame
+        tc.onMouseMove(md(100, 50), rect);               // pointer straight RIGHT of centre → 0°, so +90° total
+        tc.onMouseUp(md(100, 50));
+        expect(rotOf(dispatcher)).toBeCloseTo(Math.PI / 2, 10);
+        dispatcher.undo();
+        expect(rotOf(dispatcher)).toBe(0); // ONE undo restores the original → the two frames coalesced
+    });
+
+    test("rotation is RELATIVE to the node's existing rotation (adds the drag delta)", () => {
+        const { dispatcher, tc } = harness(Math.PI / 2); // a 100×100 square rotated 90° has the same AABB
+        tc.onMouseDown(md(50, -ROTATE_OFFSET_PX), rect); // knob still at (50,−off) since the AABB is unchanged
+        tc.onMouseMove(md(100, 50), rect);               // +90° drag
+        tc.onMouseUp(md(100, 50));
+        expect(rotOf(dispatcher)).toBeCloseTo(Math.PI, 10); // π/2 initial + π/2 delta
+    });
+
+    test("a non-knob press does not rotate (a corner press resizes instead)", () => {
+        const { dispatcher, tc } = harness();
+        tc.onMouseDown(md(100, 100), rect); // SE corner, not the knob
+        tc.onMouseMove(md(120, 120), rect);
+        tc.onMouseUp(md(120, 120));
+        expect(rotOf(dispatcher)).toBe(0); // never rotated
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry).toMatchObject({ width: 120, height: 120 }); // resized
+    });
+
+    test("the knob grab and the angle math hold under a non-identity zoom + pan", () => {
+        const { dispatcher, es, tc } = harness();
+        es.viewport = { x: 30, y: 20, zoom: 2 };
+        const r = { left: 0, top: 0 } as DOMRect;
+        // Knob world (50, −ROTATE_OFFSET_PX/2 = −11) → screen (2·50−30, 2·(−11)−20) = (70, −42).
+        tc.onMouseDown(md(70, -42), r);
+        // World (100,50) [straight right of centre → angle 0] → screen (2·100−30, 2·50−20) = (170, 80).
+        tc.onMouseMove(md(170, 80), r);
+        tc.onMouseUp(md(170, 80));
+        expect(rotOf(dispatcher)).toBeCloseTo(Math.PI / 2, 10); // wrong zoom/pan handling → wrong angle
+    });
+
+    test("deleting the rotated node mid-drag ends the gesture and clears the drag-cursor flag", () => {
+        const { dispatcher, es, tc } = harness();
+        tc.onMouseDown(md(50, -ROTATE_OFFSET_PX), rect); // grab knob → isDragging = true
+        expect(es.isDragging).toBe(true);
+        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "A")); // node vanishes
+        tc.onMouseMove(md(60, 0), rect); // abort path: rotateNodeId no longer in the doc
+        expect(es.isDragging).toBe(false); // not left stuck on "grabbing"
     });
 });
 

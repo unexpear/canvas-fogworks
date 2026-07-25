@@ -1,29 +1,34 @@
 /**
  * @module SelectionHandles
- * @description The resize-handle geometry for a selection — shared by the renderer
- * (which DRAWS the handles) and the editor (which HIT-TESTS them), so picking can
- * never drift from drawing, and so hit-testing needs no DOM: the Canvas backend has
- * no `data-resize-handle` element to read, yet resize must still work under it.
+ * @description The selection-handle geometry — shared by the renderer (which DRAWS the
+ * handles) and the editor (which HIT-TESTS them), so picking can never drift from drawing,
+ * and so hit-testing needs no DOM: the Canvas backend has no `data-resize-handle` element
+ * to read, yet resize/rotate must still work under it.
  *
- * Positions are read straight from each node's precomputed world AABB (`bounds`) — no
- * coordinate composition — so this is safe for the render model to depend on.
+ * Positions are read from each node's precomputed world AABB (`bounds`) — no coordinate
+ * composition — so this is safe for the render model to depend on. Both the handle size and
+ * the rotate-handle offset are fixed SCREEN pixels, so callers pass `zoom`; the conversion to
+ * world (and the zoom floor) lives here ONCE, which is what keeps the drawn square and the
+ * grabbable square identical at every zoom.
  */
 
 import { ComputedState } from "./GeometryEngine";
 import { Rect } from "./Matrix";
 
-/** Resize-handle square edge length in SCREEN pixels (÷ zoom → world units). */
+/** Resize-handle square edge length in SCREEN pixels. */
 export const HANDLE_SIZE_PX = 8;
+/** How far above the selection's top edge the rotate handle sits, in SCREEN pixels. */
+export const ROTATE_OFFSET_PX = 22;
 
-export type HandleId = "nw" | "ne" | "sw" | "se";
+export type HandleId = "nw" | "ne" | "sw" | "se" | "rotate";
 
 export interface SelectionHandle {
     nodeId: string;
     handle: HandleId;
-    /** Handle CENTER in world coordinates — a corner of the node's world AABB. */
+    /** Handle CENTER in world coordinates (a corner of the node's world AABB, or the rotate knob above it). */
     cx: number;
     cy: number;
-    /** CSS cursor for the handle (diagonal resize matching the corner). */
+    /** CSS cursor for the handle. */
     cursor: string;
 }
 
@@ -32,12 +37,19 @@ function isFiniteRect(r: Rect): boolean {
         && Number.isFinite(r.width) && Number.isFinite(r.height);
 }
 
+/** Zoom floored to the same minimum the viewport clamp and renderer use. */
+function flooredZoom(zoom: number): number {
+    return Math.max(0.01, zoom);
+}
+
 /**
- * The four corner resize handles for every selected node, in selection order (and, per
- * node, nw · ne · sw · se). A node missing from the computed state, or with a non-finite
- * AABB, contributes none — never throws.
+ * Every handle for the selection, in selection order and — per node — nw · ne · sw · se ·
+ * rotate. The four corners come straight from the world AABB (zoom-independent); the rotate
+ * knob sits `ROTATE_OFFSET_PX` screen px above the top edge's centre (so it needs `zoom`). A
+ * node missing from the computed state, or with a non-finite AABB, contributes none — never throws.
  */
-export function selectionHandles(state: ComputedState, selectedNodeIds: readonly string[]): SelectionHandle[] {
+export function selectionHandles(state: ComputedState, selectedNodeIds: readonly string[], zoom: number): SelectionHandle[] {
+    const rotateOffset = ROTATE_OFFSET_PX / flooredZoom(zoom);
     const handles: SelectionHandle[] = [];
     for (const nodeId of selectedNodeIds) {
         const c = state.nodes.get(nodeId);
@@ -47,27 +59,28 @@ export function selectionHandles(state: ComputedState, selectedNodeIds: readonly
             { nodeId, handle: "nw", cx: b.x, cy: b.y, cursor: "nwse-resize" },
             { nodeId, handle: "ne", cx: b.x + b.width, cy: b.y, cursor: "nesw-resize" },
             { nodeId, handle: "sw", cx: b.x, cy: b.y + b.height, cursor: "nesw-resize" },
-            { nodeId, handle: "se", cx: b.x + b.width, cy: b.y + b.height, cursor: "nwse-resize" }
+            { nodeId, handle: "se", cx: b.x + b.width, cy: b.y + b.height, cursor: "nwse-resize" },
+            { nodeId, handle: "rotate", cx: b.x + b.width / 2, cy: b.y - rotateOffset, cursor: "grab" }
         );
     }
     return handles;
 }
 
 /**
- * The handle under a world-space point, or null. `sizeWorld` is the handle edge length in
- * world units (HANDLE_SIZE_PX / zoom) — the same square the renderer draws, so the grab
- * area equals the visible target. Later-listed handles win an overlap (they draw on top),
- * so the scan runs back to front.
+ * The handle under a world-space point, or null. `zoom` sizes the grab square
+ * (HANDLE_SIZE_PX / floored-zoom) — the same square the renderer draws, so the grab area
+ * equals the visible target — and places the rotate knob. Later-listed handles win an overlap
+ * (they draw on top), so the scan runs back to front: the rotate knob beats a corner it grazes.
  */
 export function handleAtPoint(
     state: ComputedState,
     selectedNodeIds: readonly string[],
     x: number,
     y: number,
-    sizeWorld: number
+    zoom: number
 ): SelectionHandle | null {
-    const half = sizeWorld / 2;
-    const handles = selectionHandles(state, selectedNodeIds);
+    const half = (HANDLE_SIZE_PX / flooredZoom(zoom)) / 2;
+    const handles = selectionHandles(state, selectedNodeIds, zoom);
     for (let i = handles.length - 1; i >= 0; i--) {
         const h = handles[i];
         if (x >= h.cx - half && x <= h.cx + half && y >= h.cy - half && y <= h.cy + half) return h;

@@ -17,7 +17,7 @@ import { RendererState } from "./RendererState";
 import { createEmptyDocument, ProjectDocument, ReadonlyDocument } from "../core/document/Document";
 import { Node } from "../core/document/Node";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
-import { handleAtPoint } from "../core/geometry/SelectionHandles";
+import { handleAtPoint, ROTATE_OFFSET_PX } from "../core/geometry/SelectionHandles";
 import { IDENTITY } from "../core/geometry/Matrix";
 
 const SIZE = { width: 800, height: 600 };
@@ -137,7 +137,7 @@ describe("buildRenderModel — content", () => {
 
 // ─── Overlay ─────────────────────────────────────────────────────────────────
 describe("buildRenderModel — overlay", () => {
-    test("selected node → one outline plus four handles at its world bounds", () => {
+    test("selected node → one outline, four square resize handles, and a round rotate knob", () => {
         const doc = docWith({ type: "core.rectangle", geometry: { x: 10, y: 20, width: 30, height: 40 }, style: { fill: "#fff", opacity: 1 } });
         const state = stateFor(doc, { selectedNodeIds: ["n1"] });
         const model = buildRenderModel(SIZE, doc, state);
@@ -146,19 +146,22 @@ describe("buildRenderModel — overlay", () => {
         const outlines = model.overlay.filter(i => i.role === "outline");
         const handles = model.overlay.filter(i => i.role === "handle");
         expect(outlines.length).toBe(1);
-        expect(handles.length).toBe(4);
+        expect(handles.length).toBe(5); // 4 corners + rotate
 
         expect(outlines[0].shape).toEqual({ kind: "rect", x: b.x - 3, y: b.y - 3, width: b.width + 6, height: b.height + 6 });
         expect(outlines[0].paint).toMatchObject({ fill: "none", stroke: "#00bfff", strokeWidth: 1.5, pointerEvents: false });
         expect(outlines[0].world).toBeNull();
 
         const hs = HANDLE_SIZE_PX; // z = 1
-        expect(handles.map(h => h.handle)).toEqual(["nw", "ne", "sw", "se"]);
+        expect(handles.map(h => h.handle)).toEqual(["nw", "ne", "sw", "se", "rotate"]);
         expect(handles[0].shape).toEqual({ kind: "rect", x: b.x - hs / 2, y: b.y - hs / 2, width: hs, height: hs });
         expect(handles[3].shape).toMatchObject({ x: b.x + b.width - hs / 2, y: b.y + b.height - hs / 2 });
+        // The rotate knob is a CIRCLE above the top-centre, offset up by ROTATE_OFFSET_PX (z = 1).
+        expect(handles[4].shape).toEqual({ kind: "ellipse", cx: b.x + b.width / 2, cy: b.y - ROTATE_OFFSET_PX, rx: hs / 2, ry: hs / 2 });
         expect(handles.every(h => h.nodeId === "n1")).toBe(true);
         expect(handles[1].paint.cursor).toBe("nesw-resize");
         expect(handles[0].paint.cursor).toBe("nwse-resize");
+        expect(handles[4].paint.cursor).toBe("grab");
     });
 
     test("handles scale with zoom, and the DRAWN square equals the GRABBABLE square", () => {
@@ -173,8 +176,14 @@ describe("buildRenderModel — overlay", () => {
         // edge hits, one epsilon past misses — so draw and pick can't drift at any zoom.
         const cs = computeGeometry(doc); // world geometry is zoom-independent; nw centre = (0,0)
         const cx = shape.x + shape.width / 2, half = shape.width / 2;
-        expect(handleAtPoint(cs, ["n1"], cx + half, 0, HANDLE_SIZE_PX / z)!.handle).toBe("nw");
-        expect(handleAtPoint(cs, ["n1"], cx + half + 0.01, 0, HANDLE_SIZE_PX / z)).toBeNull();
+        expect(handleAtPoint(cs, ["n1"], cx + half, 0, z)!.handle).toBe("nw"); // same z → grab half == drawn half
+        expect(handleAtPoint(cs, ["n1"], cx + half + 0.01, 0, z)).toBeNull();
+
+        // The rotate knob's offset AND radius scale with zoom too (only asserted at z=1 elsewhere).
+        const knob = model.overlay.find(i => i.role === "handle" && i.handle === "rotate")!;
+        expect(knob.shape).toEqual({ kind: "ellipse", cx: 25, cy: -ROTATE_OFFSET_PX / z, rx: HANDLE_SIZE_PX / z / 2, ry: HANDLE_SIZE_PX / z / 2 });
+        // And the drawn knob is grabbable: its centre hits at the same z.
+        expect(handleAtPoint(cs, ["n1"], 25, -ROTATE_OFFSET_PX / z, z)!.handle).toBe("rotate");
     });
 
     test("RenderModel composes no coordinates — its Matrix import is the Mat2D TYPE only (invariant, mechanically checked)", () => {
@@ -371,7 +380,7 @@ describe("buildRenderModel — culling", () => {
         const model = buildRenderModel(SIZE, doc, stateFor(doc, { selectedNodeIds: ["n1"] }));
         expect(model.content.length).toBe(0); // content culled...
         expect(model.overlay.filter(i => i.role === "outline").length).toBe(1); // ...but overlay kept
-        expect(model.overlay.filter(i => i.role === "handle").length).toBe(4);
+        expect(model.overlay.filter(i => i.role === "handle").length).toBe(5); // 4 corners + rotate
     });
     test("T20 the grid is NOT culled when all content is off-screen", () => {
         const doc = one(2000, 2000);

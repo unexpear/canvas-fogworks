@@ -391,13 +391,17 @@ function buildOverlay(state: RendererState, z: number): DrawItem[] {
         }
     });
 
-    // Resize handles (world-space). Positions come from the SHARED `selectionHandles` (the
-    // same source the editor hit-tests), so drawing and picking cannot drift. The square is
-    // HANDLE_SIZE_PX on screen, converted to world once.
+    // Resize + rotate handles (world-space). Positions come from the SHARED `selectionHandles`
+    // (the same source the editor hit-tests), so drawing and picking cannot drift. The square is
+    // HANDLE_SIZE_PX on screen, converted to world once; the rotate knob is drawn as a circle to
+    // distinguish it from the square resize handles.
     const HS = HANDLE_SIZE_PX / z;
-    selectionHandles(computed, state.selectedNodeIds).forEach(({ nodeId, handle, cx, cy, cursor }) => {
+    selectionHandles(computed, state.selectedNodeIds, z).forEach(({ nodeId, handle, cx, cy, cursor }) => {
+        const shape: Shape = handle === "rotate"
+            ? { kind: "ellipse", cx, cy, rx: HS / 2, ry: HS / 2 }
+            : { kind: "rect", x: cx - HS / 2, y: cy - HS / 2, width: HS, height: HS };
         items.push({
-            shape: { kind: "rect", x: cx - HS / 2, y: cy - HS / 2, width: HS, height: HS },
+            shape,
             paint: {
                 fill: "#ffffff", opacity: null, stroke: "#00bfff", strokeWidth: 1 / z,
                 strokeDash: null, radius: null, cursor, pointerEvents: true, shadow: null, blur: null
