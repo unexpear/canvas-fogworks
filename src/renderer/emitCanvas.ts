@@ -26,6 +26,10 @@
  *   - ROUNDED RECT uses `roundRect(…, radius)` (uniform corner), which clamps a radius >
  *     min(w,h)/2 differently from SVG's independent `rx`/`ry` clamp — diverges only for an
  *     over-large corner radius.
+ *   - SHADOW/BLUR on a filled+stroked shape is cast on the fill op AND the stroke op (two draws),
+ *     not once for the whole element like SVG's `filter` — same per-op family as the opacity gap.
+ *     (Effects on a ZERO-EXTENT shape are dropped in the model — see buildContent — so neither
+ *     backend renders one; that keeps SVG's collapsing filter region from hiding the element.)
  */
 
 import { isTranslationOnly } from "../core/geometry/Matrix";
@@ -109,9 +113,27 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): v
     }
 }
 
-function drawItem(ctx: CanvasRenderingContext2D, item: DrawItem): void {
-    // save/restore brackets BOTH the world transform AND the paint state, so a null Paint
-    // field behaves like SVG's per-element attribute independence (globalAlpha→1, no dash…).
+/**
+ * Effects (schema 18), set BEFORE the shape draws so they apply to its whole ink (fill+stroke+text),
+ * matching SVG's element-level `filter`. `scale` = z·dpr: canvas `shadow*`/`ctx.filter` are in
+ * DEVICE space (the CTM never touches them), so the backend that owns the CTM must replay its uniform
+ * scale on the world-unit effect values — the ONE arithmetic exception to "the backend does no maths".
+ */
+function applyEffects(ctx: CanvasRenderingContext2D, paint: Paint, scale: number): void {
+    if (paint.shadow !== null) {
+        ctx.shadowColor = paint.shadow.color;
+        ctx.shadowBlur = paint.shadow.blur * scale;
+        ctx.shadowOffsetX = paint.shadow.dx * scale;
+        ctx.shadowOffsetY = paint.shadow.dy * scale;
+    }
+    if (paint.blur !== null && paint.blur > 0) {
+        ctx.filter = `blur(${paint.blur * scale}px)`;
+    }
+}
+
+function drawItem(ctx: CanvasRenderingContext2D, item: DrawItem, scale: number): void {
+    // save/restore brackets the world transform, paint state AND shadow*/filter, so a null Paint
+    // field behaves like SVG's per-element attribute independence (globalAlpha→1, no shadow…).
     ctx.save();
     const w = item.world;
     if (w) {
@@ -119,6 +141,7 @@ function drawItem(ctx: CanvasRenderingContext2D, item: DrawItem): void {
         if (isTranslationOnly(w)) ctx.translate(w.e, w.f);
         else ctx.transform(w.a, w.b, w.c, w.d, w.e, w.f);
     }
+    applyEffects(ctx, item.paint, scale);
     drawShape(ctx, item.shape, item.paint);
     ctx.restore();
 }
@@ -140,7 +163,9 @@ export function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dp
     // Base CTM = viewport, DPR folded in (setTransform resets, so DPR can't be a separate scale).
     ctx.setTransform(z * dpr, 0, 0, z * dpr, -model.viewport.x * dpr, -model.viewport.y * dpr);
 
-    model.grid.lines.forEach(item => drawItem(ctx, item));
-    model.content.forEach(item => drawItem(ctx, item));
-    model.overlay.forEach(item => drawItem(ctx, item));
+    // shadow*/filter are device-space (untouched by the CTM), so effect values are replayed × scale.
+    const scale = z * dpr;
+    model.grid.lines.forEach(item => drawItem(ctx, item, scale));
+    model.content.forEach(item => drawItem(ctx, item, scale));
+    model.overlay.forEach(item => drawItem(ctx, item, scale));
 }

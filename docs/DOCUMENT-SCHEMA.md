@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v17 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -42,6 +42,7 @@ function isNodeType(v: unknown): v is NodeType;  // membership, checked on BOTH 
 // ONE box axis (a horizontal/vertical line, or a flat path bbox); see dimensionError.
 function dimensionError(type: NodeType, width: number, height: number): string | null; // shared edit+load
 function pathError(type: NodeType, path: unknown): string | null;                      // shared edit+load
+function styleError(style: Partial<Style>): string | null;                             // shared edit+load (all Style fields, incl. effects)
 
 // core.path drawing commands: ABSOLUTE, explicit, local-space. Relative/shorthand/arcs are
 // deferred to a future SVG-import normalizer (whose output feeds this same type through pathError).
@@ -74,7 +75,10 @@ interface Style {
   radius?: number;
   opacity: number;     // 0..1
   fontSize?: number;   // core.text; world units, defaults to 14
+  shadow?: Shadow;     // drop shadow (schema 18); absent = none
+  blur?: number;       // whole-node gaussian blur radius, world units, >= 0 (schema 18); absent/0 = none
 }
+interface Shadow { dx: number; dy: number; blur: number; color: string }  // offset + gaussian softness + colour (world units)
 
 interface Layout {     // constraint intent, not absolute position (Milestone 2)
   horizontalAlignment?: "left" | "right" | "center";  // reserved (constraints, deferred)

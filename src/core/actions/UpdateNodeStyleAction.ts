@@ -5,15 +5,11 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
+import { Style, styleError } from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 
-export interface StyleUpdate {
-    fill?: string;
-    opacity?: number;
-    stroke?: string;
-    radius?: number;
-    fontSize?: number;
-}
+/** A partial style patch — every `Style` field is patchable (shared shape, one drift-free source). */
+export type StyleUpdate = Partial<Style>;
 
 export class UpdateNodeStyleAction extends Action {
     private nodeId: string;
@@ -27,14 +23,8 @@ export class UpdateNodeStyleAction extends Action {
 
     public validate(): boolean {
         if (!this.document.nodes.has(this.nodeId)) return false;
-        const s = this.newStyle;
-        // Presence-based, not value-based — see UpdateNodeGeometryAction.validate().
-        if ("opacity" in s && (!Number.isFinite(s.opacity) || (s.opacity as number) < 0 || (s.opacity as number) > 1)) return false;
-        if ("radius" in s && (!Number.isFinite(s.radius) || (s.radius as number) < 0)) return false;
-        if ("fontSize" in s && (!Number.isFinite(s.fontSize) || (s.fontSize as number) <= 0)) return false;
-        if ("fill" in s && typeof s.fill !== "string") return false;
-        if ("stroke" in s && typeof s.stroke !== "string") return false;
-        return true;
+        // Shared, presence-based validator (also the load path's) — cannot drift.
+        return styleError(this.newStyle) === null;
     }
 
     public execute(): MutationResult {

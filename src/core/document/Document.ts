@@ -119,8 +119,13 @@ export const CURRENT_VERSION: string =
  *         — but a schema-16 build would reject a path as an unknown type on load, and would not
  *         understand the `path` command array. Raw SVG-`d`-string parsing is deferred to a future
  *         import feature; the stored form is always explicit absolute commands.
+ *
+ *   "18" — adds `Style.shadow` (drop shadow: dx/dy/blur/color) and `Style.blur` (whole-node gaussian
+ *         blur), the Milestone 3 renderer effects. Existing documents have neither, so
+ *         `migrate_17_to_18` is a pass-through — but a schema-17 build would silently ignore an
+ *         effect and render the node flat.
  */
-export const SCHEMA_VERSION = "17";
+export const SCHEMA_VERSION = "18";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

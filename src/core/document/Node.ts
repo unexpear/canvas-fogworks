@@ -131,6 +131,14 @@ export interface Geometry {
     height: number;
 }
 
+/** A drop shadow: offset + gaussian softness + colour, all in world units. Persisted (schema 18). */
+export interface Shadow {
+    dx: number;
+    dy: number;
+    blur: number;    // gaussian std-dev radius in world units, >= 0 (0 = a sharp shadow)
+    color: string;   // colour value or token id, like `fill` (not parsed)
+}
+
 /** Style holds the visual attributes that define appearance. */
 export interface Style {
     fill: string;      // Color value or token ID (e.g., "$color/primary")
@@ -138,6 +146,32 @@ export interface Style {
     radius?: number;   // Corner radius
     opacity: number;
     fontSize?: number; // Text nodes: font size in world units (defaults to 14)
+    shadow?: Shadow;   // Drop shadow (schema 18); absent = none
+    blur?: number;     // Whole-node gaussian blur radius in world units, >= 0 (schema 18); absent/0 = none
+}
+
+/**
+ * Validity check for a style patch, SHARED by the edit path (`UpdateNodeStyleAction`) and the
+ * load path (`Integrity.checkNodeRanges`) so the two cannot drift — the same discipline
+ * `layoutError`/`transformError` use, and it also closes the pre-existing inline duplication of
+ * the opacity/radius/fontSize rules. Only present fields are checked. Message substrings are
+ * load-bearing (tests assert "opacity must be within"). Returns an error string, or null.
+ */
+export function styleError(s: Partial<Style>): string | null {
+    if ("fill" in s && typeof s.fill !== "string") return "style.fill must be a string";
+    if ("stroke" in s && s.stroke !== undefined && typeof s.stroke !== "string") return "style.stroke must be a string";
+    if ("opacity" in s && (!Number.isFinite(s.opacity) || (s.opacity as number) < 0 || (s.opacity as number) > 1)) return "style.opacity must be within [0, 1]";
+    if ("radius" in s && (!Number.isFinite(s.radius) || (s.radius as number) < 0)) return "style.radius must be >= 0";
+    if ("fontSize" in s && (!Number.isFinite(s.fontSize) || (s.fontSize as number) <= 0)) return "style.fontSize must be > 0";
+    if ("blur" in s && s.blur !== undefined && (!Number.isFinite(s.blur) || (s.blur as number) < 0)) return "style.blur must be finite and >= 0";
+    if ("shadow" in s && s.shadow !== undefined) {
+        const sh = s.shadow as Partial<Shadow>;
+        if (typeof sh !== "object" || sh === null || Array.isArray(sh)) return "style.shadow must be an object";
+        if (!Number.isFinite(sh.dx) || !Number.isFinite(sh.dy)) return "style.shadow dx and dy must be finite";
+        if (!Number.isFinite(sh.blur) || (sh.blur as number) < 0) return "style.shadow.blur must be finite and >= 0";
+        if (typeof sh.color !== "string") return "style.shadow.color must be a string";
+    }
+    return null;
 }
 
 /** Layout defines how the node should behave within its parent container. */

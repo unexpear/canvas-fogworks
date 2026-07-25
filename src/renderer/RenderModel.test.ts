@@ -10,7 +10,7 @@
  * layer, asserted on plain data in the `node` environment like the layout engine.
  */
 
-import { buildRenderModel, DisplayList, HANDLE_SIZE_PX, commandsToPathData } from "./RenderModel";
+import { buildRenderModel, DisplayList, HANDLE_SIZE_PX, commandsToPathData, effectFilterId } from "./RenderModel";
 import { RendererState } from "./RendererState";
 import { createEmptyDocument, ProjectDocument, ReadonlyDocument } from "../core/document/Document";
 import { Node } from "../core/document/Node";
@@ -448,5 +448,68 @@ describe("buildRenderModel — path", () => {
         const model = buildRenderModel(SIZE, doc, stateFor(doc));
         expect(model.content.length).toBe(1);
         expect(model.content[0].shape).toEqual({ kind: "path", commands: [] });
+    });
+});
+
+// ─── Effects (shadow + blur) ─────────────────────────────────────────────────
+describe("buildRenderModel — effects", () => {
+    const SH = { dx: 2, dy: 5, blur: 3, color: "#f00" };
+    const fx = (style: Node["style"]) => {
+        const doc = docWith({ type: "core.rectangle", style });
+        return buildRenderModel(SIZE, doc, stateFor(doc)).content[0].paint;
+    };
+
+    test("resolves shadow + blur onto the content Paint (a copy, not the doc reference)", () => {
+        const p = fx({ fill: "#fff", opacity: 1, shadow: SH, blur: 7 });
+        expect(p.shadow).toEqual(SH);
+        expect(p.shadow).not.toBe(SH);
+        expect(p.blur).toBe(7);
+    });
+
+    test("shadow-only / blur-only / neither / zero-blur resolve independently", () => {
+        expect(fx({ fill: "#fff", opacity: 1, shadow: SH }).blur).toBeNull();
+        expect(fx({ fill: "#fff", opacity: 1, shadow: SH }).shadow).toEqual(SH);
+        expect(fx({ fill: "#fff", opacity: 1, blur: 7 }).shadow).toBeNull();
+        expect(fx({ fill: "#fff", opacity: 1, blur: 7 }).blur).toBe(7);
+        expect(fx({ fill: "#fff", opacity: 1 }).shadow).toBeNull();
+        expect(fx({ fill: "#fff", opacity: 1, blur: 0 }).blur).toBeNull(); // 0 blur = none
+    });
+
+    test("effectFilterId: null with no effect, deterministic, injective, SVG-id-safe", () => {
+        expect(effectFilterId(null, null)).toBeNull();
+        expect(effectFilterId(null, 0)).toBeNull();
+        const id = effectFilterId(SH, 7);
+        expect(id).toBe(effectFilterId(SH, 7));                     // deterministic
+        expect(id).toMatch(/^fx[A-Za-z0-9_]*$/);                    // id-safe: no # ( ) . % or space
+        expect(effectFilterId(SH, 7)).not.toBe(effectFilterId({ ...SH, dx: 3 }, 7));          // injective (dx)
+        expect(effectFilterId(SH, 7)).not.toBe(effectFilterId(SH, 8));                        // injective (blur)
+        expect(effectFilterId(SH, 7)).not.toBe(effectFilterId({ ...SH, color: "#f01" }, 7));  // injective (color)
+        // Non-ASCII colours (code point > 0xFF) must not collide with ASCII ones (hexColor pads to 4, not 2).
+        expect(effectFilterId({ ...SH, color: "red" }, null)).not.toBe(effectFilterId({ ...SH, color: "ܦդ" }, null));
+    });
+
+    test("effects are DROPPED on a zero-extent box (SVG's filter region would collapse and hide it)", () => {
+        const line = docWith({ type: "core.line", geometry: { x: 0, y: 0, width: 120, height: 0 }, style: { fill: "#000", opacity: 1, shadow: SH, blur: 4 } });
+        const p = buildRenderModel(SIZE, line, stateFor(line)).content[0].paint;
+        expect(p.shadow).toBeNull();
+        expect(p.blur).toBeNull();
+        // ...but a positive-area shape keeps them (the gate is on zero AREA, not on the type).
+        expect(fx({ fill: "#fff", opacity: 1, shadow: SH }).shadow).toEqual(SH);
+    });
+
+    test("DisplayList.defs are deduped by id in content order; effect-less content → no defs", () => {
+        const doc = createEmptyDocument();
+        const rect = (id: string, x: number, style: Node["style"]): Node => ({ id, type: "core.rectangle", parent: null, children: [], geometry: { x, y: 0, width: 20, height: 20 }, style, layout: {} });
+        doc.nodes.set("a", rect("a", 0, { fill: "#fff", opacity: 1, shadow: SH }));
+        doc.nodes.set("b", rect("b", 30, { fill: "#fff", opacity: 1, shadow: SH })); // SAME effect as a
+        doc.nodes.set("c", rect("c", 60, { fill: "#fff", opacity: 1, blur: 5 }));     // distinct
+        doc.rootNodeUuids = ["a", "b", "c"];
+        const defs = buildRenderModel(SIZE, doc, stateFor(doc)).defs;
+        expect(defs.length).toBe(2);                          // a + b share one def; c a second
+        expect(defs[0].id).toBe(effectFilterId(SH, null));
+        expect(defs[1].id).toBe(effectFilterId(null, 5));
+
+        const plain = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1 } });
+        expect(buildRenderModel(SIZE, plain, stateFor(plain)).defs).toEqual([]);
     });
 });

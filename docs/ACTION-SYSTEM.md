@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions -->
 
-> 🔒 Frozen contract · schema v17 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Code in `src/core/actions/`.
+> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Code in `src/core/actions/`.
 
 The action system is the engine's spine: it is **the only way the document changes**,
 and it is what makes undo/redo, and later AI, plugins, and collaboration, safe.
@@ -49,6 +49,8 @@ abstract class Action {
 shared per-type `dimensionError` (so the edit and load paths cannot drift) — rect/ellipse/text/image
 need a positive box; a `core.line` may collapse one axis (a horizontal/vertical line), not both.
 `UpdateNodeGeometryAction` merges its partial patch over the current geometry before the check.
+`UpdateNodeStyleAction` validates through the shared `styleError` (all `Style` fields incl. the
+schema-18 shadow/blur effects), closing what was a duplicated inline style-validation copy.
 
 ## 2. MutationResult & the delta protocol
 

@@ -24,7 +24,7 @@ import {
     ProjectDocument, ReadonlyDocument, createEmptyDocument,
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
-import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, Layout } from "../document/Node";
+import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, Shadow, Layout } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
@@ -51,7 +51,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { createEditorState, clampViewport, EditorState } from "../../editor/EditorState";
 import { renderSVG, RendererState } from "../../renderer/SVGRenderer";
-import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, commandsToPathData } from "../../renderer/RenderModel";
+import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
 import { emitCanvas } from "../../renderer/emitCanvas";
 
@@ -87,6 +87,9 @@ export function __apiSurfacePin(): void {
     expectType<boolean>(isNodeType("core.rectangle"));
     expectType<string | null>(dimensionError("core.line", 1, 0));
     expectType<string | null>(pathError("core.path", []));
+    expectType<string | null>(styleError({}));
+    const shadow: Shadow = { dx: 0, dy: 0, blur: 0, color: "#000" };
+    expectType<Shadow>(shadow);
     expectType<number>(PATH_MAX_COMMANDS);
     const pathCmd: PathCommand = { c: "M", x: 0, y: 0 };
     expectType<PathCommand>(pathCmd);
@@ -215,6 +218,8 @@ export function __apiSurfacePin(): void {
     expectType<Shape>(model.content[0].shape);
     expectType<Paint>(model.content[0].paint);
     expectType<Mat2D | null>(model.content[0].world);
+    expectType<FilterDef[]>(model.defs);
+    expectType<string | null>(effectFilterId(shadow, 4));
     expectType<(c: HTMLElement, m: DisplayList) => void>(emitSVG);
     expectType<(ctx: CanvasRenderingContext2D, m: DisplayList, dpr?: number) => void>(emitCanvas);
 }

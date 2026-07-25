@@ -15,9 +15,46 @@
  */
 
 import { toMatrixString, isTranslationOnly } from "../core/geometry/Matrix";
-import { DisplayList, DrawItem, Paint, commandsToPathData } from "./RenderModel";
+import { DisplayList, DrawItem, Paint, FilterDef, commandsToPathData, effectFilterId } from "./RenderModel";
 
 const svgNS = "http://www.w3.org/2000/svg";
+
+/** The `<defs>` element holding effect `<filter>`s; created once under the svg, rebuilt each frame. */
+function getOrCreateDefs(svg: SVGSVGElement): SVGDefsElement {
+    let defs = svg.querySelector(":scope > defs") as SVGDefsElement | null;
+    if (!defs) {
+        defs = document.createElementNS(svgNS, "defs");
+        svg.insertBefore(defs, svg.firstChild);
+    }
+    return defs;
+}
+
+/** Build one `<filter>` per def: gaussian blur first, then drop shadow (default input chaining). */
+function buildFilters(defs: SVGDefsElement, filterDefs: FilterDef[]): void {
+    for (const def of filterDefs) {
+        const filter = document.createElementNS(svgNS, "filter");
+        filter.setAttribute("id", def.id);
+        // Box-relative region so a def is size-independent (dedup holds); clips extreme offset/blur.
+        filter.setAttribute("x", "-50%");
+        filter.setAttribute("y", "-50%");
+        filter.setAttribute("width", "200%");
+        filter.setAttribute("height", "200%");
+        if (def.blur !== null && def.blur > 0) {
+            const b = document.createElementNS(svgNS, "feGaussianBlur");
+            b.setAttribute("stdDeviation", String(def.blur));
+            filter.appendChild(b);
+        }
+        if (def.shadow !== null) {
+            const s = document.createElementNS(svgNS, "feDropShadow");
+            s.setAttribute("dx", String(def.shadow.dx));
+            s.setAttribute("dy", String(def.shadow.dy));
+            s.setAttribute("stdDeviation", String(def.shadow.blur));
+            s.setAttribute("flood-color", def.shadow.color);
+            filter.appendChild(s);
+        }
+        defs.appendChild(filter);
+    }
+}
 
 function getOrCreateGroup(parent: Element, id: string): SVGGElement {
     let group = parent.querySelector(`:scope > g#${id}`) as SVGGElement | null;
@@ -42,6 +79,10 @@ function applyTail(el: SVGElement, item: DrawItem): void {
     if (item.nodeId !== null) el.setAttribute("data-node-id", item.nodeId);
     if (item.handle) el.setAttribute("data-resize-handle", item.handle);
     const paint = item.paint;
+    // Effects (schema 18): reference the deduped <filter> def. Same pure id the model deduped by,
+    // so it always resolves; null (no effect / grid / overlay) emits no attr.
+    const fid = effectFilterId(paint.shadow, paint.blur);
+    if (fid !== null) el.setAttribute("filter", `url(#${fid})`);
     if (paint.cursor !== null) el.style.cursor = paint.cursor;
     if (!paint.pointerEvents) el.style.pointerEvents = "none";
 }
@@ -135,6 +176,11 @@ export function emitSVG(container: HTMLElement, model: DisplayList): void {
         svg.style.background = "#1a1a2e";
         container.appendChild(svg);
     }
+
+    // Effect filter defs — rebuilt each frame (shares content's lifecycle; leak-free).
+    const defs = getOrCreateDefs(svg);
+    clearChildren(defs);
+    buildFilters(defs, model.defs);
 
     const z = Math.max(0.01, model.viewport.zoom);
     const g = getOrCreateGroup(svg, "viewport-transform");

@@ -53,6 +53,11 @@ class MockCtx {
     private _globalAlpha = 1; get globalAlpha() { return this._globalAlpha; } set globalAlpha(v: number) { this._globalAlpha = v; this.log("set globalAlpha", v); }
     private _font = ""; get font() { return this._font; } set font(v: string) { this._font = v; this.log("set font", v); }
     private _textBaseline = ""; get textBaseline() { return this._textBaseline; } set textBaseline(v: string) { this._textBaseline = v; this.log("set textBaseline", v); }
+    private _shadowColor = ""; get shadowColor() { return this._shadowColor; } set shadowColor(v: string) { this._shadowColor = v; this.log("set shadowColor", v); }
+    private _shadowBlur = 0; get shadowBlur() { return this._shadowBlur; } set shadowBlur(v: number) { this._shadowBlur = v; this.log("set shadowBlur", v); }
+    private _shadowOffsetX = 0; get shadowOffsetX() { return this._shadowOffsetX; } set shadowOffsetX(v: number) { this._shadowOffsetX = v; this.log("set shadowOffsetX", v); }
+    private _shadowOffsetY = 0; get shadowOffsetY() { return this._shadowOffsetY; } set shadowOffsetY(v: number) { this._shadowOffsetY = v; this.log("set shadowOffsetY", v); }
+    private _filter = ""; get filter() { return this._filter; } set filter(v: string) { this._filter = v; this.log("set filter", v); }
 }
 
 function run(doc: ProjectDocument, over?: Partial<RendererState>, dpr?: number): MockCtx {
@@ -240,5 +245,43 @@ describe("emitCanvas — paint, transform, grid", () => {
         const b = bracket(run(doc, { previewRect: { x: 1, y: 2, width: 50, height: 30 } }).calls, "rect", a => JSON.stringify(a) === "[1,2,50,30]");
         expect(ops(b)).toContain("setLineDash");
         expect(call(b, "setLineDash")!.args).toEqual([[4, 4]]); // "4 4" → [4,4]
+    });
+});
+
+// ─── Effects ─────────────────────────────────────────────────────────────────
+describe("emitCanvas — effects", () => {
+    const SH = { dx: 2, dy: 5, blur: 3, color: "#f00" };
+
+    test("shadow sets shadowColor/Blur/OffsetX/Y before the shape draws", () => {
+        const doc = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1, shadow: SH } });
+        const b = bracket(run(doc).calls, "rect", a => JSON.stringify(a) === "[0,0,200,100]");
+        expect(call(b, "set shadowColor")!.args).toEqual(["#f00"]);
+        expect(call(b, "set shadowBlur")!.args).toEqual([3]);    // × z·dpr = 1
+        expect(call(b, "set shadowOffsetX")!.args).toEqual([2]);
+        expect(call(b, "set shadowOffsetY")!.args).toEqual([5]);
+        expect(ops(b).indexOf("set shadowColor")).toBeLessThan(ops(b).indexOf("fill"));
+    });
+
+    test("shadow magnitudes scale by z·dpr (device-space, untouched by the CTM)", () => {
+        const doc = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1, shadow: SH } });
+        const ctx = new MockCtx();
+        const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed: computeGeometry(doc), viewport: { x: 0, y: 0, zoom: 2 } };
+        emitCanvas(ctx as unknown as CanvasRenderingContext2D, buildRenderModel(SIZE, doc, state), 3); // scale = 2·3 = 6
+        const b = bracket(ctx.calls, "rect", a => JSON.stringify(a) === "[0,0,200,100]");
+        expect(call(b, "set shadowBlur")!.args).toEqual([3 * 6]);
+        expect(call(b, "set shadowOffsetX")!.args).toEqual([2 * 6]);
+    });
+
+    test("blur sets ctx.filter = blur(radius·scale px)", () => {
+        const doc = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1, blur: 4 } });
+        const b = bracket(run(doc).calls, "rect", a => JSON.stringify(a) === "[0,0,200,100]");
+        expect(call(b, "set filter")!.args).toEqual(["blur(4px)"]);
+    });
+
+    test("an effect-less item sets no shadow/filter", () => {
+        const doc = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1 } });
+        const b = bracket(run(doc).calls, "rect", a => JSON.stringify(a) === "[0,0,200,100]");
+        expect(ops(b)).not.toContain("set shadowColor");
+        expect(ops(b)).not.toContain("set filter");
     });
 });

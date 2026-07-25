@@ -16,7 +16,7 @@
  */
 
 import { ReadonlyDocument } from "../core/document/Document";
-import { PathCommand } from "../core/document/Node";
+import { PathCommand, Shadow } from "../core/document/Node";
 import { ComputedState } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
 import { RendererState } from "./RendererState";
@@ -82,6 +82,45 @@ export interface Paint {
     cursor: string | null;
     /** `false` → the backend sets `pointer-events: none` (grid/outline/preview). */
     pointerEvents: boolean;
+    /** Drop shadow (world units), or null. Both backends read it; SVG also builds a `<filter>` def. */
+    shadow: Shadow | null;
+    /** Whole-node gaussian blur radius (world units), or null. */
+    blur: number | null;
+}
+
+/** A deduped filter definition (schema-18 effects) — emitSVG builds one `<filter id>` per entry. */
+export interface FilterDef {
+    id: string;
+    shadow: Shadow | null;
+    blur: number | null;
+}
+
+/** Encode a finite number into an SVG-id-safe, reversible token (`-`→n, `.`→p, `+`→P). */
+function tok(n: number): string {
+    return String(n).replace(/-/g, "n").replace(/\./g, "p").replace(/\+/g, "P");
+}
+/** Hex-encode a colour string (arbitrary, incl. tokens like `$color/x`) into an id-safe, injective form. */
+function hexColor(s: string): string {
+    let h = "";
+    // padStart(4): charCodeAt is a 16-bit code unit (<= 0xFFFF = 4 hex digits). padStart(2) only pads a
+    // MINIMUM, so a code point >= U+0100 would emit 3-4 digits and break the fixed-width → non-injective.
+    for (let i = 0; i < s.length; i++) h += s.charCodeAt(i).toString(16).padStart(4, "0");
+    return h;
+}
+
+/**
+ * Deterministic, INJECTIVE, SVG-id-safe filter id for an effect (the twin of `commandsToPathData`
+ * — a pure string build, unit-tested in the node env). `null` when there is no effect, so identical
+ * effects share ONE `<filter>` def and the backend needs zero escaping. The `fx` prefix guarantees a
+ * letter-leading id; the charset is `[A-Za-z0-9_]`.
+ */
+export function effectFilterId(shadow: Shadow | null, blur: number | null): string | null {
+    const hasBlur = blur !== null && blur > 0;
+    if (!shadow && !hasBlur) return null;
+    let id = "fx";
+    if (shadow) id += `_s${tok(shadow.dx)}_${tok(shadow.dy)}_${tok(shadow.blur)}_${hexColor(shadow.color)}`;
+    if (hasBlur) id += `_b${tok(blur as number)}`;
+    return id;
 }
 
 export type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview";
@@ -117,6 +156,8 @@ export interface DisplayList {
     grid: GridModel;
     content: DrawItem[];
     overlay: DrawItem[];
+    /** Deduped filter defs referenced by content items — emitSVG builds `<defs>` from these. */
+    defs: FilterDef[];
 }
 
 type Box = { x: number; y: number; width: number; height: number };
@@ -141,7 +182,7 @@ function lineItem(x1: number, y1: number, x2: number, y2: number, stroke: string
         shape: { kind: "line", x1, y1, x2, y2 },
         paint: {
             fill: null, opacity: null, stroke, strokeWidth,
-            strokeDash: null, radius: null, cursor: null, pointerEvents: false
+            strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
         },
         world: null,
         nodeId: null,
@@ -214,6 +255,17 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         // The world matrix carries position/rotation/scale, so the shape itself is
         // emitted at the local origin and placed by the transform.
         const x = 0, y = 0, width = c.local.width, height = c.local.height;
+        // Effects (schema 18), resolved once and shared by every content branch (a copy, so the
+        // model stays independent plain data). The magenta unknown-type fallback keeps them null.
+        // Gated on a POSITIVE-AREA box: SVG's objectBoundingBox filter region is `200% × 0 = 0` for a
+        // zero-extent shape (an axis-aligned `core.line`, a flat path), which the spec renders as
+        // NOTHING — so a zero-extent box drops its effect (in the model, so both backends agree)
+        // rather than vanishing. A shadow on a hairline needs a positive box (or a diagonal line).
+        const hasArea = width > 0 && height > 0;
+        const shadow: Shadow | null = (hasArea && sty.shadow)
+            ? { dx: sty.shadow.dx, dy: sty.shadow.dy, blur: sty.shadow.blur, color: sty.shadow.color }
+            : null;
+        const blur: number | null = (hasArea && sty.blur) ? sty.blur : null;
 
         let shape: Shape;
         let paint: Paint;
@@ -222,7 +274,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "rect", x, y, width, height };
             paint = {
                 fill: sty.fill,
-                opacity: sty.opacity,
+                opacity: sty.opacity, shadow, blur,
                 stroke: sty.stroke ? sty.stroke : null,
                 strokeWidth: sty.stroke ? 1 / z : null,
                 strokeDash: null,
@@ -235,7 +287,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "ellipse", cx: width / 2, cy: height / 2, rx: width / 2, ry: height / 2 };
             paint = {
                 fill: sty.fill,
-                opacity: sty.opacity,
+                opacity: sty.opacity, shadow, blur,
                 stroke: sty.stroke ? sty.stroke : null,
                 strokeWidth: sty.stroke ? 1 / z : null,
                 strokeDash: null,
@@ -250,7 +302,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "line", x1: 0, y1: 0, x2: width, y2: height };
             paint = {
                 fill: null,
-                opacity: sty.opacity,
+                opacity: sty.opacity, shadow, blur,
                 // `||` not `??`: an empty-string stroke also falls back to `fill`, so a line
                 // is never invisible (a line's stroke IS its body, unlike a rect's border).
                 stroke: sty.stroke || sty.fill,
@@ -264,13 +316,13 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "text", x, y, width, height, text: node.text ?? "Text", fontSize: sty.fontSize ?? 14 };
             paint = {
                 fill: sty.fill, opacity: sty.opacity, stroke: null, strokeWidth: null,
-                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true
+                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
             };
         } else if (node.type === "core.image") {
             shape = { kind: "image", x, y, width, height, href: node.src ?? null };
             paint = {
                 fill: null, opacity: sty.opacity, stroke: null, strokeWidth: null,
-                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true
+                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
             };
         } else if (node.type === "core.path") {
             // Drawn ONLY from its commands (the first shape whose ink is independent of the
@@ -279,7 +331,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "path", commands: node.path ?? [] };
             paint = {
                 fill: sty.fill,
-                opacity: sty.opacity,
+                opacity: sty.opacity, shadow, blur,
                 stroke: sty.stroke ? sty.stroke : null,
                 strokeWidth: sty.stroke ? 1 / z : null,
                 strokeDash: null,
@@ -292,7 +344,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "rect", x, y, width, height };
             paint = {
                 fill: "#ff006e33", opacity: null, stroke: "#ff006e", strokeWidth: 1 / z,
-                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true
+                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow: null, blur: null
             };
         }
 
@@ -312,7 +364,7 @@ function outlineItem(
         shape: { kind: "rect", x: geo.x - pad, y: geo.y - pad, width: geo.width + pad * 2, height: geo.height + pad * 2 },
         paint: {
             fill: "none", opacity: null, stroke, strokeWidth,
-            strokeDash: null, radius: null, cursor: null, pointerEvents: false
+            strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
         },
         world: null,
         nodeId: null,
@@ -354,7 +406,7 @@ function buildOverlay(state: RendererState, z: number): DrawItem[] {
                 shape: { kind: "rect", x: cx - HS / 2, y: cy - HS / 2, width: HS, height: HS },
                 paint: {
                     fill: "#ffffff", opacity: null, stroke: "#00bfff", strokeWidth: 1 / z,
-                    strokeDash: null, radius: null, cursor, pointerEvents: true
+                    strokeDash: null, radius: null, cursor, pointerEvents: true, shadow: null, blur: null
                 },
                 world: null,
                 nodeId,
@@ -371,7 +423,7 @@ function buildOverlay(state: RendererState, z: number): DrawItem[] {
             shape: { kind: "rect", x: preview.x, y: preview.y, width: preview.width, height: preview.height },
             paint: {
                 fill: "#4a90d933", opacity: null, stroke: "#4a90d9", strokeWidth: 1 / z,
-                strokeDash: `${4 / z} ${4 / z}`, radius: null, cursor: null, pointerEvents: false
+                strokeDash: `${4 / z} ${4 / z}`, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
             },
             world: null,
             nodeId: null,
@@ -380,6 +432,19 @@ function buildOverlay(state: RendererState, z: number): DrawItem[] {
     }
 
     return items;
+}
+
+/** Dedupe (by id) the filter defs referenced by the visible content, in content order. */
+function collectDefs(content: DrawItem[]): FilterDef[] {
+    const defs: FilterDef[] = [];
+    const seen = new Set<string>();
+    for (const item of content) {
+        const id = effectFilterId(item.paint.shadow, item.paint.blur);
+        if (id === null || seen.has(id)) continue;
+        seen.add(id);
+        defs.push({ id, shadow: item.paint.shadow, blur: item.paint.blur });
+    }
+    return defs;
 }
 
 /**
@@ -405,10 +470,12 @@ export function buildRenderModel(
         width: (size.width || 800) / z,
         height: (size.height || 600) / z
     };
+    const content = buildContent(doc, state.computed, z, visible);
     return {
         viewport: state.viewport,
         grid: buildGrid(size, state.viewport, z, prev),
-        content: buildContent(doc, state.computed, z, visible),
-        overlay: buildOverlay(state, z)
+        content,
+        overlay: buildOverlay(state, z),
+        defs: collectDefs(content)
     };
 }

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v17 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -115,12 +115,13 @@ Types: `ProjectDocument`, `DocumentMetadata`, `SerializedMetadata`, `VariableSto
 `TrackSize`, `Constraints`, `HConstraint`, `VConstraint`, `Margins`, `Transform`,
 `StateDefinition`, `SerializedDocument`, `DeepReadonly`, `ReadonlyDocument`, `ReadonlyNode`,
 `LoadResult`, `SaveResult`, `NODE_TYPES`/`isNodeType`. Shared validators
-`transformError(t)` / `layoutError(l)` / `dimensionError(type, w, h)` / `pathError(type, path)`
-return an error string or `null`, and are used by BOTH the edit path and the load path.
-`dimensionError` is per-type (rect/ellipse/text/image need a positive box; `core.line`/`core.path`
-may collapse one axis, not both). `pathError` (+ `PathCommand`, `PATH_MAX_COMMANDS`) validates a
-`core.path`'s commands (present ⇒ non-empty, opens with `M`, finite coords, ≤ cap) and rejects
-path data on any other type. See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
+`transformError(t)` / `layoutError(l)` / `dimensionError(type, w, h)` / `pathError(type, path)` /
+`styleError(style)` return an error string or `null`, and are used by BOTH the edit path and the
+load path. `dimensionError` is per-type (rect/ellipse/text/image need a positive box; `core.line`/
+`core.path` may collapse one axis, not both). `pathError` (+ `PathCommand`, `PATH_MAX_COMMANDS`)
+validates a `core.path`'s commands (present ⇒ non-empty, opens with `M`, finite coords, ≤ cap) and
+rejects path data on any other type. `styleError` validates every `Style` field including the
+schema-18 effects (`Shadow` = dx/dy/blur/color; `blur` ≥ 0). See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
 
 ## Actions (`core/actions/`)
 
@@ -261,6 +262,7 @@ interface Paint {
   fill: string | null; opacity: number | null;
   stroke: string | null; strokeWidth: number | null; strokeDash: string | null;
   radius: number | null; cursor: string | null; pointerEvents: boolean;
+  shadow: Shadow | null; blur: number | null;   // schema-18 effects (world units), resolved from Style
 }
 type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview";
 interface DrawItem {
@@ -270,10 +272,14 @@ interface DrawItem {
   handle?: string; role: DrawRole;
 }
 interface GridModel { sig: string; lines: DrawItem[]; unchanged: boolean }
+interface FilterDef { id: string; shadow: Shadow | null; blur: number | null }  // one <filter> per entry
 interface DisplayList {
   viewport: { x: number; y: number; zoom: number };
   grid: GridModel; content: DrawItem[]; overlay: DrawItem[];
+  defs: FilterDef[];            // deduped effect filters (by id); emitSVG builds <defs> from these
 }
+// Pure, deterministic, INJECTIVE, SVG-id-safe filter id (the twin of commandsToPathData); null = no effect.
+function effectFilterId(shadow: Shadow | null, blur: number | null): string | null;
 
 function buildRenderModel(
   size: { width: number; height: number },

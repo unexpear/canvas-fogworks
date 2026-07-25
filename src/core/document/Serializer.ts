@@ -34,6 +34,12 @@ function isValidNode(n: any): n is Node {
         isOptionalString(n.style.stroke) &&
         (n.style.radius === undefined || typeof n.style.radius === "number") &&
         (n.style.fontSize === undefined || typeof n.style.fontSize === "number") &&
+        // Shallow structural gate for the schema-18 effects; the semantic rules (finite, >=0)
+        // live once in `styleError` (Integrity), like the transform gate.
+        (n.style.blur === undefined || typeof n.style.blur === "number") &&
+        (n.style.shadow === undefined || (isPlainObject(n.style.shadow) &&
+            typeof n.style.shadow.dx === "number" && typeof n.style.shadow.dy === "number" &&
+            typeof n.style.shadow.blur === "number" && typeof n.style.shadow.color === "string")) &&
         isPlainObject(n.layout) &&
         (n.layout.container === undefined || isPlainObject(n.layout.container)) &&
         isOptionalString(n.text) && isOptionalString(n.src) && isOptionalString(n.name) &&
@@ -221,6 +227,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "14") { raw = migrate_14_to_15(raw); version = "15"; }
     if (version === "15") { raw = migrate_15_to_16(raw); version = "16"; }
     if (version === "16") { raw = migrate_16_to_17(raw); version = "17"; }
+    if (version === "17") { raw = migrate_17_to_18(raw); version = "18"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -319,6 +326,11 @@ function migrate_15_to_16(raw: any): any {
 /** Schema 16 → 17: adds the `core.path` node type + `Node.path` commands. Pass-through by content. */
 function migrate_16_to_17(raw: any): any {
     return { ...raw, version: "17" };
+}
+
+/** Schema 17 → 18: adds `Style.shadow` + `Style.blur` (drop shadow + gaussian blur). Pass-through by content. */
+function migrate_17_to_18(raw: any): any {
+    return { ...raw, version: "18" };
 }
 
 /**

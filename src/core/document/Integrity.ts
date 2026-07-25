@@ -12,7 +12,7 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError, layoutError, dimensionError, pathError } from "./Node";
+import { transformError, layoutError, dimensionError, pathError, styleError } from "./Node";
 
 function checkNodeRanges(node: ReadonlyNode): void {
     const g = node.geometry;
@@ -27,16 +27,10 @@ function checkNodeRanges(node: ReadonlyNode): void {
         throw new Error(`Invalid document: node "${node.id}" ${dimErr} (got ${g.width}x${g.height}).`);
     }
 
-    const s = node.style;
-    if (!Number.isFinite(s.opacity) || s.opacity < 0 || s.opacity > 1) {
-        throw new Error(`Invalid document: node "${node.id}" style.opacity must be within [0, 1] (got ${s.opacity}).`);
-    }
-    if (s.radius !== undefined && (!Number.isFinite(s.radius) || s.radius < 0)) {
-        throw new Error(`Invalid document: node "${node.id}" style.radius must be >= 0 (got ${s.radius}).`);
-    }
-    if (s.fontSize !== undefined && (!Number.isFinite(s.fontSize) || s.fontSize <= 0)) {
-        throw new Error(`Invalid document: node "${node.id}" style.fontSize must be > 0 (got ${s.fontSize}).`);
-    }
+    // Shared with the edit path (UpdateNodeStyleAction) so the two cannot drift; covers
+    // fill/stroke/opacity/radius/fontSize AND the schema-18 shadow/blur effects.
+    const styleErr = styleError(node.style);
+    if (styleErr) throw new Error(`Invalid document: node "${node.id}" ${styleErr}.`);
 
     // The load path must reject exactly the transforms the edit path rejects — a
     // schema-2 file with scaleX:0 or rotation:Infinity would otherwise load clean and

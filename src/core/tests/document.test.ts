@@ -22,7 +22,7 @@ import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, 
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB } from "../geometry/Matrix";
 import { clampViewport, createEditorState } from "../../editor/EditorState";
 import { MoveTool } from "../../editor/tools/MoveTool";
-import { Node, NODE_TYPES, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand } from "../document/Node";
+import { Node, NODE_TYPES, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow } from "../document/Node";
 
 function createDocWithRectangle(): ProjectDocument {
     const doc = createEmptyDocument();
@@ -1645,13 +1645,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "18" that has no 17→18 step: the
+        // Pretending the build has moved to a schema "19" that has no 18→19 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→17), and then REFUSED at "17" — never re-stamped straight to the current
-        // schema. The error naming "17" (not "1") is the proof the chain actually ran.
+        // (1→2→…→18), and then REFUSED at "18" — never re-stamped straight to the current
+        // schema. The error naming "18" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 16→17 landed for core.path.)
-        expect(() => migrateIfNeeded(legacy, "18")).toThrow('Migration not implemented for document schema "17"');
+        // time a real migration is added — here, when 17→18 landed for effects.)
+        expect(() => migrateIfNeeded(legacy, "19")).toThrow('Migration not implemented for document schema "18"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -3970,5 +3970,49 @@ describe("Node type: path (schema 17)", () => {
         const d = new ActionDispatcher(doc);
         expect(d.dispatchAction(new AddNodeAction(d.getDocument(), "core.path", 0, 0, 40, 40, "#000", "P")).success).toBe(true);
         expect(d.getDocument().nodes.get("P")!.path).toBeUndefined(); // empty, renders nothing until edited
+    });
+});
+
+// ─── Schema 18: Style effects (shadow + blur) ───
+describe("Style effects: shadow + blur (schema 18)", () => {
+    const SH: Shadow = { dx: 2, dy: 5, blur: 3, color: "#f00" };
+
+    test("styleError: valid effects pass; invalid rejected", () => {
+        expect(styleError({ shadow: SH, blur: 4 })).toBeNull();
+        expect(styleError({ blur: -1 })).not.toBeNull();
+        expect(styleError({ blur: NaN })).not.toBeNull();
+        expect(styleError({ shadow: { dx: 2, dy: 5, blur: -1, color: "#f00" } })).not.toBeNull();       // shadow.blur < 0
+        expect(styleError({ shadow: { dx: NaN, dy: 5, blur: 3, color: "#f00" } })).not.toBeNull();      // non-finite dx
+        expect(styleError({ shadow: { dx: 2, dy: 5, blur: 3, color: 5 } as unknown as Shadow })).not.toBeNull(); // non-string color
+        expect(styleError({ shadow: [] as unknown as Shadow })).not.toBeNull();                          // array
+    });
+
+    test("styleError still validates the pre-existing fields (closed inline duplication)", () => {
+        expect(styleError({ opacity: 5 })).toMatch(/opacity must be within/);
+        expect(styleError({ radius: -1 })).toMatch(/radius must be/);
+        expect(styleError({ fontSize: 0 })).toMatch(/fontSize/);
+        expect(styleError({ fill: 5 as unknown as string })).not.toBeNull();
+    });
+
+    test("load path accepts a node with effects and round-trips; rejects a bad blur", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("n", { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 20, height: 20 }, style: { fill: "#fff", opacity: 1, shadow: SH, blur: 4 }, layout: {} });
+        doc.rootNodeUuids = ["n"];
+        const round = deserializeDocument(serializeDocument(doc));
+        expect(round.version).toBe(SCHEMA_VERSION);
+        expect(round.nodes.get("n")!.style.shadow).toEqual(SH);
+        expect(round.nodes.get("n")!.style.blur).toBe(4);
+        expect(compareDocuments(doc, round)).toBe(true);
+
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 20, height: 20 }, style: { fill: "#fff", opacity: 1, blur: -3 }, layout: {} } } } });
+        expect(() => deserializeDocument(bad)).toThrow("blur must be finite");
+    });
+
+    test("UpdateNodeStyleAction validates effects via the shared styleError", () => {
+        const d = new ActionDispatcher(createEmptyDocument());
+        d.dispatchAction(new AddNodeAction(d.getDocument(), "core.rectangle", 0, 0, 20, 20, "#fff", "R"));
+        expect(new UpdateNodeStyleAction(d.getDocument(), "R", { shadow: SH }).validate()).toBe(true);
+        expect(new UpdateNodeStyleAction(d.getDocument(), "R", { blur: -1 }).validate()).toBe(false);
+        expect(new UpdateNodeStyleAction(d.getDocument(), "R", { shadow: { dx: 1, dy: 1, blur: 1, color: 9 } as unknown as Shadow }).validate()).toBe(false);
     });
 });

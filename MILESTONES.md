@@ -21,7 +21,7 @@ M1  Computed State           ✅   stored intent -> calculated results
       │
 M2  Layout Engine            ✅   flex(grow/shrink/wrap/align-content) + hug + grid(rows/auto/hug/spans/flow/pins) + constraints + absolute; minmax/fit-content deferred
       │
-M3  Renderer                 🚧*  SVG renderer complete (shapes + culling) + Canvas backend (unwired); effects remain
+M3  Renderer                 🚧*  SVG renderer complete (shapes + culling + effects) + Canvas backend (unwired, tested)
       │
 M4  Editor                   ⬜*  viewport, selection, manipulation, guides
       │
@@ -457,9 +457,27 @@ translucent stroked shape shows a fill-tinted ≈1px hairline in the stroke's in
 opacity needs an offscreen layer); rounded-rect radius clamping differs from SVG for an over-large
 radius; and the `renderCanvas` DOM shim (canvas sizing / `getContext` / DPR read) lands with the M4 wiring.
 
-**Remaining:** **effects** (shadow/blur — plumbing lives in the emitters). The SVG renderer is
-otherwise complete (rect/ellipse/line/path/text/image + culling), and the Canvas backend exists and
-is tested; wiring canvas as a live editing surface is an M4 editor concern (DOM-free handle picking).
+**Landed (slice 6 — effects, schema 18):** drop **shadow** (`Style.shadow` = dx/dy/blur/color) and
+whole-node **blur** (`Style.blur`), resolved onto `Paint` (world units, both backends read them).
+The decidable parts live in the PURE model, node-tested: a `effectFilterId(shadow, blur)` that is
+deterministic + **injective** + SVG-id-safe (the twin of `commandsToPathData`), and a deduped
+`DisplayList.defs`. emitSVG builds one `<filter>` (feGaussianBlur → feDropShadow) per def in a
+cleared-each-frame `<defs>` and references it via `filter="url(#id)"`; emitCanvas sets
+`ctx.shadowColor/Blur/Offset*` + `ctx.filter`, replaying the CTM's `z·dpr` scale (shadow* is
+device-space — the one backend arithmetic exception). Validation extracted a **shared `styleError`**
+(load path + `UpdateNodeStyleAction`), closing a pre-existing inline-duplication drift risk. Every
+guard mutation-tested. An adversarial review caught two real bugs, both fixed: `hexColor`'s
+`padStart(2)` broke injectivity for colours with code points > U+0100 (→ `padStart(4)`), and an effect
+on a ZERO-EXTENT box (an axis-aligned line) collapsed SVG's `objectBoundingBox` filter region and hid
+the element — so effects are now dropped in the model for a zero-area box (both backends agree).
+Documented parity gaps (browser-smoke): canvas `shadowBlur` ≠ SVG stdDeviation, `ctx.filter` blur may
+double-scale under zoom, combined blur→shadow chaining, canvas casts the shadow per fill/stroke op (like
+the opacity gap), filter-region clip on extreme offsets.
+
+**Remaining:** nothing in the renderer proper. The SVG renderer is complete (rect/ellipse/line/path/
+text/image + culling + effects) and the Canvas backend exists and is tested. What's left is not M3:
+wiring canvas as a live *editing* surface needs DOM-free resize-handle picking (M4 editor), and richer
+effects (multiple shadows, inner shadow, blend modes) are future scope.
 
 ---
 
