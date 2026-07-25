@@ -12,6 +12,9 @@ import { computeGeometry, hitTest } from "../../core/geometry/GeometryEngine";
 import { EditorState } from "../EditorState";
 import { Tool } from "./ToolController";
 
+/** Pick halo in SCREEN pixels — converted to world (÷ zoom) so thin/hairline targets stay grabbable. */
+const PICK_RADIUS_PX = 4;
+
 export class SelectTool implements Tool {
     private dispatcher: ActionDispatcher;
     private editorState: EditorState;
@@ -55,6 +58,6 @@ export class SelectTool implements Tool {
             this.dispatcher.getDocument(),
             this.editorState.pendingGeometry
         );
-        return hitTest(computed, worldX, worldY);
+        return hitTest(computed, worldX, worldY, PICK_RADIUS_PX / zoom);
     }
 }

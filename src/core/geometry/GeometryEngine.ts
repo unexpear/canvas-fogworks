@@ -291,23 +291,32 @@ export function toWorld(state: ComputedState, nodeId: string, x: number, y: numb
 }
 
 /**
- * Topmost node containing a world point, or null.
+ * Topmost node within `tolerance` world units of a world point, or null.
  *
  * Walks draw order in reverse so the front-most wins, and tests in each node's LOCAL
  * space via the inverse matrix — so a rotated node hit-tests against its true shape,
  * not its bounding box.
+ *
+ * `tolerance` (world units, default 0) is a pick halo that inflates both the AABB
+ * reject and the local box. Its point: a ZERO-EXTENT node — an axis-aligned
+ * `core.line` (width 0 or height 0) — has a zero-area box, so with no tolerance only
+ * a click whose world coordinate exactly equals the collapsed axis could ever hit it,
+ * making the visible hairline effectively unselectable. A few screen px, converted to
+ * world by the caller (`px / zoom`), makes it (and thin targets generally) pickable.
+ * Applied to the local box directly — approximate under a node scale, which is
+ * acceptable for a fuzzy affordance, and exact for the common unscaled case.
  */
-export function hitTest(state: ComputedState, x: number, y: number): string | null {
+export function hitTest(state: ComputedState, x: number, y: number, tolerance: number = 0): string | null {
     for (let i = state.order.length - 1; i >= 0; i--) {
         const id = state.order[i];
         const c = state.nodes.get(id);
         if (!c) continue;
-        // Cheap AABB reject first, then the exact local-space test.
+        // Cheap AABB reject first (inflated by the halo), then the exact local-space test.
         const b = c.bounds;
-        if (x < b.x || y < b.y || x > b.x + b.width || y > b.y + b.height) continue;
+        if (x < b.x - tolerance || y < b.y - tolerance || x > b.x + b.width + tolerance || y > b.y + b.height + tolerance) continue;
         const p = toLocal(state, id, x, y);
         if (!p) continue;
-        if (p.x >= 0 && p.y >= 0 && p.x <= c.local.width && p.y <= c.local.height) return id;
+        if (p.x >= -tolerance && p.y >= -tolerance && p.x <= c.local.width + tolerance && p.y <= c.local.height + tolerance) return id;
     }
     return null;
 }

@@ -731,6 +731,41 @@ describe("GeometryEngine", () => {
     });
 });
 
+// ─── hitTest pick tolerance — makes thin/zero-extent targets selectable ───
+describe("hitTest pick tolerance", () => {
+    // A horizontal line: box collapses to zero height at world y = 100.
+    function lineDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("L", { id: "L", type: "core.line", parent: null, children: [], geometry: { x: 0, y: 100, width: 200, height: 0 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["L"];
+        return doc;
+    }
+
+    test("a zero-extent (horizontal) line is UNSELECTABLE without tolerance", () => {
+        const cs = computeGeometry(lineDoc());
+        expect(hitTest(cs, 100, 102)).toBeNull();  // 2 units off the hairline → miss
+        expect(hitTest(cs, 100, 100)).toBe("L");   // exactly on it still hits (default tol 0)
+    });
+
+    test("a small tolerance makes the hairline pickable near it, not far or past its ends", () => {
+        const cs = computeGeometry(lineDoc());
+        expect(hitTest(cs, 100, 102, 4)).toBe("L");  // within 4 units of the line
+        expect(hitTest(cs, 100, 96, 4)).toBe("L");   // the other side, within tol
+        expect(hitTest(cs, 100, 110, 4)).toBeNull(); // 10 units off → beyond tol
+        expect(hitTest(cs, 250, 100, 4)).toBeNull(); // past the x end (> 200 + tol)
+    });
+
+    test("tolerance defaults to 0 and only widens (a rect's hit region is unchanged without it)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["R"];
+        const cs = computeGeometry(doc);
+        expect(hitTest(cs, 25, 25)).toBe("R");    // inside
+        expect(hitTest(cs, 55, 25)).toBeNull();   // 5 units outside, no tolerance → miss
+        expect(hitTest(cs, 55, 25, 8)).toBe("R"); // ...but inside an 8-unit halo → hit
+    });
+});
+
 // ─── Undo/redo reports a real dirty set (Milestone 1 dirty-state tracking) ───
 describe("Restore dirty set", () => {
     test("undo reports only the nodes that actually changed", () => {

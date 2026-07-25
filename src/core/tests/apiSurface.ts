@@ -107,6 +107,7 @@ export function __apiSurfacePin(): void {
     expectType<string[]>(computed.order);
     expectType<Map<string, ComputedNode>>(computed.nodes);
     expectType<string | null>(hitTest(computed, 0, 0));
+    expectType<string | null>(hitTest(computed, 0, 0, 4)); // optional world-space pick tolerance
     expectType<{ x: number; y: number } | null>(toLocal(computed, "id", 0, 0));
     expectType<{ x: number; y: number } | null>(toWorld(computed, "id", 0, 0));
     expectType<Rect | null>(subtreeBounds(doc, computed, "id"));

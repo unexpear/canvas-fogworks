@@ -41,7 +41,7 @@ function computeGeometry(
   previous?: ComputedState,                          // dirty-tracking reuse
   dirty?: ReadonlySet<string>
 ): ComputedState;
-function hitTest(computed: ComputedState, x: number, y: number): string | null; // local-space, DOM-free
+function hitTest(computed: ComputedState, x: number, y: number, tolerance?: number): string | null; // local-space, DOM-free; `tolerance` (world units, default 0) is a pick halo so thin/zero-extent targets (an axis-aligned line) stay selectable
 function toLocal(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;
 function toWorld(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;
 function subtreeBounds(doc: ReadonlyDocument, s: ComputedState, rootId: string): Rect | null;
