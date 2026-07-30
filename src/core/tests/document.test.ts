@@ -1250,6 +1250,30 @@ describe("ToolController rotate", () => {
         tc.onMouseMove(md(60, 0), rect); // abort path: rotateNodeId no longer in the doc
         expect(es.isDragging).toBe(false); // not left stuck on "grabbing"
     });
+
+    const key = (k: string) => ({ key: k, target: { tagName: "BODY", isContentEditable: false }, preventDefault() { } } as unknown as KeyboardEvent);
+
+    test("Escape cancels an in-flight rotate, reverting to the pre-gesture angle", () => {
+        const { dispatcher, es, tc } = harness(); // rotation 0
+        tc.onMouseDown(md(50, -ROTATE_OFFSET_PX), rect);
+        tc.onMouseMove(md(90, 10), rect);
+        tc.onMouseMove(md(100, 50), rect); // rotated ~+90°
+        expect(rotOf(dispatcher)).toBeCloseTo(Math.PI / 2, 10);
+        tc.onKeyDown(key("Escape"));
+        expect(rotOf(dispatcher)).toBe(0);     // reverted to initial
+        expect(es.isDragging).toBe(false);
+        tc.onMouseUp(md(100, 50));             // gesture already cancelled → no further change
+        expect(rotOf(dispatcher)).toBe(0);
+    });
+
+    test("Escape reverts to a NON-zero initial rotation", () => {
+        const { dispatcher, tc } = harness(Math.PI / 2);
+        tc.onMouseDown(md(50, -ROTATE_OFFSET_PX), rect);
+        tc.onMouseMove(md(100, 50), rect); // +90° → ~π
+        expect(rotOf(dispatcher)).toBeCloseTo(Math.PI, 10);
+        tc.onKeyDown(key("Escape"));
+        expect(rotOf(dispatcher)).toBeCloseTo(Math.PI / 2, 10); // back to the initial π/2
+    });
 });
 
 // ─── M4: alignment snapping — the pure geometry behind smart guides ───

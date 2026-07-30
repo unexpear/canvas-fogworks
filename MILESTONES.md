@@ -499,7 +499,7 @@ guides · smart guides · rulers.
 **Close-out:** slices 1–5 are done — pan/zoom, box-select, DOM-free resize/rotate handle picking, a live
 SVG/Canvas backend selector, and alignment snapping + smart guides (move AND resize). Deferred refinements
 (documented at each slice): multi-select/group snapping + rotate (snapping is single top-level unrotated node);
-Escape-to-cancel-rotate; the canvas per-region hover cursor and text/image rasterization; rulers. The core
+the canvas per-region hover cursor and text/image rasterization; rulers. The core
 editor loop is complete and every interaction is DOM-free, so it runs identically on both backends.
 
 Already present from earlier prototypes: click + shift-multi-select (DOM-free `hitTest`), drag (`MoveTool`),
@@ -548,7 +548,7 @@ and each move **live-commits a coalesced `UpdateNodeTransformAction`** — live 
 coalesces into ONE undo step (reusing the existing `actionId:nodeId` coalescing rather than adding pending-
 transform plumbing; like any slider drag, a >window pause mid-gesture splits it, and two flicks on the same node
 within the window merge — inherent, acceptable). No schema change (rotation is the existing
-`Node.transform.rotation`, schema 2). Deferred: a stalk line to the knob, Escape-to-cancel-rotate (undo covers
+`Node.transform.rotation`, schema 2). Deferred: a stalk line to the knob, ~~Escape-to-cancel-rotate~~ DONE (was: undo covers
 it), group-rotate for multi-select, rotate about a non-centre origin, and the cosmetic knob-slide as a rotating
 node's AABB grows/shrinks (the handles are AABB-based). This closes M4 slice 3; next is **slice 4 — canvas
 wiring**, now unblocked.

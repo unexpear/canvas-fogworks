@@ -241,6 +241,18 @@ export class ToolController {
                 this.refresh();
                 return;
             }
+            if (this.rotateMode && this.rotateNodeId) {
+                // Rotate live-committed as it dragged (coalesced), so cancel = revert to the pre-gesture
+                // angle, coalesced into the SAME run so the whole gesture nets to a no-op revision.
+                const doc = this.dispatcher.getDocument();
+                if (doc.nodes.has(this.rotateNodeId)) {
+                    this.dispatcher.dispatchAction(new UpdateNodeTransformAction(doc, this.rotateNodeId, { rotation: this.rotateInitial }), { coalesce: true });
+                }
+                this.resetRotate();
+                this.editorState.isDragging = false;
+                this.refresh();
+                return;
+            }
         }
 
         if (e.key === "Delete" || e.key === "Backspace") {

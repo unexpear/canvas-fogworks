@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 403 — `src/core/tests/document.test.ts` (323) + `src/renderer/RenderModel.test.ts` (60) + `src/renderer/emitCanvas.test.ts` (20).
+- **Tests:** 405 — `src/core/tests/document.test.ts` (325) + `src/renderer/RenderModel.test.ts` (60) + `src/renderer/emitCanvas.test.ts` (20).
 
 ## Source map
 
