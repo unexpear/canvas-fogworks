@@ -52,8 +52,8 @@ import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction"
 import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { createEditorState, clampViewport, panBy, zoomAt, screenToWorld, EditorState } from "../../editor/EditorState";
-import { selectionHandles, handleAtPoint, groupRotateHandle, groupHandleAtPoint, SelectionHandle, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
-import { rotateGroup, isGroupRotatable, GroupRotateInput, GroupRotateOutput } from "../geometry/GroupTransform";
+import { selectionHandles, handleAtPoint, groupRotateHandle, groupHandleAtPoint, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
+import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupRotateOutput, GroupScaleInput, GroupScaleOutput } from "../geometry/GroupTransform";
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain, SNAP_THRESHOLD_PX, SnapGuide, SnapResult } from "../geometry/Snapping";
 import { rulerTicks, niceStep, RulerTick } from "../geometry/Ruler";
 import { renderSVG, clearRenderState, RendererState } from "../../renderer/SVGRenderer";
@@ -252,6 +252,11 @@ export function __apiSurfacePin(): void {
     const gri: GroupRotateInput = { id: "id", startX: 0, startY: 0, startRotation: 0, centerX: 0, centerY: 0 };
     expectType<GroupRotateOutput[]>(rotateGroup(0, 0, 0, [gri]));
     expectType<boolean>(isGroupRotatable(doc, ["id"]));
+    expectType<SelectionHandle[]>(groupCornerHandles(computed, ["id"], 1));           // the group's 4 resize corners
+    expectType<SelectionHandle | null>(groupHandleAtPoint(computed, ["id"], 0, 0, 1, true)); // incl. corners (resizable groups)
+    const gsi: GroupScaleInput = { id: "id", startX: 0, startY: 0, worldX: 0, worldY: 0, startWidth: 1, startHeight: 1 };
+    expectType<GroupScaleOutput[]>(scaleGroup(0, 0, 1, 1, [gsi]));
+    expectType<boolean>(isGroupResizable(doc, ["id"]));
     const unit: Rect = { x: 0, y: 0, width: 1, height: 1 };
     const snap: SnapResult = computeSnap(unit, [unit], 6);
     expectType<number>(snap.dx); expectType<number>(snap.dy); expectType<SnapGuide[]>(snap.guides);

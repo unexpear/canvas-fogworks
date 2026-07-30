@@ -102,10 +102,43 @@ export function groupRotateHandle(state: ComputedState, rootIds: readonly string
     return { nodeId: "", handle: "rotate", cx: b.x + b.width / 2, cy: b.y - rotateOffset, cursor: "grab" };
 }
 
-/** Whether a world point hits the group rotate knob (grab square = HANDLE_SIZE_PX / floored zoom). */
-export function groupHandleAtPoint(state: ComputedState, rootIds: readonly string[], x: number, y: number, zoom: number): SelectionHandle | null {
-    const h = groupRotateHandle(state, rootIds, zoom);
-    if (!h) return null;
+/**
+ * The four RESIZE corner handles of a GROUP box (the union of `rootIds`' world AABBs) —
+ * drawn/picked only for an `isGroupResizable` group (the caller gates; same split as the
+ * rotate knob vs `isGroupRotatable`). `nodeId` is "" — the handles belong to the group.
+ */
+export function groupCornerHandles(state: ComputedState, rootIds: readonly string[], zoom: number): SelectionHandle[] {
+    void zoom; // corners are zoom-independent (the knob's offset is why the sibling fns take zoom)
+    const b = selectionBounds(state, rootIds);
+    if (!b || !isFiniteRect(b)) return [];
+    return [
+        { nodeId: "", handle: "nw", cx: b.x, cy: b.y, cursor: "nwse-resize" },
+        { nodeId: "", handle: "ne", cx: b.x + b.width, cy: b.y, cursor: "nesw-resize" },
+        { nodeId: "", handle: "sw", cx: b.x, cy: b.y + b.height, cursor: "nesw-resize" },
+        { nodeId: "", handle: "se", cx: b.x + b.width, cy: b.y + b.height, cursor: "nwse-resize" }
+    ];
+}
+
+/**
+ * Whether a world point hits a group handle (grab square = HANDLE_SIZE_PX / floored zoom).
+ * Scans the rotate knob first, then — when `includeCorners` (the group is resizable) — the
+ * four corners, so the knob wins any overlap exactly as it draws on top.
+ */
+export function groupHandleAtPoint(
+    state: ComputedState,
+    rootIds: readonly string[],
+    x: number,
+    y: number,
+    zoom: number,
+    includeCorners: boolean = false
+): SelectionHandle | null {
     const half = (HANDLE_SIZE_PX / flooredZoom(zoom)) / 2;
-    return (x >= h.cx - half && x <= h.cx + half && y >= h.cy - half && y <= h.cy + half) ? h : null;
+    const hit = (h: SelectionHandle | null): boolean =>
+        !!h && x >= h.cx - half && x <= h.cx + half && y >= h.cy - half && y <= h.cy + half;
+    const knob = groupRotateHandle(state, rootIds, zoom);
+    if (hit(knob)) return knob;
+    if (includeCorners) {
+        for (const c of groupCornerHandles(state, rootIds, zoom)) if (hit(c)) return c;
+    }
+    return null;
 }

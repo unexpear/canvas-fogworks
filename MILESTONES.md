@@ -499,11 +499,16 @@ guides · smart guides · rulers.
 **Close-out:** slices 1–5 are done — pan/zoom, box-select, DOM-free resize/rotate handle picking, a live
 SVG/Canvas backend selector, and alignment snapping + smart guides (move AND resize). The per-slice deferrals
 have since been cleared: resize snapping, Escape-cancel-rotate, nested translation-only chains, canvas
-hover-cursor, rulers, canvas images, and now **multi-select / group snapping + rotate** (below). The only
-deferrals that remain are the canvas TEXT wrapping (single-line for now; matching SVG `<foreignObject>`
-wrapping is inherent) and group RESIZE (scaling a rotated set non-uniformly is a shear the rotation+scale
-transform model can't represent — a genuinely separate feature). The core editor loop is complete and every
-interaction is DOM-free, so it runs identically on both backends.
+hover-cursor, rulers, canvas images, **multi-select / group snapping + rotate** (below), canvas text
+WRAPPING, and **group RESIZE for transform-free groups** — dragging a group corner scales every root
+proportionally about the opposite corner (pure `scaleGroup` in `GroupTransform.ts`, world scale mapped 1:1
+to stored for translation-only chains), previewed via `pendingGeometry`, committed as ONE transaction,
+Escape drops the preview, extent clamped at 1 world unit (no flip — mirroring member positions while their
+content stays unmirrored would misrepresent the gesture). Gated on `isGroupResizable` — STRICTER than
+rotate: every root transform-free *including itself*, because a rotated member scaled non-uniformly is a
+SHEAR the rotation+scale transform model cannot represent. That rotated-set case is the one PERMANENT limit
+(inherent, not deferred). The core editor loop is complete and every interaction is DOM-free, so it runs
+identically on both backends.
 
 Already present from earlier prototypes: click + shift-multi-select (DOM-free `hitTest`), drag (`MoveTool`),
 resize (`ToolController`, but DOM-`data-resize-handle`-based — the canvas-wiring blocker), delete, and
@@ -612,8 +617,10 @@ auto-layout child**, whose position the layout engine computes and whose orbit w
 the same class `MoveTool` skips), so an ineligible group never offers a dead control. Multi-select no longer
 offers per-node resize (only the group knob is grabbable). No schema change. Verified by node tests + a
 10-mutant guard battery (all killed) + an adversarial multi-agent review (which caught the auto-layout-child
-non-rigidity — now fixed — and confirmed the Escape/coalesce caveat above). Still deferred: **group RESIZE** (a
-rotated set scaled non-uniformly is a shear the transform model can't represent) and rotated/scaled *parent* chains.
+non-rigidity — now fixed — and confirmed the Escape/coalesce caveat above). Since addressed: **group
+RESIZE** for transform-free groups (see the M4 close-out). Permanently out of scope: resizing a ROTATED set
+(a non-uniform scale of a rotated box is a shear the transform model can't represent) and gestures on
+rotated/scaled *parent* chains.
 
 ---
 

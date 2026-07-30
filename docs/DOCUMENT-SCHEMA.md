@@ -481,11 +481,17 @@ the override for the active theme wins, absent override falls back to `value`, a
 aliases chain (token inheritance) with a seen-set — a cycle, a dangling target, or a
 wrong-typed target (a spacing number in a color slot) resolves to the visible debug
 fallback `#ff006e`, never a throw. Keys must not start with `$` (ambiguous with an
-alias), are capped at 200 chars, and the store at `VARIABLES_MAX = 10 000` entries (the
-OOM-guard discipline). Aliases are NOT required to resolve at rest: deleting a variable
-leaves referencing styles/aliases dangling-but-valid (they render the fallback), so a
-delete can never corrupt a document. Validation is `variableStoreError`, SHARED by the
-load path (`Integrity`) and the edit path so the two cannot drift.
+alias), must not be the prototype-machinery names `__proto__`/`constructor`/`prototype`
+(RESERVED — `store[key] =` would fire the prototype setter on the edit path, so the rule
+keeps edit and load symmetric), are capped at 200 chars, and the store at
+`VARIABLES_MAX = 10 000` entries (the OOM-guard discipline; the 18→19 migration truncates
+an over-cap legacy store so the file stays loadable). Aliases are NOT required to resolve
+at rest: deleting a variable leaves referencing styles/aliases dangling-but-valid (they
+render the fallback), so a delete can never corrupt a document. Validation is
+`variableStoreError` (+ `variableKeyError`), SHARED by the load path (`Integrity`) and the
+edit path so the two cannot drift. The NODE id `"__document__"` (`RESERVED_NODE_ID`) is
+likewise reserved on both paths — it is the delta-map key document-level (variables)
+deltas travel under.
 
 `doc.activeTheme` ("light"/"dark", absent on the wire = "light") is persisted — a
 document reopens in the theme it was saved in — and changed only through an action.

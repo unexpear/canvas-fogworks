@@ -79,13 +79,18 @@ function selectionHandles(s: ComputedState, selectedNodeIds: readonly string[], 
 function handleAtPoint(s: ComputedState, selectedNodeIds: readonly string[], x: number, y: number, zoom: number): SelectionHandle | null; // handle under a world point; back-to-front (rotate beats a grazed corner)
 // GROUP handles (multi-select): the editor shows ONE rotate knob above the union box (selectionBounds), not per-node handles.
 function groupRotateHandle(s: ComputedState, rootIds: readonly string[], zoom: number): SelectionHandle | null;  // the group's single rotate knob (nodeId ""), or null if no finite union box
-function groupHandleAtPoint(s: ComputedState, rootIds: readonly string[], x: number, y: number, zoom: number): SelectionHandle | null; // that knob, if the world point hits it
+function groupCornerHandles(s: ComputedState, rootIds: readonly string[], zoom: number): SelectionHandle[];      // the group box's 4 resize corners (nodeId ""); drawn/picked only for a RESIZABLE group
+function groupHandleAtPoint(s: ComputedState, rootIds: readonly string[], x: number, y: number, zoom: number, includeCorners?: boolean): SelectionHandle | null; // knob first (wins overlaps), then — when includeCorners — the corners
 
-// geometry/GroupTransform.ts — pure math for rotating a MULTI-SELECTION rigidly about a shared pivot.
+// geometry/GroupTransform.ts — pure math for transforming a MULTI-SELECTION as one object.
 interface GroupRotateInput { id: string; startX: number; startY: number; startRotation: number; centerX: number; centerY: number } // a root's start pose (captured at grab)
 interface GroupRotateOutput { id: string; x: number; y: number; rotation: number } // orbited stored x/y + new absolute rotation
 function rotateGroup(pivotX: number, pivotY: number, delta: number, inputs: readonly GroupRotateInput[]): GroupRotateOutput[]; // each root: rotation += delta AND centre orbits the pivot (rigid). ABSOLUTE in delta (no compounding)
 function isGroupRotatable(doc: ReadonlyDocument, rootIds: readonly string[]): boolean; // every root centre-origin + translation-only PARENT chain (else no knob is shown)
+interface GroupScaleInput { id: string; startX: number; startY: number; worldX: number; worldY: number; startWidth: number; startHeight: number } // stored + world start geometry
+interface GroupScaleOutput { id: string; x: number; y: number; width: number; height: number }
+function scaleGroup(fixedX: number, fixedY: number, sx: number, sy: number, inputs: readonly GroupScaleInput[]): GroupScaleOutput[]; // proportional scale about the FIXED corner (world), world delta mapped 1:1 to stored; absolute in sx/sy
+function isGroupResizable(doc: ReadonlyDocument, rootIds: readonly string[]): boolean; // STRICTER than rotatable: every root transform-free INCLUDING itself (a rotated member scaled non-uniformly is a shear) + not laid-out
 
 // geometry/Snapping.ts — DOM-free alignment snapping (M4 smart guides), pure like the above.
 const SNAP_THRESHOLD_PX: number;                       // default snap budget, SCREEN px (tools ÷ zoom)
@@ -310,7 +315,10 @@ class ToolController {
   // each a mode that intercepts before the active tool. For a MULTI-root selection the per-node handles are
   // replaced by ONE group rotate knob (`groupHandleAtPoint`): grabbing it rotates every root rigidly about the
   // group-box centre (`rotateGroup`), live-committed as one coalesced `TransactionAction` per frame (one undo);
-  // Escape reverts. Shown only when `isGroupRotatable`. Group RESIZE is deferred.
+  // Escape reverts (shown only when `isGroupRotatable`). Dragging a GROUP CORNER scales every root
+  // proportionally about the opposite corner (`scaleGroup`) — previewed via pendingGeometry, committed as
+  // one transaction on mouse-up, Escape drops the preview; shown only when `isGroupResizable` (every root
+  // transform-free — resizing a ROTATED set is a shear and stays impossible by design).
 }
 ```
 

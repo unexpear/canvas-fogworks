@@ -28,8 +28,8 @@ import { resolveColor, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
-import { selectionHandles, groupRotateHandle, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
-import { isGroupRotatable } from "../core/geometry/GroupTransform";
+import { selectionHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
+import { isGroupRotatable, isGroupResizable } from "../core/geometry/GroupTransform";
 import { RendererState } from "./RendererState";
 
 const GRID_BASE = 20;
@@ -431,17 +431,23 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
         }
     });
 
-    // Handles (world-space). Positions come from the SHARED `selectionHandles`/`groupRotateHandle`
-    // (the same source the editor hit-tests), so drawing and picking cannot drift.
+    // Handles (world-space). Positions come from the SHARED `selectionHandles`/`groupRotateHandle`/
+    // `groupCornerHandles` (the same sources the editor hit-tests), so drawing and picking cannot drift.
     //  - a SINGLE selected root → per-node resize corners + a rotate knob (drawn as a circle);
-    //  - a MULTI-root selection → ONE group bounding box + (when the group can be rigidly rotated)
-    //    one group rotate knob. Per-node resize is intentionally NOT offered for a group (group
-    //    resize is a documented deferral), so the group shows a box + knob, not corner squares.
+    //  - a MULTI-root selection → ONE group bounding box, plus GROUP corner handles when the
+    //    group is resizable (every root transform-free) and one group rotate knob when it is
+    //    rotatable — each affordance gated on its own eligibility, never per-node handles.
     const roots = selectionRoots(doc, state.selectedNodeIds);
     if (roots.length >= 2) {
         const gb = selectionBounds(computed, roots);
         if (gb && isFiniteRect(gb)) {
             items.push(outlineItem(gb, 0, "#00bfff", 1.5 / z)); // the group's bounding box (the true union)
+            // Corner handles only for a RESIZABLE group (every root transform-free — a rotated
+            // member scaled non-uniformly would shear); drawn before the knob so the knob wins
+            // an overlap, matching groupHandleAtPoint's scan order.
+            if (isGroupResizable(doc, roots)) {
+                groupCornerHandles(computed, roots, z).forEach(h => items.push(handleItem(h, z)));
+            }
             if (isGroupRotatable(doc, roots)) {
                 const knob = groupRotateHandle(computed, roots, z);
                 if (knob) items.push(handleItem(knob, z));

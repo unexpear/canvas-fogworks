@@ -14,6 +14,7 @@
 
 import { ReadonlyDocument } from "../document/Document";
 import { isAbsolute, isLayoutContainer } from "./LayoutEngine";
+import { isTranslationOnlyChain } from "./Snapping";
 
 /** One root's state captured at gesture start, enough to compute its rotated pose each frame. */
 export interface GroupRotateInput {
@@ -104,5 +105,76 @@ export function isGroupRotatable(doc: ReadonlyDocument, rootIds: readonly string
         const parent = n.parent ? doc.nodes.get(n.parent) : undefined;
         const laidOut = isLayoutContainer(parent) && !isAbsolute(n);
         return centreOrigin && !laidOut && isTranslationOnlyParentChain(doc, id);
+    });
+}
+
+/** One root's state captured at a group-resize grab. `startX/Y` are STORED geometry; `worldX/Y`
+ *  the world-AABB origin (equal in extent for an eligible root, but offset under a translated
+ *  parent — the scale runs in WORLD, and the world delta maps 1:1 back to stored). */
+export interface GroupScaleInput {
+    id: string;
+    startX: number;
+    startY: number;
+    worldX: number;
+    worldY: number;
+    startWidth: number;
+    startHeight: number;
+}
+
+/** One root's new stored geometry after the group scale. */
+export interface GroupScaleOutput {
+    id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+/**
+ * Scale every input root about a FIXED world point (the group box corner opposite the dragged
+ * handle) by (`sx`, `sy`) — positions orbit the fixed point linearly, sizes scale. Valid ONLY
+ * for `isGroupResizable` roots (node + ancestors transform-free): axis-aligned boxes scale to
+ * axis-aligned boxes (no shear — the reason ROTATED sets can't group-resize), stored size ==
+ * world size, and the world position delta maps 1:1 to stored x/y. Like `rotateGroup`, it is
+ * absolute in (`sx`, `sy`) — each frame recomputes from the captured start poses, nothing
+ * compounds. Callers keep `sx`/`sy` > 0 (the tool clamps the group extent at 1 world unit; a
+ * flip would mirror member POSITIONS while leaving their content unmirrored — misleading).
+ */
+export function scaleGroup(
+    fixedX: number,
+    fixedY: number,
+    sx: number,
+    sy: number,
+    inputs: readonly GroupScaleInput[]
+): GroupScaleOutput[] {
+    return inputs.map(n => {
+        const newWorldX = fixedX + (n.worldX - fixedX) * sx;
+        const newWorldY = fixedY + (n.worldY - fixedY) * sy;
+        return {
+            id: n.id,
+            x: n.startX + (newWorldX - n.worldX),
+            y: n.startY + (newWorldY - n.worldY),
+            width: n.startWidth * sx,
+            height: n.startHeight * sy
+        };
+    });
+}
+
+/**
+ * Whether a group of roots can be proportionally resized by `scaleGroup`. STRICTER than
+ * `isGroupRotatable`: every root must be entirely transform-free INCLUDING itself
+ * (`isTranslationOnlyChain` — a rotated/scaled member scaled non-uniformly is a SHEAR the
+ * rotation+scale transform model cannot represent, the documented inherent limit) and not an
+ * in-flow auto-layout child (its stored geometry is ignored, the same class `MoveTool` skips).
+ * Empty set → false. An ineligible group shows NO corner handles rather than shearing.
+ */
+export function isGroupResizable(doc: ReadonlyDocument, rootIds: readonly string[]): boolean {
+    if (rootIds.length === 0) return false;
+    return rootIds.every(id => {
+        const n = doc.nodes.get(id);
+        if (!n) return false;
+        const parent = n.parent ? doc.nodes.get(n.parent) : undefined;
+        const laidOut = isLayoutContainer(parent) && !isAbsolute(n);
+        return !laidOut && isTranslationOnlyChain(doc, id);
     });
 }

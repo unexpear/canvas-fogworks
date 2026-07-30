@@ -12,7 +12,7 @@ import { TransactionAction } from "../../core/actions/TransactionAction";
 import { EditorState, panBy, screenToWorld } from "../EditorState";
 import { computeGeometry, ComputedState, selectionBounds } from "../../core/geometry/GeometryEngine";
 import { handleAtPoint, groupHandleAtPoint } from "../../core/geometry/SelectionHandles";
-import { rotateGroup, isGroupRotatable, GroupRotateInput } from "../../core/geometry/GroupTransform";
+import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupScaleInput } from "../../core/geometry/GroupTransform";
 import { snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect } from "../../core/geometry/Matrix";
 import { ReadonlyDocument } from "../../core/document/Document";
@@ -74,6 +74,17 @@ export class ToolController {
     private groupRotateStartAngle = 0; // pointer angle about the pivot at grab
     private groupRotateKey = "";       // coalesce key = "rotate-group:<sorted root ids>"
 
+    // Group resize — dragging a GROUP corner scales every root proportionally about the
+    // opposite (fixed) corner (scaleGroup). Previewed via pendingGeometry (nothing commits
+    // until mouse-up → one transaction → one undo; Escape just drops the preview).
+    private groupResizeMode = false;
+    private groupResizeInputs: GroupScaleInput[] = []; // each root's start geometry, at grab
+    private groupResizeHandle = "";                     // the dragged corner ("nw"|"ne"|"sw"|"se")
+    private groupResizeBox: Rect = { x: 0, y: 0, width: 0, height: 0 }; // the group box at grab (world)
+    private groupResizeStartX = 0;                      // pointer (client px) at grab
+    private groupResizeStartY = 0;
+    private groupResizePending: Map<string, { x: number; y: number; width: number; height: number }> | null = null;
+
     // Viewport pan (space+drag or middle-mouse) — a mode that intercepts before the tool,
     // like resize. The gesture is screen-space, so it applies at any zoom and any tool.
     private spaceHeld = false;
@@ -122,9 +133,21 @@ export class ToolController {
             const roots = selectionRoots(doc, sel);
 
             if (roots.length >= 2) {
-                // Group: only the rotate knob is grabbable (a rotatable group), and only then.
-                if (isGroupRotatable(doc, roots) && groupHandleAtPoint(computed, roots, w.x, w.y, vp.zoom)) {
+                // Group: the rotate knob (a rotatable group) and the corner handles (a
+                // resizable group) — each affordance gated on ITS eligibility, matching what
+                // the renderer draws. A hit that isn't acted on falls through to the tool.
+                const rotatable = isGroupRotatable(doc, roots);
+                const resizable = isGroupResizable(doc, roots);
+                const hit = (rotatable || resizable)
+                    ? groupHandleAtPoint(computed, roots, w.x, w.y, vp.zoom, resizable)
+                    : null;
+                if (hit?.handle === "rotate" && rotatable) {
                     this.beginGroupRotate(doc, computed, roots, w.x, w.y);
+                    e.preventDefault();
+                    return;
+                }
+                if (hit && hit.handle !== "rotate" && resizable) {
+                    this.beginGroupResize(doc, computed, roots, hit.handle, e.clientX, e.clientY);
                     e.preventDefault();
                     return;
                 }
@@ -212,6 +235,27 @@ export class ToolController {
             return;
         }
 
+        if (this.groupResizeMode) {
+            const doc = this.dispatcher.getDocument();
+            const live = this.groupResizeInputs.filter(n => doc.nodes.has(n.id));
+            if (live.length === 0) { // every root vanished mid-drag → abort cleanly
+                this.resetGroupResize(); this.refresh(); return;
+            }
+            const zoom = Math.max(0.01, this.editorState.viewport.zoom);
+            const dx = (e.clientX - this.groupResizeStartX) / zoom;
+            const dy = (e.clientY - this.groupResizeStartY) / zoom;
+            const { fixedX, fixedY, sx, sy } = this.groupScaleFactors(dx, dy);
+            // Preview via pendingGeometry — absolute from the captured poses, nothing commits.
+            const pending = new Map<string, { x: number; y: number; width: number; height: number }>();
+            for (const p of scaleGroup(fixedX, fixedY, sx, sy, live)) {
+                pending.set(p.id, { x: p.x, y: p.y, width: p.width, height: p.height });
+            }
+            this.groupResizePending = pending;
+            this.editorState.pendingGeometry = pending;
+            this.refresh();
+            return;
+        }
+
         if (this.resizeMode && this.resizeNodeId && this.resizeHandle && this.resizeOrigin) {
             const zoom = Math.max(0.01, this.editorState.viewport.zoom);
             let dx = (e.clientX - this.resizeStartX) / zoom;
@@ -263,10 +307,16 @@ export class ToolController {
             const w = screenToWorld(vp, canvasRect, e.clientX, e.clientY);
             const computed = computeGeometry(doc, this.editorState.pendingGeometry);
             const roots = selectionRoots(doc, sel);
-            // Match onMouseDown's picking: a group exposes only its rotate knob, a single root its
-            // per-node handles — so the hover cursor reflects what a press would actually grab.
+            // Match onMouseDown's picking exactly: each group affordance is gated on its own
+            // eligibility — so the hover cursor reflects what a press would actually grab.
             if (roots.length >= 2) {
-                cursor = (isGroupRotatable(doc, roots) ? groupHandleAtPoint(computed, roots, w.x, w.y, vp.zoom) : null)?.cursor ?? null;
+                const rotatable = isGroupRotatable(doc, roots);
+                const resizable = isGroupResizable(doc, roots);
+                const hit = (rotatable || resizable)
+                    ? groupHandleAtPoint(computed, roots, w.x, w.y, vp.zoom, resizable)
+                    : null;
+                const actionable = hit && (hit.handle === "rotate" ? rotatable : resizable);
+                cursor = actionable ? hit.cursor : null;
             } else {
                 cursor = handleAtPoint(computed, roots, w.x, w.y, vp.zoom)?.cursor ?? null;
             }
@@ -333,6 +383,63 @@ export class ToolController {
         this.rotateCheckpointId = null;
     }
 
+    /** Capture the group box + each root's start geometry for a group-resize gesture. */
+    private beginGroupResize(doc: ReadonlyDocument, computed: ComputedState, roots: string[], handle: string, clientX: number, clientY: number): void {
+        const box = selectionBounds(computed, roots);
+        if (!box) return;
+        const inputs: GroupScaleInput[] = [];
+        for (const id of roots) {
+            const node = doc.nodes.get(id);
+            const c = computed.nodes.get(id);
+            if (!node || !c) continue;
+            inputs.push({
+                id,
+                startX: node.geometry.x,
+                startY: node.geometry.y,
+                worldX: c.bounds.x,
+                worldY: c.bounds.y,
+                startWidth: node.geometry.width,
+                startHeight: node.geometry.height
+            });
+        }
+        if (inputs.length === 0) return;
+        this.groupResizeMode = true;
+        this.groupResizeInputs = inputs;
+        this.groupResizeHandle = handle;
+        this.groupResizeBox = box;
+        this.groupResizeStartX = clientX;
+        this.groupResizeStartY = clientY;
+        this.editorState.isDragging = true;
+    }
+
+    /**
+     * Scale factors + the FIXED corner for the current drag: the dragged corner follows the
+     * pointer, the opposite corner stays put, and the group extent clamps at 1 world unit per
+     * axis — no flip (mirroring member positions while their content stays unmirrored would
+     * misrepresent the gesture; the single-node resize CAN flip because one box has no layout).
+     */
+    private groupScaleFactors(dx: number, dy: number): { fixedX: number; fixedY: number; sx: number; sy: number } {
+        const b = this.groupResizeBox;
+        const h = this.groupResizeHandle;
+        const west = h === "nw" || h === "sw";   // dragging a LEFT corner → the RIGHT edge is fixed
+        const north = h === "nw" || h === "ne";  // dragging a TOP corner → the BOTTOM edge is fixed
+        const fixedX = west ? b.x + b.width : b.x;
+        const fixedY = north ? b.y + b.height : b.y;
+        const movingX = (west ? b.x : b.x + b.width) + dx;
+        const movingY = (north ? b.y : b.y + b.height) + dy;
+        const newW = Math.max(1, west ? fixedX - movingX : movingX - fixedX);
+        const newH = Math.max(1, north ? fixedY - movingY : movingY - fixedY);
+        return { fixedX, fixedY, sx: newW / b.width, sy: newH / b.height };
+    }
+
+    private resetGroupResize(): void {
+        this.groupResizeMode = false;
+        this.groupResizeInputs = [];
+        this.groupResizePending = null;
+        this.editorState.pendingGeometry = null;
+        this.editorState.isDragging = false;
+    }
+
     onMouseUp(e: MouseEvent): void {
         if (this.panMode) {
             this.panMode = false;
@@ -353,6 +460,23 @@ export class ToolController {
             // The group rotation was already live-committed (coalesced) during the drag; just end.
             this.resetGroupRotate();
             this.editorState.isDragging = false;
+            this.refresh();
+            return;
+        }
+
+        if (this.groupResizeMode) {
+            // Commit the previewed scale as ONE transaction (one undo restores the whole group).
+            const doc = this.dispatcher.getDocument();
+            const pending = this.groupResizePending;
+            if (pending) {
+                const actions: Action[] = [];
+                pending.forEach((g, id) => {
+                    if (doc.nodes.has(id)) actions.push(new UpdateNodeGeometryAction(doc, id, g));
+                });
+                if (actions.length === 1) this.dispatcher.dispatchAction(actions[0]);
+                else if (actions.length > 1) this.dispatcher.dispatchAction(new TransactionAction(doc, "resize-group", actions));
+            }
+            this.resetGroupResize();
             this.refresh();
             return;
         }
@@ -414,6 +538,12 @@ export class ToolController {
                 if (!this.cancelGesture()) this.commitGroupRotate(0);
                 this.resetGroupRotate();
                 this.editorState.isDragging = false;
+                this.refresh();
+                return;
+            }
+            if (this.groupResizeMode) {
+                // Preview-only gesture (like single resize): nothing committed — drop the preview.
+                this.resetGroupResize();
                 this.refresh();
                 return;
             }

@@ -23,8 +23,8 @@ import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds,
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
-import { selectionHandles, handleAtPoint, groupRotateHandle, groupHandleAtPoint, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
-import { rotateGroup, isGroupRotatable } from "../geometry/GroupTransform";
+import { selectionHandles, handleAtPoint, groupRotateHandle, groupHandleAtPoint, groupCornerHandles, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
+import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../geometry/GroupTransform";
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
 import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
@@ -1768,6 +1768,169 @@ describe("GroupTransform (group rotate math)", () => {
         doc.nodes.get("A")!.layout = { position: "absolute" };
         doc.nodes.get("B")!.layout = { position: "absolute" };
         expect(isGroupRotatable(doc, ["A", "B"])).toBe(true);
+    });
+});
+
+// ─── Deferral: group RESIZE — pure scale math + eligibility ───
+describe("GroupTransform (group resize math)", () => {
+    test("scaleGroup scales positions about the fixed corner and sizes proportionally", () => {
+        // Fixed corner (0,0), sx=2, sy=0.5. A at world (10,20) 30×40 (top-level: stored == world).
+        const out = scaleGroup(0, 0, 2, 0.5, [
+            { id: "A", startX: 10, startY: 20, worldX: 10, worldY: 20, startWidth: 30, startHeight: 40 }
+        ]);
+        expect(out[0]).toEqual({ id: "A", x: 20, y: 10, width: 60, height: 20 });
+    });
+
+    test("a NESTED root maps the world scale back to STORED coords (world ≠ stored)", () => {
+        // Stored (10,10) under a parent at (500,500) → world (510,510). Fixed corner (500,500), sx=sy=2:
+        // new world = 500 + (510−500)·2 = 520 → stored delta +10 → stored 20. A stored-space scale
+        // (10 → 500 + (10−500)·2 = −480) would be wildly wrong — the far parent exposes any mixup.
+        const out = scaleGroup(500, 500, 2, 2, [
+            { id: "C", startX: 10, startY: 10, worldX: 510, worldY: 510, startWidth: 50, startHeight: 50 }
+        ]);
+        expect(out[0]).toEqual({ id: "C", x: 20, y: 20, width: 100, height: 100 });
+    });
+
+    test("sx=sy=1 is the identity (the Escape/no-move path)", () => {
+        const input = { id: "A", startX: 7, startY: 9, worldX: 7, worldY: 9, startWidth: 30, startHeight: 40 };
+        expect(scaleGroup(100, 100, 1, 1, [input])).toEqual([{ id: "A", x: 7, y: 9, width: 30, height: 40 }]);
+    });
+
+    test("isGroupResizable is STRICTER than rotatable: a rotated MEMBER disqualifies (shear)", () => {
+        const doc = createEmptyDocument();
+        const mk = (id: string, extra: object = {}) => doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {}, ...extra });
+        mk("A"); mk("B");
+        doc.rootNodeUuids = ["A", "B"];
+        expect(isGroupResizable(doc, ["A", "B"])).toBe(true);
+        expect(isGroupResizable(doc, [])).toBe(false);
+        doc.nodes.get("A")!.transform = { rotation: 0.3 };
+        expect(isGroupResizable(doc, ["A", "B"])).toBe(false); // rotated member → shear → ineligible
+        expect(isGroupRotatable(doc, ["A", "B"])).toBe(true);  // …but still ROTATABLE (own rotation is fine there)
+    });
+
+    test("isGroupResizable rejects an in-flow auto-layout child (stored geometry is ignored)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["A"], geometry: { x: 0, y: 0, width: 300, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: { container: { direction: "row" } } });
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: "F", children: [], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("B", { id: "B", type: "core.rectangle", parent: null, children: [], geometry: { x: 400, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["F", "B"];
+        expect(isGroupResizable(doc, ["A", "B"])).toBe(false);
+        doc.nodes.get("A")!.layout = { position: "absolute" }; // out of flow → stored x/y drives again
+        expect(isGroupResizable(doc, ["A", "B"])).toBe(true);
+    });
+
+    test("groupCornerHandles sit on the union box; the knob wins an overlap in groupHandleAtPoint", () => {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number, y: number) => doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        mk("A", 0, 0); mk("B", 100, 100); // union {0,0,150,150}
+        doc.rootNodeUuids = ["A", "B"];
+        const cs = computeGeometry(doc);
+        const corners = groupCornerHandles(cs, ["A", "B"], 1);
+        expect(corners.map(h => [h.handle, h.cx, h.cy])).toEqual([["nw", 0, 0], ["ne", 150, 0], ["sw", 0, 150], ["se", 150, 150]]);
+        expect(corners.every(h => h.nodeId === "")).toBe(true);
+        // Pick: corners only when includeCorners; the knob wins where both could match.
+        expect(groupHandleAtPoint(cs, ["A", "B"], 150, 150, 1, true)!.handle).toBe("se");
+        expect(groupHandleAtPoint(cs, ["A", "B"], 150, 150, 1)).toBeNull();          // corners excluded by default
+        expect(groupHandleAtPoint(cs, ["A", "B"], 75, -ROTATE_OFFSET_PX, 1, true)!.handle).toBe("rotate");
+    });
+});
+
+// ─── Deferral: ToolController group resize — a corner drag scales the whole group ───
+describe("ToolController group resize", () => {
+    const rect = { left: 0, top: 0 } as DOMRect;
+    const md = (x: number, y: number) =>
+        ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+    const key = (k: string) => ({ key: k, target: { tagName: "BODY", isContentEditable: false }, preventDefault() { } } as unknown as KeyboardEvent);
+
+    function harness() {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number, y: number) => doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        mk("A", 0, 0); mk("B", 100, 100); // union {0,0,150,150}
+        doc.rootNodeUuids = ["A", "B"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        return { dispatcher, es, tc };
+    }
+    const geo = (d: ActionDispatcher, id: string) => d.getDocument().nodes.get(id)!.geometry;
+
+    test("dragging the SE corner scales BOTH roots about the fixed NW corner, in ONE undo", () => {
+        const { dispatcher, tc } = harness();
+        tc.onMouseDown(md(150, 150), rect); // grab the group SE corner
+        tc.onMouseMove(md(300, 225), rect); // +150,+75 → new extent 300×225 → sx=2, sy=1.5 about (0,0)
+        tc.onMouseUp(md(300, 225));
+        expect(geo(dispatcher, "A")).toEqual({ x: 0, y: 0, width: 100, height: 75 });
+        expect(geo(dispatcher, "B")).toEqual({ x: 200, y: 150, width: 100, height: 75 });
+        dispatcher.undo(); // ONE undo restores the whole group
+        expect(geo(dispatcher, "A")).toEqual({ x: 0, y: 0, width: 50, height: 50 });
+        expect(geo(dispatcher, "B")).toEqual({ x: 100, y: 100, width: 50, height: 50 });
+        expect(dispatcher.canUndo()).toBe(false);
+    });
+
+    test("dragging the NW corner keeps the SE corner fixed", () => {
+        const { dispatcher, tc } = harness();
+        tc.onMouseDown(md(0, 0), rect);     // grab NW; fixed = (150,150)
+        tc.onMouseMove(md(75, 75), rect);   // new extent 75×75 → sx=sy=0.5 about (150,150)
+        tc.onMouseUp(md(75, 75));
+        expect(geo(dispatcher, "A")).toEqual({ x: 75, y: 75, width: 25, height: 25 });
+        expect(geo(dispatcher, "B")).toEqual({ x: 125, y: 125, width: 25, height: 25 });
+    });
+
+    test("Escape cancels the preview — nothing commits, no undo step", () => {
+        const { dispatcher, es, tc } = harness();
+        tc.onMouseDown(md(150, 150), rect);
+        tc.onMouseMove(md(300, 300), rect);
+        expect(es.pendingGeometry!.get("A")).toBeDefined(); // previewing
+        tc.onKeyDown(key("Escape"));
+        expect(es.pendingGeometry).toBeNull();
+        tc.onMouseUp(md(300, 300));
+        expect(geo(dispatcher, "A")).toEqual({ x: 0, y: 0, width: 50, height: 50 }); // untouched
+        expect(dispatcher.canUndo()).toBe(false);
+    });
+
+    test("the extent clamps at 1 world unit — crossing the fixed corner cannot flip the group", () => {
+        const { dispatcher, tc } = harness();
+        tc.onMouseDown(md(150, 150), rect);   // SE grab, fixed (0,0)
+        tc.onMouseMove(md(-200, -200), rect); // pointer far past the fixed corner
+        tc.onMouseUp(md(-200, -200));
+        const a = geo(dispatcher, "A"), b = geo(dispatcher, "B");
+        expect(a.width).toBeGreaterThan(0);   // scaled tiny, never negative/flipped
+        expect(b.x).toBeGreaterThanOrEqual(0); // B stays on A's far side (no mirror)
+        expect(b.x).toBeLessThan(1.01);        // ≈ 150 · (1/150)
+    });
+
+    test("a corner press on an INELIGIBLE group (rotated member) does not resize", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {}, transform: { rotation: 0.3 } });
+        doc.nodes.set("B", { id: "B", type: "core.rectangle", parent: null, children: [], geometry: { x: 100, y: 100, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["A", "B"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        const before = JSON.stringify(dispatcher.getDocument().nodes.get("B")!.geometry);
+        tc.onMouseDown(md(150, 150), rect); // where the SE corner would be
+        tc.onMouseMove(md(250, 250), rect);
+        tc.onMouseUp(md(250, 250));
+        expect(JSON.stringify(dispatcher.getDocument().nodes.get("B")!.geometry)).toBe(before);
+        expect(dispatcher.canUndo()).toBe(false);
+    });
+
+    test("a NESTED eligible root scales in world space (stored maps 1:1)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 500, y: 500, width: 400, height: 400 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 10, y: 10, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} }); // world (510,510)
+        doc.nodes.set("B", { id: "B", type: "core.rectangle", parent: null, children: [], geometry: { x: 610, y: 610, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P", "B"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["C", "B"]; // union {510,510,150,150}
+        const tc = new ToolController(dispatcher, es, () => { });
+        tc.onMouseDown(md(660, 660), rect); // SE corner of the union
+        tc.onMouseMove(md(810, 810), rect); // extent 150→300 → sx=sy=2 about world (510,510)
+        tc.onMouseUp(md(810, 810));
+        // C's world (510,510) is the fixed corner → stays; stored stays 10,10; size doubles.
+        expect(geo(dispatcher, "C")).toEqual({ x: 10, y: 10, width: 100, height: 100 });
+        // B world (610,610) → 510+100·2 = 710 (top-level stored == world).
+        expect(geo(dispatcher, "B")).toEqual({ x: 710, y: 710, width: 100, height: 100 });
     });
 });
 

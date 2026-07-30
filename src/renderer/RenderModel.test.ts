@@ -187,7 +187,7 @@ describe("buildRenderModel — overlay", () => {
         expect(handleAtPoint(cs, ["n1"], 25, -ROTATE_OFFSET_PX / z, z)!.handle).toBe("rotate");
     });
 
-    test("multi-select → ONE group box + one group rotate knob, and no per-node corner handles", () => {
+    test("multi-select → ONE group box + GROUP corner handles + one group knob (never per-node handles)", () => {
         const doc = createEmptyDocument();
         const mk = (id: string, x: number, y: number) => doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: 50, height: 50 }, style: { fill: "#fff", opacity: 1 }, layout: {} });
         mk("A", 0, 0); mk("B", 100, 100); // union {0,0,150,150}, centre (75,75)
@@ -195,14 +195,31 @@ describe("buildRenderModel — overlay", () => {
         const model = buildRenderModel(SIZE, doc, stateFor(doc, { selectedNodeIds: ["A", "B"] }));
 
         const handles = model.overlay.filter(i => i.role === "handle");
-        expect(handles.length).toBe(1);            // ONLY the group knob — no per-node corner squares
-        expect(handles[0].handle).toBe("rotate");
-        expect(handles[0].nodeId).toBe("");        // belongs to the group, not a node
-        expect(handles[0].shape).toMatchObject({ kind: "ellipse", cx: 75, cy: -ROTATE_OFFSET_PX }); // above the union top-centre
+        // A plain (transform-free) group is resizable AND rotatable: 4 GROUP corners + the knob,
+        // all nodeId "" (they belong to the group) — never per-node squares (would be 10).
+        expect(handles.length).toBe(5);
+        expect(handles.every(h => h.nodeId === "")).toBe(true);
+        expect(handles.map(h => h.handle)).toEqual(["nw", "ne", "sw", "se", "rotate"]); // knob LAST (drawn on top)
+        const corners = handles.filter(h => h.handle !== "rotate").map(h => h.shape) as { x: number; y: number; width: number }[];
+        expect(corners[0]).toMatchObject({ kind: "rect" });
+        // Corners sit on the UNION box corners (handle squares centred there), not any node's box.
+        const hs = HANDLE_SIZE_PX;
+        expect(corners.map(c => [c.x + hs / 2, (c as unknown as { y: number }).y + hs / 2])).toEqual([[0, 0], [150, 0], [0, 150], [150, 150]]);
+        expect(handles[4].shape).toMatchObject({ kind: "ellipse", cx: 75, cy: -ROTATE_OFFSET_PX }); // knob above the union top-centre
 
         const outlines = model.overlay.filter(i => i.role === "outline");
         expect(outlines.length).toBe(3); // 2 per-node selection outlines (pad 3) + 1 tight group box (pad 0)
         expect(outlines).toContainEqual(expect.objectContaining({ shape: { kind: "rect", x: 0, y: 0, width: 150, height: 150 } }));
+    });
+
+    test("a ROTATED-member group draws the knob but NO corner handles (rotatable, not resizable)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#fff", opacity: 1 }, layout: {}, transform: { rotation: 0.3 } });
+        doc.nodes.set("B", { id: "B", type: "core.rectangle", parent: null, children: [], geometry: { x: 100, y: 100, width: 50, height: 50 }, style: { fill: "#fff", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["A", "B"];
+        const model = buildRenderModel(SIZE, doc, stateFor(doc, { selectedNodeIds: ["A", "B"] }));
+        const handles = model.overlay.filter(i => i.role === "handle");
+        expect(handles.map(h => h.handle)).toEqual(["rotate"]); // scaling a rotated member would shear → no corners
     });
 
     test("a non-rotatable group (a root under a rotated parent) → the group box but NO rotate knob", () => {
