@@ -420,7 +420,9 @@ function renderScene(container: HTMLElement, doc: ReadonlyDocument, state: Rende
   now live** (M4 — a toolbar toggle), since all picking is DOM-free. The shims themselves
   (`renderSVG`/`renderCanvas`/`renderScene`) are DOM plumbing (the untested boundary, browser-
   smoke-verified). Canvas IMAGES now render (lazily loaded + cached; `setImageReadyCallback` repaints on
-  decode). Canvas TEXT now word-WRAPS (greedy measureText breaking, 1.2×fontSize lines, clip-cropped); exact `<foreignObject>` metric parity stays the inherent gap.
+  decode). Canvas TEXT now word-WRAPS (greedy measureText breaking with CSS-normal whitespace
+  collapse — all whitespace runs are single-space break points, matching the HTML backend —
+  1.2×fontSize lines, clip-cropped); exact `<foreignObject>` metric parity stays the inherent gap.
 - **Viewport culling:** `content` holds only nodes whose world bounds intersect the visible
   world rect `{x: vp.x/z, y: vp.y/z, w: (size.w||800)/z, h: (size.h||600)/z}` (the same
   screen→world region the viewport transform maps, inclusive edges). So `content` depends
