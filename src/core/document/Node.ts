@@ -12,6 +12,15 @@
 export const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path"] as const;
 export type NodeType = typeof NODE_TYPES[number];
 
+/**
+ * A node id no document may use: the action layer's delta map is keyed by node id, and
+ * DOCUMENT-level deltas (the M5 `"variables"` kind) travel under this sentinel — a real node
+ * with the same id would collide with them in a transaction's merged result (the doc delta
+ * would overwrite the node's edits). Rejected on BOTH paths (`AddNodeAction` + `Integrity`),
+ * like the reserved variable keys.
+ */
+export const RESERVED_NODE_ID = "__document__";
+
 export function isNodeType(value: unknown): value is NodeType {
     return typeof value === "string" && (NODE_TYPES as readonly string[]).includes(value);
 }

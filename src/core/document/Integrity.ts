@@ -12,7 +12,7 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError, layoutError, dimensionError, pathError, styleError } from "./Node";
+import { transformError, layoutError, dimensionError, pathError, styleError, RESERVED_NODE_ID } from "./Node";
 import { variableStoreError, THEME_MODES } from "./Variables";
 
 function checkNodeRanges(node: ReadonlyNode): void {
@@ -66,8 +66,14 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
         throw new Error(`Invalid document: activeTheme must be one of ${THEME_MODES.join("/")} (got "${String(doc.activeTheme)}").`);
     }
 
-    // 1. Per-node ranges.
-    doc.nodes.forEach(node => checkNodeRanges(node));
+    // 1. Per-node ranges — and no node may claim the reserved document-delta id (it would
+    // collide with doc-level deltas in the action layer's node-id-keyed map).
+    doc.nodes.forEach(node => {
+        if (node.id === RESERVED_NODE_ID) {
+            throw new Error(`Invalid document: node id "${RESERVED_NODE_ID}" is reserved.`);
+        }
+        checkNodeRanges(node);
+    });
 
     // 2. Parent references resolve.
     doc.nodes.forEach(node => {

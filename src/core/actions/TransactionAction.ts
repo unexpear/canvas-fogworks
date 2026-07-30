@@ -149,7 +149,10 @@ export class TransactionAction extends Action {
         if (documentDelta) finalDeltas.set(DOCUMENT_DELTA_KEY, documentDelta);
 
         return {
-            updatedNodeIds: new Set(finalDeltas.keys()),
+            // The document-delta sentinel is NOT a node id — leaking it would seed the
+            // geometry dirty-tracker with a ghost and break the variables-delta contract
+            // ("updatedNodeIds stays empty for doc-level changes").
+            updatedNodeIds: new Set([...finalDeltas.keys()].filter(k => k !== DOCUMENT_DELTA_KEY)),
             propertyDeltas: finalDeltas,
             success: true
         };

@@ -47,6 +47,16 @@ export interface VariableStore {
 export const VARIABLES_MAX = 10_000;
 /** Key length cap (keys are user-authored ids, not prose). */
 export const VARIABLE_KEY_MAX = 200;
+/**
+ * Keys that collide with `Object.prototype` machinery are RESERVED on both paths. The load
+ * path could technically carry them (JSON.parse creates own properties), but the edit path
+ * cannot: `store["__proto__"] = def` triggers the prototype SETTER — the variable is
+ * silently not added and the copy's prototype is swapped. Rejecting them in the shared
+ * validator keeps edit and load symmetric (the round-trip-closure rule) instead of letting
+ * a hand-edited file author what the actions never could. Same family as the recorded
+ * `key in plainObjectTable` prototype-walk hazard.
+ */
+const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 /** Rendered when a color token cannot be resolved (missing/cycle/wrong type) — the same
  *  debug magenta family as the unknown-node-type fallback, so a broken reference is VISIBLE. */
@@ -104,12 +114,25 @@ export function variableStoreError(store: unknown): string | null {
     const entries = Object.entries(store);
     if (entries.length > VARIABLES_MAX) return `variables must have at most ${VARIABLES_MAX} entries`;
     for (const [key, def] of entries) {
-        if (key.length === 0) return "variable key must be non-empty";
-        if (key.length > VARIABLE_KEY_MAX) return `variable key must be at most ${VARIABLE_KEY_MAX} characters`;
-        if (key.charCodeAt(0) === 36) return `variable key "${key}" must not start with "$"`;
+        const ke = variableKeyError(key);
+        if (ke) return ke;
         const e = variableError(def);
         if (e) return `variable "${key}": ${e}`;
     }
+    return null;
+}
+
+/**
+ * Validity of ONE variable KEY — shared by the store validator AND `SetVariableAction`,
+ * which must check the key BEFORE building its candidate store: a reserved key like
+ * "__proto__" is dropped by the assignment itself (the prototype setter fires instead), so
+ * validating only the built store would miss it and the action would silently no-op.
+ */
+export function variableKeyError(key: string): string | null {
+    if (key.length === 0) return "variable key must be non-empty";
+    if (key.length > VARIABLE_KEY_MAX) return `variable key must be at most ${VARIABLE_KEY_MAX} characters`;
+    if (key.charCodeAt(0) === 36) return `variable key "${key}" must not start with "$"`;
+    if (RESERVED_KEYS.has(key)) return `variable key "${key}" is reserved`;
     return null;
 }
 

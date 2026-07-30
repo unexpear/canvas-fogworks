@@ -5,7 +5,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { Node, NodeType, isNodeType, dimensionError } from "../document/Node";
+import { Node, NodeType, isNodeType, dimensionError, RESERVED_NODE_ID } from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 import { generateUUID } from "../ids/UUID";
 
@@ -46,6 +46,11 @@ export class AddNodeAction extends Action {
         // An explicit id must not collide with an existing node, or the add
         // would silently replace it (and orphan its child links).
         if (this.explicitId !== null && this.document.nodes.has(this.explicitId)) {
+            return false;
+        }
+        // The reserved document-delta id would collide with doc-level (variables) deltas in
+        // the node-id-keyed delta map; the load path rejects it too (Integrity).
+        if (this.explicitId === RESERVED_NODE_ID) {
             return false;
         }
         // A requested parent must actually exist.

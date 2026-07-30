@@ -24,8 +24,8 @@ import {
     ProjectDocument, ReadonlyDocument, createEmptyDocument,
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
-import { Variable, VariableStore, VariableType, VariableValue, ThemeMode, THEME_MODES, VARIABLES_MAX, VARIABLE_KEY_MAX, VARIABLE_FALLBACK_COLOR, isTokenRef, variableError, variableStoreError, resolveVariable, resolveColor, resolveNumber } from "../document/Variables";
-import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, Shadow, Layout } from "../document/Node";
+import { Variable, VariableStore, VariableType, VariableValue, ThemeMode, THEME_MODES, VARIABLES_MAX, VARIABLE_KEY_MAX, VARIABLE_FALLBACK_COLOR, isTokenRef, variableError, variableKeyError, variableStoreError, resolveVariable, resolveColor, resolveNumber } from "../document/Variables";
+import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, Shadow, Layout, RESERVED_NODE_ID } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
@@ -116,7 +116,9 @@ export function __apiSurfacePin(): void {
     expectType<string>(VARIABLE_FALLBACK_COLOR);
     expectType<boolean>(isTokenRef("$color/primary"));
     expectType<string | null>(variableError(variable));
+    expectType<string | null>(variableKeyError("color/primary"));
     expectType<string | null>(variableStoreError(store));
+    expectType<string>(RESERVED_NODE_ID);
     expectType<string | number | null>(resolveVariable(store, "color/primary", "light"));
     expectType<string>(resolveColor(store, "$color/primary", "dark"));
     expectType<number | null>(resolveNumber(store, "$spacing/gap", "light"));

@@ -18,7 +18,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument, VariableStore, ThemeMode } from "../document/Document";
-import { Variable, THEME_MODES, variableStoreError } from "../document/Variables";
+import { Variable, THEME_MODES, variableStoreError, variableKeyError } from "../document/Variables";
 import { MutationResult, ActionPayload, NodeDelta, DOCUMENT_DELTA_KEY } from "./types";
 
 /** The shared success shape: a whole-state document delta under the reserved key. */
@@ -48,8 +48,12 @@ export class SetVariableAction extends Action {
     }
 
     public validate(): boolean {
-        // Validate the RESULTING store with the shared load-path rule (covers the key
-        // rules, the definition, and the entry cap in one place).
+        // The KEY must be checked BEFORE building the candidate store: a reserved key like
+        // "__proto__" is swallowed by the assignment itself (the prototype setter fires, no
+        // own property appears), so a store-only validation would pass and silently no-op.
+        if (variableKeyError(this.key) !== null) return false;
+        // Then validate the RESULTING store with the shared load-path rule (covers the
+        // definition rules and the entry cap in one place).
         const next = copyStore(this.document.variables);
         next[this.key] = this.variable;
         return variableStoreError(next) === null;

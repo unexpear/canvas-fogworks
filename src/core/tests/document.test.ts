@@ -4,7 +4,7 @@
  */
 
 import { createEmptyDocument, ProjectDocument, CURRENT_VERSION, SCHEMA_VERSION } from "../document/Document";
-import { variableStoreError, resolveVariable, resolveColor, resolveNumber, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
+import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
@@ -742,6 +742,81 @@ describe("variableStoreError / variableError", () => {
         const big: Record<string, unknown> = {};
         for (let i = 0; i <= VARIABLES_MAX; i++) big[`v${i}`] = { type: "spacing", value: i };
         expect(variableStoreError(big)).toMatch(`at most ${VARIABLES_MAX} entries`);
+    });
+
+    test("prototype-machinery keys are RESERVED on every path (edit can't author them — assignment fires the setter)", () => {
+        // Load path: a JSON.parse'd "__proto__" IS an own property, but the validator rejects it
+        // so load and edit stay symmetric.
+        const viaParse = JSON.parse('{ "__proto__": { "type": "color", "value": "#000" } }');
+        expect(variableStoreError(viaParse)).toMatch("reserved");
+        expect(variableKeyError("__proto__")).toMatch("reserved");
+        expect(variableKeyError("constructor")).toMatch("reserved");
+        expect(variableKeyError("prototype")).toMatch("reserved");
+        expect(variableKeyError("color/primary")).toBeNull();
+        // Edit path: the action must FAIL (without the key pre-check it would silently no-op,
+        // because `store["__proto__"] = def` swaps the prototype instead of adding a property).
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const r = dispatcher.dispatchAction(new SetVariableAction(dispatcher.getDocument(), "__proto__", { type: "color", value: "#000" }));
+        expect(r.success).toBe(false);
+        expect(dispatcher.canUndo()).toBe(false);
+        // Resolution stays null-safe for inherited names even without a stored entry.
+        expect(resolveVariable({}, "constructor", "light")).toBeNull();
+        expect(resolveVariable({}, "__proto__", "light")).toBeNull();
+        expect(resolveColor({}, "$toString", "light")).toBe(VARIABLE_FALLBACK_COLOR);
+    });
+
+    test("the 18→19 migration DROPS reserved-key entries (stays loadable, never crashes)", () => {
+        const v18 = JSON.stringify({
+            version: "18",
+            document: {
+                metadata: {}, nodes: {}, rootNodeUuids: [],
+                variables: JSON.parse('{ "__proto__": { "type": "color", "value": "#000" }, "ok": { "type": "color", "value": "#fff" } }')
+            }
+        });
+        const doc = deserializeDocument(v18);
+        expect(Object.keys(doc.variables)).toEqual(["ok"]); // the reserved key was dropped
+    });
+
+    test("the 18→19 migration TRUNCATES an over-cap legacy store (the file must stay loadable)", () => {
+        // The legacy store had no cap; schema 19 does. Without truncation the sanitized
+        // output would fail the very validation the migration exists to satisfy.
+        const vars: Record<string, unknown> = {};
+        for (let i = 0; i <= VARIABLES_MAX; i++) vars[`v${i}`] = { type: "spacing", value: i }; // 10 001 entries
+        const v18 = JSON.stringify({ version: "18", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: vars } });
+        const doc = deserializeDocument(v18); // must NOT throw
+        expect(Object.keys(doc.variables).length).toBe(VARIABLES_MAX); // first 10 000 kept
+        expect(doc.variables["v0"]).toBeDefined();
+    });
+
+    test("the node id \"__document__\" is RESERVED on both paths (it is the doc-delta sentinel)", () => {
+        // Load path: rejected by Integrity.
+        const bad = JSON.stringify({
+            version: SCHEMA_VERSION,
+            document: {
+                metadata: {}, rootNodeUuids: ["__document__"], variables: {},
+                nodes: { "__document__": { id: "__document__", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } }
+            }
+        });
+        expect(() => deserializeDocument(bad)).toThrow('node id "__document__" is reserved');
+        // Edit path: AddNodeAction refuses the explicit id.
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const r = dispatcher.dispatchAction(new AddNodeAction(dispatcher.getDocument(), "core.rectangle", 0, 0, 10, 10, "#fff", "__document__"));
+        expect(r.success).toBe(false);
+    });
+
+    test("a mixed transaction's updatedNodeIds lists the NODE, never the \"__document__\" sentinel", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("n", { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["n"];
+        const dispatcher = new ActionDispatcher(doc);
+        const d = dispatcher.getDocument();
+        const r = dispatcher.dispatchAction(new TransactionAction(d, "mixed", [
+            new SetVariableAction(d, "color/x", { type: "color", value: "#fff" }),
+            new UpdateNodeStyleAction(d, "n", { fill: "$color/x" })
+        ]));
+        expect(r.success).toBe(true);
+        expect([...r.updatedNodeIds]).toEqual(["n"]); // the sentinel must not seed the geometry dirty-set
+        expect(r.propertyDeltas.has("__document__")).toBe(true); // …but the doc delta itself is present
     });
 });
 

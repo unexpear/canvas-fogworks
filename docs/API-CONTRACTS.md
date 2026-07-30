@@ -31,6 +31,7 @@ const VARIABLE_KEY_MAX: number;                            // key length cap
 const VARIABLE_FALLBACK_COLOR: string;                     // debug magenta for a broken color token
 function isTokenRef(v: unknown): v is string;              // "$" + non-empty key
 function variableError(def: unknown): string | null;       // one definition (shared with the 18→19 sanitizer)
+function variableKeyError(key: string): string | null;     // one KEY (empty/long/"$"/reserved "__proto__" family) — SetVariableAction pre-checks it (the assignment would swallow a reserved key before store validation could see it)
 function variableStoreError(store: unknown): string | null; // whole store, shared load + edit
 function resolveVariable(store: VariableStore, key: string, theme: ThemeMode): string | number | null; // follows aliases; null = missing/cycle
 function resolveColor(store: VariableStore, raw: string, theme: ThemeMode): string;   // non-token passes through; broken token → fallback
@@ -219,7 +220,7 @@ type NodeDelta =
       style?: Partial<Style>; layout?: Partial<Layout>;
       text?: string; src?: string; name?: string }
   | { kind: "variables"; variables: VariableStore; activeTheme: ThemeMode }; // DOC-level (M5): whole store + theme, under DOCUMENT_DELTA_KEY
-const DOCUMENT_DELTA_KEY: string;    // "__document__" — the reserved delta-map key for kind "variables"
+const DOCUMENT_DELTA_KEY: string;    // = RESERVED_NODE_ID ("__document__") — the delta-map key for kind "variables"; the node id itself is REJECTED by AddNodeAction + Integrity so a real node can never collide, and TransactionAction excludes it from updatedNodeIds
 
 // VariableActions.ts — the design-token write path (M5). All emit the "variables" delta;
 // validation delegates to the shared variableStoreError (load/edit round-trip closure).

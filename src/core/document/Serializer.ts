@@ -8,7 +8,7 @@
 
 import { ProjectDocument, ReadonlyDocument, ThemeMode, createEmptyDocument, SCHEMA_VERSION, SerializedMetadata } from "./Document";
 import { Node, isNodeType } from "./Node";
-import { variableError } from "./Variables";
+import { variableError, variableKeyError, VARIABLES_MAX } from "./Variables";
 import { validateDocumentIntegrity } from "./Integrity";
 
 /** Structural check for a persisted node — guards against malformed input. */
@@ -377,10 +377,15 @@ function migrate_18_to_19(raw: any): any {
     const d = (raw && typeof raw.document === "object" && raw.document) ? raw.document : {};
     const src = (d.variables && typeof d.variables === "object" && !Array.isArray(d.variables)) ? d.variables : {};
     const variables: Record<string, unknown> = {};
+    let kept = 0;
     for (const [key, def] of Object.entries(src)) {
-        if (key.length === 0 || key.length > 200 || key.startsWith("$")) continue; // unkeyable → drop
+        // Schema 19 caps the store at VARIABLES_MAX; the legacy store had no cap, so an
+        // over-cap file must be TRUNCATED here (keep the first entries, in file order) or the
+        // sanitized output would fail the very validation this migration exists to satisfy.
+        if (kept >= VARIABLES_MAX) break;
+        if (variableKeyError(key) !== null) continue; // unkeyable (empty/long/"$"/reserved) → drop
         const fixed = normalizeLegacyVariable(def);
-        if (fixed !== null) variables[key] = fixed;
+        if (fixed !== null) { variables[key] = fixed; kept++; }
     }
     const activeTheme = d.activeTheme === "dark" ? "dark" : "light";
     return { ...raw, version: "19", document: { ...d, variables, activeTheme } };

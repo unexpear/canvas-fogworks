@@ -3,15 +3,17 @@
  * @description Shared types used across all Actions and History tracking.
  */
 
-import { Node, Geometry, Style, Layout, Transform } from "../document/Node";
+import { Node, Geometry, Style, Layout, Transform, RESERVED_NODE_ID } from "../document/Node";
 import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
 
 /**
  * The reserved `propertyDeltas` key a DOCUMENT-LEVEL delta (kind "variables") travels
  * under — the delta map is keyed by node id, and doc-level state has none. The kind, not
- * the key, is what dispatch switches on; the constant just keeps the key out of node-id space.
+ * the key, is what dispatch switches on; the id itself is RESERVED at the document layer
+ * (`RESERVED_NODE_ID`, rejected by AddNodeAction + Integrity) so a real node can never
+ * collide with it in a transaction's merged delta map.
  */
-export const DOCUMENT_DELTA_KEY = "__document__";
+export const DOCUMENT_DELTA_KEY: string = RESERVED_NODE_ID;
 
 /**
  * What one action wants done to one node.

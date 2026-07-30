@@ -675,6 +675,23 @@ The toolbar gains a **Theme: Light/Dark** toggle dispatching `SetActiveThemeActi
 normal undoable action, so a theme switch repaints through the ordinary dispatch → refresh
 path and undo restores the previous theme.
 
+**M5 adversarial review (post-close-out fixes):** a multi-agent review over the whole
+milestone confirmed three defect families, all fixed + mutation-verified: (1)
+**prototype-machinery variable keys** — `store["__proto__"] = def` fires the prototype
+SETTER, so `SetVariableAction` silently no-oped while a hand-edited file could carry the key
+as an own property (an edit/load asymmetry); keys `__proto__`/`constructor`/`prototype` are
+now RESERVED in the shared `variableKeyError` (rejected on load, pre-checked by the action
+BEFORE building its candidate store — store-level validation alone cannot see a swallowed
+assignment), and the 18→19 sanitizer drops them; (2) **the migration ignored
+`VARIABLES_MAX`** — an over-cap legacy store passed migration untouched and then failed the
+schema-19 validation the migration exists to satisfy; it now truncates to the first 10 000
+entries; (3) **the `"__document__"` delta sentinel collided with node-id space** — a real
+node with that id (constructible via `AddNodeAction`'s explicit id or a hand-edited file)
+would have its transaction edits overwritten by a doc delta, and `TransactionAction` leaked
+the sentinel into `updatedNodeIds` (seeding the geometry dirty-tracker with a ghost); the id
+is now `RESERVED_NODE_ID` (rejected by AddNodeAction + Integrity) and the sentinel is
+excluded from `updatedNodeIds`.
+
 ---
 
 ## Phase 6 — Components
