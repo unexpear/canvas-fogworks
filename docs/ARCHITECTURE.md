@@ -11,7 +11,9 @@ Everything in the engine — now and in every future milestone — rests on thes
 1. **The document is the single source of truth.** All persisted state lives in one
    `ProjectDocument`. Nothing authoritative lives in the renderer, the tools, or React.
 2. **Actions are declarative.** An `Action` computes *what should change* (a
-   `MutationResult` of deltas) and returns it. It never mutates the document.
+   `MutationResult` of deltas) and returns it. It never mutates the document. Deltas are
+   per-node (add/delete/patch) plus one DOCUMENT-level kind — `"variables"` (M5 design
+   tokens: whole store + active theme, under the reserved `DOCUMENT_DELTA_KEY`).
 3. **The Dispatcher is the only write path — enforced by the compiler.**
    `getDocument()` returns `ReadonlyDocument` (a `DeepReadonly<ProjectDocument>`), so a
    tool, the renderer, or a React handler that tries to assign to `node.geometry` or
