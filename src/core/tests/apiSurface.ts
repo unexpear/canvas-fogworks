@@ -207,6 +207,7 @@ export function __apiSurfacePin(): void {
     const es: EditorState = createEditorState();
     expectType<Map<string, Partial<Node["geometry"]>> | null>(es.pendingGeometry);
     expectType<{ x: number; y: number; width: number; height: number } | null>(es.marqueeRect);
+    expectType<string | null>(es.hoverCursor);
     expectType<void>(clampViewport(es.viewport));
     expectType<void>(panBy(es.viewport, 0, 0));
     expectType<void>(zoomAt(es.viewport, 1.1, 0, 0));

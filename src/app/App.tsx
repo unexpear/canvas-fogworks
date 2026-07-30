@@ -259,11 +259,13 @@ export function App() {
     const node = selectedNodeId ? dispatcher.getDocument().nodes.get(selectedNodeId) : undefined;
     const vp = es.viewport;
 
-    const canvasCursor = toolName === "rectangle"
-        ? "crosshair"
-        : toolName === "move"
-            ? (es.isDragging ? "grabbing" : "grab")
-            : "default";
+    // A hovered resize/rotate handle wins (both backends); otherwise the tool's cursor.
+    const canvasCursor = es.hoverCursor
+        ?? (toolName === "rectangle"
+            ? "crosshair"
+            : toolName === "move"
+                ? (es.isDragging ? "grabbing" : "grab")
+                : "default");
 
     // One friendly label per NODE_TYPES entry (the `|| n.type` fallback keeps this graceful).
     const nodeTypeLabels: Record<string, string> = {

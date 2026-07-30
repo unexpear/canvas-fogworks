@@ -1151,6 +1151,24 @@ describe("ToolController DOM-free resize", () => {
         expect(dispatcher.getDocument().nodes.get("C")!.geometry).toMatchObject({ width: 70, height: 70 });
     });
 
+    test("idle hover over a handle sets the hover cursor (so the Canvas backend can show it)", () => {
+        const { es, tc } = harness(["A"]); // A is 50×50 at origin
+        const hover = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 0, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        tc.onMouseMove(hover(50, 50), rect); // over A's SE corner handle
+        expect(es.hoverCursor).toBe("nwse-resize");
+        tc.onMouseMove(hover(25, -ROTATE_OFFSET_PX), rect); // over the rotate knob (top-centre)
+        expect(es.hoverCursor).toBe("grab");
+        tc.onMouseMove(hover(25, 25), rect); // node centre — no handle
+        expect(es.hoverCursor).toBeNull();
+    });
+
+    test("hover does nothing while a button is held (that's a drag, not a hover)", () => {
+        const { es, tc } = harness(["A"]);
+        const drag = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        tc.onMouseMove(drag(50, 50), rect); // button held → not a hover
+        expect(es.hoverCursor).toBeNull();
+    });
+
     test("resize snaps the dragged corner to another node's edge, with a guide", () => {
         const doc = createEmptyDocument();
         const mk = (id: string, x: number, y: number, w: number, h: number) =>

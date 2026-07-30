@@ -257,7 +257,9 @@ class ToolController {
   // routes pointer/key events; owns viewport PAN (space+drag / middle-mouse), corner-RESIZE and
   // ROTATE (both via DOM-free `handleAtPoint` over the selection, NOT `data-resize-handle`; rotate
   // spins about the node's world-AABB centre and live-commits a coalesced `UpdateNodeTransformAction`
-  // = one undo per continuous drag), Delete/Backspace, Escape — each a mode that intercepts before the active tool
+  // = one undo per continuous drag; Escape cancels an in-flight resize/rotate), Delete/Backspace, and on an
+  // IDLE hover sets `EditorState.hoverCursor` from `handleAtPoint` so the Canvas backend shows handle cursors —
+  // each a mode that intercepts before the active tool
 }
 ```
 

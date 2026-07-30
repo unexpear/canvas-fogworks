@@ -9,6 +9,9 @@ import { SnapGuide } from "../core/geometry/Snapping";
 export interface EditorState {
     selectedNodeIds: string[];
     hoveredNodeId: string | null;
+    /** CSS cursor for the handle currently under an idle pointer (resize/rotate), or null. Lets the
+     * Canvas backend show handle cursors, which — unlike SVG's per-element `cursor` — it can't itself. */
+    hoverCursor: string | null;
     activeTool: string;
     /** True while a tool is actively dragging (drives the "grabbing" cursor). */
     isDragging: boolean;
@@ -104,6 +107,7 @@ export function createEditorState(): EditorState {
     return {
         selectedNodeIds: [],
         hoveredNodeId: null,
+        hoverCursor: null,
         activeTool: "select",
         isDragging: false,
         previewRect: null,

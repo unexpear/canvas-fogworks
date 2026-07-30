@@ -114,7 +114,9 @@ grabbing (`handleAtPoint` over `selectionHandles`, the SAME handle geometry the 
 draws, so pick and draw can't drift). Rotate spins the node about its world-AABB centre and
 live-commits a coalesced `UpdateNodeTransformAction` (a continuous drag = one undo). Tools convert the pointer once via the shared
 `screenToWorld` (the inverse of `screen = z·world − vp`). Because nothing reads
-`data-node-id`/`data-resize-handle`, the editor works unchanged under the Canvas backend.
+`data-node-id`/`data-resize-handle`, the editor works unchanged under the Canvas backend — even the
+handle hover cursor (an idle-hover `handleAtPoint` → `EditorState.hoverCursor`, applied by the app,
+since the single canvas element can't set a per-region cursor like SVG's per-element `style.cursor`).
 The renderer's `buildRenderModel` also
 uses that world AABB to **cull** off-screen content — dropping any node whose bounds
 don't intersect the viewport's world rect — so a large document only pays for what is

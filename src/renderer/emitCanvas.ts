@@ -30,10 +30,10 @@
  *     not once for the whole element like SVG's `filter` — same per-op family as the opacity gap.
  *     (Effects on a ZERO-EXTENT shape are dropped in the model — see buildContent — so neither
  *     backend renders one; that keeps SVG's collapsing filter region from hiding the element.)
- *   - PER-REGION CURSOR (`paint.cursor`) is not honoured: canvas is a single element, so hovering
- *     a resize/rotate handle can't switch the cursor the way SVG's per-element `style.cursor` does.
- *     Handles still WORK (DOM-free `handleAtPoint` picking); only the hover affordance is absent.
- *     Wiring a hover cursor needs a hover system the editor doesn't have yet — deferred.
+ *   - PER-REGION CURSOR: canvas is a single element, so it can't set a per-region cursor the way
+ *     SVG's per-element `style.cursor` does. The EDITOR fills this gap instead of the backend: on an
+ *     idle hover `ToolController` sets `EditorState.hoverCursor` (from `handleAtPoint`) and the app
+ *     applies it to the canvas container, so resize/rotate handle cursors show on BOTH backends.
  */
 
 import { isTranslationOnly } from "../core/geometry/Matrix";

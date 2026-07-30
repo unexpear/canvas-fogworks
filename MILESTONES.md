@@ -499,7 +499,7 @@ guides · smart guides · rulers.
 **Close-out:** slices 1–5 are done — pan/zoom, box-select, DOM-free resize/rotate handle picking, a live
 SVG/Canvas backend selector, and alignment snapping + smart guides (move AND resize). Deferred refinements
 (documented at each slice): multi-select/group snapping + rotate; rotated/scaled-chain nodes (snapping now covers any translation-only chain — top-level or nested);
-the canvas per-region hover cursor and text/image rasterization; rulers. The core
+the canvas text/image rasterization; rulers. The core
 editor loop is complete and every interaction is DOM-free, so it runs identically on both backends.
 
 Already present from earlier prototypes: click + shift-multi-select (DOM-free `hitTest`), drag (`MoveTool`),

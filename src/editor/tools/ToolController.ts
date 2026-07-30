@@ -196,7 +196,28 @@ export class ToolController {
             return;
         }
 
+        // Idle hover (no button held, no active gesture): reflect the handle under the pointer as a
+        // cursor. The Canvas backend can't set a per-region cursor the way SVG's per-element `cursor`
+        // does, so the app reads this. Only recompute when a selection has handles to hover.
+        if ((e.buttons & 1) === 0) this.updateHoverCursor(e, canvasRect);
+
         this.activeTool?.onMouseMove?.(e, canvasRect);
+    }
+
+    /** Set `editorState.hoverCursor` to the cursor of the handle under an idle pointer (or null). */
+    private updateHoverCursor(e: MouseEvent, canvasRect: DOMRect): void {
+        const sel = this.editorState.selectedNodeIds;
+        let cursor: string | null = null;
+        if (sel.length > 0) {
+            const vp = this.editorState.viewport;
+            const w = screenToWorld(vp, canvasRect, e.clientX, e.clientY);
+            const computed = computeGeometry(this.dispatcher.getDocument(), this.editorState.pendingGeometry);
+            cursor = handleAtPoint(computed, sel, w.x, w.y, vp.zoom)?.cursor ?? null;
+        }
+        if (cursor !== this.editorState.hoverCursor) {
+            this.editorState.hoverCursor = cursor;
+            this.refresh(); // only repaint on a change, not on every idle pixel
+        }
     }
 
     onMouseUp(e: MouseEvent): void {
