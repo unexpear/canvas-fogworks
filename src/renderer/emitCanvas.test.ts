@@ -45,6 +45,9 @@ class MockCtx {
     stroke() { this.log("stroke"); }
     clip() { this.log("clip"); }
     fillText(t: string, x: number, y: number) { this.log("fillText", t, x, y); }
+    // Deterministic metrics for the wrap tests: 10px per character (measurement isn't logged —
+    // it's a query, not output; the resulting LINE BREAKS are what the call sequence asserts).
+    measureText(t: string) { return { width: t.length * 10 }; }
     drawImage(...a: unknown[]) { this.log("drawImage", ...a); }
     setLineDash(a: number[]) { this.log("setLineDash", a); }
 
@@ -178,13 +181,71 @@ describe("emitCanvas — shapes", () => {
         expect(call(b, "quadraticCurveTo")!.args).toEqual([7, 8, 9, 10]);
     });
 
-    test("text: single-line fillText, top baseline, clipped to the box", () => {
+    test("text: a short line stays a SINGLE fillText, top baseline, clipped to the box", () => {
         const doc = docWith({ type: "core.text", text: "hi", style: { fill: "#111", opacity: 1, fontSize: 20 } });
         const b = bracket(run(doc).calls, "fillText");
         expect(ops(b)).toEqual(["save", "translate", "set font", "set globalAlpha", "set fillStyle", "set textBaseline", "beginPath", "rect", "clip", "fillText", "restore"]);
         expect(call(b, "set font")!.args).toEqual(["20px sans-serif"]);
         expect(call(b, "set textBaseline")!.args).toEqual(["top"]);
         expect(call(b, "fillText")!.args).toEqual(["hi", 0, 0]);
+    });
+
+    test("text WRAPS greedily at the box width; lines advance by 1.2 × fontSize", () => {
+        // Mock metrics: 10px/char. Box 100 wide: "aaaa bbbb" = 90 fits, "+ cccc" = 140 breaks.
+        const doc = docWith({
+            type: "core.text", text: "aaaa bbbb cccc",
+            geometry: { x: 5, y: 7, width: 100, height: 100 },
+            style: { fill: "#111", opacity: 1, fontSize: 20 }
+        });
+        const b = bracket(run(doc).calls, "fillText");
+        const fills = b.filter(c => c.op === "fillText").map(c => c.args);
+        expect(fills).toEqual([
+            ["aaaa bbbb", 0, 0],
+            ["cccc", 0, 24]      // 20px font × 1.2 line height
+        ]);
+    });
+
+    test("an exactly-fitting line does NOT break (the comparison is strictly greater-than)", () => {
+        const doc = docWith({
+            type: "core.text", text: "aaaa bbbb",           // 90px — exactly the box width
+            geometry: { x: 0, y: 0, width: 90, height: 100 },
+            style: { fill: "#111", opacity: 1, fontSize: 20 }
+        });
+        const b = bracket(run(doc).calls, "fillText");
+        expect(b.filter(c => c.op === "fillText").map(c => c.args)).toEqual([["aaaa bbbb", 0, 0]]);
+    });
+
+    test("a single over-wide word gets its own line and overflows into the clip (never split, never dropped)", () => {
+        const doc = docWith({
+            type: "core.text", text: "aa verylongwordhere aa", // 20 / 160 / 20 px in a 100px box
+            geometry: { x: 0, y: 0, width: 100, height: 200 },
+            style: { fill: "#111", opacity: 1, fontSize: 10 }
+        });
+        const b = bracket(run(doc).calls, "fillText");
+        const fills = b.filter(c => c.op === "fillText").map(c => c.args);
+        // The over-wide word starts its OWN line (first word of a line always stays — no empty
+        // lines, no mid-word split) and the following word wraps again.
+        expect(fills).toEqual([
+            ["aa", 0, 0],
+            ["verylongwordhere", 0, 12],  // 10px font × 1.2
+            ["aa", 0, 24]
+        ]);
+        expect(ops(b)).toContain("clip"); // overflow is cropped by the box clip, not dropped
+    });
+
+    test("a text STARTING with an over-wide word emits no empty first line", () => {
+        // The first word arrives with line == "" — without the first-word-stays guard the wrap
+        // would push an empty line first (fillText("") at y 0 and everything shifted down).
+        const doc = docWith({
+            type: "core.text", text: "verylongwordhere aa", // 160 / 20 px in a 100px box
+            geometry: { x: 0, y: 0, width: 100, height: 200 },
+            style: { fill: "#111", opacity: 1, fontSize: 10 }
+        });
+        const b = bracket(run(doc).calls, "fillText");
+        expect(b.filter(c => c.op === "fillText").map(c => c.args)).toEqual([
+            ["verylongwordhere", 0, 0],  // the over-wide word IS line one — no "" before it
+            ["aa", 0, 12]
+        ]);
     });
 
     test("image is deferred: draws nothing (empty save/restore)", () => {

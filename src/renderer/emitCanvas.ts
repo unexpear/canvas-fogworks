@@ -17,7 +17,8 @@
  * Tested by a recording-mock `CanvasRenderingContext2D` (the call sequence IS the output);
  * pixel-level SVG↔canvas parity stays a browser smoke test. Known first-pass gaps (all
  * inherent SVG-vs-canvas rasterizer differences, deferred like text wrapping):
- *   - TEXT is single-line `fillText` (no HTML wrapping/metrics like the SVG `<foreignObject>`).
+ *   - TEXT word-WRAPS (greedy `measureText` breaking, line height 1.2×font, clip-cropped), but
+ *     exact metric parity with the SVG `<foreignObject>`'s HTML typesetting stays inherent.
  *   - IMAGE loads its href lazily (a decoded bitmap, cached) and draws it once ready; a repaint is
  *     requested on load via `setImageReadyCallback`. Nothing draws until it decodes (or with no DOM).
  *   - OPACITY is applied as per-op `globalAlpha` (fill, then stroke), not as SVG *group*
@@ -75,6 +76,30 @@ function unreachable(x: never): never {
     throw new Error(`emitCanvas: unhandled variant ${JSON.stringify(x)}`);
 }
 
+/**
+ * Greedy word wrap against `maxWidth` using the context's CURRENT font (callers set `font`
+ * first). CSS-`normal` semantics: break between words only; a single word wider than the box
+ * gets its own line and overflows (the clip crops it) rather than being split mid-word; the
+ * first word of a line always stays (a line is never empty) — the same first-item-always-fits
+ * rule `breakFlexLines` uses. Empty text → one empty line (fillText draws nothing).
+ */
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+    const words = text.split(" ");
+    const lines: string[] = [];
+    let line = "";
+    for (const word of words) {
+        const candidate = line === "" ? word : `${line} ${word}`;
+        if (line !== "" && ctx.measureText(candidate).width > maxWidth) {
+            lines.push(line);
+            line = word;
+        } else {
+            line = candidate;
+        }
+    }
+    lines.push(line);
+    return lines;
+}
+
 function fillAndStroke(ctx: CanvasRenderingContext2D, paint: Paint): void {
     if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
     // `fill: "none"` (outline items) has no canvas colour equivalent — skip the fill,
@@ -125,8 +150,12 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): v
             fillAndStroke(ctx, paint);
             return;
         case "text":
-            // First-pass: single line, top-left origin (fillText's y is the baseline by
-            // default, so textBaseline="top" reproduces the SVG box origin), clipped to the box.
+            // Word-WRAPPED text: greedy line breaking against the box width via `measureText`
+            // (set `font` FIRST — measurement depends on it), top-left origin (textBaseline
+            // "top" reproduces the SVG box origin), clipped to the box. Line height mirrors the
+            // browser's `normal` (~1.2 × font size) so the two backends break comparably —
+            // exact metric parity with the SVG `<foreignObject>`'s HTML layout stays the
+            // documented inherent gap (canvas measures, the browser typesets).
             ctx.font = `${shape.fontSize}px sans-serif`;
             if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
             if (paint.fill !== null) ctx.fillStyle = paint.fill;
@@ -134,7 +163,13 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): v
             ctx.beginPath();
             ctx.rect(shape.x, shape.y, shape.width, shape.height);
             ctx.clip();
-            ctx.fillText(shape.text, shape.x, shape.y);
+            {
+                const lineHeight = shape.fontSize * 1.2;
+                const lines = wrapText(ctx, shape.text, shape.width);
+                for (let i = 0; i < lines.length; i++) {
+                    ctx.fillText(lines[i], shape.x, shape.y + i * lineHeight);
+                }
+            }
             return;
         case "image": {
             // Load the href once (cached); draw it when decoded. Until then (or with no href /

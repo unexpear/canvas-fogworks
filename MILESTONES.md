@@ -25,7 +25,7 @@ M3  Renderer                 ✅   SVG renderer (shapes + culling + effects) + C
       │
 M4  Editor                   ✅*  pan/zoom + box-select + DOM-free handles + rotate + canvas wiring + snapping/guides
       │
-M5  Variables & Tokens       ⬜
+M5  Variables & Tokens       ✅*  typed store + light/dark themes + $token references + aliases; number-token consumption deferred
 M6  Components                ⬜
 M7  States                    ⬜
 M8  Animation Engine          ⬜
@@ -459,7 +459,7 @@ so making canvas the live editing backend needs DOM-free handle picking (M4); th
 lower-layer-capability-predates-its-editor-affordance pattern as `ReparentNodeAction` (M0) and
 `UpdateNodeTransformAction` (M1), and it ships WITH tests, not as a dead flag. First-pass gaps
 (all documented as inherent SVG-vs-canvas rasterizer differences, deferred like text wrapping): text
-is single-line `fillText` (no HTML wrapping/metrics); image is deferred (draws nothing — `drawImage`
+WRAPPED greedily via measureText (was single-line at first); image is deferred (draws nothing — `drawImage`
 needs a decoded bitmap); **opacity** is per-op `globalAlpha` not SVG *group* opacity, so a
 translucent stroked shape shows a fill-tinted ≈1px hairline in the stroke's inner half (true group
 opacity needs an offscreen layer); rounded-rect radius clamping differs from SVG for an over-large
