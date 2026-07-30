@@ -619,10 +619,30 @@ rotated set scaled non-uniformly is a shear the transform model can't represent)
 
 ## Phase 5 — Variables & Design Tokens
 
-### Milestone 5 — Variables ⬜
+### Milestone 5 — Variables 🚧 (slice 1 landed: the store, schema 19)
 Global values: `Color.Primary`, `Spacing.Small`, `Radius.Medium`, `Typography.Body`.
 **Support:** themes · light/dark mode · variable references · token inheritance.
 (`VariableStore` and `Style.fill` token syntax `$color/primary` are already reserved.)
+
+**Landed (slice 1 — the variable store; schema 18 → 19):** the reserved `variables` store is
+now LIVE and typed (`src/core/document/Variables.ts`): a `Variable` is `{ type: "color" |
+"spacing" | "font", value, modes? }` — color/font values are strings, spacing values NUMBERS,
+and any value (base or per-theme override) may instead be an ALIAS `"$other/key"` (token
+inheritance). The document gains a persisted **`activeTheme`** ("light"/"dark"); resolution
+(`resolveVariable`/`resolveColor`/`resolveNumber`) is pure, follows alias chains through the
+active theme at every hop with a seen-set, and maps a cycle / dangling target / wrong-typed
+target to the visible `#ff006e` fallback — never a throw, and aliases are NOT required to
+resolve at rest (deleting a variable can't corrupt a document). Validation
+(`variableStoreError`, keys capped, `VARIABLES_MAX` OOM guard) is shared by the load path
+(`Integrity`) and the coming edit actions. `migrate_18_to_19` is the chain's first migration
+with CONTENT: it stamps `activeTheme` and SANITIZES the never-before-validated legacy store
+(numeric-string spacing coerced, unvalidatable entries dropped) so every previously-loadable
+file stays loadable. `activeTheme` threads through the serialize envelope, history
+snapshots/hydration, and transaction clones. Remaining slices: **(2)** variable actions +
+doc-level deltas (author/edit/delete variables, switch theme — undoable), **(3)** renderer
+consumption (`$token` fills/strokes/shadow colors resolve per active theme on both backends)
++ a theme toggle in the app. Number/typography token CONSUMPTION by layout/text (spacing,
+radius, font) is defined-and-resolvable now but wired in a later milestone.
 
 ---
 

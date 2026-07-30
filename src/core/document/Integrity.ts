@@ -13,6 +13,7 @@
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
 import { transformError, layoutError, dimensionError, pathError, styleError } from "./Node";
+import { variableStoreError, THEME_MODES } from "./Variables";
 
 function checkNodeRanges(node: ReadonlyNode): void {
     const g = node.geometry;
@@ -57,6 +58,14 @@ function checkNodeRanges(node: ReadonlyNode): void {
  *  - the tree is acyclic
  */
 export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
+    // 0. Document-level fields (schema 19): the variable store + active theme, shared with
+    // the edit path (variable actions) so load and edit cannot drift.
+    const varErr = variableStoreError(doc.variables);
+    if (varErr) throw new Error(`Invalid document: ${varErr}.`);
+    if (!(THEME_MODES as readonly string[]).includes(doc.activeTheme as string)) {
+        throw new Error(`Invalid document: activeTheme must be one of ${THEME_MODES.join("/")} (got "${String(doc.activeTheme)}").`);
+    }
+
     // 1. Per-node ranges.
     doc.nodes.forEach(node => checkNodeRanges(node));
 

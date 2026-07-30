@@ -44,7 +44,8 @@ function hydrateDocument(raw: DocumentSnapshot): ProjectDocument {
         },
         nodes: new Map<string, Node>(),
         rootNodeUuids: source.rootNodeUuids,
-        variables: source.variables
+        variables: source.variables,
+        activeTheme: source.activeTheme ?? "light"
     };
 
     for (const [key, value] of Object.entries(source.nodes || {})) {

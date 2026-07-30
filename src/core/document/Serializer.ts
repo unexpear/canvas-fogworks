@@ -6,8 +6,9 @@
  * stamps, then runs the migration chain; unknown versions throw.
  */
 
-import { ProjectDocument, ReadonlyDocument, createEmptyDocument, SCHEMA_VERSION, SerializedMetadata } from "./Document";
+import { ProjectDocument, ReadonlyDocument, ThemeMode, createEmptyDocument, SCHEMA_VERSION, SerializedMetadata } from "./Document";
 import { Node, isNodeType } from "./Node";
+import { variableError } from "./Variables";
 import { validateDocumentIntegrity } from "./Integrity";
 
 /** Structural check for a persisted node — guards against malformed input. */
@@ -63,6 +64,8 @@ export interface SerializedDocument {
         nodes: Record<string, Node>;
         rootNodeUuids: string[];
         variables: ProjectDocument["variables"];
+        /** Theme mode for token resolution (schema 19). Absent on old/hand-edited files = "light". */
+        activeTheme?: ThemeMode;
     };
 }
 
@@ -85,7 +88,8 @@ export function serializeDocument(doc: ReadonlyDocument): string {
             // shape; the casts are the boundary, not a hole in the invariant.
             nodes: Object.fromEntries(doc.nodes) as Record<string, Node>,
             rootNodeUuids: [...doc.rootNodeUuids],
-            variables: doc.variables as ProjectDocument["variables"]
+            variables: doc.variables as ProjectDocument["variables"],
+            activeTheme: doc.activeTheme
         }
     };
 
@@ -145,6 +149,11 @@ export function deserializeDocument(json: string): ProjectDocument {
     }
     if (migrated.document.variables && typeof migrated.document.variables === "object") {
         doc.variables = migrated.document.variables;
+    }
+    // Copy the theme WHENEVER the key is present (even malformed) so Integrity can reject a
+    // bad value — a silent default here would hide "activeTheme": "banana". Absent = "light".
+    if ("activeTheme" in migrated.document) {
+        doc.activeTheme = migrated.document.activeTheme as ThemeMode;
     }
 
     // Reconstruct the Map, validating each node's shape and key/id agreement.
@@ -228,6 +237,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "15") { raw = migrate_15_to_16(raw); version = "16"; }
     if (version === "16") { raw = migrate_16_to_17(raw); version = "17"; }
     if (version === "17") { raw = migrate_17_to_18(raw); version = "18"; }
+    if (version === "18") { raw = migrate_18_to_19(raw); version = "19"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -334,6 +344,49 @@ function migrate_17_to_18(raw: any): any {
 }
 
 /**
+ * One legacy variable entry → its schema-19 form, or null to drop it. The old reserved
+ * store was NEVER validated (`value` was typed `string` for every type), so this is a
+ * normalizer, not a pass-through: a `spacing` variable's numeric-string value ("8") is
+ * coerced to the number schema 19 requires (base and per-mode alike, aliases untouched),
+ * and anything that still fails the shared `variableError` is dropped — a previously-
+ * loadable file must stay loadable, junk and all.
+ */
+function normalizeLegacyVariable(def: any): any | null {
+    if (!def || typeof def !== "object" || Array.isArray(def)) return null;
+    let d = def;
+    if (d.type === "spacing") {
+        const coerce = (v: any) =>
+            (typeof v === "string" && !v.startsWith("$") && v.trim() !== "" && Number.isFinite(Number(v)))
+                ? Number(v) : v;
+        d = { ...d, value: coerce(d.value) };
+        if (d.modes && typeof d.modes === "object" && !Array.isArray(d.modes)) {
+            d.modes = Object.fromEntries(Object.entries(d.modes).map(([k, v]) => [k, coerce(v)]));
+        }
+    }
+    return variableError(d) === null ? d : null;
+}
+
+/**
+ * Schema 18 → 19: design tokens go LIVE (Milestone 5). NOT a pass-through — the first
+ * migration with content: stamps `activeTheme` ("light" unless a valid mode is already
+ * present) and sanitizes the never-before-validated `variables` store (coercing legacy
+ * string-spacing, dropping unvalidatable entries) so schema 19's strict load validation
+ * cannot reject a file schema 18 accepted.
+ */
+function migrate_18_to_19(raw: any): any {
+    const d = (raw && typeof raw.document === "object" && raw.document) ? raw.document : {};
+    const src = (d.variables && typeof d.variables === "object" && !Array.isArray(d.variables)) ? d.variables : {};
+    const variables: Record<string, unknown> = {};
+    for (const [key, def] of Object.entries(src)) {
+        if (key.length === 0 || key.length > 200 || key.startsWith("$")) continue; // unkeyable → drop
+        const fixed = normalizeLegacyVariable(def);
+        if (fixed !== null) variables[key] = fixed;
+    }
+    const activeTheme = d.activeTheme === "dark" ? "dark" : "light";
+    return { ...raw, version: "19", document: { ...d, variables, activeTheme } };
+}
+
+/**
  * Deep equality comparison for two ProjectDocuments.
  * Useful for testing serialization round-trips.
  */
@@ -358,6 +411,7 @@ export function compareDocuments(a: ReadonlyDocument, b: ReadonlyDocument): bool
     }
 
     if (JSON.stringify(a.variables) !== JSON.stringify(b.variables)) return false;
+    if (a.activeTheme !== b.activeTheme) return false;
 
     return true;
 }

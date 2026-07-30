@@ -21,7 +21,8 @@ function cloneWorkingDocument(doc: ReadonlyDocument): ProjectDocument {
             Array.from(doc.nodes.entries()).map(([k, v]) => [k, JSON.parse(JSON.stringify(v)) as Node])
         ),
         rootNodeUuids: [...doc.rootNodeUuids],
-        variables: JSON.parse(JSON.stringify(doc.variables))
+        variables: JSON.parse(JSON.stringify(doc.variables)),
+        activeTheme: doc.activeTheme
     };
 }
 

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v19 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -14,7 +14,8 @@ interface ProjectDocument {
   metadata: DocumentMetadata;
   nodes: Map<string, Node>;        // UUID → Node, O(1) lookup
   rootNodeUuids: string[];         // top-level nodes, in order
-  variables: VariableStore;        // design tokens
+  variables: VariableStore;        // design tokens — LIVE at schema 19 (see VariableStore below)
+  activeTheme: ThemeMode;          // "light" | "dark" — the mode token resolution reads (schema 19)
 }
 
 interface DocumentMetadata {       // runtime shape (date is a live Date)
@@ -70,7 +71,7 @@ interface Geometry { x: number; y: number; width: number; height: number; }
 // COORDINATE SPACE: x/y are PARENT-RELATIVE. See the rule below.
 
 interface Style {
-  fill: string;        // color OR token id, e.g. "$color/primary"  (tokens: Milestone 5)
+  fill: string;        // color OR token id, e.g. "$color/primary" (resolved against variables, M5)
   stroke?: string;
   radius?: number;
   opacity: number;     // 0..1
@@ -454,23 +455,40 @@ of `deserializeDocument`, so a hand-edited or third-party file with `opacity: 5`
 `width: -10`, a dangling `parent`, or a ghost root now **fails loudly at the
 boundary** instead of corrupting state later.
 
-> **Reserved-but-unused today:** `states`, the `layout` *constraint* fields
-> (`horizontalAlignment` / `verticalAlignment` / `spacing`), and token resolution of
-> `fill` are part of the schema so later milestones don't require a breaking change,
-> but the current renderer/actions do not yet interpret them. **`layout.container` is
-> the exception — it is live (M2 auto-layout).**
+> **Reserved-but-unused today:** `states` and the `layout` *constraint* fields
+> (`horizontalAlignment` / `verticalAlignment` / `spacing`) are part of the schema so
+> later milestones don't require a breaking change, but the current renderer/actions do
+> not yet interpret them. **`layout.container` (M2 auto-layout) and the `variables`
+> store + `$token` resolution (M5 design tokens) are live.**
 
-## VariableStore (design tokens — reserved for Milestone 5)
+## VariableStore (design tokens — LIVE at schema 19, Milestone 5)
 
 ```ts
-interface VariableStore {
-  [key: string]: {
-    type: "color" | "spacing" | "font";
-    value: string;
-    modes?: Record<"light" | "dark", string>; // theme support
-  };
+type ThemeMode = "light" | "dark";                 // doc.activeTheme picks the mode
+
+interface Variable {
+  type: "color" | "spacing" | "font";
+  value: string | number;                          // color/font: string · spacing: number
+                                                   // — OR an ALIAS "$other/key" (any type)
+  modes?: Partial<Record<ThemeMode, string | number>>; // per-theme overrides (same rules)
 }
+interface VariableStore { [key: string]: Variable } // key e.g. "color/primary"
 ```
+
+A `Style` color field referencing `"$color/primary"` resolves against the store under
+`doc.activeTheme` at render time (`resolveColor` in `src/core/document/Variables.ts`):
+the override for the active theme wins, absent override falls back to `value`, and
+aliases chain (token inheritance) with a seen-set — a cycle, a dangling target, or a
+wrong-typed target (a spacing number in a color slot) resolves to the visible debug
+fallback `#ff006e`, never a throw. Keys must not start with `$` (ambiguous with an
+alias), are capped at 200 chars, and the store at `VARIABLES_MAX = 10 000` entries (the
+OOM-guard discipline). Aliases are NOT required to resolve at rest: deleting a variable
+leaves referencing styles/aliases dangling-but-valid (they render the fallback), so a
+delete can never corrupt a document. Validation is `variableStoreError`, SHARED by the
+load path (`Integrity`) and the edit path so the two cannot drift.
+
+`doc.activeTheme` ("light"/"dark", absent on the wire = "light") is persisted — a
+document reopens in the theme it was saved in — and changed only through an action.
 
 ## Serialization
 
@@ -492,6 +510,7 @@ interface SerializedDocument {
     nodes: Record<string, Node>;        // Map flattened to an object
     rootNodeUuids: string[];
     variables: ProjectDocument["variables"];
+    activeTheme?: ThemeMode;            // absent (old/hand-edited files) = "light"
   };
 }
 ```
@@ -513,7 +532,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"15"`; chain: …12→13 grid spans, 13→14 per-side/grid margins, 14→15 align-content + auto-flow + line placement) | **only** when the persisted shape changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"19"`; chain tail: …15→16 ellipse/line, 16→17 path, 17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing values to numbers, drops unvalidatable variable entries) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

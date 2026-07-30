@@ -4,6 +4,11 @@
  */
 
 import { Node } from "./Node";
+import { VariableStore, ThemeMode } from "./Variables";
+
+// The variables layer (types + validation + resolution) lives in Variables.ts; the document
+// re-exports the store type so existing `import { VariableStore } from "./Document"` holds.
+export { VariableStore, ThemeMode };
 
 /**
  * The build injects the version from package.json via esbuild `define`
@@ -124,8 +129,18 @@ export const CURRENT_VERSION: string =
  *         blur), the Milestone 3 renderer effects. Existing documents have neither, so
  *         `migrate_17_to_18` is a pass-through — but a schema-17 build would silently ignore an
  *         effect and render the node flat.
+ *
+ *   "19" — Milestone 5 design tokens: the reserved `variables` store becomes LIVE and typed
+ *         (`{ type: "color"|"spacing"|"font", value, modes? }`, values may ALIAS other
+ *         variables via "$key", spacing values are numbers), and the document gains
+ *         `activeTheme` ("light"/"dark", the mode token resolution reads). `migrate_18_to_19`
+ *         NORMALIZES rather than passes through: the old store was never validated, so it
+ *         stamps `activeTheme: "light"`, coerces legacy string-valued spacing variables to
+ *         numbers, and drops entries that cannot validate — every previously-loadable file
+ *         stays loadable. The bump is interpretation too: "$"-prefixed strings are now
+ *         aliases/tokens, and an 18 build would render a token fill as a literal color string.
  */
-export const SCHEMA_VERSION = "18";
+export const SCHEMA_VERSION = "19";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
@@ -162,9 +177,16 @@ export interface ProjectDocument {
     nodes: Map<string, Node>; 
     
     // Top-level roots that are not contained within any other node.
-    rootNodeUuids: string[]; 
-    
+    rootNodeUuids: string[];
+
     variables: VariableStore; // Global design tokens and variables
+
+    /**
+     * The theme mode token resolution reads (schema 19) — a variable's `modes[activeTheme]`
+     * override wins over its base value. Persisted, so a document reopens in the theme it was
+     * saved in; changed only through an action (undoable). Absent on the wire = "light".
+     */
+    activeTheme: ThemeMode;
 }
 
 /**
@@ -179,15 +201,6 @@ export interface ProjectDocument {
  */
 export type ReadonlyDocument = DeepReadonly<ProjectDocument>;
 
-/** Defines the global context for reusable styles (Design Tokens). */
-export interface VariableStore {
-    [key: string]: {
-        type: "color" | "spacing" | "font";
-        value: string; 
-        modes?: Record<"light" | "dark", string>; // For theme support
-    }
-}
-
 // Utility function to create a new, empty document instance.
 export function createEmptyDocument(): ProjectDocument {
     return {
@@ -199,6 +212,7 @@ export function createEmptyDocument(): ProjectDocument {
         },
         nodes: new Map<string, Node>(),
         rootNodeUuids: [],
-        variables: {} // Empty variable store
+        variables: {}, // Empty variable store
+        activeTheme: "light"
     };
 }

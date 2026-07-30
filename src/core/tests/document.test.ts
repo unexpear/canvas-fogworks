@@ -4,6 +4,7 @@
  */
 
 import { createEmptyDocument, ProjectDocument, CURRENT_VERSION, SCHEMA_VERSION } from "../document/Document";
+import { variableStoreError, resolveVariable, resolveColor, resolveNumber, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
@@ -684,17 +685,165 @@ describe("compareDocuments", () => {
 
 // ─── T14: VariableStore round-trip ───
 describe("Variables round-trip", () => {
-    test("preserves variables (real VariableStore shape) through serialize/deserialize", () => {
+    test("preserves variables (schema-19 shapes: modes, aliases, number spacing) and the active theme", () => {
         const doc = createEmptyDocument();
         doc.variables = {
-            primary: { type: "color", value: "#ff0000", modes: { light: "#ff0000", dark: "#cc0000" } },
-            gap: { type: "spacing", value: "8" }
+            "color/primary": { type: "color", value: "#ff0000", modes: { light: "#ff0000", dark: "#cc0000" } },
+            "color/accent": { type: "color", value: "$color/primary" },   // alias
+            "spacing/gap": { type: "spacing", value: 8 },                  // numbers, not strings, at schema 19
+            "font/body": { type: "font", value: "Inter" }
         };
+        doc.activeTheme = "dark";
         const json = serializeDocument(doc);
         const loaded = deserializeDocument(json);
         expect(loaded.variables).toEqual(doc.variables);
-        // Nested mode map survives the round-trip.
-        expect(loaded.variables.primary.modes!.dark).toBe("#cc0000");
+        expect(loaded.variables["color/primary"].modes!.dark).toBe("#cc0000"); // nested mode map survives
+        expect(loaded.activeTheme).toBe("dark");                               // the theme is persisted
+        expect(compareDocuments(doc, loaded)).toBe(true);
+    });
+});
+
+// ─── M5: variable store validation (shared by load + edit paths) ───
+describe("variableStoreError / variableError", () => {
+    const color = (value: unknown, modes?: unknown) => ({ type: "color", value, ...(modes !== undefined ? { modes } : {}) });
+
+    test("accepts an empty store, typed values, aliases, and per-theme overrides", () => {
+        expect(variableStoreError({})).toBeNull();
+        expect(variableStoreError({
+            "color/primary": color("#f00", { light: "#f00", dark: "#900" }),
+            "color/accent": color("$color/primary"),          // alias (target NOT required to exist)
+            "color/dangling": color("$nope"),                  // dangling alias is valid at rest
+            "spacing/gap": { type: "spacing", value: 8 },
+            "spacing/wide": { type: "spacing", value: "$spacing/gap" }, // alias in a spacing slot
+            "font/body": { type: "font", value: "Inter" }
+        })).toBeNull();
+    });
+
+    test("rejects non-object stores, bad keys, and malformed definitions", () => {
+        expect(variableStoreError([])).toMatch("must be an object");
+        expect(variableStoreError(null)).toMatch("must be an object");
+        expect(variableStoreError({ "": color("#f00") })).toMatch("key must be non-empty");
+        expect(variableStoreError({ "$x": color("#f00") })).toMatch('must not start with "$"');
+        expect(variableStoreError({ ["k".repeat(201)]: color("#f00") })).toMatch("at most 200 characters");
+        expect(variableStoreError({ a: null })).toMatch("must be an object");
+        expect(variableStoreError({ a: { type: "gradient", value: "#f00" } })).toMatch('type must be "color", "spacing" or "font"');
+        expect(variableStoreError({ a: { type: "color", value: "" } })).toMatch("non-empty string");
+        expect(variableStoreError({ a: { type: "color", value: 7 } })).toMatch("non-empty string");
+        expect(variableStoreError({ a: { type: "color", value: "$" } })).toMatch("bare");
+        expect(variableStoreError({ a: { type: "spacing", value: "8" } })).toMatch("finite number");   // strings are schema-18 legacy
+        expect(variableStoreError({ a: { type: "spacing", value: Infinity } })).toMatch("finite number");
+        expect(variableStoreError({ a: color("#f00", { sepia: "#a52" }) })).toMatch('unknown theme mode "sepia"');
+        expect(variableStoreError({ a: color("#f00", { dark: "" }) })).toMatch('mode "dark"');
+        expect(variableStoreError({ a: color("#f00", []) })).toMatch("modes must be an object");
+    });
+
+    test("caps the entry count (OOM guard on a hand-editable map)", () => {
+        const big: Record<string, unknown> = {};
+        for (let i = 0; i <= VARIABLES_MAX; i++) big[`v${i}`] = { type: "spacing", value: i };
+        expect(variableStoreError(big)).toMatch(`at most ${VARIABLES_MAX} entries`);
+    });
+});
+
+// ─── M5: token resolution (pure, never throws) ───
+describe("resolveVariable / resolveColor / resolveNumber", () => {
+    const store: VariableStore = {
+        "color/primary": { type: "color", value: "#ff0000", modes: { dark: "#990000" } },
+        "color/accent": { type: "color", value: "$color/primary" },              // one-hop alias
+        "color/brand": { type: "color", value: "$color/accent" },                // two-hop chain
+        "color/loop-a": { type: "color", value: "$color/loop-b" },               // cycle
+        "color/loop-b": { type: "color", value: "$color/loop-a" },
+        "color/dangling": { type: "color", value: "$color/nope" },
+        "color/theme-alias": { type: "color", value: "#000000", modes: { dark: "$color/primary" } }, // override IS an alias
+        "spacing/gap": { type: "spacing", value: 8, modes: { dark: 12 } },
+        "color/to-number": { type: "color", value: "$spacing/gap" }              // wrong-type alias
+    };
+
+    test("resolves concrete values, per-theme overrides, and base fallback", () => {
+        expect(resolveVariable(store, "color/primary", "light")).toBe("#ff0000");
+        expect(resolveVariable(store, "color/primary", "dark")).toBe("#990000");  // override wins
+        expect(resolveVariable(store, "spacing/gap", "light")).toBe(8);           // no light override → base
+        expect(resolveVariable(store, "missing", "light")).toBeNull();
+    });
+
+    test("follows alias chains — through the ACTIVE theme at every hop", () => {
+        expect(resolveVariable(store, "color/accent", "light")).toBe("#ff0000");
+        expect(resolveVariable(store, "color/brand", "dark")).toBe("#990000");    // 2 hops, dark override at the end
+        expect(resolveVariable(store, "color/theme-alias", "dark")).toBe("#990000"); // the OVERRIDE is the alias
+        expect(resolveVariable(store, "color/theme-alias", "light")).toBe("#000000");
+    });
+
+    test("a cycle or dangling target resolves to null, never throws or hangs", () => {
+        expect(resolveVariable(store, "color/loop-a", "light")).toBeNull();
+        expect(resolveVariable(store, "color/dangling", "light")).toBeNull();
+    });
+
+    test("resolveColor: pass-through for non-tokens, fallback magenta for broken/wrong-type tokens", () => {
+        expect(resolveColor(store, "#123456", "light")).toBe("#123456");          // not a token → untouched
+        expect(resolveColor(store, "$color/primary", "dark")).toBe("#990000");
+        expect(resolveColor(store, "$color/loop-a", "light")).toBe(VARIABLE_FALLBACK_COLOR);
+        expect(resolveColor(store, "$missing", "light")).toBe(VARIABLE_FALLBACK_COLOR);
+        expect(resolveColor(store, "$color/to-number", "light")).toBe(VARIABLE_FALLBACK_COLOR); // number in a color slot
+        expect(resolveColor({}, "$anything", "light")).toBe(VARIABLE_FALLBACK_COLOR);
+    });
+
+    test("resolveNumber: numbers pass through, tokens must land on a number", () => {
+        expect(resolveNumber(store, 5, "light")).toBe(5);
+        expect(resolveNumber(store, "$spacing/gap", "dark")).toBe(12);
+        expect(resolveNumber(store, "$color/primary", "light")).toBeNull();       // string in a number slot
+        expect(resolveNumber(store, "not-a-token", "light")).toBeNull();
+        expect(resolveNumber(store, Infinity, "light")).toBeNull();
+    });
+});
+
+// ─── M5: schema 18 → 19 migration (the first migration with CONTENT) ───
+describe("Schema 19 migration (design tokens)", () => {
+    test("an 18 file gets activeTheme stamped, string-spacing coerced, junk dropped", () => {
+        const v18 = JSON.stringify({
+            version: "18",
+            document: {
+                metadata: {}, nodes: {}, rootNodeUuids: [],
+                variables: {
+                    primary: { type: "color", value: "#ff0000", modes: { light: "#ff0000", dark: "#cc0000" } },
+                    gap: { type: "spacing", value: "8", modes: { dark: "12" } }, // legacy string spacing → coerced
+                    junk: { type: "gradient", value: "#f00" },                    // unknown type → dropped
+                    broken: "not-an-object",                                      // malformed → dropped
+                    "$bad": { type: "color", value: "#fff" }                      // unkeyable → dropped
+                }
+            }
+        });
+        const doc = deserializeDocument(v18);
+        expect(doc.version).toBe(SCHEMA_VERSION);
+        expect(doc.activeTheme).toBe("light");                                    // stamped
+        expect(doc.variables.primary.value).toBe("#ff0000");                      // valid entry kept as-is
+        expect(doc.variables.gap).toEqual({ type: "spacing", value: 8, modes: { dark: 12 } }); // coerced to numbers
+        expect(doc.variables.junk).toBeUndefined();
+        expect(doc.variables.broken).toBeUndefined();
+        expect(doc.variables["$bad"]).toBeUndefined();
+        expect(() => deserializeDocument(serializeDocument(doc))).not.toThrow();  // round-trips at 19
+    });
+
+    test("activeTheme survives the history snapshot/hydrate cycle (undo/redo)", () => {
+        const doc = createEmptyDocument();
+        doc.activeTheme = "dark";
+        doc.variables = { "color/primary": { type: "color", value: "#f00" } };
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new AddNodeAction(dispatcher.getDocument(), "core.rectangle", 0, 0, 10, 10, "#fff", "n1"));
+        dispatcher.undo(); // hydrates the INITIAL snapshot — the theme + variables must come back
+        expect(dispatcher.getDocument().activeTheme).toBe("dark");
+        expect(dispatcher.getDocument().variables["color/primary"].value).toBe("#f00");
+        dispatcher.redo();
+        expect(dispatcher.getDocument().activeTheme).toBe("dark");
+    });
+
+    test("the load path REJECTS a malformed store and a bad theme at the current schema", () => {
+        const env = (vars: string, theme = '"light"') =>
+            `{ "version": "${SCHEMA_VERSION}", "document": { "metadata": {}, "nodes": {}, "rootNodeUuids": [], "variables": ${vars}, "activeTheme": ${theme} } }`;
+        expect(() => deserializeDocument(env('{ "a": { "type": "spacing", "value": "8" } }'))).toThrow("finite number");
+        expect(() => deserializeDocument(env('{ "a": { "type": "color", "value": "#f00", "modes": { "sepia": "#a52" } } }'))).toThrow("unknown theme mode");
+        expect(() => deserializeDocument(env("{}", '"banana"'))).toThrow("activeTheme must be one of light/dark");
+        expect(() => deserializeDocument(env("{}", "42"))).toThrow("activeTheme must be one of light/dark");
+        // A valid store + theme loads.
+        expect(() => deserializeDocument(env('{ "a": { "type": "color", "value": "$b" } }', '"dark"'))).not.toThrow();
     });
 });
 
@@ -2867,13 +3016,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "19" that has no 18→19 step: the
+        // Pretending the build has moved to a schema "20" that has no 19→20 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→18), and then REFUSED at "18" — never re-stamped straight to the current
-        // schema. The error naming "18" (not "1") is the proof the chain actually ran.
+        // (1→2→…→19), and then REFUSED at "19" — never re-stamped straight to the current
+        // schema. The error naming "19" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 17→18 landed for effects.)
-        expect(() => migrateIfNeeded(legacy, "19")).toThrow('Migration not implemented for document schema "18"');
+        // time a real migration is added — here, when 18→19 landed for design tokens.)
+        expect(() => migrateIfNeeded(legacy, "20")).toThrow('Migration not implemented for document schema "19"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);

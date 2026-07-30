@@ -61,6 +61,8 @@ export interface DocumentSnapshot {
     nodes: Record<string, Node>;
     rootNodeUuids: string[];
     variables: ProjectDocument["variables"];
+    /** Theme mode (schema 19). Snapshots taken before the field existed hydrate as "light". */
+    activeTheme?: ProjectDocument["activeTheme"];
 }
 
 /** The serialized payload needed to store history for Undo/Redo */

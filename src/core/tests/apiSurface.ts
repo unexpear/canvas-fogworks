@@ -24,6 +24,7 @@ import {
     ProjectDocument, ReadonlyDocument, createEmptyDocument,
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
+import { Variable, VariableStore, VariableType, VariableValue, ThemeMode, THEME_MODES, VARIABLES_MAX, VARIABLE_KEY_MAX, VARIABLE_FALLBACK_COLOR, isTokenRef, variableError, variableStoreError, resolveVariable, resolveColor, resolveNumber } from "../document/Variables";
 import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, Shadow, Layout } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
@@ -99,6 +100,25 @@ export function __apiSurfacePin(): void {
     expectType<number>(PATH_MAX_COMMANDS);
     const pathCmd: PathCommand = { c: "M", x: 0, y: 0 };
     expectType<PathCommand>(pathCmd);
+
+    // --- Variables / design tokens (schema 19) ------------------------------
+    const variable: Variable = { type: "color", value: "#fff", modes: { dark: "$other" } };
+    expectType<Variable>(variable);
+    expectType<VariableType>(variable.type);
+    expectType<VariableValue>(variable.value);
+    const store: VariableStore = { "color/primary": variable };
+    expectType<VariableStore>(doc.variables);
+    expectType<ThemeMode>(doc.activeTheme);
+    expectType<readonly ThemeMode[]>(THEME_MODES);
+    expectType<number>(VARIABLES_MAX);
+    expectType<number>(VARIABLE_KEY_MAX);
+    expectType<string>(VARIABLE_FALLBACK_COLOR);
+    expectType<boolean>(isTokenRef("$color/primary"));
+    expectType<string | null>(variableError(variable));
+    expectType<string | null>(variableStoreError(store));
+    expectType<string | number | null>(resolveVariable(store, "color/primary", "light"));
+    expectType<string>(resolveColor(store, "$color/primary", "dark"));
+    expectType<number | null>(resolveNumber(store, "$spacing/gap", "light"));
     expectType<string>(commandsToPathData([{ c: "M", x: 0, y: 0 }, { c: "Z" }]));
 
     // getDocument() is READ-ONLY — asserted in BOTH directions, so the guarantee

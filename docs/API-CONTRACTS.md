@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v19 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -17,6 +17,24 @@ function traverseSceneGraph(doc: ReadonlyDocument): ReadonlyNode[]; // depth-fir
 
 // Integrity.ts — structural + range validation (runs inside deserializeDocument)
 function validateDocumentIntegrity(doc: ReadonlyDocument): void;  // throws on the first problem
+
+// Variables.ts — design tokens (schema 19, M5). Validation shared by load + edit paths;
+// resolution is pure and NEVER throws (broken references render the visible fallback).
+type ThemeMode = "light" | "dark";
+const THEME_MODES: readonly ThemeMode[];
+type VariableType = "color" | "spacing" | "font";
+type VariableValue = string | number;                      // concrete, or an alias "$key"
+interface Variable { type: VariableType; value: VariableValue; modes?: Partial<Record<ThemeMode, VariableValue>> }
+interface VariableStore { [key: string]: Variable }
+const VARIABLES_MAX: number;                               // store entry cap (OOM guard)
+const VARIABLE_KEY_MAX: number;                            // key length cap
+const VARIABLE_FALLBACK_COLOR: string;                     // debug magenta for a broken color token
+function isTokenRef(v: unknown): v is string;              // "$" + non-empty key
+function variableError(def: unknown): string | null;       // one definition (shared with the 18→19 sanitizer)
+function variableStoreError(store: unknown): string | null; // whole store, shared load + edit
+function resolveVariable(store: VariableStore, key: string, theme: ThemeMode): string | number | null; // follows aliases; null = missing/cycle
+function resolveColor(store: VariableStore, raw: string, theme: ThemeMode): string;   // non-token passes through; broken token → fallback
+function resolveNumber(store: VariableStore, raw: number | string, theme: ThemeMode): number | null; // spacing tokens (consumed by layout later)
 
 // geometry/Matrix.ts — 2D affine primitive
 interface Mat2D { a: number; b: number; c: number; d: number; e: number; f: number }
