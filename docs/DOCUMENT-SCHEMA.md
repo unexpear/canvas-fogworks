@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v20 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v21 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -35,9 +35,15 @@ interface DocumentMetadata {       // runtime shape (date is a live Date)
 Every object in `nodes` (`Node.ts`). **Nodes are never mutated directly — only via Actions.**
 
 ```ts
-const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path"] as const;
+const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path", "core.instance"] as const;
 type NodeType = typeof NODE_TYPES[number];   // derived — one edit adds a type
 function isNodeType(v: unknown): v is NodeType;  // membership, checked on BOTH paths
+// Stored node ids are constrained on BOTH paths (AddNodeAction + Integrity): not the
+// document-delta sentinel, and free of "::" — the separator instance expansion builds
+// VIRTUAL ids with, which a stored id must never collide with.
+const RESERVED_NODE_ID = "__document__";
+const RESERVED_ID_SUBSTRING = "::";
+function nodeIdError(id: string): string | null;                                       // shared edit+load
 // core.ellipse fills its box (cx=w/2 …). core.line is the box DIAGONAL (0,0)→(w,h); core.path
 // is drawn from its `path` commands (the box is just the declared bbox). line + path may collapse
 // ONE box axis (a horizontal/vertical line, or a flat path bbox); see dimensionError.
@@ -64,6 +70,7 @@ interface Node {
   text?: string;                    // core.text
   src?: string;                     // core.image
   path?: PathCommand[];             // core.path (absent = empty path, draws nothing)
+  componentId?: string;             // core.instance → the MASTER node it copies (schema 21, M6)
   name?: string;                    // display name
 }
 
@@ -498,6 +505,31 @@ deltas travel under.
 
 `doc.activeTheme` ("light"/"dark", absent on the wire = "light") is persisted — a
 document reopens in the theme it was saved in — and changed only through an action.
+
+## Components & instances (schema 21, Milestone 6)
+
+A component **master** is an ordinary node subtree in the document — no new storage, so it
+reuses every existing mechanism (validation, geometry, layout, serialization, actions,
+editing). An **instance** is a `core.instance` node carrying `componentId` (the master's node
+id); it draws nothing itself and has **no children in the stored document**.
+
+`expandInstances(doc)` (`Components.ts`) materializes each instance's master subtree as
+**virtual** children, returning a DERIVED document — never persisted, never mutated, never
+seen by an Action. `computeGeometry` runs it first, so layout, transforms, culling,
+hit-testing and both backends work on an ordinary tree with no special cases. Because nothing
+is copied into the document, editing a master updates every instance on the next frame.
+
+Virtual ids are `<instance path>::<master node id>`, so they are stable, unique and
+REVERSIBLE (`splitVirtualId` → the owning instance + the master node it copies — what
+per-child overrides will key on). Virtual nodes are **not selectable** in this slice:
+`hitTest`/`nodesInRect` skip them, so clicking instance content selects the instance.
+
+Three guards bound recursion (a master containing an instance of itself, or a cycle through
+several masters, and nested instances that MULTIPLY rather than add): a per-path master
+**chain** (a cycle stops expanding), `INSTANCE_MAX_DEPTH`, and a total materialized-node cap
+`INSTANCE_MAX_NODES`. A stopped expansion draws nothing — it never throws. A **dangling**
+`componentId` is valid at rest and draws nothing, so deleting a master can never make a
+document unloadable (the same rule dangling `$token` aliases follow).
 
 ## Serialization
 

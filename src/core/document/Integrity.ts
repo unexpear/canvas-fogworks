@@ -12,7 +12,8 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError, layoutError, dimensionError, pathError, styleError, RESERVED_NODE_ID } from "./Node";
+import { transformError, layoutError, dimensionError, pathError, styleError, nodeIdError } from "./Node";
+import { componentError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
 
 function checkNodeRanges(node: ReadonlyNode): void {
@@ -46,6 +47,10 @@ function checkNodeRanges(node: ReadonlyNode): void {
     // node) wherever it appears, sharing `pathError` with the edit path.
     const pathErr = pathError(node.type, node.path);
     if (pathErr) throw new Error(`Invalid document: node "${node.id}" ${pathErr}.`);
+    // `componentId` (M6): only an instance may carry one; a DANGLING reference is deliberately
+    // allowed (it draws nothing), so deleting a master never makes a document unloadable.
+    const compErr = componentError(node.type, node.componentId);
+    if (compErr) throw new Error(`Invalid document: node "${node.id}" ${compErr}.`);
 }
 
 /**
@@ -69,9 +74,10 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
     // 1. Per-node ranges — and no node may claim the reserved document-delta id (it would
     // collide with doc-level deltas in the action layer's node-id-keyed map).
     doc.nodes.forEach(node => {
-        if (node.id === RESERVED_NODE_ID) {
-            throw new Error(`Invalid document: node id "${RESERVED_NODE_ID}" is reserved.`);
-        }
+        // Reserved ids: the document-delta sentinel, and any id containing the virtual-id
+        // separator (it would collide with an expanded instance's materialized copies).
+        const idErr = nodeIdError(node.id);
+        if (idErr) throw new Error(`Invalid document: ${idErr}.`);
         checkNodeRanges(node);
     });
 

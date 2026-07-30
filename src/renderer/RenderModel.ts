@@ -376,6 +376,13 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 cursor: "pointer",
                 pointerEvents: true
             };
+        } else if (node.type === "core.instance") {
+            // A component instance (M6) draws NOTHING itself — it is a placement frame whose
+            // materialized copies (virtual children, added by `expandInstances`) carry the ink,
+            // exactly like a group. Emitting no item keeps it out of the display list entirely;
+            // its box still selects and culls via geometry, and an empty/dangling instance is
+            // simply invisible rather than a magenta unknown-type box.
+            return;
         } else {
             // Unknown type: magenta debug rect (no opacity attr — matches the old renderer).
             shape = { kind: "rect", x, y, width, height };

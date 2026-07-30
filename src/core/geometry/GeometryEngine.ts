@@ -30,6 +30,7 @@
 import { DeepReadonly, ReadonlyDocument } from "../document/Document";
 import { Geometry, Margins, Node } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
+import { expandInstances, isVirtualId } from "../document/Components";
 import { expandDirtyForLayout, isAbsolute, isLayoutContainer, layoutChildren, layoutGridChildren, measureIntrinsicSizes, resolveConstraints } from "./LayoutEngine";
 import {
     Mat2D, IDENTITY, Rect, multiply, compose, invert, applyToPoint,
@@ -77,6 +78,20 @@ export function computeGeometry(
     previous?: ComputedState,
     dirty?: ReadonlySet<string>
 ): ComputedState {
+    // COMPONENT INSTANCES (M6) resolve FIRST: `expandInstances` materializes each instance's
+    // master subtree as ordinary virtual children, so everything below — layout, transforms,
+    // culling, hit-testing, both backends — works unchanged on an ordinary tree. It returns
+    // the SAME document reference when there is nothing to expand, so an instance-free
+    // document pays nothing. Doing it here (rather than at each call site) is what keeps every
+    // consumer — renderer, tools, inspector — reading one consistent scene.
+    const stored = doc;
+    doc = expandInstances(doc);
+    // Dirty-tracking reuse is DISABLED while instances are present: the dirty set names STORED
+    // ids (that is what actions report), but a master edit changes its VIRTUAL copies, whose
+    // ids are not in that set — reusing them would render a stale copy. A full recompute is
+    // always correct; incremental reuse for instanced documents is a documented deferral.
+    if (doc !== stored) { previous = undefined; dirty = undefined; }
+
     const order: string[] = [];
     const nodes = new Map<string, ComputedNode>();
     // A node is recomputed if it, or any ancestor, is dirty.
@@ -309,6 +324,11 @@ export function toWorld(state: ComputedState, nodeId: string, x: number, y: numb
 export function hitTest(state: ComputedState, x: number, y: number, tolerance: number = 0): string | null {
     for (let i = state.order.length - 1; i >= 0; i--) {
         const id = state.order[i];
+        // A VIRTUAL node (an instance's materialized copy, M6) is not a document node: it has
+        // no stored geometry to edit, so selecting it would produce a selection no action can
+        // act on. Clicking instance content therefore selects the INSTANCE, whose own box is
+        // tested normally. Per-child picking arrives with overrides (M6 slice 2).
+        if (isVirtualId(id)) continue;
         const c = state.nodes.get(id);
         if (!c) continue;
         // Cheap AABB reject first (inflated by the halo), then the exact local-space test.
@@ -336,6 +356,9 @@ export function nodesInRect(state: ComputedState, rect: Rect): string[] {
     const rx2 = rect.x + rect.width;
     const ry2 = rect.y + rect.height;
     for (const id of state.order) {
+        // Virtual (instance-copy) nodes are not selectable — same rule as `hitTest`, so a
+        // marquee over an instance selects the instance itself, not its materialized children.
+        if (isVirtualId(id)) continue;
         const c = state.nodes.get(id);
         if (!c) continue;
         const b = c.bounds;

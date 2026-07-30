@@ -5,7 +5,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { Node, NodeType, isNodeType, dimensionError, RESERVED_NODE_ID } from "../document/Node";
+import { Node, NodeType, isNodeType, dimensionError, nodeIdError } from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 import { generateUUID } from "../ids/UUID";
 
@@ -48,9 +48,10 @@ export class AddNodeAction extends Action {
         if (this.explicitId !== null && this.document.nodes.has(this.explicitId)) {
             return false;
         }
-        // The reserved document-delta id would collide with doc-level (variables) deltas in
-        // the node-id-keyed delta map; the load path rejects it too (Integrity).
-        if (this.explicitId === RESERVED_NODE_ID) {
+        // Reserved ids (shared with the load path via `nodeIdError`): the document-delta
+        // sentinel would collide with doc-level deltas in the node-id-keyed map, and an id
+        // containing "::" would collide with a component instance's virtual copies.
+        if (this.explicitId !== null && nodeIdError(this.explicitId) !== null) {
             return false;
         }
         // A requested parent must actually exist.

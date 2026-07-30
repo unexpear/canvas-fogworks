@@ -49,6 +49,9 @@ function isValidNode(n: any): n is Node {
         // Shallow structural gate only (array of command objects); the semantic rules
         // (first M, finite coords, command cap) live once in `pathError` (Integrity).
         (n.path === undefined || (Array.isArray(n.path) && n.path.every((c: any) => c !== null && typeof c === "object" && !Array.isArray(c)))) &&
+        // Shallow gate for the M6 instance reference; the semantic rule (only an instance may
+        // carry it, non-empty) lives once in `componentError` (Integrity), like the effects.
+        isOptionalString(n.componentId) &&
         (n.states === undefined || isPlainObject(n.states)) &&
         (n.transform === undefined || (isPlainObject(n.transform) &&
             (n.transform.rotation === undefined || typeof n.transform.rotation === "number") &&
@@ -241,6 +244,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "17") { raw = migrate_17_to_18(raw); version = "18"; }
     if (version === "18") { raw = migrate_18_to_19(raw); version = "19"; }
     if (version === "19") { raw = migrate_19_to_20(raw); version = "20"; }
+    if (version === "20") { raw = migrate_20_to_21(raw); version = "21"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -398,6 +402,12 @@ function migrate_18_to_19(raw: any): any {
  *  resolved at render time). Pass-through by content — existing files carry only numbers. */
 function migrate_19_to_20(raw: any): any {
     return { ...raw, version: "20" };
+}
+
+/** Schema 20 → 21: adds the `core.instance` node type + `Node.componentId` (M6 components).
+ *  Pass-through by content — existing documents contain neither. */
+function migrate_20_to_21(raw: any): any {
+    return { ...raw, version: "21" };
 }
 
 /**

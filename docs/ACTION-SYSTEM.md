@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions -->
 
-> 🔒 Frozen contract · schema v20 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Code in `src/core/actions/`.
+> 🔒 Frozen contract · schema v21 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Code in `src/core/actions/`.
 
 The action system is the engine's spine: it is **the only way the document changes**,
 and it is what makes undo/redo, and later AI, plugins, and collaboration, safe.
@@ -43,6 +43,7 @@ abstract class Action {
 | `UpdateNodeTransformAction` | `{ kind: "patch", transform: {…partial…} }` — rotation/scale/origin |
 | `UpdateNodeLayoutAction` | `{ kind: "patch", layout: {…partial…} }` — M2 layout (container/grid/grow/constraints/position/margin). Carries grid⊕container exclusivity IN the delta, and auto-captures `constraintRef` from a NON-container parent's stored size on first opt-in |
 | `ReparentNodeAction` | `{ kind: "patch", reparent: { parent, index? } }` |
+| `CreateInstanceAction` | `{ kind: "add", node }` — a `core.instance` sized to its MASTER (M6); the master must exist at creation time (a DANGLING reference is only valid at rest) |
 | `SetVariableAction` | `{ kind: "variables", variables, activeTheme }` — upsert one design token (M5); validated via the shared `variableStoreError` |
 | `DeleteVariableAction` | `{ kind: "variables", … }` — remove one token; dangling references stay valid (they resolve to the visible fallback) |
 | `SetActiveThemeAction` | `{ kind: "variables", … }` — switch the persisted light/dark theme |

@@ -145,8 +145,14 @@ export const CURRENT_VERSION: string =
  *         number tokens becoming consumable). Existing documents carry only numbers, so
  *         `migrate_19_to_20` is a pass-through — but a schema-19 build's `isValidNode` rejects a
  *         string radius/fontSize outright, which is exactly what the bump signals.
+ *
+ *   "21" — adds the `core.instance` node type + `Node.componentId` (Milestone 6 components: an
+ *         instance renders a copy of a MASTER node subtree, resolved by `expandInstances`).
+ *         Existing documents contain neither, so `migrate_20_to_21` is a pass-through — but a
+ *         schema-20 build would reject an instance as an unknown node type on load, and would
+ *         not know that `::` is now RESERVED in stored node ids (the virtual-id separator).
  */
-export const SCHEMA_VERSION = "20";
+export const SCHEMA_VERSION = "21";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

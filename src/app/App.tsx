@@ -14,6 +14,7 @@ import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine"
 import { UpdateNodeGeometryAction } from "../core/actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../core/actions/UpdateNodeStyleAction";
 import { SetActiveThemeAction } from "../core/actions/VariableActions";
+import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { createEditorState, EditorState, zoomAt } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
@@ -310,6 +311,26 @@ export function App() {
                         }}
                     />
                 )}
+                <button
+                    title="Create an instance of the selected node — it mirrors that master until you edit the master (M6 components)"
+                    disabled={es.selectedNodeIds.length !== 1 || dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.type === "core.instance"}
+                    onClick={() => {
+                        const masterId = es.selectedNodeIds[0];
+                        const doc = dispatcher.getDocument();
+                        const master = doc.nodes.get(masterId);
+                        if (!master) return;
+                        // Offset the copy so it doesn't land exactly on its master.
+                        const action = new CreateInstanceAction(doc, masterId, master.geometry.x + 40, master.geometry.y + 40);
+                        if (dispatcher.dispatchAction(action).success) {
+                            const created = action.getCreatedNodeId();
+                            if (created) es.selectedNodeIds = [created];
+                        }
+                        refresh();
+                    }}
+                    style={{ fontSize: 11, padding: "3px 8px", marginLeft: 8, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
+                >
+                    ⧉ Instance
+                </button>
                 <div style={{ flex: 1 }} />
                 <button
                     title="Switch the document's theme mode — $token colors re-resolve against the variable store (undoable, persisted)"

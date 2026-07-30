@@ -25,7 +25,7 @@ import {
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
 import { Variable, VariableStore, VariableType, VariableValue, ThemeMode, THEME_MODES, VARIABLES_MAX, VARIABLE_KEY_MAX, VARIABLE_FALLBACK_COLOR, isTokenRef, variableError, variableKeyError, variableStoreError, resolveVariable, resolveColor, resolveNumber } from "../document/Variables";
-import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, Shadow, Layout, RESERVED_NODE_ID } from "../document/Node";
+import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, Shadow, Layout, RESERVED_NODE_ID, RESERVED_ID_SUBSTRING, nodeIdError } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
@@ -38,6 +38,8 @@ import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToP
 import { Action } from "../actions/Action";
 import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot, DOCUMENT_DELTA_KEY } from "../actions/types";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
+import { CreateInstanceAction } from "../actions/CreateInstanceAction";
+import { expandInstances, componentError, isVirtualId, virtualId, splitVirtualId, VIRTUAL_ID_SEP, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES } from "../document/Components";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { HistoryManager, HistoryLimits, DEFAULT_HISTORY_LIMITS } from "../actions/HistoryManager";
@@ -119,6 +121,19 @@ export function __apiSurfacePin(): void {
     expectType<string | null>(variableKeyError("color/primary"));
     expectType<string | null>(variableStoreError(store));
     expectType<string>(RESERVED_NODE_ID);
+
+    // --- Components / instances (schema 21) ---------------------------------
+    expectType<string>(RESERVED_ID_SUBSTRING);
+    expectType<string>(VIRTUAL_ID_SEP);
+    expectType<number>(INSTANCE_MAX_DEPTH);
+    expectType<number>(INSTANCE_MAX_NODES);
+    expectType<string | null>(nodeIdError("some-id"));
+    expectType<string | null>(componentError("core.instance", "master"));
+    expectType<string>(virtualId("instance", "master"));
+    expectType<boolean>(isVirtualId("a::b"));
+    expectType<{ instancePath: string; masterNodeId: string } | null>(splitVirtualId("a::b"));
+    expectType<ReadonlyDocument>(expandInstances(doc));
+    expectType<MutationResult>(new CreateInstanceAction(doc, "master", 0, 0).execute());
     expectType<string | number | null>(resolveVariable(store, "color/primary", "light"));
     expectType<string>(resolveColor(store, "$color/primary", "dark"));
     expectType<number | null>(resolveNumber(store, "$spacing/gap", "light"));

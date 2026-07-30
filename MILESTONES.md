@@ -26,7 +26,7 @@ M3  Renderer                 ✅   SVG renderer (shapes + culling + effects) + C
 M4  Editor                   ✅*  pan/zoom + box-select + DOM-free handles + rotate + canvas wiring + snapping/guides
       │
 M5  Variables & Tokens       ✅*  typed store + light/dark themes + $token references + aliases; radius/fontSize tokens live (schema 20); layout-side spacing tokens deferred
-M6  Components                ⬜
+M6  Components                🚧   masters + instances + pure resolution (schema 21); overrides/variants next
 M7  States                    ⬜
 M8  Animation Engine          ⬜
 M9  Interaction Graph         ⬜
@@ -706,9 +706,47 @@ excluded from `updatedNodeIds`.
 
 ## Phase 6 — Components
 
-### Milestone 6 — Components ⬜
+### Milestone 6 — Components 🚧 (slice 1 landed: masters + instances, schema 21)
 Reusable objects: components · instances · overrides · nested components · slots ·
 variants. Similar to Figma Components.
+
+**Landed (slice 1 — masters, instances, resolution; schema 20 → 21):** a component **master**
+is an ordinary node subtree in the document (like a Figma component on the canvas) — the
+design fork resolved in favour of NO new storage, so masters inherit every existing mechanism:
+validation, geometry, layout, serialization, actions, editing. An **instance** is a
+`core.instance` node carrying `componentId` (the master's node id), drawing nothing itself and
+holding **no children in the stored document**.
+
+The whole feature rests on one pure function: `expandInstances(doc)`
+(`src/core/document/Components.ts`) materializes each instance's master subtree as VIRTUAL
+children and returns a DERIVED document — never persisted, never mutated, never seen by an
+Action. `computeGeometry` runs it FIRST, so layout, transforms, culling, hit-testing and BOTH
+render backends work on an ordinary tree with zero special cases; the materialized master root
+is re-origined to (0,0) so the instance's own geometry places the copy. Because nothing is
+copied into the document, **editing a master updates every instance on the next frame**.
+
+Virtual ids are `<instance path>::<master node id>` — stable, unique, and REVERSIBLE
+(`splitVirtualId` recovers the owning instance + the master node, which per-child overrides
+will key on). `::` is therefore RESERVED in stored node ids, rejected on BOTH paths via a
+shared `nodeIdError` (the `RESERVED_NODE_ID` discipline). Virtual nodes are NOT selectable in
+this slice — `hitTest`/`nodesInRect` skip them, so clicking instance content selects the
+instance; per-child picking arrives with overrides.
+
+Recursion is the hazard the module exists to bound (a master containing an instance of itself,
+a cycle through several masters, and nested instances that MULTIPLY rather than add). Three
+guards in the `GRID_MAX_TRACKS` tradition: a per-path master **chain** (a cycle stops
+expanding), `INSTANCE_MAX_DEPTH` (nesting), and `INSTANCE_MAX_NODES` (total materialized — the
+BREADTH guard depth cannot provide). A stopped expansion draws nothing; it never throws. A
+**dangling** `componentId` is valid at rest and draws nothing, so deleting a master can never
+make a document unloadable — the rule dangling `$token` aliases already follow.
+`CreateInstanceAction` (+ a toolbar ⧉ Instance button) is the write path; it requires a real,
+non-instance master at creation time.
+
+Deferred to later slices: **overrides** (per-instance property patches keyed on the virtual
+id — the reason ids are reversible), **variants/slots**, "detach instance", and incremental
+dirty-tracking reuse for instanced documents (the dirty set names stored ids, not the virtual
+copies a master edit changes, so instanced documents recompute fully — always correct, just
+not incremental).
 
 ---
 

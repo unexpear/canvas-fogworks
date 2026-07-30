@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v20 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v21 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -37,6 +37,17 @@ function resolveVariable(store: VariableStore, key: string, theme: ThemeMode): s
 function resolveColor(store: VariableStore, raw: string, theme: ThemeMode): string;   // non-token passes through; broken token → fallback
 function resolveNumber(store: VariableStore, raw: number | string, theme: ThemeMode): number | null; // number tokens — consumed by radius/fontSize (schema 20); layout gap/padding later
 
+// Components.ts — reusable components (schema 21, M6). A master is an ordinary node subtree;
+// an instance is a `core.instance` node with `componentId`. Resolution is pure and never throws.
+const VIRTUAL_ID_SEP: string;                              // "::" — also RESERVED in stored ids
+const INSTANCE_MAX_DEPTH: number;                          // nesting cap
+const INSTANCE_MAX_NODES: number;                          // total materialized-node cap (OOM guard)
+function virtualId(instancePath: string, masterNodeId: string): string;
+function isVirtualId(id: string): boolean;                 // true for an expansion-produced id
+function splitVirtualId(id: string): { instancePath: string; masterNodeId: string } | null; // reversible
+function componentError(type: string, componentId: unknown): string | null; // shared load + edit; dangling is ALLOWED
+function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializes instances as virtual children; SAME reference when there is nothing to expand
+
 // geometry/Matrix.ts — 2D affine primitive
 interface Mat2D { a: number; b: number; c: number; d: number; e: number; f: number }
 interface Rect { x: number; y: number; width: number; height: number }
@@ -60,6 +71,10 @@ function computeGeometry(
   previous?: ComputedState,                          // dirty-tracking reuse
   dirty?: ReadonlySet<string>
 ): ComputedState;
+// Runs `expandInstances` FIRST (M6), so every consumer sees one consistent scene with
+// instance content materialized. While instances are present, `previous`/`dirty` reuse is
+// disabled (the dirty set names STORED ids, not the virtual copies a master edit changes) —
+// incremental reuse for instanced documents is a documented deferral.
 function hitTest(computed: ComputedState, x: number, y: number, tolerance?: number): string | null; // local-space, DOM-free; `tolerance` (world units, default 0) is a pick halo so thin/zero-extent targets (an axis-aligned line) stay selectable
 function nodesInRect(computed: ComputedState, rect: Rect): string[]; // marquee (box) select: ids whose WORLD bounds OVERLAP rect (touch, not containment), in draw order; DOM-free
 function toLocal(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;

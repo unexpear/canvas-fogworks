@@ -17,7 +17,7 @@ function isNumberToken(v: unknown): boolean {
  * it, and both validation paths check membership against it — so adding a type is
  * one edit, and an unknown type cannot slip in through a hand-edited file.
  */
-export const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path"] as const;
+export const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path", "core.instance"] as const;
 export type NodeType = typeof NODE_TYPES[number];
 
 /**
@@ -28,6 +28,24 @@ export type NodeType = typeof NODE_TYPES[number];
  * like the reserved variable keys.
  */
 export const RESERVED_NODE_ID = "__document__";
+
+/**
+ * A substring no STORED node id may contain: instance expansion (M6) builds VIRTUAL node ids
+ * as `<instance path>::<master node id>`, so a stored id containing `::` could collide with a
+ * materialized copy — and `splitVirtualId` would mis-attribute it to an instance. Rejected on
+ * BOTH paths (`AddNodeAction` + `Integrity`), like `RESERVED_NODE_ID`. Kept here (not in
+ * Components.ts) so the document layer owns every id rule in one place; Components re-exports
+ * the separator it forms ids with.
+ */
+export const RESERVED_ID_SUBSTRING = "::";
+
+/** Validity of a stored node id: not the document-delta sentinel, and free of the virtual-id
+ *  separator. Shared by the edit path (`AddNodeAction`) and the load path (`Integrity`). */
+export function nodeIdError(id: string): string | null {
+    if (id === RESERVED_NODE_ID) return `node id "${RESERVED_NODE_ID}" is reserved`;
+    if (id.includes(RESERVED_ID_SUBSTRING)) return `node id "${id}" must not contain "${RESERVED_ID_SUBSTRING}" (reserved for component instances)`;
+    return null;
+}
 
 export function isNodeType(value: unknown): value is NodeType {
     return typeof value === "string" && (NODE_TYPES as readonly string[]).includes(value);
@@ -137,6 +155,13 @@ export interface Node {
     src?: string;
     /** `core.path` drawing commands (absolute, local-space). Absent = an empty path. See `PathCommand`. */
     path?: PathCommand[];
+    /**
+     * `core.instance` → the id of the MASTER node this instance copies (M6). The master is an
+     * ordinary node subtree in the same document. Absent = an empty instance (draws nothing);
+     * a DANGLING reference is valid at rest and also draws nothing, so deleting a master can
+     * never corrupt a document that instances it. See `Components.expandInstances`.
+     */
+    componentId?: string;
     name?: string;
 }
 

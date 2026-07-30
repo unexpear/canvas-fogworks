@@ -6,6 +6,8 @@
 import { createEmptyDocument, ProjectDocument, CURRENT_VERSION, SCHEMA_VERSION } from "../document/Document";
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
+import { CreateInstanceAction } from "../actions/CreateInstanceAction";
+import { expandInstances, componentError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES } from "../document/Components";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
@@ -30,7 +32,7 @@ import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
-import { Node, NODE_TYPES, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow } from "../document/Node";
+import { Node, NODE_TYPES, nodeIdError, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow } from "../document/Node";
 
 function createDocWithRectangle(): ProjectDocument {
     const doc = createEmptyDocument();
@@ -1795,6 +1797,219 @@ describe("GroupTransform (group rotate math)", () => {
     });
 });
 
+// ─── M6: components — instance resolution (pure), guards, and the pipeline ───
+describe("Components: expandInstances", () => {
+    /** master M = a 100×50 rect at (10,20) with a 20×20 child; plus an instance of it at (300,300). */
+    function docWithInstance(instanceExtra: Partial<import("../document/Node").Node> = {}): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: ["MC"], geometry: { x: 10, y: 20, width: 100, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("MC", { id: "MC", type: "core.rectangle", parent: "M", children: [], geometry: { x: 5, y: 5, width: 20, height: 20 }, style: { fill: "#0f0", opacity: 1 }, layout: {} });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 300, y: 300, width: 100, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M", ...instanceExtra });
+        doc.rootNodeUuids = ["M", "I"];
+        return doc;
+    }
+
+    test("materializes the master subtree under the instance, with the ROOT re-origined to (0,0)", () => {
+        const x = expandInstances(docWithInstance());
+        expect(x.nodes.get("I")!.children).toEqual(["I::M"]);
+        const root = x.nodes.get("I::M")!;
+        expect(root.parent).toBe("I");
+        expect([root.geometry.x, root.geometry.y]).toEqual([0, 0]);   // the INSTANCE places the copy
+        expect([root.geometry.width, root.geometry.height]).toEqual([100, 50]); // size copied as-is
+        expect(root.type).toBe("core.rectangle");
+        expect(root.style.fill).toBe("#f00");
+        // The child copies keep their own parent-relative geometry.
+        const child = x.nodes.get("I::MC")!;
+        expect(child.parent).toBe("I::M");
+        expect([child.geometry.x, child.geometry.y]).toEqual([5, 5]);
+        expect(x.nodes.get("I::M")!.children).toEqual(["I::MC"]);
+        // The STORED document is untouched (expansion is derived, never persisted).
+        expect(x).not.toBe(docWithInstance());
+    });
+
+    test("an instance-free document is returned UNCHANGED (same reference — no allocation)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["A"];
+        expect(expandInstances(doc)).toBe(doc);
+    });
+
+    test("an ABSENT or DANGLING componentId expands to nothing (valid at rest — deleting a master can't corrupt)", () => {
+        const dangling = docWithInstance({ componentId: "gone" });
+        expect(expandInstances(dangling)).toBe(dangling);             // nothing expandable
+        expect(() => deserializeDocument(serializeDocument(dangling))).not.toThrow();
+        const empty = docWithInstance({ componentId: undefined });
+        expect(expandInstances(empty)).toBe(empty);
+        expect(() => deserializeDocument(serializeDocument(empty))).not.toThrow();
+    });
+
+    test("NESTED instances expand recursively, with reversible ids", () => {
+        const doc = createEmptyDocument();
+        // Inner master IM; outer master OM CONTAINS an instance of IM; I instances OM.
+        doc.nodes.set("IM", { id: "IM", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#00f", opacity: 1 }, layout: {} });
+        doc.nodes.set("OM", { id: "OM", type: "core.rectangle", parent: null, children: ["OI"], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("OI", { id: "OI", type: "core.instance", parent: "OM", children: [], geometry: { x: 5, y: 5, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "IM" });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 200, y: 200, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "OM" });
+        doc.rootNodeUuids = ["IM", "OM", "I"];
+        const x = expandInstances(doc);
+        expect(x.nodes.has("I::OM")).toBe(true);
+        expect(x.nodes.has("I::OI")).toBe(true);          // the nested instance's own copy
+        expect(x.nodes.has("I::OI::IM")).toBe(true);      // …expanded one level deeper
+        expect(x.nodes.get("I::OI::IM")!.parent).toBe("I::OI");
+        // The id decomposes back to (instance path, master node) — what overrides will key on.
+        expect(splitVirtualId("I::OI::IM")).toEqual({ instancePath: "I::OI", masterNodeId: "IM" });
+        expect(splitVirtualId("plain")).toBeNull();
+        expect(isVirtualId("I::OM")).toBe(true);
+        expect(isVirtualId("I")).toBe(false);
+    });
+
+    test("a SELF-referential master stops at the cycle instead of expanding forever", () => {
+        const doc = createEmptyDocument();
+        // M contains an instance of M itself.
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: ["SI"], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("SI", { id: "SI", type: "core.instance", parent: "M", children: [], geometry: { x: 5, y: 5, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["M"];
+        const x = expandInstances(doc);          // must terminate
+        expect(x.nodes.has("SI::M")).toBe(true); // one level materialized…
+        expect(x.nodes.has("SI::M::SI::M")).toBe(false); // …then the chain guard stops it
+        expect(x.nodes.size).toBeLessThan(20);
+    });
+
+    test("a two-master CYCLE also terminates (chain, not just self-reference)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: ["AI"], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("AI", { id: "AI", type: "core.instance", parent: "A", children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "B" });
+        doc.nodes.set("B", { id: "B", type: "core.rectangle", parent: null, children: ["BI"], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#0f0", opacity: 1 }, layout: {} });
+        doc.nodes.set("BI", { id: "BI", type: "core.instance", parent: "B", children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "A" });
+        doc.rootNodeUuids = ["A", "B"];
+        const x = expandInstances(doc); // terminates
+        expect(x.nodes.size).toBeLessThan(100);
+    });
+
+    test("DEPTH is capped: a long instance chain stops materializing rather than exploding", () => {
+        // m0 <- i1 (in m1) <- i2 (in m2) … a chain deeper than INSTANCE_MAX_DEPTH.
+        const doc = createEmptyDocument();
+        const depth = INSTANCE_MAX_DEPTH + 6;
+        doc.nodes.set("m0", { id: "m0", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        for (let k = 1; k <= depth; k++) {
+            doc.nodes.set(`m${k}`, { id: `m${k}`, type: "core.rectangle", parent: null, children: [`i${k}`], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+            doc.nodes.set(`i${k}`, { id: `i${k}`, type: "core.instance", parent: `m${k}`, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: `m${k - 1}` });
+        }
+        doc.rootNodeUuids = Object.keys(Object.fromEntries([...doc.nodes].filter(([, n]) => !n.parent))).map(String);
+        const x = expandInstances(doc); // terminates
+        // The deepest chain materializes at most INSTANCE_MAX_DEPTH+1 levels of separators.
+        const deepest = [...x.nodes.keys()].reduce((m, id) => Math.max(m, id.split("::").length - 1), 0);
+        expect(deepest).toBeLessThanOrEqual(INSTANCE_MAX_DEPTH + 1);
+    });
+
+    test("the total materialized-node CAP bounds a WIDE expansion (breadth, which depth can't stop)", () => {
+        // A big master instanced many times: 1001 × 60 = 60 060 copies — the DEPTH cap is
+        // irrelevant here (every instance is depth 0), so only the node cap bounds it.
+        const doc = createEmptyDocument();
+        const kids: string[] = [];
+        for (let k = 0; k < 1000; k++) {
+            const id = `k${k}`;
+            kids.push(id);
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: "BIG", children: [], geometry: { x: 0, y: 0, width: 5, height: 5 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        }
+        doc.nodes.set("BIG", { id: "BIG", type: "core.rectangle", parent: null, children: kids, geometry: { x: 0, y: 0, width: 500, height: 500 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        const roots = ["BIG"];
+        for (let n = 0; n < 60; n++) {
+            const id = `inst${n}`;
+            roots.push(id);
+            doc.nodes.set(id, { id, type: "core.instance", parent: null, children: [], geometry: { x: n * 10, y: 0, width: 500, height: 500 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "BIG" });
+        }
+        doc.rootNodeUuids = roots;
+        const stored = doc.nodes.size;
+        const x = expandInstances(doc);
+        const materialized = x.nodes.size - stored;
+        expect(materialized).toBeLessThanOrEqual(INSTANCE_MAX_NODES); // capped, not 60 060
+        expect(materialized).toBeGreaterThan(1000);                    // …but it DID expand (non-vacuous)
+    });
+
+    test("componentError: only an instance may carry a componentId; dangling is allowed", () => {
+        expect(componentError("core.instance", "M")).toBeNull();
+        expect(componentError("core.instance", undefined)).toBeNull();
+        expect(componentError("core.rectangle", "M")).toMatch("only a core.instance");
+        expect(componentError("core.rectangle", undefined)).toBeNull();
+        expect(componentError("core.instance", "")).toMatch("non-empty");
+        expect(componentError("core.instance", 42)).toMatch("non-empty");
+        // The load path enforces the same rule.
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["r"], variables: {}, nodes: { r: { id: "r", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {}, componentId: "M" } } } });
+        expect(() => deserializeDocument(bad)).toThrow("only a core.instance");
+    });
+
+    test('"::" is RESERVED in stored node ids on both paths (it would collide with virtual ids)', () => {
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["a::b"], variables: {}, nodes: { "a::b": { id: "a::b", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } } } });
+        expect(() => deserializeDocument(bad)).toThrow('must not contain "::"');
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        expect(dispatcher.dispatchAction(new AddNodeAction(dispatcher.getDocument(), "core.rectangle", 0, 0, 10, 10, "#fff", "a::b")).success).toBe(false);
+        expect(nodeIdError("ok-id")).toBeNull();
+        expect(nodeIdError("__document__")).toMatch("reserved");
+    });
+
+    test("through computeGeometry: the instance's copies get WORLD positions under the instance", () => {
+        const cs = computeGeometry(docWithInstance());
+        // The instance sits at (300,300); its master copy is at the instance origin, and the
+        // master's child keeps its (5,5) offset → world (305,305).
+        expect(cs.nodes.get("I")!.bounds).toMatchObject({ x: 300, y: 300, width: 100, height: 50 });
+        expect(cs.nodes.get("I::M")!.bounds).toMatchObject({ x: 300, y: 300 });
+        expect(cs.nodes.get("I::MC")!.bounds).toMatchObject({ x: 305, y: 305, width: 20, height: 20 });
+        // The MASTER itself still renders in place, independently.
+        expect(cs.nodes.get("M")!.bounds).toMatchObject({ x: 10, y: 20 });
+    });
+
+    test("picking: clicking instance CONTENT selects the instance, never a virtual copy", () => {
+        const cs = computeGeometry(docWithInstance());
+        expect(hitTest(cs, 310, 310)).toBe("I");        // over the copied child → the INSTANCE
+        expect(nodesInRect(cs, { x: 290, y: 290, width: 200, height: 200 })).toEqual(["I"]);
+        expect(hitTest(cs, 15, 25)).toBe("MC");          // the real master still picks normally
+    });
+
+    test("a master edit is reflected by its instances on the next compute (no copy in the document)", () => {
+        const doc = docWithInstance();
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new UpdateNodeGeometryAction(dispatcher.getDocument(), "MC", { x: 40 }));
+        const cs = computeGeometry(dispatcher.getDocument());
+        expect(cs.nodes.get("I::MC")!.bounds).toMatchObject({ x: 340 }); // 300 + 40
+        // …and the stored document still holds no copies.
+        expect([...dispatcher.getDocument().nodes.keys()].some(isVirtualId)).toBe(false);
+    });
+
+    test("CreateInstanceAction adds an instance sized to its master; undo removes it", () => {
+        const doc = docWithInstance();
+        doc.nodes.delete("I"); doc.rootNodeUuids = ["M"];
+        const dispatcher = new ActionDispatcher(doc);
+        const action = new CreateInstanceAction(dispatcher.getDocument(), "M", 500, 500, "NEW");
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const made = dispatcher.getDocument().nodes.get("NEW")!;
+        expect(made.type).toBe("core.instance");
+        expect(made.componentId).toBe("M");
+        expect(made.geometry).toEqual({ x: 500, y: 500, width: 100, height: 50 }); // master's size
+        expect(computeGeometry(dispatcher.getDocument()).nodes.get("NEW::MC")).toBeDefined();
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.has("NEW")).toBe(false);
+    });
+
+    test("CreateInstanceAction rejects a missing master, an instance-of-an-instance, and a reserved id", () => {
+        const dispatcher = new ActionDispatcher(docWithInstance());
+        const d = dispatcher.getDocument();
+        expect(dispatcher.dispatchAction(new CreateInstanceAction(d, "nope", 0, 0)).success).toBe(false);
+        expect(dispatcher.dispatchAction(new CreateInstanceAction(d, "I", 0, 0)).success).toBe(false);      // master is itself an instance
+        expect(dispatcher.dispatchAction(new CreateInstanceAction(d, "M", 0, 0, "a::b")).success).toBe(false);
+        expect(dispatcher.dispatchAction(new CreateInstanceAction(d, "M", NaN, 0)).success).toBe(false);
+        expect(dispatcher.canUndo()).toBe(false);
+    });
+
+    test("an instance round-trips through serialize/deserialize", () => {
+        const doc = docWithInstance();
+        const loaded = deserializeDocument(serializeDocument(doc));
+        expect(loaded.nodes.get("I")!.componentId).toBe("M");
+        expect(loaded.nodes.get("I")!.type).toBe("core.instance");
+        expect(compareDocuments(doc, loaded)).toBe(true);
+    });
+});
+
 // ─── Deferral: group RESIZE — pure scale math + eligibility ───
 describe("GroupTransform (group resize math)", () => {
     test("scaleGroup scales positions about the fixed corner and sizes proportionally", () => {
@@ -3447,13 +3662,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "21" that has no 20→21 step: the
+        // Pretending the build has moved to a schema "22" that has no 21→22 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→20), and then REFUSED at "20" — never re-stamped straight to the current
-        // schema. The error naming "20" (not "1") is the proof the chain actually ran.
+        // (1→2→…→21), and then REFUSED at "21" — never re-stamped straight to the current
+        // schema. The error naming "21" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 19→20 landed for number tokens.)
-        expect(() => migrateIfNeeded(legacy, "21")).toThrow('Migration not implemented for document schema "20"');
+        // time a real migration is added — here, when 20→21 landed for components.)
+        expect(() => migrateIfNeeded(legacy, "22")).toThrow('Migration not implemented for document schema "21"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
