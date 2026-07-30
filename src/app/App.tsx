@@ -13,6 +13,7 @@ import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
 import { UpdateNodeGeometryAction } from "../core/actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../core/actions/UpdateNodeStyleAction";
+import { SetActiveThemeAction } from "../core/actions/VariableActions";
 import { createEditorState, EditorState, zoomAt } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
@@ -310,6 +311,17 @@ export function App() {
                     />
                 )}
                 <div style={{ flex: 1 }} />
+                <button
+                    title="Switch the document's theme mode — $token colors re-resolve against the variable store (undoable, persisted)"
+                    onClick={() => {
+                        const doc = dispatcher.getDocument();
+                        dispatcher.dispatchAction(new SetActiveThemeAction(doc, doc.activeTheme === "light" ? "dark" : "light"));
+                        refresh();
+                    }}
+                    style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
+                >
+                    Theme: {dispatcher.getDocument().activeTheme === "light" ? "Light" : "Dark"}
+                </button>
                 <button
                     title="Switch the rendering backend (both draw the same display list)"
                     onClick={() => setBackend(b => (b === "svg" ? "canvas" : "svg"))}

@@ -619,10 +619,22 @@ rotated set scaled non-uniformly is a shear the transform model can't represent)
 
 ## Phase 5 — Variables & Design Tokens
 
-### Milestone 5 — Variables 🚧 (slice 1 landed: the store, schema 19)
+### Milestone 5 — Variables ✅* (all three slices landed; number/typography CONSUMPTION deferred)
 Global values: `Color.Primary`, `Spacing.Small`, `Radius.Medium`, `Typography.Body`.
 **Support:** themes · light/dark mode · variable references · token inheritance.
 (`VariableStore` and `Style.fill` token syntax `$color/primary` are already reserved.)
+
+**Close-out:** the four support pillars are all live — a typed, validated, undoable variable
+store (schema 19); light/dark **themes** with a persisted `activeTheme` and a toolbar toggle;
+**variable references** (`$token` in every color slot, resolved in the render model on both
+backends); **token inheritance** (alias chains through the active theme, cycle-safe). The `*`:
+`spacing`/`font` variables are definable, validated, migrated and resolvable
+(`resolveNumber`/`resolveVariable`), but no layout/text field CONSUMES them yet — wiring
+number tokens into `radius`/`gap`/`fontSize` retypes those fields (`number | string`) across
+the validators and the layout engine, a cross-cutting change deferred to the milestone that
+next touches those fields. Live-smoke-verified end-to-end: a seeded token document renders the
+resolved light value, the theme toggle re-resolves to the dark override (SVG attribute AND
+canvas pixel `#ff8800` at DPR 2.4), and undo reverts the switch.
 
 **Landed (slice 1 — the variable store; schema 18 → 19):** the reserved `variables` store is
 now LIVE and typed (`src/core/document/Variables.ts`): a `Variable` is `{ type: "color" |
@@ -650,11 +662,18 @@ safely (each component action builds its delta from the working document at exec
 restores store + theme together). Validation delegates to the shared `variableStoreError`
 (the edit path can never author what the loader rejects); deleting an aliased/referenced
 variable is allowed by design (dangling refs resolve to the fallback). `updatedNodeIds`
-stays empty — no node changes, the geometry dirty-tracker is untouched. Remaining slice:
-**(3)** renderer consumption (`$token` fills/strokes/shadow colors resolve per active theme
-on both backends) + a theme toggle in the app. Number/typography token CONSUMPTION by
-layout/text (spacing, radius, font) is defined-and-resolvable now but wired in a later
-milestone.
+stays empty — no node changes, the geometry dirty-tracker is untouched.
+
+**Landed (slice 3 — renderer consumption + theme UI; M5 CLOSE-OUT):** every COLOR slot in
+`buildRenderModel` (fill, stroke, `shadow.color`, the line's raw-first `stroke||fill`
+fallback) resolves `$token` references via `resolveColor(doc.variables, raw,
+doc.activeTheme)` — in the MODEL, so both backends agree by construction, presence checks
+stay on the raw style values (a token string is truthy), and the deduped SVG filter defs key
+on RESOLVED colors (two tokens resolving to one color share one `<filter>`). A broken
+reference renders the loud fallback magenta; the unknown-node-type debug fill stays literal.
+The toolbar gains a **Theme: Light/Dark** toggle dispatching `SetActiveThemeAction` — a
+normal undoable action, so a theme switch repaints through the ordinary dispatch → refresh
+path and undo restores the previous theme.
 
 ---
 

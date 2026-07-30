@@ -15,6 +15,7 @@ import { resolve } from "path";
 import { buildRenderModel, DisplayList, HANDLE_SIZE_PX, commandsToPathData, effectFilterId } from "./RenderModel";
 import { RendererState } from "./RendererState";
 import { createEmptyDocument, ProjectDocument, ReadonlyDocument } from "../core/document/Document";
+import { VARIABLE_FALLBACK_COLOR } from "../core/document/Variables";
 import { Node } from "../core/document/Node";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
 import { handleAtPoint, ROTATE_OFFSET_PX } from "../core/geometry/SelectionHandles";
@@ -213,6 +214,48 @@ describe("buildRenderModel — overlay", () => {
         const model = buildRenderModel(SIZE, doc, stateFor(doc, { selectedNodeIds: ["C", "R"] }));
         expect(model.overlay.filter(i => i.role === "handle").length).toBe(0); // not rotatable → no knob
         expect(model.overlay.some(i => i.role === "outline")).toBe(true);      // group box still drawn
+    });
+
+    test("$token colors resolve against the store under the ACTIVE theme (fill, stroke, shadow)", () => {
+        const doc = docWith({
+            type: "core.rectangle",
+            style: { fill: "$color/primary", stroke: "$color/edge", opacity: 1, shadow: { dx: 1, dy: 2, blur: 3, color: "$color/edge" } }
+        });
+        doc.variables = {
+            "color/primary": { type: "color", value: "#111111", modes: { dark: "#999999" } },
+            "color/edge": { type: "color", value: "$color/primary" } // alias chains through the theme
+        };
+        const light = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
+        expect(light.paint.fill).toBe("#111111");
+        expect(light.paint.stroke).toBe("#111111");         // alias resolved
+        expect(light.paint.shadow!.color).toBe("#111111");  // shadow color resolved too
+        doc.activeTheme = "dark";
+        const dark = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
+        expect(dark.paint.fill).toBe("#999999");            // theme switch re-resolves — no node changed
+        expect(dark.paint.stroke).toBe("#999999");
+        expect(dark.paint.shadow!.color).toBe("#999999");
+        // Defs key on the RESOLVED color: the def id must embed the resolved hex, not the token.
+        const model = buildRenderModel(SIZE, doc, stateFor(doc));
+        expect(model.defs.length).toBe(1);
+        expect(model.defs[0].shadow!.color).toBe("#999999");
+    });
+
+    test("a broken token renders the visible fallback; non-token colors pass through untouched", () => {
+        const doc = docWith({ type: "core.rectangle", style: { fill: "$color/missing", stroke: "#00ff00", opacity: 1 } });
+        const item = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
+        expect(item.paint.fill).toBe(VARIABLE_FALLBACK_COLOR); // dangling token → loud magenta
+        expect(item.paint.stroke).toBe("#00ff00");             // concrete color untouched
+    });
+
+    test("a line's stroke||fill fallback picks the RAW winner, then resolves it", () => {
+        const doc = docWith({ type: "core.line", geometry: { x: 0, y: 0, width: 100, height: 0 }, style: { fill: "$color/fill", stroke: "$color/stroke", opacity: 1 } });
+        doc.variables = {
+            "color/fill": { type: "color", value: "#0000ff" },
+            "color/stroke": { type: "color", value: "#ff0000" }
+        };
+        expect(buildRenderModel(SIZE, doc, stateFor(doc)).content[0].paint.stroke).toBe("#ff0000"); // stroke wins
+        doc.nodes.get("n1")!.style.stroke = ""; // empty-string stroke → falls back to the fill TOKEN
+        expect(buildRenderModel(SIZE, doc, stateFor(doc)).content[0].paint.stroke).toBe("#0000ff");
     });
 
     test("RenderModel composes no coordinates — its Matrix import is the Mat2D TYPE only (invariant, mechanically checked)", () => {

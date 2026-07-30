@@ -14,10 +14,17 @@
  * Positions come straight from `ComputedState` (`world`/`local`/`bounds`); the model
  * never composes coordinates. It reads shape params from `local.width/height`, places
  * by the pre-computed `world`, and outlines/handles from world-space `bounds`.
+ *
+ * Design tokens (M5): every COLOR slot (fill, stroke, shadow.color, the line's
+ * stroke||fill fallback) resolves `$token` references against `doc.variables` under
+ * `doc.activeTheme` HERE, in the model — so both backends agree, the deduped filter defs
+ * key on resolved colors, and a theme switch is just another frame. Broken references
+ * resolve to the visible fallback magenta; presence checks stay on the raw style values.
  */
 
 import { ReadonlyDocument } from "../core/document/Document";
 import { PathCommand, Shadow } from "../core/document/Node";
+import { resolveColor, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
@@ -241,6 +248,14 @@ function buildGrid(
  */
 function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number, visible: Box): DrawItem[] {
     const items: DrawItem[] = [];
+    // Design tokens (M5): every COLOR slot resolves "$token" references against the store
+    // under the document's active theme — right here in the model, so both backends agree
+    // and a theme switch repaints via the normal dispatch → refresh path. Presence checks
+    // below stay on the RAW style values (a token string is truthy); only the emitted color
+    // is resolved. A broken reference resolves to the visible fallback, never a throw.
+    const store = doc.variables as VariableStore;
+    const theme = doc.activeTheme;
+    const color = (raw: string): string => resolveColor(store, raw, theme);
 
     // Paint in computed draw order (scene-graph order), using resolved world rects.
     computed.order.forEach((id: string) => {
@@ -266,8 +281,10 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         // NOTHING — so a zero-extent box drops its effect (in the model, so both backends agree)
         // rather than vanishing. A shadow on a hairline needs a positive box (or a diagonal line).
         const hasArea = width > 0 && height > 0;
+        // The shadow color resolves here too, so `effectFilterId` (and the deduped defs) key on
+        // the RESOLVED color — two different tokens resolving to one color share one filter.
         const shadow: Shadow | null = (hasArea && sty.shadow)
-            ? { dx: sty.shadow.dx, dy: sty.shadow.dy, blur: sty.shadow.blur, color: sty.shadow.color }
+            ? { dx: sty.shadow.dx, dy: sty.shadow.dy, blur: sty.shadow.blur, color: color(sty.shadow.color) }
             : null;
         const blur: number | null = (hasArea && sty.blur) ? sty.blur : null;
 
@@ -277,9 +294,9 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         if (node.type === "core.rectangle") {
             shape = { kind: "rect", x, y, width, height };
             paint = {
-                fill: sty.fill,
+                fill: color(sty.fill),
                 opacity: sty.opacity, shadow, blur,
-                stroke: sty.stroke ? sty.stroke : null,
+                stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? 1 / z : null,
                 strokeDash: null,
                 radius: sty.radius ? sty.radius : null,
@@ -290,9 +307,9 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             // Fills its local box: centre + radii from the box (no corner radius).
             shape = { kind: "ellipse", cx: width / 2, cy: height / 2, rx: width / 2, ry: height / 2 };
             paint = {
-                fill: sty.fill,
+                fill: color(sty.fill),
                 opacity: sty.opacity, shadow, blur,
-                stroke: sty.stroke ? sty.stroke : null,
+                stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? 1 / z : null,
                 strokeDash: null,
                 radius: null,
@@ -309,7 +326,9 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 opacity: sty.opacity, shadow, blur,
                 // `||` not `??`: an empty-string stroke also falls back to `fill`, so a line
                 // is never invisible (a line's stroke IS its body, unlike a rect's border).
-                stroke: sty.stroke || sty.fill,
+                // The fallback picks the RAW winner first, THEN resolves — so a token stroke
+                // wins over a token fill exactly like concrete colors.
+                stroke: color(sty.stroke || sty.fill),
                 strokeWidth: 1 / z,
                 strokeDash: null,
                 radius: null,
@@ -319,7 +338,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         } else if (node.type === "core.text") {
             shape = { kind: "text", x, y, width, height, text: node.text ?? "Text", fontSize: sty.fontSize ?? 14 };
             paint = {
-                fill: sty.fill, opacity: sty.opacity, stroke: null, strokeWidth: null,
+                fill: color(sty.fill), opacity: sty.opacity, stroke: null, strokeWidth: null,
                 strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
             };
         } else if (node.type === "core.image") {
@@ -334,9 +353,9 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             // node's box keeps its selection/handles/culling. Filled like a rect (no radius).
             shape = { kind: "path", commands: node.path ?? [] };
             paint = {
-                fill: sty.fill,
+                fill: color(sty.fill),
                 opacity: sty.opacity, shadow, blur,
-                stroke: sty.stroke ? sty.stroke : null,
+                stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? 1 / z : null,
                 strokeDash: null,
                 radius: null,

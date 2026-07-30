@@ -331,7 +331,11 @@ chain, gesture is unsnapped (deferred).
 The renderer is a pure display-list builder plus a thin backend. `buildRenderModel`
 turns `(size, doc, state)` into a plain-data `DisplayList`; a backend transcribes it to
 the screen. Every draw decision lives in the model (unit-tested in the `node` env like
-the layout engine); the backend does no arithmetic.
+the layout engine); the backend does no arithmetic. Every COLOR slot (fill, stroke,
+shadow.color, the line's stroke||fill fallback) resolves `$token` references via
+`resolveColor(doc.variables, raw, doc.activeTheme)` IN the model (M5), so both backends
+agree, the deduped filter defs key on resolved colors, and a theme switch repaints
+through the normal dispatch path.
 
 ```ts
 interface RendererState {
