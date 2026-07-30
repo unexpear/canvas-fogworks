@@ -50,11 +50,17 @@ abstract class Action {
 
 The `"variables"` delta is DOCUMENT-level: it replaces the whole store + active theme
 atomically and travels under the reserved `DOCUMENT_DELTA_KEY` (`"__document__"`) since the
-delta map is keyed by node id. In a transaction the LAST variables delta wins — safe because
-each component action builds its delta from the *working* document at execute time, so a
-later `SetActiveThemeAction` already carries an earlier `SetVariableAction`'s store. These
-actions report an EMPTY `updatedNodeIds` (no node changed; the id set feeds the geometry
-dirty-tracker, which token edits never affect).
+delta map is keyed by node id. That id is reserved in NODE-id space too (`RESERVED_NODE_ID`,
+rejected by `AddNodeAction` and `Integrity`) so a real node can never collide with the
+sentinel, and `TransactionAction` excludes the sentinel from `updatedNodeIds`. In a
+transaction the LAST variables delta wins — safe because each component action builds its
+delta from the *working* document at execute time, so a later `SetActiveThemeAction` already
+carries an earlier `SetVariableAction`'s store. These actions report an EMPTY
+`updatedNodeIds` (no node changed; the id set feeds the geometry dirty-tracker, which token
+edits never affect). `SetVariableAction` pre-checks its KEY via the shared
+`variableKeyError` before building its candidate store — a reserved key like `"__proto__"`
+would be swallowed by the assignment itself (the prototype setter fires), invisible to
+store-level validation.
 
 `AddNodeAction`/`ResizeNodeAction`/`UpdateNodeGeometryAction` validate dimensions through the
 shared per-type `dimensionError` (so the edit and load paths cannot drift) — rect/ellipse/text/image
