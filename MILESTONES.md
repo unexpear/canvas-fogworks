@@ -23,7 +23,7 @@ M2  Layout Engine            ✅   flex(grow/shrink/wrap/align-content) + hug + 
       │
 M3  Renderer                 ✅   SVG renderer (shapes + culling + effects) + Canvas backend (tested); canvas wiring → M4
       │
-M4  Editor                   🚧*  pan/zoom + box-select + DOM-free handles + rotate + canvas wiring landed; guides remain
+M4  Editor                   ✅*  pan/zoom + box-select + DOM-free handles + rotate + canvas wiring + snapping/guides
       │
 M5  Variables & Tokens       ⬜
 M6  Components                ⬜
@@ -44,11 +44,11 @@ M17 Production Hardening      ⬜
 editor tools, and the Electron shell already exists (originally built as "Phase 1"),
 so functionality sits in M3/M4 territory while those milestones are still open.
 As of M1 it **does** consume `ComputedState` — the renderer reads world matrices and
-never composes coordinates itself — so M3/M4 are now "formalize + complete", not
-"re-derive". What was genuinely missing was scope, not plumbing: M3's scope has since landed
-(ellipses, lines, paths, the Canvas backend); M4 has **pan/zoom** and **box-select**, and
-still lacks a **rotate** editor affordance (now representable), DOM-free handle picking,
-canvas wiring, snapping and guides.
+never composes coordinates itself — so M3/M4 were "formalize + complete", not
+"re-derive". What was genuinely missing was scope, not plumbing, and it has since ALL landed:
+M3 (ellipses, lines, paths, effects, the Canvas backend) and M4 (pan/zoom, box-select, rotate,
+DOM-free handle picking, canvas wiring, snapping + smart guides) are both complete — with
+refinements deferred and listed in each milestone's close-out.
 
 ---
 
@@ -491,10 +491,17 @@ effects (multiple shadows, inner shadow, blend modes) are future scope.
 
 ## Phase 4 — Editor
 
-### Milestone 4 — Editor 🚧
+### Milestone 4 — Editor ✅ (all five planned slices landed; refinements deferred)
 **Viewport:** pan · zoom · infinite canvas. **Selection:** click · multi-select ·
 box select. **Manipulation:** drag · resize · rotate. **Guides:** snapping · alignment
 guides · smart guides · rulers.
+
+**Close-out:** slices 1–5 are done — pan/zoom, box-select, DOM-free resize/rotate handle picking, a live
+SVG/Canvas backend selector, and alignment snapping + smart guides. Deferred refinements (documented at each
+slice): resize-snapping and multi-select/group snapping + rotate (snapping is move-only, single top-level
+unrotated node); Escape-to-cancel-rotate; the canvas per-region hover cursor and text/image rasterization;
+rulers. The core editor loop is complete and every interaction is DOM-free, so it runs identically on both
+backends.
 
 Already present from earlier prototypes: click + shift-multi-select (DOM-free `hitTest`), drag (`MoveTool`),
 resize (`ToolController`, but DOM-`data-resize-handle`-based — the canvas-wiring blocker), delete, and
@@ -566,6 +573,17 @@ plus a NEW canvas gap the review found — **per-region hover cursor** (`paint.c
 doesn't switch the pointer on canvas (one element, no per-region cursor), though the handles still FUNCTION
 (DOM-free picking); wiring it needs a hover system the editor doesn't have yet. Next is **slice 5 — snapping /
 alignment guides**.
+
+**Landed (slice 5 — snapping + smart guides; M4 COMPLETE):** a pure `computeSnap(moving, targets, threshold)`
+(`src/core/geometry/Snapping.ts`) — each axis exposes three snap lines (min edge, centre, max edge); it returns
+the smallest in-threshold `{dx, dy}` that lands a moving line on a target line, plus the guide lines at every
+resulting alignment (spans merged across targets). `MoveTool` folds it into the drag for a SINGLE top-level,
+unrotated node (stored == world, so a world snap delta is also its stored delta): targets = other nodes' world
+bounds captured once at mouse-down (its own subtree excluded), snap applied to the pending AND the committed
+position, `EditorState.snapGuides` drawn by the renderer as thin world-space lines (`role: "guide"`). No schema
+change. Deferred: resize-snapping, multi-select/group snapping, nested/rotated moving nodes, and artboard/grid
+snapping (the pure `computeSnap` already generalises to any rects — only the tool wiring is scoped). This closes
+Milestone 4.
 
 ---
 

@@ -10,7 +10,13 @@ import { EditorState } from "../EditorState";
 import { Geometry } from "../../core/document/Node";
 import { selectionRoots } from "../../core/document/SceneGraph";
 import { isAbsolute, isLayoutContainer } from "../../core/geometry/LayoutEngine";
+import { computeGeometry } from "../../core/geometry/GeometryEngine";
+import { computeSnap } from "../../core/geometry/Snapping";
+import { Rect } from "../../core/geometry/Matrix";
 import { Tool } from "./ToolController";
+
+/** Alignment-snap budget in SCREEN pixels (converted to world by ÷ zoom). */
+const SNAP_THRESHOLD_PX = 6;
 
 export class MoveTool implements Tool {
     private dispatcher: ActionDispatcher;
@@ -20,6 +26,12 @@ export class MoveTool implements Tool {
     private startX = 0;
     private startY = 0;
     private nodeStartPositions: Map<string, { x: number; y: number }> = new Map();
+    // Alignment snapping applies to a SINGLE top-level, unrotated node (stored == world, so a
+    // world snap delta is also the stored delta). `snapTargets` = other nodes' world bounds,
+    // captured once at mouse-down (they don't move during the drag); null disables snapping.
+    private snapTargets: Rect[] | null = null;
+    private snapNodeId: string | null = null;
+    private snapSize: { width: number; height: number } = { width: 0, height: 0 };
 
     constructor(dispatcher: ActionDispatcher, editorState: EditorState, refresh: () => void) {
         this.dispatcher = dispatcher;
@@ -51,14 +63,76 @@ export class MoveTool implements Tool {
         this.editorState.isDragging = true;
         this.startX = e.clientX;
         this.startY = e.clientY;
+        this.captureSnapTargets(doc);
+    }
+
+    /**
+     * Enable alignment snapping only for the clean case: a SINGLE moving node that is top-level
+     * (parent === null) and unrotated/unscaled (no transform), so its world bounds equal its
+     * stored box and a world snap delta is also its stored delta. Targets = every OTHER node's
+     * world AABB (excluding the moving node's own subtree, which travels with it), captured now.
+     */
+    private captureSnapTargets(doc: ReturnType<ActionDispatcher["getDocument"]>): void {
+        this.snapTargets = null;
+        this.snapNodeId = null;
+        if (this.nodeStartPositions.size !== 1) return;
+        const id = [...this.nodeStartPositions.keys()][0];
+        const node = doc.nodes.get(id);
+        if (!node || node.parent !== null || node.transform) return;
+
+        // The moving subtree (this node + descendants) is excluded — it moves as one.
+        const subtree = new Set<string>();
+        const stack = [id];
+        while (stack.length) {
+            const nid = stack.pop()!;
+            subtree.add(nid);
+            doc.nodes.get(nid)?.children.forEach(c => stack.push(c));
+        }
+
+        const computed = computeGeometry(doc);
+        const movingBounds = computed.nodes.get(id)?.bounds;
+        if (!movingBounds) return;
+        const targets: Rect[] = [];
+        computed.nodes.forEach((c, nid) => {
+            const b = c.bounds;
+            if (!subtree.has(nid) && Number.isFinite(b.x) && Number.isFinite(b.y) && Number.isFinite(b.width) && Number.isFinite(b.height)) {
+                targets.push(b);
+            }
+        });
+        this.snapTargets = targets;
+        this.snapNodeId = id;
+        // Computed size (a hug container's rendered size can differ from its stored width/height).
+        this.snapSize = { width: movingBounds.width, height: movingBounds.height };
+    }
+
+    /**
+     * Fold alignment snapping into a raw drag delta. Returns the (possibly adjusted) delta and
+     * the guides to show. A no-op (returns the delta unchanged, no guides) unless this drag
+     * enabled snapping (single top-level unrotated node) — see `captureSnapTargets`.
+     */
+    private snapDelta(dx: number, dy: number): { dx: number; dy: number; guides: EditorState["snapGuides"] } {
+        if (!this.snapTargets || this.snapNodeId === null) return { dx, dy, guides: null };
+        // A pointer that hasn't moved is a CLICK, not a drag — never snap it, or a click on a
+        // node that merely sits within threshold of an alignment would nudge it (and add an undo).
+        if (dx === 0 && dy === 0) return { dx: 0, dy: 0, guides: null };
+        const start = this.nodeStartPositions.get(this.snapNodeId);
+        if (!start) return { dx, dy, guides: null };
+        const zoom = Math.max(0.01, this.editorState.viewport.zoom);
+        // start.x/y == the node's world bounds origin (top-level, unrotated), so a world snap
+        // delta is also its stored delta.
+        const moving = { x: start.x + dx, y: start.y + dy, width: this.snapSize.width, height: this.snapSize.height };
+        const snap = computeSnap(moving, this.snapTargets, SNAP_THRESHOLD_PX / zoom);
+        return { dx: dx + snap.dx, dy: dy + snap.dy, guides: snap.guides.length > 0 ? snap.guides : null };
     }
 
     onMouseMove(e: MouseEvent): void {
         if (!this.isDragging) return;
 
         const zoom = Math.max(0.01, this.editorState.viewport.zoom);
-        const dx = (e.clientX - this.startX) / zoom;
-        const dy = (e.clientY - this.startY) / zoom;
+        const rawDx = (e.clientX - this.startX) / zoom;
+        const rawDy = (e.clientY - this.startY) / zoom;
+        // Fold in alignment snapping (a no-op unless this drag enabled it) and get the guides.
+        const { dx, dy, guides } = this.snapDelta(rawDx, rawDy);
 
         // Preview as PENDING PATCHES to stored (parent-relative) geometry. These
         // are composed by computeGeometry like any other geometry; the
@@ -79,6 +153,7 @@ export class MoveTool implements Tool {
             this.endDrag(); // every tracked node vanished — abort cleanly
         } else {
             this.editorState.pendingGeometry = overrides;
+            this.editorState.snapGuides = guides;
         }
         this.refresh();
     }
@@ -87,8 +162,10 @@ export class MoveTool implements Tool {
         if (!this.isDragging) return;
 
         const zoom = Math.max(0.01, this.editorState.viewport.zoom);
-        const dx = (e.clientX - this.startX) / zoom;
-        const dy = (e.clientY - this.startY) / zoom;
+        const rawDx = (e.clientX - this.startX) / zoom;
+        const rawDy = (e.clientY - this.startY) / zoom;
+        // Commit the SNAPPED position, so the drop lands exactly where the preview showed it.
+        const { dx, dy } = this.snapDelta(rawDx, rawDy);
 
         const doc = this.dispatcher.getDocument();
         const actions: UpdateNodeGeometryAction[] = [];
@@ -120,6 +197,9 @@ export class MoveTool implements Tool {
         this.isDragging = false;
         this.editorState.isDragging = false;
         this.editorState.pendingGeometry = null;
+        this.editorState.snapGuides = null;
         this.nodeStartPositions = new Map();
+        this.snapTargets = null;
+        this.snapNodeId = null;
     }
 }

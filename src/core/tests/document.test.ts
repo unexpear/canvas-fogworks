@@ -22,6 +22,7 @@ import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, 
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
 import { selectionHandles, handleAtPoint, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
+import { computeSnap } from "../geometry/Snapping";
 import { MoveTool } from "../../editor/tools/MoveTool";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
@@ -1216,6 +1217,142 @@ describe("ToolController rotate", () => {
         dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "A")); // node vanishes
         tc.onMouseMove(md(60, 0), rect); // abort path: rotateNodeId no longer in the doc
         expect(es.isDragging).toBe(false); // not left stuck on "grabbing"
+    });
+});
+
+// ─── M4: alignment snapping — the pure geometry behind smart guides ───
+describe("computeSnap", () => {
+    const A = { x: 100, y: 100, width: 50, height: 50 }; // X lines 100/125/150, Y lines 100/125/150
+
+    test("snaps a near left edge and emits a vertical guide spanning both nodes", () => {
+        // moving left 97 is within 6 of A's left 100 → dx +3; far in Y → dy 0.
+        const r = computeSnap({ x: 97, y: 300, width: 20, height: 20 }, [A], 6);
+        expect([r.dx, r.dy]).toEqual([3, 0]);
+        expect(r.guides).toEqual([{ axis: "x", pos: 100, start: 100, end: 320 }]);
+    });
+
+    test("snaps both centres and emits a vertical + a horizontal guide", () => {
+        // moving centre (124,124) within 6 of A's centre (125,125) → dx +1, dy +1.
+        const r = computeSnap({ x: 112, y: 112, width: 24, height: 24 }, [A], 6);
+        expect([r.dx, r.dy]).toEqual([1, 1]);
+        expect(r.guides).toEqual([
+            { axis: "x", pos: 125, start: 100, end: 150 },
+            { axis: "y", pos: 125, start: 100, end: 150 }
+        ]);
+    });
+
+    test("no alignment within threshold → no move, no guides", () => {
+        const r = computeSnap({ x: 200, y: 300, width: 30, height: 30 }, [A], 6);
+        expect([r.dx, r.dy, r.guides.length]).toEqual([0, 0, 0]);
+    });
+
+    test("chooses the CLOSEST alignment among several candidates", () => {
+        // moving X 96/111/126: left→left is +4, but moving-right(126)→A-centre(125) is −1 (closer).
+        const r = computeSnap({ x: 96, y: 300, width: 30, height: 20 }, [A], 6);
+        expect(r.dx).toBe(-1); // the −1 candidate wins over +4
+    });
+
+    test("empty targets → zero snap, no guides", () => {
+        expect(computeSnap(A, [], 6)).toEqual({ dx: 0, dy: 0, guides: [] });
+    });
+
+    test("merges guides from multiple targets aligned at the same coordinate", () => {
+        const B = { x: 100, y: 300, width: 50, height: 50 }; // same left edge (100) as A
+        const r = computeSnap({ x: 97, y: 180, width: 20, height: 20 }, [A, B], 6);
+        expect(r.dx).toBe(3);
+        // ONE merged vertical guide at x=100, spanning A, B, and the moving node in y.
+        expect(r.guides).toEqual([{ axis: "x", pos: 100, start: 100, end: 350 }]);
+    });
+});
+
+// ─── M4: MoveTool folds snapping into the drag (single top-level node) ───
+describe("MoveTool snapping", () => {
+    const md = (x: number, y: number) => ({ clientX: x, clientY: y } as unknown as MouseEvent);
+
+    function twoNodeDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number, y: number, w: number, h: number) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: w, height: h }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        mk("A", 0, 0, 50, 50); mk("B", 100, 100, 60, 60);
+        doc.rootNodeUuids = ["A", "B"];
+        return doc;
+    }
+
+    test("a single top-level node snaps its edge to another and shows a guide", () => {
+        const doc = twoNodeDoc();
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        tool.onMouseDown(md(0, 0));
+        tool.onMouseMove(md(97, 0)); // drag A's left to 97 → within 6 of B's left (100) → snaps to 100
+        expect(es.pendingGeometry!.get("A")).toEqual({ x: 100, y: 0 }); // 97 snapped to 100
+        expect(es.snapGuides && es.snapGuides.length).toBeGreaterThan(0);
+        tool.onMouseUp(md(97, 0));
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry.x).toBe(100); // committed at the snapped x
+        expect(es.snapGuides).toBeNull(); // cleared on release
+    });
+
+    test("snaps on the Y axis too (a downward drag aligns top edges)", () => {
+        const doc = twoNodeDoc(); // A{0,0,50,50}, B{100,100,60,60}
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        tool.onMouseDown(md(0, 0));
+        tool.onMouseMove(md(0, 97)); // A's top to y=97 → within 6 of B's top (100) → snaps to 100
+        expect(es.pendingGeometry!.get("A")).toEqual({ x: 0, y: 100 }); // 97 snapped to 100 on Y
+    });
+
+    test("a zero-movement click does NOT snap or commit (a click is not a drag)", () => {
+        const doc = twoNodeDoc();
+        doc.nodes.get("A")!.geometry.x = 97; // A already sits within 6 of B's left edge (100)
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        tool.onMouseDown(md(0, 0));
+        tool.onMouseUp(md(0, 0)); // no movement
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry.x).toBe(97); // NOT nudged to 100
+        expect(dispatcher.canUndo()).toBe(false); // no action committed
+    });
+
+    test("a nested (non-top-level) node does not snap", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 0, y: 0, width: 200, height: 200 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 97, y: 10, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("T", { id: "T", type: "core.rectangle", parent: null, children: [], geometry: { x: 100, y: 500, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P", "T"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["C"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        tool.onMouseDown(md(0, 0));
+        tool.onMouseMove(md(1, 0)); // a real drag, but C is nested → snapping disabled
+        expect(es.pendingGeometry!.get("C")).toEqual({ x: 98, y: 10 }); // raw +1, NOT snapped to any edge
+        expect(es.snapGuides).toBeNull();
+    });
+
+    test("a dragged parent does not snap to its OWN child (the moving subtree is excluded)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 0, y: 0, width: 200, height: 200 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 10, y: 10, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} }); // world left 10
+        doc.nodes.set("T", { id: "T", type: "core.rectangle", parent: null, children: [], geometry: { x: 300, y: 500, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P", "T"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["P"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        tool.onMouseDown(md(0, 0));
+        tool.onMouseMove(md(5, 0)); // P's left to 5 — within 6 of its child C's left (10), but C moves WITH P
+        expect(es.pendingGeometry!.get("P")).toEqual({ x: 5, y: 0 }); // NOT snapped to the child's 10
+        expect(es.snapGuides).toBeNull();
+    });
+
+    test("a multi-node drag does not snap (guides stay null)", () => {
+        const doc = twoNodeDoc();
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        tool.onMouseDown(md(0, 0));
+        tool.onMouseMove(md(97, 0));
+        expect(es.pendingGeometry!.get("A")).toEqual({ x: 97, y: 0 }); // raw delta, NOT snapped
+        expect(es.snapGuides).toBeNull();
     });
 });
 

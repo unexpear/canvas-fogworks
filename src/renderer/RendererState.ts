@@ -7,6 +7,7 @@
  */
 
 import { ComputedState } from "../core/geometry/GeometryEngine";
+import { SnapGuide } from "../core/geometry/Snapping";
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -16,6 +17,8 @@ export interface RendererState {
     previewRect?: Rect | null;
     /** Box-select marquee in world coordinates (drawn as an overlay); absent when not dragging. */
     marqueeRect?: Rect | null;
+    /** Alignment (smart) guides in world coordinates, drawn while a drag snaps; absent otherwise. */
+    snapGuides?: SnapGuide[] | null;
     /**
      * Resolved world geometry + draw order. The renderer reads ONLY this for
      * positions — it never composes coordinates itself.

@@ -59,6 +59,11 @@ interface SelectionHandle { nodeId: string; handle: HandleId; cx: number; cy: nu
 function selectionHandles(s: ComputedState, selectedNodeIds: readonly string[], zoom: number): SelectionHandle[]; // 4 corners + rotate per selected node
 function handleAtPoint(s: ComputedState, selectedNodeIds: readonly string[], x: number, y: number, zoom: number): SelectionHandle | null; // handle under a world point; back-to-front (rotate beats a grazed corner)
 
+// geometry/Snapping.ts — DOM-free alignment snapping (M4 smart guides), pure like the above.
+interface SnapGuide { axis: "x" | "y"; pos: number; start: number; end: number } // "x"=vertical line at world x=pos; span on the perpendicular axis
+interface SnapResult { dx: number; dy: number; guides: SnapGuide[] }
+function computeSnap(moving: Rect, targets: readonly Rect[], threshold: number): SnapResult; // snap moving's edges/centre onto a target's within threshold (WORLD units); guides at each alignment
+
 // geometry/LayoutEngine.ts — Milestone 2 core: auto-layout containers.
 // Runs INSIDE computeGeometry; a container's children get a computed local rect.
 function layoutChildren(                          // pure flex-stack math (multi-line when wrap)
@@ -257,6 +262,9 @@ Actions and dispatch them; they mutate only `EditorState`, never the document.
 (`EditorState.marqueeRect`) and, on release, selects `nodesInRect` (shift = additive); a
 plain click with no drag deselects. Picking is world-space (`hitTest`/`nodesInRect`), never
 the DOM, so selection works under any renderer backend.
+`MoveTool` folds `computeSnap` into the drag for a SINGLE top-level, unrotated node (stored ==
+world), snapping its edges/centre onto other nodes' and writing `EditorState.snapGuides` for the
+renderer; a multi-node/nested/rotated drag is unsnapped (deferred).
 
 ## Renderer (`renderer/`)
 

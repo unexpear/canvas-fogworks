@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend. Suites: `src/core/tests/document.test.ts` (306) + `src/renderer/RenderModel.test.ts` (59) + `src/renderer/emitCanvas.test.ts` (20) = 385 tests.
+> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides. Suites: `src/core/tests/document.test.ts` (318) + `src/renderer/RenderModel.test.ts` (60) + `src/renderer/emitCanvas.test.ts` (20) = 398 tests.
 
 ## Philosophy
 
@@ -22,7 +22,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 385 tests
+npm test                                   # jest (ts-jest), 398 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -33,7 +33,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (385 tests)
+## What is covered (398 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -299,9 +299,10 @@ test that was never seen to fail proves nothing.
   is node-tested with fake events — the viewport math (`panBy`/`zoomAt`/`screenToWorld`),
   the `ToolController` pan-mode intercept, its **DOM-free corner-resize AND rotate** (handle
   picked by `handleAtPoint`; resize drives geometry, rotate spins about the AABB centre and
-  live-commits a coalesced transform = one undo per continuous drag), and the `SelectTool` marquee (drag →
-  `nodesInRect`, click-to-select, shift-additive). Adding jsdom-based emitter/tool tests is
-  future work.
+  live-commits a coalesced transform = one undo per continuous drag), the `SelectTool` marquee (drag →
+  `nodesInRect`, click-to-select, shift-additive), and `MoveTool` **alignment snapping** (`computeSnap`
+  edge/centre snap + merged guides, and the drag folding it in for a single top-level node). Adding
+  jsdom-based emitter/tool tests is future work.
 - **Electron main/preload** IPC is not unit-tested (thin, and requires an Electron host).
   The Open → edit → Ctrl+S round-trip in particular is only manually verified.
 - `applyMutationsToDocument`'s `text` / `src` / `name` branches have no producing Action

@@ -4,6 +4,7 @@
  */
 
 import { Geometry } from "../core/document/Node";
+import { SnapGuide } from "../core/geometry/Snapping";
 
 export interface EditorState {
     selectedNodeIds: string[];
@@ -19,6 +20,11 @@ export interface EditorState {
      * never persisted. Non-null only while a marquee drag is in flight.
      */
     marqueeRect: { x: number; y: number; width: number; height: number } | null;
+    /**
+     * Ephemeral alignment (smart) guides in WORLD coordinates, drawn by the renderer while a
+     * drag snaps the moving node's edges/centre onto another node's; never persisted.
+     */
+    snapGuides: SnapGuide[] | null;
     /**
      * Ephemeral per-node patches to STORED (parent-relative) geometry, used to
      * preview a move/resize drag WITHOUT mutating the document. These are fed
@@ -102,6 +108,7 @@ export function createEditorState(): EditorState {
         isDragging: false,
         previewRect: null,
         marqueeRect: null,
+        snapGuides: null,
         pendingGeometry: null,
         viewport: { x: 0, y: 0, zoom: 1 }
     };

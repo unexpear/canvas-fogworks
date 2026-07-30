@@ -169,6 +169,7 @@ export function App() {
                 hoveredNodeId: es.hoveredNodeId,
                 previewRect: es.previewRect,
                 marqueeRect: es.marqueeRect,
+                snapGuides: es.snapGuides,
                 computed,
                 viewport: es.viewport
             };

@@ -125,7 +125,7 @@ export function effectFilterId(shadow: Shadow | null, blur: number | null): stri
     return id;
 }
 
-export type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview" | "marquee";
+export type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview" | "marquee" | "guide";
 
 /** One resolved primitive: a shape, its paint, its world placement, and hit-test tags. */
 export interface DrawItem {
@@ -427,6 +427,26 @@ function buildOverlay(state: RendererState, z: number): DrawItem[] {
             role: "preview"
         });
     }
+
+    // Alignment (smart) guides — thin world-space lines where the dragged node aligns with
+    // another. Emitted AFTER the handles (drawn on top) so a handle never hides a guide, and
+    // only for finite coordinates (never emit a NaN line — matches the marquee/preview guards).
+    (state.snapGuides ?? []).forEach(g => {
+        if (!Number.isFinite(g.pos) || !Number.isFinite(g.start) || !Number.isFinite(g.end)) return;
+        const shape: Shape = g.axis === "x"
+            ? { kind: "line", x1: g.pos, y1: g.start, x2: g.pos, y2: g.end }
+            : { kind: "line", x1: g.start, y1: g.pos, x2: g.end, y2: g.pos };
+        items.push({
+            shape,
+            paint: {
+                fill: null, opacity: null, stroke: "#ff2d9b", strokeWidth: 1 / z,
+                strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
+            },
+            world: null,
+            nodeId: null,
+            role: "guide"
+        });
+    });
 
     // Box-select marquee (world-space; drawn once the drag has positive extent). Dropping
     // zero-area rects matches the preview emitter and keeps a degenerate box (e.g. a strict

@@ -238,6 +238,23 @@ describe("buildRenderModel — overlay", () => {
         expect(count({ marqueeRect: { x: 0, y: 0, width: 0, height: 20 } })).toBe(0);  // zero-area → dropped (like preview)
         expect(count({ marqueeRect: { x: NaN, y: 0, width: 10, height: 10 } })).toBe(0); // non-finite → dropped, never NaN attrs
     });
+
+    test("snap guides render as world-space lines (vertical for axis x, horizontal for axis y)", () => {
+        const doc = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1 } });
+        const model = buildRenderModel(SIZE, doc, stateFor(doc, {
+            snapGuides: [{ axis: "x", pos: 100, start: 50, end: 200 }, { axis: "y", pos: 75, start: 10, end: 300 }]
+        }));
+        const guides = model.overlay.filter(i => i.role === "guide");
+        expect(guides.length).toBe(2);
+        expect(guides[0].shape).toEqual({ kind: "line", x1: 100, y1: 50, x2: 100, y2: 200 }); // vertical at x=100
+        expect(guides[1].shape).toEqual({ kind: "line", x1: 10, y1: 75, x2: 300, y2: 75 });   // horizontal at y=75
+        expect(guides[0].paint).toMatchObject({ stroke: "#ff2d9b", pointerEvents: false, fill: null });
+        expect(guides[0].world).toBeNull();
+        expect(buildRenderModel(SIZE, doc, stateFor(doc)).overlay.filter(i => i.role === "guide").length).toBe(0);
+        // A non-finite guide is dropped (never emit a NaN line) — matches the marquee/preview guards.
+        expect(buildRenderModel(SIZE, doc, stateFor(doc, { snapGuides: [{ axis: "x", pos: NaN, start: 0, end: 10 }] }))
+            .overlay.filter(i => i.role === "guide").length).toBe(0);
+    });
 });
 
 // ─── Grid ────────────────────────────────────────────────────────────────────
