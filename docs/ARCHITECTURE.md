@@ -1,7 +1,7 @@
 # Architecture
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer -->
-<!-- re-read 2026-07-30 after the deferral review fixes (0dfd32e): accurate at this doc's altitude -->
+<!-- re-read 2026-07-30 after the M6 component-instance fixes (fb80157): accurate at this doc's altitude -->
 
 
 > 🔒 Frozen contract · schema v21 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
@@ -103,6 +103,11 @@ Document → GeometryEngine ─(runs)→ LayoutEngine → ComputedState → Rend
                  ▲
                  └── pending drag patches (previews are an INPUT)
 ```
+
+`computeGeometry` first resolves **component instances** (M6): the pure `expandInstances`
+materializes each instance's master subtree as virtual children, so everything below this
+point — layout, transforms, culling, picking, both backends — operates on an ordinary tree.
+The renderer resolves node data through the same expansion, so the two never disagree.
 
 `computeGeometry(doc, pending?, previous?, dirty?)`
 (`src/core/geometry/GeometryEngine.ts`) resolves parent-relative stored intent into a
