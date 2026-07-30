@@ -233,6 +233,27 @@ describe("emitCanvas — shapes", () => {
         expect(ops(b)).toContain("clip"); // overflow is cropped by the box clip, not dropped
     });
 
+    test("ALL whitespace (newlines, tabs, runs) collapses and breaks — matching the HTML backend", () => {
+        // "aaaa\nbbbb\tcccc" with box 100 (10px/char): words [aaaa,bbbb,cccc] exactly like
+        // spaces — a \n inside a "word" would have made one overlong unwrapped line.
+        const doc = docWith({
+            type: "core.text", text: "aaaa\nbbbb\tcccc  dddd",
+            geometry: { x: 0, y: 0, width: 100, height: 200 },
+            style: { fill: "#111", opacity: 1, fontSize: 10 }
+        });
+        const b = bracket(run(doc).calls, "fillText");
+        expect(b.filter(c => c.op === "fillText").map(c => c.args)).toEqual([
+            ["aaaa bbbb", 0, 0],  // \n collapsed to a single-space separator (90px fits)
+            ["cccc dddd", 0, 12]  // \t and the double space likewise
+        ]);
+    });
+
+    test("empty / whitespace-only text emits ONE empty fillText (draws nothing, never throws)", () => {
+        const doc = docWith({ type: "core.text", text: "   ", geometry: { x: 0, y: 0, width: 100, height: 50 }, style: { fill: "#111", opacity: 1, fontSize: 10 } });
+        const b = bracket(run(doc).calls, "fillText");
+        expect(b.filter(c => c.op === "fillText").map(c => c.args)).toEqual([["", 0, 0]]);
+    });
+
     test("a text STARTING with an over-wide word emits no empty first line", () => {
         // The first word arrives with line == "" — without the first-word-stays guard the wrap
         // would push an empty line first (fillText("") at y 0 and everything shifted down).

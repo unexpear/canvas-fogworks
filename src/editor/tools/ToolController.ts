@@ -414,9 +414,13 @@ export class ToolController {
 
     /**
      * Scale factors + the FIXED corner for the current drag: the dragged corner follows the
-     * pointer, the opposite corner stays put, and the group extent clamps at 1 world unit per
-     * axis — no flip (mirroring member positions while their content stays unmirrored would
-     * misrepresent the gesture; the single-node resize CAN flip because one box has no layout).
+     * pointer, the opposite corner stays put, and the group extent clamps at `min(1 world unit,
+     * the STARTING extent)` per axis — no flip (mirroring member positions while their content
+     * stays unmirrored would misrepresent the gesture; the single-node resize CAN flip because
+     * one box has no layout). The floor is capped at the starting extent so a SUB-unit group
+     * (two lines 0.5 apart) isn't force-grown to 1 by a drag on the other axis; a ZERO-extent
+     * axis (a group of collinear zero-height lines) locks at s=1 — dividing by it would make
+     * Infinity, NaN out the whole preview, and silently void the commit (review-confirmed).
      */
     private groupScaleFactors(dx: number, dy: number): { fixedX: number; fixedY: number; sx: number; sy: number } {
         const b = this.groupResizeBox;
@@ -427,9 +431,13 @@ export class ToolController {
         const fixedY = north ? b.y + b.height : b.y;
         const movingX = (west ? b.x : b.x + b.width) + dx;
         const movingY = (north ? b.y : b.y + b.height) + dy;
-        const newW = Math.max(1, west ? fixedX - movingX : movingX - fixedX);
-        const newH = Math.max(1, north ? fixedY - movingY : movingY - fixedY);
-        return { fixedX, fixedY, sx: newW / b.width, sy: newH / b.height };
+        const newW = Math.max(Math.min(1, b.width), west ? fixedX - movingX : movingX - fixedX);
+        const newH = Math.max(Math.min(1, b.height), north ? fixedY - movingY : movingY - fixedY);
+        return {
+            fixedX, fixedY,
+            sx: b.width > 0 ? newW / b.width : 1,   // degenerate axis → locked, the other still scales
+            sy: b.height > 0 ? newH / b.height : 1
+        };
     }
 
     private resetGroupResize(): void {

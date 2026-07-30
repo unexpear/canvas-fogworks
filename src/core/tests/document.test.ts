@@ -807,6 +807,7 @@ describe("variableStoreError / variableError", () => {
     test("radius/fontSize accept a $token or the old number rules — arbitrary strings rejected (schema 20)", () => {
         // Numbers: the pre-20 range rules hold.
         expect(styleError({ radius: 4 })).toBeNull();
+        expect(styleError({ radius: 0 })).toBeNull(); // zero is a legal (no-op) radius
         expect(styleError({ radius: -1 })).toMatch("radius");
         expect(styleError({ fontSize: 14 })).toBeNull();
         expect(styleError({ fontSize: 0 })).toMatch("fontSize");
@@ -1936,6 +1937,54 @@ describe("ToolController group resize", () => {
         tc.onMouseUp(md(250, 250));
         expect(JSON.stringify(dispatcher.getDocument().nodes.get("B")!.geometry)).toBe(before);
         expect(dispatcher.canUndo()).toBe(false);
+    });
+
+    test("a ZERO-extent union axis locks at s=1 — the other axis still scales and COMMITS (no NaN)", () => {
+        // Two horizontal lines at the same y: union height 0. Without the guard, sy = x/0 =
+        // Infinity → NaN preview → every commit action fails validation → silent no-op drag.
+        const doc = createEmptyDocument();
+        const mkLine = (id: string, x: number) => doc.nodes.set(id, { id, type: "core.line", parent: null, children: [], geometry: { x, y: 100, width: 100, height: 0 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        mkLine("L1", 0); mkLine("L2", 150); // union {0,100,250,0}
+        doc.rootNodeUuids = ["L1", "L2"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["L1", "L2"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        tc.onMouseDown(md(250, 100), rect);  // the degenerate box's SE corner
+        tc.onMouseMove(md(375, 100), rect);  // stretch horizontally: extent 250→375 → sx=1.5
+        tc.onMouseUp(md(375, 100));
+        expect(geo(dispatcher, "L1")).toEqual({ x: 0, y: 100, width: 150, height: 0 });   // y/height LOCKED, x scaled
+        expect(geo(dispatcher, "L2")).toEqual({ x: 225, y: 100, width: 150, height: 0 }); // 150·1.5
+        expect(dispatcher.canUndo()).toBe(true); // the commit actually happened
+    });
+
+    test("a SUB-unit union axis is not force-grown by a drag on the OTHER axis", () => {
+        // Two vertical lines 0.5 apart: union width 0.5. The old absolute-1 floor made
+        // sx = 1/0.5 = 2 on a pure-vertical drag — unrequested horizontal growth that committed.
+        const doc = createEmptyDocument();
+        const mkV = (id: string, x: number) => doc.nodes.set(id, { id, type: "core.line", parent: null, children: [], geometry: { x, y: 0, width: 0, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        mkV("V1", 10); mkV("V2", 10.5); // union {10,0,0.5,100}
+        doc.rootNodeUuids = ["V1", "V2"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["V1", "V2"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        tc.onMouseDown(md(10.5, 100), rect); // a bottom group corner (sw/se overlap within the grab square)
+        tc.onMouseMove(md(10.5, 150), rect); // pure vertical drag: heights 100→150
+        tc.onMouseUp(md(10.5, 150));
+        // BOTH x positions untouched — assert the MOVING member too (the fixed-corner one is
+        // trivially unchanged; a survived mutant taught that lesson).
+        expect(geo(dispatcher, "V1").x).toBe(10);
+        expect(geo(dispatcher, "V2").x).toBe(10.5);
+        expect(geo(dispatcher, "V1").height).toBe(150);
+        expect(geo(dispatcher, "V2").height).toBe(150);
+    });
+
+    test("idle hover over a GROUP corner shows its resize cursor (press/hover parity)", () => {
+        const { es, tc } = harness();
+        const hover = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 0, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        tc.onMouseMove(hover(150, 150), rect); // the group SE corner
+        expect(es.hoverCursor).toBe("nwse-resize");
+        tc.onMouseMove(hover(150, 0), rect);   // NE corner
+        expect(es.hoverCursor).toBe("nesw-resize");
     });
 
     test("a NESTED eligible root scales in world space (stored maps 1:1)", () => {

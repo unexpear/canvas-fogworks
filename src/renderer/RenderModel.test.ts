@@ -278,11 +278,18 @@ describe("buildRenderModel — overlay", () => {
         expect(buildRenderModel(SIZE, doc, stateFor(doc)).content[0].paint.radius).toBeNull(); // broken → no radius
         doc.nodes.get("n1")!.style.radius = "$spacing/negative";
         expect(buildRenderModel(SIZE, doc, stateFor(doc)).content[0].paint.radius).toBeNull(); // out of range → no radius
+        // A CONCRETE radius of 0 still means "no corner radius" (the pre-20 truthiness).
+        doc.nodes.get("n1")!.style.radius = 0;
+        expect(buildRenderModel(SIZE, doc, stateFor(doc)).content[0].paint.radius).toBeNull();
         // fontSize: resolves; broken token → the 14 default (never NaN into the backend).
         const t = docWith({ type: "core.text", text: "x", style: { fill: "#fff", opacity: 1, fontSize: "$type/body" } });
         t.variables = doc.variables;
         expect((buildRenderModel(SIZE, t, stateFor(t)).content[0].shape as { fontSize: number }).fontSize).toBe(18);
         t.nodes.get("n1")!.style.fontSize = "$missing";
+        expect((buildRenderModel(SIZE, t, stateFor(t)).content[0].shape as { fontSize: number }).fontSize).toBe(14);
+        // A NEGATIVE-resolved fontSize token (a legal spacing variable) also falls back to 14 —
+        // a negative font would emit "font: -5px" garbage into the backend.
+        t.nodes.get("n1")!.style.fontSize = "$spacing/negative";
         expect((buildRenderModel(SIZE, t, stateFor(t)).content[0].shape as { fontSize: number }).fontSize).toBe(14);
     });
 

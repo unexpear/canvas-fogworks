@@ -78,13 +78,18 @@ function unreachable(x: never): never {
 
 /**
  * Greedy word wrap against `maxWidth` using the context's CURRENT font (callers set `font`
- * first). CSS-`normal` semantics: break between words only; a single word wider than the box
- * gets its own line and overflows (the clip crops it) rather than being split mid-word; the
- * first word of a line always stays (a line is never empty) — the same first-item-always-fits
- * rule `breakFlexLines` uses. Empty text → one empty line (fillText draws nothing).
+ * first). CSS-`normal` semantics, matching the SVG backend's `<foreignObject>` div: ALL
+ * whitespace (spaces, tabs, newlines, runs thereof) collapses to single-space separators and
+ * is a break opportunity — splitting on `" "` alone would keep a `\n` INSIDE a "word" (canvas
+ * renders it as a space on one overlong line while HTML wraps there; review-confirmed
+ * divergence). Break between words only; a single word wider than the box gets its own line
+ * and overflows (the clip crops it) rather than being split mid-word; the first word of a
+ * line always stays (a line is never empty) — the same first-item-always-fits rule
+ * `breakFlexLines` uses. Empty/whitespace-only text → one empty line (fillText draws nothing).
  */
 function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-    const words = text.split(" ");
+    const words = text.split(/\s+/).filter(w => w.length > 0); // collapse runs, drop leading/trailing
+    if (words.length === 0) return [""];
     const lines: string[] = [];
     let line = "";
     for (const word of words) {
