@@ -24,7 +24,7 @@
 
 import { ReadonlyDocument } from "../core/document/Document";
 import { PathCommand, Shadow } from "../core/document/Node";
-import { resolveColor, VariableStore } from "../core/document/Variables";
+import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
@@ -256,6 +256,20 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
     const store = doc.variables as VariableStore;
     const theme = doc.activeTheme;
     const color = (raw: string): string => resolveColor(store, raw, theme);
+    // NUMBER slots (schema 20): radius/fontSize may be "$token" strings. The RESOLVED value is
+    // range-checked here (the store only guarantees a finite number — a negative "spacing" is a
+    // legal variable but an illegal radius): out-of-range/broken → the slot's fallback (radius:
+    // none; fontSize: the 14 default) — visible-but-harmless, never a throw into the backend.
+    const radiusOf = (raw: number | string | undefined): number | null => {
+        if (raw === undefined) return null;
+        const r = typeof raw === "number" ? raw : resolveNumber(store, raw, theme);
+        return r !== null && r > 0 ? r : null; // 0/negative/broken → no corner radius (matches the old `sty.radius ? …` truthiness)
+    };
+    const fontSizeOf = (raw: number | string | undefined): number => {
+        if (raw === undefined) return 14;
+        const r = typeof raw === "number" ? raw : resolveNumber(store, raw, theme);
+        return r !== null && r > 0 ? r : 14;   // broken/non-positive token → the documented default
+    };
 
     // Paint in computed draw order (scene-graph order), using resolved world rects.
     computed.order.forEach((id: string) => {
@@ -299,7 +313,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? 1 / z : null,
                 strokeDash: null,
-                radius: sty.radius ? sty.radius : null,
+                radius: radiusOf(sty.radius),
                 cursor: "pointer",
                 pointerEvents: true
             };
@@ -336,7 +350,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 pointerEvents: true
             };
         } else if (node.type === "core.text") {
-            shape = { kind: "text", x, y, width, height, text: node.text ?? "Text", fontSize: sty.fontSize ?? 14 };
+            shape = { kind: "text", x, y, width, height, text: node.text ?? "Text", fontSize: fontSizeOf(sty.fontSize) };
             paint = {
                 fill: color(sty.fill), opacity: sty.opacity, stroke: null, strokeWidth: null,
                 strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur

@@ -264,6 +264,28 @@ describe("buildRenderModel — overlay", () => {
         expect(item.paint.stroke).toBe("#00ff00");             // concrete color untouched
     });
 
+    test("NUMBER tokens resolve in radius and fontSize per theme; broken/out-of-range fall back (schema 20)", () => {
+        const doc = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1, radius: "$radius/medium" } });
+        doc.variables = {
+            "radius/medium": { type: "spacing", value: 6, modes: { dark: 12 } },
+            "type/body": { type: "spacing", value: 18 },
+            "spacing/negative": { type: "spacing", value: -5 } // legal variable, illegal radius
+        };
+        expect(buildRenderModel(SIZE, doc, stateFor(doc)).content[0].paint.radius).toBe(6);
+        doc.activeTheme = "dark";
+        expect(buildRenderModel(SIZE, doc, stateFor(doc)).content[0].paint.radius).toBe(12); // theme override
+        doc.nodes.get("n1")!.style.radius = "$missing";
+        expect(buildRenderModel(SIZE, doc, stateFor(doc)).content[0].paint.radius).toBeNull(); // broken → no radius
+        doc.nodes.get("n1")!.style.radius = "$spacing/negative";
+        expect(buildRenderModel(SIZE, doc, stateFor(doc)).content[0].paint.radius).toBeNull(); // out of range → no radius
+        // fontSize: resolves; broken token → the 14 default (never NaN into the backend).
+        const t = docWith({ type: "core.text", text: "x", style: { fill: "#fff", opacity: 1, fontSize: "$type/body" } });
+        t.variables = doc.variables;
+        expect((buildRenderModel(SIZE, t, stateFor(t)).content[0].shape as { fontSize: number }).fontSize).toBe(18);
+        t.nodes.get("n1")!.style.fontSize = "$missing";
+        expect((buildRenderModel(SIZE, t, stateFor(t)).content[0].shape as { fontSize: number }).fontSize).toBe(14);
+    });
+
     test("a line's stroke||fill fallback picks the RAW winner, then resolves it", () => {
         const doc = docWith({ type: "core.line", geometry: { x: 0, y: 0, width: 100, height: 0 }, style: { fill: "$color/fill", stroke: "$color/stroke", opacity: 1 } });
         doc.variables = {

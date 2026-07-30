@@ -139,8 +139,14 @@ export const CURRENT_VERSION: string =
  *         numbers, and drops entries that cannot validate — every previously-loadable file
  *         stays loadable. The bump is interpretation too: "$"-prefixed strings are now
  *         aliases/tokens, and an 18 build would render a token fill as a literal color string.
+ *
+ *   "20" — widens `Style.radius` and `Style.fontSize` to `number | string` (a "$token" number
+ *         reference, resolved against `variables` under `activeTheme` at render time — the M5
+ *         number tokens becoming consumable). Existing documents carry only numbers, so
+ *         `migrate_19_to_20` is a pass-through — but a schema-19 build's `isValidNode` rejects a
+ *         string radius/fontSize outright, which is exactly what the bump signals.
  */
-export const SCHEMA_VERSION = "19";
+export const SCHEMA_VERSION = "20";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

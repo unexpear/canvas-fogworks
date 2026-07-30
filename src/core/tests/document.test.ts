@@ -804,6 +804,29 @@ describe("variableStoreError / variableError", () => {
         expect(r.success).toBe(false);
     });
 
+    test("radius/fontSize accept a $token or the old number rules — arbitrary strings rejected (schema 20)", () => {
+        // Numbers: the pre-20 range rules hold.
+        expect(styleError({ radius: 4 })).toBeNull();
+        expect(styleError({ radius: -1 })).toMatch("radius");
+        expect(styleError({ fontSize: 14 })).toBeNull();
+        expect(styleError({ fontSize: 0 })).toMatch("fontSize");
+        // Tokens: any "$key" passes validation (the RESOLVED value is range-checked at render).
+        expect(styleError({ radius: "$radius/medium" })).toBeNull();
+        expect(styleError({ fontSize: "$type/body" })).toBeNull();
+        // Arbitrary non-token strings are rejected — they could never resolve.
+        expect(styleError({ radius: "big" })).toMatch("radius");
+        expect(styleError({ fontSize: "" })).toMatch("fontSize");
+        expect(styleError({ radius: "$" })).toMatch("radius"); // a bare "$" is not a token
+        // The load path applies the same rule (shared styleError) and round-trips a token radius.
+        const doc = createEmptyDocument();
+        doc.nodes.set("n", { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1, radius: "$radius/medium", fontSize: "$type/body" }, layout: {} });
+        doc.rootNodeUuids = ["n"];
+        const loaded = deserializeDocument(serializeDocument(doc));
+        expect(loaded.nodes.get("n")!.style.radius).toBe("$radius/medium");
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1, radius: "big" }, layout: {} } } } });
+        expect(() => deserializeDocument(bad)).toThrow("radius");
+    });
+
     test("a mixed transaction's updatedNodeIds lists the NODE, never the \"__document__\" sentinel", () => {
         const doc = createEmptyDocument();
         doc.nodes.set("n", { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} });
@@ -3375,13 +3398,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "20" that has no 19→20 step: the
+        // Pretending the build has moved to a schema "21" that has no 20→21 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→19), and then REFUSED at "19" — never re-stamped straight to the current
-        // schema. The error naming "19" (not "1") is the proof the chain actually ran.
+        // (1→2→…→20), and then REFUSED at "20" — never re-stamped straight to the current
+        // schema. The error naming "20" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 18→19 landed for design tokens.)
-        expect(() => migrateIfNeeded(legacy, "20")).toThrow('Migration not implemented for document schema "19"');
+        // time a real migration is added — here, when 19→20 landed for number tokens.)
+        expect(() => migrateIfNeeded(legacy, "21")).toThrow('Migration not implemented for document schema "20"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);

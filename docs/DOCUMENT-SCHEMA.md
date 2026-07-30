@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v19 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v20 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -71,14 +71,17 @@ interface Geometry { x: number; y: number; width: number; height: number; }
 // COORDINATE SPACE: x/y are PARENT-RELATIVE. See the rule below.
 
 interface Style {
-  fill: string;        // color OR token id, e.g. "$color/primary" (resolved against variables, M5)
+  fill: string;             // color OR token id, e.g. "$color/primary" (resolved against variables, M5)
   stroke?: string;
-  radius?: number;
-  opacity: number;     // 0..1
-  fontSize?: number;   // core.text; world units, defaults to 14
-  shadow?: Shadow;     // drop shadow (schema 18); absent = none
-  blur?: number;       // whole-node gaussian blur radius, world units, >= 0 (schema 18); absent/0 = none
+  radius?: number | string; // corner radius, or a NUMBER-token "$radius/medium" (schema 20)
+  opacity: number;          // 0..1
+  fontSize?: number | string; // core.text; world units, default 14 — number or a number-token (schema 20)
+  shadow?: Shadow;          // drop shadow (schema 18); absent = none
+  blur?: number;            // whole-node gaussian blur radius, world units, >= 0 (schema 18); absent/0 = none
 }
+// A string radius/fontSize MUST be a "$token" (arbitrary strings are rejected on both paths);
+// the RESOLVED value is range-checked at render time — broken/out-of-range falls back visibly
+// (radius: none; fontSize: 14), never a throw.
 interface Shadow { dx: number; dy: number; blur: number; color: string }  // offset + gaussian softness + colour (world units)
 
 interface Layout {     // constraint intent, not absolute position (Milestone 2)
@@ -538,7 +541,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"19"`; chain tail: …15→16 ellipse/line, 16→17 path, 17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing values to numbers, drops unvalidatable variable entries) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"20"`; chain tail: …16→17 path, 17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing to numbers, drops unvalidatable entries — 19→20 number-token radius/fontSize, pass-through) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

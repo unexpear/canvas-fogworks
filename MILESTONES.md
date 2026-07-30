@@ -25,7 +25,7 @@ M3  Renderer                 ✅   SVG renderer (shapes + culling + effects) + C
       │
 M4  Editor                   ✅*  pan/zoom + box-select + DOM-free handles + rotate + canvas wiring + snapping/guides
       │
-M5  Variables & Tokens       ✅*  typed store + light/dark themes + $token references + aliases; number-token consumption deferred
+M5  Variables & Tokens       ✅*  typed store + light/dark themes + $token references + aliases; radius/fontSize tokens live (schema 20); layout-side spacing tokens deferred
 M6  Components                ⬜
 M7  States                    ⬜
 M8  Animation Engine          ⬜
@@ -626,7 +626,7 @@ rotated/scaled *parent* chains.
 
 ## Phase 5 — Variables & Design Tokens
 
-### Milestone 5 — Variables ✅* (all three slices landed; number/typography CONSUMPTION deferred)
+### Milestone 5 — Variables ✅* (all three slices landed + schema-20 number tokens; layout-side spacing consumption deferred)
 Global values: `Color.Primary`, `Spacing.Small`, `Radius.Medium`, `Typography.Body`.
 **Support:** themes · light/dark mode · variable references · token inheritance.
 (`VariableStore` and `Style.fill` token syntax `$color/primary` are already reserved.)
@@ -634,14 +634,17 @@ Global values: `Color.Primary`, `Spacing.Small`, `Radius.Medium`, `Typography.Bo
 **Close-out:** the four support pillars are all live — a typed, validated, undoable variable
 store (schema 19); light/dark **themes** with a persisted `activeTheme` and a toolbar toggle;
 **variable references** (`$token` in every color slot, resolved in the render model on both
-backends); **token inheritance** (alias chains through the active theme, cycle-safe). The `*`:
-`spacing`/`font` variables are definable, validated, migrated and resolvable
-(`resolveNumber`/`resolveVariable`), but no layout/text field CONSUMES them yet — wiring
-number tokens into `radius`/`gap`/`fontSize` retypes those fields (`number | string`) across
-the validators and the layout engine, a cross-cutting change deferred to the milestone that
-next touches those fields. Live-smoke-verified end-to-end: a seeded token document renders the
-resolved light value, the theme toggle re-resolves to the dark override (SVG attribute AND
-canvas pixel `#ff8800` at DPR 2.4), and undo reverts the switch.
+backends); **token inheritance** (alias chains through the active theme, cycle-safe). Since
+the close-out, **number tokens became consumable too (schema 20)**: `Style.radius` and
+`Style.fontSize` widened to `number | string` — a string must be a `$token` (arbitrary
+strings rejected on both paths), resolved via `resolveNumber` in the render model with
+range-checked fallbacks (broken/negative radius → no radius; broken/non-positive fontSize →
+the 14 default). The remaining `*`: LAYOUT-side spacing tokens (`gap`/`padding`/margins) —
+consuming them means threading the store through the entire must-never-throw measure pass,
+deferred to the milestone that next touches the layout engine. Live-smoke-verified
+end-to-end: a seeded token document renders the resolved light value, the theme toggle
+re-resolves to the dark override (SVG attribute AND canvas pixel `#ff8800` at DPR 2.4), and
+undo reverts the switch.
 
 **Landed (slice 1 — the variable store; schema 18 → 19):** the reserved `variables` store is
 now LIVE and typed (`src/core/document/Variables.ts`): a `Variable` is `{ type: "color" |

@@ -33,8 +33,10 @@ function isValidNode(n: any): n is Node {
         isPlainObject(n.style) &&
         typeof n.style.fill === "string" && typeof n.style.opacity === "number" &&
         isOptionalString(n.style.stroke) &&
-        (n.style.radius === undefined || typeof n.style.radius === "number") &&
-        (n.style.fontSize === undefined || typeof n.style.fontSize === "number") &&
+        // radius/fontSize: number OR string (a "$token", schema 20) — the shallow gate; the
+        // token-or-range semantic lives once in `styleError` (Integrity), like the effects.
+        (n.style.radius === undefined || typeof n.style.radius === "number" || typeof n.style.radius === "string") &&
+        (n.style.fontSize === undefined || typeof n.style.fontSize === "number" || typeof n.style.fontSize === "string") &&
         // Shallow structural gate for the schema-18 effects; the semantic rules (finite, >=0)
         // live once in `styleError` (Integrity), like the transform gate.
         (n.style.blur === undefined || typeof n.style.blur === "number") &&
@@ -238,6 +240,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "16") { raw = migrate_16_to_17(raw); version = "17"; }
     if (version === "17") { raw = migrate_17_to_18(raw); version = "18"; }
     if (version === "18") { raw = migrate_18_to_19(raw); version = "19"; }
+    if (version === "19") { raw = migrate_19_to_20(raw); version = "20"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -389,6 +392,12 @@ function migrate_18_to_19(raw: any): any {
     }
     const activeTheme = d.activeTheme === "dark" ? "dark" : "light";
     return { ...raw, version: "19", document: { ...d, variables, activeTheme } };
+}
+
+/** Schema 19 → 20: widens `Style.radius`/`fontSize` to `number | string` (number tokens,
+ *  resolved at render time). Pass-through by content — existing files carry only numbers. */
+function migrate_19_to_20(raw: any): any {
+    return { ...raw, version: "20" };
 }
 
 /**

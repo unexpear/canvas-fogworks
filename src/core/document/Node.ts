@@ -4,6 +4,14 @@
  * Nodes are never mutated directly; changes happen via Actions.
  */
 
+import { isTokenRef } from "./Variables";
+
+/** A `"$token"` reference in a NUMBER slot (radius/fontSize, schema 20). Same syntax as color
+ *  tokens; the resolved value's range is checked at render time (broken → visible fallback). */
+function isNumberToken(v: unknown): boolean {
+    return isTokenRef(v);
+}
+
 /**
  * The closed set of node types. Single source of truth: `NodeType` is derived from
  * it, and both validation paths check membership against it — so adding a type is
@@ -152,9 +160,11 @@ export interface Shadow {
 export interface Style {
     fill: string;      // Color value or token ID (e.g., "$color/primary")
     stroke?: string;   // Optional border color
-    radius?: number;   // Corner radius
+    /** Corner radius — a number, or a NUMBER-token reference like "$radius/medium" (schema 20). */
+    radius?: number | string;
     opacity: number;
-    fontSize?: number; // Text nodes: font size in world units (defaults to 14)
+    /** Text font size in world units (defaults to 14) — a number, or a number-token reference (schema 20). */
+    fontSize?: number | string;
     shadow?: Shadow;   // Drop shadow (schema 18); absent = none
     blur?: number;     // Whole-node gaussian blur radius in world units, >= 0 (schema 18); absent/0 = none
 }
@@ -170,8 +180,14 @@ export function styleError(s: Partial<Style>): string | null {
     if ("fill" in s && typeof s.fill !== "string") return "style.fill must be a string";
     if ("stroke" in s && s.stroke !== undefined && typeof s.stroke !== "string") return "style.stroke must be a string";
     if ("opacity" in s && (!Number.isFinite(s.opacity) || (s.opacity as number) < 0 || (s.opacity as number) > 1)) return "style.opacity must be within [0, 1]";
-    if ("radius" in s && (!Number.isFinite(s.radius) || (s.radius as number) < 0)) return "style.radius must be >= 0";
-    if ("fontSize" in s && (!Number.isFinite(s.fontSize) || (s.fontSize as number) <= 0)) return "style.fontSize must be > 0";
+    // radius/fontSize (schema 20): a concrete number under the old range rules, OR a "$token"
+    // reference — an arbitrary NON-token string is rejected (it would silently render as the
+    // fallback with no hint that it was never a token). The token's RESOLVED value is range-
+    // checked at render time (a broken/out-of-range token falls back visibly, never throws).
+    if ("radius" in s && s.radius !== undefined && !isNumberToken(s.radius)
+        && (typeof s.radius !== "number" || !Number.isFinite(s.radius) || s.radius < 0)) return "style.radius must be >= 0 or a $token";
+    if ("fontSize" in s && s.fontSize !== undefined && !isNumberToken(s.fontSize)
+        && (typeof s.fontSize !== "number" || !Number.isFinite(s.fontSize) || s.fontSize <= 0)) return "style.fontSize must be > 0 or a $token";
     if ("blur" in s && s.blur !== undefined && (!Number.isFinite(s.blur) || (s.blur as number) < 0)) return "style.blur must be finite and >= 0";
     if ("shadow" in s && s.shadow !== undefined) {
         const sh = s.shadow as Partial<Shadow>;
