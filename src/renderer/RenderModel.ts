@@ -18,9 +18,11 @@
 
 import { ReadonlyDocument } from "../core/document/Document";
 import { PathCommand, Shadow } from "../core/document/Node";
-import { ComputedState } from "../core/geometry/GeometryEngine";
+import { selectionRoots } from "../core/document/SceneGraph";
+import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
-import { selectionHandles, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
+import { selectionHandles, groupRotateHandle, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
+import { isGroupRotatable } from "../core/geometry/GroupTransform";
 import { RendererState } from "./RendererState";
 
 const GRID_BASE = 20;
@@ -374,7 +376,26 @@ function outlineItem(
     };
 }
 
-function buildOverlay(state: RendererState, z: number): DrawItem[] {
+/** A resize/rotate handle as a draw item — a white square (corner) or circle (rotate knob). */
+function handleItem(h: SelectionHandle, z: number): DrawItem {
+    const HS = HANDLE_SIZE_PX / z;
+    const shape: Shape = h.handle === "rotate"
+        ? { kind: "ellipse", cx: h.cx, cy: h.cy, rx: HS / 2, ry: HS / 2 }
+        : { kind: "rect", x: h.cx - HS / 2, y: h.cy - HS / 2, width: HS, height: HS };
+    return {
+        shape,
+        paint: {
+            fill: "#ffffff", opacity: null, stroke: "#00bfff", strokeWidth: 1 / z,
+            strokeDash: null, radius: null, cursor: h.cursor, pointerEvents: true, shadow: null, blur: null
+        },
+        world: null,
+        nodeId: h.nodeId,
+        handle: h.handle,
+        role: "handle"
+    };
+}
+
+function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): DrawItem[] {
     const items: DrawItem[] = [];
     const computed = state.computed;
     const selectedSet = new Set(state.selectedNodeIds);
@@ -391,27 +412,27 @@ function buildOverlay(state: RendererState, z: number): DrawItem[] {
         }
     });
 
-    // Resize + rotate handles (world-space). Positions come from the SHARED `selectionHandles`
-    // (the same source the editor hit-tests), so drawing and picking cannot drift. The square is
-    // HANDLE_SIZE_PX on screen, converted to world once; the rotate knob is drawn as a circle to
-    // distinguish it from the square resize handles.
-    const HS = HANDLE_SIZE_PX / z;
-    selectionHandles(computed, state.selectedNodeIds, z).forEach(({ nodeId, handle, cx, cy, cursor }) => {
-        const shape: Shape = handle === "rotate"
-            ? { kind: "ellipse", cx, cy, rx: HS / 2, ry: HS / 2 }
-            : { kind: "rect", x: cx - HS / 2, y: cy - HS / 2, width: HS, height: HS };
-        items.push({
-            shape,
-            paint: {
-                fill: "#ffffff", opacity: null, stroke: "#00bfff", strokeWidth: 1 / z,
-                strokeDash: null, radius: null, cursor, pointerEvents: true, shadow: null, blur: null
-            },
-            world: null,
-            nodeId,
-            handle,
-            role: "handle"
-        });
-    });
+    // Handles (world-space). Positions come from the SHARED `selectionHandles`/`groupRotateHandle`
+    // (the same source the editor hit-tests), so drawing and picking cannot drift.
+    //  - a SINGLE selected root → per-node resize corners + a rotate knob (drawn as a circle);
+    //  - a MULTI-root selection → ONE group bounding box + (when the group can be rigidly rotated)
+    //    one group rotate knob. Per-node resize is intentionally NOT offered for a group (group
+    //    resize is a documented deferral), so the group shows a box + knob, not corner squares.
+    const roots = selectionRoots(doc, state.selectedNodeIds);
+    if (roots.length >= 2) {
+        const gb = selectionBounds(computed, roots);
+        if (gb && isFiniteRect(gb)) {
+            items.push(outlineItem(gb, 0, "#00bfff", 1.5 / z)); // the group's bounding box (the true union)
+            if (isGroupRotatable(doc, roots)) {
+                const knob = groupRotateHandle(computed, roots, z);
+                if (knob) items.push(handleItem(knob, z));
+            }
+        }
+    } else {
+        // 0 or 1 root: per-node handles exactly as before (roots, so a parent+child selection
+        // shows the parent's handles once, not one set per selected id).
+        selectionHandles(computed, roots, z).forEach(h => items.push(handleItem(h, z)));
+    }
 
     // Rectangle-tool drag preview.
     const preview = state.previewRect;
@@ -509,7 +530,7 @@ export function buildRenderModel(
         viewport: state.viewport,
         grid: buildGrid(size, state.viewport, z, prev),
         content,
-        overlay: buildOverlay(state, z),
+        overlay: buildOverlay(state, z, doc),
         defs: collectDefs(content)
     };
 }

@@ -50,8 +50,9 @@ import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction"
 import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { createEditorState, clampViewport, panBy, zoomAt, screenToWorld, EditorState } from "../../editor/EditorState";
-import { selectionHandles, handleAtPoint, SelectionHandle, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
-import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX, SnapGuide, SnapResult } from "../geometry/Snapping";
+import { selectionHandles, handleAtPoint, groupRotateHandle, groupHandleAtPoint, SelectionHandle, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
+import { rotateGroup, isGroupRotatable, GroupRotateInput, GroupRotateOutput } from "../geometry/GroupTransform";
+import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain, SNAP_THRESHOLD_PX, SnapGuide, SnapResult } from "../geometry/Snapping";
 import { rulerTicks, niceStep, RulerTick } from "../geometry/Ruler";
 import { renderSVG, clearRenderState, RendererState } from "../../renderer/SVGRenderer";
 import { renderCanvas } from "../../renderer/CanvasRenderer";
@@ -217,6 +218,11 @@ export function __apiSurfacePin(): void {
     expectType<number>(ROTATE_OFFSET_PX);
     expectType<SelectionHandle[]>(selectionHandles(computed, ["id"], 1));       // zoom (for the rotate-knob offset)
     expectType<SelectionHandle | null>(handleAtPoint(computed, ["id"], 0, 0, 1)); // zoom (sizes the grab square)
+    expectType<SelectionHandle | null>(groupRotateHandle(computed, ["id"], 1));    // the group's single rotate knob
+    expectType<SelectionHandle | null>(groupHandleAtPoint(computed, ["id"], 0, 0, 1));
+    const gri: GroupRotateInput = { id: "id", startX: 0, startY: 0, startRotation: 0, centerX: 0, centerY: 0 };
+    expectType<GroupRotateOutput[]>(rotateGroup(0, 0, 0, [gri]));
+    expectType<boolean>(isGroupRotatable(doc, ["id"]));
     const unit: Rect = { x: 0, y: 0, width: 1, height: 1 };
     const snap: SnapResult = computeSnap(unit, [unit], 6);
     expectType<number>(snap.dx); expectType<number>(snap.dy); expectType<SnapGuide[]>(snap.guides);
@@ -225,6 +231,7 @@ export function __apiSurfacePin(): void {
     expectType<{ dx: number; dy: number }>(snapPoint(0, 0, [unit], 6));
     expectType<SnapGuide[]>(guidesForRect(unit, [unit]));
     expectType<Rect[]>(snapTargetsExcludingSubtree(doc, computed, "id"));
+    expectType<Rect[]>(snapTargetsExcludingSubtrees(doc, computed, ["id"]));
     expectType<boolean>(isTranslationOnlyChain(doc, "id"));
     expectType<number>(niceStep(80));
     expectType<RulerTick[]>(rulerTicks(0, 100, 1));

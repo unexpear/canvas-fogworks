@@ -21,8 +21,9 @@ import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds,
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
-import { selectionHandles, handleAtPoint, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
-import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain } from "../geometry/Snapping";
+import { selectionHandles, handleAtPoint, groupRotateHandle, groupHandleAtPoint, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
+import { rotateGroup, isGroupRotatable } from "../geometry/GroupTransform";
+import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
 import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
 import { SelectTool } from "../../editor/tools/SelectTool";
@@ -1030,6 +1031,17 @@ describe("selectionHandles + handleAtPoint", () => {
         const hit = handleAtPoint(cs, ["A", "B"], 50, 50, 1)!;
         expect([hit.nodeId, hit.handle]).toEqual(["B", "nw"]);
     });
+
+    test("groupRotateHandle: one knob above the UNION box's top-centre; groupHandleAtPoint hits only it", () => {
+        const cs = computeGeometry(handleDoc()); // A{0,0,50,50}, B{50,50,50,50} → union {0,0,100,100}
+        const knob = groupRotateHandle(cs, ["A", "B"], 1)!;
+        expect(knob).toMatchObject({ handle: "rotate", nodeId: "", cx: 50, cy: -ROTATE_OFFSET_PX, cursor: "grab" });
+        expect(groupRotateHandle(cs, ["A", "B"], 2)!.cy).toBe(-ROTATE_OFFSET_PX / 2); // fixed screen offset → scales with zoom
+        expect(groupHandleAtPoint(cs, ["A", "B"], 50, -ROTATE_OFFSET_PX, 1)!.handle).toBe("rotate"); // on the knob
+        expect(groupHandleAtPoint(cs, ["A", "B"], 50, 0, 1)).toBeNull();   // the box top-centre is NOT the knob
+        expect(groupHandleAtPoint(cs, ["A", "B"], 0, 0, 1)).toBeNull();    // a group exposes no corner handles
+        expect(groupRotateHandle(cs, [], 1)).toBeNull();                   // empty group → no knob
+    });
 });
 
 // ─── M4: screenToWorld — the one sanctioned screen→world inverse ───
@@ -1120,7 +1132,7 @@ describe("ToolController DOM-free resize", () => {
         expect(es.viewport).toMatchObject({ x: -20, y: -10 }); // panned (screen −delta) instead
     });
 
-    test("multi-select: the front node's overlapping handle wins, and only that node resizes", () => {
+    test("multi-select shows NO per-node resize handle — a press where a corner used to be does not resize", () => {
         const doc = createEmptyDocument();
         const mk = (id: string, x: number, y: number) =>
             doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
@@ -1129,11 +1141,14 @@ describe("ToolController DOM-free resize", () => {
         const dispatcher = new ActionDispatcher(doc);
         const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
         const tc = new ToolController(dispatcher, es, () => { });
-        tc.onMouseDown(md(50, 50), rect); // shared corner → B (drawn last) wins its NW
+        // A group exposes only its rotate knob (above the box), NOT per-node corner squares — so a
+        // press where a per-node corner used to be grabs nothing and falls through to the (null) tool.
+        tc.onMouseDown(md(50, 50), rect);
         tc.onMouseMove(md(60, 60), rect);
         tc.onMouseUp(md(60, 60));
-        expect(dispatcher.getDocument().nodes.get("B")!.geometry).toMatchObject({ x: 60, y: 60, width: 40, height: 40 });
-        expect(dispatcher.getDocument().nodes.get("A")!.geometry).toMatchObject({ x: 0, y: 0, width: 50, height: 50 }); // untouched
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry).toMatchObject({ x: 0, y: 0, width: 50, height: 50 });
+        expect(dispatcher.getDocument().nodes.get("B")!.geometry).toMatchObject({ x: 50, y: 50, width: 50, height: 50 });
+        expect(dispatcher.canUndo()).toBe(false); // nothing committed
     });
 
     test("handles and resize follow a child's WORLD AABB under a translated parent (bounds, not local)", () => {
@@ -1310,6 +1325,216 @@ describe("ToolController rotate", () => {
     });
 });
 
+// ─── M4: GroupTransform — rigid group rotation about a shared pivot (pure math) ───
+describe("GroupTransform (group rotate math)", () => {
+    test("rotateGroup rotates each root rigidly about the pivot: orbit the centre + add the delta", () => {
+        // Pivot (150,50). +90° clockwise (y-down). A due-WEST of pivot, B due-EAST; B already rotated 0.1.
+        const inputs = [
+            { id: "A", startX: 0, startY: 0, startRotation: 0, centerX: 50, centerY: 50 },
+            { id: "B", startX: 200, startY: 0, startRotation: 0.1, centerX: 250, centerY: 50 },
+        ];
+        const out = rotateGroup(150, 50, Math.PI / 2, inputs);
+        // A (west) orbits to due-NORTH → centre (150,-50); geom shifts by (+100,-100). rotation 0→π/2.
+        expect(out[0].x).toBeCloseTo(100, 9); expect(out[0].y).toBeCloseTo(-100, 9);
+        expect(out[0].rotation).toBeCloseTo(Math.PI / 2, 9);
+        // B (east) orbits to due-SOUTH → centre (150,150); geom shifts by (-100,+100). rotation adds to 0.1.
+        expect(out[1].x).toBeCloseTo(100, 9); expect(out[1].y).toBeCloseTo(100, 9);
+        expect(out[1].rotation).toBeCloseTo(0.1 + Math.PI / 2, 9);
+    });
+
+    test("rotateGroup with delta 0 is the identity — returns the captured start poses (the Escape path)", () => {
+        const inputs = [{ id: "A", startX: 7, startY: 9, startRotation: 0.3, centerX: 30, centerY: 40 }];
+        expect(rotateGroup(100, 100, 0, inputs)).toEqual([{ id: "A", x: 7, y: 9, rotation: 0.3 }]);
+    });
+
+    test("a DIAGONALLY-offset centre at a generic angle exercises all four cos/sin orbit terms", () => {
+        // rx and ry BOTH non-zero and unequal; delta with cos AND sin clearly non-zero — so a sign
+        // flip or dropped coefficient on ANY of cos·rx, sin·ry, sin·rx, cos·ry changes the result.
+        const pivotX = 30, pivotY = -10, delta = 0.7;
+        const centerX = 100, centerY = 50, startX = 5, startY = 8;
+        const rx = centerX - pivotX, ry = centerY - pivotY;
+        const cos = Math.cos(delta), sin = Math.sin(delta);
+        const expX = startX + ((pivotX + cos * rx - sin * ry) - centerX); // independent oracle for the formula
+        const expY = startY + ((pivotY + sin * rx + cos * ry) - centerY);
+        const out = rotateGroup(pivotX, pivotY, delta, [{ id: "A", startX, startY, startRotation: 0.2, centerX, centerY }]);
+        expect(out[0].x).toBeCloseTo(expX, 9);
+        expect(out[0].y).toBeCloseTo(expY, 9);
+        expect(out[0].rotation).toBeCloseTo(0.2 + delta, 9);
+    });
+
+    test("a root AT the pivot only spins (its centre doesn't move)", () => {
+        const out = rotateGroup(50, 50, 1.2345, [{ id: "A", startX: 0, startY: 0, startRotation: 0, centerX: 50, centerY: 50 }]);
+        expect(out[0].x).toBeCloseTo(0, 9); expect(out[0].y).toBeCloseTo(0, 9); // no orbit
+        expect(out[0].rotation).toBeCloseTo(1.2345, 9);
+    });
+
+    test("isGroupRotatable requires centre origin + a translation-only PARENT chain for EVERY root", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 0, y: 0, width: 20, height: 20 }, style: { fill: "#000", opacity: 1 }, layout: {}, transform: { rotation: 0.5 } }); // C's OWN rotation is fine
+        doc.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 20, height: 20 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P", "R"];
+        expect(isGroupRotatable(doc, ["C", "R"])).toBe(true);   // C rotated, but its parent P is translation-only
+        expect(isGroupRotatable(doc, [])).toBe(false);           // empty group → false
+        doc.nodes.get("P")!.transform = { rotation: 0.2 };       // a ROTATED PARENT breaks C's eligibility
+        expect(isGroupRotatable(doc, ["C", "R"])).toBe(false);
+        doc.nodes.get("P")!.transform = undefined;
+        doc.nodes.get("R")!.transform = { rotation: 0, origin: { x: 0, y: 0 } }; // a NON-centre origin breaks it
+        expect(isGroupRotatable(doc, ["C", "R"])).toBe(false);
+        doc.nodes.get("R")!.transform = { rotation: 0, origin: { x: 0.5, y: 0 } }; // ONE axis centred is NOT centre (both must be 0.5)
+        expect(isGroupRotatable(doc, ["C", "R"])).toBe(false);
+        doc.nodes.get("R")!.transform = { rotation: 0, origin: { x: 0.5, y: 0.5 } }; // explicit centre origin is fine
+        expect(isGroupRotatable(doc, ["C", "R"])).toBe(true);
+    });
+
+    test("isGroupRotatable rejects an in-flow auto-layout child (its position isn't driven by stored x/y)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["A", "B"], geometry: { x: 0, y: 0, width: 300, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: { container: { direction: "row" } } });
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: "F", children: [], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("B", { id: "B", type: "core.rectangle", parent: "F", children: [], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["F"];
+        // A and B are laid out by F (a container, no transform) → their orbit would be discarded → not rotatable.
+        expect(isGroupRotatable(doc, ["A", "B"])).toBe(false);
+        // Making A `absolute` takes it out of flow → positioned by stored x/y → the group is rotatable again.
+        doc.nodes.get("A")!.layout = { position: "absolute" };
+        doc.nodes.get("B")!.layout = { position: "absolute" };
+        expect(isGroupRotatable(doc, ["A", "B"])).toBe(true);
+    });
+});
+
+// ─── M4: ToolController group rotate — the group knob spins every root about the box centre ───
+describe("ToolController group rotate", () => {
+    const rect = { left: 0, top: 0 } as DOMRect;
+    const md = (x: number, y: number) =>
+        ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+    const key = (k: string) => ({ key: k, target: { tagName: "BODY", isContentEditable: false }, preventDefault() { } } as unknown as KeyboardEvent);
+
+    function harness() {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number) => doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        mk("A", 0); mk("B", 200); // union {0,0,300,100}, centre (150,50); knob at (150,-ROTATE_OFFSET_PX)
+        doc.rootNodeUuids = ["A", "B"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        return { dispatcher, es, tc };
+    }
+    const geoRot = (d: ActionDispatcher, id: string) => {
+        const n = d.getDocument().nodes.get(id)!;
+        return { x: n.geometry.x, y: n.geometry.y, rotation: n.transform?.rotation ?? 0 };
+    };
+
+    test("the group knob rotates every root rigidly about the group-box centre, in ONE coalesced undo", () => {
+        const { dispatcher, tc } = harness();
+        tc.onMouseDown(md(150, -ROTATE_OFFSET_PX), rect); // grab the group knob (straight up from the pivot)
+        tc.onMouseMove(md(200, -30), rect);               // an intermediate frame
+        tc.onMouseMove(md(230, 20), rect);                // another
+        tc.onMouseMove(md(250, 50), rect);                // pointer due-right of pivot → +90° (π/2) total
+        tc.onMouseUp(md(250, 50));
+        const A = geoRot(dispatcher, "A"), B = geoRot(dispatcher, "B");
+        expect(A.rotation).toBeCloseTo(Math.PI / 2, 9); expect(B.rotation).toBeCloseTo(Math.PI / 2, 9);
+        expect(A.x).toBeCloseTo(100, 9); expect(A.y).toBeCloseTo(-100, 9); // left box orbits to the top
+        expect(B.x).toBeCloseTo(100, 9); expect(B.y).toBeCloseTo(100, 9);  // right box orbits to the bottom
+        dispatcher.undo(); // the 3 frames coalesced → ONE undo restores the whole group
+        expect(geoRot(dispatcher, "A")).toEqual({ x: 0, y: 0, rotation: 0 });
+        expect(geoRot(dispatcher, "B")).toEqual({ x: 200, y: 0, rotation: 0 });
+        expect(dispatcher.canUndo()).toBe(false); // exactly one undo step for the whole drag
+    });
+
+    test("a press that is NOT on the group knob does not rotate (falls through to the tool)", () => {
+        const { dispatcher, tc } = harness();
+        tc.onMouseDown(md(150, 50), rect); // the group-box CENTRE, not the knob (which is above the box)
+        tc.onMouseMove(md(250, 50), rect);
+        tc.onMouseUp(md(250, 50));
+        expect(geoRot(dispatcher, "A")).toEqual({ x: 0, y: 0, rotation: 0 }); // untouched
+        expect(dispatcher.canUndo()).toBe(false);
+    });
+
+    test("Escape cancels an in-flight group rotate — reverts every root to its start pose", () => {
+        const { dispatcher, es, tc } = harness();
+        tc.onMouseDown(md(150, -ROTATE_OFFSET_PX), rect);
+        tc.onMouseMove(md(250, 50), rect); // rotated +90°
+        expect(geoRot(dispatcher, "A").rotation).toBeCloseTo(Math.PI / 2, 9);
+        tc.onKeyDown(key("Escape"));
+        expect(geoRot(dispatcher, "A")).toEqual({ x: 0, y: 0, rotation: 0 }); // A back to start
+        expect(geoRot(dispatcher, "B")).toEqual({ x: 200, y: 0, rotation: 0 }); // B back to start
+        expect(es.isDragging).toBe(false);
+        tc.onMouseUp(md(250, 50)); // already cancelled → no further change
+        expect(geoRot(dispatcher, "A")).toEqual({ x: 0, y: 0, rotation: 0 });
+    });
+
+    test("deleting a group member mid-drag ends the gesture and clears the drag-cursor flag", () => {
+        const { dispatcher, es, tc } = harness();
+        tc.onMouseDown(md(150, -ROTATE_OFFSET_PX), rect);
+        expect(es.isDragging).toBe(true);
+        // Delete BOTH roots mid-drag → the group is gone → the gesture must end cleanly.
+        dispatcher.dispatchAction(new TransactionAction(dispatcher.getDocument(), "del", [
+            new DeleteNodeAction(dispatcher.getDocument(), "A"), new DeleteNodeAction(dispatcher.getDocument(), "B")
+        ]));
+        tc.onMouseMove(md(250, 50), rect); // abort path: no root survives
+        expect(es.isDragging).toBe(false);
+    });
+
+    test("group rotate is disabled when a root is NOT rotatable (a rotated parent) — the knob isn't grabbable", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {}, transform: { rotation: 0.3 } });
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 0, y: 0, width: 40, height: 40 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [], geometry: { x: 200, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P", "R"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["C", "R"]; // C sits under a ROTATED parent → not rotatable
+        const tc = new ToolController(dispatcher, es, () => { });
+        // Wherever the union knob would be, isGroupRotatable is false → no rotate gesture starts.
+        tc.onMouseDown(md(0, -ROTATE_OFFSET_PX), rect);
+        tc.onMouseMove(md(100, 100), rect);
+        tc.onMouseUp(md(100, 100));
+        expect(dispatcher.canUndo()).toBe(false); // nothing rotated
+    });
+
+    test("group rotate does not engage for an in-flow auto-layout group (orbit would be discarded)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["A", "B"], geometry: { x: 0, y: 0, width: 300, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: { container: { direction: "row" } } });
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: "F", children: [], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("B", { id: "B", type: "core.rectangle", parent: "F", children: [], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["F"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        tc.onMouseDown(md(100, -ROTATE_OFFSET_PX), rect); // A,B are laid out → not rotatable → knob not grabbable
+        tc.onMouseMove(md(200, 50), rect);
+        tc.onMouseUp(md(200, 50));
+        expect(dispatcher.canUndo()).toBe(false);
+        expect(es.isDragging).toBe(false);
+    });
+
+    test("two group-rotate gestures on DIFFERENT selections do NOT coalesce (each is its own undo)", () => {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number) => doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        mk("A", 0); mk("B", 200); mk("C", 500); mk("D", 700); // two DISJOINT pairs (gesture 1 doesn't disturb pair 2)
+        doc.rootNodeUuids = ["A", "B", "C", "D"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        const tc = new ToolController(dispatcher, es, () => { });
+        es.selectedNodeIds = ["A", "B"]; // gesture 1: union {0,0,300,100}, knob (150,-off)
+        tc.onMouseDown(md(150, -ROTATE_OFFSET_PX), rect); tc.onMouseMove(md(250, 50), rect); tc.onMouseUp(md(250, 50));
+        es.selectedNodeIds = ["C", "D"]; // gesture 2 (same window): union {500,0,300,100}, knob (650,-off)
+        tc.onMouseDown(md(650, -ROTATE_OFFSET_PX), rect); tc.onMouseMove(md(750, 50), rect); tc.onMouseUp(md(750, 50));
+        // Names differ ("rotate-group:A,B" vs ":C,D") → they did NOT merge: TWO undo steps, not one.
+        expect(dispatcher.canUndo()).toBe(true);
+        dispatcher.undo(); expect(dispatcher.canUndo()).toBe(true);  // undid gesture 2 only
+        dispatcher.undo(); expect(dispatcher.canUndo()).toBe(false); // undid gesture 1
+    });
+
+    test("idle hover over the group knob sets the grab cursor (the Canvas hover affordance)", () => {
+        const { es, tc } = harness();
+        const hover = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 0, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        tc.onMouseMove(hover(150, -ROTATE_OFFSET_PX), rect); // idle over the group knob
+        expect(es.hoverCursor).toBe("grab");
+        tc.onMouseMove(hover(150, 50), rect); // idle over the box body (no handle)
+        expect(es.hoverCursor).toBeNull();
+    });
+});
+
 // ─── M4: alignment snapping — the pure geometry behind smart guides ───
 describe("computeSnap", () => {
     const A = { x: 100, y: 100, width: 50, height: 50 }; // X lines 100/125/150, Y lines 100/125/150
@@ -1448,6 +1673,18 @@ describe("snapTargetsExcludingSubtree", () => {
         expect(forC).toContainEqual({ x: 300, y: 0, width: 50, height: 50 });   // T
         expect(forC).toContainEqual({ x: 0, y: 0, width: 200, height: 200 });   // P (world == stored, top-level)
     });
+
+    test("snapTargetsExcludingSubtrees excludes EVERY listed root's subtree (group move)", () => {
+        const doc = doc3();
+        const cs = computeGeometry(doc);
+        // A group of {P, T} moving together excludes P, its child C, AND T → nothing left to snap to.
+        expect(snapTargetsExcludingSubtrees(doc, cs, ["P", "T"])).toEqual([]);
+        // A duplicate id in the list is idempotent (a Set) → {T, T} still excludes just T's subtree.
+        const forT = snapTargetsExcludingSubtrees(doc, cs, ["T", "T"]);
+        expect(forT.length).toBe(2);
+        expect(forT).toContainEqual({ x: 0, y: 0, width: 200, height: 200 });   // P
+        expect(forT).toContainEqual({ x: 10, y: 10, width: 50, height: 50 });   // C (world == stored)
+    });
 });
 
 // ─── M4: MoveTool folds snapping into the drag (single top-level node) ───
@@ -1544,14 +1781,100 @@ describe("MoveTool snapping", () => {
         expect(es.snapGuides).toBeNull();
     });
 
-    test("a multi-node drag does not snap (guides stay null)", () => {
-        const doc = twoNodeDoc();
+    // ─── group (multi-root) move snapping: the union box snaps, all roots move together ───
+    const mk = (doc: ProjectDocument, id: string, x: number, y: number, w: number, h: number, extra: Partial<import("../document/Node").Node> = {}) =>
+        doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: w, height: h }, style: { fill: "#000", opacity: 1 }, layout: {}, ...extra });
+
+    test("a group drag snaps the UNION box's left edge to a target and moves all roots together", () => {
+        const doc = createEmptyDocument();
+        mk(doc, "A", 0, 0, 50, 50); mk(doc, "B", 0, 60, 50, 50); // union {0,0,50,110}, left edge 0
+        mk(doc, "T", 100, 0, 80, 50); // target left edge at 100
+        doc.rootNodeUuids = ["A", "B", "T"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        tool.onMouseDown(md(0, 0));
+        tool.onMouseMove(md(97, 0)); // group left 0→97, within 6 of T's left (100) → snaps +3
+        expect(es.pendingGeometry!.get("A")).toEqual({ x: 100, y: 0 });   // both get the SAME snapped dx (100)
+        expect(es.pendingGeometry!.get("B")).toEqual({ x: 100, y: 60 });
+        expect(es.snapGuides).toContainEqual(expect.objectContaining({ axis: "x", pos: 100 }));
+        tool.onMouseUp(md(97, 0));
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry.x).toBe(100);
+        expect(dispatcher.getDocument().nodes.get("B")!.geometry.x).toBe(100);
+        expect(es.snapGuides).toBeNull();
+    });
+
+    test("group snap uses the UNION's far edge (from a non-first root), not just the first node's box", () => {
+        const doc = createEmptyDocument();
+        mk(doc, "A", 0, 0, 50, 50); mk(doc, "B", 0, 60, 50, 50); // union bottom (110) comes from B, not A (50)
+        mk(doc, "T", 300, 200, 50, 50); // target top edge at 200 (x far, so no x-snap)
+        doc.rootNodeUuids = ["A", "B", "T"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        tool.onMouseDown(md(0, 0));
+        tool.onMouseMove(md(0, 87)); // union bottom 110→197, within 6 of T's top (200) → snaps +3
+        expect(es.pendingGeometry!.get("A")).toEqual({ x: 0, y: 90 });  // +90 = 87 + 3(snap); a first-node-only box (bottom 50) would NOT snap here
+        expect(es.pendingGeometry!.get("B")).toEqual({ x: 0, y: 150 });
+        expect(es.snapGuides).toContainEqual(expect.objectContaining({ axis: "y", pos: 200 }));
+    });
+
+    test("group snap uses the UNION's RIGHT edge (from a non-first root) on the X axis too", () => {
+        const doc = createEmptyDocument();
+        mk(doc, "A", 0, 0, 50, 50); mk(doc, "B", 80, 0, 50, 50); // union right (130) comes from B, not A (50)
+        mk(doc, "T", 230, 200, 40, 50); // target LEFT edge at 230 (y far, so no y-snap)
+        doc.rootNodeUuids = ["A", "B", "T"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        tool.onMouseDown(md(0, 0));
+        tool.onMouseMove(md(97, 0)); // union right 130→227, within 6 of T's left (230) → snaps +3
+        expect(es.pendingGeometry!.get("A")).toEqual({ x: 100, y: 0 });  // +100 = 97+3; a first-node box (right 50) would NOT snap
+        expect(es.pendingGeometry!.get("B")).toEqual({ x: 180, y: 0 });
+        expect(es.snapGuides).toContainEqual(expect.objectContaining({ axis: "x", pos: 230 }));
+    });
+
+    test("a member deleted mid-drag stops snapping (no snap against a stale group box)", () => {
+        const doc = createEmptyDocument();
+        mk(doc, "A", 0, 0, 50, 50); mk(doc, "B", 0, 60, 50, 50); mk(doc, "T", 100, 0, 80, 50);
+        doc.rootNodeUuids = ["A", "B", "T"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        tool.onMouseDown(md(0, 0));
+        tool.onMouseMove(md(97, 0)); // snaps normally: group left 0→97 → 100
+        expect(es.pendingGeometry!.get("A")).toEqual({ x: 100, y: 0 });
+        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "A")); // A deleted mid-drag
+        tool.onMouseMove(md(97, 0)); // the captured group box now includes a gone node → snapping stops
+        expect(es.pendingGeometry!.get("B")).toEqual({ x: 97, y: 60 }); // raw 97, NOT snapped to 100
+        expect(es.pendingGeometry!.has("A")).toBe(false);              // A dropped from the drag set
+        expect(es.snapGuides).toBeNull();
+    });
+
+    test("a group drag does NOT snap to its own members (every moving subtree is excluded)", () => {
+        const doc = twoNodeDoc(); // only A,B exist — both selected/moving, so there is no external target
         const dispatcher = new ActionDispatcher(doc);
         const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
         const tool = new MoveTool(dispatcher, es, () => { });
         tool.onMouseDown(md(0, 0));
         tool.onMouseMove(md(97, 0));
-        expect(es.pendingGeometry!.get("A")).toEqual({ x: 97, y: 0 }); // raw delta, NOT snapped
+        expect(es.pendingGeometry!.get("A")).toEqual({ x: 97, y: 0 });   // raw delta — nothing to snap to
+        expect(es.pendingGeometry!.get("B")).toEqual({ x: 197, y: 100 }); // B shifts by the same raw delta
+        expect(es.snapGuides).toBeNull();
+    });
+
+    test("group snap is disabled when ANY moving root is transformed (rotated)", () => {
+        const doc = createEmptyDocument();
+        mk(doc, "A", 0, 0, 50, 50, { transform: { rotation: 0.2 } }); // one rotated root disables the whole group
+        mk(doc, "B", 0, 60, 50, 50);
+        mk(doc, "T", 100, 0, 80, 50);
+        doc.rootNodeUuids = ["A", "B", "T"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        tool.onMouseDown(md(0, 0));
+        tool.onMouseMove(md(97, 0)); // near T's left (100), but A is rotated → snapping disabled
+        expect(es.pendingGeometry!.get("B")).toEqual({ x: 97, y: 60 }); // raw 97, NOT snapped to 100
         expect(es.snapGuides).toBeNull();
     });
 });

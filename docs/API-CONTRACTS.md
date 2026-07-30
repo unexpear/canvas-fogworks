@@ -58,6 +58,15 @@ interface SelectionHandle { nodeId: string; handle: HandleId; cx: number; cy: nu
 // (HANDLE_SIZE_PX/floored-zoom) — the SAME square the renderer draws, so grab==draw at every zoom.
 function selectionHandles(s: ComputedState, selectedNodeIds: readonly string[], zoom: number): SelectionHandle[]; // 4 corners + rotate per selected node
 function handleAtPoint(s: ComputedState, selectedNodeIds: readonly string[], x: number, y: number, zoom: number): SelectionHandle | null; // handle under a world point; back-to-front (rotate beats a grazed corner)
+// GROUP handles (multi-select): the editor shows ONE rotate knob above the union box (selectionBounds), not per-node handles.
+function groupRotateHandle(s: ComputedState, rootIds: readonly string[], zoom: number): SelectionHandle | null;  // the group's single rotate knob (nodeId ""), or null if no finite union box
+function groupHandleAtPoint(s: ComputedState, rootIds: readonly string[], x: number, y: number, zoom: number): SelectionHandle | null; // that knob, if the world point hits it
+
+// geometry/GroupTransform.ts — pure math for rotating a MULTI-SELECTION rigidly about a shared pivot.
+interface GroupRotateInput { id: string; startX: number; startY: number; startRotation: number; centerX: number; centerY: number } // a root's start pose (captured at grab)
+interface GroupRotateOutput { id: string; x: number; y: number; rotation: number } // orbited stored x/y + new absolute rotation
+function rotateGroup(pivotX: number, pivotY: number, delta: number, inputs: readonly GroupRotateInput[]): GroupRotateOutput[]; // each root: rotation += delta AND centre orbits the pivot (rigid). ABSOLUTE in delta (no compounding)
+function isGroupRotatable(doc: ReadonlyDocument, rootIds: readonly string[]): boolean; // every root centre-origin + translation-only PARENT chain (else no knob is shown)
 
 // geometry/Snapping.ts — DOM-free alignment snapping (M4 smart guides), pure like the above.
 const SNAP_THRESHOLD_PX: number;                       // default snap budget, SCREEN px (tools ÷ zoom)
@@ -67,6 +76,7 @@ function computeSnap(moving: Rect, targets: readonly Rect[], threshold: number):
 function snapPoint(px: number, py: number, targets: readonly Rect[], threshold: number): { dx: number; dy: number }; // RESIZE: snap the dragged corner to target lines, each axis independently
 function guidesForRect(rect: Rect, targets: readonly Rect[]): SnapGuide[]; // guides for a rect's existing alignments (merged spans)
 function snapTargetsExcludingSubtree(doc: ReadonlyDocument, computed: ComputedState, rootId: string): Rect[]; // other nodes' world bounds, minus rootId's own subtree
+function snapTargetsExcludingSubtrees(doc: ReadonlyDocument, computed: ComputedState, rootIds: readonly string[]): Rect[]; // …minus EVERY root's subtree (group move)
 function isTranslationOnlyChain(doc: ReadonlyDocument, nodeId: string): boolean; // node + all ancestors unrotated/unscaled → world snap delta == stored delta (snapping is enabled only then)
 
 // geometry/Ruler.ts — pure ruler tick computation (the app draws the bars).
@@ -197,7 +207,7 @@ type NodeDelta =
 ```ts
 class ActionDispatcher {
   constructor(initialDoc: ProjectDocument);
-  dispatchAction(action: Action, options?: { coalesce?: boolean }): MutationResult; // never throws
+  dispatchAction(action: Action, options?: { coalesce?: boolean }): MutationResult; // never throws; coalesce collapses a run of same-target edits (a node action by `actionId:nodeId`, a TransactionAction by its name) into one undo
   onChange(listener: (r: MutationResult) => void): () => void;  // returns unsubscribe
   undo(): ProjectDocument | null;
   redo(): ProjectDocument | null;
@@ -264,7 +274,10 @@ class ToolController {
   // spins about the node's world-AABB centre and live-commits a coalesced `UpdateNodeTransformAction`
   // = one undo per continuous drag; Escape cancels an in-flight resize/rotate), Delete/Backspace, and on an
   // IDLE hover sets `EditorState.hoverCursor` from `handleAtPoint` so the Canvas backend shows handle cursors —
-  // each a mode that intercepts before the active tool
+  // each a mode that intercepts before the active tool. For a MULTI-root selection the per-node handles are
+  // replaced by ONE group rotate knob (`groupHandleAtPoint`): grabbing it rotates every root rigidly about the
+  // group-box centre (`rotateGroup`), live-committed as one coalesced `TransactionAction` per frame (one undo);
+  // Escape reverts. Shown only when `isGroupRotatable`. Group RESIZE is deferred.
 }
 ```
 

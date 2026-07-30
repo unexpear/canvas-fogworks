@@ -10,8 +10,8 @@ import { EditorState } from "../EditorState";
 import { Geometry } from "../../core/document/Node";
 import { selectionRoots } from "../../core/document/SceneGraph";
 import { isAbsolute, isLayoutContainer } from "../../core/geometry/LayoutEngine";
-import { computeGeometry } from "../../core/geometry/GeometryEngine";
-import { computeSnap, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
+import { computeGeometry, selectionBounds } from "../../core/geometry/GeometryEngine";
+import { computeSnap, snapTargetsExcludingSubtrees, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect } from "../../core/geometry/Matrix";
 import { Tool } from "./ToolController";
 
@@ -23,15 +23,18 @@ export class MoveTool implements Tool {
     private startX = 0;
     private startY = 0;
     private nodeStartPositions: Map<string, { x: number; y: number }> = new Map();
-    // Alignment snapping applies to a SINGLE top-level, unrotated node (stored == world, so a
-    // world snap delta is also the stored delta). `snapTargets` = other nodes' world bounds,
-    // captured once at mouse-down (they don't move during the drag); null disables snapping.
+    // Alignment snapping snaps the moving selection's GROUP box (the union of every moving root's
+    // world AABB) to other nodes' alignment lines. Enabled only when EVERY moving root is a
+    // translation-only chain, so the single world snap delta maps 1:1 to each root's stored
+    // geometry (translation composes) — one moving node is just a one-member group. `snapTargets`
+    // = other nodes' world bounds, captured once at mouse-down (they don't move during the drag);
+    // `snapEnabled` false disables it (a rotated/scaled chain in the set, or nothing to snap).
     private snapTargets: Rect[] | null = null;
-    private snapNodeId: string | null = null;
+    private snapEnabled = false;
     private snapSize: { width: number; height: number } = { width: 0, height: 0 };
-    // The moving node's WORLD bounds origin at mouse-down. Snapping runs in world space, so the
-    // moving box is (worldOrigin + drag delta); the snap delta then applies 1:1 to stored geometry
-    // because the chain is translation-only (see isTranslationOnlyChain).
+    // The moving GROUP box's WORLD origin at mouse-down. Snapping runs in world space, so the
+    // moving box is (worldOrigin + drag delta); the snap delta then applies 1:1 to every root's
+    // stored geometry because all chains are translation-only.
     private snapWorldOrigin: { x: number; y: number } = { x: 0, y: 0 };
 
     constructor(dispatcher: ActionDispatcher, editorState: EditorState, refresh: () => void) {
@@ -68,52 +71,66 @@ export class MoveTool implements Tool {
     }
 
     /**
-     * Enable alignment snapping only for the clean case: a SINGLE moving node that is top-level
-     * (parent === null) and unrotated/unscaled (no transform), so its world bounds equal its
-     * stored box and a world snap delta is also its stored delta. Targets = every OTHER node's
-     * world AABB (excluding the moving node's own subtree, which travels with it), captured now.
+     * Enable alignment snapping when EVERY moving root is a translation-only chain (node +
+     * ancestors unrotated/unscaled), so a world snap delta is also each root's stored delta —
+     * top-level OR nested under purely-translated parents, single node OR a whole group. The
+     * moving box is the union of the roots' world AABBs; targets = every OTHER node's world AABB
+     * (excluding all moving subtrees, which travel with the group), captured now.
      */
     private captureSnapTargets(doc: ReturnType<ActionDispatcher["getDocument"]>): void {
         this.snapTargets = null;
-        this.snapNodeId = null;
-        if (this.nodeStartPositions.size !== 1) return;
-        const id = [...this.nodeStartPositions.keys()][0];
-        // Snap only a translation-only chain (node + ancestors unrotated/unscaled), so a world snap
-        // delta is also the stored delta — top-level OR nested under purely-translated parents.
-        if (!doc.nodes.has(id) || !isTranslationOnlyChain(doc, id)) return;
+        this.snapEnabled = false;
+        const ids = [...this.nodeStartPositions.keys()];
+        if (ids.length === 0) return;
+        // Snap only if ALL moving roots are translation-only (a world delta == each stored delta).
+        // A single rotated/scaled chain in the set disables snapping for the whole gesture.
+        if (!ids.every(id => doc.nodes.has(id) && isTranslationOnlyChain(doc, id))) return;
 
         const computed = computeGeometry(doc);
-        const movingBounds = computed.nodes.get(id)?.bounds;
-        if (!movingBounds) return;
-        this.snapTargets = snapTargetsExcludingSubtree(doc, computed, id); // excludes this node's own subtree
-        this.snapNodeId = id;
+        const box = selectionBounds(computed, ids); // union of the moving roots' world AABBs
+        if (!box) return;
+        this.snapTargets = snapTargetsExcludingSubtrees(doc, computed, ids); // excludes every moving subtree
+        this.snapEnabled = true;
         // Computed size (a hug container's rendered size can differ from its stored width/height).
-        this.snapSize = { width: movingBounds.width, height: movingBounds.height };
-        this.snapWorldOrigin = { x: movingBounds.x, y: movingBounds.y };
+        this.snapSize = { width: box.width, height: box.height };
+        this.snapWorldOrigin = { x: box.x, y: box.y };
     }
 
     /**
      * Fold alignment snapping into a raw drag delta. Returns the (possibly adjusted) delta and
      * the guides to show. A no-op (returns the delta unchanged, no guides) unless this drag
-     * enabled snapping (single top-level unrotated node) — see `captureSnapTargets`.
+     * enabled snapping (all moving roots translation-only) — see `captureSnapTargets`.
      */
     private snapDelta(dx: number, dy: number): { dx: number; dy: number; guides: EditorState["snapGuides"] } {
-        if (!this.snapTargets || this.snapNodeId === null) return { dx, dy, guides: null };
+        if (!this.snapEnabled || !this.snapTargets) return { dx, dy, guides: null };
         // A pointer that hasn't moved is a CLICK, not a drag — never snap it, or a click on a
         // node that merely sits within threshold of an alignment would nudge it (and add an undo).
         if (dx === 0 && dy === 0) return { dx: 0, dy: 0, guides: null };
-        const start = this.nodeStartPositions.get(this.snapNodeId);
-        if (!start) return { dx, dy, guides: null };
         const zoom = Math.max(0.01, this.editorState.viewport.zoom);
-        // Snap in WORLD space (worldOrigin + drag), then apply the world snap delta 1:1 to the
-        // stored delta — valid because the chain is translation-only.
+        // Snap in WORLD space (the group box's worldOrigin + drag), then apply the world snap
+        // delta 1:1 to each root's stored delta — valid because every chain is translation-only.
         const moving = { x: this.snapWorldOrigin.x + dx, y: this.snapWorldOrigin.y + dy, width: this.snapSize.width, height: this.snapSize.height };
         const snap = computeSnap(moving, this.snapTargets, SNAP_THRESHOLD_PX / zoom);
         return { dx: dx + snap.dx, dy: dy + snap.dy, guides: snap.guides.length > 0 ? snap.guides : null };
     }
 
+    /**
+     * If a tracked node was deleted mid-drag, the group box captured at mouse-down is stale (it still
+     * includes the deleted member's extent), so stop snapping rather than snap the survivors against a
+     * phantom box. Called before every snap so a mid-drag deletion can't nudge the rest.
+     */
+    private invalidateSnapIfStale(doc: ReturnType<ActionDispatcher["getDocument"]>): void {
+        if (this.snapEnabled && ![...this.nodeStartPositions.keys()].every(id => doc.nodes.has(id))) {
+            this.snapEnabled = false;
+            this.snapTargets = null;
+        }
+    }
+
     onMouseMove(e: MouseEvent): void {
         if (!this.isDragging) return;
+
+        const doc = this.dispatcher.getDocument();
+        this.invalidateSnapIfStale(doc); // a member deleted mid-drag → the captured group box is stale
 
         const zoom = Math.max(0.01, this.editorState.viewport.zoom);
         const rawDx = (e.clientX - this.startX) / zoom;
@@ -124,7 +141,6 @@ export class MoveTool implements Tool {
         // Preview as PENDING PATCHES to stored (parent-relative) geometry. These
         // are composed by computeGeometry like any other geometry; the
         // document is never touched until commit.
-        const doc = this.dispatcher.getDocument();
         const overrides = new Map<string, Partial<Geometry>>();
         for (const id of [...this.nodeStartPositions.keys()]) {
             const node = doc.nodes.get(id);
@@ -148,13 +164,15 @@ export class MoveTool implements Tool {
     onMouseUp(e: MouseEvent): void {
         if (!this.isDragging) return;
 
+        const doc = this.dispatcher.getDocument();
+        this.invalidateSnapIfStale(doc); // don't commit a snap computed from a stale group box
+
         const zoom = Math.max(0.01, this.editorState.viewport.zoom);
         const rawDx = (e.clientX - this.startX) / zoom;
         const rawDy = (e.clientY - this.startY) / zoom;
         // Commit the SNAPPED position, so the drop lands exactly where the preview showed it.
         const { dx, dy } = this.snapDelta(rawDx, rawDy);
 
-        const doc = this.dispatcher.getDocument();
         const actions: UpdateNodeGeometryAction[] = [];
         if (dx !== 0 || dy !== 0) {
             for (const [id, start] of this.nodeStartPositions) {
@@ -187,6 +205,6 @@ export class MoveTool implements Tool {
         this.editorState.snapGuides = null;
         this.nodeStartPositions = new Map();
         this.snapTargets = null;
-        this.snapNodeId = null;
+        this.snapEnabled = false;
     }
 }

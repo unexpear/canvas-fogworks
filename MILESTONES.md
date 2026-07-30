@@ -497,10 +497,13 @@ box select. **Manipulation:** drag · resize · rotate. **Guides:** snapping · 
 guides · smart guides · rulers.
 
 **Close-out:** slices 1–5 are done — pan/zoom, box-select, DOM-free resize/rotate handle picking, a live
-SVG/Canvas backend selector, and alignment snapping + smart guides (move AND resize). Deferred refinements
-(documented at each slice): multi-select/group snapping + rotate; rotated/scaled-chain nodes (snapping now covers any translation-only chain — top-level or nested);
-the canvas TEXT wrapping (single-line for now; matching SVG foreignObject wrapping is inherent). Canvas images now render. The core
-editor loop is complete and every interaction is DOM-free, so it runs identically on both backends.
+SVG/Canvas backend selector, and alignment snapping + smart guides (move AND resize). The per-slice deferrals
+have since been cleared: resize snapping, Escape-cancel-rotate, nested translation-only chains, canvas
+hover-cursor, rulers, canvas images, and now **multi-select / group snapping + rotate** (below). The only
+deferrals that remain are the canvas TEXT wrapping (single-line for now; matching SVG `<foreignObject>`
+wrapping is inherent) and group RESIZE (scaling a rotated set non-uniformly is a shear the rotation+scale
+transform model can't represent — a genuinely separate feature). The core editor loop is complete and every
+interaction is DOM-free, so it runs identically on both backends.
 
 Already present from earlier prototypes: click + shift-multi-select (DOM-free `hitTest`), drag (`MoveTool`),
 resize (`ToolController`, but DOM-`data-resize-handle`-based — the canvas-wiring blocker), delete, and
@@ -586,9 +589,31 @@ change. This closes Milestone 4.
 pure `snapPoint(px, py, targets, threshold)` snaps the DRAGGED corner (the fixed corner stays) to target
 lines; `ToolController` folds it into a corner-resize of a single top-level unrotated node (the shared
 `snapTargetsExcludingSubtree` + `guidesForRect` helpers, extracted from `MoveTool`), snapping the pending +
-committed geometry and showing the same guides. Still deferred: multi-select/group snapping + rotate,
-rotated/scaled-CHAIN moving/resizing nodes (nested under purely-translated parents now snaps), and artboard/grid snapping (the pure snap already generalises to any
-rects — only the per-gesture tool wiring is scoped).
+committed geometry and showing the same guides. Still deferred: artboard/grid snapping (the pure snap already
+generalises to any rects — only the per-gesture tool wiring is scoped).
+
+**Follow-up (deferral addressed) — group operations (multi-select snapping + rotate):** a multi-selection now
+acts as ONE object. **Group move-snapping:** `MoveTool` snaps the *union* box of all moving roots
+(`selectionBounds`) to alignment lines when EVERY root is a translation-only chain, applying the one world
+delta to all (a single node is just a one-member group); targets exclude *every* moving subtree
+(`snapTargetsExcludingSubtrees`); a member deleted mid-drag disables snapping so the survivors don't snap
+against a stale box. **Group rotate:** for 2+ roots the overlay draws ONE group bounding box + a single rotate
+knob (`groupRotateHandle`), and grabbing it rotates every root *rigidly* about the group-box centre — the pure
+`rotateGroup` (in `src/core/geometry/GroupTransform.ts`) adds the drag's angle-delta to each root's rotation
+AND orbits its centre about the pivot (`newX = startX + Δcentre`, valid because the parent chain is
+translation-only and the origin is centre). It live-commits one **coalesced `TransactionAction`** (a geometry
++ transform update per root) per frame — so a continuous drag is ONE undo — keyed gesture-specifically
+(`rotate-group:<sorted ids>`) via a small `coalesceKey` extension that keys a transaction by its name.
+**Escape** reverts the visible state (a `rotateGroup(delta 0)` coalesced into the same run; within the
+coalesce window it nets to a no-op revision — a >window pause can leave the revert as its own undo step,
+inherited from single-node rotate and left consistent with it). The knob shows only when the group is
+*rotatable* (`isGroupRotatable`: every root centre-origin + translation-only parent chain + **not an in-flow
+auto-layout child**, whose position the layout engine computes and whose orbit would therefore be discarded —
+the same class `MoveTool` skips), so an ineligible group never offers a dead control. Multi-select no longer
+offers per-node resize (only the group knob is grabbable). No schema change. Verified by node tests + a
+10-mutant guard battery (all killed) + an adversarial multi-agent review (which caught the auto-layout-child
+non-rigidity — now fixed — and confirmed the Escape/coalesce caveat above). Still deferred: **group RESIZE** (a
+rotated set scaled non-uniformly is a shear the transform model can't represent) and rotated/scaled *parent* chains.
 
 ---
 

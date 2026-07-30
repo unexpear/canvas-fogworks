@@ -157,10 +157,15 @@ cursor. **No actions are re-executed on undo/redo** — a full snapshot is resto
   undoable). `hasTruncatedHistory()` tells the UI when to offer it.
 
 - **Coalescing — opt-in by the CALLER, not inferred from the action type.**
-  `dispatchAction(action, { coalesce: true })` lets consecutive edits to the *same node*
-  within `COALESCE_WINDOW_MS = 400` replace the previous revision instead of appending,
-  so a slider drag or a run of keystrokes is **one** undo step. Only continuous UI (the
-  inspector) opts in; every other dispatch defaults to a separate revision.
+  `dispatchAction(action, { coalesce: true })` lets consecutive edits with the *same
+  coalesce key* within `COALESCE_WINDOW_MS = 400` replace the previous revision instead of
+  appending, so a slider drag or a run of keystrokes is **one** undo step. The key is
+  `actionId:nodeId` for a single-node action, or — for a `TransactionAction`, which has no
+  single node — `TransactionAction:<name>`, so a continuous *multi-node* gesture (group
+  rotate emits one geometry+transform transaction per frame, named gesture-specifically as
+  `rotate-group:<sorted ids>`) also collapses to one undo. Only continuous UI opts in; every
+  other dispatch — including the discrete `move-nodes`/`delete-nodes` transactions — defaults
+  to a separate revision.
 
   > This used to be an allow-list of action classes, which was wrong:
   > `UpdateNodeGeometryAction` has two producers — the inspector (continuous) *and* a

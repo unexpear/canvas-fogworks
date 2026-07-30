@@ -186,6 +186,35 @@ describe("buildRenderModel — overlay", () => {
         expect(handleAtPoint(cs, ["n1"], 25, -ROTATE_OFFSET_PX / z, z)!.handle).toBe("rotate");
     });
 
+    test("multi-select → ONE group box + one group rotate knob, and no per-node corner handles", () => {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number, y: number) => doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: 50, height: 50 }, style: { fill: "#fff", opacity: 1 }, layout: {} });
+        mk("A", 0, 0); mk("B", 100, 100); // union {0,0,150,150}, centre (75,75)
+        doc.rootNodeUuids = ["A", "B"];
+        const model = buildRenderModel(SIZE, doc, stateFor(doc, { selectedNodeIds: ["A", "B"] }));
+
+        const handles = model.overlay.filter(i => i.role === "handle");
+        expect(handles.length).toBe(1);            // ONLY the group knob — no per-node corner squares
+        expect(handles[0].handle).toBe("rotate");
+        expect(handles[0].nodeId).toBe("");        // belongs to the group, not a node
+        expect(handles[0].shape).toMatchObject({ kind: "ellipse", cx: 75, cy: -ROTATE_OFFSET_PX }); // above the union top-centre
+
+        const outlines = model.overlay.filter(i => i.role === "outline");
+        expect(outlines.length).toBe(3); // 2 per-node selection outlines (pad 3) + 1 tight group box (pad 0)
+        expect(outlines).toContainEqual(expect.objectContaining({ shape: { kind: "rect", x: 0, y: 0, width: 150, height: 150 } }));
+    });
+
+    test("a non-rotatable group (a root under a rotated parent) → the group box but NO rotate knob", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#fff", opacity: 1 }, layout: {}, transform: { rotation: 0.3 } });
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 0, y: 0, width: 40, height: 40 }, style: { fill: "#fff", opacity: 1 }, layout: {} });
+        doc.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [], geometry: { x: 200, y: 0, width: 100, height: 100 }, style: { fill: "#fff", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P", "R"];
+        const model = buildRenderModel(SIZE, doc, stateFor(doc, { selectedNodeIds: ["C", "R"] }));
+        expect(model.overlay.filter(i => i.role === "handle").length).toBe(0); // not rotatable → no knob
+        expect(model.overlay.some(i => i.role === "outline")).toBe(true);      // group box still drawn
+    });
+
     test("RenderModel composes no coordinates — its Matrix import is the Mat2D TYPE only (invariant, mechanically checked)", () => {
         const src = readFileSync(resolve(__dirname, "RenderModel.ts"), "utf8");
         const m = src.match(/import\s*\{([^}]*)\}\s*from\s*"\.\.\/core\/geometry\/Matrix"/);

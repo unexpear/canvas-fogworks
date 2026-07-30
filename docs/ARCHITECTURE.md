@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer -->
 
-> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v18 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -206,7 +206,7 @@ Layout output today is expressed *as* geometry (computed local rects), not as a 
 |-------|-------|----------------|
 | Document | `core/document/{Document,Node,Serializer}.ts`, `core/ids/UUID.ts` | Source of truth, types, (de)serialization, identity |
 | Document integrity | `core/document/{SceneGraph,Integrity}.ts` | Tree traversal/draw order; structural + range validation on load |
-| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine,SelectionHandles,Snapping,Ruler}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**); DOM-free handle geometry + alignment snapping (move + resize; any translation-only chain) (**M4**) |
+| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine,SelectionHandles,Snapping,Ruler,GroupTransform}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**); DOM-free handle geometry + alignment snapping (move + resize; any translation-only chain) + group ops — union-box snapping, a group rotate knob, and `GroupTransform.rotateGroup` (rigid multi-node rotation about a shared pivot) (**M4**) |
 | Actions | `core/actions/{Action,types,applyMutations}.ts` + `*Action.ts` | Declarative mutations + delta protocol |
 | Dispatch/History | `core/actions/{ActionDispatcher,HistoryManager}.ts` | Only write path; snapshot undo/redo |
 | Editor | `editor/EditorState.ts`, `editor/tools/*` | Ephemeral state; input → Actions |

@@ -12,7 +12,7 @@
  * grabbable square identical at every zoom.
  */
 
-import { ComputedState } from "./GeometryEngine";
+import { ComputedState, selectionBounds } from "./GeometryEngine";
 import { Rect } from "./Matrix";
 
 /** Resize-handle square edge length in SCREEN pixels. */
@@ -86,4 +86,26 @@ export function handleAtPoint(
         if (x >= h.cx - half && x <= h.cx + half && y >= h.cy - half && y <= h.cy + half) return h;
     }
     return null;
+}
+
+/**
+ * The rotate knob for a GROUP box — one knob `ROTATE_OFFSET_PX` screen px above the top-centre of
+ * the union of `rootIds`' world AABBs (a multi-selection rotates as one). Null when the group has no
+ * finite box. `nodeId` is "" because the knob belongs to the whole group, not a single node. Shared
+ * by the renderer (which draws it) and the editor (which hit-tests it), so the two can't drift —
+ * exactly like `selectionHandles`. `zoom` places the knob (fixed screen offset) and sizes the grab.
+ */
+export function groupRotateHandle(state: ComputedState, rootIds: readonly string[], zoom: number): SelectionHandle | null {
+    const b = selectionBounds(state, rootIds);
+    if (!b || !isFiniteRect(b)) return null; // no finite union box (empty group, or non-finite bounds)
+    const rotateOffset = ROTATE_OFFSET_PX / flooredZoom(zoom);
+    return { nodeId: "", handle: "rotate", cx: b.x + b.width / 2, cy: b.y - rotateOffset, cursor: "grab" };
+}
+
+/** Whether a world point hits the group rotate knob (grab square = HANDLE_SIZE_PX / floored zoom). */
+export function groupHandleAtPoint(state: ComputedState, rootIds: readonly string[], x: number, y: number, zoom: number): SelectionHandle | null {
+    const h = groupRotateHandle(state, rootIds, zoom);
+    if (!h) return null;
+    const half = (HANDLE_SIZE_PX / flooredZoom(zoom)) / 2;
+    return (x >= h.cx - half && x <= h.cx + half && y >= h.cy - half && y <= h.cy + half) ? h : null;
 }

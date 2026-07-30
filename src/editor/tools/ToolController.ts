@@ -4,15 +4,18 @@
  */
 
 import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
+import { Action } from "../../core/actions/Action";
 import { UpdateNodeGeometryAction } from "../../core/actions/UpdateNodeGeometryAction";
 import { UpdateNodeTransformAction } from "../../core/actions/UpdateNodeTransformAction";
 import { DeleteNodeAction } from "../../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../../core/actions/TransactionAction";
 import { EditorState, panBy, screenToWorld } from "../EditorState";
-import { computeGeometry, ComputedState } from "../../core/geometry/GeometryEngine";
-import { handleAtPoint } from "../../core/geometry/SelectionHandles";
+import { computeGeometry, ComputedState, selectionBounds } from "../../core/geometry/GeometryEngine";
+import { handleAtPoint, groupHandleAtPoint } from "../../core/geometry/SelectionHandles";
+import { rotateGroup, isGroupRotatable, GroupRotateInput } from "../../core/geometry/GroupTransform";
 import { snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect } from "../../core/geometry/Matrix";
+import { ReadonlyDocument } from "../../core/document/Document";
 import { selectionRoots } from "../../core/document/SceneGraph";
 
 export interface Tool {
@@ -55,6 +58,17 @@ export class ToolController {
     private rotateStartAngle = 0;   // pointer angle about the centre at grab
     private rotateInitial = 0;      // the node's rotation at grab
 
+    // Group rotate — grabbing the GROUP knob spins EVERY selected root rigidly about the group
+    // box's centre (each root's rotation gains the same delta AND its centre orbits the pivot; see
+    // GroupTransform.rotateGroup). Live-committed as one coalesced TransactionAction per frame, so a
+    // continuous drag is one undo step; `groupRotateKey` (the sorted root ids) keys the coalescing.
+    private groupRotateMode = false;
+    private groupRotateInputs: GroupRotateInput[] = []; // each root's start pose, captured at grab
+    private groupPivotX = 0;
+    private groupPivotY = 0;
+    private groupRotateStartAngle = 0; // pointer angle about the pivot at grab
+    private groupRotateKey = "";       // coalesce key = "rotate-group:<sorted root ids>"
+
     // Viewport pan (space+drag or middle-mouse) — a mode that intercepts before the tool,
     // like resize. The gesture is screen-space, so it applies at any zoom and any tool.
     private spaceHeld = false;
@@ -88,53 +102,68 @@ export class ToolController {
             return;
         }
 
-        // Resize: hit-test the selection's corner handles in WORLD space — no DOM read, so it
-        // works under any backend (the Canvas surface has no `data-resize-handle` element).
-        // Geometry is resolved once here and handed to the active tool on fall-through, so a
-        // plain click that misses the handles doesn't recompute it in `SelectTool.pick`.
+        // Handle picking in WORLD space — no DOM read, so it works under any backend (the Canvas
+        // surface has no `data-resize-handle` element). Geometry is resolved once here and handed to
+        // the active tool on fall-through, so a plain click that misses the handles doesn't recompute
+        // it in `SelectTool.pick`. A SINGLE root shows per-node resize+rotate handles; a MULTI-root
+        // selection shows only the GROUP rotate knob (group resize is deferred).
         const sel = this.editorState.selectedNodeIds;
         let computed: ComputedState | undefined;
         if (sel.length > 0) {
+            const doc = this.dispatcher.getDocument();
             const vp = this.editorState.viewport;
             const w = screenToWorld(vp, canvasRect, e.clientX, e.clientY);
-            computed = computeGeometry(this.dispatcher.getDocument(), this.editorState.pendingGeometry);
-            const hit = handleAtPoint(computed, sel, w.x, w.y, vp.zoom);
-            const c = hit ? computed.nodes.get(hit.nodeId) : undefined;
-            const node = hit ? this.dispatcher.getDocument().nodes.get(hit.nodeId) : undefined;
-            if (hit && c && node) {
-                if (hit.handle === "rotate") {
-                    // Spin about the world-AABB centre (= the default centre transform-origin).
-                    this.rotateMode = true;
-                    this.rotateNodeId = hit.nodeId;
-                    this.rotateCenterX = c.bounds.x + c.bounds.width / 2;
-                    this.rotateCenterY = c.bounds.y + c.bounds.height / 2;
-                    this.rotateInitial = node.transform?.rotation ?? 0;
-                    this.rotateStartAngle = Math.atan2(w.y - this.rotateCenterY, w.x - this.rotateCenterX);
-                    this.editorState.isDragging = true;
+            computed = computeGeometry(doc, this.editorState.pendingGeometry);
+            const roots = selectionRoots(doc, sel);
+
+            if (roots.length >= 2) {
+                // Group: only the rotate knob is grabbable (a rotatable group), and only then.
+                if (isGroupRotatable(doc, roots) && groupHandleAtPoint(computed, roots, w.x, w.y, vp.zoom)) {
+                    this.beginGroupRotate(doc, computed, roots, w.x, w.y);
                     e.preventDefault();
                     return;
                 }
-                this.resizeMode = true;
-                this.resizeNodeId = hit.nodeId;
-                this.resizeHandle = hit.handle;
-                this.resizeStartX = e.clientX;
-                this.resizeStartY = e.clientY;
-                this.resizeOrigin = {
-                    x: node.geometry.x,
-                    y: node.geometry.y,
-                    width: node.geometry.width,
-                    height: node.geometry.height
-                };
-                // Enable snapping for a translation-only chain (world snap delta == stored delta),
-                // capturing the constant world↔stored origin offset so the world snap maps to stored.
-                if (isTranslationOnlyChain(this.dispatcher.getDocument(), hit.nodeId)) {
-                    this.resizeSnapTargets = snapTargetsExcludingSubtree(this.dispatcher.getDocument(), computed, hit.nodeId);
-                    this.resizeSnapOffset = { x: c.bounds.x - node.geometry.x, y: c.bounds.y - node.geometry.y };
-                } else {
-                    this.resizeSnapTargets = null;
+                // else fall through: a body click/drag on the multi-selection goes to the tool.
+            } else {
+                // 0/1 root: per-node handles, hit-tested over `roots` so picking matches drawing.
+                const hit = handleAtPoint(computed, roots, w.x, w.y, vp.zoom);
+                const c = hit ? computed.nodes.get(hit.nodeId) : undefined;
+                const node = hit ? doc.nodes.get(hit.nodeId) : undefined;
+                if (hit && c && node) {
+                    if (hit.handle === "rotate") {
+                        // Spin about the world-AABB centre (= the default centre transform-origin).
+                        this.rotateMode = true;
+                        this.rotateNodeId = hit.nodeId;
+                        this.rotateCenterX = c.bounds.x + c.bounds.width / 2;
+                        this.rotateCenterY = c.bounds.y + c.bounds.height / 2;
+                        this.rotateInitial = node.transform?.rotation ?? 0;
+                        this.rotateStartAngle = Math.atan2(w.y - this.rotateCenterY, w.x - this.rotateCenterX);
+                        this.editorState.isDragging = true;
+                        e.preventDefault();
+                        return;
+                    }
+                    this.resizeMode = true;
+                    this.resizeNodeId = hit.nodeId;
+                    this.resizeHandle = hit.handle;
+                    this.resizeStartX = e.clientX;
+                    this.resizeStartY = e.clientY;
+                    this.resizeOrigin = {
+                        x: node.geometry.x,
+                        y: node.geometry.y,
+                        width: node.geometry.width,
+                        height: node.geometry.height
+                    };
+                    // Enable snapping for a translation-only chain (world snap delta == stored delta),
+                    // capturing the constant world↔stored origin offset so the world snap maps to stored.
+                    if (isTranslationOnlyChain(doc, hit.nodeId)) {
+                        this.resizeSnapTargets = snapTargetsExcludingSubtree(doc, computed, hit.nodeId);
+                        this.resizeSnapOffset = { x: c.bounds.x - node.geometry.x, y: c.bounds.y - node.geometry.y };
+                    } else {
+                        this.resizeSnapTargets = null;
+                    }
+                    e.preventDefault();
+                    return;
                 }
-                e.preventDefault();
-                return;
             }
         }
 
@@ -160,6 +189,20 @@ export class ToolController {
             const rotation = this.rotateInitial + (angle - this.rotateStartAngle);
             // Live-commit, coalesced → a continuous drag is one undo step; onChange repaints.
             this.dispatcher.dispatchAction(new UpdateNodeTransformAction(doc, this.rotateNodeId, { rotation }), { coalesce: true });
+            return;
+        }
+
+        if (this.groupRotateMode) {
+            const doc = this.dispatcher.getDocument();
+            // Every root vanished mid-drag → end the gesture AND clear the drag-cursor flag.
+            if (!this.groupRotateInputs.some(n => doc.nodes.has(n.id))) {
+                this.resetGroupRotate(); this.editorState.isDragging = false; this.refresh(); return;
+            }
+            const w = screenToWorld(this.editorState.viewport, canvasRect, e.clientX, e.clientY);
+            const angle = Math.atan2(w.y - this.groupPivotY, w.x - this.groupPivotX);
+            // Absolute delta from the start angle → each frame recomputes from the captured poses, so
+            // nothing compounds; live-committed coalesced (one undo for the drag). onChange repaints.
+            this.commitGroupRotate(angle - this.groupRotateStartAngle);
             return;
         }
 
@@ -209,15 +252,77 @@ export class ToolController {
         const sel = this.editorState.selectedNodeIds;
         let cursor: string | null = null;
         if (sel.length > 0) {
+            const doc = this.dispatcher.getDocument();
             const vp = this.editorState.viewport;
             const w = screenToWorld(vp, canvasRect, e.clientX, e.clientY);
-            const computed = computeGeometry(this.dispatcher.getDocument(), this.editorState.pendingGeometry);
-            cursor = handleAtPoint(computed, sel, w.x, w.y, vp.zoom)?.cursor ?? null;
+            const computed = computeGeometry(doc, this.editorState.pendingGeometry);
+            const roots = selectionRoots(doc, sel);
+            // Match onMouseDown's picking: a group exposes only its rotate knob, a single root its
+            // per-node handles — so the hover cursor reflects what a press would actually grab.
+            if (roots.length >= 2) {
+                cursor = (isGroupRotatable(doc, roots) ? groupHandleAtPoint(computed, roots, w.x, w.y, vp.zoom) : null)?.cursor ?? null;
+            } else {
+                cursor = handleAtPoint(computed, roots, w.x, w.y, vp.zoom)?.cursor ?? null;
+            }
         }
         if (cursor !== this.editorState.hoverCursor) {
             this.editorState.hoverCursor = cursor;
             this.refresh(); // only repaint on a change, not on every idle pixel
         }
+    }
+
+    /** Capture each root's start pose + the group pivot (box centre) for a group-rotate gesture. */
+    private beginGroupRotate(doc: ReadonlyDocument, computed: ComputedState, roots: string[], wx: number, wy: number): void {
+        const box = selectionBounds(computed, roots);
+        if (!box) return; // no finite group box — nothing to rotate (the knob hit implies one exists)
+        const inputs: GroupRotateInput[] = [];
+        for (const id of roots) {
+            const c = computed.nodes.get(id);
+            const node = doc.nodes.get(id);
+            if (!c || !node) continue;
+            inputs.push({
+                id,
+                startX: node.geometry.x,
+                startY: node.geometry.y,
+                startRotation: node.transform?.rotation ?? 0,
+                centerX: c.bounds.x + c.bounds.width / 2,   // == the box centre for a centre-origin node
+                centerY: c.bounds.y + c.bounds.height / 2
+            });
+        }
+        if (inputs.length === 0) return;
+        this.groupPivotX = box.x + box.width / 2;
+        this.groupPivotY = box.y + box.height / 2;
+        this.groupRotateStartAngle = Math.atan2(wy - this.groupPivotY, wx - this.groupPivotX);
+        this.groupRotateInputs = inputs;
+        // Gesture-specific coalesce key (sorted so it's stable), so a continuous drag collapses to one
+        // undo but two DIFFERENT group selections don't merge (see HistoryManager.coalesceKey).
+        this.groupRotateKey = `rotate-group:${[...roots].sort().join(",")}`;
+        this.groupRotateMode = true;
+        this.editorState.isDragging = true;
+    }
+
+    /**
+     * Live-commit the group rotation at `delta` radians: one atomic, coalesced transaction of a
+     * geometry (orbit) + transform (rotation) update per surviving root. Absolute in `delta`, so the
+     * caller passes the total delta from the start angle and frames don't compound. A no-op when
+     * every root has vanished (the move/up handlers detect that and end the gesture).
+     */
+    private commitGroupRotate(delta: number): void {
+        const doc = this.dispatcher.getDocument();
+        const live = this.groupRotateInputs.filter(n => doc.nodes.has(n.id));
+        if (live.length === 0) return;
+        const poses = rotateGroup(this.groupPivotX, this.groupPivotY, delta, live);
+        const actions: Action[] = [];
+        for (const p of poses) {
+            actions.push(new UpdateNodeGeometryAction(doc, p.id, { x: p.x, y: p.y }));
+            actions.push(new UpdateNodeTransformAction(doc, p.id, { rotation: p.rotation }));
+        }
+        this.dispatcher.dispatchAction(new TransactionAction(doc, this.groupRotateKey, actions), { coalesce: true });
+    }
+
+    private resetGroupRotate(): void {
+        this.groupRotateMode = false;
+        this.groupRotateInputs = [];
     }
 
     onMouseUp(e: MouseEvent): void {
@@ -231,6 +336,14 @@ export class ToolController {
         if (this.rotateMode) {
             // The rotation was already live-committed (coalesced) during the drag; just end.
             this.resetRotate();
+            this.editorState.isDragging = false;
+            this.refresh();
+            return;
+        }
+
+        if (this.groupRotateMode) {
+            // The group rotation was already live-committed (coalesced) during the drag; just end.
+            this.resetGroupRotate();
             this.editorState.isDragging = false;
             this.refresh();
             return;
@@ -279,6 +392,18 @@ export class ToolController {
                     this.dispatcher.dispatchAction(new UpdateNodeTransformAction(doc, this.rotateNodeId, { rotation: this.rotateInitial }), { coalesce: true });
                 }
                 this.resetRotate();
+                this.editorState.isDragging = false;
+                this.refresh();
+                return;
+            }
+            if (this.groupRotateMode) {
+                // Revert the VISIBLE state to the start poses: rotateGroup with delta 0 returns exactly
+                // the captured start x/y/rotation, coalesced into the same run so — within the coalesce
+                // window — the whole gesture nets to a no-op revision. (Like single-node rotate, a
+                // >window pause before Escape can leave the revert as its own undo step; inherent to
+                // time-windowed coalescing, not special-cased here to keep the two gestures consistent.)
+                this.commitGroupRotate(0);
+                this.resetGroupRotate();
                 this.editorState.isDragging = false;
                 this.refresh();
                 return;

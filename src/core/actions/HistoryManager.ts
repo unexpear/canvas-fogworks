@@ -93,9 +93,18 @@ const COALESCE_WINDOW_MS = 400;
  * Only the call site knows.
  */
 function coalesceKey(payload: ActionPayload): string | null {
-    const nodeId = payload.payload && typeof payload.payload === "object"
-        ? (payload.payload as { nodeId?: unknown }).nodeId
-        : undefined;
+    const p = payload.payload && typeof payload.payload === "object" ? payload.payload as Record<string, unknown> : null;
+    // A TransactionAction has no single-node target, so key it by its NAME instead. A continuous
+    // gesture that emits one transaction per frame (group rotate: each root's geometry + transform in
+    // one atomic step) then collapses into a single undo step — the multi-node analogue of a slider
+    // drag's `Action:nodeId` key. The name is made gesture-specific by the caller (the sorted root
+    // ids), so two different groups don't merge. Only ever consulted when the caller opts in
+    // (coalesce:true); the discrete transactions (move-nodes, delete-nodes) don't, so they're unchanged.
+    if (payload.actionId === "TransactionAction") {
+        const name = p ? p.name : undefined;
+        return typeof name === "string" && name.length > 0 ? `TransactionAction:${name}` : null;
+    }
+    const nodeId = p ? p.nodeId : undefined;
     if (typeof nodeId !== "string" || nodeId.length === 0) return null;
     return `${payload.actionId}:${nodeId}`;
 }

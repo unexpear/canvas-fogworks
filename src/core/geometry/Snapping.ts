@@ -113,16 +113,16 @@ export function isTranslationOnlyChain(doc: ReadonlyDocument, nodeId: string): b
 }
 
 /**
- * Other nodes' world bounds to snap against: every computed node EXCEPT `rootId`'s own subtree,
- * which moves/resizes as one and must not be a snap target for itself. Shared by the move and
- * resize gestures. Non-finite bounds are dropped.
+ * Other nodes' world bounds to snap against: every computed node EXCEPT the subtrees of
+ * `rootIds`, which move/resize as one group and must not be snap targets for themselves.
+ * Shared by the move (single AND group) and resize gestures. Non-finite bounds are dropped.
  */
-export function snapTargetsExcludingSubtree(doc: ReadonlyDocument, computed: ComputedState, rootId: string): Rect[] {
+export function snapTargetsExcludingSubtrees(doc: ReadonlyDocument, computed: ComputedState, rootIds: readonly string[]): Rect[] {
     const subtree = new Set<string>();
-    const stack = [rootId];
+    const stack = [...rootIds];
     while (stack.length) {
         const id = stack.pop()!;
-        subtree.add(id);
+        subtree.add(id); // a Set, so a duplicate/shared id is idempotent (callers pass disjoint roots anyway)
         doc.nodes.get(id)?.children.forEach(c => stack.push(c));
     }
     const targets: Rect[] = [];
@@ -130,6 +130,11 @@ export function snapTargetsExcludingSubtree(doc: ReadonlyDocument, computed: Com
         if (!subtree.has(id) && isFiniteRect(c.bounds)) targets.push(c.bounds);
     });
     return targets;
+}
+
+/** Single-root convenience wrapper over `snapTargetsExcludingSubtrees` (the common move/resize case). */
+export function snapTargetsExcludingSubtree(doc: ReadonlyDocument, computed: ComputedState, rootId: string): Rect[] {
+    return snapTargetsExcludingSubtrees(doc, computed, [rootId]);
 }
 
 /** Every alignment that holds for `rect`, one guide per aligned coordinate (spans merged across targets). */
