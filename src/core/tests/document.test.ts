@@ -22,7 +22,7 @@ import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, 
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
 import { selectionHandles, handleAtPoint, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
-import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree } from "../geometry/Snapping";
+import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain } from "../geometry/Snapping";
 import { MoveTool } from "../../editor/tools/MoveTool";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
@@ -1168,19 +1168,34 @@ describe("ToolController DOM-free resize", () => {
         expect(es.snapGuides).toBeNull(); // cleared on release
     });
 
-    test("resize does NOT snap a node that isn't top-level (stored != world)", () => {
+    test("resize snaps a NESTED node's corner in world space (translated parent)", () => {
         const doc = createEmptyDocument();
-        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 0, y: 0, width: 300, height: 300 }, style: { fill: "#000", opacity: 1 }, layout: {} });
-        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
-        doc.nodes.set("T", { id: "T", type: "core.rectangle", parent: null, children: [], geometry: { x: 100, y: 100, width: 60, height: 60 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 500, y: 500, width: 400, height: 400 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 10, y: 10, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} }); // world (510,510) → SE (560,560)
+        doc.nodes.set("T", { id: "T", type: "core.rectangle", parent: null, children: [], geometry: { x: 600, y: 510, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
         doc.rootNodeUuids = ["P", "T"];
         const dispatcher = new ActionDispatcher(doc);
         const es = createEditorState(); es.selectedNodeIds = ["C"];
         const tc = new ToolController(dispatcher, es, () => { });
-        tc.onMouseDown(md(50, 50), rect); // C's SE world corner (P at origin → 50,50)
-        tc.onMouseMove(md(97, 50), rect); // near T's left (100), but C is nested → snapping disabled
+        tc.onMouseDown(md(560, 560), rect); // C's SE world corner
+        tc.onMouseMove(md(597, 560), rect); // world right 560→597, within 6 of T's left (600) → snaps; stored width += (37+3)
+        expect(es.snapGuides).toContainEqual(expect.objectContaining({ axis: "x", pos: 600 })); // guide at T's WORLD edge (not the stored 100)
+        tc.onMouseUp(md(597, 560));
+        expect(dispatcher.getDocument().nodes.get("C")!.geometry.width).toBe(90); // 50 + 37 + 3(snap)
+    });
+
+    test("resize does NOT snap a transformed (rotated) node", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {}, transform: { rotation: 0.0001 } });
+        doc.nodes.set("T", { id: "T", type: "core.rectangle", parent: null, children: [], geometry: { x: 100, y: 100, width: 60, height: 60 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["A", "T"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        tc.onMouseDown(md(50, 50), rect); // A's SE ≈ (50,50) (barely rotated)
+        tc.onMouseMove(md(97, 50), rect); // near T's left (100), but A is rotated → snapping disabled
         tc.onMouseUp(md(97, 50));
-        expect(dispatcher.getDocument().nodes.get("C")!.geometry.width).toBe(97); // raw 97, NOT snapped to 100
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry.width).toBe(97); // raw 97, NOT snapped
     });
 });
 
@@ -1333,6 +1348,29 @@ describe("computeSnap", () => {
     });
 });
 
+describe("isTranslationOnlyChain", () => {
+    function chainDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        const mk = (id: string, parent: string | null, extra: Partial<Node> = {}) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {}, ...extra });
+        mk("top", null);
+        mk("Pt", null, { children: ["Ct"] }); mk("Ct", "Pt");                    // translated (no transform) parent + child
+        mk("Pr", null, { children: ["Cr"], transform: { rotation: 0.1 } }); mk("Cr", "Pr"); // ROTATED parent + unrotated child
+        mk("selfr", null, { transform: { scaleX: 2 } });                         // self scaled
+        doc.rootNodeUuids = ["top", "Pt", "Pr", "selfr"];
+        return doc;
+    }
+
+    test("true iff the node AND every ancestor are unrotated/unscaled", () => {
+        const doc = chainDoc();
+        expect(isTranslationOnlyChain(doc, "top")).toBe(true);   // top-level, no transform
+        expect(isTranslationOnlyChain(doc, "Ct")).toBe(true);    // child of a translated parent
+        expect(isTranslationOnlyChain(doc, "Cr")).toBe(false);   // child of a ROTATED parent — walks up and fails
+        expect(isTranslationOnlyChain(doc, "selfr")).toBe(false); // self scaled
+        expect(isTranslationOnlyChain(doc, "nope")).toBe(false);  // missing node
+    });
+});
+
 describe("snapTargetsExcludingSubtree", () => {
     function doc3(): ProjectDocument {
         const doc = createEmptyDocument();
@@ -1405,18 +1443,33 @@ describe("MoveTool snapping", () => {
         expect(dispatcher.canUndo()).toBe(false); // no action committed
     });
 
-    test("a nested (non-top-level) node does not snap", () => {
+    test("a nested node (translated parent) snaps in WORLD space — the delta maps 1:1 to stored", () => {
         const doc = createEmptyDocument();
-        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 0, y: 0, width: 200, height: 200 }, style: { fill: "#000", opacity: 1 }, layout: {} });
-        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 97, y: 10, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
-        doc.nodes.set("T", { id: "T", type: "core.rectangle", parent: null, children: [], geometry: { x: 100, y: 500, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        // Parent far away so the snap ONLY works via the WORLD origin (the stored value 97 is near NO target).
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 500, y: 500, width: 400, height: 400 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 10, y: 10, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} }); // world (510,510)
+        doc.nodes.set("T", { id: "T", type: "core.rectangle", parent: null, children: [], geometry: { x: 600, y: 510, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
         doc.rootNodeUuids = ["P", "T"];
         const dispatcher = new ActionDispatcher(doc);
         const es = createEditorState(); es.selectedNodeIds = ["C"];
         const tool = new MoveTool(dispatcher, es, () => { });
         tool.onMouseDown(md(0, 0));
-        tool.onMouseMove(md(1, 0)); // a real drag, but C is nested → snapping disabled
-        expect(es.pendingGeometry!.get("C")).toEqual({ x: 98, y: 10 }); // raw +1, NOT snapped to any edge
+        tool.onMouseMove(md(87, 0)); // C's world left 510→597, within 6 of T's left (600) → snaps; stored += (87+3)
+        expect(es.pendingGeometry!.get("C")).toEqual({ x: 100, y: 10 }); // stored 10 + 87 + 3(snap) — a stored-origin snap would give 97
+        expect(es.snapGuides).toContainEqual(expect.objectContaining({ axis: "x", pos: 600 })); // guide at T's world edge
+    });
+
+    test("a transformed (rotated) node does not snap — its world delta ≠ its stored delta", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {}, transform: { rotation: 0.1 } });
+        doc.nodes.set("T", { id: "T", type: "core.rectangle", parent: null, children: [], geometry: { x: 100, y: 100, width: 60, height: 60 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["C", "T"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["C"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        tool.onMouseDown(md(0, 0));
+        tool.onMouseMove(md(97, 0)); // near T's left (100), but C is rotated → snapping disabled
+        expect(es.pendingGeometry!.get("C")).toEqual({ x: 97, y: 0 }); // raw 97, NOT snapped
         expect(es.snapGuides).toBeNull();
     });
 

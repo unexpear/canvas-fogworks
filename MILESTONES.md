@@ -498,7 +498,7 @@ guides · smart guides · rulers.
 
 **Close-out:** slices 1–5 are done — pan/zoom, box-select, DOM-free resize/rotate handle picking, a live
 SVG/Canvas backend selector, and alignment snapping + smart guides (move AND resize). Deferred refinements
-(documented at each slice): multi-select/group snapping + rotate (snapping is single top-level unrotated node);
+(documented at each slice): multi-select/group snapping + rotate; rotated/scaled-chain nodes (snapping now covers any translation-only chain — top-level or nested);
 the canvas per-region hover cursor and text/image rasterization; rulers. The core
 editor loop is complete and every interaction is DOM-free, so it runs identically on both backends.
 
@@ -587,7 +587,7 @@ pure `snapPoint(px, py, targets, threshold)` snaps the DRAGGED corner (the fixed
 lines; `ToolController` folds it into a corner-resize of a single top-level unrotated node (the shared
 `snapTargetsExcludingSubtree` + `guidesForRect` helpers, extracted from `MoveTool`), snapping the pending +
 committed geometry and showing the same guides. Still deferred: multi-select/group snapping + rotate,
-nested/rotated moving/resizing nodes, and artboard/grid snapping (the pure snap already generalises to any
+rotated/scaled-CHAIN moving/resizing nodes (nested under purely-translated parents now snaps), and artboard/grid snapping (the pure snap already generalises to any
 rects — only the per-gesture tool wiring is scoped).
 
 ---

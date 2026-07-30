@@ -67,6 +67,7 @@ function computeSnap(moving: Rect, targets: readonly Rect[], threshold: number):
 function snapPoint(px: number, py: number, targets: readonly Rect[], threshold: number): { dx: number; dy: number }; // RESIZE: snap the dragged corner to target lines, each axis independently
 function guidesForRect(rect: Rect, targets: readonly Rect[]): SnapGuide[]; // guides for a rect's existing alignments (merged spans)
 function snapTargetsExcludingSubtree(doc: ReadonlyDocument, computed: ComputedState, rootId: string): Rect[]; // other nodes' world bounds, minus rootId's own subtree
+function isTranslationOnlyChain(doc: ReadonlyDocument, nodeId: string): boolean; // node + all ancestors unrotated/unscaled → world snap delta == stored delta (snapping is enabled only then)
 
 // geometry/LayoutEngine.ts — Milestone 2 core: auto-layout containers.
 // Runs INSIDE computeGeometry; a container's children get a computed local rect.
@@ -266,10 +267,12 @@ Actions and dispatch them; they mutate only `EditorState`, never the document.
 (`EditorState.marqueeRect`) and, on release, selects `nodesInRect` (shift = additive); a
 plain click with no drag deselects. Picking is world-space (`hitTest`/`nodesInRect`), never
 the DOM, so selection works under any renderer backend.
-Alignment snapping applies to a SINGLE top-level, unrotated node (stored == world): `MoveTool`
-folds `computeSnap` into a drag (whole box), and `ToolController` resize folds `snapPoint` into a
-corner drag — both write `EditorState.snapGuides` for the renderer. A multi-node/nested/rotated
-gesture is unsnapped (deferred).
+Alignment snapping applies to a SINGLE node whose transform chain is translation-only
+(`isTranslationOnlyChain` — so a WORLD snap delta maps 1:1 to stored; top-level OR nested under
+purely-translated parents): `MoveTool` folds `computeSnap` into a drag (whole box) and
+`ToolController` resize folds `snapPoint` into a corner drag — both run in WORLD space (via the
+node's world origin/offset) and write `EditorState.snapGuides`. A multi-node, or rotated/scaled-
+chain, gesture is unsnapped (deferred).
 
 ## Renderer (`renderer/`)
 

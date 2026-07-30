@@ -51,7 +51,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { createEditorState, clampViewport, panBy, zoomAt, screenToWorld, EditorState } from "../../editor/EditorState";
 import { selectionHandles, handleAtPoint, SelectionHandle, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
-import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, SNAP_THRESHOLD_PX, SnapGuide, SnapResult } from "../geometry/Snapping";
+import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX, SnapGuide, SnapResult } from "../geometry/Snapping";
 import { renderSVG, clearRenderState, RendererState } from "../../renderer/SVGRenderer";
 import { renderCanvas } from "../../renderer/CanvasRenderer";
 import { renderScene, RenderBackend } from "../../renderer/renderScene";
@@ -223,6 +223,7 @@ export function __apiSurfacePin(): void {
     expectType<{ dx: number; dy: number }>(snapPoint(0, 0, [unit], 6));
     expectType<SnapGuide[]>(guidesForRect(unit, [unit]));
     expectType<Rect[]>(snapTargetsExcludingSubtree(doc, computed, "id"));
+    expectType<boolean>(isTranslationOnlyChain(doc, "id"));
     const rendererState: RendererState = {
         selectedNodeIds: [], hoveredNodeId: null, computed, viewport: es.viewport
     };

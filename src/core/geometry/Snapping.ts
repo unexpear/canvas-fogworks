@@ -97,6 +97,22 @@ function isFiniteRect(r: Rect): boolean {
 }
 
 /**
+ * Whether a node and EVERY ancestor carry no transform — a purely translated chain. When true, a
+ * WORLD snap delta equals the node's STORED delta (translation composes 1:1), so a tool can snap in
+ * world space and write the same delta to stored geometry. A rotation/scale anywhere breaks that, so
+ * snapping is disabled for such a node (a documented scope, not a correctness risk).
+ */
+export function isTranslationOnlyChain(doc: ReadonlyDocument, nodeId: string): boolean {
+    let id: string | null = nodeId;
+    while (id !== null) {
+        const n = doc.nodes.get(id);
+        if (!n || n.transform) return false;
+        id = n.parent ?? null;
+    }
+    return true;
+}
+
+/**
  * Other nodes' world bounds to snap against: every computed node EXCEPT `rootId`'s own subtree,
  * which moves/resizes as one and must not be a snap target for itself. Shared by the move and
  * resize gestures. Non-finite bounds are dropped.

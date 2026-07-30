@@ -11,7 +11,7 @@ import { Geometry } from "../../core/document/Node";
 import { selectionRoots } from "../../core/document/SceneGraph";
 import { isAbsolute, isLayoutContainer } from "../../core/geometry/LayoutEngine";
 import { computeGeometry } from "../../core/geometry/GeometryEngine";
-import { computeSnap, snapTargetsExcludingSubtree, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
+import { computeSnap, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect } from "../../core/geometry/Matrix";
 import { Tool } from "./ToolController";
 
@@ -29,6 +29,10 @@ export class MoveTool implements Tool {
     private snapTargets: Rect[] | null = null;
     private snapNodeId: string | null = null;
     private snapSize: { width: number; height: number } = { width: 0, height: 0 };
+    // The moving node's WORLD bounds origin at mouse-down. Snapping runs in world space, so the
+    // moving box is (worldOrigin + drag delta); the snap delta then applies 1:1 to stored geometry
+    // because the chain is translation-only (see isTranslationOnlyChain).
+    private snapWorldOrigin: { x: number; y: number } = { x: 0, y: 0 };
 
     constructor(dispatcher: ActionDispatcher, editorState: EditorState, refresh: () => void) {
         this.dispatcher = dispatcher;
@@ -74,8 +78,9 @@ export class MoveTool implements Tool {
         this.snapNodeId = null;
         if (this.nodeStartPositions.size !== 1) return;
         const id = [...this.nodeStartPositions.keys()][0];
-        const node = doc.nodes.get(id);
-        if (!node || node.parent !== null || node.transform) return;
+        // Snap only a translation-only chain (node + ancestors unrotated/unscaled), so a world snap
+        // delta is also the stored delta — top-level OR nested under purely-translated parents.
+        if (!doc.nodes.has(id) || !isTranslationOnlyChain(doc, id)) return;
 
         const computed = computeGeometry(doc);
         const movingBounds = computed.nodes.get(id)?.bounds;
@@ -84,6 +89,7 @@ export class MoveTool implements Tool {
         this.snapNodeId = id;
         // Computed size (a hug container's rendered size can differ from its stored width/height).
         this.snapSize = { width: movingBounds.width, height: movingBounds.height };
+        this.snapWorldOrigin = { x: movingBounds.x, y: movingBounds.y };
     }
 
     /**
@@ -99,9 +105,9 @@ export class MoveTool implements Tool {
         const start = this.nodeStartPositions.get(this.snapNodeId);
         if (!start) return { dx, dy, guides: null };
         const zoom = Math.max(0.01, this.editorState.viewport.zoom);
-        // start.x/y == the node's world bounds origin (top-level, unrotated), so a world snap
-        // delta is also its stored delta.
-        const moving = { x: start.x + dx, y: start.y + dy, width: this.snapSize.width, height: this.snapSize.height };
+        // Snap in WORLD space (worldOrigin + drag), then apply the world snap delta 1:1 to the
+        // stored delta — valid because the chain is translation-only.
+        const moving = { x: this.snapWorldOrigin.x + dx, y: this.snapWorldOrigin.y + dy, width: this.snapSize.width, height: this.snapSize.height };
         const snap = computeSnap(moving, this.snapTargets, SNAP_THRESHOLD_PX / zoom);
         return { dx: dx + snap.dx, dy: dy + snap.dy, guides: snap.guides.length > 0 ? snap.guides : null };
     }

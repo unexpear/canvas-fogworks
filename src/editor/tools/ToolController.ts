@@ -11,7 +11,7 @@ import { TransactionAction } from "../../core/actions/TransactionAction";
 import { EditorState, panBy, screenToWorld } from "../EditorState";
 import { computeGeometry, ComputedState } from "../../core/geometry/GeometryEngine";
 import { handleAtPoint } from "../../core/geometry/SelectionHandles";
-import { snapPoint, guidesForRect, snapTargetsExcludingSubtree, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
+import { snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect } from "../../core/geometry/Matrix";
 import { selectionRoots } from "../../core/document/SceneGraph";
 
@@ -38,9 +38,12 @@ export class ToolController {
     private resizePreview: { x: number; y: number; width: number; height: number } | null = null;
     private resizeStartX = 0;
     private resizeStartY = 0;
-    // Alignment snap targets for the resize, captured at mouse-down when the resizing node is a
-    // single top-level unrotated node (stored == world); null disables resize snapping.
+    // Alignment snap targets for the resize, captured at mouse-down when the resizing node's chain
+    // is translation-only (world snap delta == stored delta); null disables resize snapping.
     private resizeSnapTargets: Rect[] | null = null;
+    // The node's WORLD-minus-STORED origin offset (constant for a translation chain), so the snap
+    // (which runs in world) maps to the stored-geometry resize: {0,0} for a top-level node.
+    private resizeSnapOffset: { x: number; y: number } = { x: 0, y: 0 };
 
     // Rotate mode — grabbing the rotate knob spins the node about its world-AABB centre.
     // Each move live-commits a coalesced UpdateNodeTransformAction, so a CONTINUOUS drag is one
@@ -122,11 +125,14 @@ export class ToolController {
                     width: node.geometry.width,
                     height: node.geometry.height
                 };
-                // Enable snapping only for a top-level, unrotated node (stored == world, so a world
-                // corner snap is also a stored-geometry adjustment).
-                this.resizeSnapTargets = (node.parent === null && !node.transform)
-                    ? snapTargetsExcludingSubtree(this.dispatcher.getDocument(), computed, hit.nodeId)
-                    : null;
+                // Enable snapping for a translation-only chain (world snap delta == stored delta),
+                // capturing the constant world↔stored origin offset so the world snap maps to stored.
+                if (isTranslationOnlyChain(this.dispatcher.getDocument(), hit.nodeId)) {
+                    this.resizeSnapTargets = snapTargetsExcludingSubtree(this.dispatcher.getDocument(), computed, hit.nodeId);
+                    this.resizeSnapOffset = { x: c.bounds.x - node.geometry.x, y: c.bounds.y - node.geometry.y };
+                } else {
+                    this.resizeSnapTargets = null;
+                }
                 e.preventDefault();
                 return;
             }
@@ -166,10 +172,12 @@ export class ToolController {
             if (!doc.nodes.has(this.resizeNodeId)) { this.resetResize(); this.refresh(); return; }
 
             // Alignment snapping: pull the DRAGGED corner (the fixed corner stays put) onto a
-            // nearby target edge/centre, then recompute the box from the adjusted delta.
+            // nearby target edge/centre, then recompute the box from the adjusted delta. The corner
+            // and guides run in WORLD (stored + offset); the snap delta applies 1:1 to stored.
+            const off = this.resizeSnapOffset;
             if (this.resizeSnapTargets) {
                 const corner = this.movingCorner(this.resizeHandle, this.resizeOrigin);
-                const snap = snapPoint(corner.x + dx, corner.y + dy, this.resizeSnapTargets, SNAP_THRESHOLD_PX / zoom);
+                const snap = snapPoint(corner.x + off.x + dx, corner.y + off.y + dy, this.resizeSnapTargets, SNAP_THRESHOLD_PX / zoom);
                 dx += snap.dx;
                 dy += snap.dy;
             }
@@ -179,7 +187,8 @@ export class ToolController {
             this.resizePreview = g;
             this.editorState.pendingGeometry = new Map([[this.resizeNodeId, g]]);
             if (this.resizeSnapTargets) {
-                const guides = guidesForRect(g, this.resizeSnapTargets);
+                const worldBox = { x: g.x + off.x, y: g.y + off.y, width: g.width, height: g.height };
+                const guides = guidesForRect(worldBox, this.resizeSnapTargets);
                 this.editorState.snapGuides = guides.length > 0 ? guides : null;
             }
 
