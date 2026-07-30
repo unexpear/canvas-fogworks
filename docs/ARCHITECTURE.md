@@ -61,7 +61,8 @@ Everything in the engine — now and in every future milestone — rests on thes
   previews) — never document state.
 - **Dispatcher** enforces the lifecycle and is the sole mutator.
 - **Document** is passive data.
-- **HistoryManager** stores snapshots and serves undo/redo.
+- **HistoryManager** stores snapshots and serves undo/redo (plus `rollbackTo(checkpoint)` — a hard
+  cancel that discards revisions since a checkpoint, used to erase a cancelled live-committed gesture).
 - **Renderer** reads the document plus `EditorState`-derived `RendererState` and paints via the
   selected backend (SVG or Canvas).
 - **App (React)** wires the pieces and re-renders on a tick. It subscribes to

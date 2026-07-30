@@ -250,6 +250,28 @@ export class HistoryManager {
         return revision ? hydrateDocument(revision.document) : null;
     }
 
+    /** Id of the revision at the current cursor — a checkpoint a caller can later `rollbackTo`. */
+    public getCurrentRevisionId(): string {
+        return this.revisions[this.currentIndex].id;
+    }
+
+    /**
+     * Hard-cancel: discard EVERY revision committed after `revisionId` and return that revision's
+     * document. Unlike undo (which leaves the discarded revisions redoable), this erases them
+     * entirely — the way a live-committed gesture (rotate) is cancelled so it leaves no undo AND no
+     * redo trace, regardless of how the coalesce window split its frames. Returns null when the id is
+     * not in the retained history (e.g. trimmed under memory pressure), so the caller can fall back.
+     * `lastCommittedId` is cleared (like undo) so a later coalesced edit never merges into the head.
+     */
+    public rollbackTo(revisionId: string): ProjectDocument | null {
+        const index = this.revisions.findIndex(r => r.id === revisionId);
+        if (index < 0) return null;
+        this.revisions = this.revisions.slice(0, index + 1);
+        this.currentIndex = index;
+        this.lastCommittedId = null;
+        return hydrateDocument(this.revisions[index].document);
+    }
+
     public canUndo(): boolean {
         return this.currentIndex > 0;
     }

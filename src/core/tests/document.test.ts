@@ -1323,6 +1323,30 @@ describe("ToolController rotate", () => {
         tc.onKeyDown(key("Escape"));
         expect(rotOf(dispatcher)).toBeCloseTo(Math.PI / 2, 10); // back to the initial π/2
     });
+
+    test("Escape after a >coalesce-window pause fully cancels — undo does NOT resurrect the rotation", () => {
+        const { dispatcher, tc } = harness();
+        const nowSpy = jest.spyOn(Date, "now");
+        try {
+            nowSpy.mockReturnValue(1000);
+            tc.onMouseDown(md(50, -ROTATE_OFFSET_PX), rect); // checkpoint = the pre-gesture (INITIAL) revision
+            tc.onMouseMove(md(90, 10), rect);                // frame 1 @ t=1000
+            nowSpy.mockReturnValue(2000);                    // +1000ms > COALESCE_WINDOW_MS(400)
+            tc.onMouseMove(md(100, 50), rect);               // frame 2 @ t=2000 → a SEPARATE revision (history split)
+            tc.onKeyDown(key("Escape"));                     // rollback to the checkpoint erases BOTH frames
+        } finally { nowSpy.mockRestore(); }
+        expect(rotOf(dispatcher)).toBe(0);                   // reverted
+        expect(dispatcher.canUndo()).toBe(false);            // NO resurrectable "rotated" revision via undo (a coalesced revert leaves one)
+        expect(dispatcher.canRedo()).toBe(false);            // NOR via redo — the gesture's revisions are TRUNCATED, not just stepped past
+    });
+
+    test("grabbing the knob and pressing Escape with NO drag commits nothing", () => {
+        const { dispatcher, tc } = harness();
+        tc.onMouseDown(md(50, -ROTATE_OFFSET_PX), rect); // grab, no move
+        tc.onKeyDown(key("Escape"));
+        expect(dispatcher.canUndo()).toBe(false);        // no phantom no-op revision
+        expect(rotOf(dispatcher)).toBe(0);
+    });
 });
 
 // ─── M4: GroupTransform — rigid group rotation about a shared pivot (pure math) ───
@@ -1532,6 +1556,30 @@ describe("ToolController group rotate", () => {
         expect(es.hoverCursor).toBe("grab");
         tc.onMouseMove(hover(150, 50), rect); // idle over the box body (no handle)
         expect(es.hoverCursor).toBeNull();
+    });
+
+    test("Escape after a >coalesce-window pause fully cancels a group rotate — undo does not resurrect it", () => {
+        const { dispatcher, tc } = harness();
+        const nowSpy = jest.spyOn(Date, "now");
+        try {
+            nowSpy.mockReturnValue(1000);
+            tc.onMouseDown(md(150, -ROTATE_OFFSET_PX), rect);
+            tc.onMouseMove(md(200, -30), rect); // frame 1 @ t=1000
+            nowSpy.mockReturnValue(2000);        // >window
+            tc.onMouseMove(md(250, 50), rect);   // frame 2 @ t=2000 → a separate revision
+            tc.onKeyDown(key("Escape"));         // rollback erases both
+        } finally { nowSpy.mockRestore(); }
+        expect(geoRot(dispatcher, "A")).toEqual({ x: 0, y: 0, rotation: 0 });   // fully reverted
+        expect(geoRot(dispatcher, "B")).toEqual({ x: 200, y: 0, rotation: 0 });
+        expect(dispatcher.canUndo()).toBe(false); // no resurrectable rotated revision via undo…
+        expect(dispatcher.canRedo()).toBe(false); // …nor via redo (revisions truncated)
+    });
+
+    test("grabbing the group knob and pressing Escape with NO drag commits nothing", () => {
+        const { dispatcher, tc } = harness();
+        tc.onMouseDown(md(150, -ROTATE_OFFSET_PX), rect);
+        tc.onKeyDown(key("Escape"));
+        expect(dispatcher.canUndo()).toBe(false);
     });
 });
 

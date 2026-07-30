@@ -213,6 +213,8 @@ class ActionDispatcher {
   redo(): ProjectDocument | null;
   canUndo(): boolean;
   canRedo(): boolean;
+  getHistoryCheckpoint(): string;                      // current revision id; capture BEFORE a live-committed gesture
+  rollbackToCheckpoint(revisionId: string): boolean;   // hard-cancel: discard revisions since the checkpoint (no undo/redo trace); false if trimmed
   getDocument(): ReadonlyDocument;   // deep-readonly; mutation requires an Action
   loadDocument(doc: ProjectDocument): void;            // New/Open: replace + reset history
   hasTruncatedHistory(): boolean;                      // undo can no longer reach the start
@@ -227,6 +229,8 @@ class HistoryManager {
   redo(): ProjectDocument | null;   // deep-cloned snapshot
   canUndo(): boolean;
   canRedo(): boolean;
+  getCurrentRevisionId(): string;                      // a checkpoint id for rollbackTo
+  rollbackTo(revisionId: string): ProjectDocument | null; // DISCARD every revision after the id (undo leaves them redoable; this erases them); null if trimmed
   getRevisionCount(): number;
   hasTruncatedHistory(): boolean;
   getOriginal(): ProjectDocument;      // pinned outside the trimmable list
@@ -272,7 +276,9 @@ class ToolController {
   // routes pointer/key events; owns viewport PAN (space+drag / middle-mouse), corner-RESIZE and
   // ROTATE (both via DOM-free `handleAtPoint` over the selection, NOT `data-resize-handle`; rotate
   // spins about the node's world-AABB centre and live-commits a coalesced `UpdateNodeTransformAction`
-  // = one undo per continuous drag; Escape cancels an in-flight resize/rotate), Delete/Backspace, and on an
+  // = one undo per continuous drag; Escape cancels an in-flight resize/rotate — a rotate cancel rolls
+  // history back to a checkpoint captured at grab, erasing the gesture's revisions with no undo/redo
+  // trace regardless of the coalesce window, and a grab+Escape with no drag is a true no-op), Delete/Backspace, and on an
   // IDLE hover sets `EditorState.hoverCursor` from `handleAtPoint` so the Canvas backend shows handle cursors —
   // each a mode that intercepts before the active tool. For a MULTI-root selection the per-node handles are
   // replaced by ONE group rotate knob (`groupHandleAtPoint`): grabbing it rotates every root rigidly about the

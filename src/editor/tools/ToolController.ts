@@ -57,6 +57,11 @@ export class ToolController {
     private rotateCenterY = 0;
     private rotateStartAngle = 0;   // pointer angle about the centre at grab
     private rotateInitial = 0;      // the node's rotation at grab
+    // History checkpoint captured at grab (single OR group rotate). Both gestures live-commit per
+    // frame, so Escape cancels by rolling history back to here — erasing the gesture's revisions
+    // entirely (no undo/redo trace), which is reliable regardless of the coalesce window. null = no
+    // gesture / no checkpoint (fall back to a manual revert).
+    private rotateCheckpointId: string | null = null;
 
     // Group rotate — grabbing the GROUP knob spins EVERY selected root rigidly about the group
     // box's centre (each root's rotation gains the same delta AND its centre orbits the pivot; see
@@ -138,6 +143,7 @@ export class ToolController {
                         this.rotateCenterY = c.bounds.y + c.bounds.height / 2;
                         this.rotateInitial = node.transform?.rotation ?? 0;
                         this.rotateStartAngle = Math.atan2(w.y - this.rotateCenterY, w.x - this.rotateCenterX);
+                        this.rotateCheckpointId = this.dispatcher.getHistoryCheckpoint(); // pre-gesture head, for Escape
                         this.editorState.isDragging = true;
                         e.preventDefault();
                         return;
@@ -294,6 +300,7 @@ export class ToolController {
         this.groupPivotY = box.y + box.height / 2;
         this.groupRotateStartAngle = Math.atan2(wy - this.groupPivotY, wx - this.groupPivotX);
         this.groupRotateInputs = inputs;
+        this.rotateCheckpointId = this.dispatcher.getHistoryCheckpoint(); // pre-gesture head, for Escape
         // Gesture-specific coalesce key (sorted so it's stable), so a continuous drag collapses to one
         // undo but two DIFFERENT group selections don't merge (see HistoryManager.coalesceKey).
         this.groupRotateKey = `rotate-group:${[...roots].sort().join(",")}`;
@@ -323,6 +330,7 @@ export class ToolController {
     private resetGroupRotate(): void {
         this.groupRotateMode = false;
         this.groupRotateInputs = [];
+        this.rotateCheckpointId = null;
     }
 
     onMouseUp(e: MouseEvent): void {
@@ -385,11 +393,15 @@ export class ToolController {
                 return;
             }
             if (this.rotateMode && this.rotateNodeId) {
-                // Rotate live-committed as it dragged (coalesced), so cancel = revert to the pre-gesture
-                // angle, coalesced into the SAME run so the whole gesture nets to a no-op revision.
-                const doc = this.dispatcher.getDocument();
-                if (doc.nodes.has(this.rotateNodeId)) {
-                    this.dispatcher.dispatchAction(new UpdateNodeTransformAction(doc, this.rotateNodeId, { rotation: this.rotateInitial }), { coalesce: true });
+                // Cancel = roll history back to the checkpoint captured at grab, which erases the
+                // gesture's live-committed revisions entirely (no undo AND no redo trace), reliably
+                // and independent of the coalesce window. Fallback (checkpoint trimmed, ~never):
+                // revert the angle the old way.
+                if (!this.cancelGesture()) {
+                    const doc = this.dispatcher.getDocument();
+                    if (doc.nodes.has(this.rotateNodeId)) {
+                        this.dispatcher.dispatchAction(new UpdateNodeTransformAction(doc, this.rotateNodeId, { rotation: this.rotateInitial }), { coalesce: true });
+                    }
                 }
                 this.resetRotate();
                 this.editorState.isDragging = false;
@@ -397,12 +409,9 @@ export class ToolController {
                 return;
             }
             if (this.groupRotateMode) {
-                // Revert the VISIBLE state to the start poses: rotateGroup with delta 0 returns exactly
-                // the captured start x/y/rotation, coalesced into the same run so — within the coalesce
-                // window — the whole gesture nets to a no-op revision. (Like single-node rotate, a
-                // >window pause before Escape can leave the revert as its own undo step; inherent to
-                // time-windowed coalescing, not special-cased here to keep the two gestures consistent.)
-                this.commitGroupRotate(0);
+                // Same as single rotate: roll history back to the grab checkpoint (erases the
+                // gesture's revisions). Fallback: revert every root's pose via rotateGroup(delta 0).
+                if (!this.cancelGesture()) this.commitGroupRotate(0);
                 this.resetGroupRotate();
                 this.editorState.isDragging = false;
                 this.refresh();
@@ -478,9 +487,20 @@ export class ToolController {
         this.editorState.snapGuides = null;
     }
 
+    /**
+     * Cancel a live-committed rotate by rolling history back to the checkpoint captured at grab —
+     * erasing the gesture's revisions entirely (undoable AND redoable). Returns false when there is no
+     * checkpoint or it was trimmed, so the caller can fall back to a manual revert. A grab with no
+     * committed frame rolls back to the same head → a true no-op (no spurious revision).
+     */
+    private cancelGesture(): boolean {
+        return this.rotateCheckpointId !== null && this.dispatcher.rollbackToCheckpoint(this.rotateCheckpointId);
+    }
+
     private resetRotate(): void {
         this.rotateMode = false;
         this.rotateNodeId = null;
+        this.rotateCheckpointId = null;
     }
 
     private deleteSelectedNodes(): void {

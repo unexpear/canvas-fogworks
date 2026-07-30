@@ -167,6 +167,13 @@ cursor. **No actions are re-executed on undo/redo** — a full snapshot is resto
   other dispatch — including the discrete `move-nodes`/`delete-nodes` transactions — defaults
   to a separate revision.
 
+  > CANCELLING a live-committed gesture does NOT rely on the coalesce window. The tool captures a
+  > checkpoint (`getHistoryCheckpoint` = the current revision id) at grab; Escape calls
+  > `rollbackToCheckpoint`, which **discards** every revision committed since (no undo AND no redo
+  > trace) and restores that document. This is what makes a rotate cancel reliable regardless of a
+  > mid-drag pause, and makes a grab-then-Escape with no drag a true no-op instead of a phantom
+  > revision. (Unlike undo, which steps the cursor back but leaves the revisions redoable.)
+
   > This used to be an allow-list of action classes, which was wrong:
   > `UpdateNodeGeometryAction` has two producers — the inspector (continuous) *and* a
   > drag committing on mouse-up (discrete) — so the class cannot tell you the input

@@ -192,6 +192,8 @@ export function __apiSurfacePin(): void {
     expectType<ProjectDocument | null>(dispatcher.redo());
     expectType<boolean>(dispatcher.canUndo());
     expectType<boolean>(dispatcher.canRedo());
+    expectType<string>(dispatcher.getHistoryCheckpoint());
+    expectType<boolean>(dispatcher.rollbackToCheckpoint("rev-id"));
     expectType<void>(dispatcher.loadDocument(doc));
     expectType<boolean>(dispatcher.hasTruncatedHistory());
     expectType<ProjectDocument>(dispatcher.revertToOriginal());
