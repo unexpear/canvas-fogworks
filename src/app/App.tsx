@@ -20,6 +20,9 @@ import { MoveTool } from "../editor/tools/MoveTool";
 import { RectangleTool } from "../editor/tools/RectangleTool";
 import { RendererState } from "../renderer/SVGRenderer";
 import { renderScene, RenderBackend } from "../renderer/renderScene";
+import { rulerTicks } from "../core/geometry/Ruler";
+
+const RULER = 18; // ruler bar thickness in px
 
 declare global {
     interface Window {
@@ -371,10 +374,17 @@ export function App() {
                     )}
                 </div>
 
-                <div
-                    ref={canvasRef}
-                    style={{ flex: 1, overflow: "hidden", position: "relative", cursor: canvasCursor }}
-                />
+                <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+                    {/* Imperative render surface (SVG or Canvas) fills the pane; React never touches its children. */}
+                    <div
+                        ref={canvasRef}
+                        style={{ position: "absolute", inset: 0, cursor: canvasCursor }}
+                    />
+                    {/* Rulers overlay the top/left edges (pointer-events off, so clicks pass through). */}
+                    <Ruler axis="x" length={canvasRef.current?.clientWidth ?? 0} vp={vp} />
+                    <Ruler axis="y" length={canvasRef.current?.clientHeight ?? 0} vp={vp} />
+                    <div style={{ position: "absolute", top: 0, left: 0, width: RULER, height: RULER, background: "#16162a", borderRight: "1px solid #2a2a4a", borderBottom: "1px solid #2a2a4a" }} />
+                </div>
 
                 <div style={{ width: 220, background: "#16162a", borderLeft: "1px solid #2a2a4a", padding: 10, overflow: "auto" }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 8 }}>INSPECTOR</div>
@@ -435,6 +445,42 @@ export function App() {
                 <span>Visual Design Engine v{CURRENT_VERSION}</span>
             </div>
         </div>
+    );
+}
+
+// A screen-fixed ruler bar. Ticks come from the pure `rulerTicks`; each world tick maps to a screen
+// position via the same transform the content uses (`screen = z·world − vp`).
+function Ruler({ axis, length, vp }: { axis: "x" | "y"; length: number; vp: { x: number; y: number; zoom: number } }) {
+    if (length <= 0) return null;
+    const z = Math.max(0.01, vp.zoom);
+    const off = axis === "x" ? vp.x : vp.y;
+    const ticks = rulerTicks(off / z, (length + off) / z, z);
+    const horizontal = axis === "x";
+    return (
+        <svg
+            width={horizontal ? length : RULER}
+            height={horizontal ? RULER : length}
+            style={{
+                position: "absolute", top: 0, left: 0, background: "#16162a", pointerEvents: "none",
+                borderBottom: horizontal ? "1px solid #2a2a4a" : undefined,
+                borderRight: horizontal ? undefined : "1px solid #2a2a4a"
+            }}
+        >
+            {ticks.map(t => {
+                const s = t.world * z - off; // screen position along the ruler's axis
+                return horizontal ? (
+                    <g key={t.world}>
+                        <line x1={s} y1={t.major ? 4 : 11} x2={s} y2={RULER} stroke="#555" strokeWidth={1} />
+                        {t.major && <text x={s + 2} y={9} fontSize={8} fill="#8a8aa0">{t.label}</text>}
+                    </g>
+                ) : (
+                    <g key={t.world}>
+                        <line x1={t.major ? 4 : 11} y1={s} x2={RULER} y2={s} stroke="#555" strokeWidth={1} />
+                        {t.major && <text x={9} y={s - 2} fontSize={8} fill="#8a8aa0" transform={`rotate(-90 9 ${s - 2})`}>{t.label}</text>}
+                    </g>
+                );
+            })}
+        </svg>
     );
 }
 

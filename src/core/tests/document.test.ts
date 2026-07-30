@@ -23,6 +23,7 @@ import { translation, compose, multiply, invert, applyToPoint, transformRectToAA
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
 import { selectionHandles, handleAtPoint, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain } from "../geometry/Snapping";
+import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
@@ -1363,6 +1364,43 @@ describe("computeSnap", () => {
         const rect = { x: 100, y: 100, width: 50, height: 50 };  // x-lines 100/125/150
         const target = { x: 100, y: 300, width: 80, height: 50 }; // x-lines 100/140/180 — shares ONLY the left edge
         expect(guidesForRect(rect, [target])).toEqual([{ axis: "x", pos: 100, start: 100, end: 350 }]);
+    });
+});
+
+describe("rulerTicks / niceStep", () => {
+    test("niceStep rounds up to 1/2/5 × 10ᵏ", () => {
+        expect(niceStep(80)).toBe(100);   // 8 → 10
+        expect(niceStep(40)).toBe(50);     // 4 → 5
+        expect(niceStep(160)).toBe(200);   // 1.6 → 2
+        expect(niceStep(3)).toBe(5);
+        expect(niceStep(0.4)).toBe(0.5);
+        expect(niceStep(0)).toBe(1);       // guard: non-positive → 1
+        expect(niceStep(NaN)).toBe(1);
+    });
+
+    test("emits ticks at a zoom-adaptive nice step across the visible range", () => {
+        // zoom 1 → step niceStep(80) = 100.
+        expect(rulerTicks(0, 250, 1)).toEqual([
+            { world: 0, label: "0", major: true },
+            { world: 100, label: "100", major: false },
+            { world: 200, label: "200", major: false }
+        ]);
+        // zoom 2 → targetPx/zoom = 40 → step 50 (denser).
+        expect(rulerTicks(0, 100, 2).map(t => t.world)).toEqual([0, 50, 100]);
+        // every 5th tick is major (index 5 = world 500 here, not index 4).
+        const big = rulerTicks(0, 600, 1); // step 100, indices 0..6
+        expect(big.find(t => t.world === 500)!.major).toBe(true);
+        expect(big.find(t => t.world === 400)!.major).toBe(false);
+    });
+
+    test("labels are integers for a ≥1 step and decimals for a sub-unit step", () => {
+        expect(rulerTicks(0, 2, 200).map(t => t.label)).toEqual(["0.0", "0.5", "1.0", "1.5", "2.0"]); // step 0.5
+    });
+
+    test("degenerate / pathological ranges yield no ticks (never explode)", () => {
+        expect(rulerTicks(50, 50, 1)).toEqual([]);   // empty range
+        expect(rulerTicks(NaN, 100, 1)).toEqual([]); // non-finite
+        expect(rulerTicks(0, 1e12, 0.001)).toEqual([]); // huge span → capped to []
     });
 });
 

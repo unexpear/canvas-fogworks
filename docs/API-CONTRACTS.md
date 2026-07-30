@@ -69,6 +69,11 @@ function guidesForRect(rect: Rect, targets: readonly Rect[]): SnapGuide[]; // gu
 function snapTargetsExcludingSubtree(doc: ReadonlyDocument, computed: ComputedState, rootId: string): Rect[]; // other nodes' world bounds, minus rootId's own subtree
 function isTranslationOnlyChain(doc: ReadonlyDocument, nodeId: string): boolean; // node + all ancestors unrotated/unscaled → world snap delta == stored delta (snapping is enabled only then)
 
+// geometry/Ruler.ts — pure ruler tick computation (the app draws the bars).
+interface RulerTick { world: number; label: string; major: boolean } // major = every 5th tick
+function niceStep(worldPerTarget: number): number;                     // 1/2/5 × 10ᵏ step
+function rulerTicks(worldStart: number, worldEnd: number, zoom: number, targetPx?: number): RulerTick[]; // ticks across the visible world range, ~targetPx apart
+
 // geometry/LayoutEngine.ts — Milestone 2 core: auto-layout containers.
 // Runs INSIDE computeGeometry; a container's children get a computed local rect.
 function layoutChildren(                          // pure flex-stack math (multi-line when wrap)

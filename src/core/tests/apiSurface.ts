@@ -52,6 +52,7 @@ import { TransactionAction } from "../actions/TransactionAction";
 import { createEditorState, clampViewport, panBy, zoomAt, screenToWorld, EditorState } from "../../editor/EditorState";
 import { selectionHandles, handleAtPoint, SelectionHandle, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX, SnapGuide, SnapResult } from "../geometry/Snapping";
+import { rulerTicks, niceStep, RulerTick } from "../geometry/Ruler";
 import { renderSVG, clearRenderState, RendererState } from "../../renderer/SVGRenderer";
 import { renderCanvas } from "../../renderer/CanvasRenderer";
 import { renderScene, RenderBackend } from "../../renderer/renderScene";
@@ -225,6 +226,9 @@ export function __apiSurfacePin(): void {
     expectType<SnapGuide[]>(guidesForRect(unit, [unit]));
     expectType<Rect[]>(snapTargetsExcludingSubtree(doc, computed, "id"));
     expectType<boolean>(isTranslationOnlyChain(doc, "id"));
+    expectType<number>(niceStep(80));
+    expectType<RulerTick[]>(rulerTicks(0, 100, 1));
+    expectType<RulerTick[]>(rulerTicks(0, 100, 1, 60));
     const rendererState: RendererState = {
         selectedNodeIds: [], hoveredNodeId: null, computed, viewport: es.viewport
     };
