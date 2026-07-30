@@ -573,7 +573,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"20"`; chain tail: …16→17 path, 17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing to numbers, drops unvalidatable entries — 19→20 number-token radius/fontSize, pass-through) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"21"`; chain tail: …17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing, drops unvalidatable entries — 19→20 number-token radius/fontSize (pass-through), 20→21 components: pass-through for the new type/field but it RENAMES stored ids containing the now-reserved `::`) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

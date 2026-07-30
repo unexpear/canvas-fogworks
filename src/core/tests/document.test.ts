@@ -2001,6 +2001,127 @@ describe("Components: expandInstances", () => {
         expect(dispatcher.canUndo()).toBe(false);
     });
 
+    test("a moving instance does NOT snap to its OWN materialized copies (they travel with it)", () => {
+        // The copies sit exactly on the instance's edges but are NOT in its stored `children`,
+        // so the subtree walk can't see them: without the owner check every sub-threshold drag
+        // would snap back to 0 and pin the instance in place.
+        const doc = docWithInstance();
+        const cs = computeGeometry(doc);
+        const targets = snapTargetsExcludingSubtrees(doc, cs, ["I"]);
+        // The instance's own copies (world 300,300 and 305,305) must be absent…
+        expect(targets.some(t => t.x === 300 && t.y === 300)).toBe(false);
+        // …while the MASTER's real nodes (elsewhere on canvas) remain valid targets.
+        expect(targets.some(t => t.x === 10 && t.y === 20)).toBe(true);
+        // A drag of the instance is therefore free to move (nothing pins it at its start).
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["I"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        const mev = (x: number, y: number) => ({ clientX: x, clientY: y } as unknown as MouseEvent);
+        tool.onMouseDown(mev(0, 0));
+        tool.onMouseMove(mev(3, 0)); // a 3px drag — inside the 6px snap threshold
+        expect(es.pendingGeometry!.get("I")).toEqual({ x: 303, y: 300 }); // moved, NOT pinned at 300
+    });
+
+    test("a LINE master can be instanced (the instance box follows the line/path rule)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("L", { id: "L", type: "core.line", parent: null, children: [], geometry: { x: 0, y: 100, width: 200, height: 0 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["L"];
+        expect(dimensionError("core.instance", 200, 0)).toBeNull();     // one axis may collapse…
+        expect(dimensionError("core.instance", 0, 0)).toMatch("non-zero"); // …but not both
+        const dispatcher = new ActionDispatcher(doc);
+        expect(dispatcher.dispatchAction(new CreateInstanceAction(dispatcher.getDocument(), "L", 0, 300, "LI")).success).toBe(true);
+        expect(computeGeometry(dispatcher.getDocument()).nodes.get("LI::L")).toBeDefined();
+    });
+
+    test("the 20→21 migration RENAMES stored ids containing the now-reserved \"::\" (old files stay loadable)", () => {
+        // Schema 21 reserves "::" retroactively; a schema-20 file using it loaded fine before,
+        // so the migration must rewrite the id AND every reference, not make the file unreadable.
+        const v20 = JSON.stringify({
+            version: "20",
+            document: {
+                metadata: {}, rootNodeUuids: ["a::b"], variables: {}, activeTheme: "light",
+                nodes: {
+                    "a::b": { id: "a::b", type: "core.rectangle", parent: null, children: ["c::d"], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} },
+                    "c::d": { id: "c::d", type: "core.rectangle", parent: "a::b", children: [], geometry: { x: 1, y: 1, width: 5, height: 5 }, style: { fill: "#000", opacity: 1 }, layout: {} }
+                }
+            }
+        });
+        const doc = deserializeDocument(v20); // must NOT throw
+        expect(doc.nodes.has("a__b")).toBe(true);
+        expect(doc.nodes.has("c__d")).toBe(true);
+        expect(doc.rootNodeUuids).toEqual(["a__b"]);
+        expect(doc.nodes.get("a__b")!.children).toEqual(["c__d"]);  // references rewritten…
+        expect(doc.nodes.get("c__d")!.parent).toBe("a__b");          // …in both directions
+        expect(doc.nodes.get("c__d")!.geometry).toMatchObject({ x: 1, y: 1 }); // content preserved
+        expect(() => deserializeDocument(serializeDocument(doc))).not.toThrow();
+    });
+
+    test("the materialized ROOT drops the master's constraints (they described a parent the copy lost)", () => {
+        // The master is a constrained child of a frame; its copy sits under the INSTANCE, whose
+        // box is unrelated — leaving the constraints would reposition the copy and override the
+        // (0,0) re-origin. Deeper copies keep theirs (their parent IS a faithful copy).
+        const doc = createEmptyDocument();
+        doc.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["M"], geometry: { x: 0, y: 0, width: 400, height: 400 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: "F", children: ["MC"], geometry: { x: 10, y: 10, width: 100, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: { constraints: { horizontal: "right" }, constraintRef: { width: 400, height: 400 } } });
+        doc.nodes.set("MC", { id: "MC", type: "core.rectangle", parent: "M", children: [], geometry: { x: 5, y: 5, width: 20, height: 20 }, style: { fill: "#0f0", opacity: 1 }, layout: { constraints: { horizontal: "right" }, constraintRef: { width: 100, height: 50 } } });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 700, y: 700, width: 100, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["F", "I"];
+        const x = expandInstances(doc);
+        expect(x.nodes.get("I::M")!.layout.constraints).toBeUndefined();   // root copy: cleared
+        expect(x.nodes.get("I::M")!.layout.constraintRef).toBeUndefined();
+        expect(x.nodes.get("I::MC")!.layout.constraints).toBeDefined();     // deeper copy: kept
+        // …so the copy lands exactly at the instance origin, not shifted by a stale anchor.
+        expect(computeGeometry(doc).nodes.get("I::M")!.bounds).toMatchObject({ x: 700, y: 700 });
+    });
+
+    test("a master edit invalidates the instance's copies even with dirty-tracking inputs", () => {
+        // computeGeometry disables previous/dirty reuse while instances are present, because the
+        // dirty set names STORED ids — the virtual copies a master edit changes are not in it.
+        const doc = docWithInstance();
+        const first = computeGeometry(doc);
+        expect(first.nodes.get("I::MC")!.bounds).toMatchObject({ x: 305 });
+        doc.nodes.get("MC")!.geometry.x = 40; // a master edit, reported as dirty on the STORED id
+        const second = computeGeometry(doc, null, first, new Set(["MC"]));
+        expect(second.nodes.get("I::MC")!.bounds).toMatchObject({ x: 340 }); // not the stale 305
+    });
+
+    test("sibling copies keep the master's CHILD ORDER (z-order must survive expansion)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: ["c1", "c2", "c3"], geometry: { x: 0, y: 0, width: 90, height: 30 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        for (const c of ["c1", "c2", "c3"]) doc.nodes.set(c, { id: c, type: "core.rectangle", parent: "M", children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 200, y: 0, width: 90, height: 30 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["M", "I"];
+        expect(expandInstances(doc).nodes.get("I::M")!.children).toEqual(["I::c1", "I::c2", "I::c3"]);
+    });
+
+    test("two SIBLING instances of the same master both expand (the chain is per-branch, not global)", () => {
+        const doc = docWithInstance();
+        doc.nodes.set("I2", { id: "I2", type: "core.instance", parent: null, children: [], geometry: { x: 600, y: 600, width: 100, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["M", "I", "I2"];
+        const x = expandInstances(doc);
+        expect(x.nodes.has("I::M")).toBe(true);
+        expect(x.nodes.has("I2::M")).toBe(true); // a SHARED chain set would have blocked the second
+    });
+
+    test("the depth cap is two-sided: nesting DOES reach the cap before stopping", () => {
+        // A one-sided "≤ cap" assertion also passes for a cap of 1 — assert a deep chain really
+        // materializes several levels, so a tightening off-by-one is caught too.
+        const doc = createEmptyDocument();
+        doc.nodes.set("m0", { id: "m0", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        for (let k = 1; k <= 5; k++) {
+            doc.nodes.set(`m${k}`, { id: `m${k}`, type: "core.rectangle", parent: null, children: [`i${k}`], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+            doc.nodes.set(`i${k}`, { id: `i${k}`, type: "core.instance", parent: `m${k}`, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: `m${k - 1}` });
+        }
+        doc.rootNodeUuids = ["m0", "m1", "m2", "m3", "m4", "m5"];
+        const x = expandInstances(doc);
+        // Instancing m5 nests 5 levels: i5::m4, then i5::i4::m3, … all within the cap of 16.
+        expect(x.nodes.has("i5::m4")).toBe(true);
+        expect(x.nodes.has("i5::i4::m3")).toBe(true);
+        expect(x.nodes.has("i5::i4::i3::m2")).toBe(true);
+        expect(x.nodes.has("i5::i4::i3::i2::m1")).toBe(true);
+        expect(x.nodes.has("i5::i4::i3::i2::i1::m0")).toBe(true);
+    });
+
     test("an instance round-trips through serialize/deserialize", () => {
         const doc = docWithInstance();
         const loaded = deserializeDocument(serializeDocument(doc));

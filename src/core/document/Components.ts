@@ -25,7 +25,10 @@
  * itself, or a cycle through several masters, would expand forever, and NESTED instances
  * multiply rather than add. Three guards, in the `GRID_MAX_TRACKS` tradition: a per-path
  * master CHAIN (a cycle stops expanding), a DEPTH cap, and a total materialized-NODE cap.
- * A stopped expansion simply draws nothing — it never throws.
+ * A stopped expansion never throws: the chain and depth guards stop BEFORE materializing (that
+ * branch draws nothing), while the node cap stops mid-walk and leaves a TRUNCATED but
+ * structurally consistent tree — a node that trips the cap is added neither to the map nor to
+ * its parent's `children`, so no dangling reference is ever produced.
  */
 
 import { ProjectDocument, ReadonlyDocument } from "./Document";
@@ -57,6 +60,17 @@ export function isVirtualId(id: string): boolean {
  * expansion `i1::i2::child` yields the full instance path `i1::i2` — the id of the (itself
  * virtual) instance node that owns the copy — and the master node `child`.
  */
+/**
+ * The STORED instance a virtual node ultimately belongs to — the FIRST path segment (nested
+ * copies like `i1::i2::child` all belong to the stored instance `i1`). Null for a stored id.
+ * Consumers that reason about a node's stored OWNER use this: an instance's materialized
+ * copies travel with it, so e.g. snapping must not treat them as external targets.
+ */
+export function ownerInstanceOf(id: string): string | null {
+    const at = id.indexOf(VIRTUAL_ID_SEP);
+    return at < 0 ? null : id.slice(0, at);
+}
+
 export function splitVirtualId(id: string): { instancePath: string; masterNodeId: string } | null {
     const at = id.lastIndexOf(VIRTUAL_ID_SEP);
     if (at < 0) return null;
@@ -128,6 +142,14 @@ export function expandInstances(doc: ReadonlyDocument): ReadonlyDocument {
             ? { ...master.geometry, x: 0, y: 0 } // the instance's own geometry places the copy
             : { ...master.geometry };
         const copy = copyForExpansion(master as Node, id, parentId, geo);
+        // The ROOT copy's CONSTRAINTS (and their frozen `constraintRef`) describe the master's
+        // relationship to ITS parent, which the copy no longer has — leaving them would let
+        // `resolveConstraints` reposition the copy against the instance's box and override the
+        // (0,0) re-origin above. Deeper copies keep theirs: their parent IS a faithful copy, so
+        // the relationship still holds. (An anchor-to-the-instance affordance is a later slice.)
+        if (isRoot && (copy.layout.constraints || copy.layout.constraintRef)) {
+            copy.layout = { ...copy.layout, constraints: undefined, constraintRef: undefined };
+        }
         nodes.set(id, copy);
         nodes.get(parentId)!.children.push(id);
         materialized++;

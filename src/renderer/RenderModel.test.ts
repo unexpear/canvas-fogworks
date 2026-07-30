@@ -187,6 +187,29 @@ describe("buildRenderModel — overlay", () => {
         expect(handleAtPoint(cs, ["n1"], 25, -ROTATE_OFFSET_PX / z, z)!.handle).toBe("rotate");
     });
 
+    test("a component INSTANCE draws its master's content (virtual nodes resolve in the model too)", () => {
+        // The regression a live smoke caught: `computed` holds VIRTUAL ids (the engine expands),
+        // but the model looked nodes up in the STORED document — so instance content silently
+        // vanished. The model must resolve against the same expanded view.
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: ["MC"], geometry: { x: 60, y: 60, width: 160, height: 100 }, style: { fill: "#2266ff", opacity: 1 }, layout: {} });
+        doc.nodes.set("MC", { id: "MC", type: "core.rectangle", parent: "M", children: [], geometry: { x: 20, y: 20, width: 60, height: 40 }, style: { fill: "#ffcc00", opacity: 1 }, layout: {} });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 400, y: 300, width: 160, height: 100 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["M", "I"];
+        const model = buildRenderModel(SIZE, doc, stateFor(doc));
+        const ids = model.content.map(i => i.nodeId);
+        expect(ids).toContain("I::M");    // the instance's copy of the master…
+        expect(ids).toContain("I::MC");   // …and of its child
+        expect(ids).not.toContain("I");   // the instance itself draws nothing
+        // The copies carry the master's paint, and sit at the INSTANCE's world position.
+        const copy = model.content.find(i => i.nodeId === "I::M")!;
+        expect(copy.paint.fill).toBe("#2266ff");
+        expect([copy.world!.e, copy.world!.f]).toEqual([400, 300]);
+        const child = model.content.find(i => i.nodeId === "I::MC")!;
+        expect(child.paint.fill).toBe("#ffcc00");
+        expect([child.world!.e, child.world!.f]).toEqual([420, 320]); // instance + the child's own offset
+    });
+
     test("multi-select → ONE group box + GROUP corner handles + one group knob (never per-node handles)", () => {
         const doc = createEmptyDocument();
         const mk = (id: string, x: number, y: number) => doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: 50, height: 50 }, style: { fill: "#fff", opacity: 1 }, layout: {} });

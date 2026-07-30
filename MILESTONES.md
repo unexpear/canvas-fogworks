@@ -742,11 +742,30 @@ make a document unloadable — the rule dangling `$token` aliases already follow
 `CreateInstanceAction` (+ a toolbar ⧉ Instance button) is the write path; it requires a real,
 non-instance master at creation time.
 
+**Review + live-smoke fixes (same slice):** a live browser smoke-test caught the central
+integration bug the unit tests could not — `buildRenderModel` resolved node data from the
+STORED document while `ComputedState` now holds virtual ids, so **instances drew nothing on
+both backends**. The model now resolves against the same expanded view (and a RenderModel test
+pins it). A 33-agent adversarial review then confirmed four more: an instance **snapped to its
+own materialized copies** (they are not in its stored `children`, so the subtree walk missed
+them — a coincident target that pinned every sub-threshold drag; fixed with a shared
+`ownerInstanceOf`); the materialized root **inherited the master's constraints**, which
+described a parent the copy no longer has and overrode the (0,0) re-origin (root copies now
+drop `constraints`/`constraintRef`, deeper copies keep theirs); a **line/flat-path master could
+never be instanced** (`dimensionError` now treats `core.instance` like line/path); and the ⧉
+button placed the instance using the master's **parent-relative** coordinates while parenting it
+to the root (now uses world bounds). One more was structural: schema 21 reserves `::`
+*retroactively*, so `migrate_20_to_21` — a pass-through for the new type/field — now also
+**renames** stored ids containing `::` and rewrites every reference (keys, `id`, `parent`,
+`children`, `rootNodeUuids`, `componentId`), honouring the standing rule that a
+previously-loadable file must stay loadable.
+
 Deferred to later slices: **overrides** (per-instance property patches keyed on the virtual
-id — the reason ids are reversible), **variants/slots**, "detach instance", and incremental
-dirty-tracking reuse for instanced documents (the dirty set names stored ids, not the virtual
-copies a master edit changes, so instanced documents recompute fully — always correct, just
-not incremental).
+id — the reason ids are reversible), **variants/slots**, "detach instance", instance content
+that overflows the instance box being unpickable (the pick box is the instance's own), and
+incremental dirty-tracking reuse for instanced documents (the dirty set names stored ids, not
+the virtual copies a master edit changes, so instanced documents recompute fully — always
+correct, just not incremental).
 
 ---
 

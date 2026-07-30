@@ -12,6 +12,7 @@
 import { Rect } from "./Matrix";
 import { ComputedState } from "./GeometryEngine";
 import { ReadonlyDocument } from "../document/Document";
+import { ownerInstanceOf } from "../document/Components";
 
 /** A smart-guide line: "x" = a VERTICAL line at world x=`pos`; "y" = a HORIZONTAL line at world y=`pos`. */
 export interface SnapGuide {
@@ -127,7 +128,14 @@ export function snapTargetsExcludingSubtrees(doc: ReadonlyDocument, computed: Co
     }
     const targets: Rect[] = [];
     computed.nodes.forEach((c, id) => {
-        if (!subtree.has(id) && isFiniteRect(c.bounds)) targets.push(c.bounds);
+        if (subtree.has(id)) return;
+        // A component instance's MATERIALIZED copies (M6) are in the computed state but not in
+        // its stored `children`, so the subtree walk above cannot see them. They travel with the
+        // instance, so treating them as targets would make a moving instance snap to ITSELF —
+        // its copies sit exactly on its own edges, pinning any sub-threshold drag at the start.
+        const owner = ownerInstanceOf(id);
+        if (owner !== null && subtree.has(owner)) return;
+        if (isFiniteRect(c.bounds)) targets.push(c.bounds);
     });
     return targets;
 }

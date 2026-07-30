@@ -26,6 +26,7 @@ import { ReadonlyDocument } from "../core/document/Document";
 import { PathCommand, Shadow } from "../core/document/Node";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
+import { expandInstances } from "../core/document/Components";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
 import { selectionHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
@@ -571,7 +572,15 @@ export function buildRenderModel(
         width: (size.width || 800) / z,
         height: (size.height || 600) / z
     };
-    const content = buildContent(doc, state.computed, z, visible);
+    // COMPONENT INSTANCES (M6): `state.computed` was produced from the EXPANDED document, so
+    // it contains virtual (materialized) node ids. The model must look those ids up in the
+    // same expanded view or every instance's content would silently vanish — the lookup here
+    // is what turns a computed entry into a draw item. `expandInstances` is pure and returns
+    // the same reference when there is nothing to expand, so an instance-free document pays
+    // nothing; running it twice (engine + model) is deliberate — the alternative, threading a
+    // document through `ComputedState`, would widen a frozen contract for a derived value.
+    const effective = expandInstances(doc);
+    const content = buildContent(effective, state.computed, z, visible);
     return {
         viewport: state.viewport,
         grid: buildGrid(size, state.viewport, z, prev),

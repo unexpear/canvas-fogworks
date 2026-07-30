@@ -45,6 +45,7 @@ const INSTANCE_MAX_NODES: number;                          // total materialized
 function virtualId(instancePath: string, masterNodeId: string): string;
 function isVirtualId(id: string): boolean;                 // true for an expansion-produced id
 function splitVirtualId(id: string): { instancePath: string; masterNodeId: string } | null; // reversible
+function ownerInstanceOf(id: string): string | null;       // the STORED instance a virtual node belongs to (first path segment)
 function componentError(type: string, componentId: unknown): string | null; // shared load + edit; dangling is ALLOWED
 function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializes instances as virtual children; SAME reference when there is nothing to expand
 

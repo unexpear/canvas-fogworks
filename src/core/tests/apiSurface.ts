@@ -39,7 +39,7 @@ import { Action } from "../actions/Action";
 import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot, DOCUMENT_DELTA_KEY } from "../actions/types";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
-import { expandInstances, componentError, isVirtualId, virtualId, splitVirtualId, VIRTUAL_ID_SEP, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES } from "../document/Components";
+import { expandInstances, componentError, isVirtualId, virtualId, splitVirtualId, ownerInstanceOf, VIRTUAL_ID_SEP, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES } from "../document/Components";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { HistoryManager, HistoryLimits, DEFAULT_HISTORY_LIMITS } from "../actions/HistoryManager";
@@ -132,6 +132,7 @@ export function __apiSurfacePin(): void {
     expectType<string>(virtualId("instance", "master"));
     expectType<boolean>(isVirtualId("a::b"));
     expectType<{ instancePath: string; masterNodeId: string } | null>(splitVirtualId("a::b"));
+    expectType<string | null>(ownerInstanceOf("a::b"));
     expectType<ReadonlyDocument>(expandInstances(doc));
     expectType<MutationResult>(new CreateInstanceAction(doc, "master", 0, 0).execute());
     expectType<string | number | null>(resolveVariable(store, "color/primary", "light"));

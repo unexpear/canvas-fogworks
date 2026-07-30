@@ -404,10 +404,46 @@ function migrate_19_to_20(raw: any): any {
     return { ...raw, version: "20" };
 }
 
-/** Schema 20 → 21: adds the `core.instance` node type + `Node.componentId` (M6 components).
- *  Pass-through by content — existing documents contain neither. */
+/**
+ * Schema 20 → 21: adds the `core.instance` node type + `Node.componentId` (M6 components) and
+ * RESERVES `::` in stored node ids (the virtual-id separator). The type/field are pass-through
+ * by content, but the id rule is RETROACTIVE — a schema-20 file whose node id contains `::`
+ * loaded fine and would now be permanently unreadable. So this step RENAMES those ids (`::` →
+ * `__`, de-duplicated) and rewrites every reference to them: the node map keys, `id`, `parent`,
+ * `children`, `rootNodeUuids`, and `componentId`. Previously-loadable files stay loadable —
+ * the same obligation the 18→19 store sanitizer carries.
+ */
 function migrate_20_to_21(raw: any): any {
-    return { ...raw, version: "21" };
+    const d = (raw && typeof raw.document === "object" && raw.document) ? raw.document : {};
+    const src = (d.nodes && typeof d.nodes === "object" && !Array.isArray(d.nodes)) ? d.nodes : {};
+    const ids = Object.keys(src);
+    const offending = ids.filter(id => id.includes("::"));
+    if (offending.length === 0) return { ...raw, version: "21" };
+
+    const taken = new Set(ids);
+    const rename = new Map<string, string>();
+    for (const id of offending) {
+        let next = id.split("::").join("__");
+        while (taken.has(next) || rename.has(next)) next = `${next}_`; // keep ids unique
+        taken.add(next);
+        rename.set(id, next);
+    }
+    const map = (v: unknown): unknown => (typeof v === "string" && rename.has(v)) ? rename.get(v) : v;
+
+    const nodes: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(src)) {
+        const n = (value && typeof value === "object" && !Array.isArray(value)) ? { ...(value as Record<string, unknown>) } : value;
+        if (n && typeof n === "object") {
+            const node = n as Record<string, unknown>;
+            node.id = map(node.id);
+            node.parent = map(node.parent);
+            if (Array.isArray(node.children)) node.children = node.children.map(map);
+            if (node.componentId !== undefined) node.componentId = map(node.componentId);
+        }
+        nodes[String(map(key))] = n;
+    }
+    const rootNodeUuids = Array.isArray(d.rootNodeUuids) ? d.rootNodeUuids.map(map) : d.rootNodeUuids;
+    return { ...raw, version: "21", document: { ...d, nodes, rootNodeUuids } };
 }
 
 /**

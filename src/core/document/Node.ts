@@ -64,7 +64,9 @@ export function dimensionError(type: NodeType, width: number, height: number): s
     if (!Number.isFinite(width) || !Number.isFinite(height)) return "must have finite dimensions";
     // A `core.line` (box diagonal) and a `core.path` (drawn from its commands, box is just the
     // declared bbox) may collapse ONE axis — a horizontal/vertical line, or a flat path bbox.
-    if (type === "core.line" || type === "core.path") {
+    // A `core.instance` mirrors its MASTER's box, which may itself be a line/path, so it takes
+    // the same rule — otherwise a horizontal rule could never be instanced.
+    if (type === "core.line" || type === "core.path" || type === "core.instance") {
         if (width < 0 || height < 0) return "dimensions must be >= 0";
         if (width === 0 && height === 0) return "must have a non-zero extent on at least one axis";
         return null;

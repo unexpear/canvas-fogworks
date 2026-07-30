@@ -319,8 +319,12 @@ export function App() {
                         const doc = dispatcher.getDocument();
                         const master = doc.nodes.get(masterId);
                         if (!master) return;
-                        // Offset the copy so it doesn't land exactly on its master.
-                        const action = new CreateInstanceAction(doc, masterId, master.geometry.x + 40, master.geometry.y + 40);
+                        // Place it near the master in WORLD space: the new instance is a ROOT, so
+                        // its x/y are world coords, while a nested master's stored x/y are
+                        // parent-relative — using those directly would misplace the instance.
+                        const box = computeGeometry(doc).nodes.get(masterId)?.bounds;
+                        const at = box ?? { x: master.geometry.x, y: master.geometry.y };
+                        const action = new CreateInstanceAction(doc, masterId, at.x + 40, at.y + 40);
                         if (dispatcher.dispatchAction(action).success) {
                             const created = action.getCreatedNodeId();
                             if (created) es.selectedNodeIds = [created];
