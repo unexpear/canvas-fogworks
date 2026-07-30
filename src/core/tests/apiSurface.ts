@@ -36,7 +36,8 @@ import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds,
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, GridCell, breakFlexLines, FlexLine, resolveMargin, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
-import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot } from "../actions/types";
+import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot, DOCUMENT_DELTA_KEY } from "../actions/types";
+import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { HistoryManager, HistoryLimits, DEFAULT_HISTORY_LIMITS } from "../actions/HistoryManager";
@@ -119,6 +120,10 @@ export function __apiSurfacePin(): void {
     expectType<string | number | null>(resolveVariable(store, "color/primary", "light"));
     expectType<string>(resolveColor(store, "$color/primary", "dark"));
     expectType<number | null>(resolveNumber(store, "$spacing/gap", "light"));
+    expectType<string>(DOCUMENT_DELTA_KEY);
+    expectType<MutationResult>(new SetVariableAction(doc, "color/primary", variable).execute());
+    expectType<MutationResult>(new DeleteVariableAction(doc, "color/primary").execute());
+    expectType<MutationResult>(new SetActiveThemeAction(doc, "dark").execute());
     expectType<string>(commandsToPathData([{ c: "M", x: 0, y: 0 }, { c: "Z" }]));
 
     // getDocument() is READ-ONLY — asserted in BOTH directions, so the guarantee

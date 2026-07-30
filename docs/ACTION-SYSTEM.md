@@ -43,7 +43,18 @@ abstract class Action {
 | `UpdateNodeTransformAction` | `{ kind: "patch", transform: {…partial…} }` — rotation/scale/origin |
 | `UpdateNodeLayoutAction` | `{ kind: "patch", layout: {…partial…} }` — M2 layout (container/grid/grow/constraints/position/margin). Carries grid⊕container exclusivity IN the delta, and auto-captures `constraintRef` from a NON-container parent's stored size on first opt-in |
 | `ReparentNodeAction` | `{ kind: "patch", reparent: { parent, index? } }` |
+| `SetVariableAction` | `{ kind: "variables", variables, activeTheme }` — upsert one design token (M5); validated via the shared `variableStoreError` |
+| `DeleteVariableAction` | `{ kind: "variables", … }` — remove one token; dangling references stay valid (they resolve to the visible fallback) |
+| `SetActiveThemeAction` | `{ kind: "variables", … }` — switch the persisted light/dark theme |
 | `TransactionAction` | merges multiple actions into one atomic result + one revision |
+
+The `"variables"` delta is DOCUMENT-level: it replaces the whole store + active theme
+atomically and travels under the reserved `DOCUMENT_DELTA_KEY` (`"__document__"`) since the
+delta map is keyed by node id. In a transaction the LAST variables delta wins — safe because
+each component action builds its delta from the *working* document at execute time, so a
+later `SetActiveThemeAction` already carries an earlier `SetVariableAction`'s store. These
+actions report an EMPTY `updatedNodeIds` (no node changed; the id set feeds the geometry
+dirty-tracker, which token edits never affect).
 
 `AddNodeAction`/`ResizeNodeAction`/`UpdateNodeGeometryAction` validate dimensions through the
 shared per-type `dimensionError` (so the edit and load paths cannot drift) — rect/ellipse/text/image

@@ -638,11 +638,23 @@ resolve at rest (deleting a variable can't corrupt a document). Validation
 with CONTENT: it stamps `activeTheme` and SANITIZES the never-before-validated legacy store
 (numeric-string spacing coerced, unvalidatable entries dropped) so every previously-loadable
 file stays loadable. `activeTheme` threads through the serialize envelope, history
-snapshots/hydration, and transaction clones. Remaining slices: **(2)** variable actions +
-doc-level deltas (author/edit/delete variables, switch theme — undoable), **(3)** renderer
-consumption (`$token` fills/strokes/shadow colors resolve per active theme on both backends)
-+ a theme toggle in the app. Number/typography token CONSUMPTION by layout/text (spacing,
-radius, font) is defined-and-resolvable now but wired in a later milestone.
+snapshots/hydration, and transaction clones.
+
+**Landed (slice 2 — the token write path):** `SetVariableAction` (upsert) /
+`DeleteVariableAction` / `SetActiveThemeAction` — all emitting a new DOCUMENT-level delta
+kind `{ kind: "variables", variables, activeTheme }` under the reserved
+`DOCUMENT_DELTA_KEY` ("__document__"), since the delta map is keyed by node id and
+doc-level state has none. The delta is whole-state, so transactions compose LAST-WINS
+safely (each component action builds its delta from the working document at execute time —
+"set a, alias b to a, switch theme" in one transaction nets all three, and one undo
+restores store + theme together). Validation delegates to the shared `variableStoreError`
+(the edit path can never author what the loader rejects); deleting an aliased/referenced
+variable is allowed by design (dangling refs resolve to the fallback). `updatedNodeIds`
+stays empty — no node changes, the geometry dirty-tracker is untouched. Remaining slice:
+**(3)** renderer consumption (`$token` fills/strokes/shadow colors resolve per active theme
+on both backends) + a theme toggle in the app. Number/typography token CONSUMPTION by
+layout/text (spacing, radius, font) is defined-and-resolvable now but wired in a later
+milestone.
 
 ---
 

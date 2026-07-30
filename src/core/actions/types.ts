@@ -4,7 +4,14 @@
  */
 
 import { Node, Geometry, Style, Layout, Transform } from "../document/Node";
-import { ProjectDocument, SerializedMetadata } from "../document/Document";
+import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
+
+/**
+ * The reserved `propertyDeltas` key a DOCUMENT-LEVEL delta (kind "variables") travels
+ * under — the delta map is keyed by node id, and doc-level state has none. The kind, not
+ * the key, is what dispatch switches on; the constant just keeps the key out of node-id space.
+ */
+export const DOCUMENT_DELTA_KEY = "__document__";
 
 /**
  * What one action wants done to one node.
@@ -33,7 +40,15 @@ export type NodeDelta =
         text?: string;
         src?: string;
         name?: string;
-    };
+    }
+    /**
+     * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme
+     * atomically. Travels under `DOCUMENT_DELTA_KEY`. Whole-state (not a patch) on purpose:
+     * transactions then compose last-wins — and since each component action builds its delta
+     * from the working document at execute time, "set a variable, then switch theme" carries
+     * the earlier edit forward naturally. TERMINAL like add/delete (no property patches ride along).
+     */
+    | { kind: "variables"; variables: VariableStore; activeTheme: ThemeMode };
 
 /** The result of an action execution. Communicates changes without coupling services. */
 export interface MutationResult {

@@ -217,7 +217,15 @@ type NodeDelta =
   | { kind: "patch"; reparent?: { parent: string | null; index?: number };
       geometry?: Partial<Geometry>; transform?: Partial<Transform>;
       style?: Partial<Style>; layout?: Partial<Layout>;
-      text?: string; src?: string; name?: string };
+      text?: string; src?: string; name?: string }
+  | { kind: "variables"; variables: VariableStore; activeTheme: ThemeMode }; // DOC-level (M5): whole store + theme, under DOCUMENT_DELTA_KEY
+const DOCUMENT_DELTA_KEY: string;    // "__document__" — the reserved delta-map key for kind "variables"
+
+// VariableActions.ts — the design-token write path (M5). All emit the "variables" delta;
+// validation delegates to the shared variableStoreError (load/edit round-trip closure).
+class SetVariableAction extends Action { constructor(doc: ReadonlyDocument, key: string, variable: Variable) }   // upsert
+class DeleteVariableAction extends Action { constructor(doc: ReadonlyDocument, key: string) }                     // dangling refs stay valid
+class SetActiveThemeAction extends Action { constructor(doc: ReadonlyDocument, theme: ThemeMode) }                // undoable + persisted
 ```
 
 ## Dispatcher & History (`core/actions/`)

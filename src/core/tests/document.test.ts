@@ -4,7 +4,8 @@
  */
 
 import { createEmptyDocument, ProjectDocument, CURRENT_VERSION, SCHEMA_VERSION } from "../document/Document";
-import { variableStoreError, resolveVariable, resolveColor, resolveNumber, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
+import { variableStoreError, resolveVariable, resolveColor, resolveNumber, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
+import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
@@ -844,6 +845,126 @@ describe("Schema 19 migration (design tokens)", () => {
         expect(() => deserializeDocument(env("{}", "42"))).toThrow("activeTheme must be one of light/dark");
         // A valid store + theme loads.
         expect(() => deserializeDocument(env('{ "a": { "type": "color", "value": "$b" } }', '"dark"'))).not.toThrow();
+    });
+});
+
+// ─── M5: variable actions (the doc-level write path) ───
+describe("Variable actions", () => {
+    const primary: Variable = { type: "color", value: "#ff0000", modes: { dark: "#990000" } };
+
+    test("SetVariableAction upserts (create then replace), is undoable, and touches no node", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("n", { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["n"];
+        const dispatcher = new ActionDispatcher(doc);
+        const r1 = dispatcher.dispatchAction(new SetVariableAction(dispatcher.getDocument(), "color/primary", primary));
+        expect(r1.success).toBe(true);
+        expect(r1.updatedNodeIds.size).toBe(0); // no node changed — the geometry dirty-set stays clean
+        expect(dispatcher.getDocument().variables["color/primary"].value).toBe("#ff0000");
+        dispatcher.dispatchAction(new SetVariableAction(dispatcher.getDocument(), "color/primary", { type: "color", value: "#00ff00" }));
+        expect(dispatcher.getDocument().variables["color/primary"].value).toBe("#00ff00"); // replaced
+        dispatcher.undo();
+        expect(dispatcher.getDocument().variables["color/primary"].value).toBe("#ff0000"); // back to v1
+        dispatcher.undo();
+        expect(dispatcher.getDocument().variables["color/primary"]).toBeUndefined();       // back to empty
+        expect(dispatcher.getDocument().nodes.get("n")!.style.fill).toBe("#000");          // node untouched throughout
+    });
+
+    test("SetVariableAction rejects what the LOAD path rejects (shared validator)", () => {
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const doc = dispatcher.getDocument();
+        expect(dispatcher.dispatchAction(new SetVariableAction(doc, "$bad", primary)).success).toBe(false);       // "$" key
+        expect(dispatcher.dispatchAction(new SetVariableAction(doc, "", primary)).success).toBe(false);            // empty key
+        expect(dispatcher.dispatchAction(new SetVariableAction(doc, "a", { type: "spacing", value: "8" as unknown as number })).success).toBe(false); // string spacing
+        expect(dispatcher.dispatchAction(new SetVariableAction(doc, "a", { type: "color", value: "" })).success).toBe(false);
+        expect(dispatcher.canUndo()).toBe(false); // nothing committed
+    });
+
+    test("DeleteVariableAction removes; a dangling alias stays LOADABLE and resolves to the fallback", () => {
+        const doc = createEmptyDocument();
+        doc.variables = {
+            "color/base": { type: "color", value: "#123456" },
+            "color/alias": { type: "color", value: "$color/base" }
+        };
+        const dispatcher = new ActionDispatcher(doc);
+        expect(dispatcher.dispatchAction(new DeleteVariableAction(dispatcher.getDocument(), "color/base")).success).toBe(true);
+        const after = dispatcher.getDocument();
+        expect(after.variables["color/base"]).toBeUndefined();
+        // The alias now dangles: still valid at rest (round-trips), resolves to the fallback.
+        expect(() => deserializeDocument(serializeDocument(after))).not.toThrow();
+        expect(resolveColor(after.variables as VariableStore, "$color/alias", "light")).toBe(VARIABLE_FALLBACK_COLOR);
+        dispatcher.undo();
+        expect(resolveColor(dispatcher.getDocument().variables as VariableStore, "$color/alias", "light")).toBe("#123456");
+        // Deleting a missing key fails cleanly.
+        expect(dispatcher.dispatchAction(new DeleteVariableAction(dispatcher.getDocument(), "nope")).success).toBe(false);
+    });
+
+    test("SetActiveThemeAction switches the persisted theme, undoably; rejects junk", () => {
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        expect(dispatcher.getDocument().activeTheme).toBe("light");
+        expect(dispatcher.dispatchAction(new SetActiveThemeAction(dispatcher.getDocument(), "dark")).success).toBe(true);
+        expect(dispatcher.getDocument().activeTheme).toBe("dark");
+        // Persisted: the serialized envelope carries it.
+        expect(deserializeDocument(serializeDocument(dispatcher.getDocument())).activeTheme).toBe("dark");
+        dispatcher.undo();
+        expect(dispatcher.getDocument().activeTheme).toBe("light");
+        expect(dispatcher.dispatchAction(new SetActiveThemeAction(dispatcher.getDocument(), "sepia" as unknown as "light")).success).toBe(false);
+    });
+
+    test("a TRANSACTION composes variable edits: later actions see earlier ones; one undo restores all", () => {
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const doc = dispatcher.getDocument();
+        // set a, set b, switch theme — the theme action's delta must CARRY a and b (it reads
+        // the working doc), and the last-wins document delta must lose nothing.
+        const r = dispatcher.dispatchAction(new TransactionAction(doc, "tokens", [
+            new SetVariableAction(doc, "color/a", { type: "color", value: "#aaa111" }),
+            new SetVariableAction(doc, "color/b", { type: "color", value: "$color/a" }),
+            new SetActiveThemeAction(doc, "dark")
+        ]));
+        expect(r.success).toBe(true);
+        const after = dispatcher.getDocument();
+        expect(after.variables["color/a"].value).toBe("#aaa111");
+        expect(after.variables["color/b"].value).toBe("$color/a");
+        expect(after.activeTheme).toBe("dark");
+        dispatcher.undo(); // ONE undo restores store AND theme
+        expect(dispatcher.getDocument().variables["color/a"]).toBeUndefined();
+        expect(dispatcher.getDocument().activeTheme).toBe("light");
+    });
+
+    test("a transaction set-then-delete nets to absent; a failing step rejects the whole batch", () => {
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const doc = dispatcher.getDocument();
+        dispatcher.dispatchAction(new TransactionAction(doc, "net", [
+            new SetVariableAction(doc, "color/tmp", { type: "color", value: "#fff" }),
+            new DeleteVariableAction(doc, "color/tmp")
+        ]));
+        expect(dispatcher.getDocument().variables["color/tmp"]).toBeUndefined(); // net absent
+        // Atomicity: a bad step (deleting a missing key) rejects the earlier valid step too.
+        const r = dispatcher.dispatchAction(new TransactionAction(dispatcher.getDocument(), "atomic", [
+            new SetVariableAction(dispatcher.getDocument(), "color/kept", { type: "color", value: "#fff" }),
+            new DeleteVariableAction(dispatcher.getDocument(), "never-existed")
+        ]));
+        expect(r.success).toBe(false);
+        expect(dispatcher.getDocument().variables["color/kept"]).toBeUndefined(); // rolled back with the batch
+    });
+
+    test("variable edits and NODE edits mix in one transaction (the doc delta rides alongside patches)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("n", { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["n"];
+        const dispatcher = new ActionDispatcher(doc);
+        const d = dispatcher.getDocument();
+        dispatcher.dispatchAction(new TransactionAction(d, "mixed", [
+            new SetVariableAction(d, "color/primary", primary),
+            new UpdateNodeStyleAction(d, "n", { fill: "$color/primary" }) // the node now REFERENCES the token
+        ]));
+        const after = dispatcher.getDocument();
+        expect(after.nodes.get("n")!.style.fill).toBe("$color/primary");
+        expect(after.variables["color/primary"].value).toBe("#ff0000");
+        expect(resolveColor(after.variables as VariableStore, after.nodes.get("n")!.style.fill, "dark")).toBe("#990000");
+        dispatcher.undo(); // one undo reverts BOTH the style patch and the store
+        expect(dispatcher.getDocument().nodes.get("n")!.style.fill).toBe("#000");
+        expect(dispatcher.getDocument().variables["color/primary"]).toBeUndefined();
     });
 });
 

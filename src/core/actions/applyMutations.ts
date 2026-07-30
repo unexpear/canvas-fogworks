@@ -107,6 +107,14 @@ export function applyMutationsToDocument(
                 return;
             }
 
+            case "variables": {
+                // Document-level state (schema 19): whole-store + theme replace. The key
+                // (DOCUMENT_DELTA_KEY) is ignored — the KIND carries the meaning.
+                doc.variables = delta.variables;
+                doc.activeTheme = delta.activeTheme;
+                return;
+            }
+
             default: {
                 // Exhaustiveness: adding a NodeDelta variant without handling it here
                 // is now a compile error.

@@ -9,7 +9,7 @@
 import { Action } from "./Action";
 import { ProjectDocument, ReadonlyDocument } from "../document/Document";
 import { Node } from "../document/Node";
-import { MutationResult, ActionPayload, NodeDelta } from "./types";
+import { MutationResult, ActionPayload, NodeDelta, DOCUMENT_DELTA_KEY } from "./types";
 import { applyMutationsToDocument } from "./applyMutations";
 
 /** Deep, independent copy of a document for in-transaction simulation. */
@@ -85,6 +85,10 @@ export class TransactionAction extends Action {
         // had. This set makes the documented net-no-op skip actually fire.
         const everAdded = new Set<string>();
         const propertyEdits = new Map<string, PatchDelta>();
+        // The LAST document-level (variables/theme) delta wins. Each component action builds
+        // its delta from the WORKING document at execute time, so a later "switch theme"
+        // already carries an earlier "set variable" — last-wins loses nothing.
+        let documentDelta: Extract<NodeDelta, { kind: "variables" }> | null = null;
 
         for (const action of this.componentActions) {
             action.rebind(working);
@@ -109,6 +113,8 @@ export class TransactionAction extends Action {
                     deletedIds.add(nodeId);
                     addedIds.delete(nodeId);
                     propertyEdits.delete(nodeId);
+                } else if (delta.kind === "variables") {
+                    documentDelta = delta;
                 } else {
                     const prev = propertyEdits.get(nodeId) ?? { kind: "patch" as const };
                     propertyEdits.set(nodeId, mergePatch(prev, delta));
@@ -139,6 +145,8 @@ export class TransactionAction extends Action {
             if (everAdded.has(id)) continue; // created and destroyed within the transaction
             finalDeltas.set(id, { kind: "delete" });
         }
+        // The net document-level (variables/theme) state, if any component touched it.
+        if (documentDelta) finalDeltas.set(DOCUMENT_DELTA_KEY, documentDelta);
 
         return {
             updatedNodeIds: new Set(finalDeltas.keys()),
