@@ -7,7 +7,7 @@
  * Pixel-level SVG↔canvas parity stays a browser smoke test.
  */
 
-import { emitCanvas } from "./emitCanvas";
+import { emitCanvas, setImageReadyCallback } from "./emitCanvas";
 import { buildRenderModel } from "./RenderModel";
 import { RendererState } from "./RendererState";
 import { createEmptyDocument, ProjectDocument } from "../core/document/Document";
@@ -45,6 +45,7 @@ class MockCtx {
     stroke() { this.log("stroke"); }
     clip() { this.log("clip"); }
     fillText(t: string, x: number, y: number) { this.log("fillText", t, x, y); }
+    drawImage(...a: unknown[]) { this.log("drawImage", ...a); }
     setLineDash(a: number[]) { this.log("setLineDash", a); }
 
     private _fillStyle = ""; get fillStyle() { return this._fillStyle; } set fillStyle(v: string) { this._fillStyle = v; this.log("set fillStyle", v); }
@@ -283,5 +284,53 @@ describe("emitCanvas — effects", () => {
         const b = bracket(run(doc).calls, "rect", a => JSON.stringify(a) === "[0,0,200,100]");
         expect(ops(b)).not.toContain("set shadowColor");
         expect(ops(b)).not.toContain("set filter");
+    });
+});
+
+// ─── Image (async bitmap load) ────────────────────────────────────────────────
+describe("emitCanvas — image", () => {
+    const imgDoc = (src?: string) => docWith({ type: "core.image", style: { fill: "#000", opacity: 1 }, ...(src !== undefined ? { src } : {}) });
+
+    test("a null-href image draws nothing (no drawImage, no crash)", () => {
+        expect(ops(run(imgDoc()).calls)).not.toContain("drawImage");
+    });
+
+    test("without a DOM (no global Image) a bitmap can't load, so nothing is drawn", () => {
+        // The node test env has no `Image`; resolveImage returns null → no drawImage.
+        expect(typeof (globalThis as { Image?: unknown }).Image).toBe("undefined");
+        expect(ops(run(imgDoc("some-href.png")).calls)).not.toContain("drawImage");
+    });
+
+    test("an image whose bitmap hasn't decoded yet draws nothing (waits for onload)", () => {
+        const g = globalThis as { Image?: unknown };
+        const orig = g.Image;
+        class SlowImage { onload: (() => void) | null = null; set src(_v: string) { /* onload never fires */ } }
+        g.Image = SlowImage as unknown as typeof Image;
+        try {
+            expect(ops(run(imgDoc("fake://never-decodes.png")).calls)).not.toContain("drawImage"); // not loaded → nothing
+        } finally {
+            g.Image = orig;
+        }
+    });
+
+    test("a decoded bitmap is drawn at the shape box and fires the ready callback", () => {
+        // Inject a fake Image that decodes synchronously when its src is set.
+        const g = globalThis as { Image?: unknown };
+        const orig = g.Image;
+        class FakeImage { onload: (() => void) | null = null; set src(_v: string) { this.onload?.(); } }
+        g.Image = FakeImage as unknown as typeof Image;
+        let ready = false;
+        setImageReadyCallback(() => { ready = true; });
+        try {
+            const calls = run(imgDoc("fake://decoded-once.png")).calls; // unique href → no cache pollution
+            const draw = call(calls, "drawImage");
+            expect(draw).toBeTruthy();
+            expect(draw!.args.slice(1)).toEqual([0, 0, 200, 100]); // shape box (local origin + size)
+            expect(draw!.args[0]).toBeInstanceOf(FakeImage);
+            expect(ready).toBe(true); // the load fired the repaint callback
+        } finally {
+            g.Image = orig;
+            setImageReadyCallback(null);
+        }
     });
 });

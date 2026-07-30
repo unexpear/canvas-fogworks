@@ -58,7 +58,7 @@ import { renderCanvas } from "../../renderer/CanvasRenderer";
 import { renderScene, RenderBackend } from "../../renderer/renderScene";
 import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
-import { emitCanvas } from "../../renderer/emitCanvas";
+import { emitCanvas, setImageReadyCallback } from "../../renderer/emitCanvas";
 
 /**
  * Assert an expression is ASSIGNABLE to the documented type.
@@ -253,4 +253,5 @@ export function __apiSurfacePin(): void {
     expectType<string | null>(effectFilterId(shadow, 4));
     expectType<(c: HTMLElement, m: DisplayList) => void>(emitSVG);
     expectType<(ctx: CanvasRenderingContext2D, m: DisplayList, dpr?: number) => void>(emitCanvas);
+    expectType<(cb: (() => void) | null) => void>(setImageReadyCallback);
 }

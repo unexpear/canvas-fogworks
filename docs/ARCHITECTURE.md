@@ -210,7 +210,7 @@ Layout output today is expressed *as* geometry (computed local rects), not as a 
 | Actions | `core/actions/{Action,types,applyMutations}.ts` + `*Action.ts` | Declarative mutations + delta protocol |
 | Dispatch/History | `core/actions/{ActionDispatcher,HistoryManager}.ts` | Only write path; snapshot undo/redo |
 | Editor | `editor/EditorState.ts`, `editor/tools/*` | Ephemeral state; input → Actions |
-| Renderer | `renderer/{RenderModel,emitSVG,emitCanvas,SVGRenderer,CanvasRenderer,renderScene}.ts` | Pure `(doc, state) → DisplayList`, then thin SVG + Canvas backends; `renderScene` selects the live backend |
+| Renderer | `renderer/{RenderModel,emitSVG,emitCanvas,SVGRenderer,CanvasRenderer,renderScene}.ts` | Pure `(doc, state) → DisplayList`, then thin SVG + Canvas backends (Canvas lazily loads + caches images); `renderScene` selects the live backend |
 | App | `app/App.tsx`, `app/index.tsx`, `app/index.html` | React shell + wiring |
 | Shell | `electron/{main.js,preload.js}` | Native window, menus, file IO via IPC |
 | Build | `scripts/build.js` | Three esbuild bundles → `dist/` |

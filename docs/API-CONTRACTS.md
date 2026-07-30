@@ -336,11 +336,12 @@ function buildRenderModel(
 ): DisplayList;                                          // pure, deterministic
 function emitSVG(container: HTMLElement, model: DisplayList): void;   // SVG DOM transcription
 function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dpr?: number): void; // Canvas 2D transcription
+function setImageReadyCallback(cb: (() => void) | null): void;       // fired when a lazily-loaded Canvas image decodes (→ repaint)
 function renderSVG(container: HTMLElement, doc: ReadonlyDocument, state: RendererState): void;    // buildRenderModel ∘ emitSVG
-function renderCanvas(container: HTMLElement, doc: ReadonlyDocument, state: RendererState): void; // buildRenderModel ∘ emitCanvas (sizes a <canvas> for the DPR)
+function renderCanvas(container: HTMLElement, doc: ReadonlyDocument, state: RendererState, onAsyncReady?: () => void): void; // ∘ emitCanvas (sizes a <canvas> for the DPR; onAsyncReady repaints on image load)
 function clearRenderState(container: HTMLElement): void;             // drop the container's cached prev frame (call when its DOM is cleared)
 type RenderBackend = "svg" | "canvas";
-function renderScene(container: HTMLElement, doc: ReadonlyDocument, state: RendererState, backend: RenderBackend): void; // the live backend selector
+function renderScene(container: HTMLElement, doc: ReadonlyDocument, state: RendererState, backend: RenderBackend, onAsyncReady?: () => void): void; // the live backend selector
 ```
 
 - Pure read of `(doc, state)`; no dispatcher reference, cannot write.
@@ -360,7 +361,8 @@ function renderScene(container: HTMLElement, doc: ReadonlyDocument, state: Rende
   its output); pixel-level SVG↔canvas parity stays a browser smoke test. **Both backends are
   now live** (M4 — a toolbar toggle), since all picking is DOM-free. The shims themselves
   (`renderSVG`/`renderCanvas`/`renderScene`) are DOM plumbing (the untested boundary, browser-
-  smoke-verified). First-pass canvas gaps: single-line text, image deferred.
+  smoke-verified). Canvas IMAGES now render (lazily loaded + cached; `setImageReadyCallback` repaints on
+  decode). Remaining canvas gap: single-line text (matching SVG's `<foreignObject>` wrapping is inherent).
 - **Viewport culling:** `content` holds only nodes whose world bounds intersect the visible
   world rect `{x: vp.x/z, y: vp.y/z, w: (size.w||800)/z, h: (size.h||600)/z}` (the same
   screen→world region the viewport transform maps, inclusive edges). So `content` depends

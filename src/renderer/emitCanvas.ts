@@ -18,7 +18,8 @@
  * pixel-level SVG↔canvas parity stays a browser smoke test. Known first-pass gaps (all
  * inherent SVG-vs-canvas rasterizer differences, deferred like text wrapping):
  *   - TEXT is single-line `fillText` (no HTML wrapping/metrics like the SVG `<foreignObject>`).
- *   - IMAGE is deferred (draws nothing — `drawImage` needs a decoded bitmap, not an href).
+ *   - IMAGE loads its href lazily (a decoded bitmap, cached) and draws it once ready; a repaint is
+ *     requested on load via `setImageReadyCallback`. Nothing draws until it decodes (or with no DOM).
  *   - OPACITY is applied as per-op `globalAlpha` (fill, then stroke), not as SVG *group*
  *     opacity, so a translucent shape WITH a stroke shows a fill-tinted band in the stroke's
  *     inner half — a ≈1-device-px hairline effect. True group opacity needs an offscreen
@@ -41,6 +42,33 @@ import { DisplayList, DrawItem, Paint, Shape } from "./RenderModel";
 
 /** Matches the SVG background (`svg.style.background`) so the two backends look alike. */
 const BACKGROUND = "#1a1a2e";
+
+// Async image loading — the one bit of state the immediate-mode backend must keep, because
+// `drawImage` needs a DECODED bitmap, not an href. Each href is loaded once and cached; a load
+// finishing fires the registered repaint callback so the frame redraws with the image present.
+type ImageEntry = { img: HTMLImageElement; loaded: boolean };
+const imageCache = new Map<string, ImageEntry>();
+let onImageReady: (() => void) | null = null;
+
+/** Register the callback invoked when a lazily-loaded image finishes decoding (so the canvas repaints). */
+export function setImageReadyCallback(cb: (() => void) | null): void {
+    onImageReady = cb;
+}
+
+/** The decoded bitmap for an href, or null while it loads / fails (or with no DOM, e.g. node tests). */
+function resolveImage(href: string): HTMLImageElement | null {
+    if (typeof Image === "undefined") return null; // no DOM (unit tests) — draw nothing, exactly as before
+    let entry = imageCache.get(href);
+    if (!entry) {
+        const img = new Image();
+        entry = { img, loaded: false };
+        imageCache.set(href, entry);
+        img.onload = () => { entry!.loaded = true; onImageReady?.(); };
+        // A failed load stays `loaded: false` and is never retried (the entry exists) — draws nothing.
+        img.src = href;
+    }
+    return entry.loaded ? entry.img : null;
+}
 
 /** Compile error if a `Shape`/`PathCommand` variant is added without a case here. */
 function unreachable(x: never): never {
@@ -108,10 +136,17 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): v
             ctx.clip();
             ctx.fillText(shape.text, shape.x, shape.y);
             return;
-        case "image":
-            // Deferred: drawImage needs a decoded bitmap, not an href string. Draws nothing
-            // this pass (the node's box still selects/culls via geometry). See the header.
+        case "image": {
+            // Load the href once (cached); draw it when decoded. Until then (or with no href /
+            // no DOM) nothing is drawn — the node's box still selects/culls via geometry.
+            if (shape.href === null) return;
+            const img = resolveImage(shape.href);
+            if (img) {
+                if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
+                ctx.drawImage(img, shape.x, shape.y, shape.width, shape.height);
+            }
             return;
+        }
         default:
             return unreachable(shape);
     }

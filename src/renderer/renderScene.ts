@@ -18,7 +18,8 @@ export function renderScene(
     container: HTMLElement,
     doc: ReadonlyDocument,
     state: RendererState,
-    backend: RenderBackend
+    backend: RenderBackend,
+    onAsyncReady?: () => void
 ): void {
     if (container.dataset.vdeBackend !== backend) {
         // Backend changed: the old element (and, for SVG, its cached grid) is now invalid.
@@ -26,6 +27,7 @@ export function renderScene(
         container.innerHTML = "";
         container.dataset.vdeBackend = backend;
     }
-    if (backend === "canvas") renderCanvas(container, doc, state);
+    // `onAsyncReady` repaints when a lazily-loaded resource (a Canvas image) finishes decoding.
+    if (backend === "canvas") renderCanvas(container, doc, state, onAsyncReady);
     else renderSVG(container, doc, state);
 }

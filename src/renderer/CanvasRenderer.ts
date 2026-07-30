@@ -19,14 +19,17 @@
 
 import { ReadonlyDocument } from "../core/document/Document";
 import { buildRenderModel } from "./RenderModel";
-import { emitCanvas } from "./emitCanvas";
+import { emitCanvas, setImageReadyCallback } from "./emitCanvas";
 import { RendererState } from "./RendererState";
 
 export function renderCanvas(
     container: HTMLElement,
     doc: ReadonlyDocument,
-    state: RendererState
+    state: RendererState,
+    onAsyncReady?: () => void
 ): void {
+    // A lazily-loaded image repaints the canvas when it finishes decoding.
+    setImageReadyCallback(onAsyncReady ?? null);
     const size = { width: container.clientWidth, height: container.clientHeight };
 
     // Reuse the container's <canvas>, or replace whatever else is there (e.g. an SVG left by

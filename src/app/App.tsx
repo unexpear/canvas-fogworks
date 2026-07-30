@@ -176,7 +176,7 @@ export function App() {
                 computed,
                 viewport: es.viewport
             };
-            renderScene(canvasRef.current, doc, rendererState, backend);
+            renderScene(canvasRef.current, doc, rendererState, backend, refresh);
         }
     }, [ui.tick, dispatcher, backend]);
 
