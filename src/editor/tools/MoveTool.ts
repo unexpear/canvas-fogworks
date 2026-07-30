@@ -11,12 +11,9 @@ import { Geometry } from "../../core/document/Node";
 import { selectionRoots } from "../../core/document/SceneGraph";
 import { isAbsolute, isLayoutContainer } from "../../core/geometry/LayoutEngine";
 import { computeGeometry } from "../../core/geometry/GeometryEngine";
-import { computeSnap } from "../../core/geometry/Snapping";
+import { computeSnap, snapTargetsExcludingSubtree, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect } from "../../core/geometry/Matrix";
 import { Tool } from "./ToolController";
-
-/** Alignment-snap budget in SCREEN pixels (converted to world by ÷ zoom). */
-const SNAP_THRESHOLD_PX = 6;
 
 export class MoveTool implements Tool {
     private dispatcher: ActionDispatcher;
@@ -80,26 +77,10 @@ export class MoveTool implements Tool {
         const node = doc.nodes.get(id);
         if (!node || node.parent !== null || node.transform) return;
 
-        // The moving subtree (this node + descendants) is excluded — it moves as one.
-        const subtree = new Set<string>();
-        const stack = [id];
-        while (stack.length) {
-            const nid = stack.pop()!;
-            subtree.add(nid);
-            doc.nodes.get(nid)?.children.forEach(c => stack.push(c));
-        }
-
         const computed = computeGeometry(doc);
         const movingBounds = computed.nodes.get(id)?.bounds;
         if (!movingBounds) return;
-        const targets: Rect[] = [];
-        computed.nodes.forEach((c, nid) => {
-            const b = c.bounds;
-            if (!subtree.has(nid) && Number.isFinite(b.x) && Number.isFinite(b.y) && Number.isFinite(b.width) && Number.isFinite(b.height)) {
-                targets.push(b);
-            }
-        });
-        this.snapTargets = targets;
+        this.snapTargets = snapTargetsExcludingSubtree(doc, computed, id); // excludes this node's own subtree
         this.snapNodeId = id;
         // Computed size (a hug container's rendered size can differ from its stored width/height).
         this.snapSize = { width: movingBounds.width, height: movingBounds.height };

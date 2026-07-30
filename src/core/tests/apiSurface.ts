@@ -51,7 +51,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { createEditorState, clampViewport, panBy, zoomAt, screenToWorld, EditorState } from "../../editor/EditorState";
 import { selectionHandles, handleAtPoint, SelectionHandle, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
-import { computeSnap, SnapGuide, SnapResult } from "../geometry/Snapping";
+import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, SNAP_THRESHOLD_PX, SnapGuide, SnapResult } from "../geometry/Snapping";
 import { renderSVG, clearRenderState, RendererState } from "../../renderer/SVGRenderer";
 import { renderCanvas } from "../../renderer/CanvasRenderer";
 import { renderScene, RenderBackend } from "../../renderer/renderScene";
@@ -215,9 +215,14 @@ export function __apiSurfacePin(): void {
     expectType<number>(ROTATE_OFFSET_PX);
     expectType<SelectionHandle[]>(selectionHandles(computed, ["id"], 1));       // zoom (for the rotate-knob offset)
     expectType<SelectionHandle | null>(handleAtPoint(computed, ["id"], 0, 0, 1)); // zoom (sizes the grab square)
-    const snap: SnapResult = computeSnap({ x: 0, y: 0, width: 1, height: 1 }, [{ x: 0, y: 0, width: 1, height: 1 }], 6);
+    const unit: Rect = { x: 0, y: 0, width: 1, height: 1 };
+    const snap: SnapResult = computeSnap(unit, [unit], 6);
     expectType<number>(snap.dx); expectType<number>(snap.dy); expectType<SnapGuide[]>(snap.guides);
     expectType<"x" | "y">(snap.guides[0]?.axis ?? "x");
+    expectType<number>(SNAP_THRESHOLD_PX);
+    expectType<{ dx: number; dy: number }>(snapPoint(0, 0, [unit], 6));
+    expectType<SnapGuide[]>(guidesForRect(unit, [unit]));
+    expectType<Rect[]>(snapTargetsExcludingSubtree(doc, computed, "id"));
     const rendererState: RendererState = {
         selectedNodeIds: [], hoveredNodeId: null, computed, viewport: es.viewport
     };

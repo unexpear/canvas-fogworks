@@ -22,7 +22,7 @@ import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, 
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
 import { selectionHandles, handleAtPoint, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
-import { computeSnap } from "../geometry/Snapping";
+import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree } from "../geometry/Snapping";
 import { MoveTool } from "../../editor/tools/MoveTool";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
@@ -1150,6 +1150,38 @@ describe("ToolController DOM-free resize", () => {
         tc.onMouseUp(md(180, 280));
         expect(dispatcher.getDocument().nodes.get("C")!.geometry).toMatchObject({ width: 70, height: 70 });
     });
+
+    test("resize snaps the dragged corner to another node's edge, with a guide", () => {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number, y: number, w: number, h: number) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: w, height: h }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        mk("A", 0, 0, 50, 50); mk("B", 100, 100, 60, 60);
+        doc.rootNodeUuids = ["A", "B"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        tc.onMouseDown(md(50, 50), rect);  // A's SE corner (world 50,50)
+        tc.onMouseMove(md(97, 50), rect);  // drag the right edge to 97 → within 6 of B's left (100) → snaps to 100
+        expect(es.snapGuides && es.snapGuides.length).toBeGreaterThan(0); // a guide is shown
+        tc.onMouseUp(md(97, 50));
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry).toMatchObject({ x: 0, y: 0, width: 100, height: 50 }); // 97 snapped to 100
+        expect(es.snapGuides).toBeNull(); // cleared on release
+    });
+
+    test("resize does NOT snap a node that isn't top-level (stored != world)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 0, y: 0, width: 300, height: 300 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("T", { id: "T", type: "core.rectangle", parent: null, children: [], geometry: { x: 100, y: 100, width: 60, height: 60 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P", "T"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["C"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        tc.onMouseDown(md(50, 50), rect); // C's SE world corner (P at origin → 50,50)
+        tc.onMouseMove(md(97, 50), rect); // near T's left (100), but C is nested → snapping disabled
+        tc.onMouseUp(md(97, 50));
+        expect(dispatcher.getDocument().nodes.get("C")!.geometry.width).toBe(97); // raw 97, NOT snapped to 100
+    });
 });
 
 // ─── M4: ToolController rotate — grab the knob to spin about the node's centre ───
@@ -1262,6 +1294,41 @@ describe("computeSnap", () => {
         expect(r.dx).toBe(3);
         // ONE merged vertical guide at x=100, spanning A, B, and the moving node in y.
         expect(r.guides).toEqual([{ axis: "x", pos: 100, start: 100, end: 350 }]);
+    });
+
+    test("snapPoint snaps a POINT's x and y to target lines, independently", () => {
+        expect(snapPoint(97, 300, [A], 6)).toEqual({ dx: 3, dy: 0 });   // x near A's left (100); y far
+        expect(snapPoint(123, 148, [A], 6)).toEqual({ dx: 2, dy: 2 });  // x near A's centre (125); y near A's right (150)
+        expect(snapPoint(200, 300, [A], 6)).toEqual({ dx: 0, dy: 0 });  // both far → no snap
+    });
+
+    test("guidesForRect emits a guide for a coincident edge (no snapping)", () => {
+        const rect = { x: 100, y: 100, width: 50, height: 50 };  // x-lines 100/125/150
+        const target = { x: 100, y: 300, width: 80, height: 50 }; // x-lines 100/140/180 — shares ONLY the left edge
+        expect(guidesForRect(rect, [target])).toEqual([{ axis: "x", pos: 100, start: 100, end: 350 }]);
+    });
+});
+
+describe("snapTargetsExcludingSubtree", () => {
+    function doc3(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 0, y: 0, width: 200, height: 200 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 10, y: 10, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.nodes.set("T", { id: "T", type: "core.rectangle", parent: null, children: [], geometry: { x: 300, y: 0, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P", "T"];
+        return doc;
+    }
+
+    test("excludes the root AND its descendants; keeps everything else", () => {
+        const doc = doc3();
+        const cs = computeGeometry(doc);
+        // Dragging P excludes P and its child C → only T remains.
+        expect(snapTargetsExcludingSubtree(doc, cs, "P")).toEqual([{ x: 300, y: 0, width: 50, height: 50 }]);
+        // Dragging the leaf C excludes only C → P and T remain.
+        const forC = snapTargetsExcludingSubtree(doc, cs, "C");
+        expect(forC.length).toBe(2);
+        expect(forC).toContainEqual({ x: 300, y: 0, width: 50, height: 50 });   // T
+        expect(forC).toContainEqual({ x: 0, y: 0, width: 200, height: 200 });   // P (world == stored, top-level)
     });
 });
 

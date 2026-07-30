@@ -497,11 +497,10 @@ box select. **Manipulation:** drag · resize · rotate. **Guides:** snapping · 
 guides · smart guides · rulers.
 
 **Close-out:** slices 1–5 are done — pan/zoom, box-select, DOM-free resize/rotate handle picking, a live
-SVG/Canvas backend selector, and alignment snapping + smart guides. Deferred refinements (documented at each
-slice): resize-snapping and multi-select/group snapping + rotate (snapping is move-only, single top-level
-unrotated node); Escape-to-cancel-rotate; the canvas per-region hover cursor and text/image rasterization;
-rulers. The core editor loop is complete and every interaction is DOM-free, so it runs identically on both
-backends.
+SVG/Canvas backend selector, and alignment snapping + smart guides (move AND resize). Deferred refinements
+(documented at each slice): multi-select/group snapping + rotate (snapping is single top-level unrotated node);
+Escape-to-cancel-rotate; the canvas per-region hover cursor and text/image rasterization; rulers. The core
+editor loop is complete and every interaction is DOM-free, so it runs identically on both backends.
 
 Already present from earlier prototypes: click + shift-multi-select (DOM-free `hitTest`), drag (`MoveTool`),
 resize (`ToolController`, but DOM-`data-resize-handle`-based — the canvas-wiring blocker), delete, and
@@ -581,9 +580,15 @@ resulting alignment (spans merged across targets). `MoveTool` folds it into the 
 unrotated node (stored == world, so a world snap delta is also its stored delta): targets = other nodes' world
 bounds captured once at mouse-down (its own subtree excluded), snap applied to the pending AND the committed
 position, `EditorState.snapGuides` drawn by the renderer as thin world-space lines (`role: "guide"`). No schema
-change. Deferred: resize-snapping, multi-select/group snapping, nested/rotated moving nodes, and artboard/grid
-snapping (the pure `computeSnap` already generalises to any rects — only the tool wiring is scoped). This closes
-Milestone 4.
+change. This closes Milestone 4.
+
+**Follow-up (deferral addressed) — resize snapping:** the same snapping now applies to the RESIZE gesture. A
+pure `snapPoint(px, py, targets, threshold)` snaps the DRAGGED corner (the fixed corner stays) to target
+lines; `ToolController` folds it into a corner-resize of a single top-level unrotated node (the shared
+`snapTargetsExcludingSubtree` + `guidesForRect` helpers, extracted from `MoveTool`), snapping the pending +
+committed geometry and showing the same guides. Still deferred: multi-select/group snapping + rotate,
+nested/rotated moving/resizing nodes, and artboard/grid snapping (the pure snap already generalises to any
+rects — only the per-gesture tool wiring is scoped).
 
 ---
 

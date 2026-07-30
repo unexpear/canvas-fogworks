@@ -60,9 +60,13 @@ function selectionHandles(s: ComputedState, selectedNodeIds: readonly string[], 
 function handleAtPoint(s: ComputedState, selectedNodeIds: readonly string[], x: number, y: number, zoom: number): SelectionHandle | null; // handle under a world point; back-to-front (rotate beats a grazed corner)
 
 // geometry/Snapping.ts — DOM-free alignment snapping (M4 smart guides), pure like the above.
+const SNAP_THRESHOLD_PX: number;                       // default snap budget, SCREEN px (tools ÷ zoom)
 interface SnapGuide { axis: "x" | "y"; pos: number; start: number; end: number } // "x"=vertical line at world x=pos; span on the perpendicular axis
 interface SnapResult { dx: number; dy: number; guides: SnapGuide[] }
-function computeSnap(moving: Rect, targets: readonly Rect[], threshold: number): SnapResult; // snap moving's edges/centre onto a target's within threshold (WORLD units); guides at each alignment
+function computeSnap(moving: Rect, targets: readonly Rect[], threshold: number): SnapResult; // MOVE: snap a whole box's edges/centre onto a target's; guides at each alignment
+function snapPoint(px: number, py: number, targets: readonly Rect[], threshold: number): { dx: number; dy: number }; // RESIZE: snap the dragged corner to target lines, each axis independently
+function guidesForRect(rect: Rect, targets: readonly Rect[]): SnapGuide[]; // guides for a rect's existing alignments (merged spans)
+function snapTargetsExcludingSubtree(doc: ReadonlyDocument, computed: ComputedState, rootId: string): Rect[]; // other nodes' world bounds, minus rootId's own subtree
 
 // geometry/LayoutEngine.ts — Milestone 2 core: auto-layout containers.
 // Runs INSIDE computeGeometry; a container's children get a computed local rect.
@@ -262,9 +266,10 @@ Actions and dispatch them; they mutate only `EditorState`, never the document.
 (`EditorState.marqueeRect`) and, on release, selects `nodesInRect` (shift = additive); a
 plain click with no drag deselects. Picking is world-space (`hitTest`/`nodesInRect`), never
 the DOM, so selection works under any renderer backend.
-`MoveTool` folds `computeSnap` into the drag for a SINGLE top-level, unrotated node (stored ==
-world), snapping its edges/centre onto other nodes' and writing `EditorState.snapGuides` for the
-renderer; a multi-node/nested/rotated drag is unsnapped (deferred).
+Alignment snapping applies to a SINGLE top-level, unrotated node (stored == world): `MoveTool`
+folds `computeSnap` into a drag (whole box), and `ToolController` resize folds `snapPoint` into a
+corner drag — both write `EditorState.snapGuides` for the renderer. A multi-node/nested/rotated
+gesture is unsnapped (deferred).
 
 ## Renderer (`renderer/`)
 

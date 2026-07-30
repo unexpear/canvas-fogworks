@@ -10,6 +10,8 @@
  */
 
 import { Rect } from "./Matrix";
+import { ComputedState } from "./GeometryEngine";
+import { ReadonlyDocument } from "../document/Document";
 
 /** A smart-guide line: "x" = a VERTICAL line at world x=`pos`; "y" = a HORIZONTAL line at world y=`pos`. */
 export interface SnapGuide {
@@ -28,6 +30,9 @@ export interface SnapResult {
 
 /** Coincidence tolerance when building guides after the snap (well under a pixel). */
 const GUIDE_EPS = 0.1;
+
+/** Default snap budget in SCREEN pixels (tools convert to world by ÷ zoom). */
+export const SNAP_THRESHOLD_PX = 6;
 
 /** The three snap lines of a rect on the x axis: left edge, centre, right edge. */
 function linesX(r: Rect): [number, number, number] {
@@ -72,11 +77,48 @@ export function computeSnap(moving: Rect, targets: readonly Rect[], threshold: n
     const dx = bestDelta(linesX(moving), targetX, threshold);
     const dy = bestDelta(linesY(moving), targetY, threshold);
     const snapped: Rect = { x: moving.x + dx, y: moving.y + dy, width: moving.width, height: moving.height };
-    return { dx, dy, guides: collectGuides(snapped, targets) };
+    return { dx, dy, guides: guidesForRect(snapped, targets) };
 }
 
-/** Every alignment that holds for the SNAPPED rect, one guide per aligned coordinate (spans merged across targets). */
-function collectGuides(snapped: Rect, targets: readonly Rect[]): SnapGuide[] {
+/**
+ * Snap a single POINT (a resize's dragged corner) to the target snap lines — the point's x to any
+ * target x-line (left/centre/right), its y to any target y-line — each axis independently, within
+ * `threshold`. Unlike `computeSnap` (which snaps a whole box's 3 lines) this snaps one coordinate pair.
+ */
+export function snapPoint(px: number, py: number, targets: readonly Rect[], threshold: number): { dx: number; dy: number } {
+    return {
+        dx: bestDelta([px], targets.map(linesX), threshold),
+        dy: bestDelta([py], targets.map(linesY), threshold)
+    };
+}
+
+function isFiniteRect(r: Rect): boolean {
+    return Number.isFinite(r.x) && Number.isFinite(r.y) && Number.isFinite(r.width) && Number.isFinite(r.height);
+}
+
+/**
+ * Other nodes' world bounds to snap against: every computed node EXCEPT `rootId`'s own subtree,
+ * which moves/resizes as one and must not be a snap target for itself. Shared by the move and
+ * resize gestures. Non-finite bounds are dropped.
+ */
+export function snapTargetsExcludingSubtree(doc: ReadonlyDocument, computed: ComputedState, rootId: string): Rect[] {
+    const subtree = new Set<string>();
+    const stack = [rootId];
+    while (stack.length) {
+        const id = stack.pop()!;
+        subtree.add(id);
+        doc.nodes.get(id)?.children.forEach(c => stack.push(c));
+    }
+    const targets: Rect[] = [];
+    computed.nodes.forEach((c, id) => {
+        if (!subtree.has(id) && isFiniteRect(c.bounds)) targets.push(c.bounds);
+    });
+    return targets;
+}
+
+/** Every alignment that holds for `rect`, one guide per aligned coordinate (spans merged across targets). */
+export function guidesForRect(rect: Rect, targets: readonly Rect[]): SnapGuide[] {
+    const snapped = rect;
     const byKey = new Map<string, SnapGuide>();
     const add = (axis: "x" | "y", pos: number, a: number, b: number) => {
         const key = `${axis}:${Math.round(pos * 100)}`;

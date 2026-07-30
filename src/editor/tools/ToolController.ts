@@ -11,6 +11,8 @@ import { TransactionAction } from "../../core/actions/TransactionAction";
 import { EditorState, panBy, screenToWorld } from "../EditorState";
 import { computeGeometry, ComputedState } from "../../core/geometry/GeometryEngine";
 import { handleAtPoint } from "../../core/geometry/SelectionHandles";
+import { snapPoint, guidesForRect, snapTargetsExcludingSubtree, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
+import { Rect } from "../../core/geometry/Matrix";
 import { selectionRoots } from "../../core/document/SceneGraph";
 
 export interface Tool {
@@ -36,6 +38,9 @@ export class ToolController {
     private resizePreview: { x: number; y: number; width: number; height: number } | null = null;
     private resizeStartX = 0;
     private resizeStartY = 0;
+    // Alignment snap targets for the resize, captured at mouse-down when the resizing node is a
+    // single top-level unrotated node (stored == world); null disables resize snapping.
+    private resizeSnapTargets: Rect[] | null = null;
 
     // Rotate mode — grabbing the rotate knob spins the node about its world-AABB centre.
     // Each move live-commits a coalesced UpdateNodeTransformAction, so a CONTINUOUS drag is one
@@ -117,6 +122,11 @@ export class ToolController {
                     width: node.geometry.width,
                     height: node.geometry.height
                 };
+                // Enable snapping only for a top-level, unrotated node (stored == world, so a world
+                // corner snap is also a stored-geometry adjustment).
+                this.resizeSnapTargets = (node.parent === null && !node.transform)
+                    ? snapTargetsExcludingSubtree(this.dispatcher.getDocument(), computed, hit.nodeId)
+                    : null;
                 e.preventDefault();
                 return;
             }
@@ -149,16 +159,29 @@ export class ToolController {
 
         if (this.resizeMode && this.resizeNodeId && this.resizeHandle && this.resizeOrigin) {
             const zoom = Math.max(0.01, this.editorState.viewport.zoom);
-            const dx = (e.clientX - this.resizeStartX) / zoom;
-            const dy = (e.clientY - this.resizeStartY) / zoom;
+            let dx = (e.clientX - this.resizeStartX) / zoom;
+            let dy = (e.clientY - this.resizeStartY) / zoom;
 
             const doc = this.dispatcher.getDocument();
             if (!doc.nodes.has(this.resizeNodeId)) { this.resetResize(); this.refresh(); return; }
+
+            // Alignment snapping: pull the DRAGGED corner (the fixed corner stays put) onto a
+            // nearby target edge/centre, then recompute the box from the adjusted delta.
+            if (this.resizeSnapTargets) {
+                const corner = this.movingCorner(this.resizeHandle, this.resizeOrigin);
+                const snap = snapPoint(corner.x + dx, corner.y + dy, this.resizeSnapTargets, SNAP_THRESHOLD_PX / zoom);
+                dx += snap.dx;
+                dy += snap.dy;
+            }
 
             // Preview via geometry override — no document mutation until commit.
             const g = this.computeResizedGeometry(this.resizeHandle, this.resizeOrigin, dx, dy);
             this.resizePreview = g;
             this.editorState.pendingGeometry = new Map([[this.resizeNodeId, g]]);
+            if (this.resizeSnapTargets) {
+                const guides = guidesForRect(g, this.resizeSnapTargets);
+                this.editorState.snapGuides = guides.length > 0 ? guides : null;
+            }
 
             this.refresh();
             return;
@@ -268,13 +291,24 @@ export class ToolController {
         };
     }
 
+    /** The corner a resize handle DRAGS (the fixed corner is the opposite), in stored coords. */
+    private movingCorner(handle: string, o: { x: number; y: number; width: number; height: number }): { x: number; y: number } {
+        const right = o.x + o.width, bottom = o.y + o.height;
+        if (handle === "se") return { x: right, y: bottom };
+        if (handle === "ne") return { x: right, y: o.y };
+        if (handle === "sw") return { x: o.x, y: bottom };
+        return { x: o.x, y: o.y }; // nw
+    }
+
     private resetResize(): void {
         this.resizeMode = false;
         this.resizeNodeId = null;
         this.resizeHandle = null;
         this.resizeOrigin = null;
         this.resizePreview = null;
+        this.resizeSnapTargets = null;
         this.editorState.pendingGeometry = null;
+        this.editorState.snapGuides = null;
     }
 
     private resetRotate(): void {
