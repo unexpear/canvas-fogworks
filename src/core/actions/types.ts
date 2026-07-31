@@ -30,7 +30,14 @@ export const DOCUMENT_DELTA_KEY: string = RESERVED_NODE_ID;
  * silently-dropped edit.
  */
 export type NodeDelta =
-    | { kind: "add"; node: Node }
+    | {
+        kind: "add";
+        node: Node;
+        /** Where among the parent's `children` (or `rootNodeUuids`) to insert. Omitted =
+         *  append, which is what creating a node means. A node REPLACING another in place
+         *  (DetachInstanceAction) passes the outgoing node's index so the z-order is kept. */
+        index?: number;
+    }
     | { kind: "delete" }
     | {
         kind: "patch";

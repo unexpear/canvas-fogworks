@@ -15,6 +15,7 @@ import { geometryActionFor, styleActionFor } from "../core/actions/nodeEdit";
 import { expandInstances } from "../core/document/Components";
 import { SetActiveThemeAction } from "../core/actions/VariableActions";
 import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
+import { DetachInstanceAction } from "../core/actions/DetachInstanceAction";
 import { createEditorState, EditorState, zoomAt } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
@@ -347,6 +348,30 @@ export function App() {
                     style={{ fontSize: 11, padding: "3px 8px", marginLeft: 8, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
                 >
                     ⧉ Instance
+                </button>
+                <button
+                    title="Detach the selected instance — bakes what it draws into ordinary nodes and severs the link to its master (undoable)"
+                    disabled={(() => {
+                        const sel = es.selectedNodeIds;
+                        if (sel.length !== 1) return true;
+                        // Enabled exactly when the action would succeed, so the control never
+                        // offers a click that silently does nothing (a dangling instance has
+                        // nothing to bake).
+                        return !new DetachInstanceAction(dispatcher.getDocument(), sel[0]).validate();
+                    })()}
+                    onClick={() => {
+                        const action = new DetachInstanceAction(dispatcher.getDocument(), es.selectedNodeIds[0]);
+                        if (dispatcher.dispatchAction(action).success) {
+                            // Select the baked ROOT: the instance the user had selected is gone,
+                            // and a stale selection would leave the inspector empty.
+                            const created = action.getCreatedNodeIds();
+                            es.selectedNodeIds = created.length > 0 ? [created[0]] : [];
+                        }
+                        refresh();
+                    }}
+                    style={{ fontSize: 11, padding: "3px 8px", marginLeft: 6, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
+                >
+                    ⊘ Detach
                 </button>
                 <div style={{ flex: 1 }} />
                 <button

@@ -197,11 +197,46 @@ export function overrideDimensionError(doc: ReadonlyDocument, instance: Readonly
     return null;
 }
 
-/** Shallow node copy with a fresh children array + geometry (the only fields expansion
- *  rewrites). Style/layout/transform are shared by REFERENCE — the expanded document is
- *  read-only downstream, and an override REPLACES rather than mutates them. */
-function copyForExpansion(n: Node, id: string, parent: string, geometry: Node["geometry"]): Node {
-    return { ...n, id, parent, children: [], geometry };
+/**
+ * ONE node of a master subtree, as a given instance renders it: the master's data with that
+ * instance's override applied, and — for the subtree ROOT — the two rules the root obeys
+ * (re-origined to (0,0), because the INSTANCE's geometry places it; constraints stripped,
+ * because they describe a parent the copy no longer has).
+ *
+ * SHARED by `expandInstances`, which materializes it as a VIRTUAL node, and
+ * `DetachInstanceAction`, which materializes it as a STORED one — so what a detach bakes
+ * into the document is exactly what the instance was drawing, and the two cannot drift.
+ * The returned node always has an EMPTY `children`; the caller wires the tree.
+ *
+ * Style/layout/transform are shared by REFERENCE when no override touches them — the expanded
+ * document is read-only downstream, and an override REPLACES rather than mutates. A detach,
+ * which produces MUTABLE stored nodes, clones them (see `DetachInstanceAction`).
+ */
+export function materializeNode(
+    master: Node,
+    override: InstanceOverride | undefined,
+    isRoot: boolean,
+    id: string,
+    parent: string | null
+): Node {
+    const geometry = isRoot
+        ? { ...master.geometry, ...override?.geometry, x: 0, y: 0 } // the INSTANCE places the root copy
+        : { ...master.geometry, ...override?.geometry };
+    const copy: Node = { ...master, id, parent, children: [], geometry };
+    if (override) {
+        if (override.style) copy.style = { ...master.style, ...override.style };
+        if (override.text !== undefined) copy.text = override.text;
+        if (override.src !== undefined) copy.src = override.src;
+    }
+    // The ROOT copy's CONSTRAINTS (and their frozen `constraintRef`) describe the master's
+    // relationship to ITS parent, which the copy no longer has — leaving them would let
+    // `resolveConstraints` reposition the copy against the instance's box and override the
+    // (0,0) re-origin above. Deeper copies keep theirs: their parent IS a faithful copy, so
+    // the relationship still holds. (An anchor-to-the-instance affordance is a later slice.)
+    if (isRoot && (copy.layout.constraints || copy.layout.constraintRef)) {
+        copy.layout = { ...copy.layout, constraints: undefined, constraintRef: undefined };
+    }
+    return copy;
 }
 
 /**
@@ -253,24 +288,9 @@ export function expandInstances(doc: ReadonlyDocument): ReadonlyDocument {
         // it is `instancePath`, whose entry in the working map carries the overrides (a stored
         // instance's own, or, for a NESTED instance, the ones copied from the master).
         const override = nodes.get(instancePath)?.overrides?.[masterId];
-        const geo = isRoot
-            ? { ...master.geometry, ...override?.geometry, x: 0, y: 0 } // the INSTANCE places the root copy
-            : { ...master.geometry, ...override?.geometry };
-        const copy = copyForExpansion(master as Node, id, parentId, geo);
-        if (override) {
-            // Replace, never mutate: the master's own objects are shared by reference.
-            if (override.style) copy.style = { ...master.style, ...override.style };
-            if (override.text !== undefined) copy.text = override.text;
-            if (override.src !== undefined) copy.src = override.src;
-        }
-        // The ROOT copy's CONSTRAINTS (and their frozen `constraintRef`) describe the master's
-        // relationship to ITS parent, which the copy no longer has — leaving them would let
-        // `resolveConstraints` reposition the copy against the instance's box and override the
-        // (0,0) re-origin above. Deeper copies keep theirs: their parent IS a faithful copy, so
-        // the relationship still holds. (An anchor-to-the-instance affordance is a later slice.)
-        if (isRoot && (copy.layout.constraints || copy.layout.constraintRef)) {
-            copy.layout = { ...copy.layout, constraints: undefined, constraintRef: undefined };
-        }
+        // The one materialization rule, shared with DetachInstanceAction so a detach bakes
+        // exactly what expansion was drawing.
+        const copy = materializeNode(master as Node, override, isRoot, id, parentId);
         nodes.set(id, copy);
         nodes.get(parentId)!.children.push(id);
         materialized++;

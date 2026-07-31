@@ -54,6 +54,11 @@ function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializ
 interface InstanceOverride { geometry?: Partial<Geometry>; style?: Partial<Style>; text?: string; src?: string }
 const INSTANCE_MAX_OVERRIDES: number;                      // per-instance cap (OOM guard)
 function overridesError(type: string, overrides: unknown): string | null; // shared load + edit; each field obeys its stored rule (styleError, finite geometry)
+function overrideDimensionError(doc: ReadonlyDocument, instance: ReadonlyNode): string | null; // the TYPE-aware half (needs the doc to resolve each key's master); BOTH paths run it
+// ONE node of a master subtree as an instance renders it (override applied; the ROOT re-origined
+// to (0,0) and stripped of constraints). Shared by expandInstances (VIRTUAL) and
+// DetachInstanceAction (STORED), so a detach bakes exactly what was drawn.
+function materializeNode(master: Node, override: InstanceOverride | undefined, isRoot: boolean, id: string, parent: string | null): Node;
 
 // actions/nodeEdit.ts — routes an edit to the right Action for the node it targets. A STORED
 // node edits directly; an instance COPY (virtual id) becomes a per-instance override. Null =
@@ -62,6 +67,8 @@ function geometryActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partial
 function styleActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partial<Style>): Action | null;
 function overrideTargetFor(doc: ReadonlyDocument, nodeId: string): { instanceId: string; masterNodeId: string } | null;
 function isEditableNode(doc: ReadonlyDocument, nodeId: string): boolean; // gate an affordance rather than offer a dead control
+function isHandleOffered(doc: ReadonlyDocument, nodeId: string, handle: string): boolean; // the ONE rule read by the renderer, the picker AND the hover cursor
+function isMasterRootCopy(doc: ReadonlyDocument, nodeId: string): boolean; // the copy whose POSITION is the instance's (its x/y override is refused)
 
 // geometry/Matrix.ts — 2D affine primitive
 interface Mat2D { a: number; b: number; c: number; d: number; e: number; f: number }

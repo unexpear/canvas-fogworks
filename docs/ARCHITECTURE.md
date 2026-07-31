@@ -107,7 +107,13 @@ Document → GeometryEngine ─(runs)→ LayoutEngine → ComputedState → Rend
 `computeGeometry` first resolves **component instances** (M6): the pure `expandInstances`
 materializes each instance's master subtree as virtual children, so everything below this
 point — layout, transforms, culling, picking, both backends — operates on an ordinary tree.
-The renderer resolves node data through the same expansion, so the two never disagree.
+The renderer resolves node data through the same expansion, so the two never disagree. Each
+copy is built by `materializeNode`, which `DetachInstanceAction` also uses to BAKE an instance
+into stored nodes — so detaching produces exactly what was being drawn. Which affordances a
+copy offers (resize corners yes, rotate knob no, nothing at all for a copy nested inside
+another instance) is the single `isHandleOffered` rule, read by the renderer, the picker and
+the hover cursor alike, so what is drawn, what a press grabs and what the pointer promises
+cannot drift apart.
 
 `computeGeometry(doc, pending?, previous?, dirty?)`
 (`src/core/geometry/GeometryEngine.ts`) resolves parent-relative stored intent into a

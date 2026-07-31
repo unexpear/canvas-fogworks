@@ -44,7 +44,8 @@ abstract class Action {
 | `UpdateNodeLayoutAction` | `{ kind: "patch", layout: {…partial…} }` — M2 layout (container/grid/grow/constraints/position/margin). Carries grid⊕container exclusivity IN the delta, and auto-captures `constraintRef` from a NON-container parent's stored size on first opt-in |
 | `ReparentNodeAction` | `{ kind: "patch", reparent: { parent, index? } }` |
 | `CreateInstanceAction` | `{ kind: "add", node }` — a `core.instance` sized to its MASTER (M6); the master must exist at creation time (a DANGLING reference is only valid at rest) |
-| `SetInstanceOverrideAction` | `{ kind: "patch", overrides }` — set/clear ONE per-instance override (M6 slice 2), keyed by master node id; patches MERGE field-by-field so a move then a resize accumulate, `null` clears the entry (reset to master); validated via the shared `overridesError` |
+| `SetInstanceOverrideAction` | `{ kind: "patch", overrides }` — set/clear ONE per-instance override (M6 slice 2), keyed by master node id; patches MERGE field-by-field so a move then a resize accumulate, `null` clears the entry (reset to master); validated via the shared `overridesError` **and** `overrideDimensionError` (the type-aware half, which needs the document) |
+| `DetachInstanceAction` | one `{ kind: "add" }` per baked node + `{ kind: "delete" }` for the instance (M6 slice 3) — bakes what the instance was DRAWING into ordinary nodes via the shared `materializeNode`, severing the link to the master. The root takes the instance's position AND its `index` among its siblings (z-order). A NESTED instance is copied as an instance, not expanded. REFUSES a dangling instance (nothing to bake) rather than deleting the node |
 | `SetVariableAction` | `{ kind: "variables", variables, activeTheme }` — upsert one design token (M5); validated via the shared `variableStoreError` |
 | `DeleteVariableAction` | `{ kind: "variables", … }` — remove one token; dangling references stay valid (they resolve to the visible fallback) |
 | `SetActiveThemeAction` | `{ kind: "variables", … }` — switch the persisted light/dark theme |
@@ -89,22 +90,24 @@ is a compile error rather than a silently-dropped edit:
 
 ```ts
 type NodeDelta =
-  | { kind: "add";    node: Node }
+  | { kind: "add";    node: Node; index?: number }
   | { kind: "delete" }
   | { kind: "patch";  reparent?: { parent: string | null; index?: number };
                       geometry?: Partial<Geometry>; transform?: Partial<Transform>;
                       style?: Partial<Style>; layout?: Partial<Layout>;
-                      text?: string; src?: string; name?: string };
+                      text?: string; src?: string; name?: string;
+                      overrides?: Record<string, InstanceOverride> };  // whole-map replace
 ```
 
 | Variant | Meaning | Applied as |
 |---------|---------|-----------|
-| `add` | create a node | `nodes.set`; if it has a resolvable `parent`, push to `parent.children`, else land it at the root |
+| `add` | create a node | `nodes.set`; if it has a resolvable `parent`, insert into `parent.children` at `index` (appended when omitted, clamped like `reparent`), else land it at the root. `index` exists so a node REPLACING another in place (`DetachInstanceAction`) keeps its z-order instead of jumping to the front |
 | `delete` | remove a node | detach from `parent.children`, `nodes.delete`, drop from `rootNodeUuids` |
 | `patch.reparent` | move within the tree | resolve the destination first, detach from **both** the source and the destination, then insert at `index` (appended if omitted) |
 | `patch.geometry` / `.style` / `.layout` | patch | `Object.assign(node.<field>, …)` |
 | `patch.transform` | patch | `node.transform = { ...node.transform, ...delta.transform }` (created if absent) |
 | `patch.text` / `.src` / `.name` | scalar set | assigned when not `undefined` |
+| `patch.overrides` | whole-map replace | `node.overrides = delta.overrides` — whole-map, not per-key, so a transaction merge is last-wins on a coherent value (the ACTION does the field-level merging) |
 
 `applyMutationsToDocument` switches exhaustively on `kind`; adding a variant without
 handling it fails to compile.

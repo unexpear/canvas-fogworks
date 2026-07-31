@@ -24,6 +24,16 @@ function detach(doc: ProjectDocument, node: Node, nodeId: string): void {
     }
 }
 
+/** Insert into a sibling list at a clamped `index`, or APPEND when none is given — the
+ *  same clamping a `patch` reparent uses, so the two placement paths behave identically. */
+function insertAt(list: string[], nodeId: string, index?: number): void {
+    if (typeof index !== "number") {
+        list.push(nodeId);
+        return;
+    }
+    list.splice(Math.max(0, Math.min(index, list.length)), 0, nodeId);
+}
+
 export function applyMutationsToDocument(
     doc: ProjectDocument,
     propertyDeltas: Map<string, NodeDelta>
@@ -35,13 +45,13 @@ export function applyMutationsToDocument(
                 doc.nodes.set(nodeId, node);
                 const parent = node.parent ? doc.nodes.get(node.parent) : null;
                 if (parent) {
-                    if (!parent.children.includes(nodeId)) parent.children.push(nodeId);
+                    if (!parent.children.includes(nodeId)) insertAt(parent.children, nodeId, delta.index);
                 } else {
                     // No parent, or one that does not resolve: land it at the root
                     // rather than leaving it unreachable (which would fail integrity
                     // validation on the next save/load round-trip).
                     node.parent = null;
-                    if (!doc.rootNodeUuids.includes(nodeId)) doc.rootNodeUuids.push(nodeId);
+                    if (!doc.rootNodeUuids.includes(nodeId)) insertAt(doc.rootNodeUuids, nodeId, delta.index);
                 }
                 return;
             }

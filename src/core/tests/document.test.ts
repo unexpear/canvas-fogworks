@@ -11,6 +11,8 @@ import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from ".
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
 import { expandInstances, componentError, overridesError, overrideDimensionError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES } from "../document/Components";
 import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
+import { DetachInstanceAction } from "../actions/DetachInstanceAction";
+import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, isEditableNode, isHandleOffered, isMasterRootCopy } from "../actions/nodeEdit";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
@@ -2423,6 +2425,184 @@ describe("Components: instance overrides", () => {
         const loaded = deserializeDocument(serializeDocument(doc));
         expect(loaded.nodes.get("I")!.overrides!.MC).toEqual({ geometry: { x: 60 }, style: { fill: "#00f" }, text: "hello" });
         expect(compareDocuments(doc, loaded)).toBe(true);
+    });
+});
+
+// ─── M6 slice 3: detach — bake an instance into ordinary nodes ───
+describe("Components: detach instance", () => {
+    /** master M (100×50 at 10,20) with child MC (20×20 at 5,5); instance I at (300,300). */
+    function doc3(overrides?: Record<string, import("../document/Components").InstanceOverride>): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: ["MC"], geometry: { x: 10, y: 20, width: 100, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("MC", { id: "MC", type: "core.rectangle", parent: "M", children: [], geometry: { x: 5, y: 5, width: 20, height: 20 }, style: { fill: "#0f0", opacity: 1 }, layout: {} });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 300, y: 300, width: 100, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M", ...(overrides ? { overrides } : {}) });
+        doc.rootNodeUuids = ["M", "I"];
+        return doc;
+    }
+
+    test("a detach bakes EXACTLY what the instance was drawing, in the same world positions", () => {
+        // The whole promise of detach: the picture does not move. Compare the WORLD boxes of
+        // the copies before against the stored nodes after.
+        const dispatcher = new ActionDispatcher(doc3({ MC: { geometry: { x: 60 }, style: { fill: "#00f" } } }));
+        const before = computeGeometry(dispatcher.getDocument());
+        const rootBefore = before.nodes.get("I::M")!.bounds;
+        const childBefore = before.nodes.get("I::MC")!.bounds;
+
+        const action = new DetachInstanceAction(dispatcher.getDocument(), "I");
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const [newRoot, newChild] = action.getCreatedNodeIds();
+        const d = dispatcher.getDocument();
+
+        expect(d.nodes.has("I")).toBe(false);                       // the instance is gone…
+        expect(d.nodes.get(newRoot)!.type).toBe("core.rectangle");  // …replaced by ordinary nodes
+        expect(d.nodes.get(newRoot)!.componentId).toBeUndefined();  // …with no link to the master
+        expect(d.nodes.get(newRoot)!.overrides).toBeUndefined();
+        const after = computeGeometry(d);
+        expect(after.nodes.get(newRoot)!.bounds).toEqual(rootBefore);
+        expect(after.nodes.get(newChild)!.bounds).toEqual(childBefore);
+        // The override is BAKED, not carried: the copy keeps the value, the master keeps its own.
+        expect(d.nodes.get(newChild)!.style.fill).toBe("#00f");
+        expect(d.nodes.get("MC")!.style.fill).toBe("#0f0");
+        // The tree is well-formed and reloadable.
+        expect(d.nodes.get(newChild)!.parent).toBe(newRoot);
+        expect(d.nodes.get(newRoot)!.children).toEqual([newChild]);
+        expect(() => deserializeDocument(serializeDocument(d))).not.toThrow();
+    });
+
+    test("the master goes on living: editing it no longer touches the detached copy", () => {
+        const dispatcher = new ActionDispatcher(doc3());
+        const action = new DetachInstanceAction(dispatcher.getDocument(), "I");
+        dispatcher.dispatchAction(action);
+        const [, newChild] = action.getCreatedNodeIds();
+        dispatcher.dispatchAction(new UpdateNodeStyleAction(dispatcher.getDocument(), "MC", { fill: "#ff0" }));
+        expect(dispatcher.getDocument().nodes.get(newChild)!.style.fill).toBe("#0f0"); // severed
+    });
+
+    test("the baked nodes own their objects — editing a copy never reaches back into the master", () => {
+        // `materializeNode` shares style/layout by REFERENCE (safe for the read-only expanded
+        // document); a detach produces MUTABLE stored nodes, so it must clone them.
+        const dispatcher = new ActionDispatcher(doc3());
+        const action = new DetachInstanceAction(dispatcher.getDocument(), "I");
+        dispatcher.dispatchAction(action);
+        const [, newChild] = action.getCreatedNodeIds();
+        const d = dispatcher.getDocument();
+        expect(d.nodes.get(newChild)!.style).not.toBe(d.nodes.get("MC")!.style);
+        expect(d.nodes.get(newChild)!.layout).not.toBe(d.nodes.get("MC")!.layout);
+        dispatcher.dispatchAction(new UpdateNodeStyleAction(dispatcher.getDocument(), newChild, { fill: "#abc" }));
+        expect(dispatcher.getDocument().nodes.get("MC")!.style.fill).toBe("#0f0"); // master untouched
+    });
+
+    test("the baked root takes the instance's PLACE in the z-order, not the end of it", () => {
+        const doc = doc3();
+        doc.nodes.set("TOP", { id: "TOP", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#fff", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["M", "I", "TOP"];      // the instance sits BEHIND "TOP"
+        const dispatcher = new ActionDispatcher(doc);
+        const action = new DetachInstanceAction(dispatcher.getDocument(), "I");
+        dispatcher.dispatchAction(action);
+        const [newRoot] = action.getCreatedNodeIds();
+        expect(dispatcher.getDocument().rootNodeUuids).toEqual(["M", newRoot, "TOP"]); // still behind
+    });
+
+    test("a NESTED instance survives as an instance — detaching the outer one is not recursive", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("IM", { id: "IM", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#00f", opacity: 1 }, layout: {} });
+        doc.nodes.set("OM", { id: "OM", type: "core.rectangle", parent: null, children: ["OI"], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("OI", { id: "OI", type: "core.instance", parent: "OM", children: [], geometry: { x: 5, y: 5, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "IM" });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 200, y: 200, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "OM" });
+        doc.rootNodeUuids = ["IM", "OM", "I"];
+        const dispatcher = new ActionDispatcher(doc);
+        const action = new DetachInstanceAction(dispatcher.getDocument(), "I");
+        dispatcher.dispatchAction(action);
+        const [, nestedCopy] = action.getCreatedNodeIds();
+        const d = dispatcher.getDocument();
+        expect(d.nodes.get(nestedCopy)!.type).toBe("core.instance");
+        expect(d.nodes.get(nestedCopy)!.componentId).toBe("IM");      // still linked to ITS master
+        // …and it still expands, so the detached content keeps drawing the inner component.
+        expect(expandInstances(d).nodes.has(`${nestedCopy}::IM`)).toBe(true);
+        // Editing the INNER master still flows through, which is the point of not recursing.
+        dispatcher.dispatchAction(new UpdateNodeStyleAction(dispatcher.getDocument(), "IM", { fill: "#0f0" }));
+        expect(expandInstances(dispatcher.getDocument()).nodes.get(`${nestedCopy}::IM`)!.style.fill).toBe("#0f0");
+    });
+
+    test("detach is undoable — undo brings the instance back and takes the baked nodes away", () => {
+        const dispatcher = new ActionDispatcher(doc3());
+        const action = new DetachInstanceAction(dispatcher.getDocument(), "I");
+        dispatcher.dispatchAction(action);
+        const created = action.getCreatedNodeIds();
+        dispatcher.undo();
+        const undone = dispatcher.getDocument();
+        expect(undone.nodes.has("I")).toBe(true);
+        expect(undone.nodes.has(created[0])).toBe(false);
+        expect(undone.rootNodeUuids).toEqual(["M", "I"]);
+        dispatcher.redo();
+        expect(dispatcher.getDocument().nodes.has(created[0])).toBe(true);
+        expect(dispatcher.getDocument().nodes.has("I")).toBe(false);
+    });
+
+    test("executing the same detach twice yields the SAME ids (redo restores a snapshot, so this is the only path that re-runs it)", () => {
+        // `getCreatedNodeIds()` is what the caller selects afterwards; a second run minting
+        // fresh ids would strand that selection on nodes the document never received.
+        const action = new DetachInstanceAction(doc3(), "I");
+        const first = [...action.execute().propertyDeltas.keys()];
+        const second = [...action.execute().propertyDeltas.keys()];
+        expect(second).toEqual(first);
+        expect(action.getCreatedNodeIds().length).toBe(2);
+    });
+
+    test("detach refuses what it cannot bake rather than deleting the node", () => {
+        const doc = doc3();
+        expect(new DetachInstanceAction(doc, "M").validate()).toBe(false);      // not an instance
+        expect(new DetachInstanceAction(doc, "nope").validate()).toBe(false);
+        // A DANGLING instance draws nothing, so there is nothing to bake — and the node stays.
+        const dangling = doc3();
+        dangling.nodes.set("I", { ...dangling.nodes.get("I")!, componentId: "ghost" });
+        expect(new DetachInstanceAction(dangling, "I").validate()).toBe(false);
+        const dispatcher = new ActionDispatcher(dangling);
+        expect(dispatcher.dispatchAction(new DetachInstanceAction(dispatcher.getDocument(), "I")).success).toBe(false);
+        expect(dispatcher.getDocument().nodes.has("I")).toBe(true);
+        // A self-referential instance would copy itself into its own replacement.
+        const selfRef = doc3();
+        selfRef.nodes.set("I", { ...selfRef.nodes.get("I")!, componentId: "I" });
+        expect(new DetachInstanceAction(selfRef, "I").validate()).toBe(false);
+    });
+
+    test("a detach INSIDE a container reparents onto the container, keeping the reflow", () => {
+        const doc = doc3();
+        doc.nodes.set("BOX", { id: "BOX", type: "core.rectangle", parent: null, children: ["I"], geometry: { x: 0, y: 0, width: 400, height: 400 }, style: { fill: "#111", opacity: 1 }, layout: { container: { direction: "row", gap: 10, padding: 5 } } });
+        doc.nodes.set("I", { ...doc.nodes.get("I")!, parent: "BOX" });
+        doc.rootNodeUuids = ["M", "BOX"];
+        const dispatcher = new ActionDispatcher(doc);
+        const action = new DetachInstanceAction(dispatcher.getDocument(), "I");
+        const result = dispatcher.dispatchAction(action);
+        const [newRoot] = action.getCreatedNodeIds();
+        const d = dispatcher.getDocument();
+        expect(d.nodes.get(newRoot)!.parent).toBe("BOX");
+        expect(d.nodes.get("BOX")!.children).toEqual([newRoot]);
+        expect(result.updatedNodeIds.has("BOX")).toBe(true);   // the container reflows around it
+        expect(() => deserializeDocument(serializeDocument(d))).not.toThrow();
+    });
+
+    test("the App's Detach button is enabled exactly when the action would succeed", () => {
+        // The button asks `validate()` rather than re-deriving the rule — the failure mode
+        // being a control that looks available and silently does nothing.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/new DetachInstanceAction\(dispatcher\.getDocument\(\), sel\[0\]\)\.validate\(\)/);
+    });
+
+    test("an `add` delta places at its index, and still appends without one", () => {
+        // The delta-layer capability detach needed: every other action appends.
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["A", "B"], geometry: { x: 0, y: 0, width: 99, height: 99 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        for (const id of ["A", "B"]) doc.nodes.set(id, { id, type: "core.rectangle", parent: "P", children: [], geometry: { x: 0, y: 0, width: 5, height: 5 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P"];
+        const mk = (id: string): Node => ({ id, type: "core.rectangle", parent: "P", children: [], geometry: { x: 0, y: 0, width: 5, height: 5 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        applyMutationsToDocument(doc, new Map([["X", { kind: "add", node: mk("X"), index: 1 } as const]]));
+        expect(doc.nodes.get("P")!.children).toEqual(["A", "X", "B"]);
+        applyMutationsToDocument(doc, new Map([["Y", { kind: "add", node: mk("Y") } as const]]));
+        expect(doc.nodes.get("P")!.children).toEqual(["A", "X", "B", "Y"]);   // no index = append
+        // Out-of-range clamps rather than tearing a hole in the list.
+        applyMutationsToDocument(doc, new Map([["Z", { kind: "add", node: mk("Z"), index: 99 } as const]]));
+        expect(doc.nodes.get("P")!.children).toEqual(["A", "X", "B", "Y", "Z"]);
     });
 });
 

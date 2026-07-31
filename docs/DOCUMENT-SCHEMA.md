@@ -546,6 +546,22 @@ resizing it routes through `nodeEdit`'s action factory, which writes an override
 stored-geometry edit. The rotate knob is not offered on a copy (transform overrides are
 deferred), in both the renderer and the picker.
 
+Each field is ALSO checked by `overrideDimensionError`, which resolves the key's master node
+and applies the same per-type `dimensionError` a stored geometry edit obeys — `overridesError`
+alone cannot (it validates a bare map and never learns the master's type), which would let an
+override hold a size the node itself could not. Both the load path and the edit path run both
+halves, so the routing seam cannot become a validation hole.
+
+**Detach (M6 slice 3).** `DetachInstanceAction` bakes an instance into ordinary nodes and
+severs the link to its master — the escape hatch that makes overrides safe to rely on, since
+they deliberately reach a limited set of fields. Each baked node is built by the SAME
+`materializeNode` expansion uses, so what lands in the document is exactly what was on screen;
+the detach adds only the instance's POSITION (which is what placed the content) and fresh ids.
+The baked root takes the instance's place in its parent's `children`, keeping the z-order. A
+NESTED instance is copied AS an instance, so detaching the outer component does not silently
+detach the inner ones — they go on tracking their own masters. A DANGLING instance draws
+nothing and so has nothing to bake: the action refuses rather than deleting the node.
+
 Three guards bound recursion (a master containing an instance of itself, or a cycle through
 several masters, and nested instances that MULTIPLY rather than add): a per-path master
 **chain** (a cycle stops expanding), `INSTANCE_MAX_DEPTH`, and a total materialized-node cap
