@@ -11,8 +11,8 @@ import { Node } from "../core/document/Node";
 import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
-import { UpdateNodeGeometryAction } from "../core/actions/UpdateNodeGeometryAction";
-import { UpdateNodeStyleAction } from "../core/actions/UpdateNodeStyleAction";
+import { geometryActionFor, styleActionFor } from "../core/actions/nodeEdit";
+import { expandInstances } from "../core/document/Components";
 import { SetActiveThemeAction } from "../core/actions/VariableActions";
 import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { createEditorState, EditorState, zoomAt } from "../editor/EditorState";
@@ -261,7 +261,20 @@ export function App() {
         return () => disposers.forEach(dispose => dispose());
     }, []);
 
-    const node = selectedNodeId ? dispatcher.getDocument().nodes.get(selectedNodeId) : undefined;
+    // Resolved against the EXPANDED document so the inspector can show — and edit — a component
+    // instance's COPY (a virtual node, alt-clicked). Its edits route through `nodeEdit`, which
+    // turns them into per-instance overrides; a raw action would target a node that isn't in the
+    // stored document and fail validation, looking like an input that does nothing.
+    const node = selectedNodeId ? expandInstances(dispatcher.getDocument()).nodes.get(selectedNodeId) : undefined;
+    /** Dispatch a geometry/style edit for the selected node, routed for stored vs instance copy. */
+    const editSelected = (patch: { geometry?: Partial<Node["geometry"]>; style?: Partial<Node["style"]> }) => {
+        if (!selectedNodeId) return;
+        const d = dispatcher.getDocument();
+        const action = patch.geometry
+            ? geometryActionFor(d, selectedNodeId, patch.geometry)
+            : styleActionFor(d, selectedNodeId, patch.style ?? {});
+        if (action) dispatcher.dispatchAction(action, { coalesce: true });
+    };
     const vp = es.viewport;
 
     // A hovered resize/rotate handle wins (both backends); otherwise the tool's cursor.
@@ -430,22 +443,22 @@ export function App() {
                             <div style={{ color: "#666", marginBottom: 6 }}>{nodeTypeLabels[node.type] || node.type} — {selectedNodeId.slice(0, 8)}</div>
                             <label style={{ color: "#aaa" }}>X</label>
                             <NumInput value={Math.round(node.geometry.x)} onChange={v => {
-                                dispatcher.dispatchAction(new UpdateNodeGeometryAction(dispatcher.getDocument(), selectedNodeId, { x: v }), { coalesce: true });
+                                editSelected({ geometry: { x: v } });
                                 refresh();
                             }} />
                             <label style={{ color: "#aaa" }}>Y</label>
                             <NumInput value={Math.round(node.geometry.y)} onChange={v => {
-                                dispatcher.dispatchAction(new UpdateNodeGeometryAction(dispatcher.getDocument(), selectedNodeId, { y: v }), { coalesce: true });
+                                editSelected({ geometry: { y: v } });
                                 refresh();
                             }} />
                             <label style={{ color: "#aaa" }}>W</label>
                             <NumInput value={Math.round(node.geometry.width)} onChange={v => {
-                                dispatcher.dispatchAction(new UpdateNodeGeometryAction(dispatcher.getDocument(), selectedNodeId, { width: Math.max(1, v) }), { coalesce: true });
+                                editSelected({ geometry: { width: Math.max(1, v) } });
                                 refresh();
                             }} />
                             <label style={{ color: "#aaa" }}>H</label>
                             <NumInput value={Math.round(node.geometry.height)} onChange={v => {
-                                dispatcher.dispatchAction(new UpdateNodeGeometryAction(dispatcher.getDocument(), selectedNodeId, { height: Math.max(1, v) }), { coalesce: true });
+                                editSelected({ geometry: { height: Math.max(1, v) } });
                                 refresh();
                             }} />
                             <label style={{ color: "#aaa" }}>Fill</label>
@@ -453,7 +466,7 @@ export function App() {
                                 type="color"
                                 value={node.style.fill}
                                 onChange={e => {
-                                    dispatcher.dispatchAction(new UpdateNodeStyleAction(dispatcher.getDocument(), selectedNodeId, { fill: e.target.value }), { coalesce: true });
+                                    editSelected({ style: { fill: e.target.value } });
                                     refresh();
                                 }}
                                 style={{ width: "100%", height: 22, border: "none", background: "transparent", cursor: "pointer" }}
@@ -464,7 +477,7 @@ export function App() {
                                 min="0" max="1" step="0.01"
                                 value={node.style.opacity}
                                 onChange={e => {
-                                    dispatcher.dispatchAction(new UpdateNodeStyleAction(dispatcher.getDocument(), selectedNodeId, { opacity: parseFloat(e.target.value) }), { coalesce: true });
+                                    editSelected({ style: { opacity: parseFloat(e.target.value) } });
                                     refresh();
                                 }}
                                 style={{ width: "100%" }}

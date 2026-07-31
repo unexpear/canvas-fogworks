@@ -3,6 +3,8 @@
  * Covers: document model, serialization, action system, dispatcher, history.
  */
 
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import { createEmptyDocument, ProjectDocument, CURRENT_VERSION, SCHEMA_VERSION } from "../document/Document";
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
@@ -2266,6 +2268,21 @@ describe("Components: instance overrides", () => {
         expect(dispatcher.getDocument().nodes.get("MC")!.geometry.x).toBe(5); // master untouched
         dispatcher.undo();
         expect(dispatcher.getDocument().nodes.get("I")!.overrides?.MC).toBeUndefined();
+    });
+
+    test("EVERY editor entry point routes — no site dispatches a raw action at a virtual id", () => {
+        // The failure mode this guards: a missed call site dispatches an action whose target
+        // isn't in the stored document, `dispatchAction` returns success:false, and the control
+        // silently does nothing. The App inspector was exactly such a site.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).not.toMatch(/new UpdateNodeGeometryAction\(/); // inspector routes via geometryActionFor
+        expect(src).not.toMatch(/new UpdateNodeStyleAction\(/);    // …and styleActionFor
+        const move = readFileSync(resolve(__dirname, "../../editor/tools/MoveTool.ts"), "utf8");
+        expect(move).not.toMatch(/new UpdateNodeGeometryAction\(/);
+        const tc = readFileSync(resolve(__dirname, "../../editor/tools/ToolController.ts"), "utf8");
+        // The controller still constructs geometry actions for the GROUP-resize path (stored
+        // roots only, never virtual), so assert the SINGLE-node resize commit is routed instead.
+        expect(tc).toMatch(/geometryActionFor\(doc, this\.resizeNodeId/);
     });
 
     test("an instance copy round-trips with its overrides", () => {
