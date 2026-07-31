@@ -22,11 +22,61 @@ import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
 import { ShapeTool, SHAPE_KINDS, ShapeKind } from "../editor/tools/ShapeTool";
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
+import { IMAGE_SRC_MAX, srcError } from "../core/document/Node";
 
 /** Toolbar glyph per basic shape (the label is the kind's own name). */
 const SHAPE_ICONS: Record<ShapeKind, string> = {
-    rectangle: "□", ellipse: "○", line: "╱", text: "T", triangle: "△"
+    rectangle: "□", ellipse: "○", line: "╱", text: "T", triangle: "△", image: "▣"
 };
+
+/**
+ * Ask the user for an image source: a file (inlined as a `data:` URL so the document is
+ * self-contained) or a URL. This is the DOM half of `ShapeTool`'s `SourceResolver` — the tool
+ * itself never touches the DOM, which is what keeps it testable in the `node` environment.
+ *
+ * Resolves to null when the user cancels. An oversized file is refused HERE, with a message,
+ * rather than being inlined into a document that could then never be saved.
+ */
+function pickImageSource(): Promise<string | null> {
+    return new Promise(resolve => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/*";
+        input.style.display = "none";
+        // A cancelled file dialog fires no event in most browsers, so the URL fallback is
+        // offered on `cancel` where supported and the promise otherwise settles on `change`.
+        input.addEventListener("cancel", () => {
+            input.remove();
+            const url = window.prompt("Image URL (https:// or a relative path):");
+            resolve(url && url.trim().length > 0 ? url.trim() : null);
+        });
+        input.addEventListener("change", () => {
+            const file = input.files?.[0];
+            input.remove();
+            if (!file) { resolve(null); return; }
+            const reader = new FileReader();
+            reader.onload = () => {
+                const src = String(reader.result ?? "");
+                // The shared validator is the authority — the app just explains the refusal.
+                const err = srcError("core.image", src);
+                if (err) {
+                    window.alert(
+                        src.length > IMAGE_SRC_MAX
+                            ? `That image is too large to embed (${Math.round(src.length / 1e6)} MB encoded; the limit is ${IMAGE_SRC_MAX / 1e6} MB). Use a URL instead.`
+                            : `That file can't be used as an image source: ${err}.`
+                    );
+                    resolve(null);
+                    return;
+                }
+                resolve(src);
+            };
+            reader.onerror = () => { window.alert("Could not read that file."); resolve(null); };
+            reader.readAsDataURL(file);
+        });
+        document.body.appendChild(input);
+        input.click();
+    });
+}
 import { RendererState } from "../renderer/SVGRenderer";
 import { renderScene, RenderBackend } from "../renderer/renderScene";
 import { rulerTicks } from "../core/geometry/Ruler";
@@ -106,7 +156,7 @@ export function App() {
             select: new SelectTool(dispatcher, es, refresh),
             move: new MoveTool(dispatcher, es, refresh),
             // One ShapeTool per basic shape, keyed by the SAME names the toolbar maps over.
-            ...Object.fromEntries(SHAPE_KINDS.map(kind => [kind, new ShapeTool(dispatcher, es, refresh, kind)]))
+            ...Object.fromEntries(SHAPE_KINDS.map(kind => [kind, new ShapeTool(dispatcher, es, refresh, kind, pickImageSource)]))
         };
         toolController.setTool(toolsRef.current.select);
     }

@@ -135,6 +135,44 @@ export function pathError(type: NodeType, path: unknown): string | null {
 }
 
 /**
+ * Longest `Node.src` a document may carry. An image source is usually a short URL, but the
+ * editor's file picker inlines a chosen file as a `data:` URL — which lands the whole encoded
+ * image IN the document. Without a bound, one picked photo makes a document that cannot be
+ * saved (browser storage quotas are a few MB) and is slow to parse forever after. ~4 MB of
+ * characters is roughly a 3 MB image: generous for a design asset, still bounded.
+ */
+export const IMAGE_SRC_MAX = 4_000_000;
+
+/** URL schemes an image source may use. Anything else (`javascript:`, `file:`, …) is not a
+ *  thing a renderer can draw, so it is rejected rather than handed to the DOM. A source with
+ *  NO scheme is a relative path and always allowed. */
+const SRC_SCHEME = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
+const SRC_ALLOWED = ["http", "https", "blob"];
+
+/**
+ * Validity check for `Node.src`, keyed on type and SHARED by the load path (`Integrity`) and
+ * the edit path (`AddNodeAction`'s content) — the same closure discipline `pathError` and
+ * `dimensionError` use. An absent src is always fine (an image with no source draws nothing);
+ * only a `core.image` may carry one; a present one must be a non-empty, bounded string whose
+ * scheme is something a renderer could actually load.
+ */
+export function srcError(type: NodeType, src: unknown): string | null {
+    if (src === undefined) return null;
+    if (type !== "core.image") return "only a core.image node may carry a src";
+    if (typeof src !== "string" || src.length === 0) return "src must be a non-empty string";
+    if (src.length > IMAGE_SRC_MAX) return `src must be at most ${IMAGE_SRC_MAX} characters`;
+    const scheme = SRC_SCHEME.exec(src);
+    if (scheme === null) return null;                    // relative path
+    const name = scheme[1].toLowerCase();
+    // A `data:` URL must actually be an IMAGE: `data:text/html,…` in an <image href> draws
+    // nothing, and handing arbitrary data URLs to the DOM is not a habit worth having.
+    if (name === "data") {
+        return /^data:image\/[a-zA-Z0-9.+-]+[;,]/.test(src) ? null : "a data: src must be an image media type";
+    }
+    return SRC_ALLOWED.includes(name) ? null : `src scheme "${name}" is not allowed`;
+}
+
+/**
  * Represents the immutable, persisted definition of a node instance.
  */
 export interface Node {

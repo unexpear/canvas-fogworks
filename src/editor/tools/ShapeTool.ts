@@ -32,7 +32,14 @@ const MIN_SIZE_PX = 2;
 
 /** The basic shapes the editor can draw. Each maps to a node type plus, where the type needs
  *  more than a box, the content that makes it visible. */
-export type ShapeKind = "rectangle" | "ellipse" | "line" | "text" | "triangle";
+export type ShapeKind = "rectangle" | "ellipse" | "line" | "text" | "triangle" | "image";
+
+/**
+ * How an `image` gets its SOURCE. Picking a file is a DOM concern (a file input, a FileReader),
+ * and tools in this codebase never touch the DOM — so the app injects this and the tool stays
+ * testable in the `node` environment like every other. Resolving to null cancels the creation.
+ */
+export type SourceResolver = (rect: Rect) => Promise<string | null>;
 
 interface ShapeSpec {
     type: NodeType;
@@ -41,6 +48,8 @@ interface ShapeSpec {
     /** Content for the drawn box, in the node's LOCAL space (the renderer emits shapes at the
      *  local origin and places them by the world matrix). */
     content?: (width: number, height: number) => NodeContent;
+    /** `true` when the shape cannot be created from the drag alone (an image needs a source). */
+    needsSource?: boolean;
 }
 
 const SHAPES: Record<ShapeKind, ShapeSpec> = {
@@ -61,11 +70,14 @@ const SHAPES: Record<ShapeKind, ShapeSpec> = {
                 { c: "Z" }
             ] as PathCommand[]
         })
-    }
+    },
+    // The one shape a drag alone cannot finish: an image with no source draws nothing, so the
+    // node is only created once a source is resolved (see `SourceResolver`).
+    image: { type: "core.image", allowsCollapsedAxis: false, needsSource: true }
 };
 
 /** The shape kinds in toolbar order — the single list the UI and the tests both read. */
-export const SHAPE_KINDS: readonly ShapeKind[] = ["rectangle", "ellipse", "line", "text", "triangle"];
+export const SHAPE_KINDS: readonly ShapeKind[] = ["rectangle", "ellipse", "line", "text", "triangle", "image"];
 
 export class ShapeTool implements Tool {
     private dispatcher: ActionDispatcher;
@@ -76,11 +88,20 @@ export class ShapeTool implements Tool {
     private anchorX = 0;
     private anchorY = 0;
 
-    constructor(dispatcher: ActionDispatcher, editorState: EditorState, refresh: () => void, kind: ShapeKind) {
+    private resolveSource: SourceResolver | null;
+
+    constructor(
+        dispatcher: ActionDispatcher,
+        editorState: EditorState,
+        refresh: () => void,
+        kind: ShapeKind,
+        resolveSource?: SourceResolver
+    ) {
         this.dispatcher = dispatcher;
         this.editorState = editorState;
         this.refresh = refresh;
         this.spec = SHAPES[kind];
+        this.resolveSource = resolveSource ?? null;
     }
 
     /** Normalized world-space rect from the anchor to the current pointer. */
@@ -128,20 +149,38 @@ export class ShapeTool implements Tool {
         this.cancel();
 
         if (rect && this.meetsMinSize(rect)) {
-            this.dispatcher.dispatchAction(new AddNodeAction(
-                this.dispatcher.getDocument(),
-                this.spec.type,
-                rect.x,
-                rect.y,
-                rect.width,
-                rect.height,
-                DEFAULT_FILL,
-                undefined,
-                null,
-                this.spec.content?.(rect.width, rect.height)
-            ));
+            if (this.spec.needsSource) {
+                // Nothing is created until a source arrives. The resolver is async (a file
+                // dialog), so the document is re-read when it returns rather than captured now —
+                // it may have changed while the dialog was open.
+                this.resolveSource?.(rect).then(src => {
+                    // Defence in depth, not the only guard: `AddNodeAction` refuses a null src
+                    // too, so removing this changes no observable behaviour (dispatch just
+                    // fails silently). It stays because "a cancelled dialog creates nothing"
+                    // should be visible HERE, not inferred from a validator two layers down.
+                    if (src !== null && src !== undefined) this.commit(rect, { src });
+                    this.refresh();
+                });
+            } else {
+                this.commit(rect, this.spec.content?.(rect.width, rect.height));
+            }
         }
         this.refresh();
+    }
+
+    private commit(rect: Rect, content?: NodeContent): void {
+        this.dispatcher.dispatchAction(new AddNodeAction(
+            this.dispatcher.getDocument(),
+            this.spec.type,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            DEFAULT_FILL,
+            undefined,
+            null,
+            content
+        ));
     }
 
     onKeyDown(e: KeyboardEvent): void {

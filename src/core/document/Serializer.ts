@@ -7,7 +7,7 @@
  */
 
 import { ProjectDocument, ReadonlyDocument, ThemeMode, createEmptyDocument, SCHEMA_VERSION, SerializedMetadata } from "./Document";
-import { Node, isNodeType } from "./Node";
+import { Node, isNodeType, srcError } from "./Node";
 import { variableError, variableKeyError, VARIABLES_MAX } from "./Variables";
 import { validateDocumentIntegrity } from "./Integrity";
 
@@ -249,6 +249,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "19") { raw = migrate_19_to_20(raw); version = "20"; }
     if (version === "20") { raw = migrate_20_to_21(raw); version = "21"; }
     if (version === "21") { raw = migrate_21_to_22(raw); version = "22"; }
+    if (version === "22") { raw = migrate_22_to_23(raw); version = "23"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -455,6 +456,26 @@ function migrate_20_to_21(raw: any): any {
  *  "this instance mirrors its master exactly", which is what schema 21 already meant. */
 function migrate_21_to_22(raw: any): any {
     return { ...raw, version: "22" };
+}
+
+/**
+ * 22 → 23: `Node.src` gained a shared validator (`srcError`) — a CONSTRAINT, not a field, so
+ * documents that were loadable before could become unloadable. A `src` that the new rule
+ * rejects (wrong node type, non-string, over `IMAGE_SRC_MAX`, or a scheme no renderer can
+ * draw) is DROPPED rather than failing the load: the image then draws nothing, exactly as an
+ * image with no source always has. Same obligation the 18→19 store sanitizer and the 20→21
+ * id renamer carry — when a bump adds a rule, ask what previously-valid document it rejects.
+ */
+function migrate_22_to_23(raw: any): any {
+    const nodes = raw?.document?.nodes;
+    if (nodes && typeof nodes === "object") {
+        for (const node of Object.values<any>(nodes)) {
+            if (node && node.src !== undefined && srcError(node.type, node.src) !== null) {
+                delete node.src;
+            }
+        }
+    }
+    return { ...raw, version: "23" };
 }
 
 /**

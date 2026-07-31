@@ -12,7 +12,7 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError, layoutError, dimensionError, pathError, styleError, nodeIdError } from "./Node";
+import { transformError, layoutError, dimensionError, pathError, srcError, styleError, nodeIdError } from "./Node";
 import { componentError, overrideDimensionError, overridesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
 
@@ -47,6 +47,10 @@ function checkNodeRanges(node: ReadonlyNode): void {
     // node) wherever it appears, sharing `pathError` with the edit path.
     const pathErr = pathError(node.type, node.path);
     if (pathErr) throw new Error(`Invalid document: node "${node.id}" ${pathErr}.`);
+    // `src` (schema 23) is hand-editable and, since the image tool inlines a picked file as a
+    // data: URL, potentially enormous — bounded and scheme-checked by the shared `srcError`.
+    const srcErr = srcError(node.type, node.src);
+    if (srcErr) throw new Error(`Invalid document: node "${node.id}" ${srcErr}.`);
     // `componentId` (M6): only an instance may carry one; a DANGLING reference is deliberately
     // allowed (it draws nothing), so deleting a master never makes a document unloadable.
     const compErr = componentError(node.type, node.componentId);

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v22 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v23 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -54,6 +54,10 @@ function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializ
 interface InstanceOverride { geometry?: Partial<Geometry>; style?: Partial<Style>; text?: string; src?: string }
 const INSTANCE_MAX_OVERRIDES: number;                      // per-instance cap (OOM guard)
 function overridesError(type: string, overrides: unknown): string | null; // shared load + edit; each field obeys its stored rule (styleError, finite geometry)
+// Node.ts — an image SOURCE (schema 23). Only a core.image may carry one; bounded, and the
+// scheme must be something a renderer can draw (http/https/blob/relative, or data:image/*).
+function srcError(type: NodeType, src: unknown): string | null;   // shared load + edit
+const IMAGE_SRC_MAX: number;                                      // cap on an inlined data: URL
 function overrideDimensionError(doc: ReadonlyDocument, instance: ReadonlyNode): string | null; // the TYPE-aware half (needs the doc to resolve each key's master); BOTH paths run it
 // ONE node of a master subtree as an instance renders it (override applied; the ROOT re-origined
 // to (0,0) and stripped of constraints). Shared by expandInstances (VIRTUAL) and

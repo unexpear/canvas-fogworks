@@ -40,7 +40,7 @@ import { ShapeTool, SHAPE_KINDS, ShapeKind } from "../../editor/tools/ShapeTool"
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
-import { Node, NODE_TYPES, nodeIdError, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow } from "../document/Node";
+import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow } from "../document/Node";
 
 function createDocWithRectangle(): ProjectDocument {
     const doc = createEmptyDocument();
@@ -4260,13 +4260,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "23" that has no 22→23 step: the
+        // Pretending the build has moved to a schema "24" that has no 23→24 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→22), and then REFUSED at "22" — never re-stamped straight to the current
-        // schema. The error naming "22" (not "1") is the proof the chain actually ran.
+        // (1→2→…→23), and then REFUSED at "23" — never re-stamped straight to the current
+        // schema. The error naming "23" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 21→22 landed for instance overrides.)
-        expect(() => migrateIfNeeded(legacy, "23")).toThrow('Migration not implemented for document schema "22"');
+        // time a real migration is added — here, when 22→23 landed for the image `src` rule.)
+        expect(() => migrateIfNeeded(legacy, "24")).toThrow('Migration not implemented for document schema "23"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -6637,41 +6637,76 @@ describe("ShapeTool: every basic shape draws", () => {
     const canvas = { left: 0, top: 0 } as DOMRect;
     const ev = (x: number, y: number) => ({ clientX: x, clientY: y } as unknown as MouseEvent);
 
-    /** Drag a box with the given shape tool and return the node it committed (or undefined). */
-    function draw(kind: ShapeKind, x1: number, y1: number, x2: number, y2: number) {
+    const PIXEL = "data:image/png;base64,iVBORw0KGgo=";
+
+    /** Drag a box with the given shape tool and return the node it committed (or undefined).
+     *  `source` stands in for the app's file/URL picker (see `SourceResolver`). */
+    function draw(kind: ShapeKind, x1: number, y1: number, x2: number, y2: number, source: string | null = PIXEL) {
         const dispatcher = new ActionDispatcher(createEmptyDocument());
         const es = createEditorState();
-        const tool = new ShapeTool(dispatcher, es, () => { }, kind);
+        const tool = new ShapeTool(dispatcher, es, () => { }, kind, () => Promise.resolve(source));
         tool.onMouseDown(ev(x1, y1), canvas);
         tool.onMouseMove(ev(x2, y2), canvas);
         tool.onMouseUp();
-        const doc = dispatcher.getDocument();
-        const id = doc.rootNodeUuids[0];
-        return { doc, dispatcher, node: id ? doc.nodes.get(id) : undefined, es };
+        // An image resolves its source asynchronously; everything else has already committed.
+        // Awaiting a resolved promise flushes that microtask, so one helper serves both.
+        return Promise.resolve().then(() => {
+            const doc = dispatcher.getDocument();
+            const id = doc.rootNodeUuids[0];
+            return { doc, dispatcher, node: id ? doc.nodes.get(id) : undefined, es };
+        });
     }
 
-    test("each kind commits its own node type, and the box is the drag", () => {
+    test("each kind commits its own node type, and the box is the drag", async () => {
         const expected: Record<ShapeKind, string> = {
             rectangle: "core.rectangle", ellipse: "core.ellipse", line: "core.line",
-            text: "core.text", triangle: "core.path"
+            text: "core.text", triangle: "core.path", image: "core.image"
         };
         for (const kind of SHAPE_KINDS) {
-            const { node } = draw(kind, 10, 20, 110, 80);
+            const { node } = await draw(kind, 10, 20, 110, 80);
             expect(node).toBeDefined();
             expect(node!.type).toBe(expected[kind]);
             expect(node!.geometry).toEqual({ x: 10, y: 20, width: 100, height: 60 });
         }
-        // …and every kind the toolbar offers is covered by that map (no silent gap).
+        // …and every kind the toolbar offers is covered by that map (no silent gap — adding a
+        // ShapeKind without extending this map is a COMPILE error, which is how `image` was caught).
         expect(Object.keys(expected).sort()).toEqual([...SHAPE_KINDS].sort());
     });
 
-    test("a drag in ANY direction normalizes to the same box", () => {
-        expect(draw("rectangle", 110, 80, 10, 20).node!.geometry).toEqual({ x: 10, y: 20, width: 100, height: 60 });
+    test("an image is created only once a SOURCE arrives — cancelling makes nothing", async () => {
+        const withSource = await draw("image", 0, 0, 100, 60, PIXEL);
+        expect(withSource.node!.src).toBe(PIXEL);
+        // The user cancelled the file dialog: no node, and nothing to undo. (This outcome is
+        // ALSO guaranteed by AddNodeAction refusing a null src, so it does not by itself prove
+        // the tool's own null check runs — see the note there. It pins the BEHAVIOUR, which is
+        // what matters here.)
+        const cancelled = await draw("image", 0, 0, 100, 60, null);
+        expect(cancelled.node).toBeUndefined();
+        expect(cancelled.dispatcher.canUndo()).toBe(false);
+        // A source the shared validator refuses never reaches the document either.
+        const refused = await draw("image", 0, 0, 100, 60, "javascript:alert(1)");
+        expect(refused.node).toBeUndefined();
     });
 
-    test("text arrives with content, and a triangle with PATH commands in local space", () => {
-        expect(draw("text", 0, 0, 100, 40).node!.text).toBe("Text");
-        const drawn = draw("triangle", 0, 0, 100, 40);
+    test("an image node is NOT created synchronously — the drag alone commits nothing", () => {
+        // The source dialog is async, so the node must not appear until it resolves; a
+        // synchronous commit would create a source-less image that draws nothing.
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const es = createEditorState();
+        const tool = new ShapeTool(dispatcher, es, () => { }, "image", () => Promise.resolve(PIXEL));
+        tool.onMouseDown(ev(0, 0), canvas);
+        tool.onMouseMove(ev(100, 60), canvas);
+        tool.onMouseUp();
+        expect(dispatcher.getDocument().rootNodeUuids).toEqual([]);
+    });
+
+    test("a drag in ANY direction normalizes to the same box", async () => {
+        expect((await draw("rectangle", 110, 80, 10, 20)).node!.geometry).toEqual({ x: 10, y: 20, width: 100, height: 60 });
+    });
+
+    test("text arrives with content, and a triangle with PATH commands in local space", async () => {
+        expect((await draw("text", 0, 0, 100, 40)).node!.text).toBe("Text");
+        const drawn = await draw("triangle", 0, 0, 100, 40);
         const tri = drawn.node!;
         // Apex top-centre, base along the bottom — LOCAL coords, since the renderer emits
         // shapes at the local origin and places them by the world matrix.
@@ -6683,22 +6718,22 @@ describe("ShapeTool: every basic shape draws", () => {
         expect(() => deserializeDocument(serializeDocument(drawn.doc))).not.toThrow();
     });
 
-    test("a LINE may collapse one axis; every other shape may not", () => {
+    test("a LINE may collapse one axis; every other shape may not", async () => {
         // The tool's minimum-size rule has to agree with `dimensionError`, or it would commit
         // what validation rejects — a gesture that silently does nothing.
-        expect(draw("line", 10, 50, 210, 50).node!.geometry).toMatchObject({ width: 200, height: 0 });
-        expect(draw("rectangle", 10, 50, 210, 50).node).toBeUndefined();   // zero height: refused
-        expect(draw("ellipse", 10, 50, 210, 50).node).toBeUndefined();
-        expect(draw("line", 10, 50, 10, 50).node).toBeUndefined();          // a point is not a line
+        expect((await draw("line", 10, 50, 210, 50)).node!.geometry).toMatchObject({ width: 200, height: 0 });
+        expect((await draw("rectangle", 10, 50, 210, 50)).node).toBeUndefined();   // zero height: refused
+        expect((await draw("ellipse", 10, 50, 210, 50)).node).toBeUndefined();
+        expect((await draw("line", 10, 50, 10, 50)).node).toBeUndefined();          // a point is not a line
         // …and the TOOL's own floor still applies to a line: a sub-minimum but NON-zero drag is
         // an accidental twitch, not a shape. (The point case above is refused by `dimensionError`
         // inside the action, so it does not exercise this rule at all.)
-        expect(draw("line", 10, 50, 11, 50).node).toBeUndefined();
-        expect(draw("line", 10, 50, 13, 50).node).toBeDefined();            // 3px clears the 2px floor
+        expect((await draw("line", 10, 50, 11, 50)).node).toBeUndefined();
+        expect((await draw("line", 10, 50, 13, 50)).node).toBeDefined();            // 3px clears the 2px floor
     });
 
-    test("a click (no drag) creates nothing, and Escape cancels an in-flight drag", () => {
-        expect(draw("rectangle", 40, 40, 40, 40).node).toBeUndefined();
+    test("a click (no drag) creates nothing, and Escape cancels an in-flight drag", async () => {
+        expect((await draw("rectangle", 40, 40, 40, 40)).node).toBeUndefined();
         const dispatcher = new ActionDispatcher(createEmptyDocument());
         const es = createEditorState();
         const tool = new ShapeTool(dispatcher, es, () => { }, "ellipse");
@@ -6860,5 +6895,75 @@ describe("FrameSelectionAction (nesting)", () => {
         const after = computeGeometry(dispatcher.getDocument());
         expect(baked.map(id => after.nodes.get(id)!.bounds)).toEqual(copyBoxes);
         expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+    });
+});
+
+// ─── schema 23: `Node.src` gains a shared validator, and 22→23 sanitizes ───
+describe("Image sources (srcError, schema 23)", () => {
+    const PIXEL = "data:image/png;base64,iVBORw0KGgo=";
+
+    test("srcError: image-only, non-empty, bounded, and a scheme a renderer can draw", () => {
+        expect(srcError("core.image", undefined)).toBeNull();          // absent is always fine
+        expect(srcError("core.image", PIXEL)).toBeNull();
+        expect(srcError("core.image", "https://example.com/a.png")).toBeNull();
+        expect(srcError("core.image", "http://example.com/a.png")).toBeNull();
+        expect(srcError("core.image", "blob:abc")).toBeNull();
+        expect(srcError("core.image", "assets/logo.png")).toBeNull();  // relative: no scheme
+        expect(srcError("core.image", "./a.png")).toBeNull();
+        // Only an image may carry one — the same discipline componentId and path follow.
+        expect(srcError("core.rectangle", PIXEL)).toMatch("only a core.image");
+        expect(srcError("core.image", "")).toMatch("non-empty");
+        expect(srcError("core.image", 7)).toMatch("non-empty");
+        // A scheme no renderer could draw is refused rather than handed to the DOM.
+        expect(srcError("core.image", "javascript:alert(1)")).toMatch("not allowed");
+        expect(srcError("core.image", "file:///etc/passwd")).toMatch("not allowed");
+        // A data: URL must actually be an image media type.
+        expect(srcError("core.image", "data:text/html,<script>")).toMatch("image media type");
+        expect(srcError("core.image", "data:image/svg+xml;base64,AAA")).toBeNull();
+        // Bounded: a picked file is inlined, so one photo must not make an unsavable document.
+        expect(srcError("core.image", "data:image/png;base64," + "A".repeat(IMAGE_SRC_MAX))).toMatch("at most");
+    });
+
+    test("the LOAD path enforces it, and the EDIT path cannot author what load would refuse", () => {
+        const doc = createEmptyDocument();
+        expect(new AddNodeAction(doc, "core.image", 0, 0, 10, 10, "#fff", undefined, null, { src: PIXEL }).validate()).toBe(true);
+        expect(new AddNodeAction(doc, "core.image", 0, 0, 10, 10, "#fff", undefined, null, { src: "javascript:x" }).validate()).toBe(false);
+        expect(new AddNodeAction(doc, "core.rectangle", 0, 0, 10, 10, "#fff", undefined, null, { src: PIXEL }).validate()).toBe(false);
+        // Round-trip closure: what the editor creates, the loader reopens.
+        const dispatcher = new ActionDispatcher(doc);
+        const action = new AddNodeAction(dispatcher.getDocument(), "core.image", 0, 0, 10, 10, "#fff", undefined, null, { src: PIXEL });
+        dispatcher.dispatchAction(action);
+        const loaded = deserializeDocument(serializeDocument(dispatcher.getDocument()));
+        expect(loaded.nodes.get(action.getCreatedNodeId()!)!.src).toBe(PIXEL);
+        // …and a hand-edited file carrying a refused src fails the load loudly.
+        const bad = JSON.stringify({
+            version: SCHEMA_VERSION,
+            document: {
+                metadata: {}, rootNodeUuids: ["r"], variables: {},
+                nodes: { r: { id: "r", type: "core.image", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {}, src: "javascript:alert(1)" } }
+            }
+        });
+        expect(() => deserializeDocument(bad)).toThrow("not allowed");
+    });
+
+    test("22→23 DROPS a src the new rule refuses, so an older file still opens", () => {
+        // The bump adds a CONSTRAINT, not a field: without sanitizing, a schema-22 document
+        // that was perfectly loadable would become permanently unreadable.
+        const legacy = JSON.stringify({
+            version: "22",
+            document: {
+                metadata: {}, rootNodeUuids: ["bad", "good", "wrongType"], variables: {},
+                nodes: {
+                    bad: { id: "bad", type: "core.image", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {}, src: "javascript:alert(1)" },
+                    good: { id: "good", type: "core.image", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {}, src: PIXEL },
+                    wrongType: { id: "wrongType", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {}, src: PIXEL }
+                }
+            }
+        });
+        const loaded = deserializeDocument(legacy);
+        expect(loaded.version).toBe(SCHEMA_VERSION);
+        expect(loaded.nodes.get("bad")!.src).toBeUndefined();        // dropped: draws nothing
+        expect(loaded.nodes.get("good")!.src).toBe(PIXEL);           // kept: still valid
+        expect(loaded.nodes.get("wrongType")!.src).toBeUndefined();  // a src on a rect is dropped
     });
 });

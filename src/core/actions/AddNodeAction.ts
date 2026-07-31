@@ -5,7 +5,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { Node, NodeType, PathCommand, isNodeType, dimensionError, nodeIdError, pathError } from "../document/Node";
+import { Node, NodeType, PathCommand, isNodeType, dimensionError, nodeIdError, pathError, srcError } from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 import { generateUUID } from "../ids/UUID";
 
@@ -21,6 +21,8 @@ import { generateUUID } from "../ids/UUID";
 export interface NodeContent {
     text?: string;
     path?: readonly PathCommand[];
+    /** A `core.image`'s source — a URL, or a `data:` URL for a file the user picked. */
+    src?: string;
 }
 
 export class AddNodeAction extends Action {
@@ -85,6 +87,11 @@ export class AddNodeAction extends Action {
         if (this.content?.text !== undefined && typeof this.content.text !== "string") {
             return false;
         }
+        // Same rule the loader applies (schema 23): only an image may carry a src, and it must
+        // be a bounded string with a scheme a renderer could draw.
+        if (this.content?.src !== undefined && srcError(this.nodeType, this.content.src) !== null) {
+            return false;
+        }
         return (
             // Membership, not just non-empty: TypeScript alone does not stop a cast,
             // a plugin (M15) or an AI-emitted action (M14) from supplying a bogus
@@ -117,6 +124,7 @@ export class AddNodeAction extends Action {
         // Copied, not aliased: the caller's array must not become the document's.
         if (this.content?.text !== undefined) node.text = this.content.text;
         if (this.content?.path !== undefined) node.path = this.content.path.map(c => ({ ...c }));
+        if (this.content?.src !== undefined) node.src = this.content.src;
 
         return {
             updatedNodeIds: new Set([this.createdNodeId]),
