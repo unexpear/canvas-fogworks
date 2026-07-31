@@ -133,6 +133,13 @@ live-commits a coalesced `UpdateNodeTransformAction` (a continuous drag = one un
 `data-node-id`/`data-resize-handle`, the editor works unchanged under the Canvas backend — even the
 handle hover cursor (an idle-hover `handleAtPoint` → `EditorState.hoverCursor`, applied by the app,
 since the single canvas element can't set a per-region cursor like SVG's per-element `style.cursor`).
+Drawing covers every basic shape through one `ShapeTool` (rectangle, ellipse, line, text,
+triangle — the last authoring `core.path` commands, so the shared `pathError` finally has an
+edit-path caller as well as the loader). `FrameSelectionAction` is the editor's only way to
+BUILD a hierarchy: nesting existed at the document layer from the start, but nothing in the UI
+could create a parent, so every drawn node was a root and auto-layout, constraints and
+multi-node component masters were unreachable by drawing.
+
 The renderer's `buildRenderModel` also
 uses that world AABB to **cull** off-screen content — dropping any node whose bounds
 don't intersect the viewport's world rect — so a large document only pays for what is

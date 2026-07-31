@@ -5,9 +5,23 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { Node, NodeType, isNodeType, dimensionError, nodeIdError } from "../document/Node";
+import { Node, NodeType, PathCommand, isNodeType, dimensionError, nodeIdError, pathError } from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 import { generateUUID } from "../ids/UUID";
+
+/**
+ * The CONTENT a created node carries beyond its box: the text a `core.text` renders, or the
+ * commands a `core.path` is drawn from. Both are optional — a node without them is the plain
+ * box every caller before this created.
+ *
+ * `path` is why this exists: until now nothing on the EDIT path could author path commands
+ * (they arrived only by loading a file), so `pathError` had exactly one call site, the loader.
+ * A shared validator with only one caller is a validator waiting to drift.
+ */
+export interface NodeContent {
+    text?: string;
+    path?: readonly PathCommand[];
+}
 
 export class AddNodeAction extends Action {
     private nodeType: NodeType;
@@ -18,6 +32,7 @@ export class AddNodeAction extends Action {
     private fill: string;
     private explicitId: string | null;
     private parentId: string | null;
+    private content: NodeContent | null;
     private createdNodeId: string | null = null;
 
     constructor(
@@ -29,7 +44,8 @@ export class AddNodeAction extends Action {
         height: number,
         fill: string = "#cccccc",
         id?: string,
-        parentId?: string | null
+        parentId?: string | null,
+        content?: NodeContent
     ) {
         super(document);
         this.nodeType = nodeType;
@@ -40,6 +56,7 @@ export class AddNodeAction extends Action {
         this.fill = fill;
         this.explicitId = id ?? null;
         this.parentId = parentId ?? null;
+        this.content = content ?? null;
     }
 
     public validate(): boolean {
@@ -56,6 +73,16 @@ export class AddNodeAction extends Action {
         }
         // A requested parent must actually exist.
         if (this.parentId !== null && !this.document.nodes.has(this.parentId)) {
+            return false;
+        }
+        // Content obeys the rules the LOAD path applies to the same fields: `pathError` (shared)
+        // rejects commands on a non-path node, a list that does not start with `M`, non-finite
+        // coordinates, and an over-long one. Without this the editor could author a node the
+        // loader refuses — the round-trip-closure rule this codebase is built on.
+        if (this.content?.path !== undefined && pathError(this.nodeType, this.content.path) !== null) {
+            return false;
+        }
+        if (this.content?.text !== undefined && typeof this.content.text !== "string") {
             return false;
         }
         return (
@@ -87,6 +114,9 @@ export class AddNodeAction extends Action {
             style: { fill: this.fill, opacity: 1 },
             layout: {}
         };
+        // Copied, not aliased: the caller's array must not become the document's.
+        if (this.content?.text !== undefined) node.text = this.content.text;
+        if (this.content?.path !== undefined) node.path = this.content.path.map(c => ({ ...c }));
 
         return {
             updatedNodeIds: new Set([this.createdNodeId]),
@@ -105,7 +135,8 @@ export class AddNodeAction extends Action {
                 width: this.width,
                 height: this.height,
                 fill: this.fill,
-                parentId: this.parentId
+                parentId: this.parentId,
+                content: this.content
             },
             timestamp: Date.now()
         };

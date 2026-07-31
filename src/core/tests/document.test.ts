@@ -36,6 +36,8 @@ import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
 import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
+import { ShapeTool, SHAPE_KINDS, ShapeKind } from "../../editor/tools/ShapeTool";
+import { FrameSelectionAction } from "../actions/FrameSelectionAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
 import { Node, NODE_TYPES, nodeIdError, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow } from "../document/Node";
@@ -6627,5 +6629,236 @@ describe("Style effects: shadow + blur (schema 18)", () => {
         expect(new UpdateNodeStyleAction(d.getDocument(), "R", { shadow: SH }).validate()).toBe(true);
         expect(new UpdateNodeStyleAction(d.getDocument(), "R", { blur: -1 }).validate()).toBe(false);
         expect(new UpdateNodeStyleAction(d.getDocument(), "R", { shadow: { dx: 1, dy: 1, blur: 1, color: 9 } as unknown as Shadow }).validate()).toBe(false);
+    });
+});
+
+// ─── Basic shapes: one tool per drawable primitive, and content on the EDIT path ───
+describe("ShapeTool: every basic shape draws", () => {
+    const canvas = { left: 0, top: 0 } as DOMRect;
+    const ev = (x: number, y: number) => ({ clientX: x, clientY: y } as unknown as MouseEvent);
+
+    /** Drag a box with the given shape tool and return the node it committed (or undefined). */
+    function draw(kind: ShapeKind, x1: number, y1: number, x2: number, y2: number) {
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const es = createEditorState();
+        const tool = new ShapeTool(dispatcher, es, () => { }, kind);
+        tool.onMouseDown(ev(x1, y1), canvas);
+        tool.onMouseMove(ev(x2, y2), canvas);
+        tool.onMouseUp();
+        const doc = dispatcher.getDocument();
+        const id = doc.rootNodeUuids[0];
+        return { doc, dispatcher, node: id ? doc.nodes.get(id) : undefined, es };
+    }
+
+    test("each kind commits its own node type, and the box is the drag", () => {
+        const expected: Record<ShapeKind, string> = {
+            rectangle: "core.rectangle", ellipse: "core.ellipse", line: "core.line",
+            text: "core.text", triangle: "core.path"
+        };
+        for (const kind of SHAPE_KINDS) {
+            const { node } = draw(kind, 10, 20, 110, 80);
+            expect(node).toBeDefined();
+            expect(node!.type).toBe(expected[kind]);
+            expect(node!.geometry).toEqual({ x: 10, y: 20, width: 100, height: 60 });
+        }
+        // …and every kind the toolbar offers is covered by that map (no silent gap).
+        expect(Object.keys(expected).sort()).toEqual([...SHAPE_KINDS].sort());
+    });
+
+    test("a drag in ANY direction normalizes to the same box", () => {
+        expect(draw("rectangle", 110, 80, 10, 20).node!.geometry).toEqual({ x: 10, y: 20, width: 100, height: 60 });
+    });
+
+    test("text arrives with content, and a triangle with PATH commands in local space", () => {
+        expect(draw("text", 0, 0, 100, 40).node!.text).toBe("Text");
+        const drawn = draw("triangle", 0, 0, 100, 40);
+        const tri = drawn.node!;
+        // Apex top-centre, base along the bottom — LOCAL coords, since the renderer emits
+        // shapes at the local origin and places them by the world matrix.
+        expect(tri.path).toEqual([
+            { c: "M", x: 50, y: 0 }, { c: "L", x: 100, y: 40 }, { c: "L", x: 0, y: 40 }, { c: "Z" }
+        ]);
+        // The commands satisfy the SAME rule the loader applies, and the document reopens.
+        expect(pathError("core.path", tri.path)).toBeNull();
+        expect(() => deserializeDocument(serializeDocument(drawn.doc))).not.toThrow();
+    });
+
+    test("a LINE may collapse one axis; every other shape may not", () => {
+        // The tool's minimum-size rule has to agree with `dimensionError`, or it would commit
+        // what validation rejects — a gesture that silently does nothing.
+        expect(draw("line", 10, 50, 210, 50).node!.geometry).toMatchObject({ width: 200, height: 0 });
+        expect(draw("rectangle", 10, 50, 210, 50).node).toBeUndefined();   // zero height: refused
+        expect(draw("ellipse", 10, 50, 210, 50).node).toBeUndefined();
+        expect(draw("line", 10, 50, 10, 50).node).toBeUndefined();          // a point is not a line
+        // …and the TOOL's own floor still applies to a line: a sub-minimum but NON-zero drag is
+        // an accidental twitch, not a shape. (The point case above is refused by `dimensionError`
+        // inside the action, so it does not exercise this rule at all.)
+        expect(draw("line", 10, 50, 11, 50).node).toBeUndefined();
+        expect(draw("line", 10, 50, 13, 50).node).toBeDefined();            // 3px clears the 2px floor
+    });
+
+    test("a click (no drag) creates nothing, and Escape cancels an in-flight drag", () => {
+        expect(draw("rectangle", 40, 40, 40, 40).node).toBeUndefined();
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const es = createEditorState();
+        const tool = new ShapeTool(dispatcher, es, () => { }, "ellipse");
+        tool.onMouseDown(ev(0, 0), canvas);
+        tool.onMouseMove(ev(80, 80), canvas);
+        expect(es.previewRect).not.toBeNull();
+        tool.onKeyDown({ key: "Escape" } as KeyboardEvent);
+        expect(es.previewRect).toBeNull();
+        tool.onMouseUp();
+        expect(dispatcher.getDocument().rootNodeUuids).toEqual([]);
+        expect(dispatcher.canUndo()).toBe(false);
+    });
+
+    test("the minimum size is in SCREEN px, so it means the same at every zoom", () => {
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const es = createEditorState();
+        es.viewport = { ...es.viewport, zoom: 20 };   // 3 screen px = 0.15 world units
+        const tool = new ShapeTool(dispatcher, es, () => { }, "rectangle");
+        tool.onMouseDown(ev(0, 0), canvas);
+        tool.onMouseMove(ev(3, 3), canvas);
+        tool.onMouseUp();
+        expect(dispatcher.getDocument().rootNodeUuids.length).toBe(1); // committed despite a tiny world box
+    });
+
+    test("AddNodeAction validates CONTENT with the same rules the loader uses", () => {
+        const doc = createEmptyDocument();
+        const bad = [{ c: "L", x: 0, y: 0 }] as PathCommand[];           // must start with M
+        expect(new AddNodeAction(doc, "core.path", 0, 0, 10, 10, "#fff", undefined, null, { path: bad }).validate()).toBe(false);
+        // A path on a NON-path node is refused by the shared `pathError`, exactly as on load.
+        expect(new AddNodeAction(doc, "core.rectangle", 0, 0, 10, 10, "#fff", undefined, null, { path: [{ c: "M", x: 0, y: 0 }] }).validate()).toBe(false);
+        expect(new AddNodeAction(doc, "core.path", 0, 0, 10, 10, "#fff", undefined, null, { path: [{ c: "M", x: 0, y: 0 }] }).validate()).toBe(true);
+        // The action COPIES the caller's commands rather than aliasing them into the document.
+        const commands: PathCommand[] = [{ c: "M", x: 1, y: 2 }];
+        const action = new AddNodeAction(doc, "core.path", 0, 0, 10, 10, "#fff", undefined, null, { path: commands });
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(action);
+        (commands[0] as { x: number }).x = 999;
+        expect(dispatcher.getDocument().nodes.get(action.getCreatedNodeId()!)!.path![0]).toEqual({ c: "M", x: 1, y: 2 });
+    });
+});
+
+// ─── Frame selection: the editor's only way to BUILD a hierarchy ───
+describe("FrameSelectionAction (nesting)", () => {
+    /** Three top-level rects: A(10,10,20×20) B(50,50,20×20) C(200,200,10×10). */
+    function doc4(): ProjectDocument {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number, y: number, w: number, h: number) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: w, height: h }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        mk("A", 10, 10, 20, 20); mk("B", 50, 50, 20, 20); mk("C", 200, 200, 10, 10);
+        doc.rootNodeUuids = ["A", "B", "C"];
+        return doc;
+    }
+
+    test("the frame fits the selection, and framing does not MOVE anything on screen", () => {
+        const dispatcher = new ActionDispatcher(doc4());
+        const before = computeGeometry(dispatcher.getDocument());
+        const boxA = before.nodes.get("A")!.bounds, boxB = before.nodes.get("B")!.bounds;
+        const action = new FrameSelectionAction(dispatcher.getDocument(), ["A", "B"]);
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const d = dispatcher.getDocument();
+        const frame = d.nodes.get(action.getFrameId()!)!;
+        expect(frame.geometry).toEqual({ x: 10, y: 10, width: 60, height: 60 });   // union of A and B
+        expect(frame.children).toEqual(["A", "B"]);
+        expect(d.nodes.get("A")!.parent).toBe(action.getFrameId());
+        // Rebased onto the frame: stored geometry is parent-relative…
+        expect(d.nodes.get("A")!.geometry).toMatchObject({ x: 0, y: 0 });
+        expect(d.nodes.get("B")!.geometry).toMatchObject({ x: 40, y: 40 });
+        // …and the WORLD position is unchanged, which is the whole point.
+        const after = computeGeometry(d);
+        expect(after.nodes.get("A")!.bounds).toEqual(boxA);
+        expect(after.nodes.get("B")!.bounds).toEqual(boxB);
+        expect(() => deserializeDocument(serializeDocument(d))).not.toThrow();
+    });
+
+    test("the frame takes the FRONTMOST member's z-position, and members keep their order", () => {
+        const dispatcher = new ActionDispatcher(doc4());
+        const action = new FrameSelectionAction(dispatcher.getDocument(), ["A", "C"]); // A behind B, C in front
+        dispatcher.dispatchAction(action);
+        const d = dispatcher.getDocument();
+        // Framing A and C must not drop C behind B — the frame lands at C's index.
+        expect(d.rootNodeUuids).toEqual(["B", action.getFrameId()]);
+        expect(d.nodes.get(action.getFrameId()!)!.children).toEqual(["A", "C"]);
+    });
+
+    test("framing NESTS: a frame can itself be framed, and its contents stay put", () => {
+        const dispatcher = new ActionDispatcher(doc4());
+        const first = new FrameSelectionAction(dispatcher.getDocument(), ["A", "B"]);
+        dispatcher.dispatchAction(first);
+        const before = computeGeometry(dispatcher.getDocument()).nodes.get("A")!.bounds;
+        const second = new FrameSelectionAction(dispatcher.getDocument(), [first.getFrameId()!, "C"]);
+        expect(dispatcher.dispatchAction(second).success).toBe(true);
+        const d = dispatcher.getDocument();
+        expect(d.nodes.get(first.getFrameId()!)!.parent).toBe(second.getFrameId());
+        expect(d.nodes.get("A")!.parent).toBe(first.getFrameId());          // still two deep
+        expect(computeGeometry(d).nodes.get("A")!.bounds).toEqual(before);  // and still in place
+        expect(() => deserializeDocument(serializeDocument(d))).not.toThrow();
+    });
+
+    test("framing a selection that does NOT share a parent is refused", () => {
+        const dispatcher = new ActionDispatcher(doc4());
+        const first = new FrameSelectionAction(dispatcher.getDocument(), ["A", "B"]);
+        dispatcher.dispatchAction(first);
+        // "A" now lives inside the frame while "C" is still a root — no single space to rebase in.
+        expect(new FrameSelectionAction(dispatcher.getDocument(), ["A", "C"]).validate()).toBe(false);
+        expect(new FrameSelectionAction(dispatcher.getDocument(), []).validate()).toBe(false);
+        expect(new FrameSelectionAction(dispatcher.getDocument(), ["nope"]).validate()).toBe(false);
+        // An instance COPY has no stored geometry to rebase and cannot be reparented — caught by
+        // the same existence check, since a virtual id is never in the stored map.
+        expect(new FrameSelectionAction(dispatcher.getDocument(), ["I::MC"]).validate()).toBe(false);
+    });
+
+    test("a node with NON-FINITE geometry is refused rather than producing a NaN frame", () => {
+        // Integrity and every action reject non-finite geometry, so this is defence against a
+        // damaged/hand-built document — but an unguarded union would emit a NaN-sized frame,
+        // which is exactly the kind of value that poisons layout silently.
+        const doc = doc4();
+        doc.nodes.set("A", { ...doc.nodes.get("A")!, geometry: { x: 0, y: 0, width: NaN, height: 10 } });
+        expect(new FrameSelectionAction(doc, ["A", "B"]).validate()).toBe(false);
+    });
+
+    test("a frame around collinear zero-height lines is refused (a rectangle needs a box)", () => {
+        const doc = createEmptyDocument();
+        for (const id of ["L1", "L2"]) {
+            doc.nodes.set(id, { id, type: "core.line", parent: null, children: [], geometry: { x: 0, y: 50, width: 100, height: 0 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        }
+        doc.rootNodeUuids = ["L1", "L2"];
+        expect(new FrameSelectionAction(doc, ["L1", "L2"]).validate()).toBe(false);
+    });
+
+    test("framing is one undo step", () => {
+        const dispatcher = new ActionDispatcher(doc4());
+        const action = new FrameSelectionAction(dispatcher.getDocument(), ["A", "B"]);
+        dispatcher.dispatchAction(action);
+        dispatcher.undo();
+        const d = dispatcher.getDocument();
+        expect(d.nodes.has(action.getFrameId()!)).toBe(false);
+        expect(d.nodes.get("A")!.parent).toBeNull();
+        expect(d.nodes.get("A")!.geometry).toMatchObject({ x: 10, y: 10 });
+        expect(d.rootNodeUuids).toEqual(["A", "B", "C"]);
+    });
+
+    test("a DETACH of a multi-node master keeps every child in place (framing makes this reachable)", () => {
+        // Before framing existed the editor could only draw ROOTS, so a component master with
+        // children — and therefore the detach child-copy path — was unreachable by drawing.
+        const dispatcher = new ActionDispatcher(doc4());
+        const frame = new FrameSelectionAction(dispatcher.getDocument(), ["A", "B"]);
+        dispatcher.dispatchAction(frame);
+        const master = frame.getFrameId()!;
+        const inst = new CreateInstanceAction(dispatcher.getDocument(), master, 300, 300);
+        dispatcher.dispatchAction(inst);
+        const instanceId = inst.getCreatedNodeId()!;
+        const drawn = computeGeometry(dispatcher.getDocument());
+        const copyBoxes = [master, "A", "B"].map(m => drawn.nodes.get(`${instanceId}::${m}`)!.bounds);
+
+        const detach = new DetachInstanceAction(dispatcher.getDocument(), instanceId);
+        expect(dispatcher.dispatchAction(detach).success).toBe(true);
+        const baked = detach.getCreatedNodeIds();
+        expect(baked.length).toBe(3);                     // the frame copy plus BOTH children
+        const after = computeGeometry(dispatcher.getDocument());
+        expect(baked.map(id => after.nodes.get(id)!.bounds)).toEqual(copyBoxes);
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
     });
 });

@@ -359,8 +359,14 @@ class ToolController {
 }
 ```
 
-Tools: `SelectTool`, `MoveTool`, `RectangleTool` (all implement `Tool`). Tools construct
+Tools: `SelectTool`, `MoveTool`, `ShapeTool` (all implement `Tool`). Tools construct
 Actions and dispatch them; they mutate only `EditorState`, never the document.
+`ShapeTool` is ONE tool parameterised by `ShapeKind` (`SHAPE_KINDS` = rectangle | ellipse |
+line | text | triangle), since the corner-to-corner gesture, preview, Escape and zoom-independent
+minimum size are identical for all of them — only the node type, the paint and the content
+differ. Its minimum-size rule is per-type on purpose, to agree with the shared `dimensionError`
+the action validates against (a `core.line` may collapse ONE axis; everything else needs a box),
+so the tool can never commit what validation would reject.
 `SelectTool` also owns box-select: a drag begun on empty space draws a marquee
 (`EditorState.marqueeRect`) and, on release, selects `nodesInRect` (shift = additive); a
 plain click with no drag deselects. Picking is world-space (`hitTest`/`nodesInRect`), never

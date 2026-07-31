@@ -20,7 +20,13 @@ import { createEditorState, EditorState, zoomAt } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
-import { RectangleTool } from "../editor/tools/RectangleTool";
+import { ShapeTool, SHAPE_KINDS, ShapeKind } from "../editor/tools/ShapeTool";
+import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
+
+/** Toolbar glyph per basic shape (the label is the kind's own name). */
+const SHAPE_ICONS: Record<ShapeKind, string> = {
+    rectangle: "□", ellipse: "○", line: "╱", text: "T", triangle: "△"
+};
 import { RendererState } from "../renderer/SVGRenderer";
 import { renderScene, RenderBackend } from "../renderer/renderScene";
 import { rulerTicks } from "../core/geometry/Ruler";
@@ -99,7 +105,8 @@ export function App() {
         toolsRef.current = {
             select: new SelectTool(dispatcher, es, refresh),
             move: new MoveTool(dispatcher, es, refresh),
-            rectangle: new RectangleTool(dispatcher, es, refresh)
+            // One ShapeTool per basic shape, keyed by the SAME names the toolbar maps over.
+            ...Object.fromEntries(SHAPE_KINDS.map(kind => [kind, new ShapeTool(dispatcher, es, refresh, kind)]))
         };
         toolController.setTool(toolsRef.current.select);
     }
@@ -302,7 +309,31 @@ export function App() {
                 <span style={{ fontWeight: 700, marginRight: 8, color: "#00bfff", fontSize: 13 }}>VDE</span>
                 <ToolButton icon="↗" label="Select" active={toolName === "select"} onClick={() => setTool("select")} />
                 <ToolButton icon="↔" label="Move" active={toolName === "move"} onClick={() => setTool("move")} />
-                <ToolButton icon="□" label="Rectangle" active={toolName === "rectangle"} onClick={() => setTool("rectangle")} />
+                {SHAPE_KINDS.map(kind => (
+                    <ToolButton
+                        key={kind}
+                        icon={SHAPE_ICONS[kind]}
+                        label={kind[0].toUpperCase() + kind.slice(1)}
+                        active={toolName === kind}
+                        onClick={() => setTool(kind)}
+                    />
+                ))}
+                <div style={{ width: 1, height: 20, background: "#2a2a4a", margin: "0 4px" }} />
+                <button
+                    title="Wrap the selected nodes in a frame that fits them — the way to build a hierarchy (they must share a parent)"
+                    disabled={!new FrameSelectionAction(dispatcher.getDocument(), es.selectedNodeIds).validate()}
+                    onClick={() => {
+                        const action = new FrameSelectionAction(dispatcher.getDocument(), es.selectedNodeIds);
+                        if (dispatcher.dispatchAction(action).success) {
+                            const frame = action.getFrameId();
+                            if (frame) es.selectedNodeIds = [frame];
+                        }
+                        refresh();
+                    }}
+                    style={{ fontSize: 11, padding: "3px 8px", background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
+                >
+                    ⧉̲ Frame
+                </button>
                 <div style={{ width: 1, height: 20, background: "#2a2a4a", margin: "0 4px" }} />
                 <ToolButton icon="↩" label="Undo" disabled={!ui.canUndo} onClick={() => { dispatcher.undo(); refresh(); }} />
                 <ToolButton icon="↪" label="Redo" disabled={!ui.canRedo} onClick={() => { dispatcher.redo(); refresh(); }} />

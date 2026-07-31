@@ -34,7 +34,8 @@ abstract class Action {
 ### Command catalogue
 | Action | Effect (delta) |
 |--------|----------------|
-| `AddNodeAction` | `{ kind: "add", node }` |
+| `AddNodeAction` | `{ kind: "add", node }` — optional `content` carries a `core.text`'s text or a `core.path`'s commands, validated by the shared `pathError` (the first EDIT-path caller of it; until then only the loader authored paths) |
+| `FrameSelectionAction` | `{ kind: "add" }` for a frame rectangle + `{ kind: "patch", reparent, geometry }` per member — wraps the selection in a parent sized to fit it, rebasing each member onto the frame's origin so nothing MOVES on screen. The editor's only way to build a hierarchy. SIBLINGS ONLY (one shared parent = one space to rebase in); the frame takes the frontmost member's z-position and members keep their relative order |
 | `DeleteNodeAction` | `{ kind: "delete" }` for the node **and every descendant** (cycle-safe) |
 | `MoveNodeAction` | `{ kind: "patch", geometry: { x, y } }` |
 | `ResizeNodeAction` | `{ kind: "patch", geometry: { width, height } }` |
