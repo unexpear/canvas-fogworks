@@ -145,6 +145,14 @@ function snapTargetsExcludingSubtree(doc: ReadonlyDocument, computed: ComputedSt
 function snapTargetsExcludingSubtrees(doc: ReadonlyDocument, computed: ComputedState, rootIds: readonly string[]): Rect[]; // …minus EVERY root's subtree (group move)
 function isTranslationOnlyChain(doc: ReadonlyDocument, nodeId: string): boolean; // node + all ancestors unrotated/unscaled → world snap delta == stored delta (snapping is enabled only then)
 
+// geometry/Polygon.ts — regular N-gon vertices (pentagon, hexagon, octagon, …), normalized so
+// the polygon's own bbox fills the drawn box. Pure; ShapeTool turns them into core.path commands.
+const POLYGON_MIN_SIDES: number;   // 3 — a 2-gon is a line
+const POLYGON_MAX_SIDES: number;   // 64 — past that an N-gon IS an ellipse, which we draw cheaper
+const POLYGON_DEFAULT_SIDES: number;
+function clampSides(sides: number): number;                    // shared by the tool, the toolbar and the generator
+function polygonPoints(sides: number, width: number, height: number): Point[];
+
 // geometry/Ruler.ts — pure ruler tick computation (the app draws the bars).
 interface RulerTick { world: number; label: string; major: boolean } // major = every 5th tick
 function niceStep(worldPerTarget: number): number;                     // 1/2/5 × 10ᵏ step
@@ -367,7 +375,7 @@ class ToolController {
 Tools: `SelectTool`, `MoveTool`, `ShapeTool` (all implement `Tool`). Tools construct
 Actions and dispatch them; they mutate only `EditorState`, never the document.
 `ShapeTool` is ONE tool parameterised by `ShapeKind` (`SHAPE_KINDS` = rectangle | ellipse |
-line | text | triangle), since the corner-to-corner gesture, preview, Escape and zoom-independent
+line | text | triangle | polygon | image), since the corner-to-corner gesture, preview, Escape and zoom-independent
 minimum size are identical for all of them — only the node type, the paint and the content
 differ. Its minimum-size rule is per-type on purpose, to agree with the shared `dimensionError`
 the action validates against (a `core.line` may collapse ONE axis; everything else needs a box),

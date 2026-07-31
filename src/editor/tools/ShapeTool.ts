@@ -19,6 +19,7 @@ import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
 import { AddNodeAction, NodeContent } from "../../core/actions/AddNodeAction";
 import { NodeType, PathCommand } from "../../core/document/Node";
 import { EditorState, screenToWorld } from "../EditorState";
+import { polygonPoints, POLYGON_DEFAULT_SIDES } from "../../core/geometry/Polygon";
 import { Rect } from "../../core/geometry/Matrix";
 import { Tool } from "./ToolController";
 
@@ -32,7 +33,7 @@ const MIN_SIZE_PX = 2;
 
 /** The basic shapes the editor can draw. Each maps to a node type plus, where the type needs
  *  more than a box, the content that makes it visible. */
-export type ShapeKind = "rectangle" | "ellipse" | "line" | "text" | "triangle" | "image";
+export type ShapeKind = "rectangle" | "ellipse" | "line" | "text" | "triangle" | "polygon" | "image";
 
 /**
  * How an `image` gets its SOURCE. Picking a file is a DOM concern (a file input, a FileReader),
@@ -50,6 +51,23 @@ interface ShapeSpec {
     content?: (width: number, height: number) => NodeContent;
     /** `true` when the shape cannot be created from the drag alone (an image needs a source). */
     needsSource?: boolean;
+    /** `true` when the shape's content depends on the toolbar's SIDE COUNT (the N-gon tool). */
+    usesSideCount?: boolean;
+}
+
+/**
+ * The closed `core.path` outline of a regular `sides`-gon filling a `width` × `height` box.
+ * Separate from `polygonPoints` (pure vertices, in `geometry/Polygon`) because turning points
+ * into path commands is a document concern, and keeping the maths free of the document type is
+ * what lets it be tested as maths.
+ */
+export function polygonCommands(sides: number, width: number, height: number): PathCommand[] {
+    const points = polygonPoints(sides, width, height);
+    return [
+        { c: "M", x: points[0].x, y: points[0].y } as PathCommand,
+        ...points.slice(1).map(p => ({ c: "L", x: p.x, y: p.y }) as PathCommand),
+        { c: "Z" } as PathCommand
+    ];
 }
 
 const SHAPES: Record<ShapeKind, ShapeSpec> = {
@@ -57,19 +75,18 @@ const SHAPES: Record<ShapeKind, ShapeSpec> = {
     ellipse: { type: "core.ellipse", allowsCollapsedAxis: false },
     line: { type: "core.line", allowsCollapsedAxis: true },
     text: { type: "core.text", allowsCollapsedAxis: false, content: () => ({ text: "Text" }) },
+    // A triangle is just the 3-gon: `polygonPoints` normalizes to the drawn box, which puts the
+    // apex at top-centre and the base along the bottom edge — the shape this shipped with.
     triangle: {
         type: "core.path",
         allowsCollapsedAxis: false,
-        // Apex at the top-centre of the box, base along its bottom edge — the box IS the
-        // triangle's bounding box, so selection, handles and culling behave like any shape.
-        content: (width, height): NodeContent => ({
-            path: [
-                { c: "M", x: width / 2, y: 0 },
-                { c: "L", x: width, y: height },
-                { c: "L", x: 0, y: height },
-                { c: "Z" }
-            ] as PathCommand[]
-        })
+        content: (width, height): NodeContent => ({ path: polygonCommands(3, width, height) })
+    },
+    // Pentagon, hexagon, octagon, …: the same generator with the side count the toolbar holds.
+    polygon: {
+        type: "core.path",
+        allowsCollapsedAxis: false,
+        usesSideCount: true
     },
     // The one shape a drag alone cannot finish: an image with no source draws nothing, so the
     // node is only created once a source is resolved (see `SourceResolver`).
@@ -77,7 +94,7 @@ const SHAPES: Record<ShapeKind, ShapeSpec> = {
 };
 
 /** The shape kinds in toolbar order — the single list the UI and the tests both read. */
-export const SHAPE_KINDS: readonly ShapeKind[] = ["rectangle", "ellipse", "line", "text", "triangle", "image"];
+export const SHAPE_KINDS: readonly ShapeKind[] = ["rectangle", "ellipse", "line", "text", "triangle", "polygon", "image"];
 
 export class ShapeTool implements Tool {
     private dispatcher: ActionDispatcher;
@@ -89,19 +106,25 @@ export class ShapeTool implements Tool {
     private anchorY = 0;
 
     private resolveSource: SourceResolver | null;
+    private sides: () => number;
 
     constructor(
         dispatcher: ActionDispatcher,
         editorState: EditorState,
         refresh: () => void,
         kind: ShapeKind,
-        resolveSource?: SourceResolver
+        resolveSource?: SourceResolver,
+        // A GETTER, not a value: the toolbar's side count changes between drags, and the tool is
+        // constructed once. Injected for the same reason `resolveSource` is — the control that
+        // holds the number is DOM, and this class never touches DOM.
+        sides?: () => number
     ) {
         this.dispatcher = dispatcher;
         this.editorState = editorState;
         this.refresh = refresh;
         this.spec = SHAPES[kind];
         this.resolveSource = resolveSource ?? null;
+        this.sides = sides ?? (() => POLYGON_DEFAULT_SIDES);
     }
 
     /** Normalized world-space rect from the anchor to the current pointer. */
@@ -161,6 +184,11 @@ export class ShapeTool implements Tool {
                     if (src !== null && src !== undefined) this.commit(rect, { src });
                     this.refresh();
                 });
+            } else if (this.spec.usesSideCount) {
+                // Read the count at COMMIT time, not construction: the tool outlives any one
+                // setting of the control. `clampSides` is shared with the UI, so what the
+                // toolbar shows and what gets drawn cannot disagree.
+                this.commit(rect, { path: polygonCommands(this.sides(), rect.width, rect.height) });
             } else {
                 this.commit(rect, this.spec.content?.(rect.width, rect.height));
             }

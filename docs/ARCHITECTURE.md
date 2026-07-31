@@ -133,9 +133,12 @@ live-commits a coalesced `UpdateNodeTransformAction` (a continuous drag = one un
 `data-node-id`/`data-resize-handle`, the editor works unchanged under the Canvas backend — even the
 handle hover cursor (an idle-hover `handleAtPoint` → `EditorState.hoverCursor`, applied by the app,
 since the single canvas element can't set a per-region cursor like SVG's per-element `style.cursor`).
-Drawing covers every basic shape through one `ShapeTool` (rectangle, ellipse, line, text,
-triangle — the last authoring `core.path` commands, so the shared `pathError` finally has an
-edit-path caller as well as the loader). `FrameSelectionAction` is the editor's only way to
+Drawing covers every drawable node type through one `ShapeTool` (rectangle, ellipse, line,
+text, triangle, N-gon and image). Triangle and N-gon both author `core.path` commands — a
+polygon is not a new node type, just a path with N generated vertices — so the shared
+`pathError` has an edit-path caller as well as the loader. The vertex maths lives in the pure
+`geometry/Polygon`, normalized so the polygon fills the box you drag, which makes the 3-gon
+come out as exactly the box-filling triangle the editor already shipped. `FrameSelectionAction` is the editor's only way to
 BUILD a hierarchy: nesting existed at the document layer from the start, but nothing in the UI
 could create a parent, so every drawn node was a root and auto-layout, constraints and
 multi-node component masters were unreachable by drawing.

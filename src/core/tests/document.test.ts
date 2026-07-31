@@ -36,7 +36,8 @@ import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
 import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
-import { ShapeTool, SHAPE_KINDS, ShapeKind } from "../../editor/tools/ShapeTool";
+import { ShapeTool, SHAPE_KINDS, ShapeKind, polygonCommands } from "../../editor/tools/ShapeTool";
+import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../geometry/Polygon";
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
@@ -6660,7 +6661,7 @@ describe("ShapeTool: every basic shape draws", () => {
     test("each kind commits its own node type, and the box is the drag", async () => {
         const expected: Record<ShapeKind, string> = {
             rectangle: "core.rectangle", ellipse: "core.ellipse", line: "core.line",
-            text: "core.text", triangle: "core.path", image: "core.image"
+            text: "core.text", triangle: "core.path", polygon: "core.path", image: "core.image"
         };
         for (const kind of SHAPE_KINDS) {
             const { node } = await draw(kind, 10, 20, 110, 80);
@@ -7184,5 +7185,151 @@ describe("Review fixes: an override src obeys the same rule a stored src does (s
         const cancelBranch = src.slice(src.indexOf('addEventListener("cancel"'), src.indexOf('addEventListener("change"'));
         expect(cancelBranch).toMatch(/srcError\("core\.image"/);
         expect(cancelBranch).toMatch(/window\.alert/);
+    });
+});
+
+// ─── Regular N-gons: pentagon, hexagon, octagon and the rest ───
+describe("Polygon: regular N-gons fill the drawn box", () => {
+    test("the polygon's OWN bounds exactly fill the box, for every side count", () => {
+        // The invariant that makes an N-gon behave like every other shape here: the box you
+        // drag is the box you get, so handles, culling and hit-testing need no special case.
+        for (let n = POLYGON_MIN_SIDES; n <= POLYGON_MAX_SIDES; n++) {
+            const pts = polygonPoints(n, 120, 80);
+            const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+            expect(pts.length).toBe(n);
+            expect(Math.min(...xs)).toBeCloseTo(0, 6);
+            expect(Math.min(...ys)).toBeCloseTo(0, 6);
+            expect(Math.max(...xs)).toBeCloseTo(120, 6);
+            expect(Math.max(...ys)).toBeCloseTo(80, 6);
+        }
+    });
+
+    test("the 3-gon IS the box-filling triangle, bit-for-bit", () => {
+        // The generalization must not silently change a shape the editor already shipped.
+        expect(polygonCommands(3, 100, 40)).toEqual([
+            { c: "M", x: 50, y: 0 }, { c: "L", x: 100, y: 40 }, { c: "L", x: 0, y: 40 }, { c: "Z" }
+        ]);
+    });
+
+    test("a 4-gon is a diamond, and even-sided polygons are symmetric about the centre", () => {
+        expect(polygonPoints(4, 100, 100)).toEqual([
+            { x: 50, y: 0 }, { x: 100, y: 50 }, { x: 50, y: 100 }, { x: 0, y: 50 }
+        ]);
+        // A hexagon's opposite vertices mirror through the box centre.
+        const hex = polygonPoints(6, 100, 100);
+        for (let i = 0; i < 3; i++) {
+            expect(hex[i].x + hex[i + 3].x).toBeCloseTo(100, 6);
+            expect(hex[i].y + hex[i + 3].y).toBeCloseTo(100, 6);
+        }
+    });
+
+    test("the first vertex is the TOP one and the winding is clockwise", () => {
+        for (const n of [5, 6, 8]) {
+            const pts = polygonPoints(n, 100, 100);
+            expect(pts[0].y).toBeCloseTo(0, 6);             // starts at the top edge
+            expect(pts[0].x).toBeCloseTo(50, 6);            // …at its centre
+            // Shoelace: a clockwise winding in screen coords (y down) has POSITIVE area.
+            let area = 0;
+            for (let i = 0; i < pts.length; i++) {
+                const a = pts[i], b = pts[(i + 1) % pts.length];
+                area += a.x * b.y - b.x * a.y;
+            }
+            expect(area).toBeGreaterThan(0);
+        }
+    });
+
+    test("a non-square box gives an affine-stretched polygon, not a small centred one", () => {
+        const wide = polygonPoints(5, 400, 50);
+        expect(Math.max(...wide.map(p => p.x))).toBeCloseTo(400, 6);
+        expect(Math.max(...wide.map(p => p.y))).toBeCloseTo(50, 6);
+    });
+
+    test("clampSides is the ONE rule the tool, the toolbar and the generator share", () => {
+        expect(clampSides(5)).toBe(5);
+        expect(clampSides(2)).toBe(POLYGON_MIN_SIDES);          // a 2-gon is a line
+        expect(clampSides(0)).toBe(POLYGON_MIN_SIDES);
+        expect(clampSides(-7)).toBe(POLYGON_MIN_SIDES);
+        expect(clampSides(1e6)).toBe(POLYGON_MAX_SIDES);
+        expect(clampSides(6.7)).toBe(7);                        // rounded, not truncated
+        expect(clampSides(NaN)).toBe(POLYGON_MIN_SIDES);
+        expect(clampSides(Infinity)).toBe(POLYGON_MIN_SIDES);
+        // …and the generator obeys it rather than emitting a degenerate path.
+        expect(polygonPoints(1, 10, 10).length).toBe(POLYGON_MIN_SIDES);
+        expect(polygonPoints(1000, 10, 10).length).toBe(POLYGON_MAX_SIDES);
+    });
+
+    test("polygonCommands closes the outline and passes the shared pathError", () => {
+        for (const n of [3, 5, 6, 8, 12, POLYGON_MAX_SIDES]) {
+            const cmds = polygonCommands(n, 100, 100);
+            expect(cmds.length).toBe(n + 1);                    // n vertices + Z
+            expect(cmds[0].c).toBe("M");
+            expect(cmds[cmds.length - 1].c).toBe("Z");
+            expect(pathError("core.path", cmds)).toBeNull();
+        }
+    });
+});
+
+describe("ShapeTool: the polygon tool", () => {
+    const canvas = { left: 0, top: 0 } as DOMRect;
+    const ev = (x: number, y: number) => ({ clientX: x, clientY: y } as unknown as MouseEvent);
+
+    /** Draw with the polygon tool, reading the side count through the injected getter. */
+    function drawPolygon(sides: () => number, x1 = 0, y1 = 0, x2 = 100, y2 = 100) {
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const es = createEditorState();
+        const tool = new ShapeTool(dispatcher, es, () => { }, "polygon", undefined, sides);
+        tool.onMouseDown(ev(x1, y1), canvas);
+        tool.onMouseMove(ev(x2, y2), canvas);
+        tool.onMouseUp();
+        const doc = dispatcher.getDocument();
+        return doc.nodes.get(doc.rootNodeUuids[0]);
+    }
+
+    test("a pentagon, a hexagon and an octagon each commit that many vertices", () => {
+        expect(drawPolygon(() => 5)!.path!.length).toBe(6);   // 5 + Z
+        expect(drawPolygon(() => 6)!.path!.length).toBe(7);
+        expect(drawPolygon(() => 8)!.path!.length).toBe(9);
+        expect(drawPolygon(() => 5)!.type).toBe("core.path");
+    });
+
+    test("the side count is read at COMMIT time, so changing it between drags takes effect", () => {
+        // The tool is constructed ONCE; a captured value would freeze the count the toolbar
+        // happened to hold when the app first rendered.
+        let sides = 5;
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const es = createEditorState();
+        const tool = new ShapeTool(dispatcher, es, () => { }, "polygon", undefined, () => sides);
+        const draw = (x: number) => { tool.onMouseDown(ev(x, 0), canvas); tool.onMouseMove(ev(x + 80, 80), canvas); tool.onMouseUp(); };
+        draw(0);
+        sides = 8;
+        draw(200);
+        const d = dispatcher.getDocument();
+        expect(d.nodes.get(d.rootNodeUuids[0])!.path!.length).toBe(6);   // pentagon
+        expect(d.nodes.get(d.rootNodeUuids[1])!.path!.length).toBe(9);   // octagon
+    });
+
+    test("an out-of-range count is clamped rather than producing a degenerate path", () => {
+        expect(drawPolygon(() => 2)!.path!.length).toBe(POLYGON_MIN_SIDES + 1);
+        expect(drawPolygon(() => 9999)!.path!.length).toBe(POLYGON_MAX_SIDES + 1);
+    });
+
+    test("a drawn polygon round-trips", () => {
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const es = createEditorState();
+        const tool = new ShapeTool(dispatcher, es, () => { }, "polygon", undefined, () => 7);
+        tool.onMouseDown(ev(10, 10), canvas);
+        tool.onMouseMove(ev(110, 90), canvas);
+        tool.onMouseUp();
+        const doc = dispatcher.getDocument();
+        expect(() => deserializeDocument(serializeDocument(doc))).not.toThrow();
+        expect(compareDocuments(doc, deserializeDocument(serializeDocument(doc)))).toBe(true);
+    });
+
+    test("the toolbar's side control is bound to the SAME clamp the generator uses", () => {
+        // A control that showed 100 while drawing a 64-gon would be lying about the result.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/clampSides\(raw\)/);
+        expect(src).toMatch(/min=\{POLYGON_MIN_SIDES\}/);
+        expect(src).toMatch(/max=\{POLYGON_MAX_SIDES\}/);
     });
 });

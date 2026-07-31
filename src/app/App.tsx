@@ -23,10 +23,11 @@ import { MoveTool } from "../editor/tools/MoveTool";
 import { ShapeTool, SHAPE_KINDS, ShapeKind } from "../editor/tools/ShapeTool";
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { IMAGE_SRC_MAX, srcError } from "../core/document/Node";
+import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
 
 /** Toolbar glyph per basic shape (the label is the kind's own name). */
 const SHAPE_ICONS: Record<ShapeKind, string> = {
-    rectangle: "□", ellipse: "○", line: "╱", text: "T", triangle: "△", image: "▣"
+    rectangle: "□", ellipse: "○", line: "╱", text: "T", triangle: "△", polygon: "⬟", image: "▣"
 };
 
 /**
@@ -112,6 +113,12 @@ const startedFromCorruptSave = initialLoad.status === "corrupt";
 
 export function App() {
     const [toolName, setToolName] = useState<string>("select");
+    // The N-gon's side count. Held in a ref as well as state because ShapeTool is constructed
+    // ONCE and reads the count at commit time through a getter — a captured value would freeze
+    // whatever the count was when the toolbar first rendered.
+    const [polygonSides, setPolygonSides] = useState<number>(POLYGON_DEFAULT_SIDES);
+    const polygonSidesRef = useRef(POLYGON_DEFAULT_SIDES);
+    polygonSidesRef.current = polygonSides;
     const [backend, setBackend] = useState<RenderBackend>("svg");
     // Consolidated UI state — one setState per refresh (React batches it into a
     // single commit). `tick` drives the imperative canvas repaint effect.
@@ -164,7 +171,8 @@ export function App() {
             select: new SelectTool(dispatcher, es, refresh),
             move: new MoveTool(dispatcher, es, refresh),
             // One ShapeTool per basic shape, keyed by the SAME names the toolbar maps over.
-            ...Object.fromEntries(SHAPE_KINDS.map(kind => [kind, new ShapeTool(dispatcher, es, refresh, kind, pickImageSource)]))
+            ...Object.fromEntries(SHAPE_KINDS.map(kind =>
+                [kind, new ShapeTool(dispatcher, es, refresh, kind, pickImageSource, () => polygonSidesRef.current)]))
         };
         toolController.setTool(toolsRef.current.select);
     }
@@ -376,6 +384,27 @@ export function App() {
                         onClick={() => setTool(kind)}
                     />
                 ))}
+                {toolName === "polygon" && (
+                    // Only while the polygon tool is active — a control for a tool you are not
+                    // using is noise, and its value is meaningless for every other shape.
+                    <label style={{ fontSize: 11, color: "#ccc", display: "flex", alignItems: "center", gap: 4, marginLeft: 4 }}>
+                        sides
+                        <input
+                            type="number"
+                            min={POLYGON_MIN_SIDES}
+                            max={POLYGON_MAX_SIDES}
+                            value={polygonSides}
+                            title={`Number of sides for the polygon tool (${POLYGON_MIN_SIDES}–${POLYGON_MAX_SIDES}); 5 = pentagon, 6 = hexagon, 8 = octagon`}
+                            onChange={e => {
+                                // Clamped through the SAME shared rule the generator uses, so the
+                                // number shown is always the number that will be drawn.
+                                const raw = Number(e.target.value);
+                                setPolygonSides(Number.isFinite(raw) ? clampSides(raw) : POLYGON_DEFAULT_SIDES);
+                            }}
+                            style={{ width: 44, fontSize: 11, padding: "2px 4px", background: "#0f0f1a", color: "#e0e0e0", border: "1px solid #2a2a4a", borderRadius: 3 }}
+                        />
+                    </label>
+                )}
                 <div style={{ width: 1, height: 20, background: "#2a2a4a", margin: "0 4px" }} />
                 <button
                     title="Wrap the selected nodes in a frame that fits them — the way to build a hierarchy (they must share a parent)"
