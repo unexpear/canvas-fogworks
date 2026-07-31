@@ -22,8 +22,28 @@ import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../editor/tools/ShapeTool";
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
+import { alignAction, distributeAction } from "../core/actions/alignActions";
+import { AlignEdge, DistributeAxis } from "../core/geometry/Alignment";
 import { IMAGE_SRC_MAX, srcError } from "../core/document/Node";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
+
+/** Align controls: edge, glyph, tooltip. One list so the row and its handlers cannot drift. */
+const ALIGN_BUTTONS: readonly [AlignEdge, string, string][] = [
+    ["left", "⇤", "Align left"],
+    ["center-h", "⇹", "Align horizontal centres"],
+    ["right", "⇥", "Align right"],
+    ["top", "⤒", "Align top"],
+    ["center-v", "⇳", "Align vertical centres"],
+    ["bottom", "⤓", "Align bottom"]
+];
+const DISTRIBUTE_BUTTONS: readonly [DistributeAxis, string, string][] = [
+    ["horizontal", "⇿", "Distribute horizontal spacing evenly"],
+    ["vertical", "⇕", "Distribute vertical spacing evenly"]
+];
+const ALIGN_BUTTON_STYLE: React.CSSProperties = {
+    fontSize: 12, padding: "3px 6px", background: "transparent", color: "#ccc",
+    border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer", minWidth: 24
+};
 
 /** Toolbar glyph per basic shape (the label is the kind's own name). */
 const SHAPE_ICONS: Record<ShapeKind, string> = {
@@ -185,6 +205,25 @@ export function App() {
         };
         toolController.setTool(toolsRef.current.select);
     }
+
+    /**
+     * Align / distribute the current selection. Both resolve geometry FRESH rather than reusing
+     * the render tick's state: the toolbar can be clicked at any time, and aligning against a
+     * stale ComputedState would move nodes to where they used to be.
+     */
+    const runAlign = useCallback((edge: AlignEdge) => {
+        const doc = dispatcher.getDocument();
+        const action = alignAction(doc, computeGeometry(doc), es.selectedNodeIds, edge);
+        if (action) dispatcher.dispatchAction(action);
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    const runDistribute = useCallback((axis: DistributeAxis) => {
+        const doc = dispatcher.getDocument();
+        const action = distributeAction(doc, computeGeometry(doc), es.selectedNodeIds, axis);
+        if (action) dispatcher.dispatchAction(action);
+        refresh();
+    }, [dispatcher, es, refresh]);
 
     const setTool = useCallback((name: string) => {
         toolController.setTool(toolsRef.current[name] ?? toolsRef.current.select);
@@ -444,6 +483,30 @@ export function App() {
                             style={{ width: 44, fontSize: 11, padding: "2px 4px", background: "#0f0f1a", color: "#e0e0e0", border: "1px solid #2a2a4a", borderRadius: 3 }}
                         />
                     </label>
+                )}
+                {es.selectedNodeIds.length >= 2 && (
+                    // Align + distribute, shown only for a MULTI-selection — the operations are
+                    // meaningless for one node, and a row of dead buttons is worse than none.
+                    <>
+                        <div style={{ width: 1, height: 20, background: "#2a2a4a", margin: "0 4px" }} />
+                        {ALIGN_BUTTONS.map(([edge, glyph, label]) => (
+                            <button
+                                key={edge}
+                                title={label}
+                                onClick={() => runAlign(edge)}
+                                style={ALIGN_BUTTON_STYLE}
+                            >{glyph}</button>
+                        ))}
+                        {DISTRIBUTE_BUTTONS.map(([axis, glyph, label]) => (
+                            <button
+                                key={axis}
+                                title={`${label} — needs 3 or more`}
+                                disabled={es.selectedNodeIds.length < 3}
+                                onClick={() => runDistribute(axis)}
+                                style={ALIGN_BUTTON_STYLE}
+                            >{glyph}</button>
+                        ))}
+                    </>
                 )}
                 <div style={{ width: 1, height: 20, background: "#2a2a4a", margin: "0 4px" }} />
                 <button

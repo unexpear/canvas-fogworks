@@ -40,6 +40,8 @@ import { buildRenderModel } from "../../renderer/RenderModel";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, polygonCommands, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../../editor/tools/ShapeTool";
 import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../geometry/Polygon";
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
+import { alignBoxes, distributeBoxes, AlignEdge } from "../geometry/Alignment";
+import { alignAction, distributeAction } from "../actions/alignActions";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
 import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow } from "../document/Node";
@@ -7528,5 +7530,251 @@ describe("Style.strokeWidth", () => {
         const loaded = deserializeDocument(legacy);
         expect(loaded.version).toBe(SCHEMA_VERSION);
         expect(loaded.nodes.get("r")!.style.strokeWidth).toBeUndefined();
+    });
+});
+
+// ─── Align & distribute: the highest-leverage row in any design tool ───
+describe("Alignment maths", () => {
+    const box = (x: number, y: number, w = 10, h = 10) => ({ x, y, width: w, height: h });
+
+    test("align references the SELECTION's own bounding box, not the canvas", () => {
+        const boxes = [box(0, 0, 10, 10), box(50, 20, 30, 10), box(100, 40, 20, 10)];
+        const left = alignBoxes(boxes, "left");
+        expect([...left.values()].map(p => p.x)).toEqual([0, 0]);        // both move to x=0
+        expect(left.has(0)).toBe(false);                                  // the leftmost never moves
+        const right = alignBoxes(boxes, "right");
+        // Union right edge is 120; each box's RIGHT edge lands there, so x = 120 - width.
+        expect(right.get(0)!.x).toBe(110);
+        expect(right.get(1)!.x).toBe(90);
+        expect(right.has(2)).toBe(false);
+    });
+
+    test("centre alignment centres the BOX, so differing sizes still line up", () => {
+        const boxes = [box(0, 0, 10, 10), box(0, 20, 40, 10)];
+        const out = alignBoxes(boxes, "center-h");
+        // Union spans 0..40, centre 20 — the 10-wide box goes to 15, the 40-wide one is already there.
+        expect(out.get(0)!.x).toBe(15);
+        expect(out.has(1)).toBe(false);
+    });
+
+    test("align is IDEMPOTENT — running it twice changes nothing the second time", () => {
+        // Which is also why an already-aligned selection reports no movers and pushes no undo.
+        const boxes = [box(0, 0), box(50, 30), box(90, 60)];
+        const first = alignBoxes(boxes, "top");
+        const moved = boxes.map((b, i) => first.has(i) ? { ...b, ...first.get(i)! } : b);
+        expect(alignBoxes(moved, "top").size).toBe(0);
+    });
+
+    test("every edge moves only the axis it names", () => {
+        const boxes = [box(0, 0), box(50, 30)];
+        for (const edge of ["left", "center-h", "right"] as AlignEdge[]) {
+            for (const [i, p] of alignBoxes(boxes, edge)) expect(p.y).toBe(boxes[i].y);
+        }
+        for (const edge of ["top", "center-v", "bottom"] as AlignEdge[]) {
+            for (const [i, p] of alignBoxes(boxes, edge)) expect(p.x).toBe(boxes[i].x);
+        }
+    });
+
+    test("distribute equalises the GAPS, not the centres", () => {
+        // Boxes of DIFFERENT widths: equal centres would leave visibly uneven gaps, which is
+        // the whole reason design tools distribute spacing instead.
+        const boxes = [box(0, 0, 10, 10), box(20, 0, 40, 10), box(100, 0, 10, 10)];
+        const out = distributeBoxes(boxes, "horizontal");
+        const placed = boxes.map((b, i) => out.has(i) ? { ...b, ...out.get(i)! } : b);
+        const gap1 = placed[1].x - (placed[0].x + placed[0].width);
+        const gap2 = placed[2].x - (placed[1].x + placed[1].width);
+        expect(gap1).toBeCloseTo(gap2, 10);
+        // The extremes stay put.
+        expect(placed[0].x).toBe(0);
+        expect(placed[2].x).toBe(100);
+    });
+
+    test("distribute sorts by POSITION but reports against the caller's indices", () => {
+        // The selection order is arbitrary; reordering it would assign positions to the wrong nodes.
+        const boxes = [box(100, 0), box(0, 0), box(50, 0)];
+        const out = distributeBoxes(boxes, "horizontal");
+        const placed = boxes.map((b, i) => out.has(i) ? { ...b, ...out.get(i)! } : b);
+        expect(placed[1].x).toBe(0);      // the leftmost by POSITION is index 1
+        expect(placed[0].x).toBe(100);    // the rightmost is index 0
+        expect(placed[2].x).toBeCloseTo(50, 10);
+    });
+
+    test("distribute needs THREE boxes; align needs two; non-finite input moves nothing", () => {
+        expect(distributeBoxes([box(0, 0), box(50, 0)], "horizontal").size).toBe(0);
+        expect(alignBoxes([box(0, 0)], "left").size).toBe(0);
+        expect(alignBoxes([box(NaN, 0), box(50, 0)], "left").size).toBe(0);
+        expect(distributeBoxes([box(0, 0), box(1, 0), box(Infinity, 0)], "horizontal").size).toBe(0);
+    });
+
+    test("an OVERLAPPING selection distributes to a negative gap rather than special-casing", () => {
+        const boxes = [box(0, 0, 100, 10), box(10, 0, 100, 10), box(20, 0, 100, 10)];
+        const out = distributeBoxes(boxes, "horizontal");
+        const placed = boxes.map((b, i) => out.has(i) ? { ...b, ...out.get(i)! } : b);
+        expect(placed[0].x).toBe(0);
+        expect(placed[2].x).toBe(20);     // extremes still pinned; the middle sits between them
+        expect(placed[1].x).toBeCloseTo(10, 10);
+    });
+});
+
+describe("Align actions: which nodes actually move", () => {
+    function scene(): ProjectDocument {
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number, y: number, parent: string | null = null) => {
+            doc.nodes.set(id, { id, type: "core.rectangle", parent, children: [], geometry: { x, y, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+            if (parent) doc.nodes.get(parent)!.children.push(id); else doc.rootNodeUuids.push(id);
+        };
+        mk("A", 0, 0); mk("B", 100, 50); mk("C", 200, 90);
+        return doc;
+    }
+
+    test("aligning is ONE undo step for the whole selection", () => {
+        const dispatcher = new ActionDispatcher(scene());
+        const doc = dispatcher.getDocument();
+        const action = alignAction(doc, computeGeometry(doc), ["A", "B", "C"], "top")!;
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const d = dispatcher.getDocument();
+        expect(d.nodes.get("B")!.geometry.y).toBe(0);
+        expect(d.nodes.get("C")!.geometry.y).toBe(0);
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.get("B")!.geometry.y).toBe(50);   // all of it, at once
+        expect(dispatcher.getDocument().nodes.get("C")!.geometry.y).toBe(90);
+    });
+
+    test("an already-aligned selection produces NO action, so no empty undo step", () => {
+        const doc = createEmptyDocument();
+        for (const [id, x] of [["A", 0], ["B", 50]] as [string, number][]) {
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y: 0, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+            doc.rootNodeUuids.push(id);
+        }
+        expect(alignAction(doc, computeGeometry(doc), ["A", "B"], "top")).toBeNull();
+    });
+
+    test("only selection ROOTS move — a child would otherwise be moved twice", () => {
+        const doc = scene();
+        // Make C a child of A: selecting both must move only A, since C travels with it.
+        doc.rootNodeUuids = ["A", "B"];
+        doc.nodes.set("C", { ...doc.nodes.get("C")!, parent: "A" });
+        doc.nodes.set("A", { ...doc.nodes.get("A")!, children: ["C"] });
+        const dispatcher = new ActionDispatcher(doc);
+        const d0 = dispatcher.getDocument();
+        const before = d0.nodes.get("C")!.geometry.y;
+        dispatcher.dispatchAction(alignAction(d0, computeGeometry(d0), ["A", "C", "B"], "top")!);
+        expect(dispatcher.getDocument().nodes.get("C")!.geometry.y).toBe(before); // untouched
+    });
+
+    test("a LAID-OUT child is skipped: its stored x/y is dead data under a container", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["A", "B"], geometry: { x: 0, y: 0, width: 300, height: 100 }, style: { fill: "#111", opacity: 1 }, layout: { container: { direction: "row", gap: 10 } } });
+        for (const id of ["A", "B"]) {
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: "P", children: [], geometry: { x: 0, y: 0, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        }
+        doc.rootNodeUuids = ["P"];
+        expect(alignAction(doc, computeGeometry(doc), ["A", "B"], "left")).toBeNull();
+    });
+
+    test("aligning an instance COPY writes a per-instance OVERRIDE, not a stored edit", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: ["MC"], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("MC", { id: "MC", type: "core.rectangle", parent: "M", children: [], geometry: { x: 10, y: 40, width: 20, height: 20 }, style: { fill: "#0f0", opacity: 1 }, layout: {} });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 300, y: 0, width: 100, height: 100 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.nodes.set("X", { id: "X", type: "core.rectangle", parent: null, children: [], geometry: { x: 500, y: 0, width: 20, height: 20 }, style: { fill: "#00f", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["M", "I", "X"];
+        const dispatcher = new ActionDispatcher(doc);
+        const d0 = dispatcher.getDocument();
+        const action = alignAction(d0, computeGeometry(d0), ["I::MC", "X"], "top");
+        expect(action).not.toBeNull();
+        dispatcher.dispatchAction(action!);
+        // Routed: the copy's move became an override on the instance; the master never moved.
+        expect(dispatcher.getDocument().nodes.get("I")!.overrides!.MC.geometry).toMatchObject({ y: 0 });
+        expect(dispatcher.getDocument().nodes.get("MC")!.geometry.y).toBe(40);
+    });
+
+    test("distribute needs three MOVABLE roots, and evens the gaps in the document", () => {
+        const dispatcher = new ActionDispatcher(scene());
+        const d0 = dispatcher.getDocument();
+        expect(distributeAction(d0, computeGeometry(d0), ["A", "B"], "horizontal")).toBeNull();
+        dispatcher.dispatchAction(distributeAction(d0, computeGeometry(d0), ["A", "B", "C"], "horizontal")!);
+        const d = dispatcher.getDocument();
+        const g = (id: string) => d.nodes.get(id)!.geometry;
+        expect(g("A").x).toBe(0);
+        expect(g("C").x).toBe(200);
+        expect(g("B").x - (g("A").x + 20)).toBeCloseTo(g("C").x - (g("B").x + 20), 10);
+    });
+});
+
+describe("Align actions: the world-to-stored seam", () => {
+    test("a NESTED node aligns in WORLD space but is written in PARENT-relative stored units", () => {
+        // Every earlier fixture was top-level at the origin, where world == stored — so the
+        // conversion was never exercised and a mutant replacing it survived.
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["A"], geometry: { x: 300, y: 200, width: 400, height: 400 }, style: { fill: "#111", opacity: 1 }, layout: {} });
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: "P", children: [], geometry: { x: 50, y: 90, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("B", { id: "B", type: "core.rectangle", parent: null, children: [], geometry: { x: 100, y: 20, width: 20, height: 20 }, style: { fill: "#00f", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P", "B"];
+
+        const dispatcher = new ActionDispatcher(doc);
+        const d0 = dispatcher.getDocument();
+        // A's WORLD top is 200 + 90 = 290; B's is 20. Aligning top pulls A up to world y=20…
+        dispatcher.dispatchAction(alignAction(d0, computeGeometry(d0), ["A", "B"], "top")!);
+        const d = dispatcher.getDocument();
+        // …which is STORED y = 20 - 200 = -180 inside P, not 20.
+        expect(d.nodes.get("A")!.geometry.y).toBe(-180);
+        expect(d.nodes.get("B")!.geometry.y).toBe(20);
+        // And the rendered result is what was asked for: both world tops equal.
+        const after = computeGeometry(d);
+        expect(after.nodes.get("A")!.bounds.y).toBeCloseTo(after.nodes.get("B")!.bounds.y, 10);
+    });
+
+    test("a ROTATED node is left alone — a world delta is not its stored delta", () => {
+        // Same rule snapping and group-move obey: only a translation-only chain can take a
+        // world-space result directly. Rotating breaks that, so the node is skipped rather
+        // than moved to somewhere it was not asked to go.
+        const doc = createEmptyDocument();
+        const mk = (id: string, x: number, y: number, extra: Record<string, unknown> = {}) => {
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {}, ...extra });
+            doc.rootNodeUuids.push(id);
+        };
+        mk("R", 0, 100, { transform: { rotation: Math.PI / 5 } });
+        mk("A", 200, 40);
+        mk("B", 400, 70);
+        const dispatcher = new ActionDispatcher(doc);
+        const d0 = dispatcher.getDocument();
+        const before = d0.nodes.get("R")!.geometry.y;
+        dispatcher.dispatchAction(alignAction(d0, computeGeometry(d0), ["R", "A", "B"], "top")!);
+        const d = dispatcher.getDocument();
+        expect(d.nodes.get("R")!.geometry.y).toBe(before);   // untouched
+        // …while the others still align to each other (the rotated one is simply not in the set).
+        expect(d.nodes.get("A")!.geometry.y).toBe(d.nodes.get("B")!.geometry.y);
+    });
+
+    test("an already-EVEN selection distributes to no action, so no empty undo step", () => {
+        // The distribute counterpart of the align check. Without it, re-clicking distribute on
+        // an even row would push an undo step that changes nothing.
+        const doc = createEmptyDocument();
+        for (const [id, x] of [["A", 0], ["B", 60], ["C", 120]] as [string, number][]) {
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y: 0, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+            doc.rootNodeUuids.push(id);
+        }
+        expect(distributeAction(doc, computeGeometry(doc), ["A", "B", "C"], "horizontal")).toBeNull();
+        // …and it is idempotent through the dispatcher: distributing an UNEVEN row once makes
+        // it even, and a second distribute then has nothing to do.
+        const uneven = createEmptyDocument();
+        for (const [id, x] of [["A", 0], ["B", 30], ["C", 200]] as [string, number][]) {
+            uneven.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y: 0, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+            uneven.rootNodeUuids.push(id);
+        }
+        const dispatcher = new ActionDispatcher(uneven);
+        const d0 = dispatcher.getDocument();
+        dispatcher.dispatchAction(distributeAction(d0, computeGeometry(d0), ["A", "B", "C"], "horizontal")!);
+        const d1 = dispatcher.getDocument();
+        expect(distributeAction(d1, computeGeometry(d1), ["A", "B", "C"], "horizontal")).toBeNull();
+    });
+
+    test("a selection of ONLY untouchable nodes produces no action at all", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 100, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {}, transform: { rotation: 0.5 } });
+        doc.nodes.set("S", { id: "S", type: "core.rectangle", parent: null, children: [], geometry: { x: 90, y: 10, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {}, transform: { rotation: 0.7 } });
+        doc.rootNodeUuids = ["R", "S"];
+        expect(alignAction(doc, computeGeometry(doc), ["R", "S"], "left")).toBeNull();
     });
 });

@@ -145,6 +145,13 @@ function snapTargetsExcludingSubtree(doc: ReadonlyDocument, computed: ComputedSt
 function snapTargetsExcludingSubtrees(doc: ReadonlyDocument, computed: ComputedState, rootIds: readonly string[]): Rect[]; // …minus EVERY root's subtree (group move)
 function isTranslationOnlyChain(doc: ReadonlyDocument, nodeId: string): boolean; // node + all ancestors unrotated/unscaled → world snap delta == stored delta (snapping is enabled only then)
 
+// geometry/Alignment.ts — pure align/distribute maths over WORLD rects; returns the new origin
+// for each box that MOVES (an unchanged box is omitted, so a no-op click commits nothing).
+type AlignEdge = "left" | "center-h" | "right" | "top" | "center-v" | "bottom";
+type DistributeAxis = "horizontal" | "vertical";
+function alignBoxes(boxes: readonly Rect[], edge: AlignEdge): Map<number, {x,y}>;      // >= 2 boxes
+function distributeBoxes(boxes: readonly Rect[], axis: DistributeAxis): Map<number, {x,y}>; // >= 3, equal GAPS
+
 // geometry/Polygon.ts — regular N-gon vertices (pentagon, hexagon, octagon, …), normalized so
 // the polygon's own bbox fills the drawn box. Pure; ShapeTool turns them into core.path commands.
 const POLYGON_MIN_SIDES: number;   // 3 — a 2-gon is a line
