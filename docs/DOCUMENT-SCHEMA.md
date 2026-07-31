@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v24 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v25 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -84,6 +84,7 @@ interface Geometry { x: number; y: number; width: number; height: number; }
 interface Style {
   fill: string;             // color OR token id, e.g. "$color/primary" (resolved against variables, M5)
   stroke?: string;
+  strokeWidth?: number | string; // border thickness in WORLD units, >= 0, or a number-token (schema 25); absent = a 1-SCREEN-px hairline
   radius?: number | string; // corner radius, or a NUMBER-token "$radius/medium" (schema 20)
   opacity: number;          // 0..1
   fontSize?: number | string; // core.text; world units, default 14 — number or a number-token (schema 20)
@@ -614,7 +615,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"24"`; chain tail: …17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing, drops unvalidatable entries — 19→20 number-token radius/fontSize (pass-through), 20→21 components: pass-through for the new type/field but it RENAMES stored ids containing the now-reserved `::`, 21→22 per-instance overrides (pass-through), 22→23 the image `src` rule: DROPS a src the new `srcError` refuses so an older file still opens, 23→24 the same rule reaching a per-instance OVERRIDE `src`: drops the offending entry so the copy just shows the master's source) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"25"`; chain tail: …17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing, drops unvalidatable entries — 19→20 number-token radius/fontSize (pass-through), 20→21 components: pass-through for the new type/field but it RENAMES stored ids containing the now-reserved `::`, 21→22 per-instance overrides (pass-through), 22→23 the image `src` rule: DROPS a src the new `srcError` refuses so an older file still opens, 23→24 the same rule reaching a per-instance OVERRIDE `src`: drops the offending entry so the copy just shows the master's source, 24→25 `Style.strokeWidth` (pass-through: a NEW optional field, so nothing previously-valid becomes invalid)) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

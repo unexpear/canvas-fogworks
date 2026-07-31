@@ -36,7 +36,8 @@ import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
 import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
-import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, polygonCommands, supportsPaintMode } from "../../editor/tools/ShapeTool";
+import { buildRenderModel } from "../../renderer/RenderModel";
+import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, polygonCommands, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../../editor/tools/ShapeTool";
 import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../geometry/Polygon";
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
@@ -4261,13 +4262,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "25" that has no 24→25 step: the
+        // Pretending the build has moved to a schema "26" that has no 25→26 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→24), and then REFUSED at "24" — never re-stamped straight to the current
-        // schema. The error naming "24" (not "1") is the proof the chain actually ran.
+        // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
+        // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 23→24 landed for the override `src` rule.)
-        expect(() => migrateIfNeeded(legacy, "25")).toThrow('Migration not implemented for document schema "24"');
+        // time a real migration is added — here, when 24→25 landed for `Style.strokeWidth`.)
+        expect(() => migrateIfNeeded(legacy, "26")).toThrow('Migration not implemented for document schema "25"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -7416,5 +7417,116 @@ describe("ShapeTool: filled or outline", () => {
         // `supportsPaintMode` rather than keeping its own list.
         const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         expect(src).toMatch(/supportsPaintMode\(toolName\)/);
+    });
+});
+
+// ─── Stroke width (schema 25): outlines you can actually see ───
+describe("Style.strokeWidth", () => {
+    const canvas = { left: 0, top: 0 } as DOMRect;
+    const ev = (x: number, y: number) => ({ clientX: x, clientY: y } as unknown as MouseEvent);
+    const stateAt = (doc: ProjectDocument, zoom: number, selectedNodeIds: string[] = []) =>
+        ({ viewport: { x: 0, y: 0, zoom }, selectedNodeIds, hoveredNodeId: null, computed: computeGeometry(doc) }) as unknown as import("../../renderer/RendererState").RendererState;
+
+    function docWith(style: Record<string, unknown>): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: style as never, layout: {} });
+        doc.rootNodeUuids = ["R"];
+        return doc;
+    }
+    const widthAt = (doc: ProjectDocument, zoom: number) =>
+        buildRenderModel({ width: 800, height: 600 }, doc, stateAt(doc, zoom))
+            .content.find(i => i.nodeId === "R")!.paint.strokeWidth;
+
+    test("styleError: >= 0, finite, or a $token — the same shape as the radius rule", () => {
+        expect(styleError({ strokeWidth: 0 })).toBeNull();
+        expect(styleError({ strokeWidth: 4 })).toBeNull();
+        expect(styleError({ strokeWidth: "$stroke/thick" })).toBeNull();
+        expect(styleError({ strokeWidth: -1 })).toMatch("strokeWidth must be >= 0");
+        expect(styleError({ strokeWidth: Infinity })).toMatch("strokeWidth must be >= 0");
+        expect(styleError({ strokeWidth: "12" })).toMatch("strokeWidth must be >= 0"); // a bare string is not a token
+        // Shared: the LOAD path enforces the identical rule.
+        const bad = JSON.stringify({
+            version: SCHEMA_VERSION,
+            document: { metadata: {}, rootNodeUuids: ["r"], variables: {}, nodes: { r: { id: "r", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1, strokeWidth: -3 }, layout: {} } } }
+        });
+        expect(() => deserializeDocument(bad)).toThrow("strokeWidth must be >= 0");
+    });
+
+    test("an ABSENT width renders the historic 1-screen-pixel hairline, unchanged", () => {
+        // The point of the default: a document written before this field renders identically.
+        const doc = docWith({ fill: "#f00", opacity: 1, stroke: "#0f0" });
+        expect(widthAt(doc, 1)).toBe(1);        // 1 world unit at zoom 1 …
+        expect(widthAt(doc, 4)).toBe(0.25);     // … still 1 SCREEN pixel at zoom 4
+    });
+
+    test("a SET width is in WORLD units, so the border thickens as you zoom in", () => {
+        const doc = docWith({ fill: "none", opacity: 1, stroke: "#0f0", strokeWidth: 6 });
+        expect(widthAt(doc, 1)).toBe(6);
+        expect(widthAt(doc, 4)).toBe(6);
+    });
+
+    test("a broken token falls back to the hairline rather than vanishing", () => {
+        const doc = docWith({ fill: "none", opacity: 1, stroke: "#0f0", strokeWidth: "$nope" });
+        expect(widthAt(doc, 2)).toBe(0.5);
+    });
+
+    test("the SELECTION overlay stays screen-fixed, independent of the shape's border", () => {
+        // Chrome is not part of the document: it must neither inherit a shape's stroke width
+        // nor stop scaling with zoom. Asserted as INDEPENDENCE rather than a literal, so the
+        // test says what matters instead of pinning the overlay's own chosen thickness.
+        const outlineWidth = (style: Record<string, unknown>, zoom: number): number => {
+            const doc = docWith(style);
+            return buildRenderModel({ width: 800, height: 600 }, doc, stateAt(doc, zoom, ["R"]))
+                .overlay.find(i => i.role === "outline")!.paint.strokeWidth!;
+        };
+        const plain = { fill: "#f00", opacity: 1, stroke: "#0f0" };
+        const thick = { fill: "#f00", opacity: 1, stroke: "#0f0", strokeWidth: 20 };
+        expect(outlineWidth(thick, 2)).toBe(outlineWidth(plain, 2));   // does not inherit the 20
+        expect(outlineWidth(plain, 4)).toBeCloseTo(outlineWidth(plain, 2) / 2, 10); // still 1/zoom
+    });
+
+    test("the outline tool commits the toolbar's width, clamped by the shared rule", () => {
+        const draw = (w: number) => {
+            const dispatcher = new ActionDispatcher(createEmptyDocument());
+            const tool = new ShapeTool(dispatcher, createEditorState(), () => { }, "rectangle", undefined, () => 6, () => "outline" as PaintMode, () => w);
+            tool.onMouseDown(ev(0, 0), canvas); tool.onMouseMove(ev(80, 80), canvas); tool.onMouseUp();
+            const d = dispatcher.getDocument();
+            return d.nodes.get(d.rootNodeUuids[0])!.style.strokeWidth;
+        };
+        expect(draw(5)).toBe(5);
+        expect(draw(-3)).toBe(0);                    // clamped, not rejected
+        expect(draw(1e9)).toBe(STROKE_WIDTH_MAX);
+        expect(draw(NaN)).toBe(DEFAULT_STROKE_WIDTH);
+        expect(clampStrokeWidth(2.5)).toBe(2.5);     // fractional widths are legitimate
+    });
+
+    test("a FILLED shape carries no stroke and no width at all", () => {
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const tool = new ShapeTool(dispatcher, createEditorState(), () => { }, "rectangle", undefined, () => 6, () => "filled" as PaintMode, () => 8);
+        tool.onMouseDown(ev(0, 0), canvas); tool.onMouseMove(ev(80, 80), canvas); tool.onMouseUp();
+        const d = dispatcher.getDocument();
+        const node = d.nodes.get(d.rootNodeUuids[0])!;
+        expect(node.style.strokeWidth).toBeUndefined();
+        expect(node.style.stroke).toBeUndefined();
+    });
+
+    test("an outline shape with a width round-trips", () => {
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const tool = new ShapeTool(dispatcher, createEditorState(), () => { }, "polygon", undefined, () => 8, () => "outline" as PaintMode, () => 3);
+        tool.onMouseDown(ev(0, 0), canvas); tool.onMouseMove(ev(90, 90), canvas); tool.onMouseUp();
+        const doc = dispatcher.getDocument();
+        const loaded = deserializeDocument(serializeDocument(doc));
+        expect(loaded.nodes.get(doc.rootNodeUuids[0])!.style.strokeWidth).toBe(3);
+        expect(compareDocuments(doc, loaded)).toBe(true);
+    });
+
+    test("24 to 25 is a pass-through: an older document still opens and still hairlines", () => {
+        const legacy = JSON.stringify({
+            version: "24",
+            document: { metadata: {}, rootNodeUuids: ["r"], variables: {}, nodes: { r: { id: "r", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1, stroke: "#fff" }, layout: {} } } }
+        });
+        const loaded = deserializeDocument(legacy);
+        expect(loaded.version).toBe(SCHEMA_VERSION);
+        expect(loaded.nodes.get("r")!.style.strokeWidth).toBeUndefined();
     });
 });

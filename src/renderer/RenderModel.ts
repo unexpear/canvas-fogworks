@@ -272,6 +272,18 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         const r = typeof raw === "number" ? raw : resolveNumber(store, raw, theme);
         return r !== null && r > 0 ? r : 14;   // broken/non-positive token → the documented default
     };
+    /**
+     * A stroke's width in WORLD units (schema 25). Absent — or a broken/negative token — falls
+     * back to `1 / z`, i.e. a 1-SCREEN-pixel hairline, which is exactly what every stroke was
+     * before the field existed: an older document renders byte-identically. A settable width is
+     * in world units on purpose, so a shape's own border thickens as you zoom in (unlike the
+     * selection chrome, which is screen-fixed and keeps using the hairline directly).
+     */
+    const strokeWidthOf = (raw: number | string | undefined): number => {
+        if (raw === undefined) return 1 / z;
+        const r = typeof raw === "number" ? raw : resolveNumber(store, raw, theme);
+        return r !== null && r >= 0 ? r : 1 / z;
+    };
 
     // Paint in computed draw order (scene-graph order), using resolved world rects.
     computed.order.forEach((id: string) => {
@@ -313,7 +325,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 fill: color(sty.fill),
                 opacity: sty.opacity, shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
-                strokeWidth: sty.stroke ? 1 / z : null,
+                strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeDash: null,
                 radius: radiusOf(sty.radius),
                 cursor: "pointer",
@@ -326,7 +338,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 fill: color(sty.fill),
                 opacity: sty.opacity, shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
-                strokeWidth: sty.stroke ? 1 / z : null,
+                strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeDash: null,
                 radius: null,
                 cursor: "pointer",
@@ -345,7 +357,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 // The fallback picks the RAW winner first, THEN resolves — so a token stroke
                 // wins over a token fill exactly like concrete colors.
                 stroke: color(sty.stroke || sty.fill),
-                strokeWidth: 1 / z,
+                strokeWidth: strokeWidthOf(sty.strokeWidth),
                 strokeDash: null,
                 radius: null,
                 cursor: "pointer",
@@ -372,7 +384,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 fill: color(sty.fill),
                 opacity: sty.opacity, shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
-                strokeWidth: sty.stroke ? 1 / z : null,
+                strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeDash: null,
                 radius: null,
                 cursor: "pointer",

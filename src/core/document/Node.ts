@@ -244,6 +244,13 @@ export interface Shadow {
 export interface Style {
     fill: string;      // Color value or token ID (e.g., "$color/primary")
     stroke?: string;   // Optional border color
+    /**
+     * Border thickness in WORLD units — a number, or a NUMBER-token reference (schema 25).
+     * Absent = a hairline: 1 SCREEN pixel at any zoom, which is what every stroke was before
+     * this field existed. World units are the meaningful default for a shape's own border (it
+     * should thicken as you zoom in, unlike the selection chrome, which stays hairline).
+     */
+    strokeWidth?: number | string;
     /** Corner radius — a number, or a NUMBER-token reference like "$radius/medium" (schema 20). */
     radius?: number | string;
     opacity: number;
@@ -272,6 +279,9 @@ export function styleError(s: Partial<Style>): string | null {
         && (typeof s.radius !== "number" || !Number.isFinite(s.radius) || s.radius < 0)) return "style.radius must be >= 0 or a $token";
     if ("fontSize" in s && s.fontSize !== undefined && !isNumberToken(s.fontSize)
         && (typeof s.fontSize !== "number" || !Number.isFinite(s.fontSize) || s.fontSize <= 0)) return "style.fontSize must be > 0 or a $token";
+    // strokeWidth (schema 25): same shape as radius — >= 0 (0 means "no visible border") or a token.
+    if ("strokeWidth" in s && s.strokeWidth !== undefined && !isNumberToken(s.strokeWidth)
+        && (typeof s.strokeWidth !== "number" || !Number.isFinite(s.strokeWidth) || s.strokeWidth < 0)) return "style.strokeWidth must be >= 0 or a $token";
     if ("blur" in s && s.blur !== undefined && (!Number.isFinite(s.blur) || (s.blur as number) < 0)) return "style.blur must be finite and >= 0";
     if ("shadow" in s && s.shadow !== undefined) {
         const sh = s.shadow as Partial<Shadow>;

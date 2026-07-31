@@ -37,6 +37,7 @@ function isValidNode(n: any): n is Node {
         // token-or-range semantic lives once in `styleError` (Integrity), like the effects.
         (n.style.radius === undefined || typeof n.style.radius === "number" || typeof n.style.radius === "string") &&
         (n.style.fontSize === undefined || typeof n.style.fontSize === "number" || typeof n.style.fontSize === "string") &&
+        (n.style.strokeWidth === undefined || typeof n.style.strokeWidth === "number" || typeof n.style.strokeWidth === "string") &&
         // Shallow structural gate for the schema-18 effects; the semantic rules (finite, >=0)
         // live once in `styleError` (Integrity), like the transform gate.
         (n.style.blur === undefined || typeof n.style.blur === "number") &&
@@ -251,6 +252,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "21") { raw = migrate_21_to_22(raw); version = "22"; }
     if (version === "22") { raw = migrate_22_to_23(raw); version = "23"; }
     if (version === "23") { raw = migrate_23_to_24(raw); version = "24"; }
+    if (version === "24") { raw = migrate_24_to_25(raw); version = "25"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -476,6 +478,16 @@ function migrate_21_to_22(raw: any): any {
  * source. The type-aware half (only a core.image master may take a src override) is sanitized
  * here too, since the migration can resolve the master.
  */
+/**
+ * 24 -> 25: Style.strokeWidth. A NEW optional field, not a constraint — a document without it
+ * is still valid and still renders exactly as before (an absent width means the hairline every
+ * stroke has always been), so nothing needs sanitizing and this is a pass-through. The bump is
+ * still required: an OLD BUILD reading a file that HAS the field is the hazard a version guards.
+ */
+function migrate_24_to_25(raw: any): any {
+    return { ...raw, version: "25" };
+}
+
 function migrate_23_to_24(raw: any): any {
     const nodes = raw?.document?.nodes;
     if (nodes && typeof nodes === "object") {

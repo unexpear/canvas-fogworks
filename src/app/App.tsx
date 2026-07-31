@@ -20,7 +20,7 @@ import { createEditorState, EditorState, zoomAt } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
-import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, supportsPaintMode } from "../editor/tools/ShapeTool";
+import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../editor/tools/ShapeTool";
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { IMAGE_SRC_MAX, srcError } from "../core/document/Node";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
@@ -124,6 +124,10 @@ export function App() {
     const [paintMode, setPaintMode] = useState<PaintMode>("filled");
     const paintModeRef = useRef<PaintMode>("filled");
     paintModeRef.current = paintMode;
+    // Border thickness for new OUTLINE shapes, in world units — same getter pattern again.
+    const [strokeWidth, setStrokeWidth] = useState<number>(DEFAULT_STROKE_WIDTH);
+    const strokeWidthRef = useRef(DEFAULT_STROKE_WIDTH);
+    strokeWidthRef.current = strokeWidth;
     const [backend, setBackend] = useState<RenderBackend>("svg");
     // Consolidated UI state — one setState per refresh (React batches it into a
     // single commit). `tick` drives the imperative canvas repaint effect.
@@ -177,7 +181,7 @@ export function App() {
             move: new MoveTool(dispatcher, es, refresh),
             // One ShapeTool per basic shape, keyed by the SAME names the toolbar maps over.
             ...Object.fromEntries(SHAPE_KINDS.map(kind =>
-                [kind, new ShapeTool(dispatcher, es, refresh, kind, pickImageSource, () => polygonSidesRef.current, () => paintModeRef.current)]))
+                [kind, new ShapeTool(dispatcher, es, refresh, kind, pickImageSource, () => polygonSidesRef.current, () => paintModeRef.current, () => strokeWidthRef.current)]))
         };
         toolController.setTool(toolsRef.current.select);
     }
@@ -399,6 +403,26 @@ export function App() {
                     >
                         {paintMode === "filled" ? "◆ Filled" : "◇ Outline"}
                     </button>
+                )}
+                {supportsPaintMode(toolName) && paintMode === "outline" && (
+                    // Only in outline mode: a border width means nothing for a shape drawn as a
+                    // solid fill, and a control whose value is ignored is worse than no control.
+                    <label style={{ fontSize: 11, color: "#ccc", display: "flex", alignItems: "center", gap: 4, marginLeft: 4 }}>
+                        width
+                        <input
+                            type="number"
+                            min={0}
+                            max={STROKE_WIDTH_MAX}
+                            step={1}
+                            value={strokeWidth}
+                            title="Border thickness for new outline shapes, in WORLD units — it scales with zoom, like the shape itself"
+                            onChange={e => {
+                                const raw = Number(e.target.value);
+                                setStrokeWidth(Number.isFinite(raw) ? clampStrokeWidth(raw) : DEFAULT_STROKE_WIDTH);
+                            }}
+                            style={{ width: 44, fontSize: 11, padding: "2px 4px", background: "#0f0f1a", color: "#e0e0e0", border: "1px solid #2a2a4a", borderRadius: 3 }}
+                        />
+                    </label>
                 )}
                 {toolName === "polygon" && (
                     // Only while the polygon tool is active — a control for a tool you are not

@@ -31,6 +31,18 @@ const DEFAULT_FILL = "#4a90d9";
  */
 const MIN_SIZE_PX = 2;
 
+/** Border thickness a new OUTLINE shape gets, in world units. */
+export const DEFAULT_STROKE_WIDTH = 2;
+/** Widest border the toolbar offers. Not a document limit — `styleError` accepts any finite
+ *  non-negative width — just a sane range for the control. */
+export const STROKE_WIDTH_MAX = 100;
+
+/** The ONE clamp the tool and the toolbar share, so the number shown is the number drawn. */
+export function clampStrokeWidth(w: number): number {
+    if (!Number.isFinite(w)) return DEFAULT_STROKE_WIDTH;
+    return Math.min(STROKE_WIDTH_MAX, Math.max(0, w));
+}
+
 /** The basic shapes the editor can draw. Each maps to a node type plus, where the type needs
  *  more than a box, the content that makes it visible. */
 export type ShapeKind = "rectangle" | "ellipse" | "line" | "text" | "triangle" | "polygon" | "image";
@@ -136,6 +148,7 @@ export class ShapeTool implements Tool {
     private resolveSource: SourceResolver | null;
     private sides: () => number;
     private paintMode: () => PaintMode;
+    private strokeWidth: () => number;
 
     constructor(
         dispatcher: ActionDispatcher,
@@ -148,7 +161,9 @@ export class ShapeTool implements Tool {
         // holds the number is DOM, and this class never touches DOM.
         sides?: () => number,
         // Same reasoning as `sides`: a getter, read at commit time, injected by the app.
-        paintMode?: () => PaintMode
+        paintMode?: () => PaintMode,
+        // Border thickness for OUTLINE shapes, in world units. Same getter reasoning again.
+        strokeWidth?: () => number
     ) {
         this.dispatcher = dispatcher;
         this.editorState = editorState;
@@ -157,6 +172,7 @@ export class ShapeTool implements Tool {
         this.resolveSource = resolveSource ?? null;
         this.sides = sides ?? (() => POLYGON_DEFAULT_SIDES);
         this.paintMode = paintMode ?? (() => "filled");
+        this.strokeWidth = strokeWidth ?? (() => DEFAULT_STROKE_WIDTH);
     }
 
     /** Normalized world-space rect from the anchor to the current pointer. */
@@ -234,14 +250,14 @@ export class ShapeTool implements Tool {
      * Shapes the mode is meaningless for (a line is already only a stroke, an image draws its
      * own pixels) ignore it rather than committing something invisible.
      */
-    private paint(): { fill: string; stroke?: string } {
+    private paint(): { fill: string; stroke?: string; strokeWidth?: number } {
         return this.spec.supportsPaintMode && this.paintMode() === "outline"
-            ? { fill: "none", stroke: DEFAULT_FILL }
+            ? { fill: "none", stroke: DEFAULT_FILL, strokeWidth: clampStrokeWidth(this.strokeWidth()) }
             : { fill: DEFAULT_FILL };
     }
 
     private commit(rect: Rect, content?: NodeContent): void {
-        const { fill, stroke } = this.paint();
+        const { fill, stroke, strokeWidth } = this.paint();
         this.dispatcher.dispatchAction(new AddNodeAction(
             this.dispatcher.getDocument(),
             this.spec.type,
@@ -253,7 +269,8 @@ export class ShapeTool implements Tool {
             undefined,
             null,
             content,
-            stroke
+            stroke,
+            strokeWidth
         ));
     }
 

@@ -36,6 +36,7 @@ export class AddNodeAction extends Action {
     private parentId: string | null;
     private content: NodeContent | null;
     private stroke: string | undefined;
+    private strokeWidth: number | string | undefined;
     private createdNodeId: string | null = null;
 
     constructor(
@@ -50,7 +51,9 @@ export class AddNodeAction extends Action {
         parentId?: string | null,
         content?: NodeContent,
         /** Border colour. Absent = no stroke. An OUTLINE shape is `fill: "none"` plus this. */
-        stroke?: string
+        stroke?: string,
+        /** Border thickness in WORLD units (schema 25). Absent = the hairline default. */
+        strokeWidth?: number | string
     ) {
         super(document);
         this.nodeType = nodeType;
@@ -63,12 +66,17 @@ export class AddNodeAction extends Action {
         this.parentId = parentId ?? null;
         this.content = content ?? null;
         this.stroke = stroke;
+        this.strokeWidth = strokeWidth;
     }
 
     /** The style the created node gets: a fill, full opacity, and a stroke when one was asked
      *  for. An OUTLINE shape is just `fill: "none"` with a stroke — no new field needed. */
     private style(): Style {
-        return { fill: this.fill, opacity: 1, ...(this.stroke !== undefined ? { stroke: this.stroke } : {}) };
+        return {
+            fill: this.fill, opacity: 1,
+            ...(this.stroke !== undefined ? { stroke: this.stroke } : {}),
+            ...(this.strokeWidth !== undefined ? { strokeWidth: this.strokeWidth } : {})
+        };
     }
 
     public validate(): boolean {
@@ -157,6 +165,7 @@ export class AddNodeAction extends Action {
                 height: this.height,
                 fill: this.fill,
                 stroke: this.stroke,
+                strokeWidth: this.strokeWidth,
                 parentId: this.parentId,
                 content: this.content
             },

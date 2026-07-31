@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v24 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v25 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -382,7 +382,10 @@ the action validates against (a `core.line` may collapse ONE axis; everything el
 so the tool can never commit what validation would reject. FILLED vs OUTLINE is a toolbar mode,
 not a document concept: an outline is `fill: "none"` plus a `stroke`, both long-standing `Style`
 fields. `supportsPaintMode(kind)` reads the same table the tool commits from, so the control is
-never offered for a kind that would ignore it (a line is already only a stroke).
+never offered for a kind that would ignore it (a line is already only a stroke). An outline's
+BORDER WIDTH is `Style.strokeWidth` (schema 25) in WORLD units — absent means the historic
+1-SCREEN-pixel hairline, so an older document renders unchanged; `clampStrokeWidth` is shared
+by the tool and the toolbar control.
 `SelectTool` also owns box-select: a drag begun on empty space draws a marquee
 (`EditorState.marqueeRect`) and, on release, selects `nodesInRect` (shift = additive); a
 plain click with no drag deselects. Picking is world-space (`hitTest`/`nodesInRect`), never
