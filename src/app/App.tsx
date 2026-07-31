@@ -20,7 +20,7 @@ import { createEditorState, EditorState, zoomAt } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
-import { ShapeTool, SHAPE_KINDS, ShapeKind } from "../editor/tools/ShapeTool";
+import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, supportsPaintMode } from "../editor/tools/ShapeTool";
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { IMAGE_SRC_MAX, srcError } from "../core/document/Node";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
@@ -119,6 +119,11 @@ export function App() {
     const [polygonSides, setPolygonSides] = useState<number>(POLYGON_DEFAULT_SIDES);
     const polygonSidesRef = useRef(POLYGON_DEFAULT_SIDES);
     polygonSidesRef.current = polygonSides;
+    // FILLED vs OUTLINE for newly drawn shapes — the same getter pattern as the side count,
+    // for the same reason: the tool is built once and must read the CURRENT choice.
+    const [paintMode, setPaintMode] = useState<PaintMode>("filled");
+    const paintModeRef = useRef<PaintMode>("filled");
+    paintModeRef.current = paintMode;
     const [backend, setBackend] = useState<RenderBackend>("svg");
     // Consolidated UI state — one setState per refresh (React batches it into a
     // single commit). `tick` drives the imperative canvas repaint effect.
@@ -172,7 +177,7 @@ export function App() {
             move: new MoveTool(dispatcher, es, refresh),
             // One ShapeTool per basic shape, keyed by the SAME names the toolbar maps over.
             ...Object.fromEntries(SHAPE_KINDS.map(kind =>
-                [kind, new ShapeTool(dispatcher, es, refresh, kind, pickImageSource, () => polygonSidesRef.current)]))
+                [kind, new ShapeTool(dispatcher, es, refresh, kind, pickImageSource, () => polygonSidesRef.current, () => paintModeRef.current)]))
         };
         toolController.setTool(toolsRef.current.select);
     }
@@ -384,6 +389,17 @@ export function App() {
                         onClick={() => setTool(kind)}
                     />
                 ))}
+                {supportsPaintMode(toolName) && (
+                    // Shown only for shapes the choice means something for — a line is already
+                    // nothing but a stroke, and an image draws its own pixels.
+                    <button
+                        title="Draw new shapes as a solid fill, or as just their outline"
+                        onClick={() => setPaintMode(m => (m === "filled" ? "outline" : "filled"))}
+                        style={{ fontSize: 11, padding: "3px 8px", marginLeft: 4, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
+                    >
+                        {paintMode === "filled" ? "◆ Filled" : "◇ Outline"}
+                    </button>
+                )}
                 {toolName === "polygon" && (
                     // Only while the polygon tool is active — a control for a tool you are not
                     // using is noise, and its value is meaningless for every other shape.

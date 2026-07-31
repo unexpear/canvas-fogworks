@@ -5,7 +5,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { Node, NodeType, PathCommand, isNodeType, dimensionError, nodeIdError, pathError, srcError } from "../document/Node";
+import { Node, NodeType, PathCommand, Style, isNodeType, dimensionError, nodeIdError, pathError, srcError, styleError } from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 import { generateUUID } from "../ids/UUID";
 
@@ -35,6 +35,7 @@ export class AddNodeAction extends Action {
     private explicitId: string | null;
     private parentId: string | null;
     private content: NodeContent | null;
+    private stroke: string | undefined;
     private createdNodeId: string | null = null;
 
     constructor(
@@ -47,7 +48,9 @@ export class AddNodeAction extends Action {
         fill: string = "#cccccc",
         id?: string,
         parentId?: string | null,
-        content?: NodeContent
+        content?: NodeContent,
+        /** Border colour. Absent = no stroke. An OUTLINE shape is `fill: "none"` plus this. */
+        stroke?: string
     ) {
         super(document);
         this.nodeType = nodeType;
@@ -59,6 +62,13 @@ export class AddNodeAction extends Action {
         this.explicitId = id ?? null;
         this.parentId = parentId ?? null;
         this.content = content ?? null;
+        this.stroke = stroke;
+    }
+
+    /** The style the created node gets: a fill, full opacity, and a stroke when one was asked
+     *  for. An OUTLINE shape is just `fill: "none"` with a stroke — no new field needed. */
+    private style(): Style {
+        return { fill: this.fill, opacity: 1, ...(this.stroke !== undefined ? { stroke: this.stroke } : {}) };
     }
 
     public validate(): boolean {
@@ -84,6 +94,9 @@ export class AddNodeAction extends Action {
         if (this.content?.path !== undefined && pathError(this.nodeType, this.content.path) !== null) {
             return false;
         }
+        // The assembled style obeys the SAME rule an edit to it would (UpdateNodeStyleAction and
+        // Integrity both run `styleError`) — until now a created node's style was never checked.
+        if (styleError(this.style()) !== null) return false;
         if (this.content?.text !== undefined && typeof this.content.text !== "string") {
             return false;
         }
@@ -118,7 +131,7 @@ export class AddNodeAction extends Action {
             parent: this.parentId,
             children: [],
             geometry: { x: this.x, y: this.y, width: this.width, height: this.height },
-            style: { fill: this.fill, opacity: 1 },
+            style: this.style(),
             layout: {}
         };
         // Copied, not aliased: the caller's array must not become the document's.
@@ -143,6 +156,7 @@ export class AddNodeAction extends Action {
                 width: this.width,
                 height: this.height,
                 fill: this.fill,
+                stroke: this.stroke,
                 parentId: this.parentId,
                 content: this.content
             },

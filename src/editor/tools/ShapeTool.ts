@@ -53,7 +53,20 @@ interface ShapeSpec {
     needsSource?: boolean;
     /** `true` when the shape's content depends on the toolbar's SIDE COUNT (the N-gon tool). */
     usesSideCount?: boolean;
+    /**
+     * `true` when FILLED vs OUTLINE is a meaningful choice for this shape. A `core.line` is
+     * already nothing but a stroke, and an image draws its own pixels, so forcing the mode on
+     * them would produce an invisible node rather than an outlined one.
+     */
+    supportsPaintMode?: boolean;
 }
+
+/**
+ * Whether a drawn shape is a solid area or just its border. Not a new document concept — a
+ * filled shape has a `fill`, an outline has `fill: "none"` and a `stroke`, both of which
+ * `Style` has always had. The toolbar picks the mode; the document just sees the paint.
+ */
+export type PaintMode = "filled" | "outline";
 
 /**
  * The closed `core.path` outline of a regular `sides`-gon filling a `width` × `height` box.
@@ -71,8 +84,8 @@ export function polygonCommands(sides: number, width: number, height: number): P
 }
 
 const SHAPES: Record<ShapeKind, ShapeSpec> = {
-    rectangle: { type: "core.rectangle", allowsCollapsedAxis: false },
-    ellipse: { type: "core.ellipse", allowsCollapsedAxis: false },
+    rectangle: { type: "core.rectangle", allowsCollapsedAxis: false, supportsPaintMode: true },
+    ellipse: { type: "core.ellipse", allowsCollapsedAxis: false, supportsPaintMode: true },
     line: { type: "core.line", allowsCollapsedAxis: true },
     text: { type: "core.text", allowsCollapsedAxis: false, content: () => ({ text: "Text" }) },
     // A triangle is just the 3-gon: `polygonPoints` normalizes to the drawn box, which puts the
@@ -80,13 +93,15 @@ const SHAPES: Record<ShapeKind, ShapeSpec> = {
     triangle: {
         type: "core.path",
         allowsCollapsedAxis: false,
+        supportsPaintMode: true,
         content: (width, height): NodeContent => ({ path: polygonCommands(3, width, height) })
     },
     // Pentagon, hexagon, octagon, …: the same generator with the side count the toolbar holds.
     polygon: {
         type: "core.path",
         allowsCollapsedAxis: false,
-        usesSideCount: true
+        usesSideCount: true,
+        supportsPaintMode: true
     },
     // The one shape a drag alone cannot finish: an image with no source draws nothing, so the
     // node is only created once a source is resolved (see `SourceResolver`).
@@ -95,6 +110,19 @@ const SHAPES: Record<ShapeKind, ShapeSpec> = {
 
 /** The shape kinds in toolbar order — the single list the UI and the tests both read. */
 export const SHAPE_KINDS: readonly ShapeKind[] = ["rectangle", "ellipse", "line", "text", "triangle", "polygon", "image"];
+
+/**
+ * Whether FILLED/OUTLINE is offered for a kind. Read from the SAME `SHAPES` table the tool
+ * commits from, so the toolbar can never show a control the tool would then ignore.
+ *
+ * Takes a plain `string`, not a `ShapeKind`: the caller is the toolbar, whose active-tool name
+ * is just as often `"select"` or `"move"`. Typing this as `ShapeKind` only invited a cast at
+ * the call site, and `SHAPES["select"]` is `undefined` — which threw during render and took
+ * the whole app down with it.
+ */
+export function supportsPaintMode(kind: string): boolean {
+    return SHAPES[kind as ShapeKind]?.supportsPaintMode === true;
+}
 
 export class ShapeTool implements Tool {
     private dispatcher: ActionDispatcher;
@@ -107,6 +135,7 @@ export class ShapeTool implements Tool {
 
     private resolveSource: SourceResolver | null;
     private sides: () => number;
+    private paintMode: () => PaintMode;
 
     constructor(
         dispatcher: ActionDispatcher,
@@ -117,7 +146,9 @@ export class ShapeTool implements Tool {
         // A GETTER, not a value: the toolbar's side count changes between drags, and the tool is
         // constructed once. Injected for the same reason `resolveSource` is — the control that
         // holds the number is DOM, and this class never touches DOM.
-        sides?: () => number
+        sides?: () => number,
+        // Same reasoning as `sides`: a getter, read at commit time, injected by the app.
+        paintMode?: () => PaintMode
     ) {
         this.dispatcher = dispatcher;
         this.editorState = editorState;
@@ -125,6 +156,7 @@ export class ShapeTool implements Tool {
         this.spec = SHAPES[kind];
         this.resolveSource = resolveSource ?? null;
         this.sides = sides ?? (() => POLYGON_DEFAULT_SIDES);
+        this.paintMode = paintMode ?? (() => "filled");
     }
 
     /** Normalized world-space rect from the anchor to the current pointer. */
@@ -196,7 +228,20 @@ export class ShapeTool implements Tool {
         this.refresh();
     }
 
+    /**
+     * The paint a committed shape gets. OUTLINE is `fill: "none"` plus a stroke of the colour a
+     * filled shape would have used, so the two modes read as the same shape drawn two ways.
+     * Shapes the mode is meaningless for (a line is already only a stroke, an image draws its
+     * own pixels) ignore it rather than committing something invisible.
+     */
+    private paint(): { fill: string; stroke?: string } {
+        return this.spec.supportsPaintMode && this.paintMode() === "outline"
+            ? { fill: "none", stroke: DEFAULT_FILL }
+            : { fill: DEFAULT_FILL };
+    }
+
     private commit(rect: Rect, content?: NodeContent): void {
+        const { fill, stroke } = this.paint();
         this.dispatcher.dispatchAction(new AddNodeAction(
             this.dispatcher.getDocument(),
             this.spec.type,
@@ -204,10 +249,11 @@ export class ShapeTool implements Tool {
             rect.y,
             rect.width,
             rect.height,
-            DEFAULT_FILL,
+            fill,
             undefined,
             null,
-            content
+            content,
+            stroke
         ));
     }
 

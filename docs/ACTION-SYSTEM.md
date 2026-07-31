@@ -34,7 +34,7 @@ abstract class Action {
 ### Command catalogue
 | Action | Effect (delta) |
 |--------|----------------|
-| `AddNodeAction` | `{ kind: "add", node }` — optional `content` carries a `core.text`'s text or a `core.path`'s commands, validated by the shared `pathError` (the first EDIT-path caller of it; until then only the loader authored paths) |
+| `AddNodeAction` | `{ kind: "add", node }` — optional `content` carries a `core.text`'s text, a `core.path`'s commands or a `core.image`'s src (validated by the shared `pathError`/`srcError`, the first EDIT-path callers of them), and an optional `stroke` makes the node an OUTLINE (`fill: "none"` + stroke). The assembled style is checked by the shared `styleError` — a created node's style was previously never validated at all |
 | `FrameSelectionAction` | `{ kind: "add" }` for a frame rectangle + `{ kind: "patch", reparent, geometry }` per member — wraps the selection in a parent sized to fit it, rebasing each member onto the frame's origin so nothing MOVES on screen. The editor's only way to build a hierarchy. SIBLINGS ONLY (one shared parent = one space to rebase in) and NOT inside an auto-layout/grid container, where stored x/y is dead data. The frame is fitted to the members' TRANSFORMED boxes, takes the frontmost member's z-position, keeps their relative order, and CLEARS each member's constraints/constraintRef (they describe the old parent, and would undo the rebase) |
 | `DeleteNodeAction` | `{ kind: "delete" }` for the node **and every descendant** (cycle-safe) |
 | `MoveNodeAction` | `{ kind: "patch", geometry: { x, y } }` |

@@ -379,7 +379,10 @@ line | text | triangle | polygon | image), since the corner-to-corner gesture, p
 minimum size are identical for all of them — only the node type, the paint and the content
 differ. Its minimum-size rule is per-type on purpose, to agree with the shared `dimensionError`
 the action validates against (a `core.line` may collapse ONE axis; everything else needs a box),
-so the tool can never commit what validation would reject.
+so the tool can never commit what validation would reject. FILLED vs OUTLINE is a toolbar mode,
+not a document concept: an outline is `fill: "none"` plus a `stroke`, both long-standing `Style`
+fields. `supportsPaintMode(kind)` reads the same table the tool commits from, so the control is
+never offered for a kind that would ignore it (a line is already only a stroke).
 `SelectTool` also owns box-select: a drag begun on empty space draws a marquee
 (`EditorState.marqueeRect`) and, on release, selects `nodesInRect` (shift = additive); a
 plain click with no drag deselects. Picking is world-space (`hitTest`/`nodesInRect`), never

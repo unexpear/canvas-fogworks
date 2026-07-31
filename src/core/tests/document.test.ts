@@ -36,7 +36,7 @@ import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
 import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
-import { ShapeTool, SHAPE_KINDS, ShapeKind, polygonCommands } from "../../editor/tools/ShapeTool";
+import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, polygonCommands, supportsPaintMode } from "../../editor/tools/ShapeTool";
 import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../geometry/Polygon";
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
@@ -7331,5 +7331,90 @@ describe("ShapeTool: the polygon tool", () => {
         expect(src).toMatch(/clampSides\(raw\)/);
         expect(src).toMatch(/min=\{POLYGON_MIN_SIDES\}/);
         expect(src).toMatch(/max=\{POLYGON_MAX_SIDES\}/);
+    });
+});
+
+// ─── Filled vs outline: the same shape drawn two ways ───
+describe("ShapeTool: filled or outline", () => {
+    const canvas = { left: 0, top: 0 } as DOMRect;
+    const ev = (x: number, y: number) => ({ clientX: x, clientY: y } as unknown as MouseEvent);
+
+    function draw(kind: ShapeKind, mode: PaintMode) {
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const es = createEditorState();
+        const tool = new ShapeTool(dispatcher, es, () => { }, kind, undefined, () => 6, () => mode);
+        tool.onMouseDown(ev(0, 0), canvas);
+        tool.onMouseMove(ev(100, 80), canvas);
+        tool.onMouseUp();
+        const doc = dispatcher.getDocument();
+        return doc.nodes.get(doc.rootNodeUuids[0]);
+    }
+
+    test("OUTLINE gives no fill and a stroke; FILLED gives a fill and no stroke", () => {
+        for (const kind of ["rectangle", "ellipse", "triangle", "polygon"] as ShapeKind[]) {
+            const filled = draw(kind, "filled")!;
+            expect(filled.style.fill).not.toBe("none");
+            expect(filled.style.stroke).toBeUndefined();
+
+            const outline = draw(kind, "outline")!;
+            expect(outline.style.fill).toBe("none");
+            expect(outline.style.stroke).toBe(filled.style.fill);   // same colour, drawn as a border
+        }
+    });
+
+    test("the mode is IGNORED where it would make the shape invisible", () => {
+        // A line is already nothing but a stroke; an image draws its own pixels. Forcing
+        // `fill: "none"` on them would commit a node that renders nothing at all.
+        for (const kind of ["line", "text"] as ShapeKind[]) {
+            expect(supportsPaintMode(kind)).toBe(false);
+            expect(draw(kind, "outline")!.style.fill).not.toBe("none");
+        }
+        expect(supportsPaintMode("image")).toBe(false);
+        expect(supportsPaintMode("rectangle")).toBe(true);
+        // The toolbar asks about the ACTIVE TOOL, which is often not a shape at all. Indexing
+        // the table blindly threw during render and took the whole app down — the unit suite
+        // never saw it because no test called this with a non-shape name.
+        for (const notAShape of ["select", "move", "", "nonsense"]) {
+            expect(supportsPaintMode(notAShape)).toBe(false);
+        }
+    });
+
+    test("the mode is read at COMMIT time, so toggling between drags takes effect", () => {
+        let mode: PaintMode = "filled";
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const es = createEditorState();
+        const tool = new ShapeTool(dispatcher, es, () => { }, "rectangle", undefined, () => 6, () => mode);
+        const go = (x: number) => { tool.onMouseDown(ev(x, 0), canvas); tool.onMouseMove(ev(x + 50, 50), canvas); tool.onMouseUp(); };
+        go(0);
+        mode = "outline";
+        go(200);
+        const d = dispatcher.getDocument();
+        expect(d.nodes.get(d.rootNodeUuids[0])!.style.fill).not.toBe("none");
+        expect(d.nodes.get(d.rootNodeUuids[1])!.style.fill).toBe("none");
+    });
+
+    test("an outline shape round-trips, and its style passes the shared styleError", () => {
+        const outline = draw("polygon", "outline")!;
+        expect(styleError(outline.style)).toBeNull();
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const tool = new ShapeTool(dispatcher, createEditorState(), () => { }, "ellipse", undefined, () => 6, () => "outline" as PaintMode);
+        tool.onMouseDown(ev(0, 0), canvas); tool.onMouseMove(ev(60, 60), canvas); tool.onMouseUp();
+        const doc = dispatcher.getDocument();
+        expect(compareDocuments(doc, deserializeDocument(serializeDocument(doc)))).toBe(true);
+    });
+
+    test("AddNodeAction validates the style it assembles", () => {
+        // A created node's style was never checked before — only edits to it were.
+        const doc = createEmptyDocument();
+        expect(new AddNodeAction(doc, "core.rectangle", 0, 0, 10, 10, "#fff", undefined, null, undefined, "#000").validate()).toBe(true);
+        const bad = new AddNodeAction(doc, "core.rectangle", 0, 0, 10, 10, "#fff", undefined, null, undefined, 42 as unknown as string);
+        expect(bad.validate()).toBe(false);
+    });
+
+    test("the toolbar reads the SAME table the tool commits from", () => {
+        // A control offered for a kind the tool ignores would be a lie; the app asks
+        // `supportsPaintMode` rather than keeping its own list.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/supportsPaintMode\(toolName\)/);
     });
 });
