@@ -39,7 +39,9 @@ import { Action } from "../actions/Action";
 import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot, DOCUMENT_DELTA_KEY } from "../actions/types";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
-import { expandInstances, componentError, isVirtualId, virtualId, splitVirtualId, ownerInstanceOf, VIRTUAL_ID_SEP, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES } from "../document/Components";
+import { expandInstances, componentError, overridesError, isVirtualId, virtualId, splitVirtualId, ownerInstanceOf, InstanceOverride, VIRTUAL_ID_SEP, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES } from "../document/Components";
+import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
+import { geometryActionFor, styleActionFor, overrideTargetFor, isEditableNode } from "../actions/nodeEdit";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { HistoryManager, HistoryLimits, DEFAULT_HISTORY_LIMITS } from "../actions/HistoryManager";
@@ -135,6 +137,18 @@ export function __apiSurfacePin(): void {
     expectType<string | null>(ownerInstanceOf("a::b"));
     expectType<ReadonlyDocument>(expandInstances(doc));
     expectType<MutationResult>(new CreateInstanceAction(doc, "master", 0, 0).execute());
+
+    // --- Instance overrides (schema 22) -------------------------------------
+    const override: InstanceOverride = { geometry: { x: 1 }, style: { fill: "#fff" }, text: "t", src: "u" };
+    expectType<InstanceOverride>(override);
+    expectType<number>(INSTANCE_MAX_OVERRIDES);
+    expectType<string | null>(overridesError("core.instance", { key: override }));
+    expectType<MutationResult>(new SetInstanceOverrideAction(doc, "inst", "masterNode", override).execute());
+    expectType<Action | null>(geometryActionFor(doc, "id", { x: 0 }));
+    expectType<Action | null>(styleActionFor(doc, "id", { fill: "#fff" }));
+    expectType<{ instanceId: string; masterNodeId: string } | null>(overrideTargetFor(doc, "a::b"));
+    expectType<boolean>(isEditableNode(doc, "id"));
+    expectType<string | null>(hitTest({ order: [], nodes: new Map() }, 0, 0, 0, true));
     expectType<string | number | null>(resolveVariable(store, "color/primary", "light"));
     expectType<string>(resolveColor(store, "$color/primary", "dark"));
     expectType<number | null>(resolveNumber(store, "$spacing/gap", "light"));

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v21 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v22 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -48,6 +48,20 @@ function splitVirtualId(id: string): { instancePath: string; masterNodeId: strin
 function ownerInstanceOf(id: string): string | null;       // the STORED instance a virtual node belongs to (first path segment)
 function componentError(type: string, componentId: unknown): string | null; // shared load + edit; dangling is ALLOWED
 function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializes instances as virtual children; SAME reference when there is nothing to expand
+// Per-instance OVERRIDES (schema 22, M6 slice 2): what one instance changes about its copy,
+// keyed by MASTER NODE ID. Applied during expansion at each level; a key matching no master
+// node is inert. `layout`/`transform` overrides are a later slice.
+interface InstanceOverride { geometry?: Partial<Geometry>; style?: Partial<Style>; text?: string; src?: string }
+const INSTANCE_MAX_OVERRIDES: number;                      // per-instance cap (OOM guard)
+function overridesError(type: string, overrides: unknown): string | null; // shared load + edit; each field obeys its stored rule (styleError, finite geometry)
+
+// actions/nodeEdit.ts — routes an edit to the right Action for the node it targets. A STORED
+// node edits directly; an instance COPY (virtual id) becomes a per-instance override. Null =
+// the edit cannot be expressed (vanished node, or a copy nested inside another instance).
+function geometryActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partial<Geometry>): Action | null;
+function styleActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partial<Style>): Action | null;
+function overrideTargetFor(doc: ReadonlyDocument, nodeId: string): { instanceId: string; masterNodeId: string } | null;
+function isEditableNode(doc: ReadonlyDocument, nodeId: string): boolean; // gate an affordance rather than offer a dead control
 
 // geometry/Matrix.ts — 2D affine primitive
 interface Mat2D { a: number; b: number; c: number; d: number; e: number; f: number }
@@ -76,7 +90,7 @@ function computeGeometry(
 // instance content materialized. While instances are present, `previous`/`dirty` reuse is
 // disabled (the dirty set names STORED ids, not the virtual copies a master edit changes) —
 // incremental reuse for instanced documents is a documented deferral.
-function hitTest(computed: ComputedState, x: number, y: number, tolerance?: number): string | null; // local-space, DOM-free; `tolerance` (world units, default 0) is a pick halo so thin/zero-extent targets (an axis-aligned line) stay selectable
+function hitTest(computed: ComputedState, x: number, y: number, tolerance?: number, includeVirtual?: boolean): string | null; // local-space, DOM-free; `tolerance` (world units, default 0) is a pick halo so thin/zero-extent targets (an axis-aligned line) stay selectable; `includeVirtual` is the DEEP pick (alt-click) that selects an instance COPY instead of the instance
 function nodesInRect(computed: ComputedState, rect: Rect): string[]; // marquee (box) select: ids whose WORLD bounds OVERLAP rect (touch, not containment), in draw order; DOM-free
 function toLocal(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;
 function toWorld(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;

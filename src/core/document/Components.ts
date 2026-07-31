@@ -32,7 +32,7 @@
  */
 
 import { ProjectDocument, ReadonlyDocument } from "./Document";
-import { Node } from "./Node";
+import { Geometry, Node, Style, styleError } from "./Node";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
  *  Reserved: a stored node id may not contain it (checked on the edit AND load paths). */
@@ -92,9 +92,78 @@ export function componentError(type: string, componentId: unknown): string | nul
     return null;
 }
 
+/**
+ * A per-instance OVERRIDE (M6 slice 2): what THIS instance changes about one node of its
+ * master subtree. Stored on the instance under `Node.overrides`, keyed by the MASTER NODE ID,
+ * so an override survives the master being edited (it targets identity, not position) and is
+ * naturally undone when the master node disappears (the key simply never matches).
+ *
+ * The scope is deliberately the fields a user edits on a copy — position/size, appearance, and
+ * content. `layout`/`transform` overrides are a later slice: they interact with the measure
+ * pass and the rotation model, unlike these, which are terminal per-node values.
+ */
+export interface InstanceOverride {
+    geometry?: Partial<Geometry>;
+    style?: Partial<Style>;
+    text?: string;
+    src?: string;
+}
+
+/** Overrides one instance may carry — an OOM guard on a hand-editable map, like `VARIABLES_MAX`. */
+export const INSTANCE_MAX_OVERRIDES = 10_000;
+
+const OVERRIDE_FIELDS = new Set(["geometry", "style", "text", "src"]);
+const GEOMETRY_FIELDS = new Set(["x", "y", "width", "height"]);
+
+function isPlain(v: unknown): v is Record<string, unknown> {
+    return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * Validity of a node's `overrides`, SHARED by the load path (`Integrity`) and the edit path
+ * (`SetInstanceOverrideAction`) so the two cannot drift. Only a `core.instance` may carry them.
+ * Keys are master node ids (non-empty, capped, and — like stored ids — free of the virtual-id
+ * separator). Each value may only carry the known fields, and each field is validated by the
+ * SAME rule its stored counterpart uses (`styleError`, finite geometry numbers), so an override
+ * can never smuggle in a value the node itself could not hold. A key that matches NO master
+ * node is deliberately allowed: it is inert, exactly like a dangling `componentId` or `$token`.
+ */
+export function overridesError(type: string, overrides: unknown): string | null {
+    if (overrides === undefined) return null;
+    if (type !== "core.instance") return "only a core.instance node may carry overrides";
+    if (!isPlain(overrides)) return "overrides must be an object";
+    const entries = Object.entries(overrides);
+    if (entries.length > INSTANCE_MAX_OVERRIDES) return `overrides must have at most ${INSTANCE_MAX_OVERRIDES} entries`;
+    for (const [key, value] of entries) {
+        if (key.length === 0) return "override key must be non-empty";
+        if (key.length > 200) return "override key must be at most 200 characters";
+        if (key.includes(VIRTUAL_ID_SEP)) return `override key "${key}" must not contain "${VIRTUAL_ID_SEP}"`;
+        if (!isPlain(value)) return `override "${key}" must be an object`;
+        for (const field of Object.keys(value)) {
+            if (!OVERRIDE_FIELDS.has(field)) return `override "${key}" has an unknown field "${field}"`;
+        }
+        const o = value as InstanceOverride;
+        if (o.geometry !== undefined) {
+            if (!isPlain(o.geometry)) return `override "${key}" geometry must be an object`;
+            for (const [f, v] of Object.entries(o.geometry)) {
+                if (!GEOMETRY_FIELDS.has(f)) return `override "${key}" geometry has an unknown field "${f}"`;
+                if (typeof v !== "number" || !Number.isFinite(v)) return `override "${key}" geometry.${f} must be a finite number`;
+            }
+        }
+        if (o.style !== undefined) {
+            if (!isPlain(o.style)) return `override "${key}" style must be an object`;
+            const e = styleError(o.style);           // the SAME rule a stored style obeys
+            if (e) return `override "${key}" ${e}`;
+        }
+        if (o.text !== undefined && typeof o.text !== "string") return `override "${key}" text must be a string`;
+        if (o.src !== undefined && typeof o.src !== "string") return `override "${key}" src must be a string`;
+    }
+    return null;
+}
+
 /** Shallow node copy with a fresh children array + geometry (the only fields expansion
  *  rewrites). Style/layout/transform are shared by REFERENCE — the expanded document is
- *  read-only downstream, and a future override slice REPLACES rather than mutates them. */
+ *  read-only downstream, and an override REPLACES rather than mutates them. */
 function copyForExpansion(n: Node, id: string, parent: string, geometry: Node["geometry"]): Node {
     return { ...n, id, parent, children: [], geometry };
 }
@@ -106,7 +175,12 @@ function copyForExpansion(n: Node, id: string, parent: string, geometry: Node["g
  *
  * The materialized master ROOT is re-positioned to the instance's local origin (0,0): the
  * master's own canvas x/y belongs to the master, while the instance's stored geometry places
- * the copy. Sizes are copied as-is (per-instance resizing arrives with overrides).
+ * the copy. (A root override may resize it, but not move it — its position IS the instance's.)
+ *
+ * Each expansion level applies the OVERRIDES of the instance node driving it, keyed by master
+ * node id — so a stored instance overrides its own master's nodes, and a NESTED instance
+ * applies the overrides it carries from the master. Overriding THROUGH a nested instance (an
+ * outer instance changing a node inside an inner one) is a documented deferral.
  */
 export function expandInstances(doc: ReadonlyDocument): ReadonlyDocument {
     // Fast path: nothing to do (the overwhelmingly common case) — no allocation at all.
@@ -138,10 +212,21 @@ export function expandInstances(doc: ReadonlyDocument): ReadonlyDocument {
         const master = doc.nodes.get(masterId);
         if (!master) return true; // dangling child reference in a damaged master — skip, don't throw
         const id = virtualId(instancePath, masterId);
+        // This instance's OVERRIDE for this master node, if any (slice 2). The driving instance
+        // node is `parentId` for a root copy and the same instance for deeper ones — either way
+        // it is `instancePath`, whose entry in the working map carries the overrides (a stored
+        // instance's own, or, for a NESTED instance, the ones copied from the master).
+        const override = nodes.get(instancePath)?.overrides?.[masterId];
         const geo = isRoot
-            ? { ...master.geometry, x: 0, y: 0 } // the instance's own geometry places the copy
-            : { ...master.geometry };
+            ? { ...master.geometry, ...override?.geometry, x: 0, y: 0 } // the INSTANCE places the root copy
+            : { ...master.geometry, ...override?.geometry };
         const copy = copyForExpansion(master as Node, id, parentId, geo);
+        if (override) {
+            // Replace, never mutate: the master's own objects are shared by reference.
+            if (override.style) copy.style = { ...master.style, ...override.style };
+            if (override.text !== undefined) copy.text = override.text;
+            if (override.src !== undefined) copy.src = override.src;
+        }
         // The ROOT copy's CONSTRAINTS (and their frozen `constraintRef`) describe the master's
         // relationship to ITS parent, which the copy no longer has — leaving them would let
         // `resolveConstraints` reposition the copy against the instance's box and override the

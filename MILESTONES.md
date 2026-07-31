@@ -26,7 +26,7 @@ M3  Renderer                 ✅   SVG renderer (shapes + culling + effects) + C
 M4  Editor                   ✅*  pan/zoom + box-select + DOM-free handles + rotate + canvas wiring + snapping/guides
       │
 M5  Variables & Tokens       ✅*  typed store + light/dark themes + $token references + aliases; radius/fontSize tokens live (schema 20); layout-side spacing tokens deferred
-M6  Components                🚧   masters + instances + pure resolution (schema 21); overrides/variants next
+M6  Components                🚧   masters + instances + resolution + per-instance overrides (schema 22); variants/slots next
 M7  States                    ⬜
 M8  Animation Engine          ⬜
 M9  Interaction Graph         ⬜
@@ -706,7 +706,7 @@ excluded from `updatedNodeIds`.
 
 ## Phase 6 — Components
 
-### Milestone 6 — Components 🚧 (slice 1 landed: masters + instances, schema 21)
+### Milestone 6 — Components 🚧 (slices 1–2 landed: masters + instances + overrides, schema 22)
 Reusable objects: components · instances · overrides · nested components · slots ·
 variants. Similar to Figma Components.
 
@@ -760,9 +760,32 @@ to the root (now uses world bounds). One more was structural: schema 21 reserves
 `children`, `rootNodeUuids`, `componentId`), honouring the standing rule that a
 previously-loadable file must stay loadable.
 
-Deferred to later slices: **overrides** (per-instance property patches keyed on the virtual
-id — the reason ids are reversible), **variants/slots**, "detach instance", instance content
-that overflows the instance box being unpickable (the pick box is the instance's own), and
+**Landed (slice 2 — per-instance OVERRIDES; schema 21 → 22):** an instance may now differ from
+its master. `Node.overrides` maps a MASTER NODE ID to an `InstanceOverride`
+(`geometry`/`style`/`text`/`src`), applied during expansion at each level — so a nested
+instance applies the overrides it carries from the master. Keying by IDENTITY rather than
+position is what makes an override survive edits to the master and go INERT (never invalid)
+when that master node is deleted — the dangling-reference rule the token layer established.
+Each field is validated by the SAME rule its stored counterpart obeys (`styleError`, finite
+geometry), so an override can never hold a value the node itself could not;
+`INSTANCE_MAX_OVERRIDES` caps the map. A ROOT override may resize the copy but never move it
+(its position IS the instance's geometry). `SetInstanceOverrideAction` is the write path:
+patches MERGE field-by-field (a move then a resize accumulate), and `null` clears an entry —
+"reset to master".
+
+The editor half is a single routing seam. `nodeEdit`'s `geometryActionFor`/`styleActionFor`
+turn an edit on a VIRTUAL id into an override and an edit on a stored id into a direct action,
+so MoveTool and the resize commit each call one factory rather than learning about virtual ids
+— a missed site would otherwise dispatch an action that fails validation and looks like an edit
+that silently did nothing. **ALT-click** deep-picks a copy (`hitTest`'s `includeVirtual`); a
+plain click still selects the instance, and a marquee never scatters into instance internals.
+A copy shows its four RESIZE corners but NOT the rotate knob — transform overrides are a later
+slice, and the renderer and the picker refuse it identically, so no dead control appears.
+
+Deferred to later slices: **variants/slots**, "detach instance", `layout`/`transform`
+overrides, overriding THROUGH a nested instance (the outer instance changing a node inside an
+inner one — `overrideTargetFor` refuses it rather than mis-target), instance content that
+overflows the instance box being unpickable (the pick box is the instance's own), and
 incremental dirty-tracking reuse for instanced documents (the dirty set names stored ids, not
 the virtual copies a master edit changes, so instanced documents recompute fully — always
 correct, just not incremental).

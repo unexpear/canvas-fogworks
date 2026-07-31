@@ -101,6 +101,7 @@ export function applyMutationsToDocument(
                 // plain field-by-field merge is correct — and a merged transaction delta
                 // resolves last-wins instead of dropping both.
                 if (delta.layout) Object.assign(node.layout, delta.layout);
+                if (delta.overrides !== undefined) node.overrides = delta.overrides;
                 if (delta.text !== undefined) node.text = delta.text;
                 if (delta.src !== undefined) node.src = delta.src;
                 if (delta.name !== undefined) node.name = delta.name;

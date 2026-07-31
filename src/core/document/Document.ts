@@ -151,8 +151,15 @@ export const CURRENT_VERSION: string =
  *         Existing documents contain neither, so `migrate_20_to_21` is a pass-through — but a
  *         schema-20 build would reject an instance as an unknown node type on load, and would
  *         not know that `::` is now RESERVED in stored node ids (the virtual-id separator).
+ *
+ *   "22" — adds `Node.overrides` (per-instance property overrides, M6 slice 2: what one instance
+ *         changes about the master copy it renders, keyed by master node id). Existing documents
+ *         carry none — and an absent map means "mirrors the master exactly", which is what schema
+ *         21 already meant — so `migrate_21_to_22` is a pass-through. The bump is still required:
+ *         a schema-21 build would IGNORE the overrides and render every instance identically,
+ *         silently misstating the document.
  */
-export const SCHEMA_VERSION = "21";
+export const SCHEMA_VERSION = "22";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

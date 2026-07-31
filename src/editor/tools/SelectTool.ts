@@ -144,7 +144,9 @@ export class SelectTool implements Tool {
     }
 
     /** Topmost node under the pointer, resolved in world space. Reuses `computed` when the
-     * controller already resolved it (a resize hit-test that missed), else computes it. */
+     * controller already resolved it (a resize hit-test that missed), else computes it.
+     * Holding ALT deep-picks: it selects a component instance's materialized COPY rather than
+     * the instance, so the copy can be edited through a per-instance override (M6 slice 2). */
     private pick(e: MouseEvent, canvasRect?: DOMRect, computed?: ComputedState): string | null {
         const w = this.screenToWorld(e, canvasRect);
         if (!w) return null;
@@ -153,7 +155,7 @@ export class SelectTool implements Tool {
             this.dispatcher.getDocument(),
             this.editorState.pendingGeometry
         );
-        return hitTest(cs, w.x, w.y, PICK_RADIUS_PX / zoom);
+        return hitTest(cs, w.x, w.y, PICK_RADIUS_PX / zoom, e.altKey === true);
     }
 
     /** Canvas-relative screen pixels → world coordinates (null when there's no canvas frame). */

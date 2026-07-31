@@ -321,14 +321,20 @@ export function toWorld(state: ComputedState, nodeId: string, x: number, y: numb
  * Applied to the local box directly — approximate under a node scale, which is
  * acceptable for a fuzzy affordance, and exact for the common unscaled case.
  */
-export function hitTest(state: ComputedState, x: number, y: number, tolerance: number = 0): string | null {
+export function hitTest(
+    state: ComputedState,
+    x: number,
+    y: number,
+    tolerance: number = 0,
+    includeVirtual: boolean = false
+): string | null {
     for (let i = state.order.length - 1; i >= 0; i--) {
         const id = state.order[i];
-        // A VIRTUAL node (an instance's materialized copy, M6) is not a document node: it has
-        // no stored geometry to edit, so selecting it would produce a selection no action can
-        // act on. Clicking instance content therefore selects the INSTANCE, whose own box is
-        // tested normally. Per-child picking arrives with overrides (M6 slice 2).
-        if (isVirtualId(id)) continue;
+        // A VIRTUAL node (an instance's materialized copy, M6) is skipped by DEFAULT, so a plain
+        // click on instance content selects the INSTANCE — the thing you usually want to move.
+        // `includeVirtual` is the deep-pick (alt-click): it selects the copy itself, which the
+        // editor then edits through a per-instance override. Same intent as Figma's drill-in.
+        if (!includeVirtual && isVirtualId(id)) continue;
         const c = state.nodes.get(id);
         if (!c) continue;
         // Cheap AABB reject first (inflated by the halo), then the exact local-space test.
@@ -356,8 +362,10 @@ export function nodesInRect(state: ComputedState, rect: Rect): string[] {
     const rx2 = rect.x + rect.width;
     const ry2 = rect.y + rect.height;
     for (const id of state.order) {
-        // Virtual (instance-copy) nodes are not selectable — same rule as `hitTest`, so a
-        // marquee over an instance selects the instance itself, not its materialized children.
+        // Virtual (instance-copy) nodes are pickable by a direct CLICK (which edits them via an
+        // override) but not by a MARQUEE: a box over an instance should grab the instance, not
+        // scatter the selection across its internals — the same containment intuition a group
+        // gives. `hitTest`'s deepest-first scan handles the click case.
         if (isVirtualId(id)) continue;
         const c = state.nodes.get(id);
         if (!c) continue;

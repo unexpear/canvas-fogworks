@@ -13,7 +13,7 @@
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
 import { transformError, layoutError, dimensionError, pathError, styleError, nodeIdError } from "./Node";
-import { componentError } from "./Components";
+import { componentError, overridesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
 
 function checkNodeRanges(node: ReadonlyNode): void {
@@ -51,6 +51,11 @@ function checkNodeRanges(node: ReadonlyNode): void {
     // allowed (it draws nothing), so deleting a master never makes a document unloadable.
     const compErr = componentError(node.type, node.componentId);
     if (compErr) throw new Error(`Invalid document: node "${node.id}" ${compErr}.`);
+    // Per-instance overrides (schema 22): the same shared-validator discipline; each field is
+    // checked by the rule its stored counterpart obeys, and a key matching no master node is
+    // inert rather than invalid.
+    const ovrErr = overridesError(node.type, node.overrides);
+    if (ovrErr) throw new Error(`Invalid document: node "${node.id}" ${ovrErr}.`);
 }
 
 /**

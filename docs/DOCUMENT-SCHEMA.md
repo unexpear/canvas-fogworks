@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v21 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v22 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -71,6 +71,7 @@ interface Node {
   src?: string;                     // core.image
   path?: PathCommand[];             // core.path (absent = empty path, draws nothing)
   componentId?: string;             // core.instance → the MASTER node it copies (schema 21, M6)
+  overrides?: Record<string, InstanceOverride>; // core.instance → per-copy changes, keyed by MASTER NODE ID (schema 22)
   name?: string;                    // display name
 }
 
@@ -523,6 +524,27 @@ Virtual ids are `<instance path>::<master node id>`, so they are stable, unique 
 REVERSIBLE (`splitVirtualId` → the owning instance + the master node it copies — what
 per-child overrides will key on). Virtual nodes are **not selectable** in this slice:
 `hitTest`/`nodesInRect` skip them, so clicking instance content selects the instance.
+
+**Overrides (schema 22).** An instance may carry `overrides` — what THIS copy changes about
+one node of its master subtree, keyed by MASTER NODE ID:
+
+```ts
+interface InstanceOverride { geometry?: Partial<Geometry>; style?: Partial<Style>; text?: string; src?: string }
+```
+
+Keying by identity (not position) means an override survives edits to the master and goes
+INERT — never invalid — if that master node is deleted. Each field is validated by the SAME
+rule its stored counterpart obeys (`styleError`, finite geometry numbers), so an override can
+never smuggle in a value the node itself could not hold; the map is capped by
+`INSTANCE_MAX_OVERRIDES`. Expansion applies the overrides of the instance driving each level,
+so a nested instance applies the ones it carries from the master; overriding THROUGH a nested
+instance is deferred. A ROOT override may resize the copy but never move it — its position is
+the instance's own geometry. `layout`/`transform` overrides are a later slice.
+
+In the editor, ALT-clicking drills into a copy (`hitTest`'s `includeVirtual`); moving or
+resizing it routes through `nodeEdit`'s action factory, which writes an override instead of a
+stored-geometry edit. The rotate knob is not offered on a copy (transform overrides are
+deferred), in both the renderer and the picker.
 
 Three guards bound recursion (a master containing an instance of itself, or a cycle through
 several masters, and nested instances that MULTIPLY rather than add): a per-path master

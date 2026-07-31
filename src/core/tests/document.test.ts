@@ -7,7 +7,9 @@ import { createEmptyDocument, ProjectDocument, CURRENT_VERSION, SCHEMA_VERSION }
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
-import { expandInstances, componentError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES } from "../document/Components";
+import { expandInstances, componentError, overridesError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES } from "../document/Components";
+import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
+import { geometryActionFor, styleActionFor, isEditableNode } from "../actions/nodeEdit";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
@@ -2131,6 +2133,149 @@ describe("Components: expandInstances", () => {
     });
 });
 
+// ─── M6 slice 2: per-instance overrides ───
+describe("Components: instance overrides", () => {
+    /** master M (100×50 at 10,20) with child MC (20×20 at 5,5); instance I at (300,300). */
+    function doc2(overrides?: Record<string, import("../document/Components").InstanceOverride>): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: ["MC"], geometry: { x: 10, y: 20, width: 100, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("MC", { id: "MC", type: "core.rectangle", parent: "M", children: [], geometry: { x: 5, y: 5, width: 20, height: 20 }, style: { fill: "#0f0", opacity: 1 }, layout: {}, text: undefined });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 300, y: 300, width: 100, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M", ...(overrides ? { overrides } : {}) });
+        doc.rootNodeUuids = ["M", "I"];
+        return doc;
+    }
+
+    test("an override changes ONLY this instance's copy — master and siblings are untouched", () => {
+        const doc = doc2({ MC: { geometry: { x: 60 }, style: { fill: "#00f" } } });
+        doc.nodes.set("I2", { id: "I2", type: "core.instance", parent: null, children: [], geometry: { x: 600, y: 600, width: 100, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["M", "I", "I2"];
+        const x = expandInstances(doc);
+        expect(x.nodes.get("I::MC")!.geometry).toMatchObject({ x: 60, y: 5, width: 20 }); // merged over the master
+        expect(x.nodes.get("I::MC")!.style.fill).toBe("#00f");
+        expect(x.nodes.get("I2::MC")!.geometry.x).toBe(5);    // the OTHER instance is unaffected…
+        expect(x.nodes.get("I2::MC")!.style.fill).toBe("#0f0");
+        expect(doc.nodes.get("MC")!.geometry.x).toBe(5);       // …and so is the master
+        expect(doc.nodes.get("MC")!.style.fill).toBe("#0f0");
+    });
+
+    test("a ROOT override may resize but never moves the copy (the instance's geometry places it)", () => {
+        const x = expandInstances(doc2({ M: { geometry: { x: 999, y: 999, width: 250 } } }));
+        expect(x.nodes.get("I::M")!.geometry).toMatchObject({ x: 0, y: 0, width: 250, height: 50 });
+        expect(computeGeometry(doc2({ M: { geometry: { x: 999, y: 999, width: 250 } } })).nodes.get("I::M")!.bounds)
+            .toMatchObject({ x: 300, y: 300, width: 250 });
+    });
+
+    test("overrides survive a master edit and go INERT when the master node disappears", () => {
+        const doc = doc2({ MC: { style: { fill: "#00f" } } });
+        const dispatcher = new ActionDispatcher(doc);
+        // Editing the master's OTHER properties leaves the override applying to the same node.
+        dispatcher.dispatchAction(new UpdateNodeGeometryAction(dispatcher.getDocument(), "MC", { y: 40 }));
+        let x = expandInstances(dispatcher.getDocument());
+        expect(x.nodes.get("I::MC")!.geometry.y).toBe(40);      // master edit flows through…
+        expect(x.nodes.get("I::MC")!.style.fill).toBe("#00f");  // …with the override still on top
+        // Deleting the master node makes the override inert, never invalid.
+        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "MC"));
+        x = expandInstances(dispatcher.getDocument());
+        expect(x.nodes.has("I::MC")).toBe(false);
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+    });
+
+    test("overridesError: instance-only, known fields, and each field obeys its stored rule", () => {
+        expect(overridesError("core.instance", undefined)).toBeNull();
+        expect(overridesError("core.instance", { MC: { geometry: { x: 1 }, style: { opacity: 0.5 }, text: "hi", src: "u" } })).toBeNull();
+        expect(overridesError("core.instance", { unknownNode: { text: "inert but valid" } })).toBeNull(); // a key matching nothing is inert
+        expect(overridesError("core.rectangle", { MC: {} })).toMatch("only a core.instance");
+        expect(overridesError("core.instance", [])).toMatch("must be an object");
+        expect(overridesError("core.instance", { "": {} })).toMatch("non-empty");
+        expect(overridesError("core.instance", { "a::b": {} })).toMatch('must not contain "::"');
+        expect(overridesError("core.instance", { MC: null })).toMatch("must be an object");
+        expect(overridesError("core.instance", { MC: { bogus: 1 } })).toMatch('unknown field "bogus"');
+        expect(overridesError("core.instance", { MC: { geometry: { z: 1 } } })).toMatch("unknown field");
+        expect(overridesError("core.instance", { MC: { geometry: { x: Infinity } } })).toMatch("finite");
+        expect(overridesError("core.instance", { MC: { style: { opacity: 5 } } })).toMatch("opacity must be within"); // the SHARED styleError
+        expect(overridesError("core.instance", { MC: { text: 7 } })).toMatch("text must be a string");
+        const many: Record<string, unknown> = {};
+        for (let i = 0; i <= INSTANCE_MAX_OVERRIDES; i++) many[`k${i}`] = {};
+        expect(overridesError("core.instance", many)).toMatch(`at most ${INSTANCE_MAX_OVERRIDES}`);
+        // The load path enforces exactly the same rule.
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["r"], variables: {}, nodes: { r: { id: "r", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {}, overrides: { a: {} } } } } });
+        expect(() => deserializeDocument(bad)).toThrow("only a core.instance");
+    });
+
+    test("SetInstanceOverrideAction merges field-by-field, clears with null, and is undoable", () => {
+        const dispatcher = new ActionDispatcher(doc2());
+        const d = () => dispatcher.getDocument();
+        expect(dispatcher.dispatchAction(new SetInstanceOverrideAction(d(), "I", "MC", { geometry: { x: 60 } })).success).toBe(true);
+        expect(dispatcher.dispatchAction(new SetInstanceOverrideAction(d(), "I", "MC", { geometry: { width: 44 } })).success).toBe(true);
+        // MERGED, not replaced — the earlier x survives the later width.
+        expect(d().nodes.get("I")!.overrides!.MC.geometry).toEqual({ x: 60, width: 44 });
+        expect(expandInstances(d()).nodes.get("I::MC")!.geometry).toMatchObject({ x: 60, y: 5, width: 44 });
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(d(), "I", "MC", null)); // clear = reset to master
+        expect(d().nodes.get("I")!.overrides!.MC).toBeUndefined();
+        expect(expandInstances(d()).nodes.get("I::MC")!.geometry).toMatchObject({ x: 5, width: 20 });
+        dispatcher.undo();
+        expect(d().nodes.get("I")!.overrides!.MC.geometry).toEqual({ x: 60, width: 44 }); // undo restores it
+    });
+
+    test("SetInstanceOverrideAction rejects a non-instance target and an invalid value", () => {
+        const dispatcher = new ActionDispatcher(doc2());
+        const d = dispatcher.getDocument();
+        expect(dispatcher.dispatchAction(new SetInstanceOverrideAction(d, "M", "MC", { text: "x" })).success).toBe(false);   // not an instance
+        expect(dispatcher.dispatchAction(new SetInstanceOverrideAction(d, "nope", "MC", { text: "x" })).success).toBe(false);
+        expect(dispatcher.dispatchAction(new SetInstanceOverrideAction(d, "I", "", { text: "x" })).success).toBe(false);
+        expect(dispatcher.dispatchAction(new SetInstanceOverrideAction(d, "I", "MC", { style: { opacity: 9 } })).success).toBe(false); // shared styleError
+        expect(dispatcher.canUndo()).toBe(false);
+    });
+
+    test("nodeEdit routes: a stored node edits directly, an instance COPY becomes an override", () => {
+        const doc = doc2();
+        const geoStored = geometryActionFor(doc, "MC", { x: 7 });
+        const geoVirtual = geometryActionFor(doc, "I::MC", { x: 7 });
+        expect(geoStored).toBeInstanceOf(UpdateNodeGeometryAction);
+        expect(geoVirtual).toBeInstanceOf(SetInstanceOverrideAction);
+        expect(styleActionFor(doc, "I::MC", { fill: "#abc" })).toBeInstanceOf(SetInstanceOverrideAction);
+        // The override lands on the INSTANCE, keyed by the master node.
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(geometryActionFor(dispatcher.getDocument(), "I::MC", { x: 77 })!);
+        expect(dispatcher.getDocument().nodes.get("I")!.overrides!.MC.geometry).toEqual({ x: 77 });
+        // Unreachable targets return null rather than an action that would fail.
+        expect(geometryActionFor(doc, "gone", { x: 1 })).toBeNull();
+        expect(geometryActionFor(doc, "I::OI::deep", { x: 1 })).toBeNull(); // nested — deferred
+        expect(isEditableNode(doc, "I::MC")).toBe(true);
+        expect(isEditableNode(doc, "I::OI::deep")).toBe(false);
+    });
+
+    test("picking: a plain click selects the INSTANCE, an ALT (deep) pick selects the copy", () => {
+        const cs = computeGeometry(doc2());
+        expect(hitTest(cs, 310, 310)).toBe("I");                  // default: the instance
+        expect(hitTest(cs, 310, 310, 0, true)).toBe("I::MC");      // deep: the copy under the pointer
+        // A marquee never scatters into instance internals, deep or not.
+        expect(nodesInRect(cs, { x: 290, y: 290, width: 200, height: 200 })).toEqual(["I"]);
+    });
+
+    test("MoveTool drags an instance COPY into an override (the master never moves)", () => {
+        const dispatcher = new ActionDispatcher(doc2());
+        const es = createEditorState(); es.selectedNodeIds = ["I::MC"];
+        const tool = new MoveTool(dispatcher, es, () => { });
+        const mev = (x: number, y: number) => ({ clientX: x, clientY: y } as unknown as MouseEvent);
+        tool.onMouseDown(mev(0, 0));
+        tool.onMouseMove(mev(30, 10));
+        expect(es.pendingGeometry!.get("I::MC")).toEqual({ x: 35, y: 15 }); // preview on the VIRTUAL id
+        tool.onMouseUp(mev(30, 10));
+        expect(dispatcher.getDocument().nodes.get("I")!.overrides!.MC.geometry).toEqual({ x: 35, y: 15 });
+        expect(dispatcher.getDocument().nodes.get("MC")!.geometry.x).toBe(5); // master untouched
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.get("I")!.overrides?.MC).toBeUndefined();
+    });
+
+    test("an instance copy round-trips with its overrides", () => {
+        const doc = doc2({ MC: { geometry: { x: 60 }, style: { fill: "#00f" }, text: "hello" } });
+        const loaded = deserializeDocument(serializeDocument(doc));
+        expect(loaded.nodes.get("I")!.overrides!.MC).toEqual({ geometry: { x: 60 }, style: { fill: "#00f" }, text: "hello" });
+        expect(compareDocuments(doc, loaded)).toBe(true);
+    });
+});
+
 // ─── Deferral: group RESIZE — pure scale math + eligibility ───
 describe("GroupTransform (group resize math)", () => {
     test("scaleGroup scales positions about the fixed corner and sizes proportionally", () => {
@@ -3783,13 +3928,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "22" that has no 21→22 step: the
+        // Pretending the build has moved to a schema "23" that has no 22→23 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→21), and then REFUSED at "21" — never re-stamped straight to the current
-        // schema. The error naming "21" (not "1") is the proof the chain actually ran.
+        // (1→2→…→22), and then REFUSED at "22" — never re-stamped straight to the current
+        // schema. The error naming "22" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 20→21 landed for components.)
-        expect(() => migrateIfNeeded(legacy, "22")).toThrow('Migration not implemented for document schema "21"');
+        // time a real migration is added — here, when 21→22 landed for instance overrides.)
+        expect(() => migrateIfNeeded(legacy, "23")).toThrow('Migration not implemented for document schema "22"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);

@@ -4,13 +4,15 @@
  */
 
 import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
-import { UpdateNodeGeometryAction } from "../../core/actions/UpdateNodeGeometryAction";
+import { Action } from "../../core/actions/Action";
+import { geometryActionFor, isEditableNode } from "../../core/actions/nodeEdit";
 import { TransactionAction } from "../../core/actions/TransactionAction";
 import { EditorState } from "../EditorState";
 import { Geometry } from "../../core/document/Node";
 import { selectionRoots } from "../../core/document/SceneGraph";
 import { isAbsolute, isLayoutContainer } from "../../core/geometry/LayoutEngine";
 import { computeGeometry, selectionBounds } from "../../core/geometry/GeometryEngine";
+import { expandInstances, isVirtualId } from "../../core/document/Components";
 import { computeSnap, snapTargetsExcludingSubtrees, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect } from "../../core/geometry/Matrix";
 import { Tool } from "./ToolController";
@@ -49,15 +51,24 @@ export class MoveTool implements Tool {
         // so moving a parent already moves its children through composition —
         // patching a selected child too would apply the drag delta twice.
         this.nodeStartPositions = new Map();
-        for (const id of selectionRoots(doc, this.editorState.selectedNodeIds)) {
-            const node = doc.nodes.get(id);
+        // Resolve against the EXPANDED document so a selected instance COPY (a virtual node,
+        // M6) is visible here: its start geometry is the master's plus any existing override,
+        // and its ancestry — which `selectionRoots` walks — only exists once expanded. The
+        // commit routes each id through `geometryActionFor`, which turns a virtual node's move
+        // into a per-instance override rather than a (nonexistent) stored-geometry edit.
+        const eff = expandInstances(doc);
+        for (const id of selectionRoots(eff, this.editorState.selectedNodeIds)) {
+            const node = eff.nodes.get(id);
             if (!node) continue;
+            // A copy nested inside ANOTHER instance's expansion can't hold an override yet, so
+            // it isn't draggable — better inert than an edit that silently fails to commit.
+            if (isVirtualId(id) && !isEditableNode(doc, id)) continue;
             // A LAID-OUT child of an auto-layout container has a COMPUTED position; its
             // stored geometry.x/y is ignored, so dragging it would move nothing on screen.
             // Free-dragging is disabled for such children (reorder-by-drag is M4). An
             // `absolute` child is OUT of flow, positioned by its stored geometry, so it
             // stays draggable even under a container parent.
-            const parent = node.parent ? doc.nodes.get(node.parent) : undefined;
+            const parent = node.parent ? eff.nodes.get(node.parent) : undefined;
             if (isLayoutContainer(parent) && !isAbsolute(node)) continue;
             this.nodeStartPositions.set(id, { x: node.geometry.x, y: node.geometry.y });
         }
@@ -142,8 +153,13 @@ export class MoveTool implements Tool {
         // are composed by computeGeometry like any other geometry; the
         // document is never touched until commit.
         const overrides = new Map<string, Partial<Geometry>>();
+        // Liveness is checked against the EXPANDED tree: an instance COPY is legitimately absent
+        // from the stored map, and treating that as "deleted mid-drag" would silently abandon
+        // the drag on its first frame. `computeGeometry` applies pending patches keyed by
+        // virtual id just as it does for stored ones, so the preview needs nothing special.
+        const eff = expandInstances(doc);
         for (const id of [...this.nodeStartPositions.keys()]) {
-            const node = doc.nodes.get(id);
+            const node = eff.nodes.get(id);
             const start = this.nodeStartPositions.get(id);
             if (node && start) {
                 overrides.set(id, { x: start.x + dx, y: start.y + dy });
@@ -173,12 +189,13 @@ export class MoveTool implements Tool {
         // Commit the SNAPPED position, so the drop lands exactly where the preview showed it.
         const { dx, dy } = this.snapDelta(rawDx, rawDy);
 
-        const actions: UpdateNodeGeometryAction[] = [];
+        const actions: Action[] = [];
         if (dx !== 0 || dy !== 0) {
             for (const [id, start] of this.nodeStartPositions) {
-                if (doc.nodes.has(id)) {
-                    actions.push(new UpdateNodeGeometryAction(doc, id, { x: start.x + dx, y: start.y + dy }));
-                }
+                // Routed: a stored node gets a geometry edit, an instance COPY gets a per-instance
+                // override. Null (the node vanished, or an unreachable nested copy) commits nothing.
+                const action = geometryActionFor(doc, id, { x: start.x + dx, y: start.y + dy });
+                if (action) actions.push(action);
             }
         }
         this.endDrag();

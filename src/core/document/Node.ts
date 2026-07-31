@@ -164,6 +164,13 @@ export interface Node {
      * never corrupt a document that instances it. See `Components.expandInstances`.
      */
     componentId?: string;
+    /**
+     * `core.instance` → per-instance OVERRIDES, keyed by MASTER NODE ID (schema 22). What this
+     * instance changes about the copy it renders: geometry / style / text / src. Keyed by
+     * identity rather than position, so an override survives edits to the master and goes inert
+     * (never invalid) if that master node is deleted. See `Components.InstanceOverride`.
+     */
+    overrides?: Record<string, import("./Components").InstanceOverride>;
     name?: string;
 }
 

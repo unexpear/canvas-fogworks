@@ -26,7 +26,7 @@ import { ReadonlyDocument } from "../core/document/Document";
 import { PathCommand, Shadow } from "../core/document/Node";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
-import { expandInstances } from "../core/document/Components";
+import { expandInstances, isVirtualId } from "../core/document/Components";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
 import { selectionHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
@@ -459,7 +459,9 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
     //  - a MULTI-root selection → ONE group bounding box, plus GROUP corner handles when the
     //    group is resizable (every root transform-free) and one group rotate knob when it is
     //    rotatable — each affordance gated on its own eligibility, never per-node handles.
-    const roots = selectionRoots(doc, state.selectedNodeIds);
+    // Resolved on the EXPANDED tree so a selected instance COPY keeps its handles (a virtual id
+    // is absent from the stored map, and `selectionRoots` drops what it cannot resolve).
+    const roots = selectionRoots(expandInstances(doc), state.selectedNodeIds);
     if (roots.length >= 2) {
         const gb = selectionBounds(computed, roots);
         if (gb && isFiniteRect(gb)) {
@@ -477,8 +479,13 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
         }
     } else {
         // 0 or 1 root: per-node handles exactly as before (roots, so a parent+child selection
-        // shows the parent's handles once, not one set per selected id).
-        selectionHandles(computed, roots, z).forEach(h => items.push(handleItem(h, z)));
+        // shows the parent's handles once, not one set per selected id). An instance COPY gets
+        // the four RESIZE corners (they commit a per-instance override) but NOT the rotate knob —
+        // transform overrides are a later slice, and the editor refuses that grab identically,
+        // so draw and pick stay in step.
+        selectionHandles(computed, roots, z)
+            .filter(h => !(h.handle === "rotate" && isVirtualId(h.nodeId)))
+            .forEach(h => items.push(handleItem(h, z)));
     }
 
     // Rectangle-tool drag preview.

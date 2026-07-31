@@ -13,6 +13,8 @@ import { EditorState, panBy, screenToWorld } from "../EditorState";
 import { computeGeometry, ComputedState, selectionBounds } from "../../core/geometry/GeometryEngine";
 import { handleAtPoint, groupHandleAtPoint } from "../../core/geometry/SelectionHandles";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupScaleInput } from "../../core/geometry/GroupTransform";
+import { expandInstances, isVirtualId } from "../../core/document/Components";
+import { geometryActionFor } from "../../core/actions/nodeEdit";
 import { snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect } from "../../core/geometry/Matrix";
 import { ReadonlyDocument } from "../../core/document/Document";
@@ -130,7 +132,9 @@ export class ToolController {
             const vp = this.editorState.viewport;
             const w = screenToWorld(vp, canvasRect, e.clientX, e.clientY);
             computed = computeGeometry(doc, this.editorState.pendingGeometry);
-            const roots = selectionRoots(doc, sel);
+            // Roots resolved on the EXPANDED tree so a selected instance COPY survives (a virtual
+            // id isn't in the stored map, and `selectionRoots` drops what it can't resolve).
+            const roots = selectionRoots(expandInstances(doc), sel);
 
             if (roots.length >= 2) {
                 // Group: the rotate knob (a rotatable group) and the corner handles (a
@@ -156,8 +160,18 @@ export class ToolController {
                 // 0/1 root: per-node handles, hit-tested over `roots` so picking matches drawing.
                 const hit = handleAtPoint(computed, roots, w.x, w.y, vp.zoom);
                 const c = hit ? computed.nodes.get(hit.nodeId) : undefined;
-                const node = hit ? doc.nodes.get(hit.nodeId) : undefined;
+                // Resolved against the EXPANDED document so an instance COPY's handles work: its
+                // geometry (master + any existing override) is only visible there. The resize
+                // COMMIT routes through `geometryActionFor`, which writes an override for it.
+                const node = hit ? expandInstances(doc).nodes.get(hit.nodeId) : undefined;
                 if (hit && c && node) {
+                    if (hit.handle === "rotate" && isVirtualId(hit.nodeId)) {
+                        // An instance COPY has no stored transform, and TRANSFORM overrides are a
+                        // later slice — so the knob isn't grabbable here (and the renderer doesn't
+                        // draw it). Falling through beats a control that silently does nothing.
+                        this.activeTool?.onMouseDown?.(e, canvasRect, computed);
+                        return;
+                    }
                     if (hit.handle === "rotate") {
                         // Spin about the world-AABB centre (= the default centre transform-origin).
                         this.rotateMode = true;
@@ -491,12 +505,11 @@ export class ToolController {
 
         if (this.resizeMode && this.resizeNodeId) {
             const doc = this.dispatcher.getDocument();
-            if (this.resizePreview && doc.nodes.has(this.resizeNodeId)) {
-                this.dispatcher.dispatchAction(new UpdateNodeGeometryAction(
-                    doc,
-                    this.resizeNodeId,
-                    this.resizePreview
-                ));
+            // Routed: a stored node commits a geometry edit, an instance COPY commits a
+            // per-instance override. Null means the target vanished — commit nothing.
+            const action = this.resizePreview ? geometryActionFor(doc, this.resizeNodeId, this.resizePreview) : null;
+            if (action) {
+                this.dispatcher.dispatchAction(action);
             }
             this.resetResize();
             this.refresh();

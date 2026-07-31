@@ -52,6 +52,9 @@ function isValidNode(n: any): n is Node {
         // Shallow gate for the M6 instance reference; the semantic rule (only an instance may
         // carry it, non-empty) lives once in `componentError` (Integrity), like the effects.
         isOptionalString(n.componentId) &&
+        // Shallow gate for the schema-22 overrides map; the semantic rules live once in
+        // `overridesError` (Integrity), like the effects and the path commands.
+        (n.overrides === undefined || isPlainObject(n.overrides)) &&
         (n.states === undefined || isPlainObject(n.states)) &&
         (n.transform === undefined || (isPlainObject(n.transform) &&
             (n.transform.rotation === undefined || typeof n.transform.rotation === "number") &&
@@ -245,6 +248,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "18") { raw = migrate_18_to_19(raw); version = "19"; }
     if (version === "19") { raw = migrate_19_to_20(raw); version = "20"; }
     if (version === "20") { raw = migrate_20_to_21(raw); version = "21"; }
+    if (version === "21") { raw = migrate_21_to_22(raw); version = "22"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -444,6 +448,13 @@ function migrate_20_to_21(raw: any): any {
     }
     const rootNodeUuids = Array.isArray(d.rootNodeUuids) ? d.rootNodeUuids.map(map) : d.rootNodeUuids;
     return { ...raw, version: "21", document: { ...d, nodes, rootNodeUuids } };
+}
+
+/** Schema 21 → 22: adds `Node.overrides` (per-instance property overrides, M6 slice 2).
+ *  Pass-through by content — existing documents carry none, and an absent map means
+ *  "this instance mirrors its master exactly", which is what schema 21 already meant. */
+function migrate_21_to_22(raw: any): any {
+    return { ...raw, version: "22" };
 }
 
 /**

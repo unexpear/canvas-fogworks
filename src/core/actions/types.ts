@@ -5,6 +5,7 @@
 
 import { Node, Geometry, Style, Layout, Transform, RESERVED_NODE_ID } from "../document/Node";
 import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
+import { InstanceOverride } from "../document/Components";
 
 /**
  * The reserved `propertyDeltas` key a DOCUMENT-LEVEL delta (kind "variables") travels
@@ -42,6 +43,10 @@ export type NodeDelta =
         text?: string;
         src?: string;
         name?: string;
+        /** Whole-map replace of a `core.instance`'s per-instance overrides (M6 slice 2). Whole-map
+         *  rather than per-key so a transaction merge is last-wins on a coherent value; the
+         *  ACTION does the field-level merging before emitting. */
+        overrides?: Record<string, InstanceOverride>;
     }
     /**
      * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme

@@ -43,7 +43,9 @@ function mergePatch(target: PatchDelta, source: PatchDelta): PatchDelta {
             ? { ...target.layout, ...source.layout } : undefined,
         text: source.text ?? target.text,
         src: source.src ?? target.src,
-        name: source.name ?? target.name
+        name: source.name ?? target.name,
+        // Whole-map value: last-wins (the ACTION already merged field-by-field before emitting).
+        overrides: source.overrides ?? target.overrides
     };
 }
 
