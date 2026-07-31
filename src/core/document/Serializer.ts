@@ -7,7 +7,7 @@
  */
 
 import { ProjectDocument, ReadonlyDocument, ThemeMode, createEmptyDocument, SCHEMA_VERSION, SerializedMetadata } from "./Document";
-import { Node, isNodeType, srcError } from "./Node";
+import { Node, isNodeType, srcError, srcValueError } from "./Node";
 import { variableError, variableKeyError, VARIABLES_MAX } from "./Variables";
 import { validateDocumentIntegrity } from "./Integrity";
 
@@ -250,6 +250,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "20") { raw = migrate_20_to_21(raw); version = "21"; }
     if (version === "21") { raw = migrate_21_to_22(raw); version = "22"; }
     if (version === "22") { raw = migrate_22_to_23(raw); version = "23"; }
+    if (version === "23") { raw = migrate_23_to_24(raw); version = "24"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -466,6 +467,33 @@ function migrate_21_to_22(raw: any): any {
  * image with no source always has. Same obligation the 18→19 store sanitizer and the 20→21
  * id renamer carry — when a bump adds a rule, ask what previously-valid document it rejects.
  */
+/**
+ * 23 → 24: the image-source rule now reaches a per-instance OVERRIDE too (`overridesError` +
+ * `overrideAgainstMasterError`). Schema 23 validated an override `src` as merely "a string",
+ * so a document could carry one that no stored node may hold — and a DETACH would bake it into
+ * a stored node, producing a file the loader then refuses. Another CONSTRAINT, so again the
+ * offending entry is DROPPED rather than failing the load: the copy simply shows the master's
+ * source. The type-aware half (only a core.image master may take a src override) is sanitized
+ * here too, since the migration can resolve the master.
+ */
+function migrate_23_to_24(raw: any): any {
+    const nodes = raw?.document?.nodes;
+    if (nodes && typeof nodes === "object") {
+        for (const node of Object.values<any>(nodes)) {
+            const overrides = node?.overrides;
+            if (!overrides || typeof overrides !== "object") continue;
+            for (const [key, o] of Object.entries<any>(overrides)) {
+                if (!o || o.src === undefined) continue;
+                const master = nodes[key];
+                if (srcValueError(o.src) !== null || (master && master.type !== "core.image")) {
+                    delete o.src;
+                }
+            }
+        }
+    }
+    return { ...raw, version: "24" };
+}
+
 function migrate_22_to_23(raw: any): any {
     const nodes = raw?.document?.nodes;
     if (nodes && typeof nodes === "object") {

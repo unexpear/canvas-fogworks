@@ -159,6 +159,18 @@ const SRC_ALLOWED = ["http", "https", "blob"];
 export function srcError(type: NodeType, src: unknown): string | null {
     if (src === undefined) return null;
     if (type !== "core.image") return "only a core.image node may carry a src";
+    return srcValueError(src);
+}
+
+/**
+ * The TYPE-FREE half of `srcError`: everything true of an image source regardless of which
+ * node carries it. Split out because a per-instance OVERRIDE also carries a `src` and is
+ * validated without knowing the master's type (`overridesError` sees a bare map) — the type
+ * half runs in `overrideAgainstMasterError`, which holds the document. Without this split the
+ * override seam validated `src` as merely "a string", so an override could smuggle in a value
+ * no stored node may hold and a detach would bake it into an unloadable document.
+ */
+export function srcValueError(src: unknown): string | null {
     if (typeof src !== "string" || src.length === 0) return "src must be a non-empty string";
     if (src.length > IMAGE_SRC_MAX) return `src must be at most ${IMAGE_SRC_MAX} characters`;
     const scheme = SRC_SCHEME.exec(src);

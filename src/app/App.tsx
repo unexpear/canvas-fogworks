@@ -48,7 +48,15 @@ function pickImageSource(): Promise<string | null> {
         input.addEventListener("cancel", () => {
             input.remove();
             const url = window.prompt("Image URL (https:// or a relative path):");
-            resolve(url && url.trim().length > 0 ? url.trim() : null);
+            const trimmed = url ? url.trim() : "";
+            if (trimmed.length === 0) { resolve(null); return; }
+            // The SAME check the file branch runs. Without it a refused URL fell through to
+            // AddNodeAction, whose validate() fails silently (`dispatchAction` logs nothing for
+            // a failed validate) — the drag vanished with no explanation on exactly the inputs
+            // the file branch is careful to explain.
+            const err = srcError("core.image", trimmed);
+            if (err) { window.alert(`That URL can't be used as an image source: ${err}.`); resolve(null); return; }
+            resolve(trimmed);
         });
         input.addEventListener("change", () => {
             const file = input.files?.[0];

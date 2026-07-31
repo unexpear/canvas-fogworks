@@ -23,6 +23,8 @@
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
 import { Node, dimensionError } from "../document/Node";
+import { isLayoutContainer } from "../geometry/LayoutEngine";
+import { compose, transformRectToAABB } from "../geometry/Matrix";
 import { MutationResult, ActionPayload, NodeDelta } from "./types";
 import { generateUUID } from "../ids/UUID";
 
@@ -52,12 +54,25 @@ export class FrameSelectionAction extends Action {
     private bounds(): { x: number; y: number; width: number; height: number } | null {
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         for (const id of this.nodeIds) {
-            const g = this.document.nodes.get(id)?.geometry;
+            const node = this.document.nodes.get(id);
+            const g = node?.geometry;
             if (!g || ![g.x, g.y, g.width, g.height].every(Number.isFinite)) return null;
-            minX = Math.min(minX, g.x);
-            minY = Math.min(minY, g.y);
-            maxX = Math.max(maxX, g.x + g.width);
-            maxY = Math.max(maxY, g.y + g.height);
+            // A ROTATED or SCALED child occupies its transformed AABB in the parent's space,
+            // not its raw box — the frame is supposed to FIT what it wraps, and the frame paints
+            // a fill behind it. The child's local matrix is entirely in the shared parent's
+            // space, so no transform-chain walk is needed. (The REBASE below is unaffected: the
+            // frame contributes a pure translation either way.)
+            const box = node!.transform
+                ? transformRectToAABB(
+                    compose(g.x, g.y, node!.transform.rotation ?? 0, node!.transform.scaleX ?? 1, node!.transform.scaleY ?? 1,
+                        g.width * (node!.transform.origin?.x ?? 0.5), g.height * (node!.transform.origin?.y ?? 0.5)),
+                    { x: 0, y: 0, width: g.width, height: g.height })
+                : { x: g.x, y: g.y, width: g.width, height: g.height };
+            if (![box.x, box.y, box.width, box.height].every(Number.isFinite)) return null;
+            minX = Math.min(minX, box.x);
+            minY = Math.min(minY, box.y);
+            maxX = Math.max(maxX, box.x + box.width);
+            maxY = Math.max(maxY, box.y + box.height);
         }
         if (!Number.isFinite(minX)) return null;
         return {
@@ -77,6 +92,14 @@ export class FrameSelectionAction extends Action {
         // single one of them still yields `false`, just by a less specific route. They stay
         // because they say what the precondition IS; don't mistake them for the only guard.
         if (this.sharedParent() === undefined) return false;
+        // A child of an auto-layout or grid container has its stored x/y IGNORED — the layout
+        // computes its position — so both the frame's box and the rebase would be built from
+        // dead data, and the children visibly jump. Inserting a frame would also collapse N
+        // in-flow children into one, changing the container's own flow and hug size. Framing
+        // INSIDE a container is a real feature (it needs the frame to inherit the flow slot);
+        // refusing is the honest interim, and the button follows validate() so it just greys out.
+        const parentId = this.sharedParent();
+        if (parentId != null && isLayoutContainer(this.document.nodes.get(parentId))) return false;
         // Covers an instance's materialized copy too: a virtual id contains `::`, reserved in
         // stored ids on both paths, so it never resolves here.
         const box = this.bounds();
@@ -127,7 +150,14 @@ export class FrameSelectionAction extends Action {
                 reparent: { parent: frameId, index: i },
                 // Stored geometry is parent-relative: rebasing onto the frame's origin is what
                 // keeps every framed node exactly where it was on screen.
-                geometry: { x: g.x - box.x, y: g.y - box.y }
+                geometry: { x: g.x - box.x, y: g.y - box.y },
+                // `constraintRef` is a FROZEN snapshot of the parent's size that the child is at
+                // rest against, and `constraints` anchor it to that parent's edges. The frame is
+                // a DIFFERENT parent of a different size, so leaving them would have
+                // `resolveConstraints` shift the child by (frameSize − oldParentSize) and undo
+                // the rebase. Cleared, exactly as `materializeNode` clears them on an instance
+                // root copy for the same reason: the reference frame they describe is gone.
+                layout: { constraints: undefined, constraintRef: undefined }
             });
         });
 

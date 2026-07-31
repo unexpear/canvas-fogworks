@@ -14,7 +14,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { InstanceOverride, overrideDimensionError, overridesError } from "../document/Components";
+import { InstanceOverride, overrideAgainstMasterError, overridesError } from "../document/Components";
 import { MutationResult, ActionPayload } from "./types";
 
 export class SetInstanceOverrideAction extends Action {
@@ -56,10 +56,10 @@ export class SetInstanceOverrideAction extends Action {
         // Validate the RESULTING map with the shared load-path rules — so the edit path can never
         // author an override the loader would reject. Both halves run: the document-free field
         // rules, and the type-aware size rule that resolves each key's master (without which an
-        // override could hold a size the master's own type forbids — see `overrideDimensionError`).
+        // override could hold a size the master's own type forbids — see `overrideAgainstMasterError`).
         const overrides = this.next();
         if (overridesError("core.instance", overrides) !== null) return false;
-        return overrideDimensionError(this.document, { ...node, overrides }) === null;
+        return overrideAgainstMasterError(this.document, { ...node, overrides }) === null;
     }
 
     public execute(): MutationResult {

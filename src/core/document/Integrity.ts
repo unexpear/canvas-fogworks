@@ -13,7 +13,7 @@
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
 import { transformError, layoutError, dimensionError, pathError, srcError, styleError, nodeIdError } from "./Node";
-import { componentError, overrideDimensionError, overridesError } from "./Components";
+import { componentError, overrideAgainstMasterError, overridesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
 
 function checkNodeRanges(node: ReadonlyNode): void {
@@ -90,7 +90,7 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
         checkNodeRanges(node);
         // The type-aware half of override validation needs the DOCUMENT (to resolve each key's
         // master and read its type), so it runs here rather than in `checkNodeRanges`.
-        const dimErr = overrideDimensionError(doc, node);
+        const dimErr = overrideAgainstMasterError(doc, node);
         if (dimErr) throw new Error(`Invalid document: node "${node.id}" ${dimErr}.`);
     });
 

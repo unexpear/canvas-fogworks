@@ -32,7 +32,7 @@
  */
 
 import { ProjectDocument, ReadonlyDocument } from "./Document";
-import { dimensionError, Geometry, Node, Style, styleError } from "./Node";
+import { dimensionError, Geometry, Node, Style, styleError, srcValueError } from "./Node";
 import { ReadonlyNode } from "./SceneGraph";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
@@ -166,7 +166,14 @@ export function overridesError(type: string, overrides: unknown): string | null 
             if (e) return `override "${key}" ${e}`;
         }
         if (o.text !== undefined && typeof o.text !== "string") return `override "${key}" text must be a string`;
-        if (o.src !== undefined && typeof o.src !== "string") return `override "${key}" src must be a string`;
+        if (o.src !== undefined) {
+            // The SAME rule a stored src obeys, minus the part that needs the master's type
+            // (see `overrideAgainstMasterError`). Validating this as merely "a string" let an
+            // override hold a source no node may hold, which a detach then baked into the
+            // document as a stored node — producing a file the loader refuses.
+            const e = srcValueError(o.src);
+            if (e) return `override "${key}" ${e}`;
+        }
     }
     return null;
 }
@@ -184,15 +191,23 @@ export function overridesError(type: string, overrides: unknown): string | null 
  * and loadable, exactly like a dangling `componentId` or `$token`. A partial size override is
  * checked against the master's OTHER axis, since that is what expansion will materialize.
  */
-export function overrideDimensionError(doc: ReadonlyDocument, instance: ReadonlyNode): string | null {
+export function overrideAgainstMasterError(doc: ReadonlyDocument, instance: ReadonlyNode): string | null {
     if (!instance.overrides) return null;
     for (const key of Object.keys(instance.overrides)) {
-        const g = instance.overrides[key].geometry;
-        if (!g || (g.width === undefined && g.height === undefined)) continue;
+        const o = instance.overrides[key];
         const master = doc.nodes.get(key);
-        if (!master) continue;
-        const err = dimensionError(master.type, g.width ?? master.geometry.width, g.height ?? master.geometry.height);
-        if (err) return `override "${key}" ${err}`;
+        if (!master) continue;   // dangling key — inert, like a dangling componentId
+        const g = o.geometry;
+        if (g && (g.width !== undefined || g.height !== undefined)) {
+            const err = dimensionError(master.type, g.width ?? master.geometry.width, g.height ?? master.geometry.height);
+            if (err) return `override "${key}" ${err}`;
+        }
+        // Only an image may carry a source — the half of `srcError` that needs the type. An
+        // override on any other master node would materialize a copy holding a field its own
+        // type forbids, which `DetachInstanceAction` then bakes into a stored node.
+        if (o.src !== undefined && master.type !== "core.image") {
+            return `override "${key}" only a core.image node may carry a src`;
+        }
     }
     return null;
 }

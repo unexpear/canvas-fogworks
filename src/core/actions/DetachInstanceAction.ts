@@ -70,6 +70,16 @@ export class DetachInstanceAction extends Action {
         if (instance.componentId === this.instanceId) return false;
         const subtree = this.masterSubtree();
         if (subtree.length === 0) return false;            // dangling — nothing to bake
+        // The instance lives INSIDE the subtree it would bake: the copies would be parented
+        // within the master, so the master would permanently gain a copy of itself (plus a
+        // still-live recursive instance) and EVERY other instance of it would change. Detach
+        // must touch only the node being detached. This is the write-path analogue of the
+        // per-path master CHAIN guard `expandInstances` uses to stop the same recursion.
+        if (subtree.includes(this.instanceId)) return false;
+        // Both the instance and the master root carrying a transform cannot be represented as
+        // the single `Node.transform` the baked root gets: composing two rotate+scale-about-
+        // origin matrices is not generally another one. Refuse rather than silently drop one.
+        if (instance.transform && this.document.nodes.get(subtree[0])?.transform) return false;
         // The same OOM bound expansion obeys: a detach materializes into the DOCUMENT, where the
         // cost is permanent rather than per-frame, so the cap matters at least as much here.
         return subtree.length <= INSTANCE_MAX_NODES;
@@ -104,12 +114,35 @@ export class DetachInstanceAction extends Action {
             if (copy.transform) copy.transform = { ...copy.transform };
             if (copy.overrides) copy.overrides = JSON.parse(JSON.stringify(copy.overrides));
             if (copy.path) copy.path = copy.path.map(c => ({ ...c }));
-            // The root takes the INSTANCE's position: that is what placed this content on the
-            // canvas, and `materializeNode` re-origined it to (0,0) precisely because the
-            // instance carried it. Its SIZE is already the master's (plus any root override).
+            // The root inherits everything the INSTANCE contributed to what was on screen. In
+            // the expanded document the root copy is a CHILD of the instance, so the instance's
+            // own position, transform and parent-facing layout all compose into the rendered
+            // result; deleting the instance without carrying them over is what made a rotated
+            // instance snap upright and a constrained one jump.
             if (isRoot) {
+                // Position: `materializeNode` re-origined the root to (0,0) precisely because
+                // the instance carried it. Size is already the master's (plus any root override).
                 copy.geometry.x = instance.geometry.x;
                 copy.geometry.y = instance.geometry.y;
+                // Transform: at most one of the two has one (validate() refuses both).
+                if (instance.transform) copy.transform = { ...instance.transform };
+                // Layout splits by who it talks to. PARENT-facing fields (how this node behaves
+                // inside its parent) belong to the instance — it is the node the parent was
+                // laying out. CHILD-facing fields (container/grid, how it arranges what is
+                // inside it) belong to the master root, which is what actually holds the copies.
+                copy.layout = {
+                    ...copy.layout,
+                    constraints: instance.layout.constraints,
+                    constraintRef: instance.layout.constraintRef,
+                    grow: instance.layout.grow,
+                    shrink: instance.layout.shrink,
+                    margin: instance.layout.margin,
+                    position: instance.layout.position,
+                    colSpan: instance.layout.colSpan,
+                    rowSpan: instance.layout.rowSpan,
+                    gridColumn: instance.layout.gridColumn,
+                    gridRow: instance.layout.gridRow
+                };
             }
             // Children are wired here (materializeNode always returns an empty list) so the
             // copies form a tree among themselves rather than pointing back at the master's.

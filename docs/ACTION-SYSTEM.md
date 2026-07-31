@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions -->
 
-> 🔒 Frozen contract · schema v23 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Code in `src/core/actions/`.
+> 🔒 Frozen contract · schema v24 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Code in `src/core/actions/`.
 
 The action system is the engine's spine: it is **the only way the document changes**,
 and it is what makes undo/redo, and later AI, plugins, and collaboration, safe.
@@ -35,7 +35,7 @@ abstract class Action {
 | Action | Effect (delta) |
 |--------|----------------|
 | `AddNodeAction` | `{ kind: "add", node }` — optional `content` carries a `core.text`'s text or a `core.path`'s commands, validated by the shared `pathError` (the first EDIT-path caller of it; until then only the loader authored paths) |
-| `FrameSelectionAction` | `{ kind: "add" }` for a frame rectangle + `{ kind: "patch", reparent, geometry }` per member — wraps the selection in a parent sized to fit it, rebasing each member onto the frame's origin so nothing MOVES on screen. The editor's only way to build a hierarchy. SIBLINGS ONLY (one shared parent = one space to rebase in); the frame takes the frontmost member's z-position and members keep their relative order |
+| `FrameSelectionAction` | `{ kind: "add" }` for a frame rectangle + `{ kind: "patch", reparent, geometry }` per member — wraps the selection in a parent sized to fit it, rebasing each member onto the frame's origin so nothing MOVES on screen. The editor's only way to build a hierarchy. SIBLINGS ONLY (one shared parent = one space to rebase in) and NOT inside an auto-layout/grid container, where stored x/y is dead data. The frame is fitted to the members' TRANSFORMED boxes, takes the frontmost member's z-position, keeps their relative order, and CLEARS each member's constraints/constraintRef (they describe the old parent, and would undo the rebase) |
 | `DeleteNodeAction` | `{ kind: "delete" }` for the node **and every descendant** (cycle-safe) |
 | `MoveNodeAction` | `{ kind: "patch", geometry: { x, y } }` |
 | `ResizeNodeAction` | `{ kind: "patch", geometry: { width, height } }` |
@@ -45,8 +45,8 @@ abstract class Action {
 | `UpdateNodeLayoutAction` | `{ kind: "patch", layout: {…partial…} }` — M2 layout (container/grid/grow/constraints/position/margin). Carries grid⊕container exclusivity IN the delta, and auto-captures `constraintRef` from a NON-container parent's stored size on first opt-in |
 | `ReparentNodeAction` | `{ kind: "patch", reparent: { parent, index? } }` |
 | `CreateInstanceAction` | `{ kind: "add", node }` — a `core.instance` sized to its MASTER (M6); the master must exist at creation time (a DANGLING reference is only valid at rest) |
-| `SetInstanceOverrideAction` | `{ kind: "patch", overrides }` — set/clear ONE per-instance override (M6 slice 2), keyed by master node id; patches MERGE field-by-field so a move then a resize accumulate, `null` clears the entry (reset to master); validated via the shared `overridesError` **and** `overrideDimensionError` (the type-aware half, which needs the document) |
-| `DetachInstanceAction` | one `{ kind: "add" }` per baked node + `{ kind: "delete" }` for the instance (M6 slice 3) — bakes what the instance was DRAWING into ordinary nodes via the shared `materializeNode`, severing the link to the master. The root takes the instance's position AND its `index` among its siblings (z-order). A NESTED instance is copied as an instance, not expanded. REFUSES a dangling instance (nothing to bake) rather than deleting the node |
+| `SetInstanceOverrideAction` | `{ kind: "patch", overrides }` — set/clear ONE per-instance override (M6 slice 2), keyed by master node id; patches MERGE field-by-field so a move then a resize accumulate, `null` clears the entry (reset to master); validated via the shared `overridesError` **and** `overrideAgainstMasterError` (the type-aware half, which needs the document) |
+| `DetachInstanceAction` | one `{ kind: "add" }` per baked node + `{ kind: "delete" }` for the instance (M6 slice 3) — bakes what the instance was DRAWING into ordinary nodes via the shared `materializeNode`, severing the link to the master. The root takes the instance's position AND its `index` among its siblings (z-order). A NESTED instance is copied as an instance, not expanded. The baked root also inherits what the INSTANCE contributed on screen — its transform and its PARENT-facing layout (constraints/grow/shrink/margin/position/spans), while the master root keeps the CHILD-facing layout (container/grid). REFUSES: a dangling instance (nothing to bake), an instance nested inside its OWN master (baking would edit the component and change every other instance), and an instance whose transform would have to compose with the master root's (not representable as one Node.transform) |
 | `SetVariableAction` | `{ kind: "variables", variables, activeTheme }` — upsert one design token (M5); validated via the shared `variableStoreError` |
 | `DeleteVariableAction` | `{ kind: "variables", … }` — remove one token; dangling references stay valid (they resolve to the visible fallback) |
 | `SetActiveThemeAction` | `{ kind: "variables", … }` — switch the persisted light/dark theme |

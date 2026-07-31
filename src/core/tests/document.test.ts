@@ -9,7 +9,7 @@ import { createEmptyDocument, ProjectDocument, CURRENT_VERSION, SCHEMA_VERSION }
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
-import { expandInstances, componentError, overridesError, overrideDimensionError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES } from "../document/Components";
+import { expandInstances, componentError, overridesError, overrideAgainstMasterError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES } from "../document/Components";
 import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
@@ -2387,15 +2387,15 @@ describe("Components: instance overrides", () => {
         // `overridesError` alone can't run `dimensionError` (it never sees the master's type), so
         // a 0-width copy of a RECTANGLE would slip through a check the stored node fails.
         const doc = doc2();
-        expect(overrideDimensionError(doc, doc.nodes.get("I")!)).toBeNull();          // no overrides
+        expect(overrideAgainstMasterError(doc, doc.nodes.get("I")!)).toBeNull();          // no overrides
         const zero = doc2({ MC: { geometry: { width: 0 } } });
-        expect(overrideDimensionError(zero, zero.nodes.get("I")!)).toMatch("positive dimensions");
+        expect(overrideAgainstMasterError(zero, zero.nodes.get("I")!)).toMatch("positive dimensions");
         // A partial override is judged against the master's OTHER axis — what expansion materializes.
         const partial = doc2({ MC: { geometry: { height: 0 } } });
-        expect(overrideDimensionError(partial, partial.nodes.get("I")!)).toMatch("positive dimensions");
+        expect(overrideAgainstMasterError(partial, partial.nodes.get("I")!)).toMatch("positive dimensions");
         // A key resolving to no master stays inert, exactly like a dangling componentId.
         const dangling = doc2({ ghost: { geometry: { width: 0 } } });
-        expect(overrideDimensionError(dangling, dangling.nodes.get("I")!)).toBeNull();
+        expect(overrideAgainstMasterError(dangling, dangling.nodes.get("I")!)).toBeNull();
         // EDIT path: the same patch is refused on the copy that is refused on the stored node.
         const dispatcher = new ActionDispatcher(doc2());
         expect(dispatcher.dispatchAction(geometryActionFor(dispatcher.getDocument(), "I::MC", { width: 0 })!).success).toBe(false);
@@ -2405,7 +2405,7 @@ describe("Components: instance overrides", () => {
         // …and a type that legitimately allows a zero axis still may.
         const line = doc2({ MC: { geometry: { width: 0 } } });
         line.nodes.set("MC", { ...line.nodes.get("MC")!, type: "core.line" });
-        expect(overrideDimensionError(line, line.nodes.get("I")!)).toBeNull();
+        expect(overrideAgainstMasterError(line, line.nodes.get("I")!)).toBeNull();
     });
 
     test("the ROOT copy's x/y is refused at the SEAM, not just by the tool that happens to check", () => {
@@ -4260,13 +4260,13 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "24" that has no 23→24 step: the
+        // Pretending the build has moved to a schema "25" that has no 24→25 step: the
         // legacy file must be normalised to "1", carried through every real step
-        // (1→2→…→23), and then REFUSED at "23" — never re-stamped straight to the current
-        // schema. The error naming "23" (not "1") is the proof the chain actually ran.
+        // (1→2→…→24), and then REFUSED at "24" — never re-stamped straight to the current
+        // schema. The error naming "24" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 22→23 landed for the image `src` rule.)
-        expect(() => migrateIfNeeded(legacy, "24")).toThrow('Migration not implemented for document schema "23"');
+        // time a real migration is added — here, when 23→24 landed for the override `src` rule.)
+        expect(() => migrateIfNeeded(legacy, "25")).toThrow('Migration not implemented for document schema "24"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -6965,5 +6965,224 @@ describe("Image sources (srcError, schema 23)", () => {
         expect(loaded.nodes.get("bad")!.src).toBeUndefined();        // dropped: draws nothing
         expect(loaded.nodes.get("good")!.src).toBe(PIXEL);           // kept: still valid
         expect(loaded.nodes.get("wrongType")!.src).toBeUndefined();  // a src on a rect is dropped
+    });
+});
+
+// ─── Adversarial-review fixes: detach fidelity, framing reference frames, override src ───
+describe("Review fixes: what the instance contributed must survive a detach", () => {
+    function mkRect(doc: ProjectDocument, id: string, x: number, y: number, w: number, h: number, parent: string | null = null) {
+        doc.nodes.set(id, { id, type: "core.rectangle", parent, children: [], geometry: { x, y, width: w, height: h }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        if (parent) doc.nodes.get(parent)!.children.push(id); else doc.rootNodeUuids.push(id);
+    }
+    /** master M (100×50 at 10,20) + child MC; instance I at (300,300). */
+    function doc5(): ProjectDocument {
+        const doc = createEmptyDocument();
+        mkRect(doc, "M", 10, 20, 100, 50);
+        mkRect(doc, "MC", 5, 5, 20, 20, "M");
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 300, y: 300, width: 100, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids.push("I");
+        return doc;
+    }
+
+    test("a ROTATED instance keeps its rotation when baked", () => {
+        // The materialized root is a CHILD of the instance, so the instance's matrix composes
+        // into what you see. Detach deletes the instance — without carrying the transform the
+        // picture snapped upright the moment you clicked Detach.
+        const doc = doc5();
+        doc.nodes.set("I", { ...doc.nodes.get("I")!, transform: { rotation: Math.PI / 2 } });
+        const dispatcher = new ActionDispatcher(doc);
+        const before = computeGeometry(dispatcher.getDocument()).nodes.get("I::M")!.bounds;
+        const action = new DetachInstanceAction(dispatcher.getDocument(), "I");
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const after = computeGeometry(dispatcher.getDocument()).nodes.get(action.getCreatedNodeIds()[0])!.bounds;
+        expect(after.width).toBeCloseTo(before.width, 6);
+        expect(after.height).toBeCloseTo(before.height, 6);
+        expect(after.x).toBeCloseTo(before.x, 6);
+    });
+
+    test("two transforms cannot compose into one, so that detach is REFUSED rather than lossy", () => {
+        const doc = doc5();
+        doc.nodes.set("I", { ...doc.nodes.get("I")!, transform: { rotation: 0.4 } });
+        doc.nodes.set("M", { ...doc.nodes.get("M")!, transform: { rotation: 0.3 } });
+        expect(new DetachInstanceAction(doc, "I").validate()).toBe(false);
+    });
+
+    test("a CONSTRAINED instance keeps its position and goes on tracking its parent", () => {
+        const doc = createEmptyDocument();
+        mkRect(doc, "P", 0, 0, 600, 400);
+        mkRect(doc, "M", 0, 0, 50, 50);
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: "P", children: [], geometry: { x: 300, y: 0, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: { constraints: { horizontal: "right" }, constraintRef: { width: 400, height: 400 } }, componentId: "M" });
+        doc.nodes.get("P")!.children.push("I");
+        const dispatcher = new ActionDispatcher(doc);
+        const before = computeGeometry(dispatcher.getDocument()).nodes.get("I::M")!.bounds;
+        const action = new DetachInstanceAction(dispatcher.getDocument(), "I");
+        dispatcher.dispatchAction(action);
+        const baked = action.getCreatedNodeIds()[0];
+        expect(computeGeometry(dispatcher.getDocument()).nodes.get(baked)!.bounds.x).toBeCloseTo(before.x, 6);
+        // …and it still RESPONDS to the parent, which the dropped constraints had ended.
+        expect(dispatcher.getDocument().nodes.get(baked)!.layout.constraints).toEqual({ horizontal: "right" });
+    });
+
+    test("the master's CHILD-facing layout survives while the instance's PARENT-facing layout wins", () => {
+        const doc = createEmptyDocument();
+        mkRect(doc, "M", 0, 0, 100, 100);
+        doc.nodes.set("M", { ...doc.nodes.get("M")!, layout: { container: { direction: "row", gap: 4 } } });
+        mkRect(doc, "MC", 0, 0, 20, 20, "M");
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "none", opacity: 1 }, layout: { grow: 2, margin: 5 }, componentId: "M" });
+        doc.rootNodeUuids.push("I");
+        const dispatcher = new ActionDispatcher(doc);
+        const action = new DetachInstanceAction(dispatcher.getDocument(), "I");
+        dispatcher.dispatchAction(action);
+        const root = dispatcher.getDocument().nodes.get(action.getCreatedNodeIds()[0])!;
+        expect(root.layout.container).toEqual({ direction: "row", gap: 4 });  // arranges its own children
+        expect(root.layout.grow).toBe(2);                                     // behaves as the instance did
+        expect(root.layout.margin).toBe(5);
+    });
+
+    test("detaching an instance nested inside its OWN master is refused (it would edit the component)", () => {
+        const doc = createEmptyDocument();
+        mkRect(doc, "M", 0, 0, 200, 200);
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: "M", children: [], geometry: { x: 50, y: 50, width: 200, height: 200 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.nodes.get("M")!.children.push("I");
+        doc.nodes.set("J", { id: "J", type: "core.instance", parent: null, children: [], geometry: { x: 400, y: 0, width: 200, height: 200 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids.push("J");
+        // Baking it would parent the copies INSIDE the master, so every other instance of that
+        // master — here J, which the user never touched — would gain the content.
+        expect(new DetachInstanceAction(doc, "I").validate()).toBe(false);
+    });
+});
+
+describe("Review fixes: framing must not silently change a reference frame", () => {
+    function mkRect(doc: ProjectDocument, id: string, x: number, y: number, w: number, h: number, parent: string | null = null) {
+        doc.nodes.set(id, { id, type: "core.rectangle", parent, children: [], geometry: { x, y, width: w, height: h }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        if (parent) doc.nodes.get(parent)!.children.push(id); else doc.rootNodeUuids.push(id);
+    }
+
+    test("framing inside an AUTO-LAYOUT parent is refused — stored x/y there is dead data", () => {
+        const doc = createEmptyDocument();
+        mkRect(doc, "P", 0, 0, 400, 200);
+        doc.nodes.set("P", { ...doc.nodes.get("P")!, layout: { container: { direction: "row", gap: 10, padding: 0 } } });
+        mkRect(doc, "A", 0, 0, 100, 100, "P");
+        mkRect(doc, "B", 0, 0, 100, 100, "P");
+        // The layout computes each child's position, so a frame built from stored x/y would put
+        // both children at the same place and shrink the group to one child's box.
+        expect(new FrameSelectionAction(doc, ["A", "B"]).validate()).toBe(false);
+        const grid = createEmptyDocument();
+        mkRect(grid, "G", 0, 0, 400, 200);
+        grid.nodes.set("G", { ...grid.nodes.get("G")!, layout: { grid: { columns: [{ px: 50 }, { px: 50 }], rowHeight: { px: 50 } } } });
+        mkRect(grid, "GA", 0, 0, 50, 50, "G");
+        mkRect(grid, "GB", 0, 0, 50, 50, "G");
+        expect(new FrameSelectionAction(grid, ["GA", "GB"]).validate()).toBe(false);
+        // …but a PLAIN parent is still fine.
+        const plain = createEmptyDocument();
+        mkRect(plain, "Q", 0, 0, 400, 200);
+        mkRect(plain, "QA", 10, 10, 50, 50, "Q");
+        mkRect(plain, "QB", 100, 10, 50, 50, "Q");
+        expect(new FrameSelectionAction(plain, ["QA", "QB"]).validate()).toBe(true);
+    });
+
+    test("a CONSTRAINED child is released from the old parent's frozen reference, so it stays put", () => {
+        const doc = createEmptyDocument();
+        mkRect(doc, "P", 0, 0, 400, 400);
+        mkRect(doc, "A", 300, 0, 50, 50, "P");
+        doc.nodes.set("A", { ...doc.nodes.get("A")!, layout: { constraints: { horizontal: "right" }, constraintRef: { width: 400, height: 400 } } });
+        mkRect(doc, "B", 0, 0, 50, 50, "P");
+        const dispatcher = new ActionDispatcher(doc);
+        const boxA = computeGeometry(dispatcher.getDocument()).nodes.get("A")!.bounds;
+        const action = new FrameSelectionAction(dispatcher.getDocument(), ["A", "B"]);
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const d = dispatcher.getDocument();
+        // constraintRef pointed at the OLD parent's 400×400; the frame is 350 wide, so leaving
+        // it would shift A by (350−400) and undo the rebase.
+        expect(d.nodes.get("A")!.layout.constraints).toBeUndefined();
+        expect(d.nodes.get("A")!.layout.constraintRef).toBeUndefined();
+        expect(computeGeometry(d).nodes.get("A")!.bounds.x).toBeCloseTo(boxA.x, 6);
+    });
+
+    test("the frame FITS a rotated or scaled child, not just its untransformed box", () => {
+        const doc = createEmptyDocument();
+        mkRect(doc, "A", 0, 0, 100, 100);
+        doc.nodes.set("A", { ...doc.nodes.get("A")!, transform: { rotation: Math.PI / 4 } });
+        const dispatcher = new ActionDispatcher(doc);
+        const childBox = computeGeometry(dispatcher.getDocument()).nodes.get("A")!.bounds;
+        const action = new FrameSelectionAction(dispatcher.getDocument(), ["A"]);
+        dispatcher.dispatchAction(action);
+        const frameBox = computeGeometry(dispatcher.getDocument()).nodes.get(action.getFrameId()!)!.bounds;
+        // A 100×100 square rotated 45° needs ~141.4 — the frame must cover all four corners.
+        expect(frameBox.width).toBeCloseTo(Math.SQRT2 * 100, 4);
+        expect(frameBox.x).toBeLessThanOrEqual(childBox.x + 1e-6);
+        expect(frameBox.x + frameBox.width).toBeGreaterThanOrEqual(childBox.x + childBox.width - 1e-6);
+        // …and the child still hasn't moved. (Compared with a tolerance, not exactly: the
+        // rebase subtracts the frame origin and the engine adds it back, so the round trip is
+        // equal to within floating-point noise — ~1e-14 — rather than bit-identical.)
+        const moved = computeGeometry(dispatcher.getDocument()).nodes.get("A")!.bounds;
+        expect(moved.x).toBeCloseTo(childBox.x, 9);
+        expect(moved.y).toBeCloseTo(childBox.y, 9);
+        expect(moved.width).toBeCloseTo(childBox.width, 9);
+        expect(moved.height).toBeCloseTo(childBox.height, 9);
+    });
+});
+
+describe("Review fixes: an override src obeys the same rule a stored src does (schema 24)", () => {
+    function doc6(masterType: "core.rectangle" | "core.image" = "core.rectangle"): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: masterType, parent: null, children: [], geometry: { x: 0, y: 0, width: 100, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 300, y: 300, width: 100, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["M", "I"];
+        return doc;
+    }
+    const PIXEL = "data:image/png;base64,iVBORw0KGgo=";
+
+    test("the document-free half runs in overridesError, the TYPE half against the master", () => {
+        // Validating an override src as merely "a string" let it hold what no node may hold.
+        expect(overridesError("core.instance", { M: { src: "javascript:alert(1)" } })).toMatch("not allowed");
+        expect(overridesError("core.instance", { M: { src: "" } })).toMatch("non-empty");
+        expect(overridesError("core.instance", { M: { src: PIXEL } })).toBeNull();
+        // …and only an IMAGE master may take one, which needs the document to resolve.
+        const onRect = doc6("core.rectangle");
+        onRect.nodes.set("I", { ...onRect.nodes.get("I")!, overrides: { M: { src: PIXEL } } });
+        expect(overrideAgainstMasterError(onRect, onRect.nodes.get("I")!)).toMatch("only a core.image");
+        const onImage = doc6("core.image");
+        onImage.nodes.set("I", { ...onImage.nodes.get("I")!, overrides: { M: { src: PIXEL } } });
+        expect(overrideAgainstMasterError(onImage, onImage.nodes.get("I")!)).toBeNull();
+    });
+
+    test("the EDIT path refuses it, so a DETACH can no longer bake an unloadable document", () => {
+        const dispatcher = new ActionDispatcher(doc6("core.rectangle"));
+        expect(dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "I", "M", { src: "javascript:alert(1)" })).success).toBe(false);
+        expect(dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "I", "M", { src: PIXEL })).success).toBe(false); // rect master
+        // A legal one on an IMAGE master still works, and detach bakes it faithfully.
+        const d2 = new ActionDispatcher(doc6("core.image"));
+        expect(d2.dispatchAction(new SetInstanceOverrideAction(d2.getDocument(), "I", "M", { src: PIXEL })).success).toBe(true);
+        const detach = new DetachInstanceAction(d2.getDocument(), "I");
+        d2.dispatchAction(detach);
+        expect(d2.getDocument().nodes.get(detach.getCreatedNodeIds()[0])!.src).toBe(PIXEL);
+        expect(() => deserializeDocument(serializeDocument(d2.getDocument()))).not.toThrow();
+    });
+
+    test("23→24 drops an override src the new rule refuses, so an older file still opens", () => {
+        const legacy = JSON.stringify({
+            version: "23",
+            document: {
+                metadata: {}, rootNodeUuids: ["M", "I"], variables: {},
+                nodes: {
+                    M: { id: "M", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} },
+                    I: { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M", overrides: { M: { src: "javascript:alert(1)", text: "kept" } } }
+                }
+            }
+        });
+        const loaded = deserializeDocument(legacy);
+        expect(loaded.version).toBe(SCHEMA_VERSION);
+        expect(loaded.nodes.get("I")!.overrides!.M.src).toBeUndefined();  // dropped
+        expect(loaded.nodes.get("I")!.overrides!.M.text).toBe("kept");    // the rest survives
+    });
+
+    test("the app's URL fallback runs the SAME validator the file branch does", () => {
+        // Without it a refused URL fell through to AddNodeAction, whose failure is silent —
+        // the drag vanished with no explanation on exactly the inputs the file branch explains.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const cancelBranch = src.slice(src.indexOf('addEventListener("cancel"'), src.indexOf('addEventListener("change"'));
+        expect(cancelBranch).toMatch(/srcError\("core\.image"/);
+        expect(cancelBranch).toMatch(/window\.alert/);
     });
 });

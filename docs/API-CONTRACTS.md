@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v23 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v24 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -57,8 +57,9 @@ function overridesError(type: string, overrides: unknown): string | null; // sha
 // Node.ts — an image SOURCE (schema 23). Only a core.image may carry one; bounded, and the
 // scheme must be something a renderer can draw (http/https/blob/relative, or data:image/*).
 function srcError(type: NodeType, src: unknown): string | null;   // shared load + edit
+function srcValueError(src: unknown): string | null;              // the TYPE-FREE half, reused by the override seam (schema 24)
 const IMAGE_SRC_MAX: number;                                      // cap on an inlined data: URL
-function overrideDimensionError(doc: ReadonlyDocument, instance: ReadonlyNode): string | null; // the TYPE-aware half (needs the doc to resolve each key's master); BOTH paths run it
+function overrideAgainstMasterError(doc: ReadonlyDocument, instance: ReadonlyNode): string | null; // the TYPE-aware half of override validation (needs the doc to resolve each key's master): per-type sizes AND "only a core.image may take a src override". BOTH paths run it
 // ONE node of a master subtree as an instance renders it (override applied; the ROOT re-origined
 // to (0,0) and stripped of constraints). Shared by expandInstances (VIRTUAL) and
 // DetachInstanceAction (STORED), so a detach bakes exactly what was drawn.
