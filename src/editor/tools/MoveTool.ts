@@ -5,7 +5,7 @@
 
 import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
 import { Action } from "../../core/actions/Action";
-import { geometryActionFor, isEditableNode } from "../../core/actions/nodeEdit";
+import { geometryActionFor, isEditableNode, isMasterRootCopy } from "../../core/actions/nodeEdit";
 import { TransactionAction } from "../../core/actions/TransactionAction";
 import { EditorState } from "../EditorState";
 import { Geometry } from "../../core/document/Node";
@@ -63,6 +63,11 @@ export class MoveTool implements Tool {
             // A copy nested inside ANOTHER instance's expansion can't hold an override yet, so
             // it isn't draggable — better inert than an edit that silently fails to commit.
             if (isVirtualId(id) && !isEditableNode(doc, id)) continue;
+            // Nor is the master ROOT copy: expansion re-origins it to (0,0) because the INSTANCE's
+            // own geometry places it, so a root override's x/y is discarded (`geometryActionFor`
+            // therefore refuses to write one). Without this the drag would preview a move that
+            // reverts on drop. Dragging the instance itself is the gesture that moves this content.
+            if (isMasterRootCopy(doc, id)) continue;
             // A LAID-OUT child of an auto-layout container has a COMPUTED position; its
             // stored geometry.x/y is ignored, so dragging it would move nothing on screen.
             // Free-dragging is disabled for such children (reorder-by-drag is M4). An

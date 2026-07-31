@@ -26,11 +26,12 @@ import { ReadonlyDocument } from "../core/document/Document";
 import { PathCommand, Shadow } from "../core/document/Node";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
-import { expandInstances, isVirtualId } from "../core/document/Components";
+import { expandInstances } from "../core/document/Components";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
 import { selectionHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
 import { isGroupRotatable, isGroupResizable } from "../core/geometry/GroupTransform";
+import { isHandleOffered } from "../core/actions/nodeEdit";
 import { RendererState } from "./RendererState";
 
 const GRID_BASE = 20;
@@ -483,8 +484,11 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
         // the four RESIZE corners (they commit a per-instance override) but NOT the rotate knob —
         // transform overrides are a later slice, and the editor refuses that grab identically,
         // so draw and pick stay in step.
+        // A copy shows RESIZE corners only when the edit can actually be recorded — the shared
+        // `isHandleOffered` rule, which the picker and the hover cursor read too, so what is
+        // drawn, what a press grabs, and what the pointer promises cannot drift apart.
         selectionHandles(computed, roots, z)
-            .filter(h => !(h.handle === "rotate" && isVirtualId(h.nodeId)))
+            .filter(h => isHandleOffered(doc, h.nodeId, h.handle))
             .forEach(h => items.push(handleItem(h, z)));
     }
 

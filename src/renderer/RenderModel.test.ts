@@ -210,6 +210,22 @@ describe("buildRenderModel — overlay", () => {
         expect([child.world!.e, child.world!.f]).toEqual([420, 320]); // instance + the child's own offset
     });
 
+    test("an instance COPY shows resize corners but NO rotate knob; a NESTED copy shows none", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("IM", { id: "IM", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#00f", opacity: 1 }, layout: {} });
+        doc.nodes.set("OM", { id: "OM", type: "core.rectangle", parent: null, children: ["OI"], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("OI", { id: "OI", type: "core.instance", parent: "OM", children: [], geometry: { x: 5, y: 5, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "IM" });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 200, y: 200, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "OM" });
+        doc.rootNodeUuids = ["IM", "OM", "I"];
+        // A DIRECT copy: four resize corners, no rotate knob (transform overrides are deferred).
+        const direct = buildRenderModel(SIZE, doc, stateFor(doc, { selectedNodeIds: ["I::OM"] }));
+        expect(direct.overlay.filter(i => i.role === "handle").map(h => h.handle)).toEqual(["nw", "ne", "sw", "se"]);
+        // A NESTED copy cannot hold an override yet → no handles at all, rather than dead controls.
+        const nested = buildRenderModel(SIZE, doc, stateFor(doc, { selectedNodeIds: ["I::OI::IM"] }));
+        expect(nested.overlay.filter(i => i.role === "handle")).toEqual([]);
+        expect(nested.overlay.some(i => i.role === "outline")).toBe(true); // still shows it IS selected
+    });
+
     test("multi-select → ONE group box + GROUP corner handles + one group knob (never per-node handles)", () => {
         const doc = createEmptyDocument();
         const mk = (id: string, x: number, y: number) => doc.nodes.set(id, { id, type: "core.rectangle", parent: null, children: [], geometry: { x, y, width: 50, height: 50 }, style: { fill: "#fff", opacity: 1 }, layout: {} });

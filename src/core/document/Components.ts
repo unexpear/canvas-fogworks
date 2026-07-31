@@ -32,7 +32,8 @@
  */
 
 import { ProjectDocument, ReadonlyDocument } from "./Document";
-import { Geometry, Node, Style, styleError } from "./Node";
+import { dimensionError, Geometry, Node, Style, styleError } from "./Node";
+import { ReadonlyNode } from "./SceneGraph";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
  *  Reserved: a stored node id may not contain it (checked on the edit AND load paths). */
@@ -149,6 +150,15 @@ export function overridesError(type: string, overrides: unknown): string | null 
                 if (!GEOMETRY_FIELDS.has(f)) return `override "${key}" geometry has an unknown field "${f}"`;
                 if (typeof v !== "number" || !Number.isFinite(v)) return `override "${key}" geometry.${f} must be a finite number`;
             }
+            // Sizes obey the same floor a STORED node's do. The per-TYPE rule (`dimensionError`)
+            // can't run here — the override is keyed by master node id and validated without the
+            // document, so the master's type is unknown — but a negative size is invalid for every
+            // type, so reject that much rather than let an override hold what no node could. The
+            // type-aware half runs in `overrideDimensionError`, which callers holding the document
+            // add on top; both paths run it, so neither side of the seam validates less.
+            const { width, height } = o.geometry as { width?: number; height?: number };
+            if (width !== undefined && width < 0) return `override "${key}" geometry.width must be >= 0`;
+            if (height !== undefined && height < 0) return `override "${key}" geometry.height must be >= 0`;
         }
         if (o.style !== undefined) {
             if (!isPlain(o.style)) return `override "${key}" style must be an object`;
@@ -157,6 +167,32 @@ export function overridesError(type: string, overrides: unknown): string | null 
         }
         if (o.text !== undefined && typeof o.text !== "string") return `override "${key}" text must be a string`;
         if (o.src !== undefined && typeof o.src !== "string") return `override "${key}" src must be a string`;
+    }
+    return null;
+}
+
+/**
+ * The TYPE-AWARE half of override validation, for callers that hold the document: an override
+ * whose key resolves to a master node must produce a size that master's own type accepts —
+ * the SAME `dimensionError` a stored geometry edit obeys. `overridesError` cannot do this (it
+ * validates a bare map, with no way to learn the master's type), so without this the routing
+ * seam would validate LESS on the override side: `{width: 0}` refused on a stored rectangle
+ * but accepted on its copy, materializing a zero-width rect no document could store.
+ *
+ * Run by the load path (`Integrity`) and the edit path (`SetInstanceOverrideAction`) alike, so
+ * the two cannot drift. A key resolving to nothing is skipped — a dangling override stays inert
+ * and loadable, exactly like a dangling `componentId` or `$token`. A partial size override is
+ * checked against the master's OTHER axis, since that is what expansion will materialize.
+ */
+export function overrideDimensionError(doc: ReadonlyDocument, instance: ReadonlyNode): string | null {
+    if (!instance.overrides) return null;
+    for (const key of Object.keys(instance.overrides)) {
+        const g = instance.overrides[key].geometry;
+        if (!g || (g.width === undefined && g.height === undefined)) continue;
+        const master = doc.nodes.get(key);
+        if (!master) continue;
+        const err = dimensionError(master.type, g.width ?? master.geometry.width, g.height ?? master.geometry.height);
+        if (err) return `override "${key}" ${err}`;
     }
     return null;
 }

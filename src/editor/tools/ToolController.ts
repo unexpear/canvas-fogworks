@@ -13,8 +13,8 @@ import { EditorState, panBy, screenToWorld } from "../EditorState";
 import { computeGeometry, ComputedState, selectionBounds } from "../../core/geometry/GeometryEngine";
 import { handleAtPoint, groupHandleAtPoint } from "../../core/geometry/SelectionHandles";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupScaleInput } from "../../core/geometry/GroupTransform";
-import { expandInstances, isVirtualId } from "../../core/document/Components";
-import { geometryActionFor } from "../../core/actions/nodeEdit";
+import { expandInstances } from "../../core/document/Components";
+import { geometryActionFor, isHandleOffered } from "../../core/actions/nodeEdit";
 import { snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect } from "../../core/geometry/Matrix";
 import { ReadonlyDocument } from "../../core/document/Document";
@@ -165,10 +165,12 @@ export class ToolController {
                 // COMMIT routes through `geometryActionFor`, which writes an override for it.
                 const node = hit ? expandInstances(doc).nodes.get(hit.nodeId) : undefined;
                 if (hit && c && node) {
-                    if (hit.handle === "rotate" && isVirtualId(hit.nodeId)) {
-                        // An instance COPY has no stored transform, and TRANSFORM overrides are a
-                        // later slice — so the knob isn't grabbable here (and the renderer doesn't
-                        // draw it). Falling through beats a control that silently does nothing.
+                    if (!isHandleOffered(doc, hit.nodeId, hit.handle)) {
+                        // An instance COPY offers only the handles whose edit it can record: no
+                        // rotate knob (a TRANSFORM override is a later slice), and nothing at all
+                        // for a copy nested inside another instance's expansion. The renderer
+                        // draws exactly this set, so falling through to the tool is what the user
+                        // sees — better than a control that silently does nothing.
                         this.activeTool?.onMouseDown?.(e, canvasRect, computed);
                         return;
                     }
@@ -276,7 +278,10 @@ export class ToolController {
             let dy = (e.clientY - this.resizeStartY) / zoom;
 
             const doc = this.dispatcher.getDocument();
-            if (!doc.nodes.has(this.resizeNodeId)) { this.resetResize(); this.refresh(); return; }
+            // Liveness against the EXPANDED tree: an instance COPY is legitimately absent from the
+            // stored map, and reading that as "deleted mid-drag" aborts the resize on its very
+            // first frame — the same trap MoveTool's preview loop had.
+            if (!expandInstances(doc).nodes.has(this.resizeNodeId)) { this.resetResize(); this.refresh(); return; }
 
             // Alignment snapping: pull the DRAGGED corner (the fixed corner stays put) onto a
             // nearby target edge/centre, then recompute the box from the adjusted delta. The corner
@@ -320,7 +325,11 @@ export class ToolController {
             const vp = this.editorState.viewport;
             const w = screenToWorld(vp, canvasRect, e.clientX, e.clientY);
             const computed = computeGeometry(doc, this.editorState.pendingGeometry);
-            const roots = selectionRoots(doc, sel);
+            // Expanded, exactly like onMouseDown: on the stored document `selectionRoots` drops a
+            // selected instance COPY, so the pointer would stay an arrow over handles that ARE
+            // drawn and ARE grabbable — and a MIXED selection would take the single-root branch
+            // here while the press takes the group branch, promising a grab that doesn't exist.
+            const roots = selectionRoots(expandInstances(doc), sel);
             // Match onMouseDown's picking exactly: each group affordance is gated on its own
             // eligibility — so the hover cursor reflects what a press would actually grab.
             if (roots.length >= 2) {
@@ -332,7 +341,10 @@ export class ToolController {
                 const actionable = hit && (hit.handle === "rotate" ? rotatable : resizable);
                 cursor = actionable ? hit.cursor : null;
             } else {
-                cursor = handleAtPoint(computed, roots, w.x, w.y, vp.zoom)?.cursor ?? null;
+                const hit = handleAtPoint(computed, roots, w.x, w.y, vp.zoom);
+                // Same `isHandleOffered` gate the press and the renderer use — a copy's rotate
+                // knob is neither drawn nor grabbable, so it must not show a cursor either.
+                cursor = hit && isHandleOffered(doc, hit.nodeId, hit.handle) ? hit.cursor : null;
             }
         }
         if (cursor !== this.editorState.hoverCursor) {

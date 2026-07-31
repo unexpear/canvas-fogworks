@@ -9,9 +9,9 @@ import { createEmptyDocument, ProjectDocument, CURRENT_VERSION, SCHEMA_VERSION }
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
-import { expandInstances, componentError, overridesError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES } from "../document/Components";
+import { expandInstances, componentError, overridesError, overrideDimensionError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES } from "../document/Components";
 import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
-import { geometryActionFor, styleActionFor, isEditableNode } from "../actions/nodeEdit";
+import { geometryActionFor, styleActionFor, isEditableNode, isHandleOffered, isMasterRootCopy } from "../actions/nodeEdit";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
@@ -2270,6 +2270,100 @@ describe("Components: instance overrides", () => {
         expect(dispatcher.getDocument().nodes.get("I")!.overrides?.MC).toBeUndefined();
     });
 
+    test("RESIZING an instance copy commits an override (the liveness check reads the EXPANDED tree)", () => {
+        // The trap MoveTool's preview loop had, in the resize path: a virtual id is legitimately
+        // absent from the stored map, so a stored-doc liveness check aborts on the FIRST frame.
+        const doc = doc2();
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["I::MC"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        const rect = { left: 0, top: 0 } as DOMRect;
+        const md = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        // The copy's world box is (305,305)-(325,325); grab its SE corner and drag +20,+20.
+        tc.onMouseDown(md(325, 325), rect);
+        tc.onMouseMove(md(345, 345), rect);
+        expect(es.pendingGeometry!.get("I::MC")).toBeDefined(); // did NOT abort on the first move
+        tc.onMouseUp(md(345, 345));
+        expect(dispatcher.getDocument().nodes.get("I")!.overrides!.MC.geometry).toMatchObject({ width: 40, height: 40 });
+        expect(dispatcher.getDocument().nodes.get("MC")!.geometry.width).toBe(20); // master untouched
+    });
+
+    test("a NEGATIVE override size is rejected — an override can't hold what no node may", () => {
+        expect(overridesError("core.instance", { MC: { geometry: { width: -5 } } })).toMatch("width must be >= 0");
+        expect(overridesError("core.instance", { MC: { geometry: { height: -1 } } })).toMatch("height must be >= 0");
+        expect(overridesError("core.instance", { MC: { geometry: { width: 0 } } })).toBeNull(); // 0 is legal (a line axis)
+        const dispatcher = new ActionDispatcher(doc2());
+        expect(dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "I", "MC", { geometry: { width: -5 } })).success).toBe(false);
+    });
+
+    test("the master ROOT copy is not draggable (its position is the instance's, so a drag would revert)", () => {
+        const dispatcher = new ActionDispatcher(doc2());
+        const es = createEditorState(); es.selectedNodeIds = ["I::M"]; // the ROOT copy
+        const tool = new MoveTool(dispatcher, es, () => { });
+        const mev = (x: number, y: number) => ({ clientX: x, clientY: y } as unknown as MouseEvent);
+        tool.onMouseDown(mev(0, 0));
+        tool.onMouseMove(mev(40, 40));
+        expect(es.pendingGeometry).toBeNull();          // no preview — the gesture never starts
+        tool.onMouseUp(mev(40, 40));
+        expect(dispatcher.canUndo()).toBe(false);       // and no no-op undo entry
+    });
+
+    test("a NESTED copy shows no handles at all (it cannot hold an override yet)", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("IM", { id: "IM", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#00f", opacity: 1 }, layout: {} });
+        doc.nodes.set("OM", { id: "OM", type: "core.rectangle", parent: null, children: ["OI"], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("OI", { id: "OI", type: "core.instance", parent: "OM", children: [], geometry: { x: 5, y: 5, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "IM" });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 200, y: 200, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "OM" });
+        doc.rootNodeUuids = ["IM", "OM", "I"];
+        expect(isEditableNode(doc, "I::OI::IM")).toBe(false);       // nested — no override target
+        expect(isEditableNode(doc, "I::OI")).toBe(true);            // …but a direct copy is fine
+    });
+
+    test("drawn, grabbable, and hovered agree — isHandleOffered is the ONE rule", () => {
+        const doc = doc2();
+        expect(isHandleOffered(doc, "MC", "rotate")).toBe(true);        // a stored node: everything
+        expect(isHandleOffered(doc, "I::MC", "se")).toBe(true);         // a copy: resize corners…
+        expect(isHandleOffered(doc, "I::MC", "rotate")).toBe(false);    // …but no rotate knob
+        expect(isHandleOffered(doc, "I::OI::deep", "se")).toBe(false);  // nested: nothing
+    });
+
+    test("the hover cursor over a COPY's corner matches what a press would grab", () => {
+        // The cursor resolved roots on the STORED document, where a virtual id doesn't exist, so
+        // the pointer stayed an arrow over handles that were both drawn and grabbable.
+        const dispatcher = new ActionDispatcher(doc2());
+        const es = createEditorState(); es.selectedNodeIds = ["I::MC"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        const rect = { left: 0, top: 0 } as DOMRect;
+        const hover = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 0, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        tc.onMouseMove(hover(325, 325), rect);   // the copy's SE corner (world box 305..325)
+        expect(es.hoverCursor).toBe("nwse-resize");
+        tc.onMouseMove(hover(500, 500), rect);   // empty space
+        expect(es.hoverCursor).toBeNull();
+    });
+
+    test("a press on a NESTED copy's corner falls through — no dead resize gesture", () => {
+        // The renderer draws no handle there; the picker must refuse the same grab, or the user
+        // would start a resize that can never commit (no override target).
+        const doc = createEmptyDocument();
+        doc.nodes.set("IM", { id: "IM", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#00f", opacity: 1 }, layout: {} });
+        doc.nodes.set("OM", { id: "OM", type: "core.rectangle", parent: null, children: ["OI"], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("OI", { id: "OI", type: "core.instance", parent: "OM", children: [], geometry: { x: 5, y: 5, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "IM" });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 200, y: 200, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "OM" });
+        doc.rootNodeUuids = ["IM", "OM", "I"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["I::OI::IM"];
+        let toolSawIt = false;
+        const tc = new ToolController(dispatcher, es, () => { });
+        tc.setTool({ onMouseDown: () => { toolSawIt = true; } });
+        const rect = { left: 0, top: 0 } as DOMRect;
+        const md = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        // The nested copy's world box is (205,205)-(215,215); press its SE corner.
+        tc.onMouseDown(md(215, 215), rect);
+        tc.onMouseMove(md(235, 235), rect);
+        expect(es.pendingGeometry).toBeNull();   // no resize armed
+        expect(toolSawIt).toBe(true);            // …the press reached the tool instead
+    });
+
     test("EVERY editor entry point routes — no site dispatches a raw action at a virtual id", () => {
         // The failure mode this guards: a missed call site dispatches an action whose target
         // isn't in the stored document, `dispatchAction` returns success:false, and the control
@@ -2283,6 +2377,45 @@ describe("Components: instance overrides", () => {
         // The controller still constructs geometry actions for the GROUP-resize path (stored
         // roots only, never virtual), so assert the SINGLE-node resize commit is routed instead.
         expect(tc).toMatch(/geometryActionFor\(doc, this\.resizeNodeId/);
+    });
+
+    test("the TYPE-aware size rule applies to overrides too — the seam can't validate less", () => {
+        // `overridesError` alone can't run `dimensionError` (it never sees the master's type), so
+        // a 0-width copy of a RECTANGLE would slip through a check the stored node fails.
+        const doc = doc2();
+        expect(overrideDimensionError(doc, doc.nodes.get("I")!)).toBeNull();          // no overrides
+        const zero = doc2({ MC: { geometry: { width: 0 } } });
+        expect(overrideDimensionError(zero, zero.nodes.get("I")!)).toMatch("positive dimensions");
+        // A partial override is judged against the master's OTHER axis — what expansion materializes.
+        const partial = doc2({ MC: { geometry: { height: 0 } } });
+        expect(overrideDimensionError(partial, partial.nodes.get("I")!)).toMatch("positive dimensions");
+        // A key resolving to no master stays inert, exactly like a dangling componentId.
+        const dangling = doc2({ ghost: { geometry: { width: 0 } } });
+        expect(overrideDimensionError(dangling, dangling.nodes.get("I")!)).toBeNull();
+        // EDIT path: the same patch is refused on the copy that is refused on the stored node.
+        const dispatcher = new ActionDispatcher(doc2());
+        expect(dispatcher.dispatchAction(geometryActionFor(dispatcher.getDocument(), "I::MC", { width: 0 })!).success).toBe(false);
+        expect(dispatcher.dispatchAction(geometryActionFor(dispatcher.getDocument(), "MC", { width: 0 })!).success).toBe(false);
+        // LOAD path: the identical document is rejected rather than materializing an illegal copy.
+        expect(() => deserializeDocument(serializeDocument(zero))).toThrow("positive dimensions");
+        // …and a type that legitimately allows a zero axis still may.
+        const line = doc2({ MC: { geometry: { width: 0 } } });
+        line.nodes.set("MC", { ...line.nodes.get("MC")!, type: "core.line" });
+        expect(overrideDimensionError(line, line.nodes.get("I")!)).toBeNull();
+    });
+
+    test("the ROOT copy's x/y is refused at the SEAM, not just by the tool that happens to check", () => {
+        // Expansion discards a root override's x/y, so writing one dirties the document and pushes
+        // an undo step for a gesture that changed nothing. Every edit site routes through here.
+        const doc = doc2();
+        expect(isMasterRootCopy(doc, "I::M")).toBe(true);
+        expect(isMasterRootCopy(doc, "I::MC")).toBe(false);
+        expect(isMasterRootCopy(doc, "M")).toBe(false);
+        expect(geometryActionFor(doc, "I::M", { x: 40, y: 40 })).toBeNull();     // nothing left to write
+        // A SIZE override on the root is honoured — only the position is dropped.
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(geometryActionFor(dispatcher.getDocument(), "I::M", { x: 40, width: 250 })!);
+        expect(dispatcher.getDocument().nodes.get("I")!.overrides!.M.geometry).toEqual({ width: 250 });
     });
 
     test("an instance copy round-trips with its overrides", () => {
