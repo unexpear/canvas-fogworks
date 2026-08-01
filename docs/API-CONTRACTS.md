@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v26 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v27 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -49,6 +49,12 @@ function isVirtualId(id: string): boolean;                 // true for an expans
 function splitVirtualId(id: string): { instancePath: string; masterNodeId: string } | null; // reversible
 function ownerInstanceOf(id: string): string | null;       // the STORED instance a virtual node belongs to (first path segment)
 function componentError(type: string, componentId: unknown): string | null; // shared load + edit; dangling is ALLOWED
+// VARIANTS (schema 27). A set has no object of its own — it is the masters that name it, so
+// tagging a node creates the set and untagging the last member ends it. Resolution is TOTAL:
+// not a variant, no member matching, an unknown property — every failure draws `componentId`.
+function variantMembers(doc: ReadonlyDocument, set: string): string[];              // sorted by id — DETERMINISTIC, not Map insertion order
+function variantProperties(doc: ReadonlyDocument, set: string): Record<string, string[]>; // what a picker offers; names and values sorted
+function resolveVariantMaster(doc: ReadonlyDocument, instance: { componentId?: string; variants?: Record<string, string> }): string | null;
 function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializes instances as virtual children; SAME reference when there is nothing to expand
 // Per-instance OVERRIDES (schema 22, M6 slice 2): what one instance changes about its copy,
 // keyed by MASTER NODE ID. Applied during expansion at each level; a key matching no master

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v26 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v27 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -75,6 +75,8 @@ interface Node {
   path?: PathCommand[];             // core.path (absent = empty path, draws nothing)
   componentId?: string;             // core.instance → the MASTER node it copies (schema 21, M6)
   overrides?: Record<string, InstanceOverride>; // core.instance → per-copy changes, keyed by MASTER NODE ID (schema 22; +layout/transform at 26)
+  variant?: VariantKey;             // this node's place in a variant SET (schema 27) — any node may carry one
+  variants?: Record<string, string>; // core.instance → the variant SELECTION; SPARSE (unnamed properties keep the master's value)
   name?: string;                    // display name
 }
 
@@ -623,7 +625,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"26"`; chain tail: …17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing, drops unvalidatable entries — 19→20 number-token radius/fontSize (pass-through), 20→21 components: pass-through for the new type/field but it RENAMES stored ids containing the now-reserved `::`, 21→22 per-instance overrides (pass-through), 22→23 the image `src` rule: DROPS a src the new `srcError` refuses so an older file still opens, 23→24 the same rule reaching a per-instance OVERRIDE `src`: drops the offending entry so the copy just shows the master's source, 24→25 `Style.strokeWidth` (pass-through: a NEW optional field, so nothing previously-valid becomes invalid), 25→26 `layout`/`transform` on a per-instance override (pass-through, same reason)) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"27"`; chain tail: …17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing, drops unvalidatable entries — 19→20 number-token radius/fontSize (pass-through), 20→21 components: pass-through for the new type/field but it RENAMES stored ids containing the now-reserved `::`, 21→22 per-instance overrides (pass-through), 22→23 the image `src` rule: DROPS a src the new `srcError` refuses so an older file still opens, 23→24 the same rule reaching a per-instance OVERRIDE `src`: drops the offending entry so the copy just shows the master's source, 24→25 `Style.strokeWidth` (pass-through: a NEW optional field, so nothing previously-valid becomes invalid), 25→26 `layout`/`transform` on a per-instance override (pass-through, same reason), 26→27 variants: `Node.variant` + `Node.variants` (pass-through — two new optional fields)) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

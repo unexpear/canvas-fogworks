@@ -3,7 +3,7 @@
  * @description Shared types used across all Actions and History tracking.
  */
 
-import { Node, Geometry, Style, Layout, Transform, RESERVED_NODE_ID } from "../document/Node";
+import { Node, Geometry, Style, Layout, Transform, VariantKey, RESERVED_NODE_ID } from "../document/Node";
 import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
 import { InstanceOverride } from "../document/Components";
 
@@ -54,6 +54,12 @@ export type NodeDelta =
          *  rather than per-key so a transaction merge is last-wins on a coherent value; the
          *  ACTION does the field-level merging before emitting. */
         overrides?: Record<string, InstanceOverride>;
+        /** Variants (schema 27). Both are whole-value replaces, and both are read with `in`
+         *  rather than an `!== undefined` test, because CLEARING one is a real edit — untagging
+         *  a master, or dropping a property back to the master's value — and an undefined that
+         *  meant "absent from the delta" could never express it. */
+        variant?: VariantKey;
+        variants?: Record<string, string>;
     }
     /**
      * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme

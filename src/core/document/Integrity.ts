@@ -12,7 +12,7 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError, layoutError, dimensionError, pathError, srcError, styleError, nodeIdError } from "./Node";
+import { transformError, layoutError, dimensionError, pathError, srcError, styleError, nodeIdError, variantError, variantSelectionError } from "./Node";
 import { componentError, overrideAgainstMasterError, overridesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
 
@@ -60,6 +60,13 @@ function checkNodeRanges(node: ReadonlyNode): void {
     // inert rather than invalid.
     const ovrErr = overridesError(node.type, node.overrides);
     if (ovrErr) throw new Error(`Invalid document: node "${node.id}" ${ovrErr}.`);
+    // Variants (schema 27): a master's place in a set, and an instance's selection within it.
+    // Both are hand-editable maps, so both are bounded and reserved-key-checked; a selection
+    // naming a property the set never defines is inert, not invalid.
+    const varErr = variantError(node.variant);
+    if (varErr) throw new Error(`Invalid document: node "${node.id}" ${varErr}.`);
+    const selErr = variantSelectionError(node.type, node.variants);
+    if (selErr) throw new Error(`Invalid document: node "${node.id}" ${selErr}.`);
 }
 
 /**

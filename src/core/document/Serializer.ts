@@ -56,6 +56,10 @@ function isValidNode(n: any): n is Node {
         // Shallow gate for the schema-22 overrides map; the semantic rules live once in
         // `overridesError` (Integrity), like the effects and the path commands.
         (n.overrides === undefined || isPlainObject(n.overrides)) &&
+        // Shallow gates for the schema-27 variant maps; the semantic rules live once in
+        // `variantError` / `variantSelectionError` (Integrity).
+        (n.variant === undefined || isPlainObject(n.variant)) &&
+        (n.variants === undefined || isPlainObject(n.variants)) &&
         (n.states === undefined || isPlainObject(n.states)) &&
         (n.transform === undefined || (isPlainObject(n.transform) &&
             (n.transform.rotation === undefined || typeof n.transform.rotation === "number") &&
@@ -254,6 +258,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "23") { raw = migrate_23_to_24(raw); version = "24"; }
     if (version === "24") { raw = migrate_24_to_25(raw); version = "25"; }
     if (version === "25") { raw = migrate_25_to_26(raw); version = "26"; }
+    if (version === "26") { raw = migrate_26_to_27(raw); version = "27"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -494,6 +499,17 @@ function migrate_21_to_22(raw: any): any {
  * lay the copy out — or leave it unrotated — exactly as the master, silently drawing a
  * different picture from the one that was saved.
  */
+/**
+ * 26 -> 27: variants — `Node.variant` on a master, `Node.variants` on an instance.
+ *
+ * Two new optional fields, so every schema-26 document is already a valid schema-27 one.
+ * The bump is required because an OLD BUILD reading a file that HAS them would ignore the
+ * selection and draw whichever master `componentId` names — a different picture, silently.
+ */
+function migrate_26_to_27(raw: any): any {
+    return { ...raw, version: "27" };
+}
+
 function migrate_25_to_26(raw: any): any {
     return { ...raw, version: "26" };
 }

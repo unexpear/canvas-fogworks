@@ -9,8 +9,9 @@ import { createEmptyDocument, ProjectDocument, ReadonlyDocument, CURRENT_VERSION
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, isTokenRef, tokenRefFor, tokenKeyOf, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
-import { expandInstances, componentError, overridesError, overrideAgainstMasterError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES } from "../document/Components";
+import { expandInstances, componentError, overridesError, overrideAgainstMasterError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES , variantMembers, variantProperties, resolveVariantMaster} from "../document/Components";
 import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
+import { SetVariantAction, SetInstanceVariantAction } from "../actions/VariantActions";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy } from "../actions/nodeEdit";
@@ -49,7 +50,7 @@ import { alignAction, distributeAction } from "../actions/alignActions";
 import { UpdateNodeContentAction, NODE_NAME_MAX } from "../actions/UpdateNodeContentAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
-import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow, TrackSize, layoutError, newGridPatch, mergeLayout, transformError, Layout } from "../document/Node";
+import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow, TrackSize, layoutError, newGridPatch, mergeLayout, transformError, Layout, variantError, variantSelectionError } from "../document/Node";
 import { parseTrackList, formatTrackList } from "../document/TrackList";
 
 function createDocWithRectangle(): ProjectDocument {
@@ -4275,8 +4276,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 25→26 landed for layout/transform overrides.)
-        expect(() => migrateIfNeeded(legacy, "27")).toThrow('Migration not implemented for document schema "26"');
+        // time a real migration is added — here, when 26→27 landed for variants.)
+        expect(() => migrateIfNeeded(legacy, "28")).toThrow('Migration not implemented for document schema "27"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -8663,5 +8664,155 @@ describe("Track lists: the authoring form of TrackSize[]", () => {
         expect(src).toMatch(/editGrid\(\{ hugWidth:/);
         expect(src).toMatch(/colSpan: Math\.max\(1/);            // the child half
         expect(src).toMatch(/formatTrackList\(node\.layout\.grid\.columns\)/);
+    });
+});
+
+
+// ─── Variants (schema 27): one instance, many masters, switched by named properties ───
+describe("Variants: a set is just the masters that name it", () => {
+    /** A "Button" set with four members: size × state. Each master is an ordinary node. */
+    function buttonSet(): ProjectDocument {
+        const doc = createEmptyDocument();
+        const mk = (id: string, size: string, state: string, w: number) =>
+            doc.nodes.set(id, {
+                id, type: "core.rectangle", parent: null, children: [],
+                geometry: { x: 0, y: 0, width: w, height: 20 },
+                style: { fill: state === "hover" ? "#00ff00" : "#0000ff", opacity: 1 }, layout: {},
+                variant: { set: "Button", values: { size, state } }
+            });
+        mk("b-sm-def", "small", "default", 40);
+        mk("b-sm-hov", "small", "hover", 40);
+        mk("b-lg-def", "large", "default", 90);
+        mk("b-lg-hov", "large", "hover", 90);
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 300, y: 300, width: 40, height: 20 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "b-sm-def" });
+        doc.rootNodeUuids = ["b-sm-def", "b-sm-hov", "b-lg-def", "b-lg-hov", "I"];
+        return doc;
+    }
+
+    test("switching ONE property picks the master carrying that combination", () => {
+        const dispatcher = new ActionDispatcher(buttonSet());
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "size", "large"));
+        const d = dispatcher.getDocument();
+        // size=large, state=default (inherited from the pointed-at master) → b-lg-def.
+        expect(resolveVariantMaster(d, d.nodes.get("I")!)).toBe("b-lg-def");
+        // …and the SELECTION is sparse: only what was changed is stored.
+        expect(d.nodes.get("I")!.variants).toEqual({ size: "large" });
+    });
+
+    test("selections MERGE — choosing a second property does not forget the first", () => {
+        const dispatcher = new ActionDispatcher(buttonSet());
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "size", "large"));
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "state", "hover"));
+        const d = dispatcher.getDocument();
+        expect(resolveVariantMaster(d, d.nodes.get("I")!)).toBe("b-lg-hov");
+        // Clearing one property falls back to the master's own value, and an EMPTY selection
+        // is absent rather than `{}` — two equal documents must compare equal.
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "size", null));
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "state", null));
+        expect(dispatcher.getDocument().nodes.get("I")!.variants).toBeUndefined();
+    });
+
+    test("the SWITCH actually redraws — the expansion copies the new master's subtree", () => {
+        const dispatcher = new ActionDispatcher(buttonSet());
+        const widthOf = (d: ReadonlyDocument) => {
+            const x = expandInstances(d);
+            const copyId = [...x.nodes.keys()].find(id => id.startsWith("I::"))!;
+            return x.nodes.get(copyId)!.geometry.width;
+        };
+        expect(widthOf(dispatcher.getDocument())).toBe(40);          // small
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "size", "large"));
+        expect(widthOf(dispatcher.getDocument())).toBe(90);          // large — a different master
+    });
+
+    test("resolution is TOTAL: every failure draws what you pointed at", () => {
+        const doc = buttonSet();
+        // A property the set never defines.
+        expect(resolveVariantMaster(doc, { componentId: "b-sm-def", variants: { flavour: "salty" } })).toBe("b-sm-def");
+        // A value no member carries.
+        expect(resolveVariantMaster(doc, { componentId: "b-sm-def", variants: { size: "enormous" } })).toBe("b-sm-def");
+        // A master that is not in any set at all.
+        doc.nodes.set("plain", { id: "plain", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 5, height: 5 }, style: { fill: "#fff", opacity: 1 }, layout: {} });
+        expect(resolveVariantMaster(doc, { componentId: "plain", variants: { size: "large" } })).toBe("plain");
+        // A dangling componentId, and none at all.
+        expect(resolveVariantMaster(doc, { componentId: "ghost" })).toBe("ghost");
+        expect(resolveVariantMaster(doc, {})).toBeNull();
+    });
+
+    test("a match must agree on the property COUNT, not just on the properties asked for", () => {
+        // Sorted-id order puts the fuller members FIRST here, so without the count check the
+        // four-property members would satisfy a one-property request by accident and the
+        // half-tagged master that actually matches would never be reached.
+        const doc = buttonSet();
+        doc.nodes.set("z-partial", { id: "z-partial", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 7, height: 7 }, style: { fill: "#fff", opacity: 1 }, layout: {}, variant: { set: "Button", values: { size: "small" } } });
+        // `z-partial` defines only `size`, so asking it for size=small is asking for ITSELF —
+        // not for `b-sm-def`, which also pins a `state` nobody mentioned.
+        expect(resolveVariantMaster(doc, { componentId: "z-partial", variants: { size: "small" } })).toBe("z-partial");
+    });
+
+    test("member order is DETERMINISTIC, independent of insertion order", () => {
+        // Map iteration is insertion order, which does not survive a save and reload — so the
+        // scan sorts, and two documents with the same nodes resolve the same way.
+        const a = buttonSet();
+        const b = createEmptyDocument();
+        for (const id of ["b-lg-hov", "b-lg-def", "b-sm-hov", "b-sm-def"]) b.nodes.set(id, a.nodes.get(id)!);
+        expect(variantMembers(b, "Button")).toEqual(variantMembers(a, "Button"));
+        expect(variantMembers(a, "Button")).toEqual(["b-lg-def", "b-lg-hov", "b-sm-def", "b-sm-hov"]);
+    });
+
+    test("variantProperties is what a picker offers — sorted names, sorted values", () => {
+        const doc = buttonSet();
+        expect(variantProperties(doc, "Button")).toEqual({ size: ["large", "small"], state: ["default", "hover"] });
+        expect(variantProperties(doc, "NoSuchSet")).toEqual({});
+    });
+
+    test("both variant maps are validated on the SAME rules the loader runs", () => {
+        expect(variantError({ set: "", values: {} })).not.toBeNull();
+        expect(variantError({ set: "S" })).not.toBeNull();                        // values required
+        expect(variantError({ set: "S", values: { size: "" } })).not.toBeNull();  // empty value
+        // Built the way the LOAD path builds it. In an object literal `__proto__:` sets the
+        // prototype and creates no own property at all, so a literal cannot even express this
+        // hazard — `JSON.parse` can, and that is precisely where a hand-edited file comes from.
+        expect(variantError(JSON.parse('{"set":"S","values":{"__proto__":"x"}}'))).not.toBeNull();
+        expect(variantSelectionError("core.instance", JSON.parse('{"__proto__":"x"}'))).not.toBeNull();
+        expect(variantError({ set: "S", values: {} })).toBeNull();                // a set of one is fine
+        expect(variantSelectionError("core.rectangle", { size: "large" })).not.toBeNull(); // instances only
+        expect(variantSelectionError("core.instance", { size: "large" })).toBeNull();
+
+        // …and the ACTIONS run those rules, rather than merely sharing a file with them. A test
+        // that only calls the validator proves nothing about the write path that must call it.
+        const dispatcher = new ActionDispatcher(buttonSet());
+        expect(dispatcher.dispatchAction(new SetVariantAction(dispatcher.getDocument(), "I", { set: "", values: {} } as never)).success).toBe(false);
+        expect(dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "size", "")).success).toBe(false);
+        expect(dispatcher.getDocument().nodes.get("I")!.variants).toBeUndefined();   // nothing was written
+        expect(dispatcher.dispatchAction(new SetVariantAction(dispatcher.getDocument(), "I", { set: "Other", values: { x: "y" } })).success).toBe(true);
+    });
+
+    test("a document with variants round-trips, and an untagged node stays untagged", () => {
+        const dispatcher = new ActionDispatcher(buttonSet());
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "state", "hover"));
+        const d = dispatcher.getDocument();
+        const loaded = deserializeDocument(serializeDocument(d));
+        expect(loaded.nodes.get("b-sm-def")!.variant).toEqual({ set: "Button", values: { size: "small", state: "default" } });
+        expect(loaded.nodes.get("I")!.variants).toEqual({ state: "hover" });
+        expect(compareDocuments(d, loaded)).toBe(true);
+    });
+
+    test("untagging a master through the action REMOVES the field, not just its contents", () => {
+        // The delta is read with `in` rather than `!== undefined`, because clearing is a real edit.
+        const dispatcher = new ActionDispatcher(buttonSet());
+        dispatcher.dispatchAction(new SetVariantAction(dispatcher.getDocument(), "b-sm-def", null));
+        const d = dispatcher.getDocument();
+        expect(d.nodes.get("b-sm-def")!.variant).toBeUndefined();
+        expect(variantMembers(d, "Button")).toEqual(["b-lg-def", "b-lg-hov", "b-sm-hov"]);
+        expect(() => deserializeDocument(serializeDocument(d))).not.toThrow();
+    });
+
+    test("the UI can TAG a master and SWITCH an instance — either alone is useless", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/<VariantSection/);
+        expect(src).toMatch(/new SetVariantAction\(/);            // tag
+        expect(src).toMatch(/new SetInstanceVariantAction\(/);    // switch
+        expect(src).toMatch(/variantProperties\(doc, masterSet\)/); // …offering what the set defines
+        expect(src).toMatch(/variantError\(candidate\)/);          // the shared validator is the authority
     });
 });

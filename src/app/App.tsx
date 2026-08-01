@@ -15,7 +15,9 @@ import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, t
 import { expandInstances, isVirtualId } from "../core/document/Components";
 import { SetActiveThemeAction, SetVariableAction, DeleteVariableAction } from "../core/actions/VariableActions";
 import { Variable, VariableStore, variableKeyError, tokenRefFor, tokenKeyOf } from "../core/document/Variables";
-import { TrackSize, newGridPatch } from "../core/document/Node";
+import { TrackSize, newGridPatch, VariantKey, variantError } from "../core/document/Node";
+import { SetVariantAction, SetInstanceVariantAction } from "../core/actions/VariantActions";
+import { variantProperties, resolveVariantMaster } from "../core/document/Components";
 import { parseTrackList, formatTrackList } from "../core/document/TrackList";
 import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { DetachInstanceAction } from "../core/actions/DetachInstanceAction";
@@ -982,6 +984,12 @@ export function App() {
                                 />
                             </InspectorSection>
 
+                            {/* Variants (schema 27): tag a master into a set, or switch an
+                                instance between the masters of the set its own master joins. */}
+                            <InspectorSection title="Variants">
+                                <VariantSection node={node as Node} dispatcher={dispatcher} refresh={refresh} />
+                            </InspectorSection>
+
                             <InspectorSection title="Position & size">
                                 <div style={INSPECTOR_GRID}>
                                     <div><label style={INSPECTOR_LABEL}>X</label>
@@ -1677,6 +1685,131 @@ function TokenSelect({ store, value, onPick }: { store: VariableStore; value: st
  * written only when `parseTrackList` accepts the draft; anything else stays local and explains
  * itself. Blur drops the draft so the field re-syncs to what the document actually holds.
  */
+
+/**
+ * The VARIANTS section — both halves, because either alone is useless.
+ *
+ * On any node: tag it into a set and give it property values, which is what MAKES a variant set
+ * (there is no set object to create — a set is the nodes that name it). On an instance whose
+ * master belongs to a set: one dropdown per property the set defines, and choosing swaps which
+ * master is drawn while the instance, its position and its overrides stay put.
+ */
+function VariantSection({ node, dispatcher, refresh }: { node: Node; dispatcher: ActionDispatcher; refresh: () => void }) {
+    const [newProp, setNewProp] = useState("");
+    const doc = dispatcher.getDocument();
+    const variant = node.variant;
+
+    const setVariant = (v: VariantKey | null) => {
+        dispatcher.dispatchAction(new SetVariantAction(dispatcher.getDocument(), node.id, v));
+        refresh();
+    };
+
+    // An instance shows the PICKER for the set its master belongs to.
+    const masterId = node.type === "core.instance" ? node.componentId : undefined;
+    const masterSet = masterId ? doc.nodes.get(masterId)?.variant?.set : undefined;
+    const props = masterSet ? variantProperties(doc, masterSet) : null;
+    const resolvedId = node.type === "core.instance" ? resolveVariantMaster(doc, node) : null;
+    const resolved = resolvedId ? doc.nodes.get(resolvedId) : null;
+
+    return (
+        <>
+            {props && masterSet && (
+                <>
+                    <div style={{ color: UI.textFaint, fontSize: 10, marginBottom: 4 }}>
+                        Set “{masterSet}” — switching redraws this instance from another master.
+                    </div>
+                    {Object.keys(props).length === 0 && (
+                        <div style={{ color: UI.textFaint }}>This set has no properties yet.</div>
+                    )}
+                    {Object.entries(props).map(([prop, values]) => {
+                        // What this instance SHOWS: its own choice, else the master's own value.
+                        const current = node.variants?.[prop] ?? resolved?.variant?.values[prop] ?? "";
+                        return (
+                            <div key={prop}>
+                                <label style={INSPECTOR_LABEL}>{prop}</label>
+                                <SelectInput
+                                    value={current}
+                                    options={values}
+                                    onChange={v => {
+                                        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), node.id, prop, v));
+                                        refresh();
+                                    }}
+                                />
+                            </div>
+                        );
+                    })}
+                    {resolvedId && resolvedId !== masterId && (
+                        <div style={{ color: UI.accent, fontSize: 10, marginBottom: 6 }}>
+                            Drawing “{resolved?.name ?? resolvedId}”.
+                        </div>
+                    )}
+                </>
+            )}
+
+            {/* The MASTER half: tag this node into a set. */}
+            <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6, marginTop: props ? 8 : 0 }}>
+                <input
+                    type="checkbox"
+                    checked={!!variant}
+                    onChange={e => setVariant(e.target.checked ? { set: "Set", values: {} } : null)}
+                />
+                In a variant set
+            </label>
+            {variant && (
+                <>
+                    <label style={INSPECTOR_LABEL}>Set name</label>
+                    <TextInput
+                        value={variant.set}
+                        placeholder="Button"
+                        onChange={v => { if (v.length > 0) setVariant({ ...variant, set: v }); }}
+                    />
+                    {Object.entries(variant.values).map(([k, v]) => (
+                        <div key={k} style={{ display: "flex", gap: 4, alignItems: "flex-end", marginBottom: 4 }}>
+                            <div style={{ flex: 1 }}>
+                                <label style={INSPECTOR_LABEL}>{k}</label>
+                                <TextInput
+                                    value={v}
+                                    onChange={nv => { if (nv.length > 0) setVariant({ ...variant, values: { ...variant.values, [k]: nv } }); }}
+                                />
+                            </div>
+                            <button
+                                title={`Remove the "${k}" property`}
+                                onClick={() => {
+                                    const values = { ...variant.values };
+                                    delete values[k];
+                                    setVariant({ ...variant, values });
+                                }}
+                                style={{ fontSize: 10, padding: "2px 5px", marginBottom: 4, background: "transparent", color: UI.textDim, border: `1px solid ${UI.line}`, borderRadius: 2, cursor: "pointer" }}
+                            >✕</button>
+                        </div>
+                    ))}
+                    <input
+                        type="text"
+                        value={newProp}
+                        placeholder="add property (e.g. size)"
+                        onChange={e => setNewProp(e.target.value)}
+                        onKeyDown={e => {
+                            if (e.key !== "Enter") return;
+                            const key = newProp.trim();
+                            if (!key) return;
+                            // `variantError` is the authority; the field only explains a refusal.
+                            const candidate: VariantKey = { ...variant, values: { ...variant.values, [key]: "default" } };
+                            const err = variantError(candidate);
+                            if (err) { window.alert(`That property can't be used: ${err}.`); return; }
+                            setVariant(candidate);
+                            setNewProp("");
+                        }}
+                        style={{
+                            width: "100%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
+                            background: UI.bg, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 2
+                        }}
+                    />
+                </>
+            )}
+        </>
+    );
+}
+
 function TrackListInput({ value, placeholder, allowEmpty, onCommit }: {
     value: string;
     placeholder?: string;

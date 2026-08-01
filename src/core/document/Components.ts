@@ -94,6 +94,71 @@ export function componentError(type: string, componentId: unknown): string | nul
 }
 
 /**
+ * Every master belonging to `set`, in a deterministic order (schema 27).
+ *
+ * Sorted by ID rather than taken in document order: a set's members are found by a scan, and
+ * `Map` iteration order is insertion order, which would make "which variant matches" depend on
+ * the order nodes happened to be added — stable within a session, but not across a save and
+ * reload, and the whole engine is built on the same input giving the same output.
+ */
+/** Whether an instance resolves to a master that exists — the expansion fast path's question,
+ *  asked THROUGH the variant selection so a switched instance is never skipped. */
+function hasResolvableMaster(doc: ReadonlyDocument, n: ReadonlyNode): boolean {
+    const id = resolveVariantMaster(doc, n as { componentId?: string; variants?: Record<string, string> });
+    return id !== null && doc.nodes.has(id);
+}
+
+export function variantMembers(doc: ReadonlyDocument, set: string): string[] {
+    const ids: string[] = [];
+    doc.nodes.forEach((n, id) => { if (n.variant?.set === set) ids.push(id); });
+    return ids.sort();
+}
+
+/** Every property name a set defines, with the values each one takes — what a picker offers. */
+export function variantProperties(doc: ReadonlyDocument, set: string): Record<string, string[]> {
+    const props: Record<string, Set<string>> = {};
+    for (const id of variantMembers(doc, set)) {
+        const values = doc.nodes.get(id)!.variant!.values;
+        for (const [k, v] of Object.entries(values)) (props[k] ??= new Set()).add(v);
+    }
+    const out: Record<string, string[]> = {};
+    for (const k of Object.keys(props).sort()) out[k] = [...props[k]].sort();
+    return out;
+}
+
+/**
+ * The master an instance should actually expand — the heart of variants (schema 27).
+ *
+ * The instance points at ONE master via `componentId`; its `variants` selection says which
+ * properties it wants DIFFERENT from that master. Merging the two gives the full set of values
+ * being asked for, and the member of the set carrying exactly those values is what gets drawn.
+ *
+ * TOTAL by construction, because every failure has an obvious "draw what you pointed at"
+ * answer: not a variant, no set member matches, a property naming something the set never
+ * defines. This is the same rule a dangling `componentId` or `$token` follows — a document that
+ * cannot resolve something stays valid and renders the nearest honest thing, rather than
+ * throwing in the middle of a render pass.
+ */
+export function resolveVariantMaster(doc: ReadonlyDocument, instance: { componentId?: string; variants?: Record<string, string> }): string | null {
+    const base = instance.componentId;
+    if (typeof base !== "string") return null;
+    const master = doc.nodes.get(base);
+    if (!master?.variant) return base;                    // not part of a set — nothing to switch
+    if (!instance.variants || Object.keys(instance.variants).length === 0) return base;
+
+    const wanted = { ...master.variant.values, ...instance.variants };
+    const keys = Object.keys(wanted);
+    for (const id of variantMembers(doc, master.variant.set)) {
+        const values = doc.nodes.get(id)!.variant!.values;
+        // An EXACT match on every property, both ways — a member defining fewer properties than
+        // were asked for is not the thing that was asked for.
+        if (Object.keys(values).length !== keys.length) continue;
+        if (keys.every(k => values[k] === wanted[k])) return id;
+    }
+    return base;                                          // nothing matches — draw what was pointed at
+}
+
+/**
  * A per-instance OVERRIDE (M6 slice 2): what THIS instance changes about one node of its
  * master subtree. Stored on the instance under `Node.overrides`, keyed by the MASTER NODE ID,
  * so an override survives the master being edited (it targets identity, not position) and is
@@ -294,7 +359,7 @@ export function expandInstances(doc: ReadonlyDocument): ReadonlyDocument {
     // Fast path: nothing to do (the overwhelmingly common case) — no allocation at all.
     let hasInstance = false;
     doc.nodes.forEach(n => {
-        if (n.type === "core.instance" && typeof n.componentId === "string" && doc.nodes.has(n.componentId)) hasInstance = true;
+        if (n.type === "core.instance" && hasResolvableMaster(doc, n)) hasInstance = true;
     });
     if (!hasInstance) return doc;
 
@@ -333,8 +398,9 @@ export function expandInstances(doc: ReadonlyDocument): ReadonlyDocument {
         materialized++;
 
         // A copied node that is ITSELF an instance expands one level deeper (nested components).
-        if (copy.type === "core.instance" && typeof copy.componentId === "string") {
-            expand(id, copy.componentId, depth + 1, chain);
+        if (copy.type === "core.instance") {
+            const nested = resolveVariantMaster(doc, copy);
+            if (nested !== null) expand(id, nested, depth + 1, chain);
         }
         for (const childId of master.children) {
             if (!materialize(childId, instancePath, id, false, depth, chain)) return false;
@@ -352,9 +418,10 @@ export function expandInstances(doc: ReadonlyDocument): ReadonlyDocument {
 
     // Expand the STORED instances; nested ones expand from inside `materialize`.
     doc.nodes.forEach((n, id) => {
-        if (n.type === "core.instance" && typeof n.componentId === "string") {
-            expand(id, n.componentId, 0, new Set<string>());
-        }
+        if (n.type !== "core.instance") return;
+        // The VARIANT the selection asks for, not blindly the id `componentId` names.
+        const masterId = resolveVariantMaster(doc, n);
+        if (masterId !== null) expand(id, masterId, 0, new Set<string>());
     });
 
     const expanded: ProjectDocument = {

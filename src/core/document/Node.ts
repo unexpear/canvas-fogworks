@@ -221,7 +221,86 @@ export interface Node {
      * (never invalid) if that master node is deleted. See `Components.InstanceOverride`.
      */
     overrides?: Record<string, import("./Components").InstanceOverride>;
+    /**
+     * A MASTER's place in a variant set (schema 27): which set it belongs to, and the property
+     * values that identify it within that set — `{ set: "Button", values: { size: "large",
+     * state: "hover" } }`. Any node may carry one; it means nothing until something instances it.
+     *
+     * There is no variant-set OBJECT. A set is just the nodes that name it, exactly as a master
+     * is just a node — the same "no new storage" discipline components were built on, which is
+     * what keeps every existing mechanism (validation, geometry, layout, serialization, actions,
+     * editing) working on variants for free.
+     */
+    variant?: VariantKey;
+    /**
+     * `core.instance` → the variant SELECTION (schema 27): which property values this instance
+     * wants. SPARSE — properties it does not name keep the value of the master it points at, so
+     * an instance need only record what it changed. See `resolveVariantMaster`.
+     */
+    variants?: Record<string, string>;
     name?: string;
+}
+
+/** A master's identity within a variant set: the set's name, plus its property values. */
+export interface VariantKey {
+    set: string;
+    values: Record<string, string>;
+}
+
+/** Caps on the hand-editable variant maps, in the `VARIABLES_MAX` tradition. */
+export const VARIANT_PROPS_MAX = 64;
+export const VARIANT_NAME_MAX = 200;
+
+/**
+ * The same reserved-key family `variableKeyError` guards: a property named `__proto__` would be
+ * swallowed by the prototype setter rather than stored, so a value written could never be read
+ * back — a silent, un-round-trippable loss rather than a rejection.
+ */
+const RESERVED_VARIANT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/** One property name or value: non-empty, bounded, and not a reserved key. */
+function variantNameError(what: string, s: unknown, checkReserved: boolean): string | null {
+    if (typeof s !== "string" || s.length === 0) return `${what} must be a non-empty string`;
+    if (s.length > VARIANT_NAME_MAX) return `${what} must be at most ${VARIANT_NAME_MAX} characters`;
+    if (checkReserved && RESERVED_VARIANT_KEYS.has(s)) return `${what} "${s}" is reserved`;
+    return null;
+}
+
+/**
+ * Validity of a node's `variant`, SHARED by the load path (`Integrity`) and the edit path
+ * (`SetVariantAction`). A set with no properties is allowed — that is a set of one, which is
+ * how a set looks the moment you tag its first master and before you have added a second.
+ */
+export function variantError(variant: unknown): string | null {
+    if (variant === undefined) return null;
+    if (typeof variant !== "object" || variant === null || Array.isArray(variant)) return "variant must be an object";
+    const v = variant as Partial<VariantKey>;
+    const se = variantNameError("variant.set", v.set, false);
+    if (se) return se;
+    if (typeof v.values !== "object" || v.values === null || Array.isArray(v.values)) return "variant.values must be an object";
+    return variantValuesError("variant.values", v.values);
+}
+
+/** The property map both `variant.values` and an instance's `variants` selection obey. */
+function variantValuesError(what: string, values: Record<string, unknown>): string | null {
+    const entries = Object.entries(values);
+    if (entries.length > VARIANT_PROPS_MAX) return `${what} must have at most ${VARIANT_PROPS_MAX} properties`;
+    for (const [k, val] of entries) {
+        const ke = variantNameError(`${what} property name`, k, true);
+        if (ke) return ke;
+        const ve = variantNameError(`${what}.${k}`, val, false);
+        if (ve) return ve;
+    }
+    return null;
+}
+
+/** Validity of an instance's variant SELECTION. Only a `core.instance` may carry one; a
+ *  property naming nothing in the set is inert, like a dangling `componentId` or `$token`. */
+export function variantSelectionError(type: string, variants: unknown): string | null {
+    if (variants === undefined) return null;
+    if (type !== "core.instance") return "only a core.instance node may carry a variant selection";
+    if (typeof variants !== "object" || variants === null || Array.isArray(variants)) return "variants must be an object";
+    return variantValuesError("variants", variants as Record<string, unknown>);
 }
 
 /** Geometry defines the bounding box and initial position intent. */
