@@ -482,10 +482,28 @@ export const GRID_MAX_TRACKS = 1000;
  * here as one function rather than as a second copy that can drift from the first.
  */
 export function mergeLayout(base: Layout, patch: Partial<Layout>): Layout {
-    const merged: Layout = { ...base, ...patch };
-    if (patch.grid !== undefined) merged.container = undefined;
-    else if (patch.container !== undefined) merged.grid = undefined;
-    return merged;
+    // Exclusivity is decided on the PATCH, then spread — so the answer does not depend on what
+    // the base happened to carry, and this is the same call the action makes on its delta.
+    return { ...base, ...layoutExclusivity({ ...patch }) };
+}
+
+/**
+ * Clear whichever of `grid` / `container` a layout patch does not name — the ONE statement of
+ * their mutual exclusivity, shared by `mergeLayout` (the instance-override path) and
+ * `UpdateNodeLayoutAction` (the direct-edit path).
+ *
+ * It takes and returns a PATCH rather than a whole layout because the action must emit a
+ * partial: its delta is merged field-by-field with any other layout patch in the same
+ * transaction, and a delta carrying every field would clobber instead of resolving last-wins.
+ * That difference is exactly why this is a separate function from `mergeLayout` rather than
+ * the same one used twice — and why, for one commit, the two paths each kept their own copy.
+ *
+ * MUTATES and returns its argument; callers pass a fresh object.
+ */
+export function layoutExclusivity<T extends Partial<Layout>>(patch: T): T {
+    if (patch.grid !== undefined) patch.container = undefined;
+    else if (patch.container !== undefined) patch.grid = undefined;
+    return patch;
 }
 
 /**

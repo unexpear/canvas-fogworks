@@ -8002,6 +8002,33 @@ describe("Instance overrides: layout and transform", () => {
         expect(transformError(expanded.nodes.get("I::M")!.transform!)).toBeNull();
     });
 
+    test("the direct-edit path and the override path share ONE exclusivity rule", () => {
+        // This is the claim `mergeLayout` was introduced to make true, and for one commit it
+        // was not: the action kept its own copy of the rule. The two paths cannot be collapsed
+        // into a single call — the action must emit a PARTIAL delta so a transaction merge
+        // stays field-wise last-wins, while `mergeLayout` returns a whole Layout — so what
+        // they share is `layoutExclusivity`, and this test is what holds them together.
+        const gridPatch = { grid: { columns: [{ fr: 1 }], rowHeight: { px: 10 } } };
+
+        // Direct edit, through the action, onto a node that IS a flex container.
+        const doc = createEmptyDocument();
+        doc.nodes.set("N", { id: "N", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#111111", opacity: 1 }, layout: { container: { direction: "row" } } });
+        doc.rootNodeUuids = ["N"];
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "N", gridPatch));
+        const direct = dispatcher.getDocument().nodes.get("N")!.layout;
+
+        // The same patch through the OVERRIDE path, over the same base layout.
+        const merged = mergeLayout({ container: { direction: "row" } }, gridPatch);
+
+        // Same question, same answer — and both answers are loadable.
+        expect(direct.container).toBeUndefined();
+        expect(merged.container).toBeUndefined();
+        expect(!!direct.grid).toBe(!!merged.grid);
+        expect(layoutError(direct)).toBeNull();
+        expect(layoutError(merged)).toBeNull();
+    });
+
     test("the OVERRIDE wins grid ⊕ container, in both directions", () => {
         // A plain spread would leave a node carrying BOTH, which no loader accepts. `mergeLayout`
         // is the one place that rule lives, shared with UpdateNodeLayoutAction's delta.

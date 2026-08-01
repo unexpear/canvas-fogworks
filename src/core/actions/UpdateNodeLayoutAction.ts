@@ -22,7 +22,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { Layout, layoutError } from "../document/Node";
+import { Layout, layoutError , layoutExclusivity} from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 
 export class UpdateNodeLayoutAction extends Action {
@@ -47,9 +47,9 @@ export class UpdateNodeLayoutAction extends Action {
         }
         // Carry grid ⊕ container exclusivity IN the delta (see the module note): setting
         // one clears the other, self-consistently, so a transaction merge stays correct.
-        const layout: Partial<Layout> = { ...this.newLayout };
-        if (layout.grid !== undefined) layout.container = undefined;
-        if (layout.container !== undefined) layout.grid = undefined;
+        // The rule itself lives in `layoutExclusivity`, shared with the instance-override
+        // merge — two paths that must agree on what "these two are exclusive" means.
+        const layout: Partial<Layout> = layoutExclusivity({ ...this.newLayout });
         // Freeze the constraint reference at FIRST opt-in: capture the parent's CURRENT
         // stored size so a static parent (computed == stored) causes no jump. Only when the
         // node has NO existing reference and the caller supplied none — never re-capture on
