@@ -115,11 +115,18 @@ materializes each instance's master subtree as virtual children, so everything b
 point — layout, transforms, culling, picking, both backends — operates on an ordinary tree.
 The renderer resolves node data through the same expansion, so the two never disagree. Each
 copy is built by `materializeNode`, which `DetachInstanceAction` also uses to BAKE an instance
-into stored nodes — so detaching produces exactly what was being drawn. Which affordances a
-copy offers (resize corners yes, rotate knob no, nothing at all for a copy nested inside
-another instance) is the single `isHandleOffered` rule, read by the renderer, the picker and
-the hover cursor alike, so what is drawn, what a press grabs and what the pointer promises
-cannot drift apart.
+into stored nodes — so detaching produces exactly what was being drawn (through the resolved
+VARIANT, not blindly `componentId`). Which affordances a copy offers is the single
+`isHandleOffered` rule, read by the renderer, the picker and the hover cursor alike, so what
+is drawn, what a press grabs and what the pointer promises cannot drift apart. Every copy now
+offers all of them — resize corners since M6, the rotate knob since schema 26 gave overrides a
+`transform`, and a copy nested inside another instance since schema 28 made an override key a
+PATH. A plain click RESOLVES a copy to its instance rather than skipping it, so content drawn
+outside the instance's own box stays clickable; alt-click is the deep pick.
+
+A dirty set names STORED ids, so `computeGeometry` translates it into the expanded id space:
+a copy is dirty when any node on its `::` path is. Reuse therefore survives expansion — the
+`incremental === full` property test covers instanced documents too.
 
 `computeGeometry(doc, pending?, previous?, dirty?)`
 (`src/core/geometry/GeometryEngine.ts`) resolves parent-relative stored intent into a
