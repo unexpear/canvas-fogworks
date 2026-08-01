@@ -28,6 +28,50 @@ import { alignAction, distributeAction } from "../core/actions/alignActions";
 import { AlignEdge, DistributeAxis } from "../core/geometry/Alignment";
 import { IMAGE_SRC_MAX, srcError } from "../core/document/Node";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
+import { scanCapabilities, Capability } from "../core/scan/CapabilityScan";
+import { AddNodeAction } from "../core/actions/AddNodeAction";
+
+
+/**
+ * The editor's visual tokens. Colours and spacing were repeated inline at ~40 sites, so the
+ * panels had drifted apart — three different greys for a heading, two panel backgrounds, four
+ * border colours. One place to change them is also the only way "make it look better" stays
+ * true after the next feature lands.
+ */
+const UI = {
+    bg: "#0e0e18",          // canvas / deepest surface
+    panel: "#15152a",       // side panels + toolbar
+    raised: "#1c1c33",      // inputs, wells
+    line: "#262642",        // hairline borders
+    lineSoft: "#1f1f38",
+    text: "#dcdce8",
+    textDim: "#8a8aa5",
+    textFaint: "#5f5f7a",
+    accent: "#4da3ff",
+    accentSoft: "#22436b"
+};
+
+/** A panel's section heading — small, spaced, quiet. Used by every panel so they match. */
+const DRAWER_BUTTON: React.CSSProperties = {
+    width: "100%", boxSizing: "border-box", fontSize: 11, padding: "4px 6px", cursor: "pointer",
+    background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, marginBottom: 4
+};
+
+const PANEL_HEADING: React.CSSProperties = {
+    fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase",
+    color: UI.textDim, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid ${UI.lineSoft}`
+};
+
+/** A toolbar button. `active` is the pressed state for a selected tool. */
+function toolbarButtonStyle(active = false): React.CSSProperties {
+    return {
+        fontSize: 11, padding: "4px 9px", borderRadius: 4, cursor: "pointer",
+        background: active ? UI.accentSoft : "transparent",
+        color: active ? "#eaf4ff" : UI.text,
+        border: `1px solid ${active ? UI.accent : UI.line}`,
+        whiteSpace: "nowrap"
+    };
+}
 
 /** Align controls: edge, glyph, tooltip. One list so the row and its handlers cannot drift. */
 const ALIGN_BUTTONS: readonly [AlignEdge, string, string][] = [
@@ -123,6 +167,10 @@ declare global {
             onRequestSave: (cb: (filePath: string) => void) => () => void;
             saveFile: (filePath: string, content: string) => Promise<boolean>;
             requestSaveAs: () => Promise<boolean>;
+            pickFolder: () => Promise<string | null>;
+            readSourceFolder: (folder: string) => Promise<{ path: string; content: string }[]>;
+            readAssetFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
+            readImageDataUrl: (filePath: string) => Promise<string>;
         };
     }
 }
@@ -150,7 +198,11 @@ export function App() {
     const [strokeWidth, setStrokeWidth] = useState<number>(DEFAULT_STROKE_WIDTH);
     const strokeWidthRef = useRef(DEFAULT_STROKE_WIDTH);
     strokeWidthRef.current = strokeWidth;
+    // Which folders are collapsed in the layer tree. Purely a VIEW concern — it never touches
+    // the document, so collapsing is not undoable and not persisted.
+    const [collapsedLayers, setCollapsedLayers] = useState<Set<string>>(new Set());
     const [backend, setBackend] = useState<RenderBackend>("svg");
+    const [showFolders, setShowFolders] = useState(false);
     // Consolidated UI state — one setState per refresh (React batches it into a
     // single commit). `tick` drives the imperative canvas repaint effect.
     const [ui, setUi] = useState<{ tick: number; selectedNodeId: string | null; canUndo: boolean; canRedo: boolean; truncated: boolean }>({
@@ -227,6 +279,30 @@ export function App() {
         refresh();
     }, [dispatcher, es, refresh]);
 
+    /**
+     * Place an asset from the folder browser. It lands at the centre of the CURRENT view (not
+     * a fixed canvas point), inlined as a data: URL so the document stays self-contained —
+     * the same source rule `srcError` applies to a file picked with the image tool.
+     */
+    const placeAsset = useCallback((dataUrl: string, name: string) => {
+        const el = canvasRef.current;
+        const w = 200, h = 150;
+        const zoom = Math.max(0.01, es.viewport.zoom);
+        const cx = (es.viewport.x + (el ? el.clientWidth : 800) / 2) / zoom - w / 2;
+        const cy = (es.viewport.y + (el ? el.clientHeight : 600) / 2) / zoom - h / 2;
+        const doc = dispatcher.getDocument();
+        const action = new AddNodeAction(doc, "core.image", cx, cy, w, h, "none", undefined, null, { src: dataUrl });
+        if (dispatcher.dispatchAction(action).success) {
+            const id = action.getCreatedNodeId();
+            if (id) {
+                es.selectedNodeIds = [id];
+                // Name it after the file, so the layers panel shows something meaningful.
+                const named = contentActionFor(dispatcher.getDocument(), id, { name });
+                if (named) dispatcher.dispatchAction(named);
+            }
+        }
+        refresh();
+    }, [dispatcher, es, refresh]);
     const setTool = useCallback((name: string) => {
         toolController.setTool(toolsRef.current[name] ?? toolsRef.current.select);
         es.activeTool = name;
@@ -478,8 +554,8 @@ export function App() {
     };
 
     return (
-        <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#0f0f1a", color: "#e0e0e0" }}>
-            <div style={{ display: "flex", alignItems: "center", padding: "4px 8px", background: "#16162a", borderBottom: "1px solid #2a2a4a", gap: 4 }}>
+        <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: UI.bg, color: UI.text }}>
+            <div style={{ display: "flex", alignItems: "center", padding: "4px 8px", background: UI.panel, borderBottom: `1px solid ${UI.line}`, gap: 4 }}>
                 <span style={{ fontWeight: 700, marginRight: 8, color: "#00bfff", fontSize: 13 }}>VDE</span>
                 <ToolButton icon="↗" label="Select" active={toolName === "select"} onClick={() => setTool("select")} />
                 <ToolButton icon="↔" label="Move" active={toolName === "move"} onClick={() => setTool("move")} />
@@ -519,7 +595,7 @@ export function App() {
                                 const raw = Number(e.target.value);
                                 setStrokeWidth(Number.isFinite(raw) ? clampStrokeWidth(raw) : DEFAULT_STROKE_WIDTH);
                             }}
-                            style={{ width: 44, fontSize: 11, padding: "2px 4px", background: "#0f0f1a", color: "#e0e0e0", border: "1px solid #2a2a4a", borderRadius: 3 }}
+                            style={{ width: 44, fontSize: 11, padding: "2px 4px", background: UI.bg, color: UI.text, border: "1px solid #2a2a4a", borderRadius: 3 }}
                         />
                     </label>
                 )}
@@ -540,7 +616,7 @@ export function App() {
                                 const raw = Number(e.target.value);
                                 setPolygonSides(Number.isFinite(raw) ? clampSides(raw) : POLYGON_DEFAULT_SIDES);
                             }}
-                            style={{ width: 44, fontSize: 11, padding: "2px 4px", background: "#0f0f1a", color: "#e0e0e0", border: "1px solid #2a2a4a", borderRadius: 3 }}
+                            style={{ width: 44, fontSize: 11, padding: "2px 4px", background: UI.bg, color: UI.text, border: "1px solid #2a2a4a", borderRadius: 3 }}
                         />
                     </label>
                 )}
@@ -666,7 +742,14 @@ export function App() {
                 >
                     Theme: {dispatcher.getDocument().activeTheme === "light" ? "Light" : "Dark"}
                 </button>
-                <button
+                                <button
+                    title="Folders — scan a codebase for capabilities with no UI, or browse an image folder"
+                    onClick={() => setShowFolders(v => !v)}
+                    style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: showFolders ? UI.accentSoft : "transparent", color: "#ccc", border: `1px solid ${UI.line}`, borderRadius: 3, cursor: "pointer" }}
+                >
+                    🗀 Folders
+                </button>
+<button
                     title="Switch the rendering backend (both draw the same display list)"
                     onClick={() => setBackend(b => (b === "svg" ? "canvas" : "svg"))}
                     style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
@@ -704,27 +787,46 @@ export function App() {
             </div>
 
             <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-                <div style={{ width: 180, background: "#16162a", borderRight: "1px solid #2a2a4a", overflow: "auto", padding: 8 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 6 }}>LAYERS</div>
-                    {traverseSceneGraph(dispatcher.getDocument()).map((n: ReadonlyNode) => {
-                        const id = n.id;
-                        return (
-                        <div
-                            key={id}
-                            onClick={() => {
-                                es.selectedNodeIds = [id];
-                                refresh();
-                            }}
-                            style={{
-                                padding: "4px 6px", fontSize: 11, borderRadius: 3, cursor: "pointer", marginBottom: 2,
-                                background: selectedNodeId === id ? "#2a4a6a" : "transparent",
-                                borderLeft: selectedNodeId === id ? "2px solid #00bfff" : "2px solid transparent"
-                            }}
-                        >
-                            {nodeTypeLabels[n.type] || n.type} <span style={{ color: "#666" }}>{id.slice(0, 6)}</span>
-                        </div>
-                        );
-                    })}
+                <div style={{ width: 180, background: UI.panel, borderRight: `1px solid ${UI.line}`, overflow: "auto", padding: 8 }}>
+                    <div style={PANEL_HEADING}>Layers</div>
+                    {(() => {
+                        // Walk the REAL tree: roots, then each node's children, depth-first. The
+                        // panel was a flat list from `traverseSceneGraph`, which had no way to show
+                        // the hierarchy that frames, groups and instances now create.
+                        const doc = dispatcher.getDocument();
+                        const rows: React.ReactNode[] = [];
+                        const walk = (ids: readonly string[], depth: number) => {
+                            for (const id of ids) {
+                                const n = doc.nodes.get(id);
+                                if (!n) continue;
+                                const hasChildren = n.children.length > 0;
+                                const isCollapsed = collapsedLayers.has(id);
+                                rows.push(
+                                    <LayerRow
+                                        key={id}
+                                        node={n}
+                                        depth={depth}
+                                        selected={es.selectedNodeIds.includes(id)}
+                                        collapsed={isCollapsed}
+                                        hasChildren={hasChildren}
+                                        isAutoLayout={n.layout.container !== undefined || n.layout.grid !== undefined}
+                                        label={n.name || nodeTypeLabels[n.type] || n.type}
+                                        onSelect={() => { es.selectedNodeIds = [id]; refresh(); }}
+                                        onToggle={() => {
+                                            const next = new Set(collapsedLayers);
+                                            next.has(id) ? next.delete(id) : next.add(id);
+                                            setCollapsedLayers(next);
+                                        }}
+                                    />
+                                );
+                                // A collapsed folder hides its subtree; the nodes stay selected and
+                                // rendered, this is purely how much of the tree the panel shows.
+                                if (hasChildren && !isCollapsed) walk(n.children, depth + 1);
+                            }
+                        };
+                        walk(doc.rootNodeUuids, 0);
+                        return rows;
+                    })()}
                     {dispatcher.getDocument().nodes.size === 0 && (
                         <div style={{ fontSize: 11, color: "#555", padding: "4px 6px" }}>No layers yet</div>
                     )}
@@ -739,11 +841,17 @@ export function App() {
                     {/* Rulers overlay the top/left edges (pointer-events off, so clicks pass through). */}
                     <Ruler axis="x" length={canvasRef.current?.clientWidth ?? 0} vp={vp} />
                     <Ruler axis="y" length={canvasRef.current?.clientHeight ?? 0} vp={vp} />
-                    <div style={{ position: "absolute", top: 0, left: 0, width: RULER, height: RULER, background: "#16162a", borderRight: "1px solid #2a2a4a", borderBottom: "1px solid #2a2a4a" }} />
+                    <div style={{ position: "absolute", top: 0, left: 0, width: RULER, height: RULER, background: UI.panel, borderRight: `1px solid ${UI.line}`, borderBottom: "1px solid #2a2a4a" }} />
                 </div>
 
-                <div style={{ width: 220, background: "#16162a", borderLeft: "1px solid #2a2a4a", padding: 10, overflow: "auto" }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 8 }}>INSPECTOR</div>
+                {showFolders && (
+                    <div style={{ width: 240, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
+                        <div style={PANEL_HEADING}>Folders</div>
+                        <FoldersDrawer onPlaceImage={placeAsset} />
+                    </div>
+                )}
+                <div style={{ width: 220, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
+                    <div style={PANEL_HEADING}>Inspector</div>
                     {node && selectedNodeId ? (
                         <div style={{ fontSize: 11, lineHeight: 1.6 }}>
                             <div style={{ color: "#666", marginBottom: 6 }}>{nodeTypeLabels[node.type] || node.type} — {selectedNodeId.slice(0, 8)}</div>
@@ -990,7 +1098,7 @@ export function App() {
                 </div>
             </div>
 
-            <div style={{ padding: "3px 10px", background: "#16162a", borderTop: "1px solid #2a2a4a", fontSize: 10, color: "#555", display: "flex", justifyContent: "space-between" }}>
+            <div style={{ padding: "3px 10px", background: UI.panel, borderTop: `1px solid ${UI.line}`, fontSize: 10, color: "#555", display: "flex", justifyContent: "space-between" }}>
                 <span>{toolName.charAt(0).toUpperCase() + toolName.slice(1)} tool</span>
                 <span>{Math.round(vp.zoom * 100)}% · {Math.round(vp.x)}, {Math.round(vp.y)}</span>
                 <span>Visual Design Engine v{CURRENT_VERSION}</span>
@@ -1079,7 +1187,7 @@ function TextInput({ value, placeholder, onChange }: { value: string; placeholde
             onChange={e => onChange(e.target.value)}
             style={{
                 width: "100%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
-                background: "#0f0f1a", color: "#e0e0e0", border: "1px solid #2a2a4a", borderRadius: 2, marginBottom: 4
+                background: UI.bg, color: UI.text, border: "1px solid #2a2a4a", borderRadius: 2, marginBottom: 4
             }}
         />
     );
@@ -1120,11 +1228,195 @@ function SelectInput({ value, options, onChange }: { value: string; options: rea
             onChange={e => onChange(e.target.value)}
             style={{
                 width: "100%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
-                background: "#0f0f1a", color: "#e0e0e0", border: "1px solid #2a2a4a", borderRadius: 2, marginBottom: 4
+                background: UI.bg, color: UI.text, border: "1px solid #2a2a4a", borderRadius: 2, marginBottom: 4
             }}
         >
             {options.map(o => <option key={o} value={o}>{o}</option>)}
         </select>
+    );
+}
+
+
+/** Glyph per node type — a layer list you can scan by shape rather than by reading every row. */
+const LAYER_ICONS: Record<string, string> = {
+    "core.rectangle": "▭", "core.ellipse": "○", "core.line": "╱", "core.text": "T",
+    "core.image": "▣", "core.path": "◇", "core.instance": "⧉"
+};
+
+/**
+ * One row of the layer tree.
+ *
+ * A row is a FOLDER when it has children. Two kinds exist and they are deliberately the same
+ * mechanism: a GROUP is a container with no fill (organisational — it holds things and paints
+ * nothing), and a FRAME is one that paints and can lay its children out. Nothing in the
+ * document distinguishes them, exactly as a component master is "just a node subtree" — so the
+ * tree shows what a node IS (does it paint? does it lay out?) rather than a stored kind.
+ */
+
+/**
+ * The FOLDERS drawer: the two directory-backed workflows.
+ *
+ *  - SOURCE: point at the codebase you are designing for; `scanCapabilities` lists what it can
+ *    already do that nothing reaches, so you know which screens are still missing.
+ *  - ASSETS: point at an image folder and click one to place it on the canvas.
+ *
+ * Both are inert without Electron (the browser build has no `electronAPI`), so the drawer says
+ * so rather than showing controls that do nothing.
+ */
+function FoldersDrawer({ onPlaceImage }: { onPlaceImage: (dataUrl: string, name: string) => void }) {
+    const [tab, setTab] = useState<"source" | "assets">("source");
+    const [sourceFolder, setSourceFolder] = useState<string | null>(null);
+    const [assetFolder, setAssetFolder] = useState<string | null>(null);
+    const [findings, setFindings] = useState<Capability[] | null>(null);
+    const [assets, setAssets] = useState<{ path: string; name: string; relative: string }[]>([]);
+    const [busy, setBusy] = useState(false);
+    const api = window.electronAPI;
+
+    /** Scan a folder. `folder` may come from the native picker OR from the typed path field —
+     *  you usually know where the project is, and pasting it beats clicking through a tree. */
+    const scan = async (folder: string | null) => {
+        if (!api || !folder) return;
+        setBusy(true);
+        try {
+            const files = await api.readSourceFolder(folder);
+            setSourceFolder(folder);
+            // The analysis is pure and runs HERE, on file contents the main process read —
+            // so the same function the tests exercise is the one the user sees.
+            setFindings(scanCapabilities(files));
+        } finally { setBusy(false); }
+    };
+
+    const browseAssets = async () => {
+        if (!api) return;
+        const folder = await api.pickFolder();
+        if (!folder) return;
+        setBusy(true);
+        try {
+            setAssetFolder(folder);
+            setAssets(await api.readAssetFolder(folder));
+        } finally { setBusy(false); }
+    };
+
+    if (!api) {
+        return <div style={{ fontSize: 11, color: "#666", padding: 8 }}>Folder access needs the desktop app.</div>;
+    }
+
+    return (
+        <div style={{ fontSize: 11 }}>
+            <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+                {(["source", "assets"] as const).map(t => (
+                    <button
+                        key={t}
+                        onClick={() => setTab(t)}
+                        style={{
+                            flex: 1, fontSize: 11, padding: "3px 6px", cursor: "pointer", borderRadius: 3,
+                            background: tab === t ? UI.accentSoft : "transparent",
+                            color: tab === t ? UI.text : "#999", border: `1px solid ${UI.line}`
+                        }}
+                    >{t === "source" ? "Code" : "Assets"}</button>
+                ))}
+            </div>
+
+            {tab === "source" ? (
+                <>
+                    <button onClick={async () => scan(await api.pickFolder())} disabled={busy} style={DRAWER_BUTTON}>
+                        {busy ? "Scanning…" : "Choose a folder…"}
+                    </button>
+                    <input
+                        type="text"
+                        placeholder="…or paste a path and press Enter"
+                        onKeyDown={e => { if (e.key === "Enter") scan((e.target as HTMLInputElement).value.trim() || null); }}
+                        style={{ width: "100%", boxSizing: "border-box", fontSize: 11, padding: "3px 5px", background: UI.raised, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3, marginBottom: 6 }}
+                    />
+                    {sourceFolder && (
+                        <div style={{ color: "#666", margin: "6px 0", wordBreak: "break-all" }}>{sourceFolder}</div>
+                    )}
+                    {findings && findings.length === 0 && (
+                        <div style={{ color: "#6a9", padding: "6px 0" }}>Nothing unwired found — every export is referenced somewhere.</div>
+                    )}
+                    {findings && findings.length > 0 && (
+                        <>
+                            <div style={{ color: "#888", margin: "6px 0" }}>
+                                {findings.length} capabilit{findings.length === 1 ? "y" : "ies"} with no apparent UI
+                            </div>
+                            {findings.slice(0, 200).map(c => (
+                                <div key={`${c.path}:${c.line}:${c.name}`} style={{ borderTop: `1px solid ${UI.line}`, padding: "5px 0" }}>
+                                    <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+                                        <span style={{
+                                            fontSize: 9, padding: "0 4px", borderRadius: 2, color: UI.bg,
+                                            background: c.confidence === "high" ? "#6ac48a" : c.confidence === "medium" ? "#d0a85c" : "#5a5a72"
+                                        }}>{c.kind}</span>
+                                        <span style={{ color: UI.text }}>{c.name}</span>
+                                    </div>
+                                    <div style={{ color: "#666" }}>{c.path}:{c.line}</div>
+                                    <div style={{ color: "#7a7a90" }}>{c.reason}</div>
+                                </div>
+                            ))}
+                            {findings.length > 200 && (
+                                <div style={{ color: "#888", paddingTop: 6 }}>…and {findings.length - 200} more (showing the top 200).</div>
+                            )}
+                        </>
+                    )}
+                </>
+            ) : (
+                <>
+                    <button onClick={browseAssets} disabled={busy} style={DRAWER_BUTTON}>
+                        {busy ? "Reading…" : "Choose an asset folder…"}
+                    </button>
+                    {assetFolder && <div style={{ color: "#666", margin: "6px 0", wordBreak: "break-all" }}>{assetFolder}</div>}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                        {assets.slice(0, 300).map(a => (
+                            <button
+                                key={a.path}
+                                title={`${a.relative} — click to place on the canvas`}
+                                onClick={async () => { onPlaceImage(await api.readImageDataUrl(a.path), a.name); }}
+                                style={{ ...DRAWER_BUTTON, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                            >{a.name}</button>
+                        ))}
+                    </div>
+                    {assetFolder && assets.length === 0 && <div style={{ color: "#666" }}>No images in that folder.</div>}
+                </>
+            )}
+        </div>
+    );
+}
+
+function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout, onSelect, onToggle, label }: {
+    node: ReadonlyNode; depth: number; selected: boolean; collapsed: boolean; hasChildren: boolean;
+    isAutoLayout: boolean; onSelect: () => void; onToggle: () => void; label: string;
+}) {
+    const [hover, setHover] = useState(false);
+    const isGroup = hasChildren && (node.style.fill === "none" || !node.style.fill);
+    return (
+        <div
+            onClick={onSelect}
+            onMouseEnter={() => setHover(true)}
+            onMouseLeave={() => setHover(false)}
+            title={`${label} — ${node.id.slice(0, 8)}`}
+            style={{
+                display: "flex", alignItems: "center", gap: 4,
+                padding: "3px 6px", paddingLeft: 6 + depth * 12,
+                fontSize: 11, borderRadius: 3, cursor: "pointer", marginBottom: 1,
+                background: selected ? "#22436b" : hover ? "#1d1d33" : "transparent",
+                borderLeft: selected ? "2px solid #4da3ff" : "2px solid transparent",
+                color: selected ? "#f0f6ff" : "#c8c8d8"
+            }}
+        >
+            {/* The disclosure triangle is its own hit target so clicking it does not also select. */}
+            <span
+                onClick={e => { if (hasChildren) { e.stopPropagation(); onToggle(); } }}
+                style={{ width: 10, textAlign: "center", color: "#7a7a95", cursor: hasChildren ? "pointer" : "default" }}
+            >
+                {hasChildren ? (collapsed ? "▸" : "▾") : ""}
+            </span>
+            <span style={{ width: 12, textAlign: "center", color: selected ? "#9ecbff" : "#8a8aa5" }}>
+                {hasChildren ? (isGroup ? "🗀" : "▤") : (LAYER_ICONS[node.type] || "◦")}
+            </span>
+            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+            {/* Badges say what a folder DOES, which is the thing you actually need at a glance. */}
+            {isAutoLayout && <span title="Auto-layout" style={{ fontSize: 9, color: "#6f9", opacity: 0.8 }}>⇥</span>}
+            {node.type === "core.instance" && <span title="Component instance" style={{ fontSize: 9, color: "#b98cff" }}>⧉</span>}
+        </div>
     );
 }
 
@@ -1142,7 +1434,7 @@ function NumInput({ value, onChange, disabled }: { value: number; onChange: (v: 
             }}
             style={{
                 width: "100%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
-                background: "#0f0f1a", color: "#e0e0e0", border: "1px solid #2a2a4a", borderRadius: 2, marginBottom: 4
+                background: UI.bg, color: UI.text, border: "1px solid #2a2a4a", borderRadius: 2, marginBottom: 4
             }}
         />
     );

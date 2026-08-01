@@ -164,6 +164,88 @@ async function saveFileDialog() {
 
 // Lets the renderer ask for the Save As dialog when the document has no path
 // yet, so Ctrl+S on an unsaved document prompts instead of silently diverting.
+/**
+ * Folder access for the two workflows that need it: SCANNING a codebase for capabilities that
+ * have no UI, and pulling image ASSETS from a directory.
+ *
+ * Both read only, both bounded, and both start from a folder the user explicitly picked in a
+ * native dialog — the renderer can never name a path itself. The caps exist because "read every
+ * file under a directory the user pointed at" is otherwise an easy way to hang the app on a
+ * home directory or a monorepo.
+ */
+const SCAN_MAX_FILES = 4000;
+const SCAN_MAX_BYTES = 2_000_000;   // per file; a source file larger than this is generated
+const SCAN_SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "out", "coverage", ".next", "vendor", ".cache"]);
+const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|vue|svelte)$/i;
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
+
+/** Walk a directory, collecting entries that pass `match`, bounded by count. */
+function walkDir(root, match, limit) {
+    const out = [];
+    const stack = [root];
+    while (stack.length > 0 && out.length < limit) {
+        const dir = stack.pop();
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+        for (const e of entries) {
+            if (out.length >= limit) break;
+            const full = path.join(dir, e.name);
+            if (e.isDirectory()) {
+                if (!SCAN_SKIP_DIRS.has(e.name) && !e.name.startsWith(".")) stack.push(full);
+            } else if (match(e.name)) {
+                out.push(full);
+            }
+        }
+    }
+    return out;
+}
+
+/** Ask the user for a folder. Returns its path, or null if they cancelled. */
+ipcMain.handle("pick-folder", async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+        title: "Choose a folder",
+        properties: ["openDirectory"]
+    });
+    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+});
+
+/** Read the SOURCE files under a folder, for the capability scan. */
+ipcMain.handle("read-source-folder", async (event, folder) => {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    const files = [];
+    for (const full of walkDir(folder, name => SOURCE_EXT.test(name), SCAN_MAX_FILES)) {
+        try {
+            if (fs.statSync(full).size > SCAN_MAX_BYTES) continue;
+            files.push({
+                path: path.relative(folder, full).replace(/\\/g, "/"),
+                content: fs.readFileSync(full, "utf8")
+            });
+        } catch { /* unreadable file: skip it rather than fail the whole scan */ }
+    }
+    return files;
+});
+
+/** List the IMAGE files under a folder, for the asset browser. Paths only — an image is read
+ *  on demand, since inlining a whole folder would be enormous. */
+ipcMain.handle("read-asset-folder", async (event, folder) => {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    return walkDir(folder, name => IMAGE_EXT.test(name), SCAN_MAX_FILES).map(full => ({
+        path: full,
+        name: path.basename(full),
+        relative: path.relative(folder, full).replace(/\\/g, "/")
+    }));
+});
+
+/** Read one image as a data: URL, so a placed asset travels with the document. */
+ipcMain.handle("read-image-data-url", async (event, filePath) => {
+    if (!filePath || typeof filePath !== "string") throw new Error("Invalid file path.");
+    const ext = path.extname(filePath).slice(1).toLowerCase();
+    const mime = ext === "svg" ? "svg+xml" : ext === "jpg" ? "jpeg" : ext;
+    const bytes = fs.readFileSync(filePath);
+    return `data:image/${mime};base64,${bytes.toString("base64")}`;
+});
+
+
 ipcMain.handle("request-save-as", async () => {
     await saveFileDialog();
     return true;

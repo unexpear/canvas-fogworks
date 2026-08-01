@@ -41,6 +41,7 @@ import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, polygonCommands, supports
 import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../geometry/Polygon";
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
 import { alignBoxes, distributeBoxes, AlignEdge } from "../geometry/Alignment";
+import { scanCapabilities } from "../scan/CapabilityScan";
 import { alignAction, distributeAction } from "../actions/alignActions";
 import { UpdateNodeContentAction, NODE_NAME_MAX } from "../actions/UpdateNodeContentAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
@@ -7944,5 +7945,131 @@ describe("Inspector: layout controls", () => {
         // Stated in the panel rather than offered and silently ignored.
         const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         expect(src).toMatch(/Layout is set on the master, not on a copy/);
+    });
+});
+
+// ─── Capability scan: find what a codebase can do but offers no way to reach ───
+describe("scanCapabilities", () => {
+    const f = (path: string, content: string) => ({ path, content });
+
+    test("an export USED by another file is not reported; an unused one is", () => {
+        const wired = scanCapabilities([
+            f("src/commands/save.ts", "export function handleSave() {}"),
+            f("src/ui/Toolbar.tsx", "import { handleSave } from '../commands/save';\nhandleSave();")
+        ]);
+        expect(wired).toEqual([]);
+        const unwired = scanCapabilities([
+            f("src/commands/save.ts", "export function handleSave() {}"),
+            // Toolbar IS referenced (by the app shell), so only the command is unwired — the
+            // realistic shape of the problem: the button exists, nothing calls the command.
+            f("src/ui/Toolbar.tsx", "export function Toolbar() { return null; }"),
+            f("src/App.tsx", "import { Toolbar } from './ui/Toolbar';\nexport default function App() { return Toolbar(); }")
+        ]);
+        expect(unwired.map(c => c.name)).toEqual(["handleSave"]);
+        expect(unwired[0].line).toBe(1);
+        expect(unwired[0].path).toBe("src/commands/save.ts");
+    });
+
+    test("every export FORM is recognised, or the scan silently misses capabilities", () => {
+        const caps = scanCapabilities([f("src/actions/all.ts", [
+            "export function doA() {}",
+            "export async function doB() {}",
+            "export class DoC {}",
+            "export const doD = () => {};",
+            "let doE = 1; let renamed = 2;",
+            "export { doE, renamed as doF };"
+        ].join("\n"))]);
+        expect(caps.map(c => c.name).sort()).toEqual(["DoC", "doA", "doB", "doD", "doE", "doF"]);
+    });
+
+    test("a symbol used only WITHIN its own file is still unwired", () => {
+        // The point of the tool: something the product cannot reach, even if it is
+        // internally self-consistent.
+        const caps = scanCapabilities([
+            f("src/commands/export.ts", "export function doExport() { helper(); }\nfunction helper() { doExport; }")
+        ]);
+        expect(caps.map(c => c.name)).toContain("doExport");
+    });
+
+    test("a symbol used only by a TEST is unwired from the product's point of view", () => {
+        const caps = scanCapabilities([
+            f("src/commands/share.ts", "export function doShare() {}"),
+            f("src/commands/share.test.ts", "import { doShare } from './share'; doShare();")
+        ]);
+        expect(caps.map(c => c.name)).toEqual(["doShare"]);
+    });
+
+    test("build output and dependencies are never scanned", () => {
+        const caps = scanCapabilities([
+            f("node_modules/lib/index.js", "export function handleThing() {}"),
+            f("dist/bundle.js", "export function handleOther() {}"),
+            f("src/types.d.ts", "export function handleTyped(): void;")
+        ]);
+        expect(caps).toEqual([]);
+    });
+
+    test("ranking puts likely USER-FACING findings first, and is stable", () => {
+        const caps = scanCapabilities([
+            f("src/util/misc.ts", "export const somethingInternal = 1;"),
+            f("src/lib/thing.ts", "export function toggleThing() {}"),
+            f("src/commands/publish.ts", "export function doPublish() {}")
+        ]);
+        expect(caps.map(c => c.confidence)).toEqual(["high", "medium", "low"]);
+        expect(caps[0].name).toBe("doPublish");
+        expect(caps[0].kind).toBe("command");
+        expect(caps[1].name).toBe("toggleThing");
+        // Deterministic: the same input yields an identical list, so a re-scan does not churn.
+        expect(scanCapabilities([
+            f("src/commands/publish.ts", "export function doPublish() {}"),
+            f("src/util/misc.ts", "export const somethingInternal = 1;"),
+            f("src/lib/thing.ts", "export function toggleThing() {}")
+        ])).toEqual(caps);
+    });
+
+    test("the reason given is checkable prose, not a score", () => {
+        const caps = scanCapabilities([f("src/handlers/x.ts", "export function onSubmit() {}")]);
+        expect(caps[0].reason).toMatch(/referenced nowhere else/);
+        expect(caps[0].confidence).toBe("high");
+    });
+
+    test("a whole-word match, so a NAME is not counted as used by a longer one", () => {
+        // `handleSaveAll` mentioning is not a use of `handleSave`.
+        const caps = scanCapabilities([
+            f("src/commands/save.ts", "export function handleSave() {}"),
+            f("src/ui/x.ts", "export function handleSaveAll() {} // handleSaveAllTheThings")
+        ]);
+        expect(caps.map(c => c.name)).toContain("handleSave");
+    });
+
+    test("an ENTRY POINT may not DECLARE a capability, but its imports still count as uses", () => {
+        // Two filters, not one. An entry is reached by the bundler, so being unreferenced is
+        // its normal state and reporting it would top every scan with a false positive. But an
+        // entry is also exactly where an app wires its parts together — excluding it from the
+        // reference corpus made everything it imports look unwired.
+        const caps = scanCapabilities([
+            f("src/main.ts", "import { doThing } from './commands/thing';\nexport function main() { doThing(); }"),
+            f("src/commands/thing.ts", "export function doThing() {}"),
+            f("src/commands/other.ts", "export function doOther() {}")
+        ]);
+        expect(caps.map(c => c.name)).toEqual(["doOther"]);   // not `main`, and not `doThing`
+    });
+
+    test("a CONSTANT is never ranked as a user-facing capability, wherever it lives", () => {
+        // Running this over its own repository put two exported constants at the TOP of the
+        // list, purely because they sit in an actions/ directory. A tuning value is not
+        // something a user triggers, and a noisy first result teaches people to ignore the list.
+        const caps = scanCapabilities([
+            f("src/actions/thing.ts", "export const FRAME_PADDING = 0;\nexport function doThing() {}")
+        ]);
+        const byName = Object.fromEntries(caps.map(c => [c.name, c]));
+        expect(byName.FRAME_PADDING.confidence).toBe("low");
+        expect(byName.FRAME_PADDING.kind).toBe("constant");
+        expect(byName.doThing.confidence).toBe("high");
+        expect(caps[0].name).toBe("doThing");   // the real capability ranks first
+    });
+
+    test("scanning nothing, or files with no exports, yields nothing", () => {
+        expect(scanCapabilities([])).toEqual([]);
+        expect(scanCapabilities([f("src/a.ts", "const x = 1;\nfunction y() {}")])).toEqual([]);
     });
 });
