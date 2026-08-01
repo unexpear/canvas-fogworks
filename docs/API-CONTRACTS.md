@@ -71,6 +71,7 @@ function materializeNode(master: Node, override: InstanceOverride | undefined, i
 function geometryActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partial<Geometry>): Action | null;
 function styleActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partial<Style>): Action | null;
 function overrideTargetFor(doc: ReadonlyDocument, nodeId: string): { instanceId: string; masterNodeId: string } | null;
+function contentActionFor(doc: ReadonlyDocument, nodeId: string, patch: ContentPatch): Action | null; // text/src route to an override on a copy; NAME has no override slot, so a mixed patch is refused WHOLE
 function isEditableNode(doc: ReadonlyDocument, nodeId: string): boolean; // gate an affordance rather than offer a dead control
 function isHandleOffered(doc: ReadonlyDocument, nodeId: string, handle: string): boolean; // the ONE rule read by the renderer, the picker AND the hover cursor
 function isMasterRootCopy(doc: ReadonlyDocument, nodeId: string): boolean; // the copy whose POSITION is the instance's (its x/y override is refused)

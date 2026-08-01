@@ -7,15 +7,16 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { ActionDispatcher } from "../core/actions/ActionDispatcher";
 import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document";
-import { Node } from "../core/document/Node";
+import { Node, Shadow } from "../core/document/Node";
 import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
-import { geometryActionFor, styleActionFor } from "../core/actions/nodeEdit";
-import { expandInstances } from "../core/document/Components";
+import { geometryActionFor, styleActionFor, contentActionFor } from "../core/actions/nodeEdit";
+import { expandInstances, isVirtualId } from "../core/document/Components";
 import { SetActiveThemeAction } from "../core/actions/VariableActions";
 import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { DetachInstanceAction } from "../core/actions/DetachInstanceAction";
+import { UpdateNodeTransformAction } from "../core/actions/UpdateNodeTransformAction";
 import { createEditorState, EditorState, zoomAt } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
@@ -397,6 +398,30 @@ export function App() {
             : styleActionFor(d, selectedNodeId, patch.style ?? {});
         if (action) dispatcher.dispatchAction(action, { coalesce: true });
     };
+    /** Content edits (text / src / name) — routed, so a copy gets an override where it can. */
+    const editContent = (patch: { text?: string; src?: string; name?: string }) => {
+        if (!selectedNodeId) return;
+        const action = contentActionFor(dispatcher.getDocument(), selectedNodeId, patch);
+        if (action) dispatcher.dispatchAction(action, { coalesce: true });
+    };
+
+    /** Transform edits. NOT routed: a transform override is a documented later slice, so this
+     *  is refused for an instance copy rather than written somewhere it cannot live. */
+    const editTransform = (patch: { rotation?: number; scaleX?: number; scaleY?: number }) => {
+        if (!selectedNodeId || isVirtualId(selectedNodeId)) return;
+        const d = dispatcher.getDocument();
+        if (!d.nodes.has(selectedNodeId)) return;
+        dispatcher.dispatchAction(new UpdateNodeTransformAction(d, selectedNodeId, patch), { coalesce: true });
+    };
+
+    /** A shadow is a WHOLE value in the schema, so a single field edit merges over the current
+     *  one — otherwise typing in dx would drop the colour and softness. */
+    const editShadow = (patch: Partial<Shadow>) => {
+        const current = node?.style.shadow;
+        if (!current) return;
+        editSelected({ style: { shadow: { ...current, ...patch } } });
+    };
+
     const vp = es.viewport;
 
     // A hovered resize/rotate handle wins (both backends); otherwise the tool's cursor.
@@ -685,53 +710,147 @@ export function App() {
                 <div style={{ width: 220, background: "#16162a", borderLeft: "1px solid #2a2a4a", padding: 10, overflow: "auto" }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 8 }}>INSPECTOR</div>
                     {node && selectedNodeId ? (
-                        <div style={{ fontSize: 11, lineHeight: 1.8 }}>
+                        <div style={{ fontSize: 11, lineHeight: 1.6 }}>
                             <div style={{ color: "#666", marginBottom: 6 }}>{nodeTypeLabels[node.type] || node.type} — {selectedNodeId.slice(0, 8)}</div>
-                            <label style={{ color: "#aaa" }}>X</label>
-                            <NumInput value={Math.round(node.geometry.x)} onChange={v => {
-                                editSelected({ geometry: { x: v } });
-                                refresh();
-                            }} />
-                            <label style={{ color: "#aaa" }}>Y</label>
-                            <NumInput value={Math.round(node.geometry.y)} onChange={v => {
-                                editSelected({ geometry: { y: v } });
-                                refresh();
-                            }} />
-                            <label style={{ color: "#aaa" }}>W</label>
-                            <NumInput value={Math.round(node.geometry.width)} onChange={v => {
-                                editSelected({ geometry: { width: Math.max(1, v) } });
-                                refresh();
-                            }} />
-                            <label style={{ color: "#aaa" }}>H</label>
-                            <NumInput value={Math.round(node.geometry.height)} onChange={v => {
-                                editSelected({ geometry: { height: Math.max(1, v) } });
-                                refresh();
-                            }} />
-                            <label style={{ color: "#aaa" }}>Fill</label>
-                            <input
-                                type="color"
-                                value={node.style.fill}
-                                onChange={e => {
-                                    editSelected({ style: { fill: e.target.value } });
-                                    refresh();
-                                }}
-                                style={{ width: "100%", height: 22, border: "none", background: "transparent", cursor: "pointer" }}
-                            />
-                            <label style={{ color: "#aaa" }}>Opacity</label>
-                            <input
-                                type="range"
-                                min="0" max="1" step="0.01"
-                                value={node.style.opacity}
-                                onChange={e => {
-                                    editSelected({ style: { opacity: parseFloat(e.target.value) } });
-                                    refresh();
-                                }}
-                                style={{ width: "100%" }}
-                            />
+
+                            <InspectorSection title="Identity">
+                                <label style={INSPECTOR_LABEL}>Name</label>
+                                <TextInput
+                                    value={node.name ?? ""}
+                                    placeholder={nodeTypeLabels[node.type] || node.type}
+                                    onChange={v => { editContent({ name: v }); refresh(); }}
+                                />
+                            </InspectorSection>
+
+                            <InspectorSection title="Position & size">
+                                <div style={INSPECTOR_GRID}>
+                                    <div><label style={INSPECTOR_LABEL}>X</label>
+                                        <NumInput value={Math.round(node.geometry.x)} onChange={v => { editSelected({ geometry: { x: v } }); refresh(); }} /></div>
+                                    <div><label style={INSPECTOR_LABEL}>Y</label>
+                                        <NumInput value={Math.round(node.geometry.y)} onChange={v => { editSelected({ geometry: { y: v } }); refresh(); }} /></div>
+                                    <div><label style={INSPECTOR_LABEL}>W</label>
+                                        <NumInput value={Math.round(node.geometry.width)} onChange={v => { editSelected({ geometry: { width: Math.max(1, v) } }); refresh(); }} /></div>
+                                    <div><label style={INSPECTOR_LABEL}>H</label>
+                                        <NumInput value={Math.round(node.geometry.height)} onChange={v => { editSelected({ geometry: { height: Math.max(1, v) } }); refresh(); }} /></div>
+                                </div>
+                                {/* Rotation in DEGREES: the document stores radians, but nobody thinks in
+                                    radians. Disabled for an instance copy — a transform override is a
+                                    later slice, so the field would silently do nothing. */}
+                                <label style={INSPECTOR_LABEL}>Rotation°</label>
+                                <NumInput
+                                    value={Math.round(((node.transform?.rotation ?? 0) * 180 / Math.PI) * 10) / 10}
+                                    disabled={isVirtualId(selectedNodeId)}
+                                    onChange={v => { editTransform({ rotation: v * Math.PI / 180 }); refresh(); }}
+                                />
+                            </InspectorSection>
+
+                            <InspectorSection title="Appearance">
+                                <label style={INSPECTOR_LABEL}>Fill</label>
+                                <ColorInput
+                                    value={node.style.fill}
+                                    onChange={v => { editSelected({ style: { fill: v } }); refresh(); }}
+                                    onClear={() => { editSelected({ style: { fill: "none" } }); refresh(); }}
+                                    clearLabel="No fill"
+                                />
+                                <label style={INSPECTOR_LABEL}>Stroke</label>
+                                <ColorInput
+                                    value={node.style.stroke ?? "#000000"}
+                                    muted={!node.style.stroke}
+                                    onChange={v => { editSelected({ style: { stroke: v } }); refresh(); }}
+                                />
+                                <div style={INSPECTOR_GRID}>
+                                    <div><label style={INSPECTOR_LABEL}>Width</label>
+                                        <NumInput
+                                            value={typeof node.style.strokeWidth === "number" ? node.style.strokeWidth : 0}
+                                            onChange={v => { editSelected({ style: { strokeWidth: clampStrokeWidth(v) } }); refresh(); }}
+                                        /></div>
+                                    <div><label style={INSPECTOR_LABEL}>Radius</label>
+                                        <NumInput
+                                            value={typeof node.style.radius === "number" ? node.style.radius : 0}
+                                            onChange={v => { editSelected({ style: { radius: Math.max(0, v) } }); refresh(); }}
+                                        /></div>
+                                </div>
+                                <label style={INSPECTOR_LABEL}>Opacity</label>
+                                <input
+                                    type="range" min="0" max="1" step="0.01"
+                                    value={node.style.opacity}
+                                    onChange={e => { editSelected({ style: { opacity: parseFloat(e.target.value) } }); refresh(); }}
+                                    style={{ width: "100%" }}
+                                />
+                            </InspectorSection>
+
+                            {node.type === "core.text" && (
+                                <InspectorSection title="Text">
+                                    <label style={INSPECTOR_LABEL}>Content</label>
+                                    <TextInput
+                                        value={node.text ?? ""}
+                                        placeholder="Text"
+                                        onChange={v => { editContent({ text: v }); refresh(); }}
+                                    />
+                                    <label style={INSPECTOR_LABEL}>Font size</label>
+                                    <NumInput
+                                        value={typeof node.style.fontSize === "number" ? node.style.fontSize : 14}
+                                        onChange={v => { editSelected({ style: { fontSize: Math.max(1, v) } }); refresh(); }}
+                                    />
+                                </InspectorSection>
+                            )}
+
+                            {node.type === "core.image" && (
+                                <InspectorSection title="Image">
+                                    <label style={INSPECTOR_LABEL}>Source</label>
+                                    <TextInput
+                                        value={node.src ?? ""}
+                                        placeholder="https://… or a relative path"
+                                        onChange={v => {
+                                            // The SAME shared validator the tool and the loader use, so the
+                                            // field cannot author a source the document would refuse.
+                                            if (v.length > 0 && srcError("core.image", v) !== null) return;
+                                            editContent({ src: v });
+                                            refresh();
+                                        }}
+                                    />
+                                </InspectorSection>
+                            )}
+
+                            <InspectorSection title="Effects">
+                                {/* Shadow and blur have been in the schema and both renderers since
+                                    M3; this is the first way to reach them. */}
+                                <label style={INSPECTOR_LABEL}>Blur</label>
+                                <NumInput
+                                    value={node.style.blur ?? 0}
+                                    onChange={v => { editSelected({ style: { blur: Math.max(0, v) } }); refresh(); }}
+                                />
+                                <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={!!node.style.shadow}
+                                        onChange={e => {
+                                            editSelected({ style: { shadow: e.target.checked ? { dx: 2, dy: 2, blur: 4, color: "#000000" } : undefined } });
+                                            refresh();
+                                        }}
+                                    />
+                                    Drop shadow
+                                </label>
+                                {node.style.shadow && (
+                                    <>
+                                        <div style={INSPECTOR_GRID}>
+                                            <div><label style={INSPECTOR_LABEL}>dx</label>
+                                                <NumInput value={node.style.shadow.dx} onChange={v => { editShadow({ dx: v }); refresh(); }} /></div>
+                                            <div><label style={INSPECTOR_LABEL}>dy</label>
+                                                <NumInput value={node.style.shadow.dy} onChange={v => { editShadow({ dy: v }); refresh(); }} /></div>
+                                        </div>
+                                        <label style={INSPECTOR_LABEL}>Softness</label>
+                                        <NumInput value={node.style.shadow.blur} onChange={v => { editShadow({ blur: Math.max(0, v) }); refresh(); }} />
+                                        <label style={INSPECTOR_LABEL}>Shadow colour</label>
+                                        <ColorInput value={node.style.shadow.color} onChange={v => { editShadow({ color: v }); refresh(); }} />
+                                    </>
+                                )}
+                            </InspectorSection>
                         </div>
                     ) : (
                         <div style={{ fontSize: 11, color: "#555" }}>Select a node to edit</div>
                     )}
+
                 </div>
             </div>
 
@@ -799,11 +918,69 @@ function ToolButton({ icon, label, active, disabled, onClick }: {
     );
 }
 
-function NumInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+
+/** Inspector chrome — one place for the panel's spacing so the sections stay uniform. */
+const INSPECTOR_LABEL: React.CSSProperties = { color: "#aaa", display: "block", marginTop: 4 };
+const INSPECTOR_GRID: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 };
+
+/** A titled group of controls. Sections are what turn a list of fields into a panel you can scan. */
+function InspectorSection({ title, children }: { title: string; children: React.ReactNode }) {
+    return (
+        <div style={{ borderTop: "1px solid #23233d", marginTop: 10, paddingTop: 6 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: "#777", letterSpacing: 0.4, textTransform: "uppercase" }}>{title}</div>
+            {children}
+        </div>
+    );
+}
+
+/** Free text, committed on every keystroke (edits coalesce into one undo, like the sliders). */
+function TextInput({ value, placeholder, onChange }: { value: string; placeholder?: string; onChange: (v: string) => void }) {
+    return (
+        <input
+            type="text"
+            value={value}
+            placeholder={placeholder}
+            onChange={e => onChange(e.target.value)}
+            style={{
+                width: "100%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
+                background: "#0f0f1a", color: "#e0e0e0", border: "1px solid #2a2a4a", borderRadius: 2, marginBottom: 4
+            }}
+        />
+    );
+}
+
+/**
+ * A colour swatch. `muted` dims it to show the field is currently ABSENT (a node with no
+ * stroke still needs a colour to pick, but must not look like it has one), and `onClear`
+ * adds an explicit "none" affordance where the field can be switched off.
+ */
+function ColorInput({ value, onChange, muted, onClear, clearLabel }: {
+    value: string; onChange: (v: string) => void; muted?: boolean; onClear?: () => void; clearLabel?: string;
+}) {
+    // A `$token` reference (or "none") is not a hex colour, so the native picker cannot show it.
+    // Fall back to a neutral swatch rather than letting the control silently rewrite the token.
+    const hex = /^#[0-9a-fA-F]{6}$/.test(value) ? value : "#888888";
+    return (
+        <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 4 }}>
+            <input
+                type="color"
+                value={hex}
+                onChange={e => onChange(e.target.value)}
+                style={{ flex: 1, height: 22, border: "none", background: "transparent", cursor: "pointer", opacity: muted ? 0.35 : 1 }}
+            />
+            {onClear && (
+                <button onClick={onClear} title={clearLabel} style={{ fontSize: 10, padding: "1px 5px", background: "transparent", color: "#888", border: "1px solid #2a2a4a", borderRadius: 2, cursor: "pointer" }}>∅</button>
+            )}
+        </div>
+    );
+}
+
+function NumInput({ value, onChange, disabled }: { value: number; onChange: (v: number) => void; disabled?: boolean }) {
     return (
         <input
             type="number"
             value={value}
+            disabled={disabled}
             // Skip non-numeric input rather than substituting 0: `|| 0` turned a
             // half-typed value (or "-") into a real edit that snapped the node to 0.
             onChange={e => {

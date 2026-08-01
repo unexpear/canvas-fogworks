@@ -13,7 +13,7 @@ import { expandInstances, componentError, overridesError, overrideAgainstMasterE
 import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
-import { geometryActionFor, styleActionFor, isEditableNode, isHandleOffered, isMasterRootCopy } from "../actions/nodeEdit";
+import { geometryActionFor, styleActionFor, contentActionFor, isEditableNode, isHandleOffered, isMasterRootCopy } from "../actions/nodeEdit";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
@@ -42,6 +42,7 @@ import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from 
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
 import { alignBoxes, distributeBoxes, AlignEdge } from "../geometry/Alignment";
 import { alignAction, distributeAction } from "../actions/alignActions";
+import { UpdateNodeContentAction, NODE_NAME_MAX } from "../actions/UpdateNodeContentAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
 import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow } from "../document/Node";
@@ -7776,5 +7777,93 @@ describe("Align actions: the world-to-stored seam", () => {
         doc.nodes.set("S", { id: "S", type: "core.rectangle", parent: null, children: [], geometry: { x: 90, y: 10, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {}, transform: { rotation: 0.7 } });
         doc.rootNodeUuids = ["R", "S"];
         expect(alignAction(doc, computeGeometry(doc), ["R", "S"], "left")).toBeNull();
+    });
+});
+
+// ─── Content edits: text, image source and display name were write-once until now ───
+describe("UpdateNodeContentAction", () => {
+    function doc7(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("T", { id: "T", type: "core.text", parent: null, children: [], geometry: { x: 0, y: 0, width: 100, height: 30 }, style: { fill: "#fff", opacity: 1 }, layout: {}, text: "Text" });
+        doc.nodes.set("IMG", { id: "IMG", type: "core.image", parent: null, children: [], geometry: { x: 0, y: 50, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["T", "IMG"];
+        return doc;
+    }
+    const PIXEL = "data:image/png;base64,iVBORw0KGgo=";
+
+    test("a text node's CONTENT can finally be changed, and it round-trips", () => {
+        // It could be authored ("Text") and rendered, but no action touched `text` at all.
+        const dispatcher = new ActionDispatcher(doc7());
+        expect(dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), "T", { text: "Hello" })).success).toBe(true);
+        expect(dispatcher.getDocument().nodes.get("T")!.text).toBe("Hello");
+        const loaded = deserializeDocument(serializeDocument(dispatcher.getDocument()));
+        expect(loaded.nodes.get("T")!.text).toBe("Hello");
+        // An EMPTY string is a legitimate value (an empty text node), not a no-op.
+        dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), "T", { text: "" }));
+        expect(dispatcher.getDocument().nodes.get("T")!.text).toBe("");
+    });
+
+    test("an omitted field is left alone — a patch is not a replace", () => {
+        const dispatcher = new ActionDispatcher(doc7());
+        dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), "T", { name: "Heading" }));
+        const d = dispatcher.getDocument();
+        expect(d.nodes.get("T")!.name).toBe("Heading");
+        expect(d.nodes.get("T")!.text).toBe("Text");     // untouched by a name-only patch
+    });
+
+    test("a src patch obeys the SHARED srcError, so the inspector cannot author an unloadable node", () => {
+        const dispatcher = new ActionDispatcher(doc7());
+        expect(dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), "IMG", { src: PIXEL })).success).toBe(true);
+        expect(dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), "IMG", { src: "javascript:alert(1)" })).success).toBe(false);
+        // …and a src on a node type that may not carry one is refused by the same rule.
+        expect(dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), "T", { src: PIXEL })).success).toBe(false);
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+    });
+
+    test("a name is bounded and must be a string", () => {
+        const doc = doc7();
+        expect(new UpdateNodeContentAction(doc, "T", { name: "x".repeat(NODE_NAME_MAX) }).validate()).toBe(true);
+        expect(new UpdateNodeContentAction(doc, "T", { name: "x".repeat(NODE_NAME_MAX + 1) }).validate()).toBe(false);
+        expect(new UpdateNodeContentAction(doc, "T", { name: 7 as unknown as string }).validate()).toBe(false);
+        expect(new UpdateNodeContentAction(doc, "gone", { name: "x" }).validate()).toBe(false);
+    });
+
+    test("contentActionFor routes: a copy's TEXT becomes an override, its NAME is refused", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: "core.text", parent: null, children: [], geometry: { x: 0, y: 0, width: 80, height: 20 }, style: { fill: "#fff", opacity: 1 }, layout: {}, text: "master" });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 200, y: 0, width: 80, height: 20 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["M", "I"];
+        const dispatcher = new ActionDispatcher(doc);
+        const action = contentActionFor(dispatcher.getDocument(), "I::M", { text: "copy" });
+        expect(action).toBeInstanceOf(SetInstanceOverrideAction);
+        dispatcher.dispatchAction(action!);
+        expect(dispatcher.getDocument().nodes.get("I")!.overrides!.M.text).toBe("copy");
+        expect(dispatcher.getDocument().nodes.get("M")!.text).toBe("master");   // master untouched
+        expect(expandInstances(dispatcher.getDocument()).nodes.get("I::M")!.text).toBe("copy");
+        // A NAME has no override slot — refused rather than written where it cannot live.
+        expect(contentActionFor(dispatcher.getDocument(), "I::M", { name: "nope" })).toBeNull();
+        // A MIXED patch is refused WHOLE. Honouring the text and silently dropping the name is
+        // the partial-application failure this codebase keeps designing against: the caller
+        // would believe both landed.
+        expect(contentActionFor(dispatcher.getDocument(), "I::M", { text: "x", name: "nope" })).toBeNull();
+        // An empty patch asks for nothing, so it produces nothing rather than a no-op override.
+        expect(contentActionFor(dispatcher.getDocument(), "I::M", {})).toBeNull();
+        // …and a stored node routes to the direct action.
+        expect(contentActionFor(dispatcher.getDocument(), "M", { text: "x" })).toBeInstanceOf(UpdateNodeContentAction);
+        expect(contentActionFor(dispatcher.getDocument(), "gone", { text: "x" })).toBeNull();
+    });
+
+    test("the inspector reaches every Style field the schema defines", () => {
+        // The audit that prompted this slice: the panel edited x/y/w/h, fill and opacity, and
+        // nothing else — while the engine validated, rendered and round-tripped the rest.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        for (const field of ["fill", "stroke", "strokeWidth", "radius", "opacity", "fontSize", "shadow", "blur"]) {
+            expect(src).toMatch(new RegExp(`style: \\{ ${field}`));
+        }
+        // …and the content fields, which had no write path at all before this commit.
+        expect(src).toMatch(/editContent\(\{ text:/);
+        expect(src).toMatch(/editContent\(\{ src:/);
+        expect(src).toMatch(/editContent\(\{ name:/);
+        expect(src).toMatch(/editTransform\(\{ rotation:/);
     });
 });

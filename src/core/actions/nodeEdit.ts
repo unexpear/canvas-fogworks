@@ -21,10 +21,11 @@ import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
 import { Style } from "../document/Node";
 import { Geometry } from "../document/Node";
-import { isVirtualId, ownerInstanceOf, splitVirtualId } from "../document/Components";
+import { isVirtualId, ownerInstanceOf, splitVirtualId, InstanceOverride } from "../document/Components";
 import { UpdateNodeGeometryAction } from "./UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "./UpdateNodeStyleAction";
 import { SetInstanceOverrideAction } from "./SetInstanceOverrideAction";
+import { UpdateNodeContentAction, ContentPatch } from "./UpdateNodeContentAction";
 
 /**
  * The instance + master node a VIRTUAL id's override should be written against, or null when
@@ -91,6 +92,28 @@ export function styleActionFor(doc: ReadonlyDocument, nodeId: string, patch: Par
     }
     const target = overrideTargetFor(doc, nodeId);
     return target ? new SetInstanceOverrideAction(doc, target.instanceId, target.masterNodeId, { style: patch }) : null;
+}
+
+/**
+ * The Action that applies a CONTENT patch (text / src / name) to `nodeId`.
+ *
+ * `text` and `src` are per-instance override fields, so a copy gets an override exactly as a
+ * geometry or style edit does. `name` is NOT: it is a stored-document label with no override
+ * slot, so renaming a copy is refused rather than silently written somewhere it cannot live —
+ * a copy's name comes from its master.
+ */
+export function contentActionFor(doc: ReadonlyDocument, nodeId: string, patch: ContentPatch): Action | null {
+    if (!isVirtualId(nodeId)) {
+        return doc.nodes.has(nodeId) ? new UpdateNodeContentAction(doc, nodeId, patch) : null;
+    }
+    if (patch.name !== undefined) return null;     // no override slot for a name
+    const target = overrideTargetFor(doc, nodeId);
+    if (!target) return null;
+    const override: InstanceOverride = {};
+    if (patch.text !== undefined) override.text = patch.text;
+    if (patch.src !== undefined) override.src = patch.src;
+    if (override.text === undefined && override.src === undefined) return null;
+    return new SetInstanceOverrideAction(doc, target.instanceId, target.masterNodeId, override);
 }
 
 /** Whether `nodeId` can be edited at all (a stored node, or an override-able instance copy).

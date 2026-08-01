@@ -1,7 +1,7 @@
 # Architecture
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer -->
-<!-- re-read 2026-07-30 after the M6 component-instance fixes (fb80157): accurate at this doc's altitude -->
+<!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
 > 🔒 Frozen contract · schema v25 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
@@ -71,8 +71,11 @@ Everything in the engine — now and in every future milestone — rests on thes
   selected backend (SVG or Canvas).
 - **App (React)** wires the pieces and re-renders on a tick. It subscribes to
   `dispatcher.onChange` so **document** changes repaint from any source. It is also a
-  second input surface: the inspector constructs and dispatches Actions directly, and
-  the toolbar/wheel handlers mutate `EditorState`.
+  second input surface: the inspector constructs and dispatches Actions directly (through
+  the `nodeEdit` routing seam, so every field works on an instance COPY too), and the
+  toolbar/wheel handlers mutate `EditorState`. The inspector reaches every `Style` field,
+  the node's transform, and its content (text / image src / name) — engine capabilities
+  that existed and were validated for several milestones with no way to reach them.
 - **Ephemeral editor state** (selection, hover, viewport, drag previews) does **not**
   flow through the dispatcher, so tools call the explicit `refresh()` callback for it.
 
