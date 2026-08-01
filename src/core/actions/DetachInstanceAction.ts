@@ -26,7 +26,7 @@
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
 import { Node } from "../document/Node";
-import { INSTANCE_MAX_NODES, materializeNode , masterSubtreeIds, resolveVariantMaster} from "../document/Components";
+import { INSTANCE_MAX_NODES, materializeNode , masterSubtreeIds, resolveVariantMaster, VIRTUAL_ID_SEP, mergeOverrides} from "../document/Components";
 import { MutationResult, ActionPayload, NodeDelta } from "./types";
 import { generateUUID } from "../ids/UUID";
 
@@ -113,6 +113,19 @@ export class DetachInstanceAction extends Action {
             copy.layout = { ...copy.layout };
             if (copy.transform) copy.transform = { ...copy.transform };
             if (copy.overrides) copy.overrides = JSON.parse(JSON.stringify(copy.overrides));
+            // A NESTED instance survives the detach as an instance node — so the outer
+            // instance's PATH overrides that reached through it (schema 28) have to move onto
+            // it, or they would name a path that no longer exists and the copy would silently
+            // lose every edit made through it. `OI::IM` on the outer becomes `IM` on the copy
+            // of `OI`; the outer's entry wins, being the more specific statement.
+            if (copy.type === "core.instance") {
+                const prefix = masterNodeId + VIRTUAL_ID_SEP;
+                for (const [key, value] of Object.entries(instance.overrides ?? {})) {
+                    if (!key.startsWith(prefix)) continue;
+                    const inner = key.slice(prefix.length);
+                    copy.overrides = { ...copy.overrides, [inner]: mergeOverrides(copy.overrides?.[inner], value) };
+                }
+            }
             if (copy.path) copy.path = copy.path.map(c => ({ ...c }));
             // The root inherits everything the INSTANCE contributed to what was on screen. In
             // the expanded document the root copy is a CHILD of the instance, so the instance's

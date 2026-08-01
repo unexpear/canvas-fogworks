@@ -276,7 +276,13 @@ export function overridesError(type: string, overrides: unknown): string | null 
     for (const [key, value] of entries) {
         if (key.length === 0) return "override key must be non-empty";
         if (key.length > 200) return "override key must be at most 200 characters";
-        if (key.includes(VIRTUAL_ID_SEP)) return `override key "${key}" must not contain "${VIRTUAL_ID_SEP}"`;
+        // A key is a PATH of master node ids (schema 28): `MC` targets a node of this
+        // instance's own master, `OI::IM` a node inside the expansion of the nested instance
+        // `OI`. Each SEGMENT is a stored node id, so each must be non-empty — a key like
+        // `A::` or `::B` names nothing and would silently never match.
+        if (key.split(VIRTUAL_ID_SEP).some(seg => seg.length === 0)) {
+            return `override key "${key}" has an empty path segment`;
+        }
         if (!isPlain(value)) return `override "${key}" must be an object`;
         for (const field of Object.keys(value)) {
             if (!OVERRIDE_FIELDS.has(field)) return `override "${key}" has an unknown field "${field}"`;
@@ -346,7 +352,7 @@ export function overrideAgainstMasterError(doc: ReadonlyDocument, instance: Read
     if (!instance.overrides) return null;
     for (const key of Object.keys(instance.overrides)) {
         const o = instance.overrides[key];
-        const master = doc.nodes.get(key);
+        const master = resolveOverridePath(doc, instance, key);
         if (!master) continue;   // dangling key — inert, like a dangling componentId
         const g = o.geometry;
         if (g && (g.width !== undefined || g.height !== undefined)) {
@@ -361,6 +367,53 @@ export function overrideAgainstMasterError(doc: ReadonlyDocument, instance: Read
         }
     }
     return null;
+}
+
+/**
+ * The MASTER NODE an override key targets, walking a nested path (schema 28), or null when the
+ * key resolves to nothing — which is inert, not invalid.
+ *
+ * `MC` is a node of this instance's own master. `OI::IM` reads "inside the copy of the nested
+ * instance `OI`, the node `IM`": each segment after the first is looked up in the master of the
+ * instance the previous segment named, which is exactly the walk expansion performs. Anything
+ * that is not an instance, or has no master, ends the walk — a path cannot point at a node that
+ * the drawing never produces.
+ */
+export function resolveOverridePath(doc: ReadonlyDocument, instance: { componentId?: string; variants?: Record<string, string> }, key: string): Node | null {
+    const segments = key.split(VIRTUAL_ID_SEP);
+    let scope = resolveVariantMaster(doc, instance);          // the master this instance draws
+    let node: Node | null = null;
+    for (const segment of segments) {
+        if (scope === null) return null;
+        // A segment must name a node INSIDE the scope's subtree, or the path is meaningless.
+        if (!masterSubtreeIds(doc, scope).includes(segment)) return null;
+        node = (doc.nodes.get(segment) ?? null) as Node | null;
+        if (!node) return null;
+        // Descend: the next segment lives inside THIS node's own expansion, so it must be an
+        // instance — and its master is resolved through ITS variant selection, like any other.
+        scope = node.type === "core.instance" ? resolveVariantMaster(doc, node) : null;
+    }
+    return node;
+}
+
+/**
+ * Merge one override PATCH over another, field by field — the patch wins.
+ *
+ * Shared by `SetInstanceOverrideAction` (accumulating a drag then a resize into one entry) and
+ * by expansion (an outer instance's path override layered over the one a nested instance
+ * carries from its master). The nested maps merge too, so setting `width` never drops an
+ * `x` that a previous edit put there.
+ */
+export function mergeOverrides(base: InstanceOverride | undefined, patch: InstanceOverride): InstanceOverride {
+    const b = base ?? {};
+    return {
+        ...b,
+        ...patch,
+        geometry: (patch.geometry || b.geometry) ? { ...b.geometry, ...patch.geometry } : undefined,
+        style: (patch.style || b.style) ? { ...b.style, ...patch.style } : undefined,
+        layout: (patch.layout || b.layout) ? { ...b.layout, ...patch.layout } : undefined,
+        transform: (patch.transform || b.transform) ? { ...b.transform, ...patch.transform } : undefined
+    };
 }
 
 /**
@@ -457,7 +510,19 @@ export function expandInstances(doc: ReadonlyDocument): ReadonlyDocument {
         // node is `parentId` for a root copy and the same instance for deeper ones — either way
         // it is `instancePath`, whose entry in the working map carries the overrides (a stored
         // instance's own, or, for a NESTED instance, the ones copied from the master).
-        const override = nodes.get(instancePath)?.overrides?.[masterId];
+        // Two overrides can speak about this copy, and both must be heard (schema 28):
+        //   · the DRIVING instance's own entry, keyed by master node id — for a stored instance
+        //     its own, for a nested one the entries it carried from the master;
+        //   · the OWNER (stored) instance's entry keyed by the PATH from itself down to here,
+        //     which is what lets an outer instance reach inside a nested one at all.
+        // The outer one wins: it is the more specific statement about this particular copy,
+        // made about this instance rather than inherited by every instance of the master.
+        const own = nodes.get(instancePath)?.overrides?.[masterId];
+        const ownerId = ownerInstanceOf(id) ?? instancePath;
+        const outer = ownerId === instancePath
+            ? undefined
+            : doc.nodes.get(ownerId)?.overrides?.[id.slice(ownerId.length + VIRTUAL_ID_SEP.length)];
+        const override = outer ? mergeOverrides(own, outer as InstanceOverride) : own;
         // The one materialization rule, shared with DetachInstanceAction so a detach bakes
         // exactly what expansion was drawing.
         const copy = materializeNode(master as Node, override, isRoot, id, parentId);

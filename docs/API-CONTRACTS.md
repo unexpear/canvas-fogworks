@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v27 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v28 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -60,6 +60,12 @@ function masterSubtreeIds(doc: ReadonlyDocument, masterId: string): string[];   
 // UNIQUE in both subtrees. An unmatched entry is KEPT (inert, live again on switch-back) —
 // guessing between two same-named nodes would move an edit onto the wrong element.
 function remapOverridesForVariant(doc, overrides, fromMasterId, toMasterId): Record<string, InstanceOverride> | undefined;
+// An override KEY is a PATH of master node ids (schema 28): `MC` names a node of the
+// instance's own master, `OI::IM` a node inside the nested instance `OI`'s expansion. This is
+// what lets an outer instance reach through a nested one; the override still lives on the
+// owning STORED instance, because a virtual instance node cannot hold one.
+function resolveOverridePath(doc: ReadonlyDocument, instance, key: string): Node | null;  // null = inert, not invalid
+function mergeOverrides(base: InstanceOverride | undefined, patch: InstanceOverride): InstanceOverride; // patch wins; nested maps merge
 function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializes instances as virtual children; SAME reference when there is nothing to expand
 // Per-instance OVERRIDES (schema 22, M6 slice 2): what one instance changes about its copy,
 // keyed by MASTER NODE ID. Applied during expansion at each level; a key matching no master
@@ -89,7 +95,7 @@ function transformActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partia
 function overrideTargetFor(doc: ReadonlyDocument, nodeId: string): { instanceId: string; masterNodeId: string } | null;
 function contentActionFor(doc: ReadonlyDocument, nodeId: string, patch: ContentPatch): Action | null; // text/src route to an override on a copy; NAME has no override slot, so a mixed patch is refused WHOLE
 function isEditableNode(doc: ReadonlyDocument, nodeId: string): boolean; // gate an affordance rather than offer a dead control
-function isHandleOffered(doc: ReadonlyDocument, nodeId: string, handle: string): boolean; // the ONE rule read by the renderer, the picker AND the hover cursor (a copy now offers ROTATE too)
+function isHandleOffered(doc: ReadonlyDocument, nodeId: string, handle: string): boolean; // the ONE rule read by the renderer, the picker AND the hover cursor (every copy now offers all of them, nested included)
 function isMasterRootCopy(doc: ReadonlyDocument, nodeId: string): boolean; // the copy whose POSITION is the instance's (its x/y override is refused)
 
 // geometry/Matrix.ts — 2D affine primitive

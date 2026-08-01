@@ -9,12 +9,12 @@ import { createEmptyDocument, ProjectDocument, ReadonlyDocument, CURRENT_VERSION
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, isTokenRef, tokenRefFor, tokenKeyOf, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
-import { expandInstances, componentError, overridesError, overrideAgainstMasterError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES , variantMembers, variantProperties, resolveVariantMaster, masterSubtreeIds} from "../document/Components";
+import { expandInstances, componentError, overridesError, overrideAgainstMasterError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES , variantMembers, variantProperties, resolveVariantMaster, masterSubtreeIds, resolveOverridePath} from "../document/Components";
 import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
 import { SetVariantAction, SetInstanceVariantAction } from "../actions/VariantActions";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
-import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy } from "../actions/nodeEdit";
+import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy , overrideTargetFor} from "../actions/nodeEdit";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
@@ -2204,7 +2204,10 @@ describe("Components: instance overrides", () => {
         expect(overridesError("core.rectangle", { MC: {} })).toMatch("only a core.instance");
         expect(overridesError("core.instance", [])).toMatch("must be an object");
         expect(overridesError("core.instance", { "": {} })).toMatch("non-empty");
-        expect(overridesError("core.instance", { "a::b": {} })).toMatch('must not contain "::"');
+        // `a::b` is a PATH key now (schema 28) — reaching into the nested instance `a`.
+        expect(overridesError("core.instance", { "a::b": {} })).toBeNull();
+        expect(overridesError("core.instance", { "a::": {} })).toMatch("empty path segment");
+        expect(overridesError("core.instance", { "::b": {} })).toMatch("empty path segment");
         expect(overridesError("core.instance", { MC: null })).toMatch("must be an object");
         expect(overridesError("core.instance", { MC: { bogus: 1 } })).toMatch('unknown field "bogus"');
         expect(overridesError("core.instance", { MC: { geometry: { z: 1 } } })).toMatch("unknown field");
@@ -2257,9 +2260,12 @@ describe("Components: instance overrides", () => {
         expect(dispatcher.getDocument().nodes.get("I")!.overrides!.MC.geometry).toEqual({ x: 77 });
         // Unreachable targets return null rather than an action that would fail.
         expect(geometryActionFor(doc, "gone", { x: 1 })).toBeNull();
-        expect(geometryActionFor(doc, "I::OI::deep", { x: 1 })).toBeNull(); // nested — deferred
+        // NESTED is expressible now (schema 28): the override lands on the stored instance
+        // `I` under the path key `OI::deep`, which is the only node that can hold one.
+        expect(geometryActionFor(doc, "I::OI::deep", { x: 1 })).not.toBeNull();
+        expect(overrideTargetFor(doc, "I::OI::deep")).toEqual({ instanceId: "I", masterNodeId: "OI::deep" });
         expect(isEditableNode(doc, "I::MC")).toBe(true);
-        expect(isEditableNode(doc, "I::OI::deep")).toBe(false);
+        expect(isEditableNode(doc, "I::OI::deep")).toBe(true);   // reachable via a path key
     });
 
     test("picking: a plain click selects the INSTANCE, an ALT (deep) pick selects the copy", () => {
@@ -2323,15 +2329,16 @@ describe("Components: instance overrides", () => {
         expect(dispatcher.canUndo()).toBe(false);       // and no no-op undo entry
     });
 
-    test("a NESTED copy shows no handles at all (it cannot hold an override yet)", () => {
+    test("a NESTED copy is editable too — the path key reaches through the inner instance", () => {
         const doc = createEmptyDocument();
         doc.nodes.set("IM", { id: "IM", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#00f", opacity: 1 }, layout: {} });
         doc.nodes.set("OM", { id: "OM", type: "core.rectangle", parent: null, children: ["OI"], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
         doc.nodes.set("OI", { id: "OI", type: "core.instance", parent: "OM", children: [], geometry: { x: 5, y: 5, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "IM" });
         doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 200, y: 200, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "OM" });
         doc.rootNodeUuids = ["IM", "OM", "I"];
-        expect(isEditableNode(doc, "I::OI::IM")).toBe(false);       // nested — no override target
-        expect(isEditableNode(doc, "I::OI")).toBe(true);            // …but a direct copy is fine
+        expect(isEditableNode(doc, "I::OI::IM")).toBe(true);        // nested — key `OI::IM` on `I`
+        expect(isEditableNode(doc, "I::OI")).toBe(true);            // …as is the direct copy
+        expect(overrideTargetFor(doc, "I::OI::IM")).toEqual({ instanceId: "I", masterNodeId: "OI::IM" });
     });
 
     test("drawn, grabbable, and hovered agree — isHandleOffered is the ONE rule", () => {
@@ -2339,7 +2346,7 @@ describe("Components: instance overrides", () => {
         expect(isHandleOffered(doc, "MC", "rotate")).toBe(true);        // a stored node: everything
         expect(isHandleOffered(doc, "I::MC", "se")).toBe(true);         // a copy: resize corners…
         expect(isHandleOffered(doc, "I::MC", "rotate")).toBe(true);     // …and, since schema 26, the rotate knob
-        expect(isHandleOffered(doc, "I::OI::deep", "se")).toBe(false);  // nested: nothing
+        expect(isHandleOffered(doc, "I::OI::deep", "se")).toBe(true);   // nested: reachable now
     });
 
     test("the hover cursor over a COPY's corner matches what a press would grab", () => {
@@ -2356,9 +2363,10 @@ describe("Components: instance overrides", () => {
         expect(es.hoverCursor).toBeNull();
     });
 
-    test("a press on a NESTED copy's corner falls through — no dead resize gesture", () => {
-        // The renderer draws no handle there; the picker must refuse the same grab, or the user
-        // would start a resize that can never commit (no override target).
+    test("a press on a NESTED copy's corner ARMS a resize — the handle now has a target", () => {
+        // Before schema 28 this had to fall through: the renderer drew no handle and the picker
+        // refused the grab, because a resize there could never commit. A path key gives it
+        // somewhere to land, so the gesture is real and the two sites still agree.
         const doc = createEmptyDocument();
         doc.nodes.set("IM", { id: "IM", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#00f", opacity: 1 }, layout: {} });
         doc.nodes.set("OM", { id: "OM", type: "core.rectangle", parent: null, children: ["OI"], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
@@ -2375,8 +2383,8 @@ describe("Components: instance overrides", () => {
         // The nested copy's world box is (205,205)-(215,215); press its SE corner.
         tc.onMouseDown(md(215, 215), rect);
         tc.onMouseMove(md(235, 235), rect);
-        expect(es.pendingGeometry).toBeNull();   // no resize armed
-        expect(toolSawIt).toBe(true);            // …the press reached the tool instead
+        expect(es.pendingGeometry).not.toBeNull();  // the resize IS armed
+        expect(toolSawIt).toBe(false);              // …so the press did not fall through
     });
 
     test("EVERY editor entry point routes — no site dispatches a raw action at a virtual id", () => {
@@ -4276,8 +4284,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 26→27 landed for variants.)
-        expect(() => migrateIfNeeded(legacy, "28")).toThrow('Migration not implemented for document schema "27"');
+        // time a real migration is added — here, when 27→28 landed for nested override keys.)
+        expect(() => migrateIfNeeded(legacy, "29")).toThrow('Migration not implemented for document schema "28"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -7954,9 +7962,10 @@ describe("Inspector: layout controls", () => {
         doc.rootNodeUuids = ["M", "I"];
         const action = layoutActionFor(doc, "I::M", { container: { direction: "column", gap: 0 } });
         expect(action).toBeInstanceOf(SetInstanceOverrideAction);
-        // A NESTED copy still has nowhere to write, so the edit is refused rather than mis-targeted.
-        expect(layoutActionFor(doc, "I::OI::deep", { container: { direction: "row" } })).toBeNull();
-        expect(transformActionFor(doc, "I::OI::deep", { rotation: 1 })).toBeNull();
+        // A NESTED copy is reachable too (schema 28) — the override lands on the stored
+        // instance under a path key rather than being refused.
+        expect(layoutActionFor(doc, "I::OI::deep", { container: { direction: "row" } })).toBeInstanceOf(SetInstanceOverrideAction);
+        expect(transformActionFor(doc, "I::OI::deep", { rotation: 1 })).toBeInstanceOf(SetInstanceOverrideAction);
     });
 });
 
@@ -8931,5 +8940,127 @@ describe("Variants: a set is just the masters that name it", () => {
         expect(src).toMatch(/new SetInstanceVariantAction\(/);    // switch
         expect(src).toMatch(/variantProperties\(doc, masterSet\)/); // …offering what the set defines
         expect(src).toMatch(/variantError\(candidate\)/);          // the shared validator is the authority
+    });
+});
+
+
+// ─── Overriding THROUGH a nested instance (schema 28): the last "cannot edit this at all" hole ───
+describe("Nested overrides: reaching inside an instance inside an instance", () => {
+    /** A Card master containing a Button INSTANCE, and two Cards on the canvas. */
+    function cardDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        // The inner component: a button whose label is a text node.
+        doc.nodes.set("BM", { id: "BM", type: "core.rectangle", parent: null, children: ["BL"], geometry: { x: 0, y: 0, width: 60, height: 20 }, style: { fill: "#3366ff", opacity: 1 }, layout: {} });
+        doc.nodes.set("BL", { id: "BL", type: "core.text", parent: "BM", children: [], geometry: { x: 0, y: 0, width: 60, height: 20 }, style: { fill: "#ffffff", opacity: 1 }, layout: {}, text: "Click" });
+        // The outer component: a card containing an INSTANCE of the button.
+        doc.nodes.set("CM", { id: "CM", type: "core.rectangle", parent: null, children: ["CB"], geometry: { x: 0, y: 0, width: 200, height: 80 }, style: { fill: "#eeeeee", opacity: 1 }, layout: {} });
+        doc.nodes.set("CB", { id: "CB", type: "core.instance", parent: "CM", children: [], geometry: { x: 10, y: 10, width: 60, height: 20 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "BM" });
+        // Two cards.
+        doc.nodes.set("C1", { id: "C1", type: "core.instance", parent: null, children: [], geometry: { x: 0, y: 0, width: 200, height: 80 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "CM" });
+        doc.nodes.set("C2", { id: "C2", type: "core.instance", parent: null, children: [], geometry: { x: 0, y: 200, width: 200, height: 80 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "CM" });
+        doc.rootNodeUuids = ["BM", "CM", "C1", "C2"];
+        return doc;
+    }
+    const textAt = (doc: ReadonlyDocument, id: string) => expandInstances(doc).nodes.get(id)?.text;
+
+    test("ONE card can rename the button inside it, and no other card changes", () => {
+        // This is the whole point: `C1::CB::BL` is a copy two instances deep. Before schema 28
+        // it could not be edited at all — the routing seam refused it, so the inspector offered
+        // nothing and the handles were withheld.
+        const dispatcher = new ActionDispatcher(cardDoc());
+        const action = contentActionFor(dispatcher.getDocument(), "C1::CB::BL", { text: "Buy now" })!;
+        expect(action).toBeInstanceOf(SetInstanceOverrideAction);
+        dispatcher.dispatchAction(action);
+        const d = dispatcher.getDocument();
+
+        expect(textAt(d, "C1::CB::BL")).toBe("Buy now");
+        expect(textAt(d, "C2::CB::BL")).toBe("Click");     // the OTHER card is untouched
+        expect(d.nodes.get("BL")!.text).toBe("Click");     // …as is the master
+        // The override lives on the STORED instance, under the path from it to the copy.
+        expect(Object.keys(d.nodes.get("C1")!.overrides!)).toEqual(["CB::BL"]);
+    });
+
+    test("the OUTER instance's override wins over one the master's nested instance carries", () => {
+        // The card's own Button instance sets a default label; this card overrides it. The outer
+        // statement is the more specific one — it is about THIS card, not about every card.
+        const doc = cardDoc();
+        doc.nodes.get("CB")!.overrides = { BL: { text: "Default", style: { opacity: 0.5 } } };
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "C1", "CB::BL", { text: "Specific" }));
+        const d = dispatcher.getDocument();
+
+        expect(textAt(d, "C1::CB::BL")).toBe("Specific");
+        expect(textAt(d, "C2::CB::BL")).toBe("Default");   // the master's own default still applies
+        // The two MERGE rather than replace: the opacity the master set survives the text override.
+        expect(expandInstances(d).nodes.get("C1::CB::BL")!.style.opacity).toBe(0.5);
+    });
+
+    test("a path key resolves to the right master node — or to nothing, which is inert", () => {
+        const doc = cardDoc();
+        const c1 = doc.nodes.get("C1")!;
+        expect(resolveOverridePath(doc, c1, "CB::BL")!.id).toBe("BL");
+        expect(resolveOverridePath(doc, c1, "CB")!.id).toBe("CB");
+        // A segment that names nothing in the scope, and a path that walks THROUGH a non-instance.
+        expect(resolveOverridePath(doc, c1, "CB::nope")).toBeNull();
+        expect(resolveOverridePath(doc, c1, "nope::BL")).toBeNull();
+        // `CM` resolves (it is the root of its own subtree) but is not an INSTANCE, so the walk
+        // cannot descend into it and the next segment has no scope to be looked up in.
+        expect(resolveOverridePath(doc, c1, "CM::CB")).toBeNull();
+        expect(resolveOverridePath(doc, c1, "CB::BL::deeper")).toBeNull(); // BL is not an instance either
+        // The case that needs the SCOPE check rather than a mere existence check: `BL` is a real
+        // node, but it belongs to the button's master, not to anything this card draws directly.
+        // Resolving it would let a key reach a node the instance does not contain — and then a
+        // type-aware check would run against the wrong master.
+        expect(resolveOverridePath(doc, c1, "BL")).toBeNull();
+        expect(resolveOverridePath(doc, c1, "CB::CM")).toBeNull();
+    });
+
+    test("type-aware validation follows the path — a src override still needs an image", () => {
+        // `overrideAgainstMasterError` resolves each key's master; with paths it must walk, or a
+        // nested key would skip the check entirely and bake an illegal node on detach.
+        const doc = cardDoc();
+        doc.nodes.get("C1")!.overrides = { "CB::BL": { src: "https://example.com/a.png" } };
+        expect(overrideAgainstMasterError(doc, doc.nodes.get("C1")!)).toMatch("only a core.image");
+        // …and a size that the nested master's own type forbids.
+        doc.nodes.get("C1")!.overrides = { "CB::BL": { geometry: { width: 0, height: 0 } } };
+        expect(overrideAgainstMasterError(doc, doc.nodes.get("C1")!)).not.toBeNull();
+    });
+
+    test("a nested override round-trips, and its key survives as a path", () => {
+        const dispatcher = new ActionDispatcher(cardDoc());
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "C1", "CB::BL", { text: "Buy now" }));
+        const d = dispatcher.getDocument();
+        const loaded = deserializeDocument(serializeDocument(d));
+        expect(loaded.nodes.get("C1")!.overrides).toEqual({ "CB::BL": { text: "Buy now" } });
+        expect(compareDocuments(d, loaded)).toBe(true);
+    });
+
+    test("DETACH pushes a path override down onto the nested instance it reached through", () => {
+        // Detaching the card leaves the Button as an instance node, so `CB::BL` on the card must
+        // become `BL` on that copy — otherwise the label silently reverts the moment you detach.
+        const dispatcher = new ActionDispatcher(cardDoc());
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "C1", "CB::BL", { text: "Buy now" }));
+        const detach = new DetachInstanceAction(dispatcher.getDocument(), "C1");
+        expect(dispatcher.dispatchAction(detach).success).toBe(true);
+        const d = dispatcher.getDocument();
+
+        const bakedButton = detach.getCreatedNodeIds().map(id => d.nodes.get(id)!).find(n => n.type === "core.instance")!;
+        expect(bakedButton.overrides).toEqual({ BL: { text: "Buy now" } });
+        // …and it still draws that way.
+        const copyId = [...expandInstances(d).nodes.keys()].find(id => id.startsWith(bakedButton.id + "::") && id.endsWith("::BL"))!;
+        expect(expandInstances(d).nodes.get(copyId)!.text).toBe("Buy now");
+    });
+
+    test("the shared override merge keeps LAYOUT and TRANSFORM, which its old copy dropped", () => {
+        // SetInstanceOverrideAction had its own merge that only knew geometry and style, so a
+        // layout override followed by a style edit silently lost the layout (schema 26 added the
+        // fields and the merge was never told).
+        const dispatcher = new ActionDispatcher(cardDoc());
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "C1", "CB", { layout: { grow: 2 }, transform: { rotation: 0.5 } }));
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "C1", "CB", { style: { opacity: 0.25 } }));
+        const o = dispatcher.getDocument().nodes.get("C1")!.overrides!["CB"];
+        expect(o.layout).toEqual({ grow: 2 });
+        expect(o.transform).toEqual({ rotation: 0.5 });
+        expect(o.style).toEqual({ opacity: 0.25 });
     });
 });

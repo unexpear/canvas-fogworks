@@ -259,6 +259,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "24") { raw = migrate_24_to_25(raw); version = "25"; }
     if (version === "25") { raw = migrate_25_to_26(raw); version = "26"; }
     if (version === "26") { raw = migrate_26_to_27(raw); version = "27"; }
+    if (version === "27") { raw = migrate_27_to_28(raw); version = "28"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -506,6 +507,19 @@ function migrate_21_to_22(raw: any): any {
  * The bump is required because an OLD BUILD reading a file that HAS them would ignore the
  * selection and draw whichever master `componentId` names — a different picture, silently.
  */
+/**
+ * 27 -> 28: an override KEY became a PATH of master node ids.
+ *
+ * Every schema-27 key is a single segment, which is still exactly what a one-element path
+ * means, so no stored key changes and this is a pass-through. The bump is required in the
+ * other direction: a schema-27 build REJECTS a key containing `::` outright (its rule was
+ * "must not contain the virtual-id separator"), so a file using nested overrides would fail
+ * to load rather than merely lose them.
+ */
+function migrate_27_to_28(raw: any): any {
+    return { ...raw, version: "28" };
+}
+
 function migrate_26_to_27(raw: any): any {
     return { ...raw, version: "27" };
 }

@@ -13,15 +13,16 @@
  * that appears to do nothing.
  *
  * Returns null when the edit cannot be expressed: a virtual node whose owning instance no
- * longer exists, or a virtual node nested INSIDE another instance's expansion (overriding
- * through a nested instance is a documented deferral). A null result means "don't dispatch".
+ * longer exists. A node nested inside ANOTHER instance's expansion is expressible since
+ * schema 28 — the override lands on the owning stored instance under a PATH key. A null
+ * result means "don't dispatch".
  */
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
 import { Style, Layout, Transform } from "../document/Node";
 import { Geometry } from "../document/Node";
-import { isVirtualId, ownerInstanceOf, splitVirtualId, InstanceOverride } from "../document/Components";
+import { isVirtualId, ownerInstanceOf, splitVirtualId, InstanceOverride , VIRTUAL_ID_SEP} from "../document/Components";
 import { UpdateNodeGeometryAction } from "./UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "./UpdateNodeStyleAction";
 import { SetInstanceOverrideAction } from "./SetInstanceOverrideAction";
@@ -30,22 +31,27 @@ import { UpdateNodeLayoutAction } from "./UpdateNodeLayoutAction";
 import { UpdateNodeTransformAction } from "./UpdateNodeTransformAction";
 
 /**
- * The instance + master node a VIRTUAL id's override should be written against, or null when
- * the id is stored, unowned, or nested one level deeper than overrides currently reach.
+ * The instance + KEY a virtual id's override should be written against, or null when the id is
+ * stored or unowned.
  *
- * The nested case is what the `instancePath === owner` check rules out: for `I::MC` the owner
- * (`I`) IS the whole instance path, so the override belongs on the stored instance `I` under
- * key `MC`. For `I::OI::IM` the path is `I::OI` — a VIRTUAL instance node, which cannot carry a
- * stored override — so the edit is refused rather than written to the wrong node.
+ * Overrides live on the owning STORED instance, because a virtual instance node cannot hold
+ * one. Reaching a copy inside a nested expansion is therefore a question of addressing, not of
+ * storage: the key is the path from that stored instance down to the copy — `MC` for its own
+ * master's node, `OI::IM` for a node inside the nested instance `OI`.
  */
 export function overrideTargetFor(doc: ReadonlyDocument, nodeId: string): { instanceId: string; masterNodeId: string } | null {
     const split = splitVirtualId(nodeId);
     const owner = ownerInstanceOf(nodeId);
     if (!split || owner === null) return null;
-    if (split.instancePath !== owner) return null;            // nested — deferred, never mis-target
     const instance = doc.nodes.get(owner);
     if (!instance || instance.type !== "core.instance") return null;
-    return { instanceId: owner, masterNodeId: split.masterNodeId };
+    // The key is the PATH from the owning STORED instance down to this copy (schema 28). For
+    // `I::MC` that is just `MC` — a node of I's own master, as it has always been. For
+    // `I::OI::IM` it is `OI::IM`, which reaches through the nested instance `OI` into its
+    // expansion. Either way the override lands on the stored instance `I`, the only node that
+    // can hold one; a virtual instance node cannot, which is why the path exists at all.
+    const key = nodeId.slice(owner.length + VIRTUAL_ID_SEP.length);
+    return { instanceId: owner, masterNodeId: key };
 }
 
 /**

@@ -14,7 +14,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { InstanceOverride, overrideAgainstMasterError, overridesError } from "../document/Components";
+import { InstanceOverride, mergeOverrides, overrideAgainstMasterError, overridesError } from "../document/Components";
 import { MutationResult, ActionPayload } from "./types";
 
 export class SetInstanceOverrideAction extends Action {
@@ -38,14 +38,11 @@ export class SetInstanceOverrideAction extends Action {
             delete current[this.masterNodeId];
             return current;
         }
-        const existing = current[this.masterNodeId] ?? {};
-        current[this.masterNodeId] = {
-            ...existing,
-            ...this.patch,
-            // The nested maps merge too, so a move then a resize accumulate into one override.
-            geometry: (this.patch.geometry || existing.geometry) ? { ...existing.geometry, ...this.patch.geometry } : undefined,
-            style: (this.patch.style || existing.style) ? { ...existing.style, ...this.patch.style } : undefined
-        };
+        // The SHARED merge — the same one expansion uses to layer an outer instance's path
+        // override over the one a nested instance carries. Its own copy here silently missed
+        // `layout` and `transform` when schema 26 added them, so a layout edit followed by a
+        // style edit dropped the layout.
+        current[this.masterNodeId] = mergeOverrides(current[this.masterNodeId], this.patch);
         return current;
     }
 

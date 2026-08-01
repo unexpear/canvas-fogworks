@@ -210,7 +210,7 @@ describe("buildRenderModel — overlay", () => {
         expect([child.world!.e, child.world!.f]).toEqual([420, 320]); // instance + the child's own offset
     });
 
-    test("an instance COPY shows every handle it can back with an override; a NESTED copy shows none", () => {
+    test("every instance copy shows its handles — nested ones included, since a path key backs them", () => {
         const doc = createEmptyDocument();
         doc.nodes.set("IM", { id: "IM", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#00f", opacity: 1 }, layout: {} });
         doc.nodes.set("OM", { id: "OM", type: "core.rectangle", parent: null, children: ["OI"], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
@@ -221,10 +221,11 @@ describe("buildRenderModel — overlay", () => {
         // `transform`, so the knob now has somewhere to write.
         const direct = buildRenderModel(SIZE, doc, stateFor(doc, { selectedNodeIds: ["I::OM"] }));
         expect(direct.overlay.filter(i => i.role === "handle").map(h => h.handle)).toEqual(["nw", "ne", "sw", "se", "rotate"]);
-        // A NESTED copy still cannot hold an override → no handles at all, rather than dead controls.
+        // A NESTED copy gets them too (schema 28): the override lands on the owning stored
+        // instance under a path key, so the handle has somewhere to write.
         const nested = buildRenderModel(SIZE, doc, stateFor(doc, { selectedNodeIds: ["I::OI::IM"] }));
-        expect(nested.overlay.filter(i => i.role === "handle")).toEqual([]);
-        expect(nested.overlay.some(i => i.role === "outline")).toBe(true); // still shows it IS selected
+        expect(nested.overlay.filter(i => i.role === "handle").map(h => h.handle)).toEqual(["nw", "ne", "sw", "se", "rotate"]);
+        expect(nested.overlay.some(i => i.role === "outline")).toBe(true);
     });
 
     test("multi-select → ONE group box + GROUP corner handles + one group knob (never per-node handles)", () => {
