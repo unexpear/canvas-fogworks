@@ -43,6 +43,8 @@ import { FrameSelectionAction } from "../actions/FrameSelectionAction";
 import { alignBoxes, distributeBoxes, AlignEdge } from "../geometry/Alignment";
 import { scanCapabilities } from "../scan/CapabilityScan";
 import { exportSVG, EXPORT_MARGIN } from "../export/ExportSVG";
+import { resolveShortcut, isTypingTarget, NUDGE_STEP, NUDGE_STEP_LARGE } from "../../editor/shortcuts";
+import { DuplicateNodesAction, DUPLICATE_OFFSET } from "../actions/DuplicateNodesAction";
 import { alignAction, distributeAction } from "../actions/alignActions";
 import { UpdateNodeContentAction, NODE_NAME_MAX } from "../actions/UpdateNodeContentAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
@@ -8187,5 +8189,134 @@ describe("exportSVG", () => {
     test("the same document always exports identically", () => {
         const doc = docWithNodes({ id: "a" }, { id: "b", geometry: { x: 90, y: 10, width: 20, height: 20 } });
         expect(exportSVG(doc)).toBe(exportSVG(doc));
+    });
+});
+
+// ─── Keyboard shortcuts: the muscle-memory layer ───
+describe("resolveShortcut", () => {
+    test("arrows nudge by one, with Shift by ten", () => {
+        expect(resolveShortcut({ key: "ArrowLeft" })).toEqual({ kind: "nudge", dx: -NUDGE_STEP, dy: 0 });
+        expect(resolveShortcut({ key: "ArrowRight" })).toEqual({ kind: "nudge", dx: NUDGE_STEP, dy: 0 });
+        expect(resolveShortcut({ key: "ArrowUp" })).toEqual({ kind: "nudge", dx: 0, dy: -NUDGE_STEP });
+        expect(resolveShortcut({ key: "ArrowDown" })).toEqual({ kind: "nudge", dx: 0, dy: NUDGE_STEP });
+        expect(resolveShortcut({ key: "ArrowUp", shiftKey: true })).toEqual({ kind: "nudge", dx: 0, dy: -NUDGE_STEP_LARGE });
+    });
+
+    test("Y is DOWN — the screen axis, not the maths one", () => {
+        // Getting this backwards is the classic bug, and it is invisible until someone uses it.
+        expect((resolveShortcut({ key: "ArrowDown" }) as { dy: number }).dy).toBeGreaterThan(0);
+        expect((resolveShortcut({ key: "ArrowUp" }) as { dy: number }).dy).toBeLessThan(0);
+    });
+
+    test("Ctrl and Cmd are interchangeable, so one build suits both platforms", () => {
+        expect(resolveShortcut({ key: "d", ctrlKey: true })).toEqual({ kind: "duplicate" });
+        expect(resolveShortcut({ key: "d", metaKey: true })).toEqual({ kind: "duplicate" });
+        expect(resolveShortcut({ key: "D", metaKey: true })).toEqual({ kind: "duplicate" });   // caps-lock / shift
+        expect(resolveShortcut({ key: "g", ctrlKey: true })).toEqual({ kind: "group" });
+        expect(resolveShortcut({ key: "a", metaKey: true })).toEqual({ kind: "select-all" });
+    });
+
+    test("undo, redo, and both redo spellings", () => {
+        expect(resolveShortcut({ key: "z", ctrlKey: true })).toEqual({ kind: "undo" });
+        expect(resolveShortcut({ key: "z", ctrlKey: true, shiftKey: true })).toEqual({ kind: "redo" });
+        expect(resolveShortcut({ key: "y", ctrlKey: true })).toEqual({ kind: "redo" });
+    });
+
+    test("Delete and Backspace both delete; Escape deselects", () => {
+        expect(resolveShortcut({ key: "Delete" })).toEqual({ kind: "delete" });
+        expect(resolveShortcut({ key: "Backspace" })).toEqual({ kind: "delete" });
+        expect(resolveShortcut({ key: "Escape" })).toEqual({ kind: "deselect" });
+    });
+
+    test("a MODIFIED arrow is left to the platform, not stolen as a nudge", () => {
+        // Ctrl/Cmd+arrow means word-jump or desktop-switch; quietly consuming it is hostile.
+        expect(resolveShortcut({ key: "ArrowLeft", ctrlKey: true })).toBeNull();
+        expect(resolveShortcut({ key: "ArrowLeft", metaKey: true })).toBeNull();
+    });
+
+    test("unbound keys resolve to nothing", () => {
+        expect(resolveShortcut({ key: "q" })).toBeNull();
+        expect(resolveShortcut({ key: "d" })).toBeNull();          // needs the modifier
+        expect(resolveShortcut({ key: "Delete", ctrlKey: true })).toBeNull();
+    });
+
+    test("typing in a field is never a shortcut", () => {
+        // Otherwise Delete destroys the selection while renaming a layer.
+        expect(isTypingTarget({ tagName: "INPUT" })).toBe(true);
+        expect(isTypingTarget({ tagName: "TEXTAREA" })).toBe(true);
+        expect(isTypingTarget({ tagName: "SELECT" })).toBe(true);
+        expect(isTypingTarget({ tagName: "DIV", isContentEditable: true })).toBe(true);
+        expect(isTypingTarget({ tagName: "DIV" })).toBe(false);
+        expect(isTypingTarget(null)).toBe(false);
+    });
+});
+
+describe("DuplicateNodesAction", () => {
+    function doc9(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 10, y: 20, width: 80, height: 60 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 5, y: 5, width: 20, height: 20 }, style: { fill: "#0f0", opacity: 1 }, layout: {} });
+        doc.nodes.set("S", { id: "S", type: "core.rectangle", parent: null, children: [], geometry: { x: 200, y: 0, width: 30, height: 30 }, style: { fill: "#00f", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P", "S"];
+        return doc;
+    }
+
+    test("a duplicate copies the whole SUBTREE, offset, with links pointing inside the copy", () => {
+        const dispatcher = new ActionDispatcher(doc9());
+        const action = new DuplicateNodesAction(dispatcher.getDocument(), ["P"]);
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const d = dispatcher.getDocument();
+        const newRoot = action.getCreatedRootIds()[0];
+        const copy = d.nodes.get(newRoot)!;
+        expect(copy.geometry).toMatchObject({ x: 10 + DUPLICATE_OFFSET, y: 20 + DUPLICATE_OFFSET });
+        expect(copy.children.length).toBe(1);
+        const childCopy = d.nodes.get(copy.children[0])!;
+        expect(childCopy.id).not.toBe("C");                  // a NEW id…
+        expect(childCopy.parent).toBe(newRoot);              // …pointing into the copy
+        expect(childCopy.geometry).toMatchObject({ x: 5, y: 5 });  // children are NOT offset again
+        expect(d.nodes.get("P")!.children).toEqual(["C"]);   // the original is untouched
+        expect(() => deserializeDocument(serializeDocument(d))).not.toThrow();
+    });
+
+    test("the copy lands directly AFTER the original, not on top of the stack", () => {
+        const dispatcher = new ActionDispatcher(doc9());
+        const action = new DuplicateNodesAction(dispatcher.getDocument(), ["P"]);
+        dispatcher.dispatchAction(action);
+        expect(dispatcher.getDocument().rootNodeUuids).toEqual(["P", action.getCreatedRootIds()[0], "S"]);
+    });
+
+    test("selecting a parent AND its child duplicates the parent once", () => {
+        // The child rides along inside the parent's copy; duplicating both would produce it twice.
+        const dispatcher = new ActionDispatcher(doc9());
+        const before = dispatcher.getDocument().nodes.size;
+        const action = new DuplicateNodesAction(dispatcher.getDocument(), ["P", "C"]);
+        dispatcher.dispatchAction(action);
+        expect(action.getCreatedRootIds().length).toBe(1);
+        expect(dispatcher.getDocument().nodes.size).toBe(before + 2);   // P' and C' only
+    });
+
+    test("the copy owns its objects — editing it never reaches the original", () => {
+        const dispatcher = new ActionDispatcher(doc9());
+        const action = new DuplicateNodesAction(dispatcher.getDocument(), ["S"]);
+        dispatcher.dispatchAction(action);
+        const newId = action.getCreatedRootIds()[0];
+        dispatcher.dispatchAction(new UpdateNodeStyleAction(dispatcher.getDocument(), newId, { fill: "#abcdef" }));
+        expect(dispatcher.getDocument().nodes.get("S")!.style.fill).toBe("#00f");
+    });
+
+    test("an instance COPY cannot be duplicated — duplicate the instance instead", () => {
+        const doc = doc9();
+        expect(new DuplicateNodesAction(doc, ["I::M"]).validate()).toBe(false);
+        expect(new DuplicateNodesAction(doc, []).validate()).toBe(false);
+        expect(new DuplicateNodesAction(doc, ["gone"]).validate()).toBe(false);
+    });
+
+    test("duplicating is one undo step", () => {
+        const dispatcher = new ActionDispatcher(doc9());
+        const before = dispatcher.getDocument().nodes.size;
+        dispatcher.dispatchAction(new DuplicateNodesAction(dispatcher.getDocument(), ["P"]));
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.size).toBe(before);
+        expect(dispatcher.getDocument().rootNodeUuids).toEqual(["P", "S"]);
     });
 });

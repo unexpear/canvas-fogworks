@@ -25,6 +25,11 @@ import { MoveTool } from "../editor/tools/MoveTool";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../editor/tools/ShapeTool";
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { alignAction, distributeAction } from "../core/actions/alignActions";
+import { DuplicateNodesAction } from "../core/actions/DuplicateNodesAction";
+import { DeleteNodeAction } from "../core/actions/DeleteNodeAction";
+import { TransactionAction } from "../core/actions/TransactionAction";
+import { selectionRoots } from "../core/document/SceneGraph";
+import { resolveShortcut, isTypingTarget, Shortcut } from "../editor/shortcuts";
 import { AlignEdge, DistributeAxis } from "../core/geometry/Alignment";
 import { IMAGE_SRC_MAX, srcError } from "../core/document/Node";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
@@ -306,6 +311,74 @@ export function App() {
         }
         refresh();
     }, [dispatcher, es, refresh]);
+    /**
+     * Perform a resolved shortcut. Returns true when it was consumed, so an unbound or
+     * inapplicable press still reaches the active tool (Escape cancelling a drag, say).
+     * Every branch goes through an existing Action, so shortcuts inherit undo for free.
+     */
+    const runShortcut = useCallback((s: Shortcut): boolean => {
+        const doc = dispatcher.getDocument();
+        const sel = es.selectedNodeIds;
+        switch (s.kind) {
+            case "undo": dispatcher.undo(); refresh(); return true;
+            case "redo": dispatcher.redo(); refresh(); return true;
+            case "select-all": {
+                es.selectedNodeIds = [...doc.rootNodeUuids];
+                refresh();
+                return true;
+            }
+            case "deselect": {
+                if (sel.length === 0) return false;   // let the tool cancel its gesture
+                es.selectedNodeIds = [];
+                refresh();
+                return true;
+            }
+            case "nudge": {
+                if (sel.length === 0) return false;
+                // Routed per node, so nudging an instance COPY writes an override; and one
+                // transaction, so holding an arrow key does not fill the history with steps.
+                const eff = expandInstances(doc);
+                const moves = selectionRoots(eff, sel).flatMap(id => {
+                    const g = eff.nodes.get(id)?.geometry;
+                    if (!g) return [];
+                    const a = geometryActionFor(doc, id, { x: g.x + s.dx, y: g.y + s.dy });
+                    return a ? [a] : [];
+                });
+                if (moves.length === 0) return false;
+                dispatcher.dispatchAction(new TransactionAction(doc, "nudge", moves), { coalesce: true });
+                refresh();
+                return true;
+            }
+            case "delete": {
+                const stored = sel.filter(id => !isVirtualId(id) && doc.nodes.has(id));
+                if (stored.length === 0) return false;
+                const actions = stored.map(id => new DeleteNodeAction(doc, id));
+                dispatcher.dispatchAction(new TransactionAction(doc, "delete", actions));
+                es.selectedNodeIds = [];
+                refresh();
+                return true;
+            }
+            case "duplicate": {
+                const action = new DuplicateNodesAction(doc, sel);
+                if (!action.validate()) return false;
+                if (dispatcher.dispatchAction(action).success) {
+                    es.selectedNodeIds = action.getCreatedRootIds();   // the copy is now the selection
+                }
+                refresh();
+                return true;
+            }
+            case "group": {
+                const action = new FrameSelectionAction(doc, sel);
+                if (!action.validate()) return false;
+                if (dispatcher.dispatchAction(action).success) {
+                    const frame = action.getFrameId();
+                    if (frame) es.selectedNodeIds = [frame];
+                }
+                refresh();
+                return true;
+            }
+        }
+    }, [dispatcher, es, refresh]);
     const setTool = useCallback((name: string) => {
         toolController.setTool(toolsRef.current[name] ?? toolsRef.current.select);
         es.activeTool = name;
@@ -325,7 +398,19 @@ export function App() {
             toolController.onMouseMove(e, rect);
         };
         const handleMouseUp = (e: MouseEvent) => toolController.onMouseUp(e);
-        const handleKeyDown = (e: KeyboardEvent) => toolController.onKeyDown(e);
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // A shortcut must never fire while someone is typing in the inspector — Delete
+            // would destroy the selection mid-word and every arrow would move the shape
+            // instead of the caret.
+            if (!isTypingTarget(e.target as HTMLElement)) {
+                const shortcut = resolveShortcut(e);
+                if (shortcut && runShortcut(shortcut)) {
+                    e.preventDefault();
+                    return;   // handled — don't also hand it to the active tool
+                }
+            }
+            toolController.onKeyDown(e);
+        };
         const handleKeyUp = (e: KeyboardEvent) => toolController.onKeyUp(e);
         const handleWheel = (e: WheelEvent) => {
             e.preventDefault();
@@ -558,7 +643,7 @@ export function App() {
 
     return (
         <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: UI.bg, color: UI.text }}>
-            <div style={{ display: "flex", alignItems: "center", padding: "4px 8px", background: UI.panel, borderBottom: `1px solid ${UI.line}`, gap: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", rowGap: 4, padding: "4px 8px", background: UI.panel, borderBottom: `1px solid ${UI.line}`, gap: 4 }}>
                 <span style={{ fontWeight: 700, marginRight: 8, color: "#00bfff", fontSize: 13 }}>VDE</span>
                 <ToolButton icon="↗" label="Select" active={toolName === "select"} onClick={() => setTool("select")} />
                 <ToolButton icon="↔" label="Move" active={toolName === "move"} onClick={() => setTool("move")} />
@@ -627,7 +712,7 @@ export function App() {
                     // Align + distribute, shown only for a MULTI-selection — the operations are
                     // meaningless for one node, and a row of dead buttons is worse than none.
                     <>
-                        <div style={{ width: 1, height: 20, background: "#2a2a4a", margin: "0 4px" }} />
+                        <Divider />
                         {ALIGN_BUTTONS.map(([edge, glyph, label]) => (
                             <button
                                 key={edge}
@@ -647,7 +732,7 @@ export function App() {
                         ))}
                     </>
                 )}
-                <div style={{ width: 1, height: 20, background: "#2a2a4a", margin: "0 4px" }} />
+                <Divider />
                 <button
                     title="Wrap the selected nodes in a frame that fits them — the way to build a hierarchy (they must share a parent)"
                     disabled={!new FrameSelectionAction(dispatcher.getDocument(), es.selectedNodeIds).validate()}
@@ -663,7 +748,7 @@ export function App() {
                 >
                     ⧉̲ Frame
                 </button>
-                <div style={{ width: 1, height: 20, background: "#2a2a4a", margin: "0 4px" }} />
+                <Divider />
                 <ToolButton icon="↩" label="Undo" disabled={!ui.canUndo} onClick={() => { dispatcher.undo(); refresh(); }} />
                 <ToolButton icon="↪" label="Redo" disabled={!ui.canRedo} onClick={() => { dispatcher.redo(); refresh(); }} />
                 {ui.truncated && (
@@ -1144,6 +1229,11 @@ function Ruler({ axis, length, vp }: { axis: "x" | "y"; length: number; vp: { x:
             })}
         </svg>
     );
+}
+
+/** A hairline group separator — the toolbar reads as clusters, not one long row. */
+function Divider() {
+    return <div style={{ width: 1, height: 20, background: UI.line, margin: "0 4px" }} />;
 }
 
 function ToolButton({ icon, label, active, disabled, onClick }: {

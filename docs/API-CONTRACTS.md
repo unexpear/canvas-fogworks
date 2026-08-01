@@ -159,6 +159,15 @@ function scanCapabilities(files: readonly SourceFile[]): Capability[];
 const EXPORT_MARGIN: number;
 function exportSVG(doc: ReadonlyDocument): string;
 
+// editor/shortcuts.ts — maps a key chord to an editor command. PURE, so "what does Shift+Left
+// do?" is a unit test. Ctrl and Cmd are interchangeable; a MODIFIED arrow is left to the
+// platform; a press from a text field is never a shortcut.
+const NUDGE_STEP: number;         // 1
+const NUDGE_STEP_LARGE: number;   // 10, with Shift
+type Shortcut = { kind: "nudge"; dx; dy } | { kind: "duplicate" | "delete" | "group" | "select-all" | "deselect" | "undo" | "redo" };
+function resolveShortcut(e: KeyChord): Shortcut | null;
+function isTypingTarget(target): boolean;
+
 // geometry/Alignment.ts — pure align/distribute maths over WORLD rects; returns the new origin
 // for each box that MOVES (an unchanged box is omitted, so a no-op click commits nothing).
 type AlignEdge = "left" | "center-h" | "right" | "top" | "center-v" | "bottom";
