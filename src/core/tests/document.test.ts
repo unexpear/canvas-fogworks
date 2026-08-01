@@ -7867,3 +7867,82 @@ describe("UpdateNodeContentAction", () => {
         expect(src).toMatch(/editTransform\(\{ rotation:/);
     });
 });
+
+// ─── Auto-layout reaches the UI: the engine's most capable subsystem, finally connected ───
+describe("Inspector: layout controls", () => {
+    function doc8(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["A", "B"], geometry: { x: 0, y: 0, width: 300, height: 120 }, style: { fill: "#111", opacity: 1 }, layout: {} });
+        for (const id of ["A", "B"]) {
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: "P", children: [], geometry: { x: 0, y: 0, width: 40, height: 40 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        }
+        doc.rootNodeUuids = ["P"];
+        return doc;
+    }
+
+    test("turning a node into an auto-layout container LAYS OUT its children", () => {
+        // The engine has done this since M2; nothing in the UI could switch it on.
+        const dispatcher = new ActionDispatcher(doc8());
+        const before = computeGeometry(dispatcher.getDocument());
+        expect(before.nodes.get("A")!.bounds.x).toBe(0);
+        expect(before.nodes.get("B")!.bounds.x).toBe(0);      // both at stored (0,0): overlapping
+
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "P", {
+            container: { direction: "row", gap: 8, padding: 8 }
+        }));
+        const after = computeGeometry(dispatcher.getDocument());
+        expect(after.nodes.get("A")!.bounds.x).toBe(8);        // padding
+        expect(after.nodes.get("B")!.bounds.x).toBe(56);       // 8 + 40 + gap 8
+        expect(() => deserializeDocument(serializeDocument(dispatcher.getDocument()))).not.toThrow();
+    });
+
+    test("grow makes a child consume the row's free space", () => {
+        const dispatcher = new ActionDispatcher(doc8());
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "P", { container: { direction: "row", gap: 0, padding: 0 } }));
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "A", { grow: 1 }));
+        const after = computeGeometry(dispatcher.getDocument());
+        // 300 wide, B keeps 40, so A grows to 260.
+        expect(after.nodes.get("A")!.bounds.width).toBe(260);
+        expect(after.nodes.get("B")!.bounds.x).toBe(260);
+    });
+
+    test("grid ⊕ container exclusivity is carried by the action, not the UI", () => {
+        const dispatcher = new ActionDispatcher(doc8());
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "P", { container: { direction: "row" } }));
+        expect(dispatcher.getDocument().nodes.get("P")!.layout.container).toBeDefined();
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "P", {
+            grid: { columns: [{ px: 50 }, { px: 50 }], rowHeight: { px: 50 } }
+        }));
+        const l = dispatcher.getDocument().nodes.get("P")!.layout;
+        expect(l.grid).toBeDefined();
+        expect(l.container).toBeUndefined();     // the previous mode is cleared, not left dangling
+    });
+
+    test("the inspector offers CHILD-side layout only where it applies", () => {
+        // Under a container: grow/shrink/margin/absolute. Under a plain parent: constraints.
+        // Showing both would offer controls the engine ignores.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/parentIsContainer \?/);
+        expect(src).toMatch(/editLayout\(\{ grow:/);
+        expect(src).toMatch(/editLayout\(\{ shrink:/);
+        expect(src).toMatch(/editLayout\(\{ margin:/);
+        expect(src).toMatch(/editLayout\(\{ position:/);
+        expect(src).toMatch(/editConstraint\("horizontal"/);
+        expect(src).toMatch(/editConstraint\("vertical"/);
+    });
+
+    test("the inspector reaches the auto-layout CONTAINER fields the engine implements", () => {
+        // The audit that prompted this slice, for Layout the way the Style one works.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        for (const field of ["direction", "gap", "padding", "alignItems", "wrap"]) {
+            expect(src).toMatch(new RegExp(`editContainer\\(\\{ ${field}`));
+        }
+        expect(src).toMatch(/editLayout\(\{ container:/);
+    });
+
+    test("a copy's layout is NOT editable — there is no override slot for it", () => {
+        // Stated in the panel rather than offered and silently ignored.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/Layout is set on the master, not on a copy/);
+    });
+});

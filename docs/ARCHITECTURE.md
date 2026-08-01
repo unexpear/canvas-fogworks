@@ -74,8 +74,11 @@ Everything in the engine — now and in every future milestone — rests on thes
   second input surface: the inspector constructs and dispatches Actions directly (through
   the `nodeEdit` routing seam, so every field works on an instance COPY too), and the
   toolbar/wheel handlers mutate `EditorState`. The inspector reaches every `Style` field,
-  the node's transform, and its content (text / image src / name) — engine capabilities
-  that existed and were validated for several milestones with no way to reach them.
+  the node's transform, its content (text / image src / name), and its LAYOUT (auto-layout
+  container + the child-side grow/shrink/margin/absolute, or constraints under a plain
+  parent) — engine capabilities that existed and were validated for several milestones with
+  no way to reach them. Which child-side fields appear depends on whether the PARENT lays
+  its children out, since the other set would be inert.
 - **Ephemeral editor state** (selection, hover, viewport, drag previews) does **not**
   flow through the dispatcher, so tools call the explicit `refresh()` callback for it.
 
