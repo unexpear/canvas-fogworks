@@ -22,7 +22,9 @@
  * `previous` was computed: an over-broad set only costs time, but an UNDER-broad set
  * silently reuses a stale entry and renders the node in the wrong place. Callers own
  * that guarantee; the invariant that keeps them honest is `incremental === full`
- * (property-tested). Descendant propagation is handled here: a node is recomputed if
+ * (property-tested, INSTANCED documents included — a stored dirty set is translated
+ * into the expanded id space by `expandDirtyForInstances`, since no action will ever
+ * name a virtual id). Descendant propagation is handled here: a node is recomputed if
  * it OR ANY ANCESTOR is dirty, because a parent's transform composes downward — so a
  * caller only needs to list the directly-changed ids, not their subtrees.
  */
@@ -30,7 +32,7 @@
 import { DeepReadonly, ReadonlyDocument } from "../document/Document";
 import { Geometry, Margins, Node } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
-import { expandInstances, isVirtualId, ownerInstanceOf } from "../document/Components";
+import { expandInstances, isVirtualId, ownerInstanceOf, VIRTUAL_ID_SEP } from "../document/Components";
 import { expandDirtyForLayout, isAbsolute, isLayoutContainer, layoutChildren, layoutGridChildren, measureIntrinsicSizes, resolveConstraints } from "./LayoutEngine";
 import {
     Mat2D, IDENTITY, Rect, multiply, compose, invert, applyToPoint,
@@ -62,6 +64,38 @@ function localMatrix(geo: Rect, t: { rotation?: number; scaleX?: number; scaleY?
     return compose(geo.x, geo.y, t.rotation ?? 0, t.scaleX ?? 1, t.scaleY ?? 1, ox, oy);
 }
 
+/**
+ * Translate a STORED dirty set into the EXPANDED document's id space (M6).
+ *
+ * A virtual id is a `::`-joined path of stored ids — `I::OI::X` is "instance I, through its
+ * master's nested instance OI, the copy of X". Everything a copy's computed entry depends on is
+ * named somewhere on that path: the master node it copies, the instance whose overrides /
+ * variant selection / slot fills shape it, and each master in between. So a copy is dirty
+ * exactly when some SEGMENT of its id is dirty.
+ *
+ * Deliberately over-broad rather than clever: a copy is marked dirty whenever anything on its
+ * path moved, even if that particular change could not have reached it. An over-broad dirty set
+ * only costs time; an under-broad one silently renders a stale node, which is the failure the
+ * `incremental === full` property test exists to catch.
+ *
+ * Scanning EVERY segment is, today, redundant with the ancestor propagation below: each middle
+ * segment of `I::OI::X` is the last segment of an expanded ANCESTOR (`I::OI`, `I::M`, `I`), so
+ * marking on the last segment alone would reach the same set. That redundancy is deliberate and
+ * cheap — this rule then stands on its own rather than depending on a second mechanism to be
+ * correct, and the failure it guards against is the one the whole engine most needs to avoid.
+ * (It is therefore only partly mutation-killable: narrowing it to the last segment survives.)
+ */
+function expandDirtyForInstances(expanded: ReadonlyDocument, dirty: ReadonlySet<string>): Set<string> {
+    const out = new Set(dirty);
+    expanded.nodes.forEach((_node, id) => {
+        if (!isVirtualId(id)) return;
+        for (const segment of id.split(VIRTUAL_ID_SEP)) {
+            if (dirty.has(segment)) { out.add(id); return; }
+        }
+    });
+    return out;
+}
+
 function isFiniteRect(r: Rect): boolean {
     return Number.isFinite(r.x) && Number.isFinite(r.y)
         && Number.isFinite(r.width) && Number.isFinite(r.height);
@@ -86,11 +120,14 @@ export function computeGeometry(
     // consumer — renderer, tools, inspector — reading one consistent scene.
     const stored = doc;
     doc = expandInstances(doc);
-    // Dirty-tracking reuse is DISABLED while instances are present: the dirty set names STORED
-    // ids (that is what actions report), but a master edit changes its VIRTUAL copies, whose
-    // ids are not in that set — reusing them would render a stale copy. A full recompute is
-    // always correct; incremental reuse for instanced documents is a documented deferral.
-    if (doc !== stored) { previous = undefined; dirty = undefined; }
+    // The dirty set names STORED ids — that is what actions report — but expansion introduces
+    // VIRTUAL ids that no action will ever mention, so a master edit would leave its copies
+    // looking clean and reuse a stale entry. Rather than give up reuse entirely (which is what
+    // this used to do), TRANSLATE the set into the expanded id space: a copy is dirty when any
+    // node ON ITS PATH is. That covers every way a copy can change — its master node
+    // (`…::X`), the instance driving it (`I::…`, which is where an override, a variant switch
+    // or a slot fill lands), and any master in between for a nested one.
+    if (doc !== stored && dirty) dirty = expandDirtyForInstances(doc, dirty);
 
     const order: string[] = [];
     const nodes = new Map<string, ComputedNode>();

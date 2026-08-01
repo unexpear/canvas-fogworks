@@ -129,9 +129,10 @@ function computeGeometry(
   dirty?: ReadonlySet<string>
 ): ComputedState;
 // Runs `expandInstances` FIRST (M6), so every consumer sees one consistent scene with
-// instance content materialized. While instances are present, `previous`/`dirty` reuse is
-// disabled (the dirty set names STORED ids, not the virtual copies a master edit changes) —
-// incremental reuse for instanced documents is a documented deferral.
+// instance content materialized. A dirty set names STORED ids, so it is TRANSLATED into the
+// expanded id space: a copy is dirty when any node on its `::` path is — its master node,
+// the instance whose overrides / variant / slot fills shape it, or any master between.
+// `incremental === full` is property-tested over instanced documents too.
 function hitTest(computed: ComputedState, x: number, y: number, tolerance?: number, includeVirtual?: boolean): string | null; // local-space, DOM-free; `tolerance` (world units, default 0) is a pick halo so thin/zero-extent targets (an axis-aligned line) stay selectable; `includeVirtual` is the DEEP pick (alt-click) that selects an instance COPY instead of the instance. By default a virtual hit RESOLVES to its owning instance rather than being skipped, so content drawn OUTSIDE the instance's own box is still clickable; `nodesInRect` resolves the same way and dedupes
 function nodesInRect(computed: ComputedState, rect: Rect): string[]; // marquee (box) select: ids whose WORLD bounds OVERLAP rect (touch, not containment), in draw order; DOM-free
 function toLocal(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;

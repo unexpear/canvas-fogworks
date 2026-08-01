@@ -9314,3 +9314,126 @@ describe("Slots: content an instance supplies", () => {
         expect(src).toMatch(/slotError\(v\) !== null/);      // the shared validator is the authority
     });
 });
+
+
+// ─── Dirty-tracking reuse for INSTANCED documents (the last M6 deferral) ───
+describe("GeometryEngine dirty tracking with instances", () => {
+    type CS = ReturnType<typeof computeGeometry>;
+    const same = (a: CS, b: CS): true | string => {
+        if (a.order.join("|") !== b.order.join("|")) return `order: ${a.order} vs ${b.order}`;
+        if (a.nodes.size !== b.nodes.size) return `size ${a.nodes.size} vs ${b.nodes.size}`;
+        for (const [id, an] of a.nodes) {
+            const bn = b.nodes.get(id);
+            if (!bn) return `missing ${id}`;
+            for (const k of ["a", "b", "c", "d", "e", "f"] as const) {
+                if (Math.abs(an.world[k] - bn.world[k]) > 1e-9) return `${id}.world.${k}`;
+            }
+            for (const k of ["x", "y", "width", "height"] as const) {
+                if (Math.abs(an.bounds[k] - bn.bounds[k]) > 1e-9) return `${id}.bounds.${k}`;
+            }
+        }
+        return true;
+    };
+
+    /** A master with a child, a nested instance inside it, and two outer instances. */
+    function instancedDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("IM", { id: "IM", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 20, height: 20 }, style: { fill: "#00ff00", opacity: 1 }, layout: {} });
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: ["MC", "OI"], geometry: { x: 5, y: 5, width: 100, height: 60 }, style: { fill: "#ff0000", opacity: 1 }, layout: {} });
+        doc.nodes.set("MC", { id: "MC", type: "core.rectangle", parent: "M", children: [], geometry: { x: 4, y: 4, width: 30, height: 30 }, style: { fill: "#0000ff", opacity: 1 }, layout: {} });
+        doc.nodes.set("OI", { id: "OI", type: "core.instance", parent: "M", children: [], geometry: { x: 40, y: 8, width: 20, height: 20 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "IM" });
+        doc.nodes.set("I1", { id: "I1", type: "core.instance", parent: null, children: [], geometry: { x: 200, y: 200, width: 100, height: 60 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.nodes.set("I2", { id: "I2", type: "core.instance", parent: null, children: [], geometry: { x: 400, y: 200, width: 100, height: 60 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["IM", "M", "I1", "I2"];
+        return doc;
+    }
+
+    test("editing a MASTER node updates every copy — reuse no longer renders a stale one", () => {
+        // The deferral this closes: the dirty set names `MC`, but the nodes that MOVE are
+        // `I1::MC` and `I2::MC`, which no action will ever mention.
+        const dispatcher = new ActionDispatcher(instancedDoc());
+        const base = computeGeometry(dispatcher.getDocument());
+        dispatcher.dispatchAction(new UpdateNodeGeometryAction(dispatcher.getDocument(), "MC", { x: 44 }));
+        const live = dispatcher.getDocument();
+
+        const incremental = computeGeometry(live, null, base, new Set(["MC"]));
+        expect(same(incremental, computeGeometry(live))).toBe(true);
+        expect(incremental.nodes.get("I1::MC")!.bounds.x).toBe(244);   // actually moved
+    });
+
+    test("…and reuse really happens: untouched copies keep their PREVIOUS entry by reference", () => {
+        // Correctness alone could be had by recomputing everything, which is what the old code
+        // did. The point of the change is that unaffected copies are reused.
+        const dispatcher = new ActionDispatcher(instancedDoc());
+        const base = computeGeometry(dispatcher.getDocument());
+        dispatcher.dispatchAction(new UpdateNodeGeometryAction(dispatcher.getDocument(), "I1", { x: 250 }));
+        const incremental = computeGeometry(dispatcher.getDocument(), null, base, new Set(["I1"]));
+
+        expect(incremental.nodes.get("I2::MC")).toBe(base.nodes.get("I2::MC"));      // untouched — reused
+        expect(incremental.nodes.get("I1::MC")).not.toBe(base.nodes.get("I1::MC"));  // on the changed path
+    });
+
+    test("a NESTED copy is dirtied by any master on its path", () => {
+        const dispatcher = new ActionDispatcher(instancedDoc());
+        const base = computeGeometry(dispatcher.getDocument());
+        // `IM` is two levels down: the copies are `I1::OI::IM` and `I2::OI::IM`.
+        dispatcher.dispatchAction(new UpdateNodeGeometryAction(dispatcher.getDocument(), "IM", { width: 35 }));
+        const live = dispatcher.getDocument();
+        const incremental = computeGeometry(live, null, base, new Set(["IM"]));
+        expect(same(incremental, computeGeometry(live))).toBe(true);
+        expect(incremental.nodes.get("I1::OI::IM")!.bounds.width).toBe(35);
+    });
+
+    test("an OVERRIDE dirties only its own instance's copies", () => {
+        const dispatcher = new ActionDispatcher(instancedDoc());
+        const base = computeGeometry(dispatcher.getDocument());
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "I1", "MC", { geometry: { x: 50 } }));
+        const live = dispatcher.getDocument();
+        const incremental = computeGeometry(live, null, base, new Set(["I1"]));
+        expect(same(incremental, computeGeometry(live))).toBe(true);
+        expect(incremental.nodes.get("I1::MC")!.bounds.x).toBe(250);
+        expect(incremental.nodes.get("I2::MC")!.bounds.x).toBe(404);   // 400 + MC's own 4 — the root copy is re-origined, so M's own x never counts
+    });
+
+    test("incremental === full over a random sequence of edits to an INSTANCED document", () => {
+        // The same property the instance-free engine has been held to since M1, now covering
+        // the expansion. Seeded, so any failure reproduces exactly.
+        let seed = 0x5bf03635;
+        const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 0x100000000; };
+        const dispatcher = new ActionDispatcher(instancedDoc());
+        const editable = ["IM", "M", "MC", "OI", "I1", "I2"];
+        const pick = () => editable[Math.floor(rnd() * editable.length)];
+
+        let prev = computeGeometry(dispatcher.getDocument());
+        const dirty = new Set<string>();
+        for (let step = 0; step < 120; step++) {
+            const doc = dispatcher.getDocument();
+            const target = pick();
+            const op = Math.floor(rnd() * 5);
+            if (op === 0) {
+                dispatcher.dispatchAction(new UpdateNodeGeometryAction(doc, target, { x: rnd() * 300, y: rnd() * 300 }));
+                dirty.add(target);
+            } else if (op === 1) {
+                dispatcher.dispatchAction(new UpdateNodeGeometryAction(doc, target, { width: 1 + rnd() * 120, height: 1 + rnd() * 120 }));
+                dirty.add(target);
+            } else if (op === 2) {
+                dispatcher.dispatchAction(new UpdateNodeTransformAction(doc, target, { rotation: rnd() * Math.PI * 2, scaleX: 0.5 + rnd() * 2 }));
+                dirty.add(target);
+            } else if (op === 3) {
+                // An OVERRIDE — the edit that only exists because of instances.
+                const inst = rnd() < 0.5 ? "I1" : "I2";
+                dispatcher.dispatchAction(new SetInstanceOverrideAction(doc, inst, rnd() < 0.5 ? "MC" : "M", { geometry: { width: 5 + rnd() * 90 } }));
+                dirty.add(inst);
+            } else {
+                dispatcher.dispatchAction(new UpdateNodeLayoutAction(doc, "M", rnd() < 0.5 ? { container: { direction: rnd() < 0.5 ? "row" : "column", gap: rnd() * 10 } } : { container: undefined }));
+                dirty.add("M");
+            }
+
+            const live = dispatcher.getDocument();
+            const incremental = computeGeometry(live, null, prev, dirty);
+            expect(same(incremental, computeGeometry(live))).toBe(true);
+            prev = incremental;
+            dirty.clear();
+        }
+    });
+});
