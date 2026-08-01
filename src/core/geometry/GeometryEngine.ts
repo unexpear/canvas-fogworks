@@ -30,7 +30,7 @@
 import { DeepReadonly, ReadonlyDocument } from "../document/Document";
 import { Geometry, Margins, Node } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
-import { expandInstances, isVirtualId } from "../document/Components";
+import { expandInstances, isVirtualId, ownerInstanceOf } from "../document/Components";
 import { expandDirtyForLayout, isAbsolute, isLayoutContainer, layoutChildren, layoutGridChildren, measureIntrinsicSizes, resolveConstraints } from "./LayoutEngine";
 import {
     Mat2D, IDENTITY, Rect, multiply, compose, invert, applyToPoint,
@@ -330,11 +330,6 @@ export function hitTest(
 ): string | null {
     for (let i = state.order.length - 1; i >= 0; i--) {
         const id = state.order[i];
-        // A VIRTUAL node (an instance's materialized copy, M6) is skipped by DEFAULT, so a plain
-        // click on instance content selects the INSTANCE — the thing you usually want to move.
-        // `includeVirtual` is the deep-pick (alt-click): it selects the copy itself, which the
-        // editor then edits through a per-instance override. Same intent as Figma's drill-in.
-        if (!includeVirtual && isVirtualId(id)) continue;
         const c = state.nodes.get(id);
         if (!c) continue;
         // Cheap AABB reject first (inflated by the halo), then the exact local-space test.
@@ -342,7 +337,23 @@ export function hitTest(
         if (x < b.x - tolerance || y < b.y - tolerance || x > b.x + b.width + tolerance || y > b.y + b.height + tolerance) continue;
         const p = toLocal(state, id, x, y);
         if (!p) continue;
-        if (p.x >= -tolerance && p.y >= -tolerance && p.x <= c.local.width + tolerance && p.y <= c.local.height + tolerance) return id;
+        if (p.x >= -tolerance && p.y >= -tolerance && p.x <= c.local.width + tolerance && p.y <= c.local.height + tolerance) {
+            // A VIRTUAL node (an instance's materialized copy, M6) RESOLVES to its instance by
+            // DEFAULT, so a plain click on instance content selects the INSTANCE — the thing you
+            // usually want to move. `includeVirtual` is the deep-pick (alt-click): it selects the
+            // copy itself, which the editor edits through an override. Figma's drill-in.
+            //
+            // Resolving rather than SKIPPING is what makes overflowing content clickable: a copy
+            // may be drawn outside the instance's own box (expansion re-origins the master root
+            // but keeps the master's size, and a laid-out child can reach further still), and
+            // skipping meant those pixels hit nothing at all — visible, but dead.
+            if (!includeVirtual && isVirtualId(id)) {
+                const owner = ownerInstanceOf(id);
+                if (owner === null || !state.nodes.has(owner)) continue;
+                return owner;
+            }
+            return id;
+        }
     }
     return null;
 }
@@ -358,19 +369,25 @@ export function hitTest(
  * fail every comparison (NaN), so a degenerate node is silently skipped, never thrown.
  */
 export function nodesInRect(state: ComputedState, rect: Rect): string[] {
-    const hits: string[] = [];
     const rx2 = rect.x + rect.width;
     const ry2 = rect.y + rect.height;
+    const hit = new Set<string>();
     for (const id of state.order) {
-        // Virtual (instance-copy) nodes are pickable by a direct CLICK (which edits them via an
-        // override) but not by a MARQUEE: a box over an instance should grab the instance, not
-        // scatter the selection across its internals — the same containment intuition a group
-        // gives. `hitTest`'s deepest-first scan handles the click case.
-        if (isVirtualId(id)) continue;
         const c = state.nodes.get(id);
         if (!c) continue;
         const b = c.bounds;
-        if (b.x <= rx2 && b.x + b.width >= rect.x && b.y <= ry2 && b.y + b.height >= rect.y) hits.push(id);
+        if (!(b.x <= rx2 && b.x + b.width >= rect.x && b.y <= ry2 && b.y + b.height >= rect.y)) continue;
+        // A marquee never scatters the selection across an instance's internals — a box over an
+        // instance grabs the INSTANCE, the same containment intuition a group gives. But a copy
+        // that overflows its instance's box must still count, or the marquee misses content the
+        // user can plainly see; so a virtual hit RESOLVES to its owner instead of being dropped.
+        const target = isVirtualId(id) ? ownerInstanceOf(id) : id;
+        if (target !== null && state.nodes.has(target)) hit.add(target);
     }
-    return hits;
+    // Draw order, back to front — `order` is the authority, so resolving cannot reorder anything.
+    // Today a plain `[...hit]` would give the same answer, because the scene walk is depth-first
+    // and a copy always immediately follows its instance, so insertion order and draw order
+    // cannot diverge; the filter states the contract rather than relying on that coincidence.
+    // (It is therefore not mutation-killable — no reachable input distinguishes the two.)
+    return state.order.filter(id => hit.has(id));
 }

@@ -9064,3 +9064,60 @@ describe("Nested overrides: reaching inside an instance inside an instance", () 
         expect(o.style).toEqual({ opacity: 0.25 });
     });
 });
+
+
+// ─── Instance-content overflow picking: a copy drawn outside its instance's box ───
+describe("Picking instance content that overflows the instance box", () => {
+    /** The instance's own box is 20×20; the master it draws is 100×100, so the copy spills. */
+    function overflowDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#f00", opacity: 1 }, layout: {} });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 300, y: 300, width: 20, height: 20 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["M", "I"];
+        return doc;
+    }
+
+    test("a click on the OVERFLOWING part selects the instance — it used to hit nothing", () => {
+        // The copy covers (300,300)-(400,400); the instance's own box only (300,300)-(320,320).
+        // Skipping virtual ids meant every pixel past 320 was visible but dead.
+        const cs = computeGeometry(overflowDoc());
+        expect(hitTest(cs, 310, 310)).toBe("I");    // inside the instance's own box (always worked)
+        expect(hitTest(cs, 380, 380)).toBe("I");    // …and out in the overflow
+        expect(hitTest(cs, 500, 500)).toBeNull();   // genuinely empty space is still empty
+    });
+
+    test("the deep pick still reaches the COPY itself, overflow included", () => {
+        const cs = computeGeometry(overflowDoc());
+        expect(hitTest(cs, 380, 380, 0, true)).toBe("I::M");
+    });
+
+    test("a marquee touching only the overflow grabs the INSTANCE, once", () => {
+        const cs = computeGeometry(overflowDoc());
+        // A rect entirely past the instance's own 20×20 box, over the copy.
+        expect(nodesInRect(cs, { x: 350, y: 350, width: 20, height: 20 })).toEqual(["I"]);
+        // Overlapping both the box and the copy still yields ONE entry, not two.
+        expect(nodesInRect(cs, { x: 290, y: 290, width: 200, height: 200 })).toEqual(["I"]);
+    });
+
+    test("resolving a copy to its owner never reorders the result", () => {
+        // `order` stays the authority: a marquee over both returns them back-to-front.
+        const doc = overflowDoc();
+        doc.nodes.set("Z", { id: "Z", type: "core.rectangle", parent: null, children: [], geometry: { x: 300, y: 300, width: 400, height: 400 }, style: { fill: "#00f", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["M", "I", "Z"];
+        const cs = computeGeometry(doc);
+        expect(nodesInRect(cs, { x: 350, y: 350, width: 20, height: 20 })).toEqual(["I", "Z"]);
+        // …and the topmost node still wins a click, even over an instance's overflow.
+        expect(hitTest(cs, 380, 380)).toBe("Z");
+    });
+
+    test("a copy whose owning instance has vanished is not selectable", () => {
+        // Defensive: `ownerInstanceOf` names a stored id, but a damaged state could hold a
+        // virtual node whose owner is gone. Returning it would hand the editor an id that
+        // isn't in the document — the exact failure the routing seam exists to prevent.
+        const cs = computeGeometry(overflowDoc());
+        const damaged: typeof cs = { order: cs.order, nodes: new Map(cs.nodes) };
+        damaged.nodes.delete("I");
+        expect(hitTest(damaged, 380, 380)).toBeNull();
+        expect(nodesInRect(damaged, { x: 350, y: 350, width: 20, height: 20 })).toEqual([]);
+    });
+});
