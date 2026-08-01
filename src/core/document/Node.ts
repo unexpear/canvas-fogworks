@@ -238,6 +238,24 @@ export interface Node {
      * an instance need only record what it changed. See `resolveVariantMaster`.
      */
     variants?: Record<string, string>;
+    /**
+     * A SLOT (schema 29): this node is a named hole in a master, which an instance may fill
+     * with content of its own. The slot node still supplies the BOX — position, size, layout —
+     * and its own children are the DEFAULT content, drawn whenever nothing fills it.
+     *
+     * Any node may carry one; it means nothing until something instances the master.
+     */
+    slot?: string;
+    /**
+     * `core.instance` → what this instance puts in each slot (schema 29): slot NAME → the id of
+     * a node to draw there. That node keeps living wherever it is in the document — a slot fill
+     * is a reference, exactly as `componentId` is, not a move.
+     *
+     * A name matching no slot, or an id matching no node, is inert: the slot falls back to its
+     * own default children, which is the same "a broken reference draws the honest fallback"
+     * rule `componentId` and `$token` follow.
+     */
+    slotContent?: Record<string, string>;
     name?: string;
 }
 
@@ -290,6 +308,33 @@ function variantValuesError(what: string, values: Record<string, unknown>): stri
         if (ke) return ke;
         const ve = variantNameError(`${what}.${k}`, val, false);
         if (ve) return ve;
+    }
+    return null;
+}
+
+/** Validity of a node's SLOT name (schema 29): non-empty and bounded, like every other
+ *  hand-editable name here. Any node type may be a slot. */
+export function slotError(slot: unknown): string | null {
+    if (slot === undefined) return null;
+    return variantNameError("slot", slot, false);
+}
+
+/**
+ * Validity of an instance's SLOT CONTENT (schema 29). Only a `core.instance` may carry it;
+ * keys are slot names and values are node ids, both bounded and non-empty. Neither is required
+ * to RESOLVE — an unfilled or dangling entry falls back to the slot's own children.
+ */
+export function slotContentError(type: string, slotContent: unknown): string | null {
+    if (slotContent === undefined) return null;
+    if (type !== "core.instance") return "only a core.instance node may carry slot content";
+    if (typeof slotContent !== "object" || slotContent === null || Array.isArray(slotContent)) return "slotContent must be an object";
+    const entries = Object.entries(slotContent as Record<string, unknown>);
+    if (entries.length > VARIANT_PROPS_MAX) return `slotContent must have at most ${VARIANT_PROPS_MAX} entries`;
+    for (const [name, id] of entries) {
+        const ne = variantNameError("slotContent slot name", name, true);
+        if (ne) return ne;
+        const ie = variantNameError(`slotContent.${name}`, id, false);
+        if (ie) return ie;
     }
     return null;
 }

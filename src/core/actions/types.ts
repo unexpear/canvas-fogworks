@@ -60,6 +60,9 @@ export type NodeDelta =
          *  meant "absent from the delta" could never express it. */
         variant?: VariantKey;
         variants?: Record<string, string>;
+        /** Slots (schema 29). Read with `in` for the same reason: CLEARING is a real edit. */
+        slot?: string;
+        slotContent?: Record<string, string>;
     }
     /**
      * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme

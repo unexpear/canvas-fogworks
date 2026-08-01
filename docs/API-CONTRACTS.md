@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v28 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v29 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -66,12 +66,19 @@ function remapOverridesForVariant(doc, overrides, fromMasterId, toMasterId): Rec
 // owning STORED instance, because a virtual instance node cannot hold one.
 function resolveOverridePath(doc: ReadonlyDocument, instance, key: string): Node | null;  // null = inert, not invalid
 function mergeOverrides(base: InstanceOverride | undefined, patch: InstanceOverride): InstanceOverride; // patch wins; nested maps merge
+// SLOTS (schema 29): a master names a hole (`Node.slot`), an instance fills it
+// (`Node.slotContent`: slot name → node id). The slot supplies the BOX and its own children
+// are the default; a fill is a REFERENCE, so the content goes on living where it is. Unfilled
+// or dangling falls back to the default. `InstanceOverride.slotContent` is how an OUTER
+// instance fills a slot inside a nested one — no second addressing scheme.
+function slotError(slot: unknown): string | null;                       // shared load + edit
+function slotContentError(type: string, slotContent: unknown): string | null;  // instances only; shared load + edit
 function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializes instances as virtual children; SAME reference when there is nothing to expand
 // Per-instance OVERRIDES (schema 22, M6 slice 2): what one instance changes about its copy,
 // keyed by MASTER NODE ID. Applied during expansion at each level; a key matching no master
 // node is inert. Schema 26 added `layout` and `transform`, so a copy can lay its children
 // out differently and be rotated independently of its master.
-interface InstanceOverride { geometry?: Partial<Geometry>; style?: Partial<Style>; text?: string; src?: string; layout?: Partial<Layout>; transform?: Partial<Transform> }
+interface InstanceOverride { geometry?: Partial<Geometry>; style?: Partial<Style>; text?: string; src?: string; layout?: Partial<Layout>; transform?: Partial<Transform>; slotContent?: Record<string, string> }
 const INSTANCE_MAX_OVERRIDES: number;                      // per-instance cap (OOM guard)
 function overridesError(type: string, overrides: unknown): string | null; // shared load + edit; each field obeys its stored rule (styleError, finite geometry)
 // Node.ts — an image SOURCE (schema 23). Only a core.image may carry one; bounded, and the

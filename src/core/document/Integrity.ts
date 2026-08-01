@@ -12,7 +12,7 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError, layoutError, dimensionError, pathError, srcError, styleError, nodeIdError, variantError, variantSelectionError } from "./Node";
+import { transformError, layoutError, dimensionError, pathError, srcError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError } from "./Node";
 import { componentError, overrideAgainstMasterError, overridesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
 
@@ -67,6 +67,12 @@ function checkNodeRanges(node: ReadonlyNode): void {
     if (varErr) throw new Error(`Invalid document: node "${node.id}" ${varErr}.`);
     const selErr = variantSelectionError(node.type, node.variants);
     if (selErr) throw new Error(`Invalid document: node "${node.id}" ${selErr}.`);
+    // Slots (schema 29): a named hole in a master, and what an instance puts in it. Neither
+    // side is required to resolve — an unfilled slot draws its own default children.
+    const slotErr = slotError(node.slot);
+    if (slotErr) throw new Error(`Invalid document: node "${node.id}" ${slotErr}.`);
+    const scErr = slotContentError(node.type, node.slotContent);
+    if (scErr) throw new Error(`Invalid document: node "${node.id}" ${scErr}.`);
 }
 
 /**

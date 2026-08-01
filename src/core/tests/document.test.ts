@@ -12,6 +12,7 @@ import { CreateInstanceAction } from "../actions/CreateInstanceAction";
 import { expandInstances, componentError, overridesError, overrideAgainstMasterError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES , variantMembers, variantProperties, resolveVariantMaster, masterSubtreeIds, resolveOverridePath} from "../document/Components";
 import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
 import { SetVariantAction, SetInstanceVariantAction } from "../actions/VariantActions";
+import { SetSlotAction, SetSlotContentAction } from "../actions/SlotActions";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy , overrideTargetFor} from "../actions/nodeEdit";
@@ -50,7 +51,7 @@ import { alignAction, distributeAction } from "../actions/alignActions";
 import { UpdateNodeContentAction, NODE_NAME_MAX } from "../actions/UpdateNodeContentAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
-import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow, TrackSize, layoutError, newGridPatch, mergeLayout, transformError, Layout, variantError, variantSelectionError } from "../document/Node";
+import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow, TrackSize, layoutError, newGridPatch, mergeLayout, transformError, Layout, variantError, variantSelectionError , slotError, slotContentError} from "../document/Node";
 import { parseTrackList, formatTrackList } from "../document/TrackList";
 
 function createDocWithRectangle(): ProjectDocument {
@@ -4284,8 +4285,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 27→28 landed for nested override keys.)
-        expect(() => migrateIfNeeded(legacy, "29")).toThrow('Migration not implemented for document schema "28"');
+        // time a real migration is added — here, when 28→29 landed for slots.)
+        expect(() => migrateIfNeeded(legacy, "30")).toThrow('Migration not implemented for document schema "29"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -9119,5 +9120,197 @@ describe("Picking instance content that overflows the instance box", () => {
         damaged.nodes.delete("I");
         expect(hitTest(damaged, 380, 380)).toBeNull();
         expect(nodesInRect(damaged, { x: 350, y: 350, width: 20, height: 20 })).toEqual([]);
+    });
+});
+
+
+// ─── Slots (schema 29): a named hole a master leaves for its instances to fill ───
+describe("Slots: content an instance supplies", () => {
+    /** A Card master with a slot named "body", whose default child says "empty". */
+    function slotDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("CM", { id: "CM", type: "core.rectangle", parent: null, children: ["SLOT"], geometry: { x: 0, y: 0, width: 200, height: 100 }, style: { fill: "#eeeeee", opacity: 1 }, layout: {} });
+        doc.nodes.set("SLOT", { id: "SLOT", type: "core.rectangle", parent: "CM", children: ["DEF"], geometry: { x: 10, y: 10, width: 180, height: 80 }, style: { fill: "#dddddd", opacity: 1 }, layout: {}, slot: "body" });
+        doc.nodes.set("DEF", { id: "DEF", type: "core.text", parent: "SLOT", children: [], geometry: { x: 0, y: 0, width: 50, height: 20 }, style: { fill: "#999999", opacity: 1 }, layout: {}, text: "empty" });
+        // Two things that could go IN the slot.
+        doc.nodes.set("PHOTO", { id: "PHOTO", type: "core.rectangle", parent: null, children: [], geometry: { x: 500, y: 500, width: 40, height: 40 }, style: { fill: "#ff0000", opacity: 1 }, layout: {} });
+        doc.nodes.set("CHART", { id: "CHART", type: "core.rectangle", parent: null, children: [], geometry: { x: 600, y: 500, width: 70, height: 30 }, style: { fill: "#0000ff", opacity: 1 }, layout: {} });
+        doc.nodes.set("C1", { id: "C1", type: "core.instance", parent: null, children: [], geometry: { x: 0, y: 0, width: 200, height: 100 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "CM" });
+        doc.nodes.set("C2", { id: "C2", type: "core.instance", parent: null, children: [], geometry: { x: 0, y: 300, width: 200, height: 100 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "CM" });
+        doc.rootNodeUuids = ["CM", "PHOTO", "CHART", "C1", "C2"];
+        return doc;
+    }
+    /** What the slot copy actually holds — its children in the expanded document. Note the
+     *  ids: ordinary descendants keep the instance's path (`C1::DEF`), while a FILL opens a
+     *  new one (`C1::SLOT::PHOTO`), exactly as a nested instance does. */
+    const slotChildren = (doc: ReadonlyDocument, slotCopyId: string) =>
+        [...(expandInstances(doc).nodes.get(slotCopyId)?.children ?? [])].sort();
+
+    test("an UNFILLED slot draws its own default children", () => {
+        const x = expandInstances(slotDoc());
+        expect(x.nodes.get("C1::SLOT")!.children).toEqual(["C1::DEF"]);
+        expect(x.nodes.get("C1::DEF")!.text).toBe("empty");
+    });
+
+    test("a FILLED slot draws the supplied node instead — and only for that instance", () => {
+        const dispatcher = new ActionDispatcher(slotDoc());
+        dispatcher.dispatchAction(new SetSlotContentAction(dispatcher.getDocument(), "C1", "body", "PHOTO"));
+        const d = dispatcher.getDocument();
+
+        // C1 draws the photo IN the slot; its default child is gone.
+        expect(slotChildren(d, "C1::SLOT")).toEqual(["C1::SLOT::PHOTO"]);
+        // C2 is untouched, and the PHOTO still lives where it always did.
+        expect(slotChildren(d, "C2::SLOT")).toEqual(["C2::DEF"]);
+        expect(d.nodes.get("PHOTO")!.parent).toBeNull();
+    });
+
+    test("the SLOT places the fill — content is re-origined into it, not left where it lives", () => {
+        // PHOTO sits at (500,500) in the document; inside the slot it must sit at the slot's
+        // origin, exactly as a master root does inside its instance.
+        const dispatcher = new ActionDispatcher(slotDoc());
+        dispatcher.dispatchAction(new SetSlotContentAction(dispatcher.getDocument(), "C1", "body", "PHOTO"));
+        const computed = computeGeometry(dispatcher.getDocument() as ProjectDocument);
+        // C1 at (0,0) → slot at (10,10) → the fill at the slot's origin.
+        expect(computed.nodes.get("C1::SLOT::PHOTO")!.bounds).toMatchObject({ x: 10, y: 10, width: 40, height: 40 });
+    });
+
+    test("two instances can hold DIFFERENT content in the same slot", () => {
+        const dispatcher = new ActionDispatcher(slotDoc());
+        dispatcher.dispatchAction(new SetSlotContentAction(dispatcher.getDocument(), "C1", "body", "PHOTO"));
+        dispatcher.dispatchAction(new SetSlotContentAction(dispatcher.getDocument(), "C2", "body", "CHART"));
+        const d = dispatcher.getDocument();
+        expect(slotChildren(d, "C1::SLOT")).toEqual(["C1::SLOT::PHOTO"]);
+        expect(slotChildren(d, "C2::SLOT")).toEqual(["C2::SLOT::CHART"]);
+    });
+
+    test("a fill that names nothing falls back to the default — inert, not broken", () => {
+        const doc = slotDoc();
+        doc.nodes.get("C1")!.slotContent = { body: "ghost", nosuchslot: "PHOTO" };
+        const x = expandInstances(doc);
+        expect(x.nodes.get("C1::SLOT")!.children).toEqual(["C1::DEF"]);
+        expect(() => deserializeDocument(serializeDocument(doc))).not.toThrow();
+    });
+
+    test("filling a slot with content that contains the card cannot expand forever", () => {
+        // PHOTO becomes a parent of an instance of the very card being filled. The chain guard
+        // has to stop it — and stop it by drawing nothing, never by throwing mid-render.
+        const doc = slotDoc();
+        doc.nodes.set("INNER", { id: "INNER", type: "core.instance", parent: "PHOTO", children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "CM" });
+        doc.nodes.get("PHOTO")!.children = ["INNER"];
+        doc.nodes.get("C1")!.slotContent = { body: "PHOTO" };
+        expect(() => expandInstances(doc)).not.toThrow();
+        const x = expandInstances(doc);
+        expect(x.nodes.size).toBeLessThan(INSTANCE_MAX_NODES);
+    });
+
+    test("slot fills MERGE, and an emptied map is stored ABSENT", () => {
+        const doc = slotDoc();
+        doc.nodes.get("CM")!.children = ["SLOT", "SLOT2"];
+        doc.nodes.set("SLOT2", { id: "SLOT2", type: "core.rectangle", parent: "CM", children: [], geometry: { x: 10, y: 60, width: 50, height: 20 }, style: { fill: "#cccccc", opacity: 1 }, layout: {}, slot: "footer" });
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new SetSlotContentAction(dispatcher.getDocument(), "C1", "body", "PHOTO"));
+        dispatcher.dispatchAction(new SetSlotContentAction(dispatcher.getDocument(), "C1", "footer", "CHART"));
+        expect(dispatcher.getDocument().nodes.get("C1")!.slotContent).toEqual({ body: "PHOTO", footer: "CHART" });
+        dispatcher.dispatchAction(new SetSlotContentAction(dispatcher.getDocument(), "C1", "body", null));
+        dispatcher.dispatchAction(new SetSlotContentAction(dispatcher.getDocument(), "C1", "footer", null));
+        expect(dispatcher.getDocument().nodes.get("C1")!.slotContent).toBeUndefined();
+    });
+
+    test("an instance may not fill a slot with ITSELF", () => {
+        // The one fill that can never draw: expansion would re-enter the instance, the chain
+        // guard would stop it, and the slot would sit empty with no explanation.
+        const dispatcher = new ActionDispatcher(slotDoc());
+        expect(dispatcher.dispatchAction(new SetSlotContentAction(dispatcher.getDocument(), "C1", "body", "C1")).success).toBe(false);
+        expect(dispatcher.getDocument().nodes.get("C1")!.slotContent).toBeUndefined();
+    });
+
+    test("both slot fields go through the SAME validators the loader runs", () => {
+        expect(slotError("")).not.toBeNull();
+        expect(slotError("body")).toBeNull();
+        expect(slotContentError("core.rectangle", { body: "PHOTO" })).not.toBeNull();  // instances only
+        expect(slotContentError("core.instance", { "": "PHOTO" })).not.toBeNull();
+        expect(slotContentError("core.instance", { body: "" })).not.toBeNull();
+        expect(slotContentError("core.instance", JSON.parse('{"__proto__":"PHOTO"}'))).not.toBeNull();
+        expect(slotContentError("core.instance", { body: "PHOTO" })).toBeNull();
+        // …and the ACTIONS run them, rather than merely sharing a file with them.
+        const dispatcher = new ActionDispatcher(slotDoc());
+        expect(dispatcher.dispatchAction(new SetSlotAction(dispatcher.getDocument(), "SLOT", "")).success).toBe(false);
+        expect(dispatcher.getDocument().nodes.get("SLOT")!.slot).toBe("body");
+    });
+
+    test("a slot document round-trips, and un-slotting REMOVES the field", () => {
+        const dispatcher = new ActionDispatcher(slotDoc());
+        dispatcher.dispatchAction(new SetSlotContentAction(dispatcher.getDocument(), "C1", "body", "PHOTO"));
+        const d = dispatcher.getDocument();
+        const loaded = deserializeDocument(serializeDocument(d));
+        expect(loaded.nodes.get("SLOT")!.slot).toBe("body");
+        expect(loaded.nodes.get("C1")!.slotContent).toEqual({ body: "PHOTO" });
+        expect(compareDocuments(d, loaded)).toBe(true);
+
+        dispatcher.dispatchAction(new SetSlotAction(dispatcher.getDocument(), "SLOT", null));
+        expect(dispatcher.getDocument().nodes.get("SLOT")!.slot).toBeUndefined();
+    });
+
+    test("an OUTER instance can fill a slot inside a NESTED one, via a slotContent override", () => {
+        // The card is itself instanced inside a Page. The page's instance overrides the nested
+        // card instance's slotContent — the same path-keyed machinery nested overrides use, so
+        // slots needed no second addressing scheme.
+        const doc = slotDoc();
+        doc.nodes.set("PM", { id: "PM", type: "core.rectangle", parent: null, children: ["PC"], geometry: { x: 0, y: 0, width: 400, height: 300 }, style: { fill: "#ffffff", opacity: 1 }, layout: {} });
+        doc.nodes.set("PC", { id: "PC", type: "core.instance", parent: "PM", children: [], geometry: { x: 20, y: 20, width: 200, height: 100 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "CM" });
+        doc.nodes.set("P1", { id: "P1", type: "core.instance", parent: null, children: [], geometry: { x: 0, y: 700, width: 400, height: 300 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "PM" });
+        doc.rootNodeUuids = [...doc.rootNodeUuids, "PM", "P1"];
+
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "P1", "PC", { slotContent: { body: "CHART" } }));
+        expect(slotChildren(dispatcher.getDocument(), "P1::PC::SLOT")).toEqual(["P1::PC::SLOT::CHART"]);
+    });
+
+    test("a slot fill that reaches ITSELF again is stopped by the chain, not by luck", () => {
+        // The construction that actually needs `chain.add(filledId)`: the slot node is itself an
+        // INSTANCE carrying slot content, so content materialized inside it looks up fills on
+        // that copy — and if those fills name a node already being filled, the walk re-enters.
+        // The master chain cannot catch this: no master repeats, only the FILL does.
+        const doc = createEmptyDocument();
+        const mk = (id: string, extra: Record<string, unknown> = {}, kids: string[] = [], parent: string | null = null) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent, children: kids, geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#111111", opacity: 1 }, layout: {}, ...extra } as never);
+        mk("IM");                                                        // a tiny master for the slot instance
+        mk("CM", {}, ["S"]);                                             // the card
+        // The slot node IS an instance, and it carries slot content naming X.
+        doc.nodes.set("S", { id: "S", type: "core.instance", parent: "CM", children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, slot: "body", componentId: "IM", slotContent: { body: "X" } });
+        mk("X", {}, ["Y"]);
+        // Y must carry slot content TOO, or the walk runs out of fills after one level:
+        // each level looks up its fill on the copy that opened the path, so a level whose
+        // opener has no slotContent simply stops. With both S and Y carrying it, every
+        // level names X again and only the chain can end it.
+        doc.nodes.set("Y", { id: "Y", type: "core.instance", parent: "X", children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, slot: "body", slotContent: { body: "X" } });
+        doc.nodes.set("C1", { id: "C1", type: "core.instance", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "CM", slotContent: { body: "X" } });
+        doc.rootNodeUuids = ["IM", "CM", "X", "C1"];
+
+        expect(() => expandInstances(doc)).not.toThrow();
+        // Bounded, and nowhere near the OOM cap — the chain stops it immediately, rather than
+        // the node cap stopping it after fifty thousand copies.
+        expect(expandInstances(doc).nodes.size).toBeLessThan(50);
+    });
+
+    test("a slotContent override MERGES with what is already there", () => {
+        // The shared merge has to know the field, or setting slot content after any other
+        // override silently replaces the fills instead of adding to them — the schema-26
+        // layout/transform bug, one field later.
+        const dispatcher = new ActionDispatcher(slotDoc());
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "C1", "SLOT", { slotContent: { body: "PHOTO" } }));
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "C1", "SLOT", { slotContent: { footer: "CHART" } }));
+        expect(dispatcher.getDocument().nodes.get("C1")!.overrides!["SLOT"].slotContent)
+            .toEqual({ body: "PHOTO", footer: "CHART" });
+    });
+
+    test("the UI can NAME a slot and FILL one — either alone is useless", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/<SlotSection/);
+        expect(src).toMatch(/e\.target\.checked \? "content" : null/);  // become a slot
+        expect(src).toMatch(/new SetSlotAction\(dispatcher\.getDocument\(\), node\.id, v\)/); // …and rename it
+        expect(src).toMatch(/new SetSlotContentAction\(/);   // fill
+        expect(src).toMatch(/masterSubtreeIds\(doc, masterId\)/);  // …offering the slots the master defines
+        expect(src).toMatch(/slotError\(v\) !== null/);      // the shared validator is the authority
     });
 });

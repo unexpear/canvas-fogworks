@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v28 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v29 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -77,6 +77,8 @@ interface Node {
   overrides?: Record<string, InstanceOverride>; // core.instance → per-copy changes, keyed by a PATH of master node ids (schema 22; +layout/transform at 26; paths at 28)
   variant?: VariantKey;             // this node's place in a variant SET (schema 27) — any node may carry one
   variants?: Record<string, string>; // core.instance → the variant SELECTION; SPARSE (unnamed properties keep the master's value)
+  slot?: string;                    // a named HOLE in a master (schema 29) — its own children are the default content
+  slotContent?: Record<string, string>; // core.instance → slot name → the id of a node to draw there
   name?: string;                    // display name
 }
 
@@ -164,6 +166,15 @@ instance's own master; `OI::IM` names a node inside the expansion of the nested 
 on the owning STORED instance — a virtual instance node cannot hold one — so this is a
 question of addressing, not of storage. A path that resolves to nothing is inert, like any
 dangling key, and `resolveOverridePath` is what the type-aware validator walks.
+
+A SLOT is a named hole a master leaves for its instances (schema 29). The slot node supplies
+the BOX — position, size, layout — and its own children are the DEFAULT content; an instance's
+`slotContent` names a node to draw there instead. The fill is a REFERENCE, like `componentId`:
+the content keeps living where it is, and clearing the fill moves nothing back. It is
+re-origined into the slot exactly as a master root is into its instance, and it opens a new
+instance path (`…::slotCopy::filled`), so a fill nests like a nested instance and the
+path-keyed override lookup reaches inside it unchanged. Unfilled, dangling, or naming a slot
+that does not exist all fall back to the default children.
 
 ## Read-only views
 
@@ -640,7 +651,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"27"`; chain tail: …17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing, drops unvalidatable entries — 19→20 number-token radius/fontSize (pass-through), 20→21 components: pass-through for the new type/field but it RENAMES stored ids containing the now-reserved `::`, 21→22 per-instance overrides (pass-through), 22→23 the image `src` rule: DROPS a src the new `srcError` refuses so an older file still opens, 23→24 the same rule reaching a per-instance OVERRIDE `src`: drops the offending entry so the copy just shows the master's source, 24→25 `Style.strokeWidth` (pass-through: a NEW optional field, so nothing previously-valid becomes invalid), 25→26 `layout`/`transform` on a per-instance override (pass-through, same reason), 26→27 variants: `Node.variant` + `Node.variants` (pass-through — two new optional fields), 27→28 override keys became PATHS (pass-through — every old key is a one-segment path — but required in the other direction, since a schema-27 build REJECTS a key containing `::`)) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"27"`; chain tail: …17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing, drops unvalidatable entries — 19→20 number-token radius/fontSize (pass-through), 20→21 components: pass-through for the new type/field but it RENAMES stored ids containing the now-reserved `::`, 21→22 per-instance overrides (pass-through), 22→23 the image `src` rule: DROPS a src the new `srcError` refuses so an older file still opens, 23→24 the same rule reaching a per-instance OVERRIDE `src`: drops the offending entry so the copy just shows the master's source, 24→25 `Style.strokeWidth` (pass-through: a NEW optional field, so nothing previously-valid becomes invalid), 25→26 `layout`/`transform` on a per-instance override (pass-through, same reason), 26→27 variants: `Node.variant` + `Node.variants` (pass-through — two new optional fields), 27→28 override keys became PATHS (pass-through — every old key is a one-segment path — but required in the other direction, since a schema-27 build REJECTS a key containing `::`), 28→29 slots: `Node.slot` + `Node.slotContent` (pass-through — an old build would draw the slot's DEFAULT children instead of the fill)) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

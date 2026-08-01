@@ -115,6 +115,8 @@ export function applyMutationsToDocument(
                 // `in`, not `!== undefined`: clearing is a real edit (see the delta type).
                 if ("variant" in delta) node.variant = delta.variant;
                 if ("variants" in delta) node.variants = delta.variants;
+                if ("slot" in delta) node.slot = delta.slot;
+                if ("slotContent" in delta) node.slotContent = delta.slotContent;
                 if (delta.text !== undefined) node.text = delta.text;
                 if (delta.src !== undefined) node.src = delta.src;
                 if (delta.name !== undefined) node.name = delta.name;

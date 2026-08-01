@@ -32,7 +32,7 @@
  */
 
 import { ProjectDocument, ReadonlyDocument } from "./Document";
-import { dimensionError, Geometry, Layout, layoutError, mergeLayout, Node, Style, styleError, srcValueError, Transform, transformError } from "./Node";
+import { dimensionError, Geometry, Layout, layoutError, mergeLayout, Node, slotContentError, Style, styleError, srcValueError, Transform, transformError } from "./Node";
 import { ReadonlyNode } from "./SceneGraph";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
@@ -246,12 +246,15 @@ export interface InstanceOverride {
     src?: string;
     layout?: Partial<Layout>;
     transform?: Partial<Transform>;
+    /** What this instance puts in the copy's slots (schema 29). Overriding it on a NESTED
+     *  instance is how an outer instance fills a slot it does not directly own. */
+    slotContent?: Record<string, string>;
 }
 
 /** Overrides one instance may carry — an OOM guard on a hand-editable map, like `VARIABLES_MAX`. */
 export const INSTANCE_MAX_OVERRIDES = 10_000;
 
-const OVERRIDE_FIELDS = new Set(["geometry", "style", "text", "src", "layout", "transform"]);
+const OVERRIDE_FIELDS = new Set(["geometry", "style", "text", "src", "layout", "transform", "slotContent"]);
 const GEOMETRY_FIELDS = new Set(["x", "y", "width", "height"]);
 
 function isPlain(v: unknown): v is Record<string, unknown> {
@@ -329,6 +332,11 @@ export function overridesError(type: string, overrides: unknown): string | null 
         if (o.transform !== undefined) {
             if (!isPlain(o.transform)) return `override "${key}" transform must be an object`;
             const e = transformError(o.transform);
+            if (e) return `override "${key}" ${e}`;
+        }
+        if (o.slotContent !== undefined) {
+            // The SAME rule a stored instance's slot content obeys.
+            const e = slotContentError("core.instance", o.slotContent);
             if (e) return `override "${key}" ${e}`;
         }
     }
@@ -412,7 +420,8 @@ export function mergeOverrides(base: InstanceOverride | undefined, patch: Instan
         geometry: (patch.geometry || b.geometry) ? { ...b.geometry, ...patch.geometry } : undefined,
         style: (patch.style || b.style) ? { ...b.style, ...patch.style } : undefined,
         layout: (patch.layout || b.layout) ? { ...b.layout, ...patch.layout } : undefined,
-        transform: (patch.transform || b.transform) ? { ...b.transform, ...patch.transform } : undefined
+        transform: (patch.transform || b.transform) ? { ...b.transform, ...patch.transform } : undefined,
+        slotContent: (patch.slotContent || b.slotContent) ? { ...b.slotContent, ...patch.slotContent } : undefined
     };
 }
 
@@ -450,6 +459,9 @@ export function materializeNode(
         // would otherwise produce a node carrying both, which no loader accepts.
         if (override.layout) copy.layout = mergeLayout(master.layout, override.layout);
         if (override.transform) copy.transform = { ...master.transform, ...override.transform };
+        // Slot fills MERGE, so an outer instance can fill one slot without clearing the ones
+        // the master's own instance already filled.
+        if (override.slotContent) copy.slotContent = { ...master.slotContent, ...override.slotContent };
     }
     // The ROOT copy's CONSTRAINTS (and their frozen `constraintRef`) describe the master's
     // relationship to ITS parent, which the copy no longer has — leaving them would let
@@ -535,6 +547,23 @@ export function expandInstances(doc: ReadonlyDocument): ReadonlyDocument {
             const nested = resolveVariantMaster(doc, copy);
             if (nested !== null) expand(id, nested, depth + 1, chain);
         }
+        // A SLOT (schema 29) draws whatever the driving instance put in it, in place of its own
+        // children. The slot node itself still supplies the box, so the fill is re-origined to
+        // (0,0) inside it — `isRoot: true`, the same rule a master root obeys, for the same
+        // reason: the slot places the content, the content does not place itself.
+        //
+        // The fill becomes a new instance PATH (`…::slotCopy::filled`), so a nested fill nests
+        // exactly like a nested instance — and the path-keyed override lookup above reaches
+        // into it with no extra machinery.
+        const filledId = copy.slot !== undefined
+            ? nodes.get(instancePath)?.slotContent?.[copy.slot]
+            : undefined;
+        if (filledId !== undefined && doc.nodes.has(filledId) && !chain.has(filledId)) {
+            // The fill joins the CHAIN, so content that (however indirectly) contains this
+            // master cannot expand forever — the same guard nested instances get.
+            return materialize(filledId, id, id, true, depth + 1, new Set(chain).add(filledId));
+        }
+
         for (const childId of master.children) {
             if (!materialize(childId, instancePath, id, false, depth, chain)) return false;
         }

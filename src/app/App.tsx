@@ -15,9 +15,10 @@ import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, t
 import { expandInstances, isVirtualId } from "../core/document/Components";
 import { SetActiveThemeAction, SetVariableAction, DeleteVariableAction } from "../core/actions/VariableActions";
 import { Variable, VariableStore, variableKeyError, tokenRefFor, tokenKeyOf } from "../core/document/Variables";
-import { TrackSize, newGridPatch, VariantKey, variantError } from "../core/document/Node";
+import { TrackSize, newGridPatch, VariantKey, variantError, slotError } from "../core/document/Node";
 import { SetVariantAction, SetInstanceVariantAction } from "../core/actions/VariantActions";
-import { variantProperties, resolveVariantMaster } from "../core/document/Components";
+import { SetSlotAction, SetSlotContentAction } from "../core/actions/SlotActions";
+import { variantProperties, resolveVariantMaster, masterSubtreeIds } from "../core/document/Components";
 import { parseTrackList, formatTrackList } from "../core/document/TrackList";
 import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { DetachInstanceAction } from "../core/actions/DetachInstanceAction";
@@ -990,6 +991,12 @@ export function App() {
                                 <VariantSection node={node as Node} dispatcher={dispatcher} refresh={refresh} />
                             </InspectorSection>
 
+                            {/* Slots (schema 29): a named hole in a master, and what an
+                                instance puts in it. */}
+                            <InspectorSection title="Slots">
+                                <SlotSection node={node as Node} dispatcher={dispatcher} refresh={refresh} />
+                            </InspectorSection>
+
                             <InspectorSection title="Position & size">
                                 <div style={INSPECTOR_GRID}>
                                     <div><label style={INSPECTOR_LABEL}>X</label>
@@ -1694,6 +1701,87 @@ function TokenSelect({ store, value, onPick }: { store: VariableStore; value: st
  * master belongs to a set: one dropdown per property the set defines, and choosing swaps which
  * master is drawn while the instance, its position and its overrides stay put.
  */
+
+/**
+ * The SLOTS section — again both halves, because either alone is useless.
+ *
+ * On any node: name it as a slot, which makes it a hole in whatever master contains it. On an
+ * instance: one picker per slot the master defines, choosing which node to draw there. The
+ * slot keeps supplying the box; its own children are the default whenever nothing fills it.
+ */
+function SlotSection({ node, dispatcher, refresh }: { node: Node; dispatcher: ActionDispatcher; refresh: () => void }) {
+    const doc = dispatcher.getDocument();
+
+    // Which slots does this instance's master expose? Walk exactly what expansion walks.
+    const masterId = node.type === "core.instance" ? resolveVariantMaster(doc, node) : null;
+    const slots = masterId
+        ? masterSubtreeIds(doc, masterId)
+            .map(id => doc.nodes.get(id)!.slot)
+            .filter((s): s is string => typeof s === "string")
+        : [];
+    const uniqueSlots = [...new Set(slots)].sort();
+
+    // Anything top-level can fill a slot — except this instance itself, which would be a cycle
+    // the expansion would have to stop, drawing nothing and looking broken.
+    const candidates = doc.rootNodeUuids
+        .filter(id => id !== node.id)
+        .map(id => ({ id, label: doc.nodes.get(id)?.name ?? doc.nodes.get(id)?.type ?? id }));
+
+    return (
+        <>
+            {uniqueSlots.length > 0 && (
+                <>
+                    <div style={{ color: UI.textFaint, fontSize: 10, marginBottom: 4 }}>
+                        This component exposes {uniqueSlots.length === 1 ? "a slot" : `${uniqueSlots.length} slots`}.
+                        An empty one draws its own default content.
+                    </div>
+                    {uniqueSlots.map(name => (
+                        <div key={name}>
+                            <label style={INSPECTOR_LABEL}>{name}</label>
+                            <SelectInput
+                                value={node.slotContent?.[name] ?? ""}
+                                options={["", ...candidates.map(c => c.id)]}
+                                onChange={v => {
+                                    dispatcher.dispatchAction(new SetSlotContentAction(dispatcher.getDocument(), node.id, name, v || null));
+                                    refresh();
+                                }}
+                            />
+                        </div>
+                    ))}
+                </>
+            )}
+
+            {/* The MASTER half: make this node a slot. */}
+            <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6, marginTop: uniqueSlots.length ? 8 : 0 }}>
+                <input
+                    type="checkbox"
+                    checked={node.slot !== undefined}
+                    onChange={e => {
+                        dispatcher.dispatchAction(new SetSlotAction(dispatcher.getDocument(), node.id, e.target.checked ? "content" : null));
+                        refresh();
+                    }}
+                />
+                Is a slot
+            </label>
+            {node.slot !== undefined && (
+                <>
+                    <label style={INSPECTOR_LABEL}>Slot name</label>
+                    <TextInput
+                        value={node.slot}
+                        placeholder="content"
+                        onChange={v => {
+                            // `slotError` is the authority; an empty name is simply not committed.
+                            if (slotError(v) !== null) return;
+                            dispatcher.dispatchAction(new SetSlotAction(dispatcher.getDocument(), node.id, v));
+                            refresh();
+                        }}
+                    />
+                </>
+            )}
+        </>
+    );
+}
+
 function VariantSection({ node, dispatcher, refresh }: { node: Node; dispatcher: ActionDispatcher; refresh: () => void }) {
     const [newProp, setNewProp] = useState("");
     const doc = dispatcher.getDocument();

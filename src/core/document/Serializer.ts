@@ -60,6 +60,10 @@ function isValidNode(n: any): n is Node {
         // `variantError` / `variantSelectionError` (Integrity).
         (n.variant === undefined || isPlainObject(n.variant)) &&
         (n.variants === undefined || isPlainObject(n.variants)) &&
+        // Shallow gates for the schema-29 slot fields; semantics live in `slotError` /
+        // `slotContentError` (Integrity).
+        isOptionalString(n.slot) &&
+        (n.slotContent === undefined || isPlainObject(n.slotContent)) &&
         (n.states === undefined || isPlainObject(n.states)) &&
         (n.transform === undefined || (isPlainObject(n.transform) &&
             (n.transform.rotation === undefined || typeof n.transform.rotation === "number") &&
@@ -260,6 +264,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "25") { raw = migrate_25_to_26(raw); version = "26"; }
     if (version === "26") { raw = migrate_26_to_27(raw); version = "27"; }
     if (version === "27") { raw = migrate_27_to_28(raw); version = "28"; }
+    if (version === "28") { raw = migrate_28_to_29(raw); version = "29"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -516,6 +521,17 @@ function migrate_21_to_22(raw: any): any {
  * "must not contain the virtual-id separator"), so a file using nested overrides would fail
  * to load rather than merely lose them.
  */
+/**
+ * 28 -> 29: SLOTS — `Node.slot` on a master node, `Node.slotContent` on an instance.
+ *
+ * Two new optional fields, so every schema-28 document is already a valid schema-29 one.
+ * The bump is required because an OLD BUILD would ignore `slotContent` and draw the slot's
+ * DEFAULT children instead of what the instance put there — a different picture, silently.
+ */
+function migrate_28_to_29(raw: any): any {
+    return { ...raw, version: "29" };
+}
+
 function migrate_27_to_28(raw: any): any {
     return { ...raw, version: "28" };
 }
