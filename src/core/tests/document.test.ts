@@ -49,7 +49,8 @@ import { alignAction, distributeAction } from "../actions/alignActions";
 import { UpdateNodeContentAction, NODE_NAME_MAX } from "../actions/UpdateNodeContentAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
-import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow } from "../document/Node";
+import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow, TrackSize, layoutError, newGridPatch } from "../document/Node";
+import { parseTrackList, formatTrackList } from "../document/TrackList";
 
 function createDocWithRectangle(): ProjectDocument {
     const doc = createEmptyDocument();
@@ -8414,5 +8415,132 @@ describe("Tokens: authored, assigned, themed", () => {
         expect(src).toMatch(/<TokenSelect/);                 // assign
         expect(src).toMatch(/style: \{ fill: v \|\|/);       // …to a fill
         expect(src).toMatch(/style: \{ stroke: v \|\|/);     // …and a stroke
+    });
+});
+
+
+// ─── Grid track editing reaches the UI: the last engine subsystem with no way in ───
+describe("Track lists: the authoring form of TrackSize[]", () => {
+    test("the three track forms parse, and a bare number is pixels", () => {
+        expect(parseTrackList("1fr 1fr 200px").tracks).toEqual([{ fr: 1 }, { fr: 1 }, { px: 200 }]);
+        expect(parseTrackList("auto").tracks).toEqual([{ auto: true }]);
+        expect(parseTrackList("120 80").tracks).toEqual([{ px: 120 }, { px: 80 }]);  // the unit people omit
+        expect(parseTrackList("AUTO 2FR 10PX").tracks).toEqual([{ auto: true }, { fr: 2 }, { px: 10 }]);
+        expect(parseTrackList("  1fr,2fr ,  auto ").tracks).toEqual([{ fr: 1 }, { fr: 2 }, { auto: true }]);
+    });
+
+    test("format is the inverse of parse, for every track kind and at the exponent boundary", () => {
+        const lists: TrackSize[][] = [
+            [{ fr: 1 }, { px: 200 }, { auto: true }],
+            [{ px: 0 }],                    // a zero-width track is legal
+            [{ px: 12.5 }, { fr: 0.25 }],
+            [{ px: 1e21 }]                  // String(1e21) is "1e+21" — the formatter must re-parse
+        ];
+        for (const list of lists) {
+            expect(parseTrackList(formatTrackList(list)).tracks).toEqual(list);
+        }
+        // …and the other direction: parsing then formatting is canonical text.
+        expect(formatTrackList(parseTrackList("120  auto,1fr").tracks!)).toBe("120px auto 1fr");
+    });
+
+    test("the parser REFUSES exactly what the document refuses — it does not restate the rules", () => {
+        // Each rejection below is `trackError`'s rule, reached through the parser.
+        expect(parseTrackList("-5px").error).not.toBeNull();     // px must be >= 0
+        expect(parseTrackList("0fr").error).not.toBeNull();      // fr must be > 0
+        expect(parseTrackList("-1fr").error).not.toBeNull();
+        expect(parseTrackList("1em").error).not.toBeNull();      // not a unit this engine has
+        expect(parseTrackList("wide").error).not.toBeNull();
+        expect(parseTrackList("").error).not.toBeNull();         // "no tracks" is never meant
+        expect(parseTrackList("   ").error).not.toBeNull();
+        expect(parseTrackList("1fr px").error).not.toBeNull();   // a bare unit is not a track
+        expect(parseTrackList(new Array(GRID_MAX_TRACKS + 1).fill("1fr").join(" ")).error).not.toBeNull();
+    });
+
+    test("anything the parser ACCEPTS, a grid will hold — the closure that makes the field safe", () => {
+        // The field cannot author a layout the loader would refuse, because a parsed list is
+        // fed straight to the same `layoutError` the load path uses.
+        for (const text of ["1fr", "auto", "0px", "1fr 2fr auto 100px", "0.5fr", "1e3px"]) {
+            const tracks = parseTrackList(text).tracks!;
+            expect(tracks).not.toBeNull();
+            expect(layoutError({ grid: { columns: tracks, rowHeight: tracks[0] } })).toBeNull();
+        }
+    });
+
+    test("a grid authored from parsed text lays out — the tracks reach real geometry", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("G", { id: "G", type: "core.rectangle", parent: null, children: ["a", "b"], geometry: { x: 0, y: 0, width: 220, height: 100 }, style: { fill: "#111111", opacity: 1 }, layout: {} });
+        for (const id of ["a", "b"]) {
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: "G", children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#222222", opacity: 1 }, layout: {} });
+        }
+        doc.rootNodeUuids = ["G"];
+
+        const dispatcher = new ActionDispatcher(doc);
+        const columns = parseTrackList("100px 1fr").tracks!;
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "G",
+            { grid: { columns, rowHeight: { px: 40 }, columnGap: 20, padding: 0 } }));
+
+        const computed = computeGeometry(dispatcher.getDocument() as ProjectDocument);
+        // 220 inner − 20 gap − 100 fixed = 100 left for the single `fr`.
+        expect(computed.nodes.get("a")!.bounds.width).toBe(100);
+        expect(computed.nodes.get("b")!.bounds.width).toBe(100);
+        expect(computed.nodes.get("b")!.bounds.x).toBe(120);   // 100 + the gap
+        expect(computed.nodes.get("a")!.bounds.height).toBe(40);
+    });
+
+    test("a grid document round-trips, tracks and all", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("G", { id: "G", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 200, height: 100 }, style: { fill: "#111111", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["G"];
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "G", {
+            grid: {
+                columns: parseTrackList("1fr auto 50px").tracks!,
+                rows: parseTrackList("auto 1fr").tracks!,
+                rowHeight: { px: 30 }, autoFlow: "column dense", hugHeight: true, columnGap: 4, rowGap: 6, padding: 2
+            }
+        }));
+        const d = dispatcher.getDocument();
+        const loaded = deserializeDocument(serializeDocument(d));
+        expect(loaded.nodes.get("G")!.layout.grid).toEqual(d.nodes.get("G")!.layout.grid);
+        expect(compareDocuments(d, loaded)).toBe(true);
+    });
+
+    test("becoming a grid REPLACES auto-layout — the patch clears the container it excludes", () => {
+        // Dispatching the REAL patch on a node that is already a flex container. Grid and
+        // container are mutually exclusive, so if the pair ever both survived a patch,
+        // `layoutError` would refuse it and the checkbox would do nothing at all — a failure
+        // with no error message anywhere. The action clears the loser; this proves it end to end.
+        const doc = createEmptyDocument();
+        doc.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#111111", opacity: 1 }, layout: { container: { direction: "row", gap: 8 } } });
+        doc.rootNodeUuids = ["F"];
+
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new UpdateNodeLayoutAction(dispatcher.getDocument(), "F", newGridPatch()));
+
+        const after = dispatcher.getDocument().nodes.get("F")!.layout;
+        expect(after.grid).toBeDefined();
+        expect(after.container).toBeUndefined();          // the flex layout is GONE, not shadowed
+        expect(layoutError(after)).toBeNull();            // …and the result is a legal layout
+    });
+
+    test("the default grid patch is a COMPLETE grid — columns and rowHeight are mandatory", () => {
+        const patch = newGridPatch();
+        expect(layoutError(patch)).toBeNull();
+        expect(patch.grid!.columns.length).toBeGreaterThan(0);
+        expect(patch.grid!.rowHeight).toBeDefined();
+        // Its tracks must survive the same text round trip every other track list does.
+        expect(parseTrackList(formatTrackList(patch.grid!.columns)).tracks).toEqual(patch.grid!.columns);
+    });
+
+    test("the UI can CREATE a grid and edit every track field", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/<TrackListInput/);
+        expect(src).toMatch(/editGrid\(\{ columns: t \}\)/);      // columns
+        expect(src).toMatch(/editGrid\(\{ rows: t \?\? undefined \}\)/);  // the OPTIONAL rows list
+        expect(src).toMatch(/editGrid\(\{ rowHeight: t\[0\] \}\)/);
+        expect(src).toMatch(/editGrid\(\{ autoFlow:/);
+        expect(src).toMatch(/editGrid\(\{ hugWidth:/);
+        expect(src).toMatch(/colSpan: Math\.max\(1/);            // the child half
+        expect(src).toMatch(/formatTrackList\(node\.layout\.grid\.columns\)/);
     });
 });

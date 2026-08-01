@@ -391,6 +391,24 @@ export const GRID_SPAN_MAX = 1000;
  */
 export const GRID_MAX_TRACKS = 1000;
 
+/**
+ * The layout patch that turns a node INTO a grid.
+ *
+ * `columns` and `rowHeight` are mandatory, so "become a grid" must supply a WHOLE grid — which
+ * is easy to get wrong (and impossible to test) spelled out inline at a checkbox, so it lives
+ * here where a test can dispatch the real thing. The particular numbers are only a starting
+ * point; every one is editable afterwards.
+ *
+ * It does NOT clear `container`: `UpdateNodeLayoutAction` carries grid ⊕ container exclusivity
+ * in the delta itself, so an explicit `container: undefined` here would be a second copy of a
+ * rule the action already owns — the kind of duplication that later drifts.
+ */
+export function newGridPatch(): Partial<Layout> {
+    return {
+        grid: { columns: [{ fr: 1 }, { fr: 1 }], rowHeight: { px: 80 }, columnGap: 8, rowGap: 8, padding: 8 }
+    };
+}
+
 /** Horizontal anchor: pin left, pin right, pin both (stretch), keep centered, or scale. */
 export type HConstraint = "left" | "right" | "left-right" | "center" | "scale";
 /** Vertical anchor: pin top, pin bottom, pin both (stretch), keep centered, or scale. */
@@ -539,7 +557,7 @@ function gridLineError(v: unknown): string | null {
 }
 
 /** Validity check for one grid `TrackSize` — exactly one of `px` (≥0), `fr` (>0), or `auto` (true). */
-function trackError(t: unknown): string | null {
+export function trackError(t: unknown): string | null {
     if (typeof t !== "object" || t === null) return "must be an object";
     const hasPx = "px" in t;
     const hasFr = "fr" in t;

@@ -30,6 +30,8 @@ const VARIABLES_MAX: number;                               // store entry cap (O
 const VARIABLE_KEY_MAX: number;                            // key length cap
 const VARIABLE_FALLBACK_COLOR: string;                     // debug magenta for a broken color token
 function isTokenRef(v: unknown): v is string;              // "$" + non-empty key
+function tokenRefFor(key: string): string;                 // key → reference ("" → "", never a bare "$")
+function tokenKeyOf(value: unknown): string;               // reference → key; "" for a concrete value
 function variableError(def: unknown): string | null;       // one definition (shared with the 18→19 sanitizer)
 function variableKeyError(key: string): string | null;     // one KEY (empty/long/"$"/reserved "__proto__" family) — SetVariableAction pre-checks it (the assignment would swallow a reserved key before store validation could see it)
 function variableStoreError(store: unknown): string | null; // whole store, shared load + edit
@@ -262,7 +264,25 @@ load path. `dimensionError` is per-type (rect/ellipse/text/image need a positive
 `core.path` may collapse one axis, not both). `pathError` (+ `PathCommand`, `PATH_MAX_COMMANDS`)
 validates a `core.path`'s commands (present ⇒ non-empty, opens with `M`, finite coords, ≤ cap) and
 rejects path data on any other type. `styleError` validates every `Style` field including the
-schema-18 effects (`Shadow` = dx/dy/blur/color; `blur` ≥ 0). See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
+schema-18 effects (`Shadow` = dx/dy/blur/color; `blur` ≥ 0). `trackError(t)` validates ONE grid
+track (exactly one of px/fr/auto; `px ≥ 0`, `fr > 0`, `auto === true`) and is exported so the
+track-list parser can defer to it rather than restate it. `newGridPatch()` returns the layout
+patch that turns a node into a grid — a COMPLETE grid, since `columns` and `rowHeight` are
+mandatory; it does not clear `container`, because `UpdateNodeLayoutAction` carries grid ⊕
+container exclusivity in the delta itself. See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).
+
+```ts
+// TrackList.ts — the TEXT form of a grid track list ("1fr 1fr 200px"), the authoring side of
+// the structured `TrackSize[]`. Pure, and the exact inverse of each other for any valid list.
+interface TrackListParse { tracks: readonly TrackSize[] | null; error: string | null }  // exactly one is set
+function parseTrackList(text: string): TrackListParse;   // ws/comma separated; bare number = px; empty is an ERROR
+function formatTrackList(tracks: readonly TrackSize[]): string;
+```
+
+The parser builds a candidate track and hands it to `trackError`, so a field cannot author a
+track the document would refuse. Structured storage is kept for the same reason `core.path`
+stores commands rather than a `d` string (one validator, no backend re-parses); the text form
+exists because a row-per-track widget is a poor way to author six columns.
 
 ## Actions (`core/actions/`)
 

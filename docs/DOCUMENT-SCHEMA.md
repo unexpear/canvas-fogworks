@@ -325,7 +325,15 @@ expected.
   merges a container-set and a grid-set resolves last-wins rather than dropping both) AND
   on read (`layoutError` rejects a node carrying both), so the two can never coexist — a
   hand-edited file with both fails to load. `TrackSize` is validated (exactly one of
-  `px` ≥ 0, `fr` > 0, or `auto` = true) on both paths.
+  `px` ≥ 0, `fr` > 0, or `auto` = true) on both paths by the exported `trackError`.
+- **Tracks are stored STRUCTURED, and authored as TEXT.** `TrackSize` stays an object for
+  the reason `core.path` stores commands rather than a `d` string: one shared field-by-field
+  validator, and no renderer has to parse. The inspector's `1fr 1fr 200px` field is a pure
+  text↔structure pair in `TrackList.ts` (`parseTrackList` / `formatTrackList`) that defers
+  every judgement to `trackError`, so the field cannot author a track the loader would refuse.
+  A bare number means pixels; `auto` and unit suffixes are case-insensitive; empty input is
+  an error rather than an empty list (`columns` may not be empty). Nothing about the text
+  form is persisted — it is an authoring convenience over the structured value.
 - **Absent means no grid**, so every schema-5 document is a valid schema-6 document —
   `migrate_5_to_6` is a pass-through. The bump is still required: a schema-5 build would
   ignore the grid and draw the children at their stored `x/y`.

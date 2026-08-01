@@ -15,6 +15,8 @@ import { geometryActionFor, styleActionFor, contentActionFor } from "../core/act
 import { expandInstances, isVirtualId } from "../core/document/Components";
 import { SetActiveThemeAction, SetVariableAction, DeleteVariableAction } from "../core/actions/VariableActions";
 import { Variable, VariableStore, variableKeyError, tokenRefFor, tokenKeyOf } from "../core/document/Variables";
+import { TrackSize, newGridPatch } from "../core/document/Node";
+import { parseTrackList, formatTrackList } from "../core/document/TrackList";
 import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { DetachInstanceAction } from "../core/actions/DetachInstanceAction";
 import { UpdateNodeTransformAction } from "../core/actions/UpdateNodeTransformAction";
@@ -56,7 +58,8 @@ const UI = {
     textDim: "#8a8aa5",
     textFaint: "#5f5f7a",
     accent: "#4da3ff",
-    accentSoft: "#22436b"
+    accentSoft: "#22436b",
+    warn: "#ff9060"         // a field explaining why it refused input
 };
 
 /** A panel's section heading — small, spaced, quiet. Used by every panel so they match. */
@@ -609,6 +612,14 @@ export function App() {
         editLayout({ container: { ...current, ...patch } });
     };
 
+    /** A grid is a WHOLE value too (`columns` and `rowHeight` are required), so one field edit
+     *  merges over the current grid rather than replacing it with a partial one. */
+    const editGrid = (patch: Partial<NonNullable<Node["layout"]["grid"]>>) => {
+        const current = node?.layout.grid;
+        if (!current) return;
+        editLayout({ grid: { ...current, ...patch } });
+    };
+
     /** Constraints are a pair; editing one axis must not drop the other. */
     const editConstraint = (axis: "horizontal" | "vertical", value: string) => {
         const current = node?.layout.constraints ?? {};
@@ -621,6 +632,13 @@ export function App() {
         if (!node?.parent) return false;
         const parent = expandInstances(dispatcher.getDocument()).nodes.get(node.parent);
         return !!parent && (parent.layout.container !== undefined || parent.layout.grid !== undefined);
+    })();
+
+    /** …and specifically a GRID parent, which offers spans where a flex parent offers grow. */
+    const parentIsGrid = (() => {
+        if (!node?.parent) return false;
+        const parent = expandInstances(dispatcher.getDocument()).nodes.get(node.parent);
+        return !!parent && parent.layout.grid !== undefined;
     })();
 
     const vp = es.viewport;
@@ -1121,6 +1139,75 @@ export function App() {
                                             </>
                                         )}
 
+                                        {/* Grid is the other half of M2's layout module, and until now
+                                            the only way to make one was to hand-write the document.
+                                            The action carries grid ⊕ container exclusivity, so ticking
+                                            this while auto-layout is on replaces it rather than
+                                            producing a node that claims to be both. */}
+                                        <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={!!node.layout.grid}
+                                                onChange={e => {
+                                                    editLayout(e.target.checked ? newGridPatch() : { grid: undefined });
+                                                    refresh();
+                                                }}
+                                            />
+                                            Grid
+                                        </label>
+                                        {node.layout.grid && (
+                                            <>
+                                                <label style={INSPECTOR_LABEL}>Columns</label>
+                                                <TrackListInput
+                                                    value={formatTrackList(node.layout.grid.columns)}
+                                                    placeholder="1fr 1fr 200px"
+                                                    onCommit={t => { if (t) { editGrid({ columns: t }); refresh(); } }}
+                                                />
+                                                {/* `rows` SIZES the leading rows and is optional — empty means
+                                                    every row falls back to the implicit row height below. Row
+                                                    COUNT still comes from the children, never from this field. */}
+                                                <label style={INSPECTOR_LABEL}>Rows (optional)</label>
+                                                <TrackListInput
+                                                    value={node.layout.grid.rows ? formatTrackList(node.layout.grid.rows) : ""}
+                                                    placeholder="auto 1fr"
+                                                    allowEmpty
+                                                    onCommit={t => { editGrid({ rows: t ?? undefined }); refresh(); }}
+                                                />
+                                                <label style={INSPECTOR_LABEL}>Row height (implicit rows)</label>
+                                                <TrackListInput
+                                                    value={formatTrackList([node.layout.grid.rowHeight])}
+                                                    placeholder="80px"
+                                                    onCommit={t => { if (t && t.length === 1) { editGrid({ rowHeight: t[0] }); refresh(); } }}
+                                                />
+                                                <div style={INSPECTOR_GRID}>
+                                                    <div><label style={INSPECTOR_LABEL}>Column gap</label>
+                                                        <NumInput value={node.layout.grid.columnGap ?? 0} onChange={v => { editGrid({ columnGap: Math.max(0, v) }); refresh(); }} /></div>
+                                                    <div><label style={INSPECTOR_LABEL}>Row gap</label>
+                                                        <NumInput value={node.layout.grid.rowGap ?? 0} onChange={v => { editGrid({ rowGap: Math.max(0, v) }); refresh(); }} /></div>
+                                                </div>
+                                                <label style={INSPECTOR_LABEL}>Padding</label>
+                                                <NumInput value={node.layout.grid.padding ?? 0} onChange={v => { editGrid({ padding: Math.max(0, v) }); refresh(); }} />
+                                                <label style={INSPECTOR_LABEL}>Auto-flow</label>
+                                                <SelectInput
+                                                    value={node.layout.grid.autoFlow ?? "row"}
+                                                    options={["row", "row dense", "column", "column dense"]}
+                                                    onChange={v => { editGrid({ autoFlow: v as NonNullable<NonNullable<Node["layout"]["grid"]>["autoFlow"]> }); refresh(); }}
+                                                />
+                                                <div style={INSPECTOR_GRID}>
+                                                    <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
+                                                        <input type="checkbox" checked={!!node.layout.grid.hugWidth}
+                                                            onChange={e => { editGrid({ hugWidth: e.target.checked || undefined }); refresh(); }} />
+                                                        Hug W
+                                                    </label>
+                                                    <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
+                                                        <input type="checkbox" checked={!!node.layout.grid.hugHeight}
+                                                            onChange={e => { editGrid({ hugHeight: e.target.checked || undefined }); refresh(); }} />
+                                                        Hug H
+                                                    </label>
+                                                </div>
+                                            </>
+                                        )}
+
                                         {/* CHILD-side fields. Which ones apply depends on the PARENT:
                                             a container lays its children out (grow/shrink/margin), while a
                                             plain parent anchors them (constraints). Showing both at once
@@ -1128,6 +1215,17 @@ export function App() {
                                         {parentIsContainer ? (
                                             <>
                                                 <div style={{ ...INSPECTOR_LABEL, color: "#777", marginTop: 8 }}>In its parent</div>
+                                                {/* A grid child spans CELLS; a flex child grows. Both fields
+                                                    exist on `Layout`, but only one set means anything under a
+                                                    given parent. */}
+                                                {parentIsGrid && (
+                                                    <div style={INSPECTOR_GRID}>
+                                                        <div><label style={INSPECTOR_LABEL}>Col span</label>
+                                                            <NumInput value={node.layout.colSpan ?? 1} onChange={v => { editLayout({ colSpan: Math.max(1, Math.round(v)) }); refresh(); }} /></div>
+                                                        <div><label style={INSPECTOR_LABEL}>Row span</label>
+                                                            <NumInput value={node.layout.rowSpan ?? 1} onChange={v => { editLayout({ rowSpan: Math.max(1, Math.round(v)) }); refresh(); }} /></div>
+                                                    </div>
+                                                )}
                                                 <div style={INSPECTOR_GRID}>
                                                     <div><label style={INSPECTOR_LABEL}>Grow</label>
                                                         <NumInput value={node.layout.grow ?? 0} onChange={v => { editLayout({ grow: Math.max(0, v) }); refresh(); }} /></div>
@@ -1576,6 +1674,54 @@ function TokenSelect({ store, value, onPick }: { store: VariableStore; value: st
             <option value="">— no token (fixed colour) —</option>
             {colorKeys.map(k => <option key={k} value={k}>${k}</option>)}
         </select>
+    );
+}
+
+/**
+ * A grid track-list field: `1fr 1fr 200px`, `auto`, `120px 1fr`.
+ *
+ * It keeps its own DRAFT text while you type, because a track list passes through invalid
+ * states on the way to a valid one — "1f" is one keystroke short of "1fr", and a field that
+ * reverted every unparseable keystroke would be impossible to type into. The document is
+ * written only when `parseTrackList` accepts the draft; anything else stays local and explains
+ * itself. Blur drops the draft so the field re-syncs to what the document actually holds.
+ */
+function TrackListInput({ value, placeholder, allowEmpty, onCommit }: {
+    value: string;
+    placeholder?: string;
+    /** When set, clearing the field commits `null` — for the OPTIONAL `rows` list. */
+    allowEmpty?: boolean;
+    onCommit: (tracks: readonly TrackSize[] | null) => void;
+}) {
+    const [draft, setDraft] = useState<string | null>(null);
+    const text = draft ?? value;
+    const blank = text.trim().length === 0;
+    const error = blank
+        ? (allowEmpty ? null : "needs at least one track")
+        : parseTrackList(text).error;
+
+    return (
+        <>
+            <input
+                type="text"
+                value={text}
+                placeholder={placeholder}
+                onChange={e => {
+                    const next = e.target.value;
+                    setDraft(next);
+                    if (next.trim().length === 0) { if (allowEmpty) onCommit(null); return; }
+                    const parsed = parseTrackList(next);
+                    if (parsed.tracks) onCommit(parsed.tracks);
+                }}
+                onBlur={() => setDraft(null)}
+                style={{
+                    width: "100%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
+                    background: UI.bg, color: error ? UI.warn : UI.text,
+                    border: `1px solid ${error ? UI.warn : "#2a2a4a"}`, borderRadius: 2, marginBottom: error ? 2 : 4
+                }}
+            />
+            {error && <div style={{ fontSize: 10, color: UI.warn, marginBottom: 4 }}>{error}</div>}
+        </>
     );
 }
 
