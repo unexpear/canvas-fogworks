@@ -5,7 +5,7 @@
 
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { createEmptyDocument, ProjectDocument, CURRENT_VERSION, SCHEMA_VERSION } from "../document/Document";
+import { createEmptyDocument, ProjectDocument, ReadonlyDocument, CURRENT_VERSION, SCHEMA_VERSION } from "../document/Document";
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, isTokenRef, tokenRefFor, tokenKeyOf, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
@@ -13,7 +13,7 @@ import { expandInstances, componentError, overridesError, overrideAgainstMasterE
 import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
-import { geometryActionFor, styleActionFor, contentActionFor, isEditableNode, isHandleOffered, isMasterRootCopy } from "../actions/nodeEdit";
+import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy } from "../actions/nodeEdit";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
@@ -49,7 +49,7 @@ import { alignAction, distributeAction } from "../actions/alignActions";
 import { UpdateNodeContentAction, NODE_NAME_MAX } from "../actions/UpdateNodeContentAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
-import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow, TrackSize, layoutError, newGridPatch } from "../document/Node";
+import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow, TrackSize, layoutError, newGridPatch, mergeLayout, transformError, Layout } from "../document/Node";
 import { parseTrackList, formatTrackList } from "../document/TrackList";
 
 function createDocWithRectangle(): ProjectDocument {
@@ -2337,7 +2337,7 @@ describe("Components: instance overrides", () => {
         const doc = doc2();
         expect(isHandleOffered(doc, "MC", "rotate")).toBe(true);        // a stored node: everything
         expect(isHandleOffered(doc, "I::MC", "se")).toBe(true);         // a copy: resize corners…
-        expect(isHandleOffered(doc, "I::MC", "rotate")).toBe(false);    // …but no rotate knob
+        expect(isHandleOffered(doc, "I::MC", "rotate")).toBe(true);     // …and, since schema 26, the rotate knob
         expect(isHandleOffered(doc, "I::OI::deep", "se")).toBe(false);  // nested: nothing
     });
 
@@ -4275,8 +4275,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 24→25 landed for `Style.strokeWidth`.)
-        expect(() => migrateIfNeeded(legacy, "26")).toThrow('Migration not implemented for document schema "25"');
+        // time a real migration is added — here, when 25→26 landed for layout/transform overrides.)
+        expect(() => migrateIfNeeded(legacy, "27")).toThrow('Migration not implemented for document schema "26"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -7945,10 +7945,131 @@ describe("Inspector: layout controls", () => {
         expect(src).toMatch(/editLayout\(\{ container:/);
     });
 
-    test("a copy's layout is NOT editable — there is no override slot for it", () => {
-        // Stated in the panel rather than offered and silently ignored.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
-        expect(src).toMatch(/Layout is set on the master, not on a copy/);
+    test("a copy's LAYOUT is now editable — the routing seam turns it into an override", () => {
+        // Replaces the old "no override slot for layout" deferral (schema 26).
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#111111", opacity: 1 }, layout: {} });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["M", "I"];
+        const action = layoutActionFor(doc, "I::M", { container: { direction: "column", gap: 0 } });
+        expect(action).toBeInstanceOf(SetInstanceOverrideAction);
+        // A NESTED copy still has nowhere to write, so the edit is refused rather than mis-targeted.
+        expect(layoutActionFor(doc, "I::OI::deep", { container: { direction: "row" } })).toBeNull();
+        expect(transformActionFor(doc, "I::OI::deep", { rotation: 1 })).toBeNull();
+    });
+});
+
+// ─── Layout + transform overrides (schema 26): the last two fields a copy could not change ───
+describe("Instance overrides: layout and transform", () => {
+    /** A master that lays two children out in a ROW, instanced once. */
+    function cardDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: ["C1", "C2"], geometry: { x: 0, y: 0, width: 100, height: 40 }, style: { fill: "#111111", opacity: 1 }, layout: { container: { direction: "row", gap: 0, padding: 0 } } });
+        for (const id of ["C1", "C2"]) {
+            doc.nodes.set(id, { id, type: "core.rectangle", parent: "M", children: [], geometry: { x: 0, y: 0, width: 20, height: 20 }, style: { fill: "#222222", opacity: 1 }, layout: {} });
+        }
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 200, y: 200, width: 100, height: 40 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["M", "I"];
+        return doc;
+    }
+    const boundsOf = (doc: ReadonlyDocument, id: string) =>
+        computeGeometry(expandInstances(doc) as ProjectDocument).nodes.get(id)!.bounds;
+
+    test("ONE instance stacks in a column while the master keeps its row", () => {
+        const dispatcher = new ActionDispatcher(cardDoc());
+        dispatcher.dispatchAction(layoutActionFor(dispatcher.getDocument(), "I::M",
+            { container: { direction: "column", gap: 0, padding: 0 } })!);
+        const d = dispatcher.getDocument();
+
+        // The COPY's children stack vertically…
+        expect(boundsOf(d, "I::C1").y).toBe(200);
+        expect(boundsOf(d, "I::C2").y).toBe(220);
+        expect(boundsOf(d, "I::C1").x).toBe(boundsOf(d, "I::C2").x);
+        // …while the MASTER is untouched, still laying its own children out in a row.
+        expect(boundsOf(d, "C1").y).toBe(boundsOf(d, "C2").y);
+        expect(boundsOf(d, "C2").x).toBe(20);
+        expect(d.nodes.get("M")!.layout.container!.direction).toBe("row");
+    });
+
+    test("a transform override ROTATES a copy — the knob finally has somewhere to write", () => {
+        const dispatcher = new ActionDispatcher(cardDoc());
+        dispatcher.dispatchAction(transformActionFor(dispatcher.getDocument(), "I::M", { rotation: Math.PI / 2 })!);
+        const expanded = expandInstances(dispatcher.getDocument());
+        expect(expanded.nodes.get("I::M")!.transform!.rotation).toBeCloseTo(Math.PI / 2);
+        expect(dispatcher.getDocument().nodes.get("M")!.transform).toBeUndefined();  // master unrotated
+        // A rotated copy is still a legal node — the transform went through the stored validator.
+        expect(transformError(expanded.nodes.get("I::M")!.transform!)).toBeNull();
+    });
+
+    test("the OVERRIDE wins grid ⊕ container, in both directions", () => {
+        // A plain spread would leave a node carrying BOTH, which no loader accepts. `mergeLayout`
+        // is the one place that rule lives, shared with UpdateNodeLayoutAction's delta.
+        const flex: Layout = { container: { direction: "row" } };
+        const gridded = mergeLayout(flex, { grid: { columns: [{ fr: 1 }], rowHeight: { px: 10 } } });
+        expect(gridded.grid).toBeDefined();
+        expect(gridded.container).toBeUndefined();
+        expect(layoutError(gridded)).toBeNull();
+
+        const grid: Layout = { grid: { columns: [{ fr: 1 }], rowHeight: { px: 10 } } };
+        const flexed = mergeLayout(grid, { container: { direction: "column" } });
+        expect(flexed.container).toBeDefined();
+        expect(flexed.grid).toBeUndefined();
+        expect(layoutError(flexed)).toBeNull();
+    });
+
+    test("an expanded copy with a layout override is a LOADABLE node, not just a drawable one", () => {
+        // The closure that matters: detach bakes overrides into stored nodes, so anything
+        // expansion can produce must be something the document can hold.
+        const dispatcher = new ActionDispatcher(cardDoc());
+        dispatcher.dispatchAction(layoutActionFor(dispatcher.getDocument(), "I::M",
+            { grid: { columns: [{ fr: 1 }, { fr: 1 }], rowHeight: { px: 20 } } })!);
+        const copy = expandInstances(dispatcher.getDocument()).nodes.get("I::M")!;
+        expect(copy.layout.grid).toBeDefined();
+        expect(copy.layout.container).toBeUndefined();   // the master's row did not survive
+        expect(layoutError(copy.layout)).toBeNull();
+    });
+
+    test("a layout override may NOT smuggle constraints onto the master-root copy", () => {
+        // The root copy's constraints are cleared because it no longer has the master's parent.
+        // That clear runs AFTER the override merge, so an override cannot reintroduce them.
+        const doc = cardDoc();
+        doc.nodes.get("I")!.overrides = { M: { layout: { constraints: { horizontal: "right" }, constraintRef: { width: 10, height: 10 } } } };
+        const copy = expandInstances(doc).nodes.get("I::M")!;
+        expect(copy.layout.constraints).toBeUndefined();
+        expect(copy.layout.constraintRef).toBeUndefined();
+    });
+
+    test("both new fields go through the SAME validators their stored counterparts use", () => {
+        const bad = (o: unknown) => overridesError("core.instance", { M: o });
+        expect(bad({ layout: { grow: -1 } })).not.toBeNull();              // layoutError
+        expect(bad({ layout: { container: { direction: "sideways" } } })).not.toBeNull();
+        expect(bad({ layout: "row" })).not.toBeNull();
+        expect(bad({ transform: { scaleX: 0 } })).not.toBeNull();          // transformError: non-invertible
+        expect(bad({ transform: { rotation: Number.NaN } })).not.toBeNull();
+        expect(bad({ transform: 90 })).not.toBeNull();
+        expect(bad({ layout: { grow: 2 }, transform: { rotation: 1 } })).toBeNull();   // …and the valid pair
+    });
+
+    test("a document carrying the new overrides round-trips at schema 26", () => {
+        const dispatcher = new ActionDispatcher(cardDoc());
+        dispatcher.dispatchAction(layoutActionFor(dispatcher.getDocument(), "I::M", { container: { direction: "column", gap: 4 } })!);
+        dispatcher.dispatchAction(transformActionFor(dispatcher.getDocument(), "I::M", { rotation: 0.5, scaleX: 2 })!);
+        const d = dispatcher.getDocument();
+        const loaded = deserializeDocument(serializeDocument(d));
+        expect(loaded.nodes.get("I")!.overrides).toEqual(d.nodes.get("I")!.overrides);
+        expect(compareDocuments(d, loaded)).toBe(true);
+    });
+
+    test("DETACH bakes an overridden layout and transform into ordinary nodes", () => {
+        const dispatcher = new ActionDispatcher(cardDoc());
+        dispatcher.dispatchAction(layoutActionFor(dispatcher.getDocument(), "I::M", { container: { direction: "column", gap: 0, padding: 0 } })!);
+        const detach = new DetachInstanceAction(dispatcher.getDocument(), "I");
+        expect(dispatcher.dispatchAction(detach).success).toBe(true);
+        const d = dispatcher.getDocument();
+        const root = d.nodes.get(detach.getCreatedNodeIds()[0])!;   // detach mints fresh ids
+        expect(root.type).not.toBe("core.instance");
+        expect(root.layout.container!.direction).toBe("column");   // the override, now stored
+        expect(() => deserializeDocument(serializeDocument(d))).not.toThrow();
     });
 });
 

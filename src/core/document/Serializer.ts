@@ -252,7 +252,8 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "21") { raw = migrate_21_to_22(raw); version = "22"; }
     if (version === "22") { raw = migrate_22_to_23(raw); version = "23"; }
     if (version === "23") { raw = migrate_23_to_24(raw); version = "24"; }
-    if (version === "24") { raw = migrate_24_to_25(raw); version = "25"; }
+    if (version === "24") { raw = migrate_24_to_25(raw); version = "25"; }
+    if (version === "25") { raw = migrate_25_to_26(raw); version = "26"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -484,6 +485,19 @@ function migrate_21_to_22(raw: any): any {
  * stroke has always been), so nothing needs sanitizing and this is a pass-through. The bump is
  * still required: an OLD BUILD reading a file that HAS the field is the hazard a version guards.
  */
+/**
+ * 25 -> 26: `InstanceOverride` gained `layout` and `transform`.
+ *
+ * Both are OPTIONAL additions to a per-instance override, so every schema-25 document is
+ * already a valid schema-26 one and nothing needs sanitizing. The bump is still required for
+ * the usual reason: an OLD BUILD reading a file that HAS them would ignore the override and
+ * lay the copy out — or leave it unrotated — exactly as the master, silently drawing a
+ * different picture from the one that was saved.
+ */
+function migrate_25_to_26(raw: any): any {
+    return { ...raw, version: "26" };
+}
+
 function migrate_24_to_25(raw: any): any {
     return { ...raw, version: "25" };
 }

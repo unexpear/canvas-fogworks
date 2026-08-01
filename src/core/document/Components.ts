@@ -32,7 +32,7 @@
  */
 
 import { ProjectDocument, ReadonlyDocument } from "./Document";
-import { dimensionError, Geometry, Node, Style, styleError, srcValueError } from "./Node";
+import { dimensionError, Geometry, Layout, layoutError, mergeLayout, Node, Style, styleError, srcValueError, Transform, transformError } from "./Node";
 import { ReadonlyNode } from "./SceneGraph";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
@@ -99,21 +99,26 @@ export function componentError(type: string, componentId: unknown): string | nul
  * so an override survives the master being edited (it targets identity, not position) and is
  * naturally undone when the master node disappears (the key simply never matches).
  *
- * The scope is deliberately the fields a user edits on a copy — position/size, appearance, and
- * content. `layout`/`transform` overrides are a later slice: they interact with the measure
- * pass and the rotation model, unlike these, which are terminal per-node values.
+ * The scope is the fields a user edits on a copy: position/size, appearance, content, and — as
+ * of schema 26 — how it lays its children out and how it is transformed. Layout and transform
+ * looked like they needed special machinery and turned out not to: expansion runs BEFORE
+ * `computeGeometry`, so an overridden layout is simply the layout the engine measures, and a
+ * root copy is a CHILD of its instance node, so an overridden transform composes through the
+ * ordinary parent chain like any other.
  */
 export interface InstanceOverride {
     geometry?: Partial<Geometry>;
     style?: Partial<Style>;
     text?: string;
     src?: string;
+    layout?: Partial<Layout>;
+    transform?: Partial<Transform>;
 }
 
 /** Overrides one instance may carry — an OOM guard on a hand-editable map, like `VARIABLES_MAX`. */
 export const INSTANCE_MAX_OVERRIDES = 10_000;
 
-const OVERRIDE_FIELDS = new Set(["geometry", "style", "text", "src"]);
+const OVERRIDE_FIELDS = new Set(["geometry", "style", "text", "src", "layout", "transform"]);
 const GEOMETRY_FIELDS = new Set(["x", "y", "width", "height"]);
 
 function isPlain(v: unknown): v is Record<string, unknown> {
@@ -172,6 +177,19 @@ export function overridesError(type: string, overrides: unknown): string | null 
             // override hold a source no node may hold, which a detach then baked into the
             // document as a stored node — producing a file the loader refuses.
             const e = srcValueError(o.src);
+            if (e) return `override "${key}" ${e}`;
+        }
+        // Layout and transform go through the SAME validators their stored counterparts use,
+        // so an override cannot hold a layout or transform the node itself could not — the
+        // rule that keeps a detach (which bakes overrides into stored nodes) loadable.
+        if (o.layout !== undefined) {
+            if (!isPlain(o.layout)) return `override "${key}" layout must be an object`;
+            const e = layoutError(o.layout);
+            if (e) return `override "${key}" ${e}`;
+        }
+        if (o.transform !== undefined) {
+            if (!isPlain(o.transform)) return `override "${key}" transform must be an object`;
+            const e = transformError(o.transform);
             if (e) return `override "${key}" ${e}`;
         }
     }
@@ -242,6 +260,10 @@ export function materializeNode(
         if (override.style) copy.style = { ...master.style, ...override.style };
         if (override.text !== undefined) copy.text = override.text;
         if (override.src !== undefined) copy.src = override.src;
+        // `mergeLayout`, not a spread: a master with `container` and an override with `grid`
+        // would otherwise produce a node carrying both, which no loader accepts.
+        if (override.layout) copy.layout = mergeLayout(master.layout, override.layout);
+        if (override.transform) copy.transform = { ...master.transform, ...override.transform };
     }
     // The ROOT copy's CONSTRAINTS (and their frozen `constraintRef`) describe the master's
     // relationship to ITS parent, which the copy no longer has — leaving them would let

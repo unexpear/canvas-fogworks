@@ -11,7 +11,7 @@ import { Node, Shadow } from "../core/document/Node";
 import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
-import { geometryActionFor, styleActionFor, contentActionFor } from "../core/actions/nodeEdit";
+import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor } from "../core/actions/nodeEdit";
 import { expandInstances, isVirtualId } from "../core/document/Components";
 import { SetActiveThemeAction, SetVariableAction, DeleteVariableAction } from "../core/actions/VariableActions";
 import { Variable, VariableStore, variableKeyError, tokenRefFor, tokenKeyOf } from "../core/document/Variables";
@@ -575,13 +575,11 @@ export function App() {
         if (action) dispatcher.dispatchAction(action, { coalesce: true });
     };
 
-    /** Transform edits. NOT routed: a transform override is a documented later slice, so this
-     *  is refused for an instance copy rather than written somewhere it cannot live. */
+    /** Transform edits — routed, so a copy gets a transform override (schema 26). */
     const editTransform = (patch: { rotation?: number; scaleX?: number; scaleY?: number }) => {
-        if (!selectedNodeId || isVirtualId(selectedNodeId)) return;
-        const d = dispatcher.getDocument();
-        if (!d.nodes.has(selectedNodeId)) return;
-        dispatcher.dispatchAction(new UpdateNodeTransformAction(d, selectedNodeId, patch), { coalesce: true });
+        if (!selectedNodeId) return;
+        const action = transformActionFor(dispatcher.getDocument(), selectedNodeId, patch);
+        if (action) dispatcher.dispatchAction(action, { coalesce: true });
     };
 
     /** A shadow is a WHOLE value in the schema, so a single field edit merges over the current
@@ -593,15 +591,13 @@ export function App() {
     };
 
     /**
-     * Layout edits. NOT routed through `nodeEdit`: `layout` has no per-instance override slot,
-     * so a copy's layout comes from its master and the inspector says so rather than offering
-     * controls that would silently do nothing.
+     * Layout edits — routed, so a copy gets a layout override (schema 26): one instance of a
+     * card can stack its children in a column while every other instance keeps the master's row.
      */
     const editLayout = (patch: Partial<Node["layout"]>) => {
-        if (!selectedNodeId || isVirtualId(selectedNodeId)) return;
-        const d = dispatcher.getDocument();
-        if (!d.nodes.has(selectedNodeId)) return;
-        dispatcher.dispatchAction(new UpdateNodeLayoutAction(d, selectedNodeId, patch), { coalesce: true });
+        if (!selectedNodeId) return;
+        const action = layoutActionFor(dispatcher.getDocument(), selectedNodeId, patch);
+        if (action) dispatcher.dispatchAction(action, { coalesce: true });
     };
 
     /** A container is a WHOLE value (`direction` is required), so one field edit merges over
@@ -1088,183 +1084,178 @@ export function App() {
 
                             <InspectorSection title="Layout">
                                 {/* Auto-layout has been in the engine since M2 — flex, hug, grow,
-                                    shrink, wrap, and a whole grid module — with no way to reach it.
-                                    Layout is not an override field, so these are stored-node only. */}
-                                {isVirtualId(selectedNodeId) ? (
-                                    <div style={{ color: "#666" }}>Layout is set on the master, not on a copy.</div>
-                                ) : (
-                                    <>
-                                        <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
-                                            <input
-                                                type="checkbox"
-                                                checked={!!node.layout.container}
-                                                onChange={e => {
-                                                    // `direction` is required, so enabling means supplying a whole
-                                                    // container; disabling clears it. The action carries grid ⊕
-                                                    // container exclusivity itself.
-                                                    editLayout({ container: e.target.checked ? { direction: "row", gap: 8, padding: 8 } : undefined });
-                                                    refresh();
-                                                }}
+                                shrink, wrap, and a whole grid module. Since schema 26 `layout`
+                                IS an override field, so a copy edits these like any other node:
+                                the change lands on its instance and leaves the master alone. */}
+                                    <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={!!node.layout.container}
+                                            onChange={e => {
+                                                // `direction` is required, so enabling means supplying a whole
+                                                // container; disabling clears it. The action carries grid ⊕
+                                                // container exclusivity itself.
+                                                editLayout({ container: e.target.checked ? { direction: "row", gap: 8, padding: 8 } : undefined });
+                                                refresh();
+                                            }}
+                                        />
+                                        Auto-layout
+                                    </label>
+                                    {node.layout.container && (
+                                        <>
+                                            <label style={INSPECTOR_LABEL}>Direction</label>
+                                            <SelectInput
+                                                value={node.layout.container.direction}
+                                                options={["row", "column"]}
+                                                onChange={v => { editContainer({ direction: v as "row" | "column" }); refresh(); }}
                                             />
-                                            Auto-layout
-                                        </label>
-                                        {node.layout.container && (
-                                            <>
-                                                <label style={INSPECTOR_LABEL}>Direction</label>
-                                                <SelectInput
-                                                    value={node.layout.container.direction}
-                                                    options={["row", "column"]}
-                                                    onChange={v => { editContainer({ direction: v as "row" | "column" }); refresh(); }}
-                                                />
-                                                <div style={INSPECTOR_GRID}>
-                                                    <div><label style={INSPECTOR_LABEL}>Gap</label>
-                                                        <NumInput value={node.layout.container.gap ?? 0} onChange={v => { editContainer({ gap: Math.max(0, v) }); refresh(); }} /></div>
-                                                    <div><label style={INSPECTOR_LABEL}>Padding</label>
-                                                        <NumInput value={node.layout.container.padding ?? 0} onChange={v => { editContainer({ padding: Math.max(0, v) }); refresh(); }} /></div>
-                                                </div>
-                                                <label style={INSPECTOR_LABEL}>Align items</label>
-                                                <SelectInput
-                                                    value={node.layout.container.alignItems ?? "start"}
-                                                    options={["start", "center", "end", "stretch"]}
-                                                    onChange={v => { editContainer({ alignItems: v as "start" | "center" | "end" | "stretch" }); refresh(); }}
-                                                />
-                                                <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={!!node.layout.container.wrap}
-                                                        onChange={e => { editContainer({ wrap: e.target.checked }); refresh(); }}
-                                                    />
-                                                    Wrap
-                                                </label>
-                                            </>
-                                        )}
-
-                                        {/* Grid is the other half of M2's layout module, and until now
-                                            the only way to make one was to hand-write the document.
-                                            The action carries grid ⊕ container exclusivity, so ticking
-                                            this while auto-layout is on replaces it rather than
-                                            producing a node that claims to be both. */}
-                                        <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
-                                            <input
-                                                type="checkbox"
-                                                checked={!!node.layout.grid}
-                                                onChange={e => {
-                                                    editLayout(e.target.checked ? newGridPatch() : { grid: undefined });
-                                                    refresh();
-                                                }}
+                                            <div style={INSPECTOR_GRID}>
+                                                <div><label style={INSPECTOR_LABEL}>Gap</label>
+                                                    <NumInput value={node.layout.container.gap ?? 0} onChange={v => { editContainer({ gap: Math.max(0, v) }); refresh(); }} /></div>
+                                                <div><label style={INSPECTOR_LABEL}>Padding</label>
+                                                    <NumInput value={node.layout.container.padding ?? 0} onChange={v => { editContainer({ padding: Math.max(0, v) }); refresh(); }} /></div>
+                                            </div>
+                                            <label style={INSPECTOR_LABEL}>Align items</label>
+                                            <SelectInput
+                                                value={node.layout.container.alignItems ?? "start"}
+                                                options={["start", "center", "end", "stretch"]}
+                                                onChange={v => { editContainer({ alignItems: v as "start" | "center" | "end" | "stretch" }); refresh(); }}
                                             />
-                                            Grid
-                                        </label>
-                                        {node.layout.grid && (
-                                            <>
-                                                <label style={INSPECTOR_LABEL}>Columns</label>
-                                                <TrackListInput
-                                                    value={formatTrackList(node.layout.grid.columns)}
-                                                    placeholder="1fr 1fr 200px"
-                                                    onCommit={t => { if (t) { editGrid({ columns: t }); refresh(); } }}
+                                            <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!node.layout.container.wrap}
+                                                    onChange={e => { editContainer({ wrap: e.target.checked }); refresh(); }}
                                                 />
-                                                {/* `rows` SIZES the leading rows and is optional — empty means
-                                                    every row falls back to the implicit row height below. Row
-                                                    COUNT still comes from the children, never from this field. */}
-                                                <label style={INSPECTOR_LABEL}>Rows (optional)</label>
-                                                <TrackListInput
-                                                    value={node.layout.grid.rows ? formatTrackList(node.layout.grid.rows) : ""}
-                                                    placeholder="auto 1fr"
-                                                    allowEmpty
-                                                    onCommit={t => { editGrid({ rows: t ?? undefined }); refresh(); }}
-                                                />
-                                                <label style={INSPECTOR_LABEL}>Row height (implicit rows)</label>
-                                                <TrackListInput
-                                                    value={formatTrackList([node.layout.grid.rowHeight])}
-                                                    placeholder="80px"
-                                                    onCommit={t => { if (t && t.length === 1) { editGrid({ rowHeight: t[0] }); refresh(); } }}
-                                                />
-                                                <div style={INSPECTOR_GRID}>
-                                                    <div><label style={INSPECTOR_LABEL}>Column gap</label>
-                                                        <NumInput value={node.layout.grid.columnGap ?? 0} onChange={v => { editGrid({ columnGap: Math.max(0, v) }); refresh(); }} /></div>
-                                                    <div><label style={INSPECTOR_LABEL}>Row gap</label>
-                                                        <NumInput value={node.layout.grid.rowGap ?? 0} onChange={v => { editGrid({ rowGap: Math.max(0, v) }); refresh(); }} /></div>
-                                                </div>
-                                                <label style={INSPECTOR_LABEL}>Padding</label>
-                                                <NumInput value={node.layout.grid.padding ?? 0} onChange={v => { editGrid({ padding: Math.max(0, v) }); refresh(); }} />
-                                                <label style={INSPECTOR_LABEL}>Auto-flow</label>
-                                                <SelectInput
-                                                    value={node.layout.grid.autoFlow ?? "row"}
-                                                    options={["row", "row dense", "column", "column dense"]}
-                                                    onChange={v => { editGrid({ autoFlow: v as NonNullable<NonNullable<Node["layout"]["grid"]>["autoFlow"]> }); refresh(); }}
-                                                />
-                                                <div style={INSPECTOR_GRID}>
-                                                    <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
-                                                        <input type="checkbox" checked={!!node.layout.grid.hugWidth}
-                                                            onChange={e => { editGrid({ hugWidth: e.target.checked || undefined }); refresh(); }} />
-                                                        Hug W
-                                                    </label>
-                                                    <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
-                                                        <input type="checkbox" checked={!!node.layout.grid.hugHeight}
-                                                            onChange={e => { editGrid({ hugHeight: e.target.checked || undefined }); refresh(); }} />
-                                                        Hug H
-                                                    </label>
-                                                </div>
-                                            </>
-                                        )}
+                                                Wrap
+                                            </label>
+                                        </>
+                                    )}
 
-                                        {/* CHILD-side fields. Which ones apply depends on the PARENT:
-                                            a container lays its children out (grow/shrink/margin), while a
-                                            plain parent anchors them (constraints). Showing both at once
-                                            would offer controls that do nothing. */}
-                                        {parentIsContainer ? (
-                                            <>
-                                                <div style={{ ...INSPECTOR_LABEL, color: "#777", marginTop: 8 }}>In its parent</div>
-                                                {/* A grid child spans CELLS; a flex child grows. Both fields
-                                                    exist on `Layout`, but only one set means anything under a
-                                                    given parent. */}
-                                                {parentIsGrid && (
-                                                    <div style={INSPECTOR_GRID}>
-                                                        <div><label style={INSPECTOR_LABEL}>Col span</label>
-                                                            <NumInput value={node.layout.colSpan ?? 1} onChange={v => { editLayout({ colSpan: Math.max(1, Math.round(v)) }); refresh(); }} /></div>
-                                                        <div><label style={INSPECTOR_LABEL}>Row span</label>
-                                                            <NumInput value={node.layout.rowSpan ?? 1} onChange={v => { editLayout({ rowSpan: Math.max(1, Math.round(v)) }); refresh(); }} /></div>
-                                                    </div>
-                                                )}
-                                                <div style={INSPECTOR_GRID}>
-                                                    <div><label style={INSPECTOR_LABEL}>Grow</label>
-                                                        <NumInput value={node.layout.grow ?? 0} onChange={v => { editLayout({ grow: Math.max(0, v) }); refresh(); }} /></div>
-                                                    <div><label style={INSPECTOR_LABEL}>Shrink</label>
-                                                        <NumInput value={node.layout.shrink ?? 0} onChange={v => { editLayout({ shrink: Math.max(0, v) }); refresh(); }} /></div>
-                                                </div>
-                                                <label style={INSPECTOR_LABEL}>Margin</label>
-                                                <NumInput
-                                                    value={typeof node.layout.margin === "number" ? node.layout.margin : 0}
-                                                    onChange={v => { editLayout({ margin: Math.max(0, v) }); refresh(); }}
-                                                />
+                                    {/* Grid is the other half of M2's layout module, and until now
+                                        the only way to make one was to hand-write the document.
+                                        The action carries grid ⊕ container exclusivity, so ticking
+                                        this while auto-layout is on replaces it rather than
+                                        producing a node that claims to be both. */}
+                                    <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={!!node.layout.grid}
+                                            onChange={e => {
+                                                editLayout(e.target.checked ? newGridPatch() : { grid: undefined });
+                                                refresh();
+                                            }}
+                                        />
+                                        Grid
+                                    </label>
+                                    {node.layout.grid && (
+                                        <>
+                                            <label style={INSPECTOR_LABEL}>Columns</label>
+                                            <TrackListInput
+                                                value={formatTrackList(node.layout.grid.columns)}
+                                                placeholder="1fr 1fr 200px"
+                                                onCommit={t => { if (t) { editGrid({ columns: t }); refresh(); } }}
+                                            />
+                                            {/* `rows` SIZES the leading rows and is optional — empty means
+                                                every row falls back to the implicit row height below. Row
+                                                COUNT still comes from the children, never from this field. */}
+                                            <label style={INSPECTOR_LABEL}>Rows (optional)</label>
+                                            <TrackListInput
+                                                value={node.layout.grid.rows ? formatTrackList(node.layout.grid.rows) : ""}
+                                                placeholder="auto 1fr"
+                                                allowEmpty
+                                                onCommit={t => { editGrid({ rows: t ?? undefined }); refresh(); }}
+                                            />
+                                            <label style={INSPECTOR_LABEL}>Row height (implicit rows)</label>
+                                            <TrackListInput
+                                                value={formatTrackList([node.layout.grid.rowHeight])}
+                                                placeholder="80px"
+                                                onCommit={t => { if (t && t.length === 1) { editGrid({ rowHeight: t[0] }); refresh(); } }}
+                                            />
+                                            <div style={INSPECTOR_GRID}>
+                                                <div><label style={INSPECTOR_LABEL}>Column gap</label>
+                                                    <NumInput value={node.layout.grid.columnGap ?? 0} onChange={v => { editGrid({ columnGap: Math.max(0, v) }); refresh(); }} /></div>
+                                                <div><label style={INSPECTOR_LABEL}>Row gap</label>
+                                                    <NumInput value={node.layout.grid.rowGap ?? 0} onChange={v => { editGrid({ rowGap: Math.max(0, v) }); refresh(); }} /></div>
+                                            </div>
+                                            <label style={INSPECTOR_LABEL}>Padding</label>
+                                            <NumInput value={node.layout.grid.padding ?? 0} onChange={v => { editGrid({ padding: Math.max(0, v) }); refresh(); }} />
+                                            <label style={INSPECTOR_LABEL}>Auto-flow</label>
+                                            <SelectInput
+                                                value={node.layout.grid.autoFlow ?? "row"}
+                                                options={["row", "row dense", "column", "column dense"]}
+                                                onChange={v => { editGrid({ autoFlow: v as NonNullable<NonNullable<Node["layout"]["grid"]>["autoFlow"]> }); refresh(); }}
+                                            />
+                                            <div style={INSPECTOR_GRID}>
                                                 <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={node.layout.position === "absolute"}
-                                                        onChange={e => { editLayout({ position: e.target.checked ? "absolute" : undefined }); refresh(); }}
-                                                    />
-                                                    Absolute (out of flow)
+                                                    <input type="checkbox" checked={!!node.layout.grid.hugWidth}
+                                                        onChange={e => { editGrid({ hugWidth: e.target.checked || undefined }); refresh(); }} />
+                                                    Hug W
                                                 </label>
-                                            </>
-                                        ) : node.parent ? (
-                                            <>
-                                                <div style={{ ...INSPECTOR_LABEL, color: "#777", marginTop: 8 }}>Constraints</div>
-                                                <label style={INSPECTOR_LABEL}>Horizontal</label>
-                                                <SelectInput
-                                                    value={node.layout.constraints?.horizontal ?? "left"}
-                                                    options={["left", "right", "left-right", "center", "scale"]}
-                                                    onChange={v => { editConstraint("horizontal", v); refresh(); }}
+                                                <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
+                                                    <input type="checkbox" checked={!!node.layout.grid.hugHeight}
+                                                        onChange={e => { editGrid({ hugHeight: e.target.checked || undefined }); refresh(); }} />
+                                                    Hug H
+                                                </label>
+                                            </div>
+                                        </>
+                                    )}
+
+                                    {/* CHILD-side fields. Which ones apply depends on the PARENT:
+                                        a container lays its children out (grow/shrink/margin), while a
+                                        plain parent anchors them (constraints). Showing both at once
+                                        would offer controls that do nothing. */}
+                                    {parentIsContainer ? (
+                                        <>
+                                            <div style={{ ...INSPECTOR_LABEL, color: "#777", marginTop: 8 }}>In its parent</div>
+                                            {/* A grid child spans CELLS; a flex child grows. Both fields
+                                                exist on `Layout`, but only one set means anything under a
+                                                given parent. */}
+                                            {parentIsGrid && (
+                                                <div style={INSPECTOR_GRID}>
+                                                    <div><label style={INSPECTOR_LABEL}>Col span</label>
+                                                        <NumInput value={node.layout.colSpan ?? 1} onChange={v => { editLayout({ colSpan: Math.max(1, Math.round(v)) }); refresh(); }} /></div>
+                                                    <div><label style={INSPECTOR_LABEL}>Row span</label>
+                                                        <NumInput value={node.layout.rowSpan ?? 1} onChange={v => { editLayout({ rowSpan: Math.max(1, Math.round(v)) }); refresh(); }} /></div>
+                                                </div>
+                                            )}
+                                            <div style={INSPECTOR_GRID}>
+                                                <div><label style={INSPECTOR_LABEL}>Grow</label>
+                                                    <NumInput value={node.layout.grow ?? 0} onChange={v => { editLayout({ grow: Math.max(0, v) }); refresh(); }} /></div>
+                                                <div><label style={INSPECTOR_LABEL}>Shrink</label>
+                                                    <NumInput value={node.layout.shrink ?? 0} onChange={v => { editLayout({ shrink: Math.max(0, v) }); refresh(); }} /></div>
+                                            </div>
+                                            <label style={INSPECTOR_LABEL}>Margin</label>
+                                            <NumInput
+                                                value={typeof node.layout.margin === "number" ? node.layout.margin : 0}
+                                                onChange={v => { editLayout({ margin: Math.max(0, v) }); refresh(); }}
+                                            />
+                                            <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={node.layout.position === "absolute"}
+                                                    onChange={e => { editLayout({ position: e.target.checked ? "absolute" : undefined }); refresh(); }}
                                                 />
-                                                <label style={INSPECTOR_LABEL}>Vertical</label>
-                                                <SelectInput
-                                                    value={node.layout.constraints?.vertical ?? "top"}
-                                                    options={["top", "bottom", "top-bottom", "center", "scale"]}
-                                                    onChange={v => { editConstraint("vertical", v); refresh(); }}
-                                                />
-                                            </>
-                                        ) : null}
-                                    </>
-                                )}
+                                                Absolute (out of flow)
+                                            </label>
+                                        </>
+                                    ) : node.parent ? (
+                                        <>
+                                            <div style={{ ...INSPECTOR_LABEL, color: "#777", marginTop: 8 }}>Constraints</div>
+                                            <label style={INSPECTOR_LABEL}>Horizontal</label>
+                                            <SelectInput
+                                                value={node.layout.constraints?.horizontal ?? "left"}
+                                                options={["left", "right", "left-right", "center", "scale"]}
+                                                onChange={v => { editConstraint("horizontal", v); refresh(); }}
+                                            />
+                                            <label style={INSPECTOR_LABEL}>Vertical</label>
+                                            <SelectInput
+                                                value={node.layout.constraints?.vertical ?? "top"}
+                                                options={["top", "bottom", "top-bottom", "center", "scale"]}
+                                                onChange={v => { editConstraint("vertical", v); refresh(); }}
+                                            />
+                                        </>
+                            ) : null}
                             </InspectorSection>
 
                             <InspectorSection title="Effects">

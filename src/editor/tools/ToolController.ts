@@ -14,7 +14,7 @@ import { computeGeometry, ComputedState, selectionBounds } from "../../core/geom
 import { handleAtPoint, groupHandleAtPoint } from "../../core/geometry/SelectionHandles";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupScaleInput } from "../../core/geometry/GroupTransform";
 import { expandInstances } from "../../core/document/Components";
-import { geometryActionFor, isHandleOffered } from "../../core/actions/nodeEdit";
+import { geometryActionFor, isHandleOffered, isEditableNode, transformActionFor } from "../../core/actions/nodeEdit";
 import { snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect } from "../../core/geometry/Matrix";
 import { ReadonlyDocument } from "../../core/document/Document";
@@ -228,12 +228,13 @@ export class ToolController {
             const doc = this.dispatcher.getDocument();
             // The node vanished mid-drag (e.g. deleted by a keyboard shortcut): end the gesture
             // AND clear the drag-cursor flag, or it stays stuck on "grabbing".
-            if (!doc.nodes.has(this.rotateNodeId)) { this.resetRotate(); this.editorState.isDragging = false; this.refresh(); return; }
+            if (!isEditableNode(doc, this.rotateNodeId)) { this.resetRotate(); this.editorState.isDragging = false; this.refresh(); return; }
             const w = screenToWorld(this.editorState.viewport, canvasRect, e.clientX, e.clientY);
             const angle = Math.atan2(w.y - this.rotateCenterY, w.x - this.rotateCenterX);
             const rotation = this.rotateInitial + (angle - this.rotateStartAngle);
             // Live-commit, coalesced → a continuous drag is one undo step; onChange repaints.
-            this.dispatcher.dispatchAction(new UpdateNodeTransformAction(doc, this.rotateNodeId, { rotation }), { coalesce: true });
+            const rotateAction = transformActionFor(doc, this.rotateNodeId, { rotation });
+            if (rotateAction) this.dispatcher.dispatchAction(rotateAction, { coalesce: true });
             return;
         }
 
@@ -556,9 +557,8 @@ export class ToolController {
                 // revert the angle the old way.
                 if (!this.cancelGesture()) {
                     const doc = this.dispatcher.getDocument();
-                    if (doc.nodes.has(this.rotateNodeId)) {
-                        this.dispatcher.dispatchAction(new UpdateNodeTransformAction(doc, this.rotateNodeId, { rotation: this.rotateInitial }), { coalesce: true });
-                    }
+                    const revert = transformActionFor(doc, this.rotateNodeId, { rotation: this.rotateInitial });
+                    if (revert) this.dispatcher.dispatchAction(revert, { coalesce: true });
                 }
                 this.resetRotate();
                 this.editorState.isDragging = false;

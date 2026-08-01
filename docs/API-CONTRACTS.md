@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v25 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v26 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -52,8 +52,9 @@ function componentError(type: string, componentId: unknown): string | null; // s
 function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializes instances as virtual children; SAME reference when there is nothing to expand
 // Per-instance OVERRIDES (schema 22, M6 slice 2): what one instance changes about its copy,
 // keyed by MASTER NODE ID. Applied during expansion at each level; a key matching no master
-// node is inert. `layout`/`transform` overrides are a later slice.
-interface InstanceOverride { geometry?: Partial<Geometry>; style?: Partial<Style>; text?: string; src?: string }
+// node is inert. Schema 26 added `layout` and `transform`, so a copy can lay its children
+// out differently and be rotated independently of its master.
+interface InstanceOverride { geometry?: Partial<Geometry>; style?: Partial<Style>; text?: string; src?: string; layout?: Partial<Layout>; transform?: Partial<Transform> }
 const INSTANCE_MAX_OVERRIDES: number;                      // per-instance cap (OOM guard)
 function overridesError(type: string, overrides: unknown): string | null; // shared load + edit; each field obeys its stored rule (styleError, finite geometry)
 // Node.ts — an image SOURCE (schema 23). Only a core.image may carry one; bounded, and the
@@ -72,10 +73,12 @@ function materializeNode(master: Node, override: InstanceOverride | undefined, i
 // the edit cannot be expressed (vanished node, or a copy nested inside another instance).
 function geometryActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partial<Geometry>): Action | null;
 function styleActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partial<Style>): Action | null;
+function layoutActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partial<Layout>): Action | null;      // schema 26
+function transformActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partial<Transform>): Action | null; // schema 26 — what lets a COPY rotate
 function overrideTargetFor(doc: ReadonlyDocument, nodeId: string): { instanceId: string; masterNodeId: string } | null;
 function contentActionFor(doc: ReadonlyDocument, nodeId: string, patch: ContentPatch): Action | null; // text/src route to an override on a copy; NAME has no override slot, so a mixed patch is refused WHOLE
 function isEditableNode(doc: ReadonlyDocument, nodeId: string): boolean; // gate an affordance rather than offer a dead control
-function isHandleOffered(doc: ReadonlyDocument, nodeId: string, handle: string): boolean; // the ONE rule read by the renderer, the picker AND the hover cursor
+function isHandleOffered(doc: ReadonlyDocument, nodeId: string, handle: string): boolean; // the ONE rule read by the renderer, the picker AND the hover cursor (a copy now offers ROTATE too)
 function isMasterRootCopy(doc: ReadonlyDocument, nodeId: string): boolean; // the copy whose POSITION is the instance's (its x/y override is refused)
 
 // geometry/Matrix.ts — 2D affine primitive
@@ -266,7 +269,9 @@ validates a `core.path`'s commands (present ⇒ non-empty, opens with `M`, finit
 rejects path data on any other type. `styleError` validates every `Style` field including the
 schema-18 effects (`Shadow` = dx/dy/blur/color; `blur` ≥ 0). `trackError(t)` validates ONE grid
 track (exactly one of px/fr/auto; `px ≥ 0`, `fr > 0`, `auto === true`) and is exported so the
-track-list parser can defer to it rather than restate it. `newGridPatch()` returns the layout
+track-list parser can defer to it rather than restate it. `mergeLayout(base, patch)` merges a
+layout patch keeping grid ⊕ container exclusivity (the patch wins) — shared by the override
+merge and `UpdateNodeLayoutAction`'s delta. `newGridPatch()` returns the layout
 patch that turns a node into a grid — a COMPLETE grid, since `columns` and `rowHeight` are
 mandatory; it does not clear `container`, because `UpdateNodeLayoutAction` carries grid ⊕
 container exclusivity in the delta itself. See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).

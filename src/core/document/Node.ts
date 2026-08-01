@@ -392,6 +392,24 @@ export const GRID_SPAN_MAX = 1000;
 export const GRID_MAX_TRACKS = 1000;
 
 /**
+ * Merge a layout PATCH over a base layout, keeping grid ⊕ container exclusivity.
+ *
+ * A plain spread is not enough: a master laying its children out with `container` and a patch
+ * supplying `grid` would produce a node carrying BOTH, which `layoutError` refuses — an
+ * expanded node no loader would accept. The PATCH wins, because it is the more specific
+ * statement; naming either half of the pair clears the other.
+ *
+ * This is the same rule `UpdateNodeLayoutAction` carries in its delta, which is why it lives
+ * here as one function rather than as a second copy that can drift from the first.
+ */
+export function mergeLayout(base: Layout, patch: Partial<Layout>): Layout {
+    const merged: Layout = { ...base, ...patch };
+    if (patch.grid !== undefined) merged.container = undefined;
+    else if (patch.container !== undefined) merged.grid = undefined;
+    return merged;
+}
+
+/**
  * The layout patch that turns a node INTO a grid.
  *
  * `columns` and `rowHeight` are mandatory, so "become a grid" must supply a WHOLE grid — which

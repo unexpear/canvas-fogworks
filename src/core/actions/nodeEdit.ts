@@ -19,13 +19,15 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { Style } from "../document/Node";
+import { Style, Layout, Transform } from "../document/Node";
 import { Geometry } from "../document/Node";
 import { isVirtualId, ownerInstanceOf, splitVirtualId, InstanceOverride } from "../document/Components";
 import { UpdateNodeGeometryAction } from "./UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "./UpdateNodeStyleAction";
 import { SetInstanceOverrideAction } from "./SetInstanceOverrideAction";
 import { UpdateNodeContentAction, ContentPatch } from "./UpdateNodeContentAction";
+import { UpdateNodeLayoutAction } from "./UpdateNodeLayoutAction";
+import { UpdateNodeTransformAction } from "./UpdateNodeTransformAction";
 
 /**
  * The instance + master node a VIRTUAL id's override should be written against, or null when
@@ -116,6 +118,36 @@ export function contentActionFor(doc: ReadonlyDocument, nodeId: string, patch: C
     return new SetInstanceOverrideAction(doc, target.instanceId, target.masterNodeId, override);
 }
 
+/**
+ * The Action that applies a LAYOUT patch to `nodeId` — direct, or an override for a copy.
+ *
+ * A copy may now carry its own layout (schema 26): one instance of a card can stack its
+ * children in a column while every other instance keeps the master's row. The merge — and the
+ * grid ⊕ container exclusivity it has to respect — happens at expansion, in `mergeLayout`.
+ */
+export function layoutActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partial<Layout>): Action | null {
+    if (!isVirtualId(nodeId)) {
+        return doc.nodes.has(nodeId) ? new UpdateNodeLayoutAction(doc, nodeId, patch) : null;
+    }
+    const target = overrideTargetFor(doc, nodeId);
+    return target ? new SetInstanceOverrideAction(doc, target.instanceId, target.masterNodeId, { layout: patch }) : null;
+}
+
+/**
+ * The Action that applies a TRANSFORM patch to `nodeId` — direct, or an override for a copy.
+ *
+ * This is what lets a copy be ROTATED. A root copy is a child of its instance node, so an
+ * overridden transform composes through the ordinary parent chain — the instance's own
+ * transform still applies on top, exactly as a parent's always has.
+ */
+export function transformActionFor(doc: ReadonlyDocument, nodeId: string, patch: Partial<Transform>): Action | null {
+    if (!isVirtualId(nodeId)) {
+        return doc.nodes.has(nodeId) ? new UpdateNodeTransformAction(doc, nodeId, patch) : null;
+    }
+    const target = overrideTargetFor(doc, nodeId);
+    return target ? new SetInstanceOverrideAction(doc, target.instanceId, target.masterNodeId, { transform: patch }) : null;
+}
+
 /** Whether `nodeId` can be edited at all (a stored node, or an override-able instance copy).
  *  Tools use this to gate an affordance rather than offer a control that would do nothing. */
 export function isEditableNode(doc: ReadonlyDocument, nodeId: string): boolean {
@@ -129,11 +161,12 @@ export function isEditableNode(doc: ReadonlyDocument, nodeId: string): boolean {
  * and a handle that is drawn but not grabbable — or grabbable but never drawn — is worse than
  * no handle at all.
  *
- * A stored node offers all of them. An instance COPY offers only its RESIZE corners, and only
- * when it can actually hold an override: rotation would need a TRANSFORM override (a later
- * slice), and a copy nested inside another instance's expansion cannot be targeted at all.
+ * A stored node offers all of them. An instance COPY offers every handle it can actually back
+ * with an override — which, since schema 26 gave overrides a `transform`, now includes ROTATE.
+ * A copy nested inside another instance's expansion still offers nothing: there is no override
+ * slot to write to, so a handle there would be a control that does nothing.
  */
 export function isHandleOffered(doc: ReadonlyDocument, nodeId: string, handle: string): boolean {
     if (!isVirtualId(nodeId)) return true;
-    return handle !== "rotate" && isEditableNode(doc, nodeId);
+    return isEditableNode(doc, nodeId);
 }
