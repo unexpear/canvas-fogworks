@@ -55,6 +55,11 @@ function componentError(type: string, componentId: unknown): string | null; // s
 function variantMembers(doc: ReadonlyDocument, set: string): string[];              // sorted by id — DETERMINISTIC, not Map insertion order
 function variantProperties(doc: ReadonlyDocument, set: string): Record<string, string[]>; // what a picker offers; names and values sorted
 function resolveVariantMaster(doc: ReadonlyDocument, instance: { componentId?: string; variants?: Record<string, string> }): string | null;
+function masterSubtreeIds(doc: ReadonlyDocument, masterId: string): string[];       // document order, cycle-safe; shared with DetachInstanceAction
+// Carries overrides across a variant switch: the ROOT structurally, everything else by a name
+// UNIQUE in both subtrees. An unmatched entry is KEPT (inert, live again on switch-back) —
+// guessing between two same-named nodes would move an edit onto the wrong element.
+function remapOverridesForVariant(doc, overrides, fromMasterId, toMasterId): Record<string, InstanceOverride> | undefined;
 function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializes instances as virtual children; SAME reference when there is nothing to expand
 // Per-instance OVERRIDES (schema 22, M6 slice 2): what one instance changes about its copy,
 // keyed by MASTER NODE ID. Applied during expansion at each level; a key matching no master
@@ -275,9 +280,11 @@ validates a `core.path`'s commands (present ⇒ non-empty, opens with `M`, finit
 rejects path data on any other type. `styleError` validates every `Style` field including the
 schema-18 effects (`Shadow` = dx/dy/blur/color; `blur` ≥ 0). `trackError(t)` validates ONE grid
 track (exactly one of px/fr/auto; `px ≥ 0`, `fr > 0`, `auto === true`) and is exported so the
-track-list parser can defer to it rather than restate it. `mergeLayout(base, patch)` merges a
-layout patch keeping grid ⊕ container exclusivity (the patch wins) — shared by the override
-merge and `UpdateNodeLayoutAction`'s delta. `newGridPatch()` returns the layout
+track-list parser can defer to it rather than restate it. `layoutExclusivity(patch)` is the ONE
+statement of grid ⊕ container exclusivity — it takes and returns a PATCH (the action's delta must
+stay partial so a transaction merge is last-wins), and `mergeLayout(base, patch)` is
+`{ ...base, ...layoutExclusivity({ ...patch }) }`; the override merge and
+`UpdateNodeLayoutAction`'s delta both call it. `newGridPatch()` returns the layout
 patch that turns a node into a grid — a COMPLETE grid, since `columns` and `rowHeight` are
 mandatory; it does not clear `container`, because `UpdateNodeLayoutAction` carries grid ⊕
 container exclusivity in the delta itself. See [DOCUMENT-SCHEMA.md](DOCUMENT-SCHEMA.md).

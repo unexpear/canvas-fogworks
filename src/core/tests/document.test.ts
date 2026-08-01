@@ -9,7 +9,7 @@ import { createEmptyDocument, ProjectDocument, ReadonlyDocument, CURRENT_VERSION
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, isTokenRef, tokenRefFor, tokenKeyOf, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
-import { expandInstances, componentError, overridesError, overrideAgainstMasterError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES , variantMembers, variantProperties, resolveVariantMaster} from "../document/Components";
+import { expandInstances, componentError, overridesError, overrideAgainstMasterError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES , variantMembers, variantProperties, resolveVariantMaster, masterSubtreeIds} from "../document/Components";
 import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
 import { SetVariantAction, SetInstanceVariantAction } from "../actions/VariantActions";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
@@ -8832,6 +8832,96 @@ describe("Variants: a set is just the masters that name it", () => {
         expect(d.nodes.get("b-sm-def")!.variant).toBeUndefined();
         expect(variantMembers(d, "Button")).toEqual(["b-lg-def", "b-lg-hov", "b-sm-hov"]);
         expect(() => deserializeDocument(serializeDocument(d))).not.toThrow();
+    });
+
+    test("DETACH bakes the SWITCHED variant, not the one componentId names", () => {
+        const dispatcher = new ActionDispatcher(buttonSet());
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "size", "large"));
+        const detach = new DetachInstanceAction(dispatcher.getDocument(), "I");
+        expect(dispatcher.dispatchAction(detach).success).toBe(true);
+        const root = dispatcher.getDocument().nodes.get(detach.getCreatedNodeIds()[0])!;
+        expect(root.geometry.width).toBe(90);   // the LARGE master — what was on screen
+    });
+
+    test("switching RESIZES the instance to the new variant — unless it was resized on purpose", () => {
+        // The limitation the first variants commit shipped: the box stayed 40 wide while the
+        // content drew 90, so the selection rectangle stopped matching what was on screen.
+        const dispatcher = new ActionDispatcher(buttonSet());
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "size", "large"));
+        expect(dispatcher.getDocument().nodes.get("I")!.geometry.width).toBe(90);
+
+        // …but a DELIBERATE resize is a decision, and switching a different property is not a
+        // request to discard it.
+        const d2 = new ActionDispatcher(buttonSet());
+        d2.dispatchAction(new UpdateNodeGeometryAction(d2.getDocument(), "I", { width: 55 }));
+        d2.dispatchAction(new SetInstanceVariantAction(d2.getDocument(), "I", "size", "large"));
+        expect(d2.getDocument().nodes.get("I")!.geometry.width).toBe(55);   // left alone
+    });
+
+    test("overrides SURVIVE a switch, carried to the matching node of the new variant", () => {
+        // Keyed by master node id, and every variant is a different node — so without a remap
+        // every edit made to the copy vanished the moment someone switched.
+        const doc = buttonSet();
+        // Give both variants a named child, so there is something to match ACROSS the switch.
+        for (const [master, child] of [["b-sm-def", "sm-label"], ["b-lg-def", "lg-label"]]) {
+            doc.nodes.set(child, { id: child, type: "core.text", parent: master, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000000", opacity: 1 }, layout: {}, name: "Label", text: "hi" });
+            doc.nodes.get(master)!.children = [child];
+        }
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "I", "sm-label", { text: "Buy now" }));
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "size", "large"));
+
+        const after = dispatcher.getDocument().nodes.get("I")!.overrides!;
+        expect(after["lg-label"]).toEqual({ text: "Buy now" });   // moved to the new variant's node
+        expect(after["sm-label"]).toBeUndefined();
+        // …and it is really on screen, not just in the map.
+        const x = expandInstances(dispatcher.getDocument());
+        expect(x.nodes.get("I::lg-label")!.text).toBe("Buy now");
+    });
+
+    test("an override on the master ROOT follows the root, which has no name to match on", () => {
+        const dispatcher = new ActionDispatcher(buttonSet());
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "I", "b-sm-def", { style: { fill: "#abcdef" } }));
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "size", "large"));
+        expect(dispatcher.getDocument().nodes.get("I")!.overrides!["b-lg-def"]).toEqual({ style: { fill: "#abcdef" } });
+    });
+
+    test("an AMBIGUOUS name is not guessed at — the entry stays put and stays inert", () => {
+        // Moving someone's edit onto the wrong element is worse than not moving it. An unmatched
+        // entry is kept rather than dropped, so switching BACK restores it.
+        const doc = buttonSet();
+        for (const [master, kids] of [["b-sm-def", ["s1", "s2"]], ["b-lg-def", ["l1", "l2"]]]) {
+            for (const k of kids as string[]) {
+                doc.nodes.set(k, { id: k, type: "core.text", parent: master as string, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000000", opacity: 1 }, layout: {}, name: "Row" });
+            }
+            doc.nodes.get(master as string)!.children = kids as string[];
+        }
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new SetInstanceOverrideAction(dispatcher.getDocument(), "I", "s1", { text: "kept" }));
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "size", "large"));
+        const after = dispatcher.getDocument().nodes.get("I")!.overrides!;
+        expect(after["s1"]).toEqual({ text: "kept" });      // untouched, not guessed
+        expect(after["l1"]).toBeUndefined();
+        expect(after["l2"]).toBeUndefined();
+
+        // Switching BACK makes it live again — a round trip loses nothing.
+        dispatcher.dispatchAction(new SetInstanceVariantAction(dispatcher.getDocument(), "I", "size", "small"));
+        expect(expandInstances(dispatcher.getDocument()).nodes.get("I::s1")!.text).toBe("kept");
+    });
+
+    test("the shared subtree walk TERMINATES on a damaged, cyclic document", () => {
+        // A parent/child cycle is not reachable through the actions, but it IS reachable by
+        // hand-editing a file, and this walk runs on the load-adjacent paths (detach, override
+        // remap). Without the visited set it recurses until the stack gives out, which is a
+        // crash rather than a refusal — so the guard is load-bearing and now has a test.
+        const doc = createEmptyDocument();
+        const mk = (id: string, kids: string[], parent: string | null) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent, children: kids, geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#111111", opacity: 1 }, layout: {} });
+        mk("A", ["B"], null);
+        mk("B", ["A"], "A");          // …and back to A
+        doc.rootNodeUuids = ["A"];
+        expect(masterSubtreeIds(doc, "A")).toEqual(["A", "B"]);   // each node ONCE, and it returns
+        expect(masterSubtreeIds(doc, "nope")).toEqual([]);
     });
 
     test("the UI can TAG a master and SWITCH an instance — either alone is useless", () => {

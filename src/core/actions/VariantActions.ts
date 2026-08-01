@@ -16,6 +16,7 @@
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
 import { VariantKey, variantError, variantSelectionError } from "../document/Node";
+import { InstanceOverride, remapOverridesForVariant, resolveVariantMaster } from "../document/Components";
 import { MutationResult, ActionPayload } from "./types";
 
 /** Tag a node as a member of a variant set, or (with `null`) remove it from one. */
@@ -95,9 +96,40 @@ export class SetInstanceVariantAction extends Action {
         if (!this.validate()) {
             throw new Error(`Validation failed: invalid variant selection "${this.property}" on instance "${this.instanceId}".`);
         }
+        const node = this.document.nodes.get(this.instanceId)!;
+        const variants = this.next();
+        const before = resolveVariantMaster(this.document, node);
+        const after = resolveVariantMaster(this.document, { ...node, variants });
+
+        const delta: {
+            kind: "patch";
+            variants?: Record<string, string>;
+            geometry?: { width: number; height: number };
+            overrides?: Record<string, InstanceOverride>;
+        } = { kind: "patch", variants };
+
+        if (before !== null && after !== null && before !== after) {
+            const from = this.document.nodes.get(before);
+            const to = this.document.nodes.get(after);
+            if (from && to) {
+                // RESIZE to the new variant, but only if the instance is still the size the old
+                // variant made it. A box that has been deliberately resized is a decision, and
+                // switching `state=hover` is not a request to throw it away — so the two cases
+                // are distinguished rather than one of them being picked for everybody.
+                if (node.geometry.width === from.geometry.width && node.geometry.height === from.geometry.height) {
+                    delta.geometry = { width: to.geometry.width, height: to.geometry.height };
+                }
+                // CARRY the overrides across. They are keyed by master node id and each variant
+                // is a different node, so without this every edit made to the copy is silently
+                // dropped the moment someone switches.
+                const remapped = remapOverridesForVariant(this.document, node.overrides as Record<string, InstanceOverride> | undefined, before, after);
+                if (remapped) delta.overrides = remapped;
+            }
+        }
+
         return {
             updatedNodeIds: new Set([this.instanceId]),
-            propertyDeltas: new Map([[this.instanceId, { kind: "patch", variants: this.next() } as const]]),
+            propertyDeltas: new Map([[this.instanceId, delta]]),
             success: true
         };
     }

@@ -101,6 +101,74 @@ export function componentError(type: string, componentId: unknown): string | nul
  * the order nodes happened to be added — stable within a session, but not across a save and
  * reload, and the whole engine is built on the same input giving the same output.
  */
+/**
+ * A master's subtree in document order, cycle-safe. Shared by expansion's consumers and by
+ * `DetachInstanceAction`, which must walk exactly the tree that was drawn.
+ */
+export function masterSubtreeIds(doc: ReadonlyDocument, masterId: string): string[] {
+    if (!doc.nodes.has(masterId)) return [];
+    const order: string[] = [];
+    const visited = new Set<string>();
+    const walk = (id: string): void => {
+        if (visited.has(id) || !doc.nodes.has(id)) return;
+        visited.add(id);
+        order.push(id);
+        for (const childId of doc.nodes.get(id)!.children) walk(childId);
+    };
+    walk(masterId);
+    return order;
+}
+
+/**
+ * Carry an instance's OVERRIDES across a variant switch (schema 27).
+ *
+ * Overrides are keyed by master node id, and each variant is a different node — so without
+ * this, switching silently drops every change made to a copy. Keys are re-pointed at the
+ * corresponding node of the new master: the ROOT structurally (it is the root either way), and
+ * everything else by NAME, but only when that name is unambiguous in BOTH subtrees. A guess
+ * between two same-named nodes would move someone's edit onto the wrong element, which is worse
+ * than not moving it.
+ *
+ * An entry that cannot be matched is KEPT, not dropped. It is inert against the new master —
+ * the same dangling-key rule everything else here follows — and comes back to life if you
+ * switch back, so a round trip through a variant loses nothing.
+ */
+export function remapOverridesForVariant(
+    doc: ReadonlyDocument,
+    overrides: Record<string, InstanceOverride> | undefined,
+    fromMasterId: string,
+    toMasterId: string
+): Record<string, InstanceOverride> | undefined {
+    if (!overrides || fromMasterId === toMasterId) return overrides;
+
+    /** name → id, only for names that appear exactly ONCE in the subtree. */
+    const uniqueNames = (rootId: string): Map<string, string> => {
+        const seen = new Map<string, string>();
+        const dupes = new Set<string>();
+        for (const id of masterSubtreeIds(doc, rootId)) {
+            const name = doc.nodes.get(id)!.name;
+            if (typeof name !== "string" || name.length === 0) continue;
+            if (seen.has(name)) dupes.add(name); else seen.set(name, id);
+        }
+        for (const d of dupes) seen.delete(d);
+        return seen;
+    };
+
+    const fromNames = uniqueNames(fromMasterId);
+    const toNames = uniqueNames(toMasterId);
+    const fromIdToName = new Map<string, string>();
+    fromNames.forEach((id, name) => fromIdToName.set(id, name));
+
+    const next: Record<string, InstanceOverride> = {};
+    for (const [key, value] of Object.entries(overrides)) {
+        if (key === fromMasterId) { next[toMasterId] = value; continue; }   // root → root
+        const name = fromIdToName.get(key);
+        const target = name !== undefined ? toNames.get(name) : undefined;
+        next[target ?? key] = value;                                        // unmatched stays put
+    }
+    return next;
+}
+
 /** Whether an instance resolves to a master that exists — the expansion fast path's question,
  *  asked THROUGH the variant selection so a switched instance is never skipped. */
 function hasResolvableMaster(doc: ReadonlyDocument, n: ReadonlyNode): boolean {

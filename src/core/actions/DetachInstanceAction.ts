@@ -26,7 +26,7 @@
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
 import { Node } from "../document/Node";
-import { INSTANCE_MAX_NODES, materializeNode } from "../document/Components";
+import { INSTANCE_MAX_NODES, materializeNode , masterSubtreeIds, resolveVariantMaster} from "../document/Components";
 import { MutationResult, ActionPayload, NodeDelta } from "./types";
 import { generateUUID } from "../ids/UUID";
 
@@ -47,27 +47,27 @@ export class DetachInstanceAction extends Action {
 
     /** The master subtree in parent-before-child order, cycle-safe against a damaged document.
      *  Empty when the master does not resolve. */
-    private masterSubtree(): string[] {
+    /** The master this instance is actually DRAWING — resolved through its variant selection
+     *  (schema 27), not blindly `componentId`. A detach must bake what was on screen; reading
+     *  `componentId` here baked the un-switched variant instead. */
+    private resolvedMasterId(): string | null {
         const instance = this.document.nodes.get(this.instanceId);
-        const masterId = instance?.componentId;
-        if (typeof masterId !== "string" || !this.document.nodes.has(masterId)) return [];
-        const order: string[] = [];
-        const visited = new Set<string>();
-        const walk = (id: string): void => {
-            if (visited.has(id) || !this.document.nodes.has(id)) return;
-            visited.add(id);
-            order.push(id);
-            for (const childId of this.document.nodes.get(id)!.children) walk(childId);
-        };
-        walk(masterId);
-        return order;
+        if (!instance) return null;
+        const id = resolveVariantMaster(this.document, instance);
+        return id !== null && this.document.nodes.has(id) ? id : null;
+    }
+
+    private masterSubtree(): string[] {
+        const masterId = this.resolvedMasterId();
+        // The SHARED walk, so detach and expansion cannot disagree about what the subtree is.
+        return masterId === null ? [] : masterSubtreeIds(this.document, masterId);
     }
 
     public validate(): boolean {
         const instance = this.document.nodes.get(this.instanceId);
         if (!instance || instance.type !== "core.instance") return false;
         // A master that is the instance itself would copy the instance into its own replacement.
-        if (instance.componentId === this.instanceId) return false;
+        if (this.resolvedMasterId() === this.instanceId) return false;
         const subtree = this.masterSubtree();
         if (subtree.length === 0) return false;            // dangling — nothing to bake
         // The instance lives INSIDE the subtree it would bake: the copies would be parented

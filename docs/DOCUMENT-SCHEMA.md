@@ -77,6 +77,14 @@ interface Node {
   overrides?: Record<string, InstanceOverride>; // core.instance → per-copy changes, keyed by MASTER NODE ID (schema 22; +layout/transform at 26)
   variant?: VariantKey;             // this node's place in a variant SET (schema 27) — any node may carry one
   variants?: Record<string, string>; // core.instance → the variant SELECTION; SPARSE (unnamed properties keep the master's value)
+
+A variant SET has no object of its own — it is the masters that name it, so tagging a node
+creates the set and untagging the last member ends it. Resolution (`resolveVariantMaster`)
+overlays the instance's sparse selection on the pointed-at master's own values and takes the
+member carrying exactly that; it is TOTAL, and every failure draws `componentId`. Switching
+also resizes the instance to the new variant UNLESS its box was deliberately resized, and
+remaps `overrides` onto the new variant's nodes (root structurally, the rest by a name unique
+in both subtrees; an unmatched entry is kept and is inert, like any dangling key).
   name?: string;                    // display name
 }
 
