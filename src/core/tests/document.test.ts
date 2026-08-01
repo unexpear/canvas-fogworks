@@ -6,7 +6,7 @@
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { createEmptyDocument, ProjectDocument, CURRENT_VERSION, SCHEMA_VERSION } from "../document/Document";
-import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
+import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, isTokenRef, tokenRefFor, tokenKeyOf, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
 import { expandInstances, componentError, overridesError, overrideAgainstMasterError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES } from "../document/Components";
@@ -8318,5 +8318,101 @@ describe("DuplicateNodesAction", () => {
         dispatcher.undo();
         expect(dispatcher.getDocument().nodes.size).toBe(before);
         expect(dispatcher.getDocument().rootNodeUuids).toEqual(["P", "S"]);
+    });
+});
+
+
+// ─── Design tokens reach the UI: the last engine subsystem with no way in ───
+describe("Tokens: authored, assigned, themed", () => {
+    function tokenDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#111111", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["R"];
+        return doc;
+    }
+    const stateFor = (doc: ProjectDocument) =>
+        ({ viewport: { x: 0, y: 0, zoom: 1 }, selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(doc) }) as unknown as import("../../renderer/RendererState").RendererState;
+    const fillOf = (doc: ProjectDocument) =>
+        buildRenderModel({ width: 400, height: 300 }, doc, stateFor(doc)).content.find(i => i.nodeId === "R")!.paint.fill;
+
+    test("a token authored through the action is usable as a fill, and RESOLVES when rendered", () => {
+        // End to end: create the token, point a node's fill at it, and the renderer shows the colour.
+        const dispatcher = new ActionDispatcher(tokenDoc());
+        dispatcher.dispatchAction(new SetVariableAction(dispatcher.getDocument(), "color/brand", { type: "color", value: "#ff8800" }));
+        dispatcher.dispatchAction(styleActionFor(dispatcher.getDocument(), "R", { fill: "$color/brand" })!);
+        const d = dispatcher.getDocument() as ProjectDocument;
+        expect(d.nodes.get("R")!.style.fill).toBe("$color/brand");   // the DOCUMENT keeps the reference…
+        expect(fillOf(d)).toBe("#ff8800");                            // …and the RENDER resolves it
+    });
+
+    test("a per-theme value is what makes a token more than a constant", () => {
+        const dispatcher = new ActionDispatcher(tokenDoc());
+        dispatcher.dispatchAction(new SetVariableAction(dispatcher.getDocument(), "color/bg",
+            { type: "color", value: "#ffffff", modes: { dark: "#000000" } }));
+        dispatcher.dispatchAction(styleActionFor(dispatcher.getDocument(), "R", { fill: "$color/bg" })!);
+        expect(fillOf(dispatcher.getDocument() as ProjectDocument)).toBe("#ffffff");
+        dispatcher.dispatchAction(new SetActiveThemeAction(dispatcher.getDocument(), "dark"));
+        // ONE theme switch repaints every node that uses the token.
+        expect(fillOf(dispatcher.getDocument() as ProjectDocument)).toBe("#000000");
+    });
+
+    test("deleting a token in use is ALLOWED and renders the visible fallback", () => {
+        // A dangling reference is valid at rest — the same rule a dangling componentId follows.
+        // Refusing the delete would leave no way to remove a token you no longer want.
+        const dispatcher = new ActionDispatcher(tokenDoc());
+        dispatcher.dispatchAction(new SetVariableAction(dispatcher.getDocument(), "color/gone", { type: "color", value: "#123456" }));
+        dispatcher.dispatchAction(styleActionFor(dispatcher.getDocument(), "R", { fill: "$color/gone" })!);
+        dispatcher.dispatchAction(new DeleteVariableAction(dispatcher.getDocument(), "color/gone"));
+        const d = dispatcher.getDocument() as ProjectDocument;
+        expect(fillOf(d)).toBe(VARIABLE_FALLBACK_COLOR);
+        expect(() => deserializeDocument(serializeDocument(d))).not.toThrow();   // still loadable
+    });
+
+    test("a token document round-trips with its per-theme values", () => {
+        const dispatcher = new ActionDispatcher(tokenDoc());
+        dispatcher.dispatchAction(new SetVariableAction(dispatcher.getDocument(), "space/gutter",
+            { type: "spacing", value: 8, modes: { dark: 12 } }));
+        const doc = dispatcher.getDocument();
+        const loaded = deserializeDocument(serializeDocument(doc));
+        expect(loaded.variables["space/gutter"]).toEqual({ type: "spacing", value: 8, modes: { dark: 12 } });
+        expect(compareDocuments(doc, loaded)).toBe(true);
+    });
+
+    test("the panel refuses a reserved token name through the SHARED validator", () => {
+        // `variableKeyError` is the authority; the field only explains the refusal.
+        expect(variableKeyError("__proto__")).not.toBeNull();
+        expect(variableKeyError("")).not.toBeNull();
+        expect(variableKeyError("color/ok")).toBeNull();
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/variableKeyError\(key\)/);
+    });
+
+    test("the picker's key⇄reference pair round-trips, and a bare key is NOT a reference", () => {
+        // The live app caught this: the picker wrote `color/brand` instead of `$color/brand`,
+        // which is neither a reference nor a colour, so the shape painted an invalid fill.
+        // The sigil is engine grammar, so it is tested here rather than grepped for in the UI.
+        expect(tokenRefFor("color/brand")).toBe("$color/brand");
+        expect(isTokenRef(tokenRefFor("color/brand"))).toBe(true);
+        expect(isTokenRef("color/brand")).toBe(false);          // the defect, stated directly
+        expect(tokenKeyOf("$color/brand")).toBe("color/brand"); // …and back again
+        expect(tokenKeyOf("#ff8800")).toBe("");                 // a concrete colour selects nothing
+        expect(tokenRefFor("")).toBe("");                       // "no token" clears rather than making "$"
+    });
+
+    test("a reference built by the picker actually RESOLVES — the end the defect broke", () => {
+        const dispatcher = new ActionDispatcher(tokenDoc());
+        dispatcher.dispatchAction(new SetVariableAction(dispatcher.getDocument(), "color/brand", { type: "color", value: "#22cc88" }));
+        dispatcher.dispatchAction(styleActionFor(dispatcher.getDocument(), "R", { fill: tokenRefFor("color/brand") })!);
+        expect(fillOf(dispatcher.getDocument() as ProjectDocument)).toBe("#22cc88");
+    });
+
+    test("the UI can both AUTHOR a token and ASSIGN one — either alone is useless", () => {
+        // The audit that prompted this slice, for tokens the way it exists for Style and Layout.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/new SetVariableAction\(/);      // author
+        expect(src).toMatch(/new DeleteVariableAction\(/);   // remove
+        expect(src).toMatch(/<TokenSelect/);                 // assign
+        expect(src).toMatch(/style: \{ fill: v \|\|/);       // …to a fill
+        expect(src).toMatch(/style: \{ stroke: v \|\|/);     // …and a stroke
     });
 });

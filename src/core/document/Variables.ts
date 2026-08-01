@@ -67,6 +67,25 @@ export function isTokenRef(v: unknown): v is string {
     return typeof v === "string" && v.length > 1 && v.charCodeAt(0) === 36; // "$"
 }
 
+/**
+ * The two directions a token picker needs: a key becomes a reference a style can hold, and a
+ * stored value becomes back the key to show as selected.
+ *
+ * These live HERE rather than as a `"$" + key` in the UI because the sigil is engine grammar —
+ * `isTokenRef` and `resolveVariable` are the ones that decide what a reference looks like, and a
+ * UI that spells it out separately can drift from them silently. It did: an editing script ate
+ * the `$` from an inline template and the picker wrote a bare key, which is not a reference and
+ * not a colour, and no test could see it because the logic was a string literal in a lambda.
+ */
+export function tokenRefFor(key: string): string {
+    return key ? "$" + key : "";
+}
+
+/** The key a value refers to, or `""` when it holds a concrete value rather than a reference. */
+export function tokenKeyOf(value: unknown): string {
+    return isTokenRef(value) ? value.slice(1) : "";
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
     return !!v && typeof v === "object" && !Array.isArray(v);
 }
