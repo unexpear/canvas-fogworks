@@ -146,6 +146,19 @@ function snapTargetsExcludingSubtree(doc: ReadonlyDocument, computed: ComputedSt
 function snapTargetsExcludingSubtrees(doc: ReadonlyDocument, computed: ComputedState, rootIds: readonly string[]): Rect[]; // …minus EVERY root's subtree (group move)
 function isTranslationOnlyChain(doc: ReadonlyDocument, nodeId: string): boolean; // node + all ancestors unrotated/unscaled → world snap delta == stored delta (snapping is enabled only then)
 
+// scan/CapabilityScan.ts — find capabilities a codebase has but nothing reaches. PURE: takes
+// file contents, returns findings, so the heuristic is node-tested. The RULE is a fact about
+// the text (exported here, referenced in no other file); the verb/directory hints only RANK.
+interface SourceFile { path: string; content: string }
+interface Capability { name; path; line; kind; confidence: "high"|"medium"|"low"; reason }
+function scanCapabilities(files: readonly SourceFile[]): Capability[];
+
+// export/ExportSVG.ts — the document as standalone SVG text. PURE (no DOM), and built from the
+// SAME DisplayList the editor draws, so an export cannot drift from the canvas. Framed to the
+// content, not the viewport; grid and selection chrome excluded.
+const EXPORT_MARGIN: number;
+function exportSVG(doc: ReadonlyDocument): string;
+
 // geometry/Alignment.ts — pure align/distribute maths over WORLD rects; returns the new origin
 // for each box that MOVES (an unchanged box is omitted, so a no-op click commits nothing).
 type AlignEdge = "left" | "center-h" | "right" | "top" | "center-v" | "bottom";

@@ -246,6 +246,27 @@ ipcMain.handle("read-image-data-url", async (event, filePath) => {
 });
 
 
+/**
+ * Write a text file INTO a folder the user picked. The filename is sanitized and the result is
+ * re-checked to be inside that folder, so a name like "../../etc/passwd" cannot escape the
+ * directory the user actually approved.
+ */
+ipcMain.handle("write-into-folder", async (event, folder, filename, content) => {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    if (!filename || typeof filename !== "string") throw new Error("Invalid filename.");
+    if (typeof content !== "string") throw new Error("Invalid content: expected a string.");
+    const safe = path.basename(filename).replace(/[^\w.\- ]+/g, "_");
+    if (safe.length === 0 || safe === "." || safe === "..") throw new Error("Invalid filename.");
+    const target = path.resolve(folder, safe);
+    const root = path.resolve(folder);
+    if (target !== root && !target.startsWith(root + path.sep)) {
+        throw new Error("Refusing to write outside the chosen folder.");
+    }
+    fs.writeFileSync(target, content, "utf8");
+    return target;
+});
+
+
 ipcMain.handle("request-save-as", async () => {
     await saveFileDialog();
     return true;

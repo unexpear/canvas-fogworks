@@ -29,6 +29,8 @@ import { AlignEdge, DistributeAxis } from "../core/geometry/Alignment";
 import { IMAGE_SRC_MAX, srcError } from "../core/document/Node";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
 import { scanCapabilities, Capability } from "../core/scan/CapabilityScan";
+import { exportSVG } from "../core/export/ExportSVG";
+import { ReadonlyDocument } from "../core/document/Document";
 import { AddNodeAction } from "../core/actions/AddNodeAction";
 
 
@@ -171,6 +173,7 @@ declare global {
             readSourceFolder: (folder: string) => Promise<{ path: string; content: string }[]>;
             readAssetFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
             readImageDataUrl: (filePath: string) => Promise<string>;
+            writeIntoFolder: (folder: string, filename: string, content: string) => Promise<string>;
         };
     }
 }
@@ -847,7 +850,7 @@ export function App() {
                 {showFolders && (
                     <div style={{ width: 240, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
                         <div style={PANEL_HEADING}>Folders</div>
-                        <FoldersDrawer onPlaceImage={placeAsset} />
+                        <FoldersDrawer onPlaceImage={placeAsset} getDocument={() => dispatcher.getDocument()} />
                     </div>
                 )}
                 <div style={{ width: 220, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
@@ -1263,8 +1266,12 @@ const LAYER_ICONS: Record<string, string> = {
  * Both are inert without Electron (the browser build has no `electronAPI`), so the drawer says
  * so rather than showing controls that do nothing.
  */
-function FoldersDrawer({ onPlaceImage }: { onPlaceImage: (dataUrl: string, name: string) => void }) {
-    const [tab, setTab] = useState<"source" | "assets">("source");
+function FoldersDrawer({ onPlaceImage, getDocument }: {
+    onPlaceImage: (dataUrl: string, name: string) => void;
+    getDocument: () => ReadonlyDocument;
+}) {
+    const [tab, setTab] = useState<"source" | "assets" | "export">("source");
+    const [exported, setExported] = useState<string | null>(null);
     const [sourceFolder, setSourceFolder] = useState<string | null>(null);
     const [assetFolder, setAssetFolder] = useState<string | null>(null);
     const [findings, setFindings] = useState<Capability[] | null>(null);
@@ -1304,7 +1311,7 @@ function FoldersDrawer({ onPlaceImage }: { onPlaceImage: (dataUrl: string, name:
     return (
         <div style={{ fontSize: 11 }}>
             <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
-                {(["source", "assets"] as const).map(t => (
+                {(["source", "assets", "export"] as const).map(t => (
                     <button
                         key={t}
                         onClick={() => setTab(t)}
@@ -1313,11 +1320,45 @@ function FoldersDrawer({ onPlaceImage }: { onPlaceImage: (dataUrl: string, name:
                             background: tab === t ? UI.accentSoft : "transparent",
                             color: tab === t ? UI.text : "#999", border: `1px solid ${UI.line}`
                         }}
-                    >{t === "source" ? "Code" : "Assets"}</button>
+                    >{t === "source" ? "Code" : t === "assets" ? "Assets" : "Export"}</button>
                 ))}
             </div>
 
-            {tab === "source" ? (
+            {tab === "export" ? (
+                <>
+                    <button
+                        onClick={async () => {
+                            const folder = await api.pickFolder();
+                            if (!folder) return;
+                            setBusy(true);
+                            try {
+                                // The SAME pure exporter the tests exercise; the main process only writes.
+                                const written = await api.writeIntoFolder(folder, "design.svg", exportSVG(getDocument()));
+                                setExported(written);
+                            } finally { setBusy(false); }
+                        }}
+                        disabled={busy}
+                        style={DRAWER_BUTTON}
+                    >{busy ? "Writing…" : "Export SVG to a folder…"}</button>
+                    <input
+                        type="text"
+                        placeholder="…or paste a folder path and press Enter"
+                        onKeyDown={async e => {
+                            if (e.key !== "Enter") return;
+                            const folder = (e.target as HTMLInputElement).value.trim();
+                            if (!folder) return;
+                            setBusy(true);
+                            try { setExported(await api.writeIntoFolder(folder, "design.svg", exportSVG(getDocument()))); }
+                            finally { setBusy(false); }
+                        }}
+                        style={{ width: "100%", boxSizing: "border-box", fontSize: 11, padding: "3px 5px", background: UI.raised, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3, marginBottom: 6 }}
+                    />
+                    {exported && <div style={{ color: "#6a9", wordBreak: "break-all" }}>Wrote {exported}</div>}
+                    <div style={{ color: "#666", marginTop: 6 }}>
+                        The whole document, framed to its own content — no grid, no selection chrome.
+                    </div>
+                </>
+            ) : tab === "source" ? (
                 <>
                     <button onClick={async () => scan(await api.pickFolder())} disabled={busy} style={DRAWER_BUTTON}>
                         {busy ? "Scanning…" : "Choose a folder…"}

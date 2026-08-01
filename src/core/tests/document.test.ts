@@ -42,6 +42,7 @@ import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from 
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
 import { alignBoxes, distributeBoxes, AlignEdge } from "../geometry/Alignment";
 import { scanCapabilities } from "../scan/CapabilityScan";
+import { exportSVG, EXPORT_MARGIN } from "../export/ExportSVG";
 import { alignAction, distributeAction } from "../actions/alignActions";
 import { UpdateNodeContentAction, NODE_NAME_MAX } from "../actions/UpdateNodeContentAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
@@ -8071,5 +8072,120 @@ describe("scanCapabilities", () => {
     test("scanning nothing, or files with no exports, yields nothing", () => {
         expect(scanCapabilities([])).toEqual([]);
         expect(scanCapabilities([f("src/a.ts", "const x = 1;\nfunction y() {}")])).toEqual([]);
+    });
+});
+
+// ─── SVG export: the artefact you hand to a developer ───
+describe("exportSVG", () => {
+    function docWithNodes(...nodes: Partial<Node>[]): ProjectDocument {
+        const doc = createEmptyDocument();
+        nodes.forEach((n, i) => {
+            const id = n.id ?? `N${i}`;
+            doc.nodes.set(id, {
+                id, type: "core.rectangle", parent: null, children: [],
+                geometry: { x: 0, y: 0, width: 50, height: 50 },
+                style: { fill: "#ff0000", opacity: 1 }, layout: {}, ...n
+            } as Node);
+            doc.rootNodeUuids.push(id);
+        });
+        return doc;
+    }
+
+    test("an empty document exports valid, empty SVG rather than nothing", () => {
+        const svg = exportSVG(createEmptyDocument());
+        expect(svg).toContain("<svg");
+        expect(svg).toContain("</svg>");
+        expect(svg).toContain('xmlns="http://www.w3.org/2000/svg"');
+    });
+
+    test("the export is framed to the CONTENT, not to the editor's viewport", () => {
+        // A node far from the origin must still appear: the model culls to the viewport, and an
+        // export that inherited the editor's view would silently drop off-screen work.
+        const doc = docWithNodes({ id: "far", geometry: { x: 5000, y: 4000, width: 100, height: 80 } });
+        const svg = exportSVG(doc);
+        expect(svg).toContain("<rect");
+        // viewBox carries the content's own origin (minus the margin), so coordinates are kept.
+        expect(svg).toMatch(new RegExp(`viewBox="${5000 - EXPORT_MARGIN} ${4000 - EXPORT_MARGIN} `));
+        expect(svg).toContain(`width="${100 + EXPORT_MARGIN * 2}"`);
+    });
+
+    test("every shape kind survives the export", () => {
+        const doc = createEmptyDocument();
+        const add = (id: string, type: Node["type"], extra: Partial<Node> = {}) => {
+            doc.nodes.set(id, {
+                id, type, parent: null, children: [],
+                geometry: { x: 0, y: 0, width: 40, height: 40 },
+                style: { fill: "#00ff00", opacity: 1 }, layout: {}, ...extra
+            } as Node);
+            doc.rootNodeUuids.push(id);
+        };
+        add("r", "core.rectangle");
+        add("e", "core.ellipse");
+        add("l", "core.line");
+        add("t", "core.text", { text: "Hi" });
+        add("p", "core.path", { path: [{ c: "M", x: 0, y: 0 }, { c: "L", x: 10, y: 10 }, { c: "Z" }] });
+        add("i", "core.image", { src: "https://example.com/a.png" });
+        const svg = exportSVG(doc);
+        for (const tag of ["<rect", "<ellipse", "<line", "<text", "<path", "<image"]) {
+            expect(svg).toContain(tag);
+        }
+        expect(svg).toContain(">Hi<");
+        expect(svg).toContain('d="M 0 0 L 10 10 Z"');
+    });
+
+    test("editor CHROME is excluded — an export is the design, not the workspace", () => {
+        const doc = docWithNodes({ id: "a" });
+        const svg = exportSVG(doc);
+        // The grid draws lines and the selection overlay draws handles; neither belongs in a
+        // deliverable. One <rect> means the content only.
+        expect((svg.match(/<rect/g) || []).length).toBe(1);
+        expect(svg).not.toContain("#00bfff");   // the selection accent
+    });
+
+    test("text and colours are XML-escaped, so a stray character cannot break the file", () => {
+        const doc = docWithNodes({ id: "t", type: "core.text", text: 'a < b & "c"' });
+        const svg = exportSVG(doc);
+        expect(svg).toContain("a &lt; b &amp; &quot;c&quot;");
+        expect(svg).not.toMatch(/>a < b/);
+    });
+
+    test("an effect exports as a filter def AND a reference, with matching ids", () => {
+        const doc = docWithNodes({ id: "s", style: { fill: "#fff", opacity: 1, shadow: { dx: 2, dy: 3, blur: 4, color: "#000000" } } });
+        const svg = exportSVG(doc);
+        const defId = (svg.match(/<filter id="([^"]+)"/) || [])[1];
+        expect(defId).toBeTruthy();
+        expect(svg).toContain(`filter="url(#${defId})"`);
+        expect(svg).toContain('<feDropShadow dx="2" dy="3"');
+    });
+
+    test("a stroke exports with its WIDTH, and a fill-less shape as fill=none", () => {
+        const doc = docWithNodes({ id: "o", style: { fill: "none", opacity: 1, stroke: "#123456", strokeWidth: 6 } });
+        const svg = exportSVG(doc);
+        expect(svg).toContain('stroke="#123456"');
+        expect(svg).toContain('stroke-width="6"');
+        expect(svg).toContain('fill="none"');
+    });
+
+    test("a design token resolves to a real colour — an export cannot carry a $reference", () => {
+        const doc = docWithNodes({ id: "tok", style: { fill: "$color/brand", opacity: 1 } });
+        doc.variables = { "color/brand": { type: "color", value: "#abcdef" } };
+        const svg = exportSVG(doc);
+        expect(svg).toContain("#abcdef");
+        expect(svg).not.toContain("$color/brand");
+    });
+
+    test("instance content is expanded, so a component exports as what it draws", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 30, height: 30 }, style: { fill: "#111111", opacity: 1 }, layout: {} });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 200, y: 0, width: 30, height: 30 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["M", "I"];
+        const svg = exportSVG(doc);
+        // The master AND the instance's materialized copy both draw.
+        expect((svg.match(/<rect/g) || []).length).toBe(2);
+    });
+
+    test("the same document always exports identically", () => {
+        const doc = docWithNodes({ id: "a" }, { id: "b", geometry: { x: 90, y: 10, width: 20, height: 20 } });
+        expect(exportSVG(doc)).toBe(exportSVG(doc));
     });
 });
