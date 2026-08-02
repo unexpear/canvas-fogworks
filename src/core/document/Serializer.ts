@@ -293,6 +293,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "34") { raw = migrate_34_to_35(raw); version = "35"; }
     if (version === "35") { raw = migrate_35_to_36(raw); version = "36"; }
     if (version === "36") { raw = migrate_36_to_37(raw); version = "37"; }
+    if (version === "37") { raw = migrate_37_to_38(raw); version = "38"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -627,6 +628,19 @@ function migrate_21_to_22(raw: any): any {
  * the same reason 34->35 was: an OLD build ignores the fields, so a shape whose corners are
  * rounded in one build is mitred in the other — the same file, two different drawings.
  */
+/**
+ * 37 -> 38: the FILL RULE — `Style.fillRule`, "nonzero" or "evenodd".
+ *
+ * Additive, and absent is the rule every backend already applied, so a schema-37 document draws
+ * identically. The bump is required for the stronger of the two reasons a bump can have: it is an
+ * INTERPRETATION change. An old build ignores the field and fills a self-crossing path solid where
+ * the author asked for a hole — the same file, two different drawings, which is precisely what
+ * 31->32 (inherited opacity) was for.
+ */
+function migrate_37_to_38(raw: any): any {
+    return { ...raw, version: "38" };
+}
+
 function migrate_36_to_37(raw: any): any {
     return { ...raw, version: "37" };
 }

@@ -95,6 +95,7 @@ function applyTail(el: SVGElement, item: DrawItem): void {
  * the SVG default is then what the renderer drew before these fields existed.
  */
 function applyStrokeCorners(el: SVGElement, paint: Paint): void {
+    if (paint.fillRule !== undefined) el.setAttribute("fill-rule", paint.fillRule);
     if (paint.strokeJoin !== undefined) el.setAttribute("stroke-linejoin", paint.strokeJoin);
     if (paint.strokeCap !== undefined) el.setAttribute("stroke-linecap", paint.strokeCap);
     if (paint.strokeMiterLimit !== undefined) el.setAttribute("stroke-miterlimit", String(paint.strokeMiterLimit));

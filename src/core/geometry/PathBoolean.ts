@@ -51,7 +51,7 @@ const key = (p: Point): string => `${Math.round(p.x / EPS)},${Math.round(p.y / E
 const same = (a: Point, b: Point): boolean => Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) < EPS;
 
 /** Signed winding of `rings` about a point — the nonzero fill rule, summed across rings. */
-function windingAt(rings: readonly Ring[], x: number, y: number): number {
+export function windingAt(rings: readonly Ring[], x: number, y: number): number {
     let w = 0;
     for (const ring of rings) {
         for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -96,10 +96,17 @@ function crossings(p: Point, p2: Point, rings: readonly Ring[]): number[] {
 }
 
 /** One directed piece of an edge after splitting. */
-interface Piece { from: Point; to: Point; }
+export interface Piece { from: Point; to: Point; }
 
-/** Every edge of `rings`, split wherever it crosses `other`. */
-function splitAgainst(rings: readonly Ring[], other: readonly Ring[]): Piece[] {
+/**
+ * Every edge of `rings`, split wherever it crosses `other`.
+ *
+ * Exported because SELF-resolution is the same operation with `other === rings`: an edge is
+ * parallel to itself, so `crossings` skips it, and an edge meets its neighbours only at shared
+ * endpoints, which the `t > EPS && t < 1 - EPS` bound excludes. What is left is exactly the
+ * places a contour crosses itself. See `geometry/Resolve`.
+ */
+export function splitAgainst(rings: readonly Ring[], other: readonly Ring[]): Piece[] {
     const out: Piece[] = [];
     for (const ring of rings) {
         for (let i = 0; i < ring.length; i++) {
@@ -143,17 +150,41 @@ function select(pieces: readonly Piece[], other: readonly Ring[], wantInside: bo
  * so no test can reach it without hand-building a piece list the splitter cannot produce. It stays
  * because the alternative failure is silent and visible on screen.
  */
-function chain(pieces: readonly Piece[]): Ring[] {
+export function chainPieces(pieces: readonly Piece[]): Ring[] {
     const byStart = new Map<string, Piece[]>();
     for (const piece of pieces) {
         const k = key(piece.from);
         const list = byStart.get(k);
         if (list) list.push(piece); else byStart.set(k, [piece]);
     }
-    const take = (k: string): Piece | undefined => {
+    /**
+     * The next piece to follow out of `k`, arriving along `arrivedFrom → k`.
+     *
+     * Where only one piece continues there is nothing to decide. Where SEVERAL do — a point two
+     * boundaries cross at — the choice is the whole of whether the result is simple. Taking any
+     * of them keeps the loop closed, but pairing them wrongly threads two faces into one ring
+     * that touches itself, and a self-touching ring cannot be ear-clipped.
+     *
+     * The rule is the one a half-edge structure uses to walk a FACE: reverse the edge just
+     * travelled, then turn to the first outgoing edge clockwise from it. That is the sharpest
+     * available turn in a consistent direction, so the walk hugs one face instead of cutting
+     * across the vertex into another.
+     */
+    const take = (k: string, arrivedFrom?: Point): Piece | undefined => {
         const list = byStart.get(k);
         if (!list || list.length === 0) return undefined;
-        const piece = list.pop() as Piece;
+        let idx = list.length - 1;
+        if (arrivedFrom && list.length > 1) {
+            const back = Math.atan2(arrivedFrom.y - list[0].from.y, arrivedFrom.x - list[0].from.x);
+            let best = Infinity;
+            for (let i = 0; i < list.length; i++) {
+                const out = Math.atan2(list[i].to.y - list[i].from.y, list[i].to.x - list[i].from.x);
+                let turn = back - out;                       // clockwise from the reversed arrival
+                while (turn <= EPS) turn += 2 * Math.PI;
+                if (turn < best) { best = turn; idx = i; }
+            }
+        }
+        const piece = list.splice(idx, 1)[0];
         if (list.length === 0) byStart.delete(k);
         return piece;
     };
@@ -173,7 +204,7 @@ function chain(pieces: readonly Piece[]): Ring[] {
         for (let guard = 0; guard <= pieces.length; guard++) {
             if (same(current.to, seed.from)) { rings.push(ring); break; }
             ring.push(current.to);
-            const next = take(key(current.to));
+            const next = take(key(current.to), current.from);
             if (!next) break;                       // dead end → drop this run
             current = next;
         }
@@ -187,17 +218,17 @@ export function booleanRings(a: readonly Ring[], b: readonly Ring[], op: Boolean
     const bPieces = splitAgainst(b, a);
     switch (op) {
         case "union":
-            return chain([...select(aPieces, b, false, false), ...select(bPieces, a, false, false)]);
+            return chainPieces([...select(aPieces, b, false, false), ...select(bPieces, a, false, false)]);
         case "intersect":
-            return chain([...select(aPieces, b, true, false), ...select(bPieces, a, true, false)]);
+            return chainPieces([...select(aPieces, b, true, false), ...select(bPieces, a, true, false)]);
         case "subtract":
             // A minus B: keep A outside B, plus B's pieces INSIDE A wound the other way — the
             // reversal is what makes the removed part read as a hole under the nonzero rule.
-            return chain([...select(aPieces, b, false, false), ...select(bPieces, a, true, true)]);
+            return chainPieces([...select(aPieces, b, false, false), ...select(bPieces, a, true, true)]);
         case "exclude":
             // (A−B) ∪ (B−A): every outside piece of both, which leaves the overlap unfilled
             // because nothing bounds it any more.
-            return chain([...select(aPieces, b, false, false), ...select(bPieces, a, false, false),
+            return chainPieces([...select(aPieces, b, false, false), ...select(bPieces, a, false, false),
                 ...select(aPieces, b, true, true), ...select(bPieces, a, true, true)]);
     }
 }

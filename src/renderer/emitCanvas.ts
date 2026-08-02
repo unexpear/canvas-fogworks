@@ -119,7 +119,9 @@ function fillAndStroke(ctx: CanvasRenderingContext2D, paint: Paint): void {
     // exactly as SVG's fill="none" paints no interior.
     if (paint.fill !== null && paint.fill !== "none") {
         ctx.fillStyle = paint.fill;
-        ctx.fill();
+        // Canvas takes the rule as an argument to `fill` rather than as state, and its spelling
+        // is the document's, so this is a pass-through and not a lookup.
+        if (paint.fillRule !== undefined) ctx.fill(paint.fillRule); else ctx.fill();
     }
     if (paint.stroke !== null) {
         ctx.strokeStyle = paint.stroke;

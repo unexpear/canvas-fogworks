@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v37 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v38 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -95,6 +95,13 @@ interface Style {
   strokeJoin?: "miter" | "round" | "bevel";   // how a corner turns (schema 37); absent = "miter"
   strokeCap?: "butt" | "round" | "square";    // how an open end finishes (schema 37); absent = "butt"
   strokeMiterLimit?: number;                  // miter length / stroke width, >= 1 (schema 37); absent = 4
+  fillRule?: "nonzero" | "evenodd";           // which points a closed outline encloses (schema 38); absent = "nonzero"
+  // The two disagree only where a contour crosses itself or contours overlap — a five-pointed
+  // star drawn in ONE stroke is solid under nonzero and hollow under even-odd. SVG takes it as
+  // `fill-rule` and Canvas as an argument to `fill()`; the GPU has nothing to hand it to, so
+  // there the rule is resolved into the geometry (`geometry/Resolve`) before tessellation.
+  // Picking reads it too — a click has to agree with the paint, or an even-odd hole would
+  // swallow clicks meant for whatever shows through it.
   // NO strokeAlign, deliberately. Neither SVG nor Canvas can draw an inside or outside border, so
   // a document field for one would render three different ways on three backends. Alignment is an
   // argument to the OUTLINE STROKE command instead (`actions/outlineStrokeActions`), whose result

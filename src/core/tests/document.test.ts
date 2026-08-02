@@ -37,11 +37,12 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
-import { flattenPath, hitsShape, isPaintBearing, FLATTEN_TOLERANCE, FLATTEN_MAX_DEPTH } from "../geometry/ShapeHit";
+import { flattenPath, hitsShape, isPaintBearing, FLATTEN_TOLERANCE, FLATTEN_MAX_DEPTH, hitShapeOf } from "../geometry/ShapeHit";
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
 import { triangulate, signedArea2, TESSELLATE_MAX_VERTICES } from "../geometry/Tessellate";
 import { convexPieces, isConvexRing, convexOverlaps, piecesOverlap, piecesArea, rectRing, DECOMPOSE_MAX_PIECES } from "../geometry/ConvexDecompose";
+import { resolveRings, insideRule, crossingCount, FILL_RULES, FillRule } from "../geometry/Resolve";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
 import { outlineStrokeAction, strokeWidthOf } from "../actions/outlineStrokeActions";
@@ -4374,8 +4375,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 36→37 landed for stroke joins.)
-        expect(() => migrateIfNeeded(legacy, "38")).toThrow('Migration not implemented for document schema "37"');
+        // time a real migration is added — most recently when 37→38 landed for the fill rule.)
+        expect(() => migrateIfNeeded(legacy, "39")).toThrow('Migration not implemented for document schema "38"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -12522,6 +12523,347 @@ describe("Marquee selection follows the INK", () => {
     });
 });
 
+describe("The FILL RULE reaches every consumer (schema 38)", () => {
+    /** The classic {5/2} star: five points visited two apart, drawn as ONE crossing contour. */
+    const star = (R: number): PathCommand[] => {
+        const cmds: PathCommand[] = [];
+        for (let k = 0; k < 5; k++) {
+            const a = (2 * Math.PI * ((k * 2) % 5)) / 5 - Math.PI / 2;
+            cmds.push({ c: k === 0 ? "M" : "L", x: R * Math.cos(a) + R, y: R * Math.sin(a) + R });
+        }
+        cmds.push({ c: "Z" });
+        return cmds;
+    };
+
+    test("it is a closed vocabulary on BOTH paths", () => {
+        expect(styleError({ fillRule: "evenodd" })).toBeNull();
+        expect(styleError({ fillRule: "nonzero" })).toBeNull();
+        expect(styleError({ fillRule: "even-odd" as never })).toMatch("fillRule");
+        expect(styleError({})).toBeNull();                    // absent stays absent
+
+        const doc = createEmptyDocument();
+        doc.nodes.set("n", { id: "n", type: "core.path", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {}, path: star(5) });
+        doc.rootNodeUuids = ["n"];
+        const dispatcher = new ActionDispatcher(doc);
+        expect(dispatcher.dispatchAction(new UpdateNodeStyleAction(dispatcher.getDocument(), "n", { fillRule: "evenodd" })).success).toBe(true);
+        expect(dispatcher.dispatchAction(new UpdateNodeStyleAction(dispatcher.getDocument(), "n", { fillRule: "winding" as never })).success).toBe(false);
+        expect(deserializeDocument(serializeDocument(dispatcher.getDocument())).nodes.get("n")!.style.fillRule).toBe("evenodd");
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1, fillRule: "winding" }, layout: {} } } } });
+        expect(() => deserializeDocument(bad)).toThrow("fillRule");
+    });
+
+    test("a schema-37 document migrates to 38 and draws identically", () => {
+        // Additive, and absent is what every backend already applied. The bump is required for
+        // the stronger reason: an old build IGNORES the field and fills a self-crossing path
+        // solid where the author asked for a hole.
+        const v37 = { version: "37", document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } } } };
+        const loaded = deserializeDocument(JSON.stringify(v37));
+        expect(loaded.nodes.get("n")!.style.fillRule).toBeUndefined();
+        expect(JSON.parse(serializeDocument(loaded)).version).toBe(SCHEMA_VERSION);
+    });
+
+    test("a CLICK in the middle of a star obeys the rule the document chose", () => {
+        // The cardinal rule of this codebase: the hit test and the paint must agree. Under
+        // even-odd the centre of a self-crossing star is a HOLE, and a picker still applying
+        // nonzero would swallow clicks meant for whatever shows through it.
+        const cmds = star(100);
+        const solid = { kind: "path" as const, commands: cmds, filled: true, fillRule: "nonzero" as const };
+        const holed = { kind: "path" as const, commands: cmds, filled: true, fillRule: "evenodd" as const };
+        expect(hitsShape(solid, 200, 200, 100, 100, 0)).toBe(true);
+        expect(hitsShape(holed, 200, 200, 100, 100, 0)).toBe(false);
+        // A point in one of the star's POINTS is filled either way — the rules only differ where
+        // the contour has wrapped more than once.
+        expect(hitsShape(solid, 200, 200, 100, 12, 0)).toBe(true);
+        expect(hitsShape(holed, 200, 200, 100, 12, 0)).toBe(true);
+        // Absent means nonzero, so an older document picks exactly as it always did.
+        expect(hitsShape({ kind: "path", commands: cmds, filled: true }, 200, 200, 100, 100, 0)).toBe(true);
+    });
+
+    test("under NONZERO, opposite-wound contours cancel — counting crossings would not", () => {
+        // The two rules are not "signed" and "unsigned" versions of one test; they disagree about
+        // what to accumulate. Two overlapping contours wound OPPOSITE ways cancel to zero where
+        // they overlap, so nonzero leaves that part unfilled — while their crossing count there is
+        // two, which is even, and a picker that summed crossings for both rules would call the
+        // same spot filled. A donut cannot show this: there the two agree.
+        const cw: PathCommand[] = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 100 }, { c: "L", x: 0, y: 100 }, { c: "Z" },
+            { c: "M", x: 50, y: 50 }, { c: "L", x: 50, y: 150 }, { c: "L", x: 150, y: 150 }, { c: "L", x: 150, y: 50 }, { c: "Z" }
+        ];
+        const shape = { kind: "path" as const, commands: cw, filled: true, fillRule: "nonzero" as const };
+        // In the OVERLAP the two windings cancel: not filled, and so not clickable.
+        expect(hitsShape(shape, 200, 200, 75, 75, 0)).toBe(false);
+        // Outside the overlap each contour fills on its own.
+        expect(hitsShape(shape, 200, 200, 20, 20, 0)).toBe(true);
+        expect(hitsShape(shape, 200, 200, 130, 130, 0)).toBe(true);
+    });
+
+    test("`hitShapeOf` carries the node's rule, so the engine derives it once", () => {
+        const node = { type: "core.path", path: star(10), style: { fill: "#fff", fillRule: "evenodd" as const } };
+        const shape = hitShapeOf(node, 0);
+        expect(shape.kind === "path" && shape.fillRule).toBe("evenodd");
+        expect((hitShapeOf({ type: "core.path", path: [], style: { fill: "#fff" } }, 0) as { fillRule?: string }).fillRule).toBeUndefined();
+    });
+
+    test("the GPU turns the rule into GEOMETRY, having nothing to hand it to", () => {
+        // SVG and Canvas take a `fill-rule` and apply it themselves. A GPU takes triangles, so on
+        // that backend the rule has to be resolved into the shape before tessellation — which is
+        // also what makes a self-crossing path come out right there at all.
+        const item = (fillRule?: string) => ({
+            shape: { kind: "path", commands: star(100) }, world: null, nodeId: null, role: "content",
+            paint: { fill: "#ff0000", opacity: null, stroke: null, strokeWidth: null, strokeDash: null,
+                     radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null, fillRule }
+        }) as never;
+        const area = (t: number[]): number => {
+            let a = 0;
+            for (let i = 0; i < t.length; i += 6) {
+                a += Math.abs((t[i + 2] - t[i]) * (t[i + 5] - t[i + 1]) - (t[i + 4] - t[i]) * (t[i + 3] - t[i + 1])) / 2;
+            }
+            return a;
+        };
+        const [solid] = itemDraws(item("nonzero"));
+        const [holed] = itemDraws(item("evenodd"));
+        // The difference is the central pentagon, whose circumradius is R/phi^2.
+        const phi = (1 + Math.sqrt(5)) / 2, r = 100 / (phi * phi);
+        expect(area(solid.vertices) - area(holed.vertices)).toBeCloseTo(2.5 * r * r * Math.sin((2 * Math.PI) / 5), 4);
+        // Absent = nonzero, so an older document draws on the GPU exactly as before.
+        const [dflt] = itemDraws(item(undefined));
+        expect(area(dflt.vertices)).toBeCloseTo(area(solid.vertices), 6);
+    });
+
+    test("the GPU draws a self-crossing path CORRECTLY, which it could not before", () => {
+        // Ear clipping is defined on simple polygons; handed a crossing contour it emitted
+        // overlapping triangles. Resolving first is what closes that, and the measure is that the
+        // triangles now cover the region's own area rather than a larger, double-counted one.
+        const item = {
+            shape: { kind: "path", commands: star(100) }, world: null, nodeId: null, role: "content",
+            paint: { fill: "#ff0000", opacity: null, stroke: null, strokeWidth: null, strokeDash: null,
+                     radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null }
+        } as never;
+        const [draw] = itemDraws(item);
+        let a = 0;
+        for (let i = 0; i < draw.vertices.length; i += 6) {
+            a += Math.abs((draw.vertices[i + 2] - draw.vertices[i]) * (draw.vertices[i + 5] - draw.vertices[i + 1])
+                - (draw.vertices[i + 4] - draw.vertices[i]) * (draw.vertices[i + 3] - draw.vertices[i + 1])) / 2;
+        }
+        const resolved = resolveRings(commandsToRings(star(100)), "nonzero");
+        const truth = Math.abs(resolved.reduce((sum, ring) => {
+            let s = 0;
+            for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) s += ring[j].x * ring[i].y - ring[i].x * ring[j].y;
+            return sum + s;
+        }, 0)) / 2;
+        expect(a).toBeCloseTo(truth, 6);
+    });
+});
+
+describe("Resolve — contours made simple under a fill rule", () => {
+    const signed2 = (r: { x: number; y: number }[]): number => {
+        let a = 0;
+        for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += r[j].x * r[i].y - r[i].x * r[j].y;
+        return a;
+    };
+    /**
+     * Area of the region a resolved ring set describes.
+     *
+     * The SIGNED sum, not "the biggest less the rest": resolution directs every boundary with the
+     * filled side on its left, so a hole is wound the other way and subtracts itself, and separate
+     * islands are wound the same way and add. That one formula covers a donut and five loose
+     * triangles alike — which the outer-minus-inner shortcut does not, and getting it wrong is how
+     * five triangles came out as one triangle minus four.
+     */
+    const net = (rings: { x: number; y: number }[][]): number =>
+        Math.abs(rings.reduce((sum, r) => sum + signed2(r), 0)) / 2;
+    const sq = (x: number, y: number, w: number, h: number) =>
+        [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+    /** Do any two non-adjacent edges of a ring cross? The definition of "not simple". */
+    const selfCrossings = (r: { x: number; y: number }[]): number => {
+        const cr = (a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }): number =>
+            (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        let n = 0;
+        for (let i = 0; i < r.length; i++) {
+            for (let j = i + 2; j < r.length; j++) {
+                if (i === 0 && j === r.length - 1) continue;
+                const a = r[i], b = r[(i + 1) % r.length], c = r[j], d = r[(j + 1) % r.length];
+                const d1 = cr(a, b, c), d2 = cr(a, b, d), d3 = cr(c, d, a), d4 = cr(c, d, b);
+                if (((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0))) n++;
+            }
+        }
+        return n;
+    };
+    /** The classic {5/2} star: five points visited two apart, drawn as ONE crossing contour. */
+    const pentagram = (R: number): { x: number; y: number }[] => {
+        const pts: { x: number; y: number }[] = [];
+        for (let k = 0; k < 5; k++) {
+            const a = (2 * Math.PI * ((k * 2) % 5)) / 5 - Math.PI / 2;
+            pts.push({ x: R * Math.cos(a), y: R * Math.sin(a) });
+        }
+        return pts;
+    };
+
+    test("a simple ring is returned unchanged — resolving is idempotent", () => {
+        // Callers resolve indiscriminately rather than testing whether they need to, because
+        // detecting self-intersection costs the same O(n^2) as fixing it. That is only safe if
+        // resolving something already simple is a no-op.
+        const once = resolveRings([sq(0, 0, 100, 50)]);
+        expect(once.length).toBe(1);
+        expect(net(once)).toBeCloseTo(5000, 6);
+        expect(net(resolveRings(once))).toBeCloseTo(5000, 6);
+        // …and it does not care which way the input was wound.
+        expect(net(resolveRings([[...sq(0, 0, 100, 50)].reverse()]))).toBeCloseTo(5000, 6);
+    });
+
+    test("a PENTAGRAM means two different shapes, and the rule is which", () => {
+        // The case the whole module exists for. Five points drawn as one self-crossing contour —
+        // the way anyone actually draws a star — winds TWICE around its centre. Under nonzero
+        // that centre is filled and the star is solid; under even-odd two boundaries lie between
+        // it and infinity, so it is a hole. Both are correct; neither is expressible without a
+        // rule, and neither was expressible at all before this.
+        const star = pentagram(100);
+        expect(insideRule([star], 0, 0, "nonzero")).toBe(true);
+        expect(insideRule([star], 0, 0, "evenodd")).toBe(false);
+
+        const solid = resolveRings([star], "nonzero");
+        const holed = resolveRings([star], "evenodd");
+        expect(solid.length).toBe(1);            // one outline, and it is the star's silhouette
+        // Under even-odd the region is FIVE separate triangles meeting at the pentagon's corners
+        // — not one loop pinched five times. Both describe the same area; only this one is made
+        // of simple rings, and only simple rings can be ear-clipped.
+        expect(holed.length).toBe(5);
+        expect(holed.every(r => r.length === 3)).toBe(true);
+        const areas = holed.map(r => Math.abs(signed2(r)) / 2);
+        for (const a of areas) expect(a).toBeCloseTo(areas[0], 6);      // congruent, by symmetry
+
+        // The difference between the two regions is exactly the central pentagon, whose
+        // circumradius is R/phi^2 — derived from the geometry rather than read off the output.
+        const phi = (1 + Math.sqrt(5)) / 2;
+        const r = 100 / (phi * phi);
+        const pentagon = 2.5 * r * r * Math.sin((2 * Math.PI) / 5);
+        expect(net(solid) - net(holed)).toBeCloseTo(pentagon, 6);
+    });
+
+    test("what comes out does not cross itself, which is what ear clipping needs", () => {
+        // `Tessellate` is defined only on simple polygons and said so; this is the promise that
+        // makes the caveat unnecessary. Asserted directly rather than through an area, because a
+        // partial fan can still sum to a plausible number.
+        for (const rule of FILL_RULES) {
+            for (const ring of resolveRings([pentagram(100)], rule)) {
+                expect(selfCrossings(ring)).toBe(0);
+            }
+        }
+    });
+
+    test("a self-crossing star TESSELLATES correctly once resolved", () => {
+        // The payoff, measured where it shows: triangles covering the region, not a partial fan.
+        // The area is not hard-coded — it is the resolved rings' own, which the previous test has
+        // already established are simple.
+        const star = pentagram(100);
+        for (const rule of FILL_RULES) {
+            const rings = resolveRings([star], rule);
+            const t = triangulate(rings);
+            let a = 0;
+            for (let i = 0; i < t.length; i += 6) {
+                a += Math.abs((t[i + 2] - t[i]) * (t[i + 5] - t[i + 1]) - (t[i + 4] - t[i]) * (t[i + 3] - t[i + 1])) / 2;
+            }
+            expect(a).toBeCloseTo(net(rings), 6);
+        }
+        // And the unresolved contour is what it could not do. The failure is not that clipping
+        // stops early — it is that the triangles OVERLAP: a crossing makes vertices reflex that
+        // the ear test reads as convex, so pieces get emitted over each other and the covered
+        // area comes out far ABOVE the shape's, not below it. Asserted as "not the right number
+        // by a wide margin", which is the honest claim; the exact wrong number is not a contract.
+        const raw = triangulate([star]);
+        let rawArea = 0;
+        for (let i = 0; i < raw.length; i += 6) {
+            rawArea += Math.abs((raw[i + 2] - raw[i]) * (raw[i + 5] - raw[i + 1]) - (raw[i + 4] - raw[i]) * (raw[i + 3] - raw[i + 1])) / 2;
+        }
+        const truth = net(resolveRings([star], "nonzero"));
+        expect(Math.abs(rawArea - truth)).toBeGreaterThan(truth * 0.1);
+    });
+
+    test("two OVERLAPPING contours merge or punch a hole, by the rule", () => {
+        // The same distinction on separate contours rather than one crossing itself. Under
+        // nonzero, two squares wound the same way are a union; under even-odd their overlap
+        // cancels and becomes a hole.
+        const two = [sq(0, 0, 100, 100), sq(50, 50, 100, 100)];
+        expect(net(resolveRings(two, "nonzero"))).toBeCloseTo(10000 + 10000 - 2500, 6);
+        expect(net(resolveRings(two, "evenodd"))).toBeCloseTo(10000 + 10000 - 2 * 2500, 6);
+    });
+
+    test("opposite windings cancel to NOTHING, and that is an answer", () => {
+        // A ring and its reverse enclose no region under nonzero. Returning an empty list is
+        // correct and has to be, because the alternative is emitting a boundary with fill on
+        // neither side — a shape that draws as a hairline nobody asked for.
+        const ring = sq(0, 0, 100, 100);
+        expect(resolveRings([ring, [...ring].reverse()], "nonzero")).toEqual([]);
+        // Even-odd agrees here for its own reason: two boundaries, so the middle is out.
+        expect(net(resolveRings([ring, [...ring].reverse()], "evenodd"))).toBeCloseTo(0, 6);
+    });
+
+    test("a ring INSIDE another is a hole under both rules", () => {
+        // The one case where the rules agree only if the inner ring is wound the other way for
+        // nonzero — and where even-odd needs no winding at all. Both must survive resolution as
+        // an outline plus a hole, not as two stacked discs.
+        const donutNonzero = resolveRings([sq(0, 0, 100, 100), [...sq(25, 25, 50, 50)].reverse()], "nonzero");
+        expect(donutNonzero.length).toBe(2);
+        expect(net(donutNonzero)).toBeCloseTo(10000 - 2500, 6);
+        // Same winding, even-odd: still a donut, because the count is what matters.
+        const donutEvenOdd = resolveRings([sq(0, 0, 100, 100), sq(25, 25, 50, 50)], "evenodd");
+        expect(donutEvenOdd.length).toBe(2);
+        expect(net(donutEvenOdd)).toBeCloseTo(10000 - 2500, 6);
+    });
+
+    test("the hole comes out wound OPPOSITE, whatever rule went in", () => {
+        // The output is always nonzero-fillable — that is what lets every consumer downstream
+        // stop carrying the rule. A hole that came out the same way round would fill solid.
+        const rings = resolveRings([sq(0, 0, 100, 100), sq(25, 25, 50, 50)], "evenodd");
+        const [outer, inner] = rings.slice().sort((a, b) => Math.abs(signed2(b)) - Math.abs(signed2(a)));
+        expect(Math.sign(signed2(outer))).not.toBe(Math.sign(signed2(inner)));
+        expect(insideRings(rings, 50, 50)).toBe(false);      // the middle reads as EMPTY under nonzero
+        expect(insideRings(rings, 5, 50)).toBe(true);
+    });
+
+    test("a piece far shorter than the probe is still classified correctly", () => {
+        // The side-probe steps a fixed 1e-6 off each edge to see what is on either side of it,
+        // which is fine until an edge is shorter than that. A square with a vertex a
+        // ten-millionth of a unit from its corner has one, and must still resolve to the square —
+        // the probe is perpendicular, so a short edge is not by itself a problem, and this pins
+        // that rather than the cap (which no producible input reaches; see the module note).
+        const tiny = [
+            { x: 0, y: 0 }, { x: 1e-7, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }
+        ];
+        const out = resolveRings([tiny], "nonzero");
+        expect(out.length).toBe(1);
+        expect(net(out)).toBeCloseTo(10000, 6);
+    });
+
+    test("a hole that TOUCHES its outline still tessellates", () => {
+        // Resolution routinely produces this: a region whose inner boundary meets its outer one
+        // at a vertex. Bridging such a hole makes a zero-length bridge, and a zero-length edge is
+        // never an ear — so the ring is re-deduped after bridging, which turns the degenerate
+        // bridge into the splice one would write by hand for that case.
+        const outer = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
+        const hole = [{ x: 100, y: 0 }, { x: 60, y: 20 }, { x: 80, y: 60 }];   // shares the corner
+        const t = triangulate([outer, hole]);
+        let a = 0;
+        for (let i = 0; i < t.length; i += 6) {
+            a += Math.abs((t[i + 2] - t[i]) * (t[i + 5] - t[i + 1]) - (t[i + 4] - t[i]) * (t[i + 3] - t[i + 1])) / 2;
+        }
+        // The triangle cut out is (100,0),(60,20),(80,60):
+        //   |100(20-60) + 60(60-0) + 80(0-20)| / 2 = |-4000 + 3600 - 1600| / 2 = 1000.
+        expect(a).toBeCloseTo(10000 - 1000, 6);
+    });
+
+    test("degenerate input resolves to nothing rather than throwing", () => {
+        expect(resolveRings([])).toEqual([]);
+        expect(resolveRings([[{ x: 0, y: 0 }, { x: 1, y: 1 }]])).toEqual([]);
+        expect(crossingCount([], 0, 0)).toBe(0);
+    });
+
+    test("the two rules are spelled the way SVG and Canvas spell them", () => {
+        // They reach `fill-rule` and `ctx.fill(...)` verbatim, like the join and cap names.
+        expect(FILL_RULES).toEqual(["nonzero", "evenodd"]);
+    });
+});
+
 describe("ConvexDecompose", () => {
     const sq = (x: number, y: number, w: number, h: number): { x: number; y: number }[] =>
         [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
@@ -13200,13 +13542,20 @@ describe("StrokeOutline", () => {
         // that gives a region computable by hand — which is how this number was arrived at rather
         // than by reading it off the implementation.
         //
-        // Arms 10 long, width 30. Outer boundary: (0,-15) -> miter (25,-15) -> (25,10). Inner
-        // boundary, with the fallback: (0,15) -> (10,15) -> (10,0) -> (-5,0) -> (-5,10). Butt
-        // caps close both ends; the shoelace of those eight points is 1650, so the area is 825.
+        // Arms 10 long, width 30, so the outline folds over itself at the corner and the result
+        // is RESOLVED before it is returned. What that means for the number: the region is the
+        // UNION of the parts, computed here as two arms plus the join.
+        //   arm 1  (0,0)->(10,0)  band y in [-15,15], x in [0,10]      = 300
+        //   arm 2  (10,0)->(10,10) band x in [-5,25], y in [0,10]      = 300
+        //   they share x,y in [0,10] x [0,10]                          = -100
+        //   the miter wedge at the outer corner, (10,-15)..(25,0)      = +225
+        // The shoelace of the unresolved ring is 825, and that is NOT this number — the shoelace
+        // of a ring that crosses itself never is the area it covers, which is the whole reason
+        // resolving happens before the rings are handed out.
         const elbow: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 10, y: 0 }, { c: "L", x: 10, y: 10 }];
         const rings = strokeOutline(elbow, { width: 30, join: "miter" });
         expect(rings.length).toBe(1);
-        expect(covered(rings)).toBeCloseTo(825, 6);
+        expect(covered(rings)).toBeCloseTo(300 + 300 - 100 + 225, 6);
     });
 
     test("a round cap bulges PAST the end, not back over the stroke", () => {
@@ -13230,20 +13579,24 @@ describe("StrokeOutline", () => {
         // the outgoing one ends. An L with equal arms fails both at once, so either bound alone
         // still looks sufficient — only an L with a LONG arm and a SHORT one separates them.
         //
-        // What is asserted is the documented fallback itself: with no trim available the outline
-        // runs through the CENTRELINE VERTEX. That is a point, not an area, so it says exactly
-        // what the rule says and needs no arithmetic to stand in for it.
-        const has = (rings: { x: number; y: number }[][], x: number, y: number): boolean =>
-            rings.flat().some(p => Math.abs(p.x - x) < 1e-9 && Math.abs(p.y - y) < 1e-9);
+        // Asserted as AREA rather than as the fallback's vertex: resolving the result erases the
+        // evidence of HOW the corner was built, and rightly so — what a caller is owed is the
+        // region, not the route. An accepted-but-overshooting trim pulls the inner boundary
+        // outside the shape and changes that region, which is what these numbers catch.
+        //
+        // Arms 100 and 5, width 30, right-angled:
+        //   arm 1  band y in [-15,15], x in [0,100]                    = 3000
+        //   arm 2  band x in [85,115], y in [0,5]                      =  150
+        //   shared x in [85,100], y in [0,5]                           =  -75
+        //   miter wedge at the outer corner, (100,-15)..(115,0)        = +225
+        const expected = 3000 + 150 - 75 + 225;
         // Long arm in, short arm out: the crossing overshoots the OUTGOING edge.
         const longThenShort: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 5 }];
-        expect(has(strokeOutline(longThenShort, { width: 30 }), 100, 0)).toBe(true);
-        // Short arm in, long arm out: it starts before the INCOMING edge.
+        expect(covered(strokeOutline(longThenShort, { width: 30 }))).toBeCloseTo(expected, 6);
+        // Short arm in, long arm out: it starts before the INCOMING edge. Same shape, drawn the
+        // other way round, so it must come out to the same area.
         const shortThenLong: PathCommand[] = [{ c: "M", x: 100, y: 5 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 0, y: 0 }];
-        expect(has(strokeOutline(shortThenLong, { width: 30 }), 100, 0)).toBe(true);
-        // Where a trim DOES exist it is used, so the vertex is not on the outline at all.
-        const roomy: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 100 }];
-        expect(has(strokeOutline(roomy, { width: 30 }), 100, 0)).toBe(false);
+        expect(covered(strokeOutline(shortThenLong, { width: 30 }))).toBeCloseTo(expected, 6);
     });
 
     test("a CURVE is stroked at the flattening tolerance, not at a fixed segment count", () => {

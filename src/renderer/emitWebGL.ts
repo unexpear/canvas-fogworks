@@ -36,6 +36,7 @@ import { Mat2D } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
 import { triangulate } from "../core/geometry/Tessellate";
 import { strokeOutline } from "../core/geometry/StrokeOutline";
+import { resolveRings } from "../core/geometry/Resolve";
 import { ellipseCommands, rectCommands, transformCommands } from "../core/geometry/ShapeToPath";
 import { PathCommand } from "../core/document/Node";
 
@@ -175,7 +176,13 @@ export function itemDraws(item: DrawItem): Draw[] {
     if (!local) return [];
     const out: Draw[] = [];
     if (paint.fill !== null) {
-        const fill = draw(commandsToRings(local), item.world, paint.fill, paint.opacity);
+        // RESOLVED first, which does two jobs at once. It applies the document's fill rule — the
+        // GPU has no `fill-rule` to hand to, unlike the other two backends, so the rule has to
+        // become geometry here. And it makes the rings simple, which ear clipping requires: a
+        // self-crossing path used to come out as overlapping triangles on this backend and as
+        // the right shape on the other two.
+        const fill = draw(resolveRings(commandsToRings(local), paint.fillRule ?? "nonzero"),
+            item.world, paint.fill, paint.opacity);
         if (fill) out.push(fill);
     }
     if (paint.stroke !== null && paint.strokeWidth !== null && paint.strokeWidth > 0) {

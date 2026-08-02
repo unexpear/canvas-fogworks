@@ -24,7 +24,7 @@
  */
 
 import { ReadonlyDocument } from "../core/document/Document";
-import { PathCommand, Shadow, StrokeCap, StrokeJoin, TextAlign } from "../core/document/Node";
+import { FillRule, PathCommand, Shadow, StrokeCap, StrokeJoin, TextAlign } from "../core/document/Node";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
@@ -126,6 +126,8 @@ export interface Paint {
     strokeJoin?: StrokeJoin;
     strokeCap?: StrokeCap;
     strokeMiterLimit?: number;
+    /** Which points a closed outline encloses; absent = "nonzero", what all three already drew. */
+    fillRule?: FillRule;
     strokeDash: string | null;
     radius: number | null;
     cursor: string | null;
@@ -440,6 +442,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeJoin: sty.strokeJoin, strokeCap: sty.strokeCap, strokeMiterLimit: sty.strokeMiterLimit,
+                fillRule: sty.fillRule,
                 strokeDash: null,
                 radius: radiusOf(sty.radius),
                 cursor: "pointer",
@@ -454,6 +457,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeJoin: sty.strokeJoin, strokeCap: sty.strokeCap, strokeMiterLimit: sty.strokeMiterLimit,
+                fillRule: sty.fillRule,
                 strokeDash: null,
                 radius: null,
                 cursor: "pointer",
@@ -474,6 +478,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 stroke: color(sty.stroke || sty.fill),
                 strokeWidth: strokeWidthOf(sty.strokeWidth),
                 strokeJoin: sty.strokeJoin, strokeCap: sty.strokeCap, strokeMiterLimit: sty.strokeMiterLimit,
+                fillRule: sty.fillRule,
                 strokeDash: null,
                 radius: null,
                 cursor: "pointer",
@@ -512,6 +517,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeJoin: sty.strokeJoin, strokeCap: sty.strokeCap, strokeMiterLimit: sty.strokeMiterLimit,
+                fillRule: sty.fillRule,
                 strokeDash: null,
                 radius: null,
                 cursor: "pointer",

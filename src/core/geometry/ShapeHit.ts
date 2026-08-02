@@ -18,7 +18,7 @@
  * node's world matrix), and path commands are already stored local to that box.
  */
 
-import { PathCommand } from "../document/Node";
+import { FillRule, PathCommand } from "../document/Node";
 
 /** What a node's ink covers, in local space. Mirrors the render model's `shape` kinds. */
 export type HitShape =
@@ -26,7 +26,7 @@ export type HitShape =
     | { kind: "ellipse" }
     | { kind: "line" }
     /** `filled` = the node carries a paint-bearing fill, so its interior is ink and not just air. */
-    | { kind: "path"; commands: readonly PathCommand[]; filled: boolean };
+    | { kind: "path"; commands: readonly PathCommand[]; filled: boolean; fillRule?: FillRule };
 
 /**
  * Whether a fill value paints anything. `Style.fill` is any string, so "none" and "" are how a
@@ -48,12 +48,12 @@ export function isPaintBearing(fill: string): boolean {
  * the caller does the token lookup with the same `resolveNumber` the renderer uses.
  */
 export function hitShapeOf(
-    node: { type: string; path?: readonly PathCommand[]; style: { fill: string } },
+    node: { type: string; path?: readonly PathCommand[]; style: { fill: string; fillRule?: FillRule } },
     radius: number
 ): HitShape {
     if (node.type === "core.ellipse") return { kind: "ellipse" };
     if (node.type === "core.line") return { kind: "line" };
-    if (node.type === "core.path") return { kind: "path", commands: node.path ?? [], filled: isPaintBearing(node.style.fill) };
+    if (node.type === "core.path") return { kind: "path", commands: node.path ?? [], filled: isPaintBearing(node.style.fill), fillRule: node.style.fillRule };
     return { kind: "box", radius: radius > 0 ? radius : 0 };
 }
 
@@ -257,6 +257,18 @@ function nearPolyline(sub: Subpath, x: number, y: number, tolerance: number): bo
  * one to zero, so the middle of an O is not clickable, exactly as it is not filled. A per-shape
  * "inside any subpath" test cannot express that at all — every hole would swallow clicks.
  */
+function crossingsOf(pts: readonly { x: number; y: number }[], x: number, y: number): number {
+    let n = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const a = pts[j], b = pts[i];
+        if ((a.y <= y) !== (b.y <= y)) {
+            const t = (y - a.y) / (b.y - a.y);
+            if (a.x + t * (b.x - a.x) > x) n++;
+        }
+    }
+    return n;
+}
+
 function windingOf(pts: readonly { x: number; y: number }[], x: number, y: number): number {
     let winding = 0;
     for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -303,9 +315,17 @@ export function hitsShape(shape: HitShape, width: number, height: number, x: num
                 // that was never closed still paints its inside — and gating this on `closed`
                 // made exactly that shape unpickable everywhere except along its own edge, which
                 // is what drawing one in the real app showed.
-                if (shape.filled && sub.points.length > 2) winding += windingOf(sub.points, x, y);
+                // The rule the DOCUMENT asked for, not the one this file happens to prefer. A
+                // click has to agree with the paint: under even-odd the middle of a self-crossing
+                // star is a hole, and a hit test still using nonzero would swallow clicks meant
+                // for whatever shows through it.
+                if (shape.filled && sub.points.length > 2) {
+                    winding += shape.fillRule === "evenodd"
+                        ? crossingsOf(sub.points, x, y)
+                        : windingOf(sub.points, x, y);
+                }
             }
-            return winding !== 0;
+            return shape.fillRule === "evenodd" ? winding % 2 !== 0 : winding !== 0;
         }
         case "box": {
             if (x < -tolerance || y < -tolerance || x > width + tolerance || y > height + tolerance) return false;

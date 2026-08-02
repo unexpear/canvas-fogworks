@@ -226,6 +226,15 @@ function tessellateOne(outline: Ring, holes: readonly Ring[], area: number, out:
         if (!bridgeHole(start, toLinked(holePoints))) continue;   // not actually inside — drop it
     }
 
+    // Re-dedupe AFTER bridging. A hole that TOUCHES the outer ring shares a vertex with it, and
+    // the bridge to that vertex is zero-length: the splice emits it twice in a row at both ends of
+    // the doubled edge. A zero-length edge is never an ear, so clipping stalled immediately and a
+    // pentagram under the even-odd rule — whose central hole meets the star at all five crossings
+    // — produced no triangles at all. Collapsing the repeats turns the degenerate bridge into
+    // exactly the right thing: the outline entering the hole at the shared vertex and leaving by
+    // it, which is the splice one would write by hand for that case.
+    start = toLinked(toArray(start));
+
     let verts = toArray(start);
     // Every clip removes one vertex, so the loop is bounded by the vertex count; the guard is
     // there for input the ear test cannot make progress on (a self-intersecting ring), where

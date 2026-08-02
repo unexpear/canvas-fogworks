@@ -30,14 +30,20 @@
  *
  * When no trim exists — a stroke wider than the segments it turns through — the fallback runs the
  * outline through the centreline vertex. That removes the FOLD at that corner and under-fills it
- * slightly; it is not a promise of a simple ring, and the promise is not available: a stroke wide
- * enough to cover itself describes a region no single ring can express. What is guaranteed is
- * that every join stays within `miterLimit` half-widths of a centreline vertex, so the outline is
- * bounded by the path's own box grown by that much and a degenerate corner cannot throw a spike.
+ * slightly, and every join stays within `miterLimit` half-widths of a centreline vertex, so a
+ * degenerate corner cannot throw a spike.
+ *
+ * The rings are then RESOLVED (`geometry/Resolve`) before they are returned. A stroke wide
+ * relative to the shape it goes round overlaps ITSELF — a single ring cannot describe a region
+ * that covers itself twice, which this module once concluded was the end of the matter. It is
+ * not: the overlap is a union, and resolving computes it. What callers get is a set of simple,
+ * non-overlapping rings, which is what lets a stroke outline be tessellated and decomposed like
+ * any other shape rather than being the one input those two could not take.
  */
 
 import { DEFAULT_MITER_LIMIT, PathCommand, STROKE_CAPS, STROKE_JOINS, StrokeCap, StrokeJoin } from "../document/Node";
 import { Point, Ring } from "./PathBoolean";
+import { resolveRings } from "./Resolve";
 import { FLATTEN_TOLERANCE, Subpath, flattenPath } from "./ShapeHit";
 
 // The join and cap vocabularies are the DOCUMENT's (`document/Node`), re-exported here so a
@@ -308,7 +314,13 @@ export function strokeOutline(
         if (Math.sign(area2(outer)) === Math.sign(area2(inner))) inner.reverse();
         out.push(outer, inner);
     }
-    return out;
+    // RESOLVE the result. A stroke wide relative to the corners it turns overlaps itself, and
+    // this module used to say no single ring could describe that. It was right about one ring and
+    // wrong about the conclusion: the overlap is a union, and `Resolve` computes unions. What
+    // comes back is a set of SIMPLE rings covering the same area — so the triangulator and the
+    // decomposition can take a stroke outline like any other shape, instead of the GPU being the
+    // one backend where a thick stroke came out wrong.
+    return resolveRings(out, "nonzero");
 }
 
 /** A flattened subpath's points with consecutive duplicates and a repeated closing point removed. */

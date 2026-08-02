@@ -439,6 +439,19 @@ export type StrokeCap = typeof STROKE_CAPS[number];
 /** SVG's default miter limit, and what every backend falls back to when none is given. */
 export const DEFAULT_MITER_LIMIT = 4;
 
+/**
+ * Which points a closed outline encloses (schema 38).
+ *
+ * SVG's `fill-rule` and Canvas's `fill(rule)` spelled their way, for the same reason the join and
+ * cap names are: both backends take these verbatim. NONZERO asks whether the contours wind around
+ * a point at all; EVENODD asks only how many boundaries lie between it and infinity. The two
+ * disagree wherever a path crosses itself, which is exactly where a design tool needs the author
+ * to be able to say which they meant — a five-pointed star drawn in one stroke is solid under one
+ * and hollow under the other. Absent = "nonzero", which is what every backend already drew.
+ */
+export const FILL_RULES = ["nonzero", "evenodd"] as const;
+export type FillRule = typeof FILL_RULES[number];
+
 /** Horizontal text alignment inside a node's box (schema 34). */
 export const TEXT_ALIGNS = ["left", "center", "right", "justify"] as const;
 export type TextAlign = typeof TEXT_ALIGNS[number];
@@ -472,6 +485,8 @@ export interface Style {
     strokeJoin?: StrokeJoin;
     strokeCap?: StrokeCap;
     strokeMiterLimit?: number;
+    /** Which points a closed outline encloses (schema 38); absent = "nonzero". */
+    fillRule?: FillRule;
     /** Corner radius — a number, or a NUMBER-token reference like "$radius/medium" (schema 20). */
     radius?: number | string;
     opacity: number;
@@ -543,6 +558,8 @@ export function styleError(s: Partial<Style>): string | null {
         && !(STROKE_CAPS as readonly string[]).includes(s.strokeCap as string)) return `style.strokeCap must be one of ${STROKE_CAPS.join(", ")}`;
     if ("strokeMiterLimit" in s && s.strokeMiterLimit !== undefined
         && (typeof s.strokeMiterLimit !== "number" || !Number.isFinite(s.strokeMiterLimit) || s.strokeMiterLimit < 1)) return "style.strokeMiterLimit must be >= 1";
+    if ("fillRule" in s && s.fillRule !== undefined
+        && !(FILL_RULES as readonly string[]).includes(s.fillRule as string)) return `style.fillRule must be one of ${FILL_RULES.join(", ")}`;
     if ("blur" in s && s.blur !== undefined && (!Number.isFinite(s.blur) || (s.blur as number) < 0)) return "style.blur must be finite and >= 0";
     if ("shadow" in s && s.shadow !== undefined) {
         const sh = s.shadow as Partial<Shadow>;

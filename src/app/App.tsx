@@ -41,7 +41,7 @@ import { alignAction, distributeAction } from "../core/actions/alignActions";
 import { booleanAction, makeBooleanNodeAction } from "../core/actions/booleanActions";
 import { outlineStrokeAction } from "../core/actions/outlineStrokeActions";
 import { STROKE_ALIGNS, StrokeAlign } from "../core/geometry/StrokeOutline";
-import { STROKE_CAPS, STROKE_JOINS } from "../core/document/Node";
+import { FILL_RULES, STROKE_CAPS, STROKE_JOINS } from "../core/document/Node";
 import { SetBooleanOpAction } from "../core/actions/SetBooleanOpAction";
 import { BooleanOp, TEXT_ALIGNS, FONT_FAMILY_MAX, StateDefinition } from "../core/document/Node";
 import { blendStates, easingAt, TRIGGERS, EASINGS, TRANSITION_MAX_MS, Interaction, Trigger, Easing } from "../core/document/Prototype";
@@ -1368,6 +1368,16 @@ export function App() {
                                     value={node.style.fill}
                                     onPick={v => { editSelected({ style: { fill: v || "#4a90d9" } }); refresh(); }}
                                 />
+                                {/* Which points a closed outline encloses (schema 38). It only
+                                    ever matters for a path that crosses itself or has more than
+                                    one contour, which is why it sits with the fill. */}
+                                <label style={INSPECTOR_LABEL}>Fill rule</label>
+                                <select
+                                    value={node.style.fillRule ?? "nonzero"}
+                                    onChange={e => { editSelected({ style: { fillRule: e.target.value as typeof FILL_RULES[number] } }); refresh(); }}
+                                    style={{ ...SELECT_STYLE, width: "100%" }}
+                                    title="Which points a closed outline encloses. They differ only where a path crosses itself: a five-pointed star drawn in one stroke is solid under nonzero and hollow under even-odd."
+                                >{FILL_RULES.map(r => <option key={r} value={r}>{r}</option>)}</select>
                                 <label style={INSPECTOR_LABEL}>Stroke</label>
                                 <ColorInput
                                     value={node.style.stroke ?? "#000000"}

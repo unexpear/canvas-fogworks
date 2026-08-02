@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v37 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v38 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -199,6 +199,19 @@ function flattenPath(commands: readonly PathCommand[], tolerance?: number): { po
 // — the input is the curve's own numbers — which is the property a fixed count was defending.
 function isPaintBearing(fill: string): boolean;   // "", "none", "transparent" = no paint
 
+// Resolve.ts — arbitrary contours made SIMPLE under a FILL RULE. The primitive the others assumed.
+// Splits every edge against every edge (its own contour included), keeps a piece only where the
+// fill differs on its two sides, directs it with the filled side on the LEFT, and re-chains.
+// What comes out never crosses itself and means the same region under NONZERO that the input meant
+// under the rule asked for — so nothing downstream has to carry the rule any further.
+type FillRule = "nonzero" | "evenodd";                    // = document/Node's, not a second spelling
+function crossingCount(rings: readonly Ring[], x: number, y: number): number;   // the even-odd raw material
+function insideRule(rings: readonly Ring[], x: number, y: number, rule: FillRule): boolean;
+function resolveRings(rings: readonly Ring[], rule?: FillRule): Ring[];         // idempotent on simple input
+// IDEMPOTENT by design: callers resolve indiscriminately rather than detecting whether they need
+// to, because detecting self-intersection costs the same O(n^2) as fixing it. Returns [] when the
+// region is empty — two identical contours wound oppositely cancel exactly, and that is an answer.
+
 // ConvexDecompose.ts — a shape as CONVEX pieces, so an area query is ONE test.
 // HERTEL-MEHLHORN over `triangulate`: merge neighbouring pieces wherever the merge stays convex.
 // Guarantees at most 4x the fewest possible pieces, invents no vertices, and inherits holes and
@@ -206,6 +219,8 @@ function isPaintBearing(fill: string): boolean;   // "", "none", "transparent" =
 const DECOMPOSE_MAX_PIECES: number;                       // 20_000 — the merge loop's budget
 function isConvexRing(ring: Ring): boolean;               // collinear corners allowed; < 3 points is not a ring
 function convexPieces(rings: readonly Ring[]): Ring[];    // [] for degenerate input, like `triangulate`
+// Takes SIMPLE rings — resolve first if the input might cross itself (it inherits `triangulate`'s
+// precondition, having started from the triangles).
 function convexOverlaps(a: Ring, b: Ring): boolean;       // SAT. Convexity is a PRECONDITION, not checked
 function piecesOverlap(pieces: readonly Ring[], region: Ring): boolean;
 function edgesOverlap(subpaths: readonly {points: readonly Point[]; closed: boolean}[], region: Ring): boolean;
@@ -227,6 +242,8 @@ const STROKE_ALIGNS: readonly ["center", "inner", "outer"];
 type StrokeAlign = typeof STROKE_ALIGNS[number];
 interface StrokeStyle { width: number; join?: StrokeJoin; cap?: StrokeCap; miterLimit?: number; align?: StrokeAlign }
 function strokeOutline(commands: readonly PathCommand[], style: StrokeStyle, tolerance?: number): Ring[];
+// The result is RESOLVED before it is returned, so a stroke wide enough to overlap itself still
+// comes back as simple, non-overlapping rings that the tessellator and the decomposition can take.
 // A CLOSED subpath yields two rings (outer edge + hole, wound opposite); an OPEN one yields a
 // single ring, up one side and back the other through the caps. ALIGNMENT is measured against the
 // shape's own winding, not the drawing direction, so a rectangle drawn either way gets the same

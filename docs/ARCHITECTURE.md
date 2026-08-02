@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v37 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v38 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -242,6 +242,40 @@ backends. So alignment is an argument to the outline COMMAND instead: what comes
 `core.path`, and a fill draws identically everywhere. The same reasoning that put the boolean bake
 in the action layer rather than in a renderer.
 
+**A drawn path is not a polygon, and the missing word was the FILL RULE (`geometry/Resolve`).**
+Everything built on top of `Tessellate` inherited a precondition nobody had supplied: ear clipping
+is defined on a SIMPLE polygon, and a path someone draws crosses itself. A five-pointed star drawn
+in one stroke — the way anyone draws one — came out of the GPU as overlapping triangles while the
+other two backends drew it correctly, because they were handed an outline and a rule and this one
+was handed only an outline.
+
+Resolution is the missing step, and it is `PathBoolean`'s own method turned on a single input:
+split every edge against every edge including its own contour, keep a piece only where the fill
+differs on its two sides, direct it with the filled side on the LEFT, and chain the survivors. What
+comes out never crosses itself and means the same region under NONZERO that the input meant under
+whichever rule was asked for — so after this point nothing carries the rule any further.
+
+Two things had to be fixed to make chaining produce SIMPLE rings rather than merely closed ones.
+At a vertex where several boundaries meet, the continuation is now chosen by ANGLE — reverse the
+edge just travelled and take the first outgoing edge clockwise from it, which is how a half-edge
+structure walks a face. Picking arbitrarily threads two faces into one ring that touches itself,
+and a self-touching ring cannot be ear-clipped: an even-odd pentagram is five triangles meeting at
+five points, and as one loop it produced no triangles at all. And a walk that returns to a point it
+already passed now closes there and carries on, which catches the same thing from the other side.
+
+The rule itself is a document field (`Style.fillRule`, schema 38) because all three backends can
+honour it: SVG takes `fill-rule`, Canvas takes an argument to `fill()`, and the GPU — having
+nothing to hand it to — resolves it into the geometry. Picking reads it too, because a click that
+disagreed with the paint would swallow clicks meant for whatever shows through an even-odd hole.
+That is the same test `strokeAlign` failed and this passes: a document may say a thing when every
+backend can draw it.
+
+It also closed a gap `StrokeOutline` had documented as closed. A stroke wide relative to the
+corners it turns overlaps itself, and that module concluded no single ring could describe the
+result. True, and beside the point — the overlap is a union, and resolving computes unions. Stroke
+outlines are now resolved before they are handed out, so a thick stroke is an ordinary shape to the
+tessellator and the decomposition instead of the one input they could not take.
+
 **A fill becomes TRIANGLES for the GPU, by the same outline everything else uses
 (`geometry/Tessellate`).** SVG and Canvas both take an outline and a fill rule and rasterize it
 for us; a GPU takes triangles and nothing else. Rather than let the GPU backend invent a fourth
@@ -379,7 +413,7 @@ Layout output today is expressed *as* geometry (computed local rects), not as a 
 |-------|-------|----------------|
 | Document | `core/document/{Document,Node,Serializer}.ts`, `core/ids/UUID.ts` | Source of truth, types, (de)serialization, identity |
 | Document integrity | `core/document/{SceneGraph,Integrity}.ts` | Tree traversal/draw order; structural + range validation on load |
-| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine,SelectionHandles,Snapping,Ruler,GroupTransform,Tessellate,StrokeOutline,ConvexDecompose}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**); DOM-free handle geometry + alignment snapping (move + resize; any translation-only chain) + group ops — union-box snapping, a group rotate knob + corner handles, `GroupTransform.rotateGroup` (rigid multi-node rotation about a shared pivot) and `scaleGroup` (proportional group resize about a fixed corner; transform-free groups only — a rotated set would shear) (**M4**) |
+| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine,SelectionHandles,Snapping,Ruler,GroupTransform,Tessellate,StrokeOutline,ConvexDecompose,Resolve}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**); DOM-free handle geometry + alignment snapping (move + resize; any translation-only chain) + group ops — union-box snapping, a group rotate knob + corner handles, `GroupTransform.rotateGroup` (rigid multi-node rotation about a shared pivot) and `scaleGroup` (proportional group resize about a fixed corner; transform-free groups only — a rotated set would shear) (**M4**) |
 | Actions | `core/actions/{Action,types,applyMutations}.ts` + `*Action.ts` | Declarative mutations + delta protocol |
 | Dispatch/History | `core/actions/{ActionDispatcher,HistoryManager}.ts` | Only write path; snapshot undo/redo |
 | Editor | `editor/EditorState.ts`, `editor/tools/*`, `editor/{shortcuts,layerDrop,layerSelection,layerFilter}.ts` | Ephemeral state; input → Actions. The RULES a panel or tool applies are pure modules with tests, not logic inside a handler: which command a chord means, what a layer drag resolves to (parent + an index measured AFTER the node is detached), what a row click selects (a shift range spans the VISIBLE order, and the anchor does not move), and which rows a search leaves (a match keeps every ancestor, so the panel shows the path to it) |
