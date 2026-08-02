@@ -181,6 +181,28 @@ A fixed count could not defend accuracy at the same time: 16 segments is wastefu
 and visibly wrong on a long one, and both errors land in picking, booleans and now tessellation,
 which all share this one flattener.
 
+**And the MARQUEE follows the ink too, which took a decomposition (`geometry/ConvexDecompose`).**
+Box-select was the last place the box was still trusted. The old argument — a marquee is a fuzzy
+affordance, so an AABB is close enough — was wrong in exactly the way the argument about clicks
+had been: a square rotated 45° has a box nearly a third empty, and dragging through one of those
+corners selected a shape the marquee visibly never touched.
+
+Making it exact needed a way to ask "does this shape meet this region". For CONVEX polygons the
+separating axis theorem answers it outright, and answers containment in the same breath — a region
+inside a shape simply admits no separating axis. For concave ones there is no such theorem, and
+the usual substitute is three cases, two of which exist only to catch containment. So the shape is
+decomposed into convex pieces first (HERTEL–MEHLHORN over the triangles `Tessellate` already
+produces, merging neighbours wherever the merge stays convex), and the three cases collapse into
+one. Bounds still run first as the cheap reject; only survivors pay. The marquee is carried INTO
+the node's local space rather than the shape out to world, so the decomposition is computed on the
+node's own untransformed outline — the same numbers a click is tested against — and is memoised on
+the `HitShape` it came from, which needs no invalidation because an edit derives a new one.
+
+Ink with no AREA takes the other branch, on the distinction `hitsShape` already makes: a
+`core.line` and an unfilled path ARE their outlines, so their segments are the operands. Without
+that, decomposing a pen stroke would yield nothing and it would become impossible to marquee —
+the same way an earlier rule once made one impossible to click.
+
 **One display list, four consumers.** `emitSVG` draws it, `emitCanvas` draws it, `emitWebGL`
 draws it, and `exportSVG` serializes it — so a feature that reaches the model reaches all four
 without a second description of any shape. Text is the one place that needed care: the backends and the exporter
@@ -357,7 +379,7 @@ Layout output today is expressed *as* geometry (computed local rects), not as a 
 |-------|-------|----------------|
 | Document | `core/document/{Document,Node,Serializer}.ts`, `core/ids/UUID.ts` | Source of truth, types, (de)serialization, identity |
 | Document integrity | `core/document/{SceneGraph,Integrity}.ts` | Tree traversal/draw order; structural + range validation on load |
-| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine,SelectionHandles,Snapping,Ruler,GroupTransform,Tessellate,StrokeOutline}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**); DOM-free handle geometry + alignment snapping (move + resize; any translation-only chain) + group ops — union-box snapping, a group rotate knob + corner handles, `GroupTransform.rotateGroup` (rigid multi-node rotation about a shared pivot) and `scaleGroup` (proportional group resize about a fixed corner; transform-free groups only — a rotated set would shear) (**M4**) |
+| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine,SelectionHandles,Snapping,Ruler,GroupTransform,Tessellate,StrokeOutline,ConvexDecompose}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**); DOM-free handle geometry + alignment snapping (move + resize; any translation-only chain) + group ops — union-box snapping, a group rotate knob + corner handles, `GroupTransform.rotateGroup` (rigid multi-node rotation about a shared pivot) and `scaleGroup` (proportional group resize about a fixed corner; transform-free groups only — a rotated set would shear) (**M4**) |
 | Actions | `core/actions/{Action,types,applyMutations}.ts` + `*Action.ts` | Declarative mutations + delta protocol |
 | Dispatch/History | `core/actions/{ActionDispatcher,HistoryManager}.ts` | Only write path; snapshot undo/redo |
 | Editor | `editor/EditorState.ts`, `editor/tools/*`, `editor/{shortcuts,layerDrop,layerSelection,layerFilter}.ts` | Ephemeral state; input → Actions. The RULES a panel or tool applies are pure modules with tests, not logic inside a handler: which command a chord means, what a layer drag resolves to (parent + an index measured AFTER the node is detached), what a row click selects (a shift range spans the VISIBLE order, and the anchor does not move), and which rows a search leaves (a match keeps every ancestor, so the panel shows the path to it) |

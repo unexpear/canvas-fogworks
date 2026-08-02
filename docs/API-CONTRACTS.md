@@ -199,6 +199,23 @@ function flattenPath(commands: readonly PathCommand[], tolerance?: number): { po
 // — the input is the curve's own numbers — which is the property a fixed count was defending.
 function isPaintBearing(fill: string): boolean;   // "", "none", "transparent" = no paint
 
+// ConvexDecompose.ts — a shape as CONVEX pieces, so an area query is ONE test.
+// HERTEL-MEHLHORN over `triangulate`: merge neighbouring pieces wherever the merge stays convex.
+// Guarantees at most 4x the fewest possible pieces, invents no vertices, and inherits holes and
+// islands for free (a triangle list has no memory of which ring a triangle came from).
+const DECOMPOSE_MAX_PIECES: number;                       // 20_000 — the merge loop's budget
+function isConvexRing(ring: Ring): boolean;               // collinear corners allowed; < 3 points is not a ring
+function convexPieces(rings: readonly Ring[]): Ring[];    // [] for degenerate input, like `triangulate`
+function convexOverlaps(a: Ring, b: Ring): boolean;       // SAT. Convexity is a PRECONDITION, not checked
+function piecesOverlap(pieces: readonly Ring[], region: Ring): boolean;
+function edgesOverlap(subpaths: readonly {points: readonly Point[]; closed: boolean}[], region: Ring): boolean;
+function rectRing(x: number, y: number, width: number, height: number): Ring;
+function piecesArea(pieces: readonly Ring[]): number;
+// SAT settles overlap, TOUCHING and CONTAINMENT in one answer — a region inside a shape admits no
+// separating axis, so containment is not a case anyone has to remember. A two-point operand is
+// legal: a segment is convex with no area, which is how ink that has no interior (a `core.line`,
+// an unfilled path) goes through the same routine as ink that does.
+
 // StrokeOutline.ts — a BORDER as fillable rings, so a stroke can be geometry and not a parameter.
 // POLYLINE OFFSETTING over the same `flattenPath` picking and tessellation use. The two sides of
 // a corner are not symmetric: the OUTER side gets the join, the INNER side is TRIMMED to where
@@ -247,7 +264,7 @@ function computeGeometry(
 // the instance whose overrides / variant / slot fills shape it, or any master between.
 // `incremental === full` is property-tested over instanced documents too.
 function hitTest(computed: ComputedState, x: number, y: number, tolerance?: number, includeVirtual?: boolean): string | null; // local-space, DOM-free; tests the node's INK (`hitsShape`), not its box — a triangle's empty corner passes the click THROUGH to whatever is drawn behind; `tolerance` (world units, default 0) is a pick halo so thin/zero-extent targets (an axis-aligned line) stay selectable; `includeVirtual` is the DEEP pick (alt-click) that selects an instance COPY instead of the instance. By default a virtual hit RESOLVES to its owning instance rather than being skipped, so content drawn OUTSIDE the instance's own box is still clickable; `nodesInRect` resolves the same way and dedupes
-function nodesInRect(computed: ComputedState, rect: Rect): string[]; // marquee (box) select: ids whose WORLD bounds OVERLAP rect (touch, not containment), in draw order; DOM-free
+function nodesInRect(computed: ComputedState, rect: Rect): string[]; // marquee (box) select: ids whose INK overlaps rect (touch, not containment), in draw order; DOM-free. Bounds are the cheap reject, then the exact test — the node's ink decomposed into CONVEX pieces (`ConvexDecompose`) with the marquee carried into LOCAL space, so a rotated square is not selected through the empty corner of its box. Ink with no AREA (a `core.line`, an unfilled path) tests its SEGMENTS instead, the same split `hitsShape` makes for a click
 function toLocal(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;
 function toWorld(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;
 function subtreeBounds(doc: ReadonlyDocument, s: ComputedState, rootId: string): Rect | null;

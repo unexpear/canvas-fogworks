@@ -41,6 +41,7 @@ import { flattenPath, hitsShape, isPaintBearing, FLATTEN_TOLERANCE, FLATTEN_MAX_
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
 import { triangulate, signedArea2, TESSELLATE_MAX_VERTICES } from "../geometry/Tessellate";
+import { convexPieces, isConvexRing, convexOverlaps, piecesOverlap, piecesArea, rectRing, DECOMPOSE_MAX_PIECES } from "../geometry/ConvexDecompose";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
 import { outlineStrokeAction, strokeWidthOf } from "../actions/outlineStrokeActions";
@@ -12370,6 +12371,315 @@ describe("Adaptive curve flattening", () => {
 });
 
 // ─── Triangulation: a fill as the GPU sees it ───
+describe("Marquee selection follows the INK", () => {
+    const doc = (...nodes: Node[]): ProjectDocument => {
+        const d = createEmptyDocument();
+        for (const n of nodes) d.nodes.set(n.id, n);
+        d.rootNodeUuids = nodes.map(n => n.id);
+        return d;
+    };
+    const node = (id: string, type: Node["type"], box: { x: number; y: number; width: number; height: number }, extra: Partial<Node> = {}): Node =>
+        ({ id, type, parent: null, children: [], geometry: box,
+           style: { fill: "#000", opacity: 1 }, layout: {}, ...extra } as Node);
+    const inRect = (d: ProjectDocument, r: { x: number; y: number; width: number; height: number }): string[] =>
+        nodesInRect(computeGeometry(d), r);
+
+    test("a ROTATED rectangle is not selected through the empty corner of its box", () => {
+        // The case that makes the point on its own. A square rotated 45 degrees has a bounding box
+        // whose corners are entirely outside the shape — nearly 30% of the box is empty — and a
+        // marquee dragged through one of those corners used to select it. Clicks stopped trusting
+        // the box when `ShapeHit` landed; the marquee had not.
+        const d = doc(node("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 },
+            { transform: { rotation: 45 } }));
+        // The rotated square spans roughly x,y in [-20.7, 120.7]; its box corner region near
+        // (-18, -18) is inside the AABB and outside the shape.
+        expect(inRect(d, { x: -20, y: -20, width: 8, height: 8 })).toEqual([]);
+        // Through the middle it still selects, and grazing an edge still counts (touch semantics).
+        expect(inRect(d, { x: 40, y: 40, width: 20, height: 20 })).toEqual(["R"]);
+        expect(inRect(d, { x: 45, y: -30, width: 10, height: 40 })).toEqual(["R"]);
+    });
+
+    test("a marquee in the NOTCH of a concave path selects nothing", () => {
+        // An L's bounding box contains a quadrant the shape does not. This is the same claim the
+        // decomposition test makes about rings, reached through the engine instead.
+        const L: PathCommand[] = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 40 },
+            { c: "L", x: 40, y: 40 }, { c: "L", x: 40, y: 100 }, { c: "L", x: 0, y: 100 }, { c: "Z" }
+        ];
+        const d = doc(node("P", "core.path", { x: 0, y: 0, width: 100, height: 100 }, { path: L }));
+        expect(inRect(d, { x: 60, y: 60, width: 20, height: 20 })).toEqual([]);   // the notch
+        expect(inRect(d, { x: 60, y: 10, width: 20, height: 20 })).toEqual(["P"]);  // the arm
+        expect(inRect(d, { x: 10, y: 60, width: 20, height: 20 })).toEqual(["P"]);  // the other arm
+    });
+
+    test("an ELLIPSE is not selected through the corner of its box", () => {
+        // A quarter of an ellipse's box is outside it, at every corner.
+        const d = doc(node("E", "core.ellipse", { x: 0, y: 0, width: 100, height: 100 }));
+        expect(inRect(d, { x: 0, y: 0, width: 8, height: 8 })).toEqual([]);
+        expect(inRect(d, { x: 40, y: 40, width: 20, height: 20 })).toEqual(["E"]);
+    });
+
+    test("a diagonal LINE is not selected through the corners its diagonal misses", () => {
+        // A line's box is entirely empty except along one diagonal. Its ink has no AREA, so it
+        // takes the segment branch rather than the decomposition — the same split `hitsShape`
+        // makes for a click.
+        const d = doc(node("L", "core.line", { x: 0, y: 0, width: 100, height: 100 }));
+        expect(inRect(d, { x: 80, y: 0, width: 15, height: 15 })).toEqual([]);    // above the diagonal
+        expect(inRect(d, { x: 0, y: 80, width: 15, height: 15 })).toEqual([]);    // below it
+        expect(inRect(d, { x: 45, y: 45, width: 10, height: 10 })).toEqual(["L"]);
+    });
+
+    test("an OPEN pen stroke stays selectable — it is its outline, not an empty region", () => {
+        // The failure this had to avoid. An unfilled path encloses no area, so decomposing it
+        // gives nothing; treating "no pieces" as "no overlap" would have made every pen stroke
+        // impossible to marquee, exactly as an earlier rule once made one impossible to click.
+        const zigzag: PathCommand[] = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 50, y: 100 }, { c: "L", x: 100, y: 0 }
+        ];
+        const d = doc(node("S", "core.path", { x: 0, y: 0, width: 100, height: 100 },
+            { path: zigzag, style: { fill: "none", stroke: "#fff", opacity: 1 } }));
+        expect(inRect(d, { x: 45, y: 90, width: 10, height: 10 })).toEqual(["S"]);   // on the stroke
+        expect(inRect(d, { x: 40, y: 10, width: 20, height: 20 })).toEqual([]);      // inside the V
+    });
+
+    test("an open stroke gains no PHANTOM edge between its two ends", () => {
+        // Closing an open subpath would draw a line from the last point back to the first, and a
+        // marquee over that line would select a shape with nothing there. On a V that phantom
+        // edge runs straight across the gap between the two arms.
+        const v: PathCommand[] = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 50, y: 100 }, { c: "L", x: 100, y: 0 }
+        ];
+        const d = doc(node("V", "core.path", { x: 0, y: 0, width: 100, height: 100 },
+            { path: v, style: { fill: "none", stroke: "#fff", opacity: 1 } }));
+        // Straight along where the closing edge WOULD be, and clear of both real arms.
+        expect(inRect(d, { x: 40, y: -3, width: 20, height: 6 })).toEqual([]);
+        // The real ends are still there, so a marquee on one of them still hits.
+        expect(inRect(d, { x: -3, y: -3, width: 6, height: 6 })).toEqual(["V"]);
+    });
+
+    test("a shape that encloses NO area is not selected by a marquee over it", () => {
+        // A filled path of two points draws nothing at all — SVG fills no area for it — so
+        // decomposing it yields no pieces. "No pieces" has to mean "meets nothing"; treating it
+        // as a hit would make an invisible node catch marquees across its whole bounding box.
+        const sliver: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 100 }, { c: "Z" }];
+        const d = doc(node("N", "core.path", { x: 0, y: 0, width: 100, height: 100 },
+            { path: sliver, style: { fill: "#fff", opacity: 1 } }));
+        expect(inRect(d, { x: 40, y: 40, width: 20, height: 20 })).toEqual([]);
+        expect(inRect(d, { x: -50, y: -50, width: 400, height: 400 })).toEqual([]);
+    });
+
+    test("containment in either direction still selects, with no case for it anywhere", () => {
+        // SAT reports overlap when one operand is inside the other, so the two containment cases
+        // the old bounds test spelled out are simply gone from the code.
+        const d = doc(node("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }));
+        expect(inRect(d, { x: -50, y: -50, width: 400, height: 400 })).toEqual(["R"]);  // marquee holds it
+        expect(inRect(d, { x: 40, y: 40, width: 5, height: 5 })).toEqual(["R"]);        // it holds marquee
+        // A zero-size marquee is a point, and a point inside the shape is still inside it.
+        expect(inRect(d, { x: 50, y: 50, width: 0, height: 0 })).toEqual(["R"]);
+    });
+
+    test("the decomposition cache cannot go STALE across an edit", () => {
+        // The pieces are memoised on the `HitShape` object they came from, which is the whole
+        // invalidation story: an edit derives a new one, so the old entry is unreachable. A cache
+        // keyed on the node ID instead would answer the second marquee with the first shape.
+        const notch: PathCommand[] = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 40 },
+            { c: "L", x: 40, y: 40 }, { c: "L", x: 40, y: 100 }, { c: "L", x: 0, y: 100 }, { c: "Z" }
+        ];
+        const d = doc(node("P", "core.path", { x: 0, y: 0, width: 100, height: 100 }, { path: notch }));
+        const probe = { x: 60, y: 60, width: 20, height: 20 };
+        expect(inRect(d, probe)).toEqual([]);                       // the notch is empty
+        // Fill the notch in: the very same probe must now hit.
+        d.nodes.get("P")!.path = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 },
+            { c: "L", x: 100, y: 100 }, { c: "L", x: 0, y: 100 }, { c: "Z" }
+        ];
+        expect(inRect(d, probe)).toEqual(["P"]);
+    });
+
+    test("the BOUNDS test still runs first, and still decides most nodes", () => {
+        // The exact test is the expensive one, so it must never be the first thing asked. A node
+        // whose box is nowhere near the marquee is rejected before its outline is ever built —
+        // asserted here as behaviour (far-away nodes are absent) rather than as a timing.
+        const d = doc(
+            node("A", "core.rectangle", { x: 0, y: 0, width: 50, height: 50 }),
+            node("B", "core.rectangle", { x: 1000, y: 1000, width: 50, height: 50 })
+        );
+        expect(inRect(d, { x: 10, y: 10, width: 10, height: 10 })).toEqual(["A"]);
+        expect(inRect(d, { x: 5000, y: 5000, width: 10, height: 10 })).toEqual([]);
+    });
+
+    test("a TEXT or IMAGE box is its own rectangle, so the box is not a lie for it", () => {
+        // These have no outline finer than their box — the answer is the same either way, and
+        // that is the reason they are allowed through rather than an oversight.
+        const d = doc(
+            node("T", "core.text", { x: 0, y: 0, width: 100, height: 20 }, { text: "hello" }),
+            node("I", "core.image", { x: 200, y: 0, width: 100, height: 100 }, { src: "x.png" })
+        );
+        expect(inRect(d, { x: 10, y: 5, width: 5, height: 5 })).toEqual(["T"]);
+        expect(inRect(d, { x: 205, y: 5, width: 5, height: 5 })).toEqual(["I"]);
+        expect(inRect(d, { x: 500, y: 500, width: 5, height: 5 })).toEqual([]);
+    });
+});
+
+describe("ConvexDecompose", () => {
+    const sq = (x: number, y: number, w: number, h: number): { x: number; y: number }[] =>
+        [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+    /** Every piece convex, and their areas summing to the shape's — the two halves of "covers it". */
+    const allConvex = (pieces: { x: number; y: number }[][]): boolean => pieces.every(isConvexRing);
+
+    test("a convex shape comes back as ONE piece", () => {
+        // The merging has to actually merge. A square triangulates into two, and if the two are
+        // not put back together then nothing else in this module is doing its job either.
+        const pieces = convexPieces([sq(0, 0, 100, 50)]);
+        expect(pieces.length).toBe(1);
+        expect(allConvex(pieces)).toBe(true);
+        expect(piecesArea(pieces)).toBeCloseTo(5000, 6);
+    });
+
+    test("a CONCAVE shape splits at its reflex corner and nowhere else", () => {
+        // An L cannot be one convex piece, and it does not need three: the fewest is two, and
+        // Hertel-Mehlhorn finds it here. What is asserted is both halves of correctness — every
+        // piece convex, and the total area unchanged.
+        const L = [
+            { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 40 },
+            { x: 40, y: 40 }, { x: 40, y: 100 }, { x: 0, y: 100 }
+        ];
+        const pieces = convexPieces([L]);
+        expect(allConvex(pieces)).toBe(true);
+        expect(piecesArea(pieces)).toBeCloseTo(100 * 40 + 40 * 60, 6);
+        expect(pieces.length).toBe(2);
+    });
+
+    test("a STAR needs one piece per point, and every piece is convex", () => {
+        // Five reflex corners, so no merging can get below six pieces (a core plus five points).
+        // The number matters less than the two invariants, which hold whatever the merge order.
+        const star: { x: number; y: number }[] = [];
+        for (let i = 0; i < 10; i++) {
+            const a = (Math.PI / 5) * i - Math.PI / 2;
+            const r = i % 2 === 0 ? 100 : 40;
+            star.push({ x: r * Math.cos(a), y: r * Math.sin(a) });
+        }
+        const pieces = convexPieces([star]);
+        expect(allConvex(pieces)).toBe(true);
+        expect(piecesArea(pieces)).toBeCloseTo(10 * 0.5 * 100 * 40 * Math.sin(Math.PI / 5), 4);
+        // Fewer than the 8 triangles it started as, and never below what the reflex corners force.
+        expect(pieces.length).toBeLessThan(8);
+        expect(pieces.length).toBeGreaterThanOrEqual(5);
+    });
+
+    test("a HOLE stays a hole, without this module knowing what a hole is", () => {
+        // `triangulate` already resolves rings by signed area, and a triangle list has no memory
+        // of which ring a triangle came from — so the decomposition inherits holes for free. The
+        // area is the proof: a donut's pieces cover the ring, not the disc.
+        const pieces = convexPieces([sq(0, 0, 100, 100), [...sq(25, 25, 50, 50)].reverse()]);
+        expect(allConvex(pieces)).toBe(true);
+        expect(piecesArea(pieces)).toBeCloseTo(10000 - 2500, 6);
+    });
+
+    test("merging invents no points — every vertex came from the input", () => {
+        // The same promise flattening and the booleans make. A decomposition that rounded or
+        // averaged coordinates would drift away from the outline picking tests against.
+        const L = [
+            { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 40 },
+            { x: 40, y: 40 }, { x: 40, y: 100 }, { x: 0, y: 100 }
+        ];
+        const source = new Set(L.map(p => `${p.x},${p.y}`));
+        for (const piece of convexPieces([L])) {
+            for (const p of piece) expect(source.has(`${p.x},${p.y}`)).toBe(true);
+        }
+    });
+
+    test("a merge that would make a reflex corner is REFUSED", () => {
+        // The whole of Hertel-Mehlhorn is this one decision. Two triangles that share an edge but
+        // whose union bends the wrong way must stay apart — merging them would produce a piece
+        // that is not convex, and every consumer here treats convexity as a promise.
+        const a = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 5, y: 5 }];
+        const b = [{ x: 10, y: 0 }, { x: 0, y: 0 }, { x: 5, y: -1 }];   // shares 0,0 -> 10,0 reversed
+        expect(isConvexRing(a)).toBe(true);
+        expect(isConvexRing(b)).toBe(true);
+        // Their union is a dart: convex at three corners, reflex nowhere it can hide.
+        expect(isConvexRing([{ x: 0, y: 0 }, { x: 5, y: -1 }, { x: 10, y: 0 }, { x: 5, y: 5 }])).toBe(true);
+        expect(isConvexRing([{ x: 0, y: 0 }, { x: 5, y: 1 }, { x: 10, y: 0 }, { x: 5, y: 5 }])).toBe(false);
+    });
+
+    test("collinear corners do not count as a bend", () => {
+        // A merge often leaves three points in a line. Calling that non-convex would split shapes
+        // at corners that are not corners, and every path with a redundant vertex has them.
+        expect(isConvexRing([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }])).toBe(true);
+        expect(isConvexRing([{ x: 0, y: 0 }, { x: 10, y: 0 }])).toBe(false);   // not a ring at all
+    });
+
+    test("SAT answers overlap, touching and containment with ONE test", () => {
+        // This is what the decomposition buys. Containment is not a case that had to be
+        // remembered — a region inside a shape admits no separating axis, so it simply reports
+        // overlap like everything else.
+        const shape = rectRing(0, 0, 100, 100);
+        expect(convexOverlaps(shape, rectRing(50, 50, 200, 200))).toBe(true);    // partial
+        expect(convexOverlaps(shape, rectRing(20, 20, 10, 10))).toBe(true);      // region INSIDE shape
+        expect(convexOverlaps(rectRing(20, 20, 10, 10), shape)).toBe(true);      // shape inside region
+        expect(convexOverlaps(shape, rectRing(100, 0, 50, 50))).toBe(true);      // edge-to-edge TOUCH
+        expect(convexOverlaps(shape, rectRing(101, 0, 50, 50))).toBe(false);     // a gap is a gap
+        expect(convexOverlaps(shape, rectRing(0, -50, 100, 49))).toBe(false);
+    });
+
+    test("a rotated region separates on an axis neither shape is aligned to", () => {
+        // The reason SAT and not two bounding-box comparisons: a diamond past the square's CORNER
+        // misses it entirely, while their axis-aligned extents overlap on both x and y — so the
+        // only axis that separates them is one neither shape has an edge parallel to the axes on.
+        const square = rectRing(0, 0, 100, 100);
+        const diamondAt = (cx: number, cy: number) =>
+            [{ x: cx, y: cy - 100 }, { x: cx + 100, y: cy }, { x: cx, y: cy + 100 }, { x: cx - 100, y: cy }];
+        const clear = diamondAt(170, 170);
+        // Extents overlap on BOTH axes: x [70,270] vs [0,100], y [70,270] vs [0,100].
+        expect(Math.min(...clear.map(p => p.x))).toBeLessThan(100);
+        expect(Math.min(...clear.map(p => p.y))).toBeLessThan(100);
+        // …and yet nothing is shared: |100-170| + |100-170| = 140 > 100, so the square's nearest
+        // corner is outside the diamond, and the separating axis is the diamond's own edge normal.
+        expect(convexOverlaps(square, clear)).toBe(false);
+        expect(convexOverlaps(square, diamondAt(140, 140))).toBe(true);   // 80 <= 100: it reaches
+    });
+
+    test("SAT projects onto edge NORMALS — directions are a different set, and a wrong one", () => {
+        // A rectangle cannot show the difference: its edge directions and its edge normals are
+        // the same four axes, so projecting onto either answers alike. A TRIANGLE separates them.
+        // These two are disjoint — the second lies entirely beyond the first's hypotenuse — and
+        // the only axis that says so is that hypotenuse's NORMAL. On all three edge directions
+        // their projections overlap, so a version that used directions would report a hit.
+        const a = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 0, y: 10 }];      // x + y <= 10
+        const clear = [{ x: 7, y: 7 }, { x: 17, y: 7 }, { x: 7, y: 17 }];  // x + y >= 14
+        expect(convexOverlaps(a, clear)).toBe(false);
+        // Its axis-aligned extents overlap on both x and y, so this is not a bounding-box result.
+        expect(Math.min(...clear.map(p => p.x))).toBeLessThan(10);
+        expect(Math.min(...clear.map(p => p.y))).toBeLessThan(10);
+        // Slide it in until it crosses the hypotenuse and the same test says yes.
+        expect(convexOverlaps(a, [{ x: 4, y: 4 }, { x: 14, y: 4 }, { x: 4, y: 14 }])).toBe(true);
+    });
+
+    test("the decomposition is what makes a CONCAVE overlap exact", () => {
+        // The payoff, stated as the thing a bounding box gets wrong: a region sitting in the
+        // notch of an L overlaps its BOX completely and its INK not at all.
+        const L = [
+            { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 40 },
+            { x: 40, y: 40 }, { x: 40, y: 100 }, { x: 0, y: 100 }
+        ];
+        const pieces = convexPieces([L]);
+        const inNotch = rectRing(60, 60, 20, 20);
+        expect(piecesOverlap(pieces, inNotch)).toBe(false);
+        // …while the same-sized region over the arm hits.
+        expect(piecesOverlap(pieces, rectRing(60, 10, 20, 20))).toBe(true);
+        // And a region containing the whole shape hits, containment being no special case.
+        expect(piecesOverlap(pieces, rectRing(-50, -50, 400, 400))).toBe(true);
+    });
+
+    test("degenerate input decomposes to nothing rather than throwing", () => {
+        expect(convexPieces([])).toEqual([]);
+        expect(convexPieces([[{ x: 0, y: 0 }, { x: 1, y: 1 }]])).toEqual([]);
+        expect(convexOverlaps([], rectRing(0, 0, 10, 10))).toBe(false);
+        expect(piecesOverlap([], rectRing(0, 0, 10, 10))).toBe(false);
+    });
+});
+
 describe("Tessellate", () => {
     /** Total area of a triangle list — the number that must match the shape it came from. */
     const triArea = (t: number[]): number => {

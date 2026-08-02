@@ -33,7 +33,10 @@ import { DeepReadonly, ReadonlyDocument } from "../document/Document";
 import { Geometry, Margins, Node, PathCommand } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
 import { resolveNumber } from "../document/Variables";
-import { HitShape, hitsShape, hitShapeOf } from "./ShapeHit";
+import { HitShape, hitsShape, hitShapeOf, flattenPath } from "./ShapeHit";
+import { shapeToCommands } from "./ShapeToPath";
+import { Ring, commandsToRings } from "./PathBoolean";
+import { convexPieces, edgesOverlap, piecesOverlap } from "./ConvexDecompose";
 import { resolveScene, isVirtualId, ownerInstanceOf, VIRTUAL_ID_SEP } from "../document/Components";
 import { expandDirtyForLayout, isAbsolute, isLayoutContainer, layoutChildren, layoutGridChildren, measureIntrinsicSizes, resolveConstraints } from "./LayoutEngine";
 import {
@@ -436,15 +439,86 @@ export function hitTest(
 }
 
 /**
- * Marquee (box) selection: every node whose WORLD bounds OVERLAP `rect` (world units),
- * returned in draw order (back to front). Overlap — "touch" semantics — not containment:
- * a node the marquee merely grazes counts, so you needn't fully enclose a target (the
- * Illustrator/Sketch default; the Figma-style directional contain-vs-touch is a later
- * refinement). The test is the rotation-aware AABB (`bounds`), like `hitTest`'s cheap
- * reject — a fuzzy affordance, so an AABB rather than the exact rotated shape is fine.
- * Inclusive edges: a rect flush against a node's edge selects it. Non-finite bounds
- * fail every comparison (NaN), so a degenerate node is silently skipped, never thrown.
+ * Marquee (box) selection: every node whose INK overlaps `rect` (world units), returned in draw
+ * order (back to front). Overlap — "touch" semantics — not containment: a node the marquee merely
+ * grazes counts, so you needn't fully enclose a target (the Illustrator/Sketch default; the
+ * Figma-style directional contain-vs-touch is a later refinement). Inclusive edges: a rect flush
+ * against a node's edge selects it.
+ *
+ * It used to be the rotation-aware AABB, on the argument that a marquee is a fuzzy affordance and
+ * an AABB is close enough. That argument was wrong in the same way the one about clicks was: for
+ * a rotated rectangle or an L, the box contains a great deal of empty space, and a marquee dragged
+ * through that space selected a shape it visibly never touched. Clicks stopped trusting the box
+ * when `ShapeHit` landed; this is the other half.
+ *
+ * Bounds still run FIRST as the cheap reject — an AABB comparison is a handful of operations and
+ * settles almost every node — and only survivors pay for the exact test. That test decomposes the
+ * node's ink into CONVEX pieces and asks the separating axis theorem, which is where containment
+ * stops needing to be remembered: a marquee entirely inside a shape admits no separating axis.
+ *
+ * Non-finite bounds fail every comparison (NaN), so a degenerate node is silently skipped, never
+ * thrown.
  */
+/**
+ * Does this node's INK meet the world-space rectangle?
+ *
+ * The marquee is carried INTO the node's local space rather than the node out to world: an affine
+ * map takes the rectangle to a parallelogram, which is still convex and so still a valid SAT
+ * operand, and it means the decomposition is computed on the node's own untransformed outline —
+ * the same numbers `hitsShape` tests a click against. Transforming the shape instead would
+ * decompose a different polygon for every rotation.
+ *
+ * Ink with no AREA takes the other branch, on exactly the distinction `hitsShape` already makes
+ * for a click: a `core.line` and a path that carries no fill ARE their outlines, so their segments
+ * are the operands. Without that, an open pen stroke would be decomposed into nothing and become
+ * impossible to marquee — the same way it once became impossible to click.
+ *
+ * Answers TRUE when the node has no outline this can reason about: a non-invertible matrix has
+ * collapsed it to nothing on screen, and a text or image box is already exactly its own rectangle.
+ * The bounds test upstream has accepted it either way, and widening a selection is a far smaller
+ * failure than a shape the user dragged across and did not get.
+ */
+/**
+ * Decompositions, keyed by the very `HitShape` they were derived from.
+ *
+ * A marquee drag asks this question of the same nodes on every pointer move, and the answer to
+ * "what are this shape's convex pieces" cannot change between two of them — the document is not
+ * being edited, so the engine hands back the same `shape` object each time. A WeakMap turns that
+ * into one decomposition per shape instead of one per frame, and needs no invalidation: an edit
+ * builds a new `HitShape`, and the old entry becomes garbage along with it.
+ */
+const pieceCache = new WeakMap<HitShape, Ring[]>();
+
+function piecesFor(shape: HitShape, local: readonly PathCommand[]): Ring[] {
+    const cached = pieceCache.get(shape);
+    if (cached) return cached;
+    const pieces = convexPieces(commandsToRings(local));
+    pieceCache.set(shape, pieces);
+    return pieces;
+}
+
+function inkOverlapsRect(c: ComputedNode, rect: Rect): boolean {
+    const inverse = invert(c.world);
+    if (!inverse) return true;
+    const region: Ring = [
+        { x: rect.x, y: rect.y }, { x: rect.x + rect.width, y: rect.y },
+        { x: rect.x + rect.width, y: rect.y + rect.height }, { x: rect.x, y: rect.y + rect.height }
+    ].map(p => applyToPoint(inverse, p.x, p.y));
+
+    // A line's ink is the box DIAGONAL — the same segment the renderer draws and the picker tests.
+    if (c.shape.kind === "line") {
+        return edgesOverlap([{ points: [{ x: 0, y: 0 }, { x: c.local.width, y: c.local.height }], closed: false }], region);
+    }
+    const local = shapeToCommands(c.shape, c.local.width, c.local.height);
+    if (!local) return true;
+    if (c.shape.kind === "path" && !c.shape.filled) {
+        return edgesOverlap(flattenPath(local), region);
+    }
+    const pieces = piecesFor(c.shape, local);
+    // No area at all — a collapsed or degenerate node. It covers nothing, so it meets nothing.
+    return pieces.length === 0 ? false : piecesOverlap(pieces, region);
+}
+
 export function nodesInRect(state: ComputedState, rect: Rect): string[] {
     const rx2 = rect.x + rect.width;
     const ry2 = rect.y + rect.height;
@@ -454,6 +528,7 @@ export function nodesInRect(state: ComputedState, rect: Rect): string[] {
         if (!c) continue;
         const b = c.bounds;
         if (!(b.x <= rx2 && b.x + b.width >= rect.x && b.y <= ry2 && b.y + b.height >= rect.y)) continue;
+        if (!inkOverlapsRect(c, rect)) continue;
         // A marquee never scatters the selection across an instance's internals — a box over an
         // instance grabs the INSTANCE, the same containment intuition a group gives. But a copy
         // that overflows its instance's box must still count, or the marquee misses content the
