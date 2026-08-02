@@ -29,6 +29,22 @@ export interface EditorState {
      */
     playState: string | null;
     /**
+     * A running NAVIGATION (schema 36): the viewport gliding from where it was to the frame an
+     * interaction pointed at. Kept beside the state transition rather than folded into it,
+     * because they are independent — one interaction can change the screen, change the state, or
+     * do both, and each has its own start and end.
+     */
+    viewportTransition: { from: EditorState["viewport"]; to: EditorState["viewport"]; startedAt: number; duration: number; easing: Easing } | null;
+    /**
+     * Where the canvas was looking when PLAY started, restored when it stops.
+     *
+     * A prototype run navigates the viewport, and the viewport is editor state — so without this,
+     * pressing Play, clicking through three screens and pressing Stop leaves you somewhere you
+     * never chose to be. "Playing is not editing" has to cover where you are looking as well as
+     * what the document says.
+     */
+    playReturnViewport: EditorState["viewport"] | null;
+    /**
      * The transition currently running, or null. `startedAt` is a timestamp the app's clock
      * compares against; the blend factor is derived from it per frame rather than stored, so a
      * dropped frame lands in the right place instead of accumulating drift.
@@ -78,6 +94,49 @@ export function clampViewport(vp: EditorState["viewport"]): void {
     const limit = PAN_LIMIT * vp.zoom;
     vp.x = Math.max(-limit, Math.min(limit, vp.x));
     vp.y = Math.max(-limit, Math.min(limit, vp.y));
+}
+
+/**
+ * The viewport that FITS a world rect into a canvas, with a margin — "zoom to this frame".
+ *
+ * From `screen = z·world − vp`: the zoom is whichever axis is tighter, and the offset places the
+ * rect's world centre at the canvas centre. A degenerate rect (a zero-extent line, an empty
+ * frame) would divide by zero, so each axis falls back to the current zoom rather than producing
+ * an infinity that `clampViewport` would then silently pin to a limit.
+ *
+ * Clamped like every other viewport change, so navigating to a huge or microscopic frame lands
+ * somewhere reachable instead of somewhere the user cannot get back from.
+ */
+export function viewportToFit(
+    bounds: { x: number; y: number; width: number; height: number },
+    size: { width: number; height: number },
+    padding: number,
+    fallbackZoom: number
+): EditorState["viewport"] {
+    const w = bounds.width + padding * 2, h = bounds.height + padding * 2;
+    const zx = w > 0 ? size.width / w : fallbackZoom;
+    const zy = h > 0 ? size.height / h : fallbackZoom;
+    const zoom = Math.min(zx, zy);
+    const cx = bounds.x + bounds.width / 2, cy = bounds.y + bounds.height / 2;
+    const vp = { zoom, x: zoom * cx - size.width / 2, y: zoom * cy - size.height / 2 };
+    clampViewport(vp);
+    return vp;
+}
+
+/**
+ * A viewport part-way between two others — the frame a NAVIGATION is currently on.
+ *
+ * Zoom interpolates GEOMETRICALLY (a constant ratio per unit time), which is what makes a zoom
+ * feel even: linear interpolation from 0.1 to 10 spends most of its run barely moving and then
+ * lurches. The offsets follow linearly, so the two ends are exact.
+ */
+export function lerpViewport(a: EditorState["viewport"], b: EditorState["viewport"], t: number): EditorState["viewport"] {
+    const k = t <= 0 ? 0 : t >= 1 ? 1 : t;
+    return {
+        x: a.x + (b.x - a.x) * k,
+        y: a.y + (b.y - a.y) * k,
+        zoom: a.zoom > 0 && b.zoom > 0 ? a.zoom * Math.pow(b.zoom / a.zoom, k) : b.zoom
+    };
 }
 
 /**
@@ -134,6 +193,8 @@ export function createEditorState(): EditorState {
         isDragging: false,
         playing: false,
         playState: null,
+        viewportTransition: null,
+        playReturnViewport: null,
         transition: null,
         previewRect: null,
         marqueeRect: null,

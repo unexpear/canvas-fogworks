@@ -291,6 +291,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "32") { raw = migrate_32_to_33(raw); version = "33"; }
     if (version === "33") { raw = migrate_33_to_34(raw); version = "34"; }
     if (version === "34") { raw = migrate_34_to_35(raw); version = "35"; }
+    if (version === "35") { raw = migrate_35_to_36(raw); version = "36"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -610,6 +611,17 @@ function migrate_21_to_22(raw: any): any {
  * it is not at rest: an old build ignores the field, so a prototype that responds to a click in
  * one build is inert in the other — the same file, two different documents to use.
  */
+/**
+ * 35 -> 36: an interaction may NAVIGATE — `Interaction.target`, a node the viewport moves to fit.
+ *
+ * One new optional field on a field that is itself new; absent means the interaction only changes
+ * state, exactly as before. The bump is required for the same reason 34->35 was: an old build
+ * ignores it, so a prototype that changes screen in one build stays put in the other.
+ */
+function migrate_35_to_36(raw: any): any {
+    return { ...raw, version: "36" };
+}
+
 function migrate_34_to_35(raw: any): any {
     return { ...raw, version: "35" };
 }

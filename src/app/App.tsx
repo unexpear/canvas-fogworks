@@ -42,6 +42,7 @@ import { booleanAction, makeBooleanNodeAction } from "../core/actions/booleanAct
 import { SetBooleanOpAction } from "../core/actions/SetBooleanOpAction";
 import { BooleanOp, TEXT_ALIGNS, FONT_FAMILY_MAX, StateDefinition } from "../core/document/Node";
 import { blendStates, easingAt, TRIGGERS, EASINGS, TRANSITION_MAX_MS, Interaction, Trigger, Easing } from "../core/document/Prototype";
+import { lerpViewport } from "../editor/EditorState";
 import { SetInteractionsAction } from "../core/actions/SetInteractionsAction";
 import { applyActiveState } from "../core/document/Components";
 import { DuplicateNodesAction } from "../core/actions/DuplicateNodesAction";
@@ -532,6 +533,16 @@ export function App() {
                         easingAt(es.transition.easing, (Date.now() - es.transition.startedAt) / es.transition.duration),
                         applyActiveState)
                     : applyActiveState({ ...(stored as ProjectDocument), activeState: es.playState ?? undefined } as ProjectDocument);
+            // NAVIGATION (schema 36): the viewport glides to the frame an interaction pointed at.
+            // Written onto the LIVE viewport rather than kept beside it, because everything —
+            // rendering, picking, the rulers — already reads that one object; a second source of
+            // truth for "where we are looking" is how those drift apart.
+            if (es.playing && es.viewportTransition) {
+                const vt = es.viewportTransition;
+                const k = easingAt(vt.easing, (Date.now() - vt.startedAt) / vt.duration);
+                Object.assign(es.viewport, lerpViewport(vt.from, vt.to, k));
+                if (Date.now() - vt.startedAt >= vt.duration) es.viewportTransition = null;
+            }
             const pendingKeys = new Set(es.pendingGeometry ? [...es.pendingGeometry.keys()] : []);
 
             // The dirty set the engine consumes must be a SUPERSET of everything whose
@@ -572,8 +583,8 @@ export function App() {
             // The animation clock. A transition is redrawn until its duration is up, then cleared
             // — so the running state is derived from a TIMESTAMP rather than accumulated per
             // frame, and a dropped frame lands in the right place instead of drifting.
-            if (es.playing && es.transition) {
-                if (Date.now() - es.transition.startedAt >= es.transition.duration) es.transition = null;
+            if (es.playing && (es.transition || es.viewportTransition)) {
+                if (es.transition && Date.now() - es.transition.startedAt >= es.transition.duration) es.transition = null;
                 requestAnimationFrame(() => refresh());
             }
         }
@@ -932,6 +943,16 @@ export function App() {
                         es.playing = !es.playing;
                         es.playState = null;
                         es.transition = null;
+                        es.viewportTransition = null;
+                        // Starting REMEMBERS where the canvas was looking; stopping puts it back.
+                        // A prototype run navigates, and being dumped three screens away from
+                        // where you pressed Play is the editor losing your place.
+                        if (es.playing) {
+                            es.playReturnViewport = { ...es.viewport };
+                        } else if (es.playReturnViewport) {
+                            Object.assign(es.viewport, es.playReturnViewport);
+                            es.playReturnViewport = null;
+                        }
                         if (es.playing) es.selectedNodeIds = [];   // nothing is selected in a prototype
                         refresh();
                     }}
@@ -1417,6 +1438,21 @@ export function App() {
                                             onChange={e => { setInteraction(i, { state: e.target.value === "" ? null : e.target.value }); refresh(); }}
                                             style={{ ...SELECT_STYLE, flex: 1, minWidth: 0 }}
                                         />
+                                        {/* NAVIGATE: pick a node to move the viewport to. The list is
+                                            every frame-ish root, and "—" means stay where we are. */}
+                                        <select
+                                            value={it.target ?? ""}
+                                            title="Navigate to — the viewport moves to fit this node"
+                                            onChange={e => { setInteraction(i, { target: e.target.value === "" ? undefined : e.target.value }); refresh(); }}
+                                            style={{ ...SELECT_STYLE, width: 92 }}
+                                        >
+                                            <option value="">— stay —</option>
+                                            {dispatcher.getDocument().rootNodeUuids.map(id => (
+                                                <option key={id} value={id}>
+                                                    {dispatcher.getDocument().nodes.get(id)?.name ?? id.slice(0, 8)}
+                                                </option>
+                                            ))}
+                                        </select>
                                         <input
                                             type="number"
                                             value={it.duration ?? 0}

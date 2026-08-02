@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v35 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v36 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -659,7 +659,7 @@ const TRIGGERS = ["click", "hover", "press"] as const;
 const EASINGS = ["linear", "ease-in", "ease-out", "ease-in-out"] as const;
 const TRANSITION_MAX_MS: number;   // 60_000 — a hand-editable field, so bounded
 const INTERACTIONS_MAX: number;    // 64 per node — the OOM guard, like STATES_MAX
-interface Interaction { trigger: Trigger; state: string | null; duration?: number; easing?: Easing }
+interface Interaction { trigger: Trigger; state: string | null; target?: string; duration?: number; easing?: Easing }
 interface Node { interactions?: Interaction[] }
 function interactionsError(interactions: unknown): string | null;   // shared load + edit
 ```
@@ -684,6 +684,8 @@ from having selected that state.
 | a numeric style slot blends only when BOTH ends are concrete | a `$token` is a reference; averaging it with a number produces neither |
 | a non-hex colour SNAPS at the halfway point | it has no channels to mix before the render model resolves it — visible and explainable beats silently wrong |
 | easing CLAMPS outside [0,1] | a frame that arrives late must land on the end state, not past it |
+| `target` (schema 36) NAVIGATES: the viewport moves to fit that node | changing SCREEN is the other half of prototyping; a dangling target is inert, like the state name |
+| a navigation's zoom interpolates GEOMETRICALLY | linear zoom over a wide range barely moves, then lurches |
 | the blended document carries NO `activeState` | every consumer resolves through `resolveScene`, which applies it again — naming the target overwrote the interpolation with the target's own values |
 | a captured state records geometry and transform, not just style | `blendStates` interpolates them, so style-only capture left most of the transition machinery with no authorable input |
 

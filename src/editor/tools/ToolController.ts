@@ -9,7 +9,7 @@ import { UpdateNodeGeometryAction } from "../../core/actions/UpdateNodeGeometryA
 import { UpdateNodeTransformAction } from "../../core/actions/UpdateNodeTransformAction";
 import { DeleteNodeAction } from "../../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../../core/actions/TransactionAction";
-import { EditorState, panBy, screenToWorld } from "../EditorState";
+import { EditorState, panBy, screenToWorld, viewportToFit } from "../EditorState";
 import { computeGeometry, ComputedState, hitTest, selectionBounds } from "../../core/geometry/GeometryEngine";
 import { interactionFor, Trigger } from "../../core/document/Prototype";
 import { PICK_RADIUS_PX } from "./SelectTool";
@@ -38,6 +38,10 @@ export interface Tool {
 
 /** Middle mouse button (per the MouseEvent.button spec). */
 const MIDDLE_BUTTON = 1;
+
+/** Margin left around a navigated-to frame, in SCREEN px — a prototype screen that touches
+ *  every edge reads as clipped rather than framed. */
+const NAVIGATE_PADDING_PX = 24;
 
 export class ToolController {
     private activeTool: Tool | null = null;
@@ -294,9 +298,24 @@ export class ToolController {
         const from = this.editorState.playState;
         this.editorState.playState = interaction.state;
         const duration = interaction.duration ?? 0;
+        const easing = interaction.easing ?? "linear";
         this.editorState.transition = duration > 0
-            ? { from, to: interaction.state, startedAt: Date.now(), duration, easing: interaction.easing ?? "linear" }
+            ? { from, to: interaction.state, startedAt: Date.now(), duration, easing }
             : null;
+
+        // NAVIGATION (schema 36): move the viewport to fit the target. A dangling target simply
+        // does not navigate — the same inert-reference rule the state name follows — so deleting
+        // a frame degrades the prototype rather than breaking the document.
+        const targetBounds = interaction.target ? computed.nodes.get(interaction.target)?.bounds : undefined;
+        if (targetBounds) {
+            const to = viewportToFit(targetBounds, { width: canvasRect.width, height: canvasRect.height }, NAVIGATE_PADDING_PX, vp.zoom);
+            if (duration > 0) {
+                this.editorState.viewportTransition = { from: { ...vp }, to, startedAt: Date.now(), duration, easing };
+            } else {
+                this.editorState.viewportTransition = null;
+                Object.assign(this.editorState.viewport, to);
+            }
+        }
         this.refresh();
         return true;
     }

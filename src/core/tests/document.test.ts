@@ -49,6 +49,7 @@ import { TEXT_ALIGNS, FONT_FAMILY_MAX } from "../document/Node";
 import { blendColor, blendStates, easingAt, interactionFor, interactionsError, Interaction, Trigger, TRANSITION_MAX_MS, INTERACTIONS_MAX } from "../document/Prototype";
 import { applyActiveState } from "../document/Components";
 import { SetInteractionsAction } from "../actions/SetInteractionsAction";
+import { viewportToFit, lerpViewport } from "../../editor/EditorState";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
@@ -4316,7 +4317,7 @@ describe("Guards the suite did not previously protect", () => {
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
         // time a real migration is added — here, when 32→33 landed for `core.boolean`.)
-        expect(() => migrateIfNeeded(legacy, "36")).toThrow('Migration not implemented for document schema "35"');
+        expect(() => migrateIfNeeded(legacy, "37")).toThrow('Migration not implemented for document schema "36"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -11774,5 +11775,113 @@ describe("Prototype interactions and transitions", () => {
         expect(src).toMatch(/prevComputedRef\.current = es\.playing \? null : computed;/);
         // Stopping clears the run's state, so the document is exactly as it was.
         expect(src).toMatch(/es\.playing = !es\.playing;[\s\S]{0,120}es\.playState = null;[\s\S]{0,60}es\.transition = null;/);
+    });
+});
+
+// ─── Prototype NAVIGATION (schema 36): a click can change the screen ───
+describe("Prototype navigation", () => {
+    const rect = { left: 0, top: 0, width: 800, height: 600 } as DOMRect;
+    const md = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+
+    /** Two screens side by side; the first has a button that navigates to the second. */
+    const twoScreens = (interaction: Interaction): ProjectDocument => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("S1", { id: "S1", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 400, height: 300 }, style: { fill: "#111111", opacity: 1 }, layout: {}, interactions: [interaction] } as Node);
+        doc.nodes.set("S2", { id: "S2", type: "core.rectangle", parent: null, children: [], geometry: { x: 1000, y: 500, width: 400, height: 300 }, style: { fill: "#222222", opacity: 1 }, layout: {} } as Node);
+        doc.rootNodeUuids = ["S1", "S2"];
+        return doc;
+    };
+
+    test("viewportToFit centres a rect and picks the tighter axis", () => {
+        // screen = z·world − vp, so fitting means: the tighter axis sets the zoom, and the offset
+        // puts the rect's world centre at the canvas centre.
+        const vp = viewportToFit({ x: 0, y: 0, width: 400, height: 200 }, { width: 800, height: 600 }, 0, 1);
+        expect(vp.zoom).toBe(2);                    // 800/400 = 2 beats 600/200 = 3
+        expect(vp.x).toBe(2 * 200 - 400);           // z·cx − size/2
+        expect(vp.y).toBe(2 * 100 - 300);
+        // Padding shrinks the fit on both axes.
+        expect(viewportToFit({ x: 0, y: 0, width: 400, height: 200 }, { width: 800, height: 600 }, 100, 1).zoom)
+            .toBeCloseTo(800 / 600, 10);
+        // A degenerate rect falls back to the current zoom rather than dividing by zero.
+        const flat = viewportToFit({ x: 0, y: 0, width: 0, height: 0 }, { width: 800, height: 600 }, 0, 3);
+        expect(flat.zoom).toBe(3);
+        expect(Number.isFinite(flat.x) && Number.isFinite(flat.y)).toBe(true);
+        // …and the result is CLAMPED like every other viewport change.
+        expect(viewportToFit({ x: 0, y: 0, width: 1, height: 1 }, { width: 800, height: 600 }, 0, 1).zoom).toBeLessThanOrEqual(20);
+    });
+
+    test("a viewport blend moves the offsets linearly and the zoom GEOMETRICALLY", () => {
+        const a = { x: 0, y: 0, zoom: 1 }, b = { x: 100, y: 200, zoom: 4 };
+        expect(lerpViewport(a, b, 0)).toEqual(a);
+        expect(lerpViewport(a, b, 1)).toEqual(b);
+        const mid = lerpViewport(a, b, 0.5);
+        expect(mid.x).toBe(50);
+        expect(mid.y).toBe(100);
+        // Geometric: the halfway point of 1→4 is 2, not 2.5. Linear zoom spends most of a big
+        // range barely moving and then lurches.
+        expect(mid.zoom).toBeCloseTo(2, 10);
+        expect(lerpViewport(a, b, 1.5)).toEqual(b);   // clamped, like the state blend
+    });
+
+    test("a click NAVIGATES: the viewport ends up fitting the target", () => {
+        const doc = twoScreens({ trigger: "click", state: null, target: "S2" });
+        const es = createEditorState();
+        const tc = new ToolController(new ActionDispatcher(doc), es, () => { });
+        es.playing = true;
+        tc.onMouseDown(md(200, 150), rect);          // on the first screen
+        // Instant (no duration): the viewport is already there, with no transition left running.
+        expect(es.viewportTransition).toBeNull();
+        const expected = viewportToFit({ x: 1000, y: 500, width: 400, height: 300 }, { width: 800, height: 600 }, 24, 1);
+        expect(es.viewport.zoom).toBeCloseTo(expected.zoom, 10);
+        expect(es.viewport.x).toBeCloseTo(expected.x, 10);
+        expect(es.viewport.y).toBeCloseTo(expected.y, 10);
+    });
+
+    test("with a duration the navigation is an ANIMATION, starting where the viewport was", () => {
+        const doc = twoScreens({ trigger: "click", state: null, target: "S2", duration: 500, easing: "ease-out" });
+        const es = createEditorState();
+        es.viewport = { x: 7, y: 9, zoom: 1.5 };
+        const tc = new ToolController(new ActionDispatcher(doc), es, () => { });
+        es.playing = true;
+        tc.onMouseDown(md(200, 150), rect);
+        expect(es.viewportTransition).toMatchObject({ from: { x: 7, y: 9, zoom: 1.5 }, duration: 500, easing: "ease-out" });
+        // The viewport itself has NOT jumped — the app's clock moves it frame by frame.
+        expect(es.viewport).toEqual({ x: 7, y: 9, zoom: 1.5 });
+    });
+
+    test("a DANGLING target does not navigate, and does not break the interaction", () => {
+        // Deleting a frame must degrade the prototype, not break the document — the same inert
+        // rule the state name follows.
+        const doc = twoScreens({ trigger: "click", state: "big", target: "deleted-screen" });
+        const es = createEditorState();
+        const before = { ...es.viewport };
+        const tc = new ToolController(new ActionDispatcher(doc), es, () => { });
+        es.playing = true;
+        tc.onMouseDown(md(200, 150), rect);
+        expect(es.viewport).toEqual(before);      // nowhere to go
+        expect(es.viewportTransition).toBeNull();
+        expect(es.playState).toBe("big");         // …but the STATE half still fired
+    });
+
+    test("the target is validated like every other reference, and round-trips", () => {
+        expect(interactionsError([{ trigger: "click", state: null, target: "S2" }])).toBeNull();
+        expect(interactionsError([{ trigger: "click", state: null, target: "" }])).toContain("target");
+        expect(interactionsError([{ trigger: "click", state: null, target: 5 }])).toContain("target");
+        const doc = twoScreens({ trigger: "click", state: null, target: "S2", duration: 300 });
+        const loaded = deserializeDocument(serializeDocument(doc));
+        expect(loaded.nodes.get("S1")!.interactions![0]).toEqual({ trigger: "click", state: null, target: "S2", duration: 300 });
+    });
+
+    test("stopping play clears a running navigation, and the app drives it on the LIVE viewport", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/Object\.assign\(es\.viewport, lerpViewport\(vt\.from, vt\.to, k\)\)/);
+        // The rAF loop must stay alive while EITHER transition runs, or a navigation with no
+        // state change would render one frame and stop halfway.
+        expect(src).toMatch(/es\.playing && \(es\.transition \|\| es\.viewportTransition\)/);
+        expect(src).toMatch(/es\.viewportTransition = null;/);
+        // Starting REMEMBERS the viewport and stopping restores it: a prototype run navigates,
+        // and "playing is not editing" has to cover where you are looking, not just the document.
+        expect(src).toMatch(/es\.playReturnViewport = \{ \.\.\.es\.viewport \};/);
+        expect(src).toMatch(/Object\.assign\(es\.viewport, es\.playReturnViewport\);/);
     });
 });

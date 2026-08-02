@@ -47,6 +47,15 @@ export interface Interaction {
     duration?: number;
     /** Absent = "linear". */
     easing?: Easing;
+    /**
+     * NAVIGATE to a node (schema 36): the viewport moves to fit it, which is how a prototype
+     * changes SCREEN rather than merely changing what one screen looks like.
+     *
+     * A node id, dangling allowed — deleting a frame must not make a document unloadable, so an
+     * unresolvable target simply does not navigate. An interaction may carry a target, a state,
+     * or both: "go to the next screen AND light up the button you pressed" is one gesture.
+     */
+    target?: string;
 }
 
 /**
@@ -69,6 +78,8 @@ export function interactionsError(interactions: unknown): string | null {
         if (i.duration !== undefined && (typeof i.duration !== "number" || !Number.isFinite(i.duration)
             || i.duration < 0 || i.duration > TRANSITION_MAX_MS)) return `interaction.duration must be within [0, ${TRANSITION_MAX_MS}]`;
         if (i.easing !== undefined && !(EASINGS as readonly unknown[]).includes(i.easing)) return `interaction.easing must be one of ${EASINGS.join(", ")}`;
+        // A DANGLING target is inert, like a dangling state name — only its shape is checked.
+        if (i.target !== undefined && (typeof i.target !== "string" || i.target.length === 0)) return "interaction.target must be a non-empty string";
     }
     return null;
 }

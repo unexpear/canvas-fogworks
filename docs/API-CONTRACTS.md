@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v35 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v36 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -568,6 +568,10 @@ function clampViewport(vp): void;            // zoom ∈ [0.05, 20]; pan ±10000
 // Pure viewport math (node-tested); each mutates vp then re-clamps.
 function panBy(vp, dx: number, dy: number): void;                 // SCREEN-px pan (zoom-independent)
 function zoomAt(vp, factor: number, cursorX: number, cursorY: number): void; // cursor-anchored zoom
+// PROTOTYPE NAVIGATION (schema 36) — pure, and RETURNING a viewport rather than mutating one,
+// because a navigation needs both ends to interpolate between.
+function viewportToFit(bounds: Rect, size: Size, padding: number, fallbackZoom: number): EditorState["viewport"]; // "zoom to this frame": the tighter axis wins, the rect is centred, the result is CLAMPED; a degenerate rect keeps the current zoom rather than dividing by zero
+function lerpViewport(a, b, t: number): EditorState["viewport"];  // offsets LINEARLY, zoom GEOMETRICALLY (a linear zoom over a wide range barely moves, then lurches); t clamped to [0,1]
 function screenToWorld(vp, canvasRect: { left: number; top: number }, clientX: number, clientY: number): { x: number; y: number }; // the one sanctioned screen→world inverse, shared by all tools
 
 interface Tool {                             // all methods optional
