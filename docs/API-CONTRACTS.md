@@ -94,6 +94,14 @@ function dropHidden(doc: ReadonlyDocument): ReadonlyDocument;   // SAME referenc
 type DropPosition = "before" | "after" | "inside";   // a row's top edge, bottom edge, or middle
 interface LayerDrop { parent: string | null; index: number }  // index measured AFTER the node is detached
 function resolveLayerDrop(doc, dragged, target, position): LayerDrop | null;   // null = refuse the drop
+// editor/layerSelection.ts — what a row click selects. A shift RANGE spans the VISIBLE row
+// order the panel passes in, not the document: rows the user cannot see are not between
+// anything. The anchor does NOT move on shift, so a range can be grown and shrunk.
+function selectionForRowClick(visible, current, anchor, clicked, mods): { selected: string[]; anchor: string | null };
+// editor/layerFilter.ts — which rows a search leaves visible. A node stays when it matches OR
+// anything beneath it does, so the panel shows the PATH to every hit; the caller treats a
+// filtered tree as fully expanded, since a hit inside a collapsed group must be reachable.
+function filterLayers(doc, query, labelOf): { visible: Set<string>; matched: Set<string>; inactive: boolean };
 ```
 
 `applyMutations` detaches before inserting, so an index measured against the list as it looks

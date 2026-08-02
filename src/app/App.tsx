@@ -21,6 +21,8 @@ import { SetSlotAction, SetSlotContentAction } from "../core/actions/SlotActions
 import { SetNodeStateAction, SetActiveStateAction } from "../core/actions/StateActions";
 import { SetNodeFlagsAction } from "../core/actions/SetNodeFlagsAction";
 import { resolveLayerDrop, DropPosition } from "../editor/layerDrop";
+import { selectionForRowClick, ClickModifiers } from "../editor/layerSelection";
+import { filterLayers } from "../editor/layerFilter";
 import { ReparentNodeAction } from "../core/actions/ReparentNodeAction";
 import { variantProperties, resolveVariantMaster, masterSubtreeIds } from "../core/document/Components";
 import { parseTrackList, formatTrackList } from "../core/document/TrackList";
@@ -227,6 +229,10 @@ export function App() {
     // Kept in React state (not a ref) because the row that is being hovered has to REDRAW to
     // show the indicator — a ref would move the data without moving the picture.
     const [layerDrag, setLayerDrag] = useState<{ id: string; over: string | null; position: DropPosition | null }>({ id: "", over: null, position: null });
+    const [layerQuery, setLayerQuery] = useState("");
+    // The row a shift-click measures from. Panel-local: it is an affordance, not document
+    // state, and it must survive a re-render without causing one.
+    const layerAnchorRef = useRef<string | null>(null);
     // Consolidated UI state — one setState per refresh (React batches it into a
     // single commit). `tick` drives the imperative canvas repaint effect.
     const [ui, setUi] = useState<{ tick: number; selectedNodeId: string | null; canUndo: boolean; canRedo: boolean; truncated: boolean }>({
@@ -935,12 +941,31 @@ export function App() {
             <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
                 <div style={{ width: 180, background: UI.panel, borderRight: `1px solid ${UI.line}`, overflow: "auto", padding: 8 }}>
                     <div style={PANEL_HEADING}>Layers</div>
+                    <input
+                        type="text"
+                        value={layerQuery}
+                        placeholder="Search layers…"
+                        onChange={e => setLayerQuery(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Escape") setLayerQuery(""); }}
+                        style={{ width: "100%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px", marginBottom: 6,
+                            background: UI.bg, color: UI.text, border: `1px solid ${layerQuery ? UI.accent : UI.line}`, borderRadius: 2 }}
+                    />
                     {(() => {
                         // Walk the REAL tree: roots, then each node's children, depth-first. The
                         // panel was a flat list from `traverseSceneGraph`, which had no way to show
                         // the hierarchy that frames, groups and instances now create.
                         const doc = dispatcher.getDocument();
                         const rows: React.ReactNode[] = [];
+                        const labelOf = (id: string) => {
+                            const n = doc.nodes.get(id);
+                            return n ? (n.name || nodeTypeLabels[n.type] || n.type) : id;
+                        };
+                        // The SAME label the row displays, so the filter cannot disagree with
+                        // what the user is reading.
+                        const filter = filterLayers(doc, layerQuery, labelOf);
+                        // The order rows are actually RENDERED in — what a shift-click range
+                        // means. Rows the user cannot see are not between anything.
+                        const visibleOrder: string[] = [];
                         // Both flags INHERIT, so the walk carries them down rather than each row
                         // re-deriving them by climbing — the panel then agrees with the engine,
                         // which computes lock the same way during its own parents-first walk.
@@ -948,8 +973,12 @@ export function App() {
                             for (const id of ids) {
                                 const n = doc.nodes.get(id);
                                 if (!n) continue;
+                                if (!filter.inactive && !filter.visible.has(id)) continue;
                                 const hasChildren = n.children.length > 0;
-                                const isCollapsed = collapsedLayers.has(id);
+                                // While filtering, a hit inside a collapsed group must be
+                                // reachable — otherwise search only finds what was already open.
+                                const isCollapsed = filter.inactive ? collapsedLayers.has(id) : false;
+                                visibleOrder.push(id);
                                 rows.push(
                                     <LayerRow
                                         key={id}
@@ -1001,7 +1030,12 @@ export function App() {
                                             refresh();
                                         }}
                                         label={n.name || nodeTypeLabels[n.type] || n.type}
-                                        onSelect={() => { es.selectedNodeIds = [id]; refresh(); }}
+                                        onSelect={mods => {
+                                            const next = selectionForRowClick(visibleOrder, es.selectedNodeIds, layerAnchorRef.current, id, mods);
+                                            es.selectedNodeIds = next.selected;
+                                            layerAnchorRef.current = next.anchor;
+                                            refresh();
+                                        }}
                                         onToggle={() => {
                                             const next = new Set(collapsedLayers);
                                             next.has(id) ? next.delete(id) : next.add(id);
@@ -2187,7 +2221,7 @@ function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout,
     /** True when an ANCESTOR is hidden/locked — both inherit, so the row shows the effect
      *  without pretending the flag is set on this node. */
     inheritedHidden: boolean; inheritedLocked: boolean;
-    onSelect: () => void; onToggle: () => void; onFlag: (flags: { hidden?: boolean; locked?: boolean }) => void; label: string;
+    onSelect: (mods: ClickModifiers) => void; onToggle: () => void; onFlag: (flags: { hidden?: boolean; locked?: boolean }) => void; label: string;
     /** Drag-to-reorder. `dropHint` is where the pointer currently is within THIS row, so the
      *  row can draw the line that says what the release will do. */
     dropHint: DropPosition | null;
@@ -2213,7 +2247,7 @@ function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout,
             }}
             onDrop={e => { e.preventDefault(); onDrop(); }}
             onDragEnd={onDragEnd}
-            onClick={onSelect}
+            onClick={e => onSelect({ shift: e.shiftKey, ctrl: e.ctrlKey, meta: e.metaKey })}
             onMouseEnter={() => setHover(true)}
             onMouseLeave={() => setHover(false)}
             title={`${label} — ${node.id.slice(0, 8)}`}

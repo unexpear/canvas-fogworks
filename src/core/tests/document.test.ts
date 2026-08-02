@@ -16,6 +16,8 @@ import { SetSlotAction, SetSlotContentAction } from "../actions/SlotActions";
 import { SetNodeStateAction, SetActiveStateAction } from "../actions/StateActions";
 import { SetNodeFlagsAction } from "../actions/SetNodeFlagsAction";
 import { resolveLayerDrop } from "../../editor/layerDrop";
+import { selectionForRowClick } from "../../editor/layerSelection";
+import { filterLayers } from "../../editor/layerFilter";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy , overrideTargetFor} from "../actions/nodeEdit";
@@ -9968,5 +9970,117 @@ describe("Opacity: a group's fade reaches its contents", () => {
         expect(src).toMatch(/onOpacity\(Math\.min\(1, Math\.max\(0, pct \/ 100\)\)\)/);
         // …and it refuses a half-typed value rather than snapping the node to invisible.
         expect(src).toMatch(/if \(!Number\.isFinite\(pct\)\) return;/);
+    });
+});
+
+
+// ─── Layer panel: multi-select and search ───
+describe("selectionForRowClick", () => {
+    const rows = ["A", "B", "C", "D", "E"];
+
+    test("a plain click selects one row and becomes the anchor", () => {
+        expect(selectionForRowClick(rows, ["A", "B"], "A", "D")).toEqual({ selected: ["D"], anchor: "D" });
+    });
+
+    test("ctrl/cmd TOGGLES without disturbing the rest", () => {
+        expect(selectionForRowClick(rows, ["A"], "A", "C", { ctrl: true })).toEqual({ selected: ["A", "C"], anchor: "C" });
+        expect(selectionForRowClick(rows, ["A", "C"], "C", "A", { meta: true })).toEqual({ selected: ["C"], anchor: "A" });
+        // Toggling the last one off leaves an empty selection rather than snapping back to one.
+        expect(selectionForRowClick(rows, ["A"], "A", "A", { ctrl: true })).toEqual({ selected: [], anchor: "A" });
+    });
+
+    test("shift selects the contiguous range, in either direction", () => {
+        expect(selectionForRowClick(rows, ["B"], "B", "D", { shift: true }).selected).toEqual(["B", "C", "D"]);
+        expect(selectionForRowClick(rows, ["D"], "D", "B", { shift: true }).selected).toEqual(["B", "C", "D"]);
+    });
+
+    test("the anchor does NOT move on shift, so the range can be grown and shrunk", () => {
+        // The bug this avoids: moving the anchor to the clicked row makes each shift-click walk
+        // the range down the list instead of resizing it from a fixed end.
+        const first = selectionForRowClick(rows, ["B"], "B", "D", { shift: true });
+        expect(first.anchor).toBe("B");
+        const grown = selectionForRowClick(rows, first.selected, first.anchor, "E", { shift: true });
+        expect(grown.selected).toEqual(["B", "C", "D", "E"]);
+        const shrunk = selectionForRowClick(rows, grown.selected, grown.anchor, "C", { shift: true });
+        expect(shrunk.selected).toEqual(["B", "C"]);
+    });
+
+    test("shift with no usable anchor falls back to a plain click rather than guessing", () => {
+        expect(selectionForRowClick(rows, [], null, "C", { shift: true })).toEqual({ selected: ["C"], anchor: "C" });
+        // An anchor that is no longer visible (collapsed away, or filtered out) is not a range.
+        expect(selectionForRowClick(rows, ["C"], "GONE", "C", { shift: true })).toEqual({ selected: ["C"], anchor: "C" });
+    });
+
+    test("a range spans the VISIBLE order, not the document order", () => {
+        // Rows the user cannot see are not between anything — selecting them would pick up nodes
+        // that were never on screen, which is the whole reason the caller passes what it rendered.
+        const visible = ["A", "D", "E"];                 // B and C are collapsed or filtered away
+        expect(selectionForRowClick(visible, ["A"], "A", "E", { shift: true }).selected).toEqual(["A", "D", "E"]);
+    });
+});
+
+describe("filterLayers", () => {
+    /** Three levels, so "keeps the parent" and "keeps every ancestor" are distinguishable. */
+    function treeDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        const mk = (id: string, kids: string[], parent: string | null, name?: string) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent, children: kids, geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#111111", opacity: 1 }, layout: {}, ...(name ? { name } : {}) });
+        mk("PAGE", ["CARD", "ASIDE"], null, "Page");
+        mk("CARD", ["TITLE"], "PAGE", "Card");
+        mk("TITLE", [], "CARD", "Headline");
+        mk("ASIDE", [], "PAGE", "Sidebar");
+        doc.rootNodeUuids = ["PAGE"];
+        return doc;
+    }
+    const labelOf = (doc: ProjectDocument) => (id: string) => doc.nodes.get(id)?.name ?? id;
+
+    test("an empty query is INACTIVE, so the caller skips filtering entirely", () => {
+        const doc = treeDoc();
+        expect(filterLayers(doc, "", labelOf(doc)).inactive).toBe(true);
+        expect(filterLayers(doc, "   ", labelOf(doc)).inactive).toBe(true);
+    });
+
+    test("a match keeps EVERY ancestor, not just its parent", () => {
+        // Two levels of ancestry: keeping only the parent would leave CARD visible at depth 1
+        // with no PAGE above it — a row at the wrong depth, belonging to nothing.
+        const doc = treeDoc();
+        const f = filterLayers(doc, "headline", labelOf(doc));
+        expect(f.matched).toEqual(new Set(["TITLE"]));
+        expect(f.visible).toEqual(new Set(["TITLE", "CARD", "PAGE"]));
+        expect(f.visible.has("ASIDE")).toBe(false);       // an unrelated branch is gone
+    });
+
+    test("matching is case-insensitive and substring, on the label the row SHOWS", () => {
+        const doc = treeDoc();
+        expect(filterLayers(doc, "CARD", labelOf(doc)).matched).toEqual(new Set(["CARD"]));
+        expect(filterLayers(doc, "ead", labelOf(doc)).matched).toEqual(new Set(["TITLE"]));
+        expect(filterLayers(doc, "nothing here", labelOf(doc)).visible.size).toBe(0);
+    });
+
+    test("a matching ANCESTOR does not drag its children back in", () => {
+        // Searching "Card" should show the path to Card, not everything under it — otherwise a
+        // query near the root just redraws the whole tree.
+        const doc = treeDoc();
+        const f = filterLayers(doc, "card", labelOf(doc));
+        expect(f.visible).toEqual(new Set(["CARD", "PAGE"]));
+        expect(f.visible.has("TITLE")).toBe(false);
+    });
+
+    test("a cyclic parent chain does not hang the climb", () => {
+        // Runs on every keystroke, so a loop here freezes the app while typing.
+        const doc = treeDoc();
+        doc.nodes.get("PAGE")!.parent = "TITLE";
+        expect(() => filterLayers(doc, "headline", labelOf(doc))).not.toThrow();
+        expect(filterLayers(doc, "headline", labelOf(doc)).visible.has("PAGE")).toBe(true);
+    });
+
+    test("the panel wires BOTH — searching and multi-select, each at its own call site", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/filterLayers\(doc, layerQuery, labelOf\)/);
+        expect(src).toMatch(/selectionForRowClick\(visibleOrder, es\.selectedNodeIds, layerAnchorRef\.current, id, mods\)/);
+        // Filtering must IGNORE the collapsed state, or search only finds what was already open.
+        expect(src).toMatch(/filter\.inactive \? collapsedLayers\.has\(id\) : false/);
+        // …and a filtered-out row is skipped before it is rendered or added to the order.
+        expect(src).toMatch(/if \(!filter\.inactive && !filter\.visible\.has\(id\)\) continue;/);
     });
 });
