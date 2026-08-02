@@ -231,6 +231,20 @@ interface SelectionHandle { nodeId: string; handle: HandleId; cx: number; cy: nu
 function selectionFrame(s: ComputedState, nodeId: string, pad?: number): Quad | null;  // the node's OWN box in world (nw·ne·se·sw), turned with it; `pad` is a WORLD distance, converted per axis so the gap is even on all four edges under any scale
 function selectionHandles(s: ComputedState, selectedNodeIds: readonly string[], zoom: number): SelectionHandle[]; // 4 corners + rotate per selected node — on the TURNED box, not the world AABB; each cursor comes from the direction its corner points on screen, and the knob rides the turned top edge
 
+// PathBoolean.ts — union / subtract / intersect / exclude on closed shapes, by edge classification:
+// split every edge where it crosses the other shape, classify each piece by its MIDPOINT, keep what
+// the op asks for (reversing B's when subtracting, so the removed part reads as a hole under the
+// nonzero rule), then chain the pieces back into closed rings.
+type BooleanOp = "union" | "subtract" | "intersect" | "exclude";
+type Ring = Point[];                                                  // closed; the closing edge is implied
+function booleanRings(a: readonly Ring[], b: readonly Ring[], op: BooleanOp): Ring[];
+function booleanPaths(a: readonly PathCommand[], b: readonly PathCommand[], op: BooleanOp): PathCommand[];
+function commandsToRings(commands: readonly PathCommand[]): Ring[];   // every subpath treated as CLOSED, like the fill
+function ringsToCommands(rings: readonly Ring[]): PathCommand[];
+function insideRings(rings: readonly Ring[], x: number, y: number): boolean;
+// CURVES ARE FLATTENED (16 segments each) — a boolean of curved shapes returns polylines, not
+// curves. KNOWN LIMIT: exactly collinear overlapping edges are not special-cased.
+
 // OrientedBox.ts — the node's box as DRAWN, and resizing along its own axes.
 type Quad = [Point, Point, Point, Point];                                   // nw · ne · se · sw
 function boxQuad(world: Mat2D, width: number, height: number, pad?: number): Quad;

@@ -39,6 +39,7 @@ import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
 import { flattenPath, hitsShape, isPaintBearing } from "../geometry/ShapeHit";
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
+import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
@@ -10861,5 +10862,162 @@ describe("Oriented resize", () => {
         expect(cursorForDirection(1, 0)).toBe("ew-resize");
         expect(cursorForDirection(0, 1)).toBe("ns-resize");
         expect(cursorForDirection(0, 0)).toBe("nwse-resize");     // no direction → a stable default
+    });
+});
+
+// ─── Boolean operations on closed shapes ───
+describe("Path booleans", () => {
+    /** A square as a ring, clockwise on screen (y down) — the winding `ringsToCommands` emits. */
+    const sq = (x: number, y: number, w: number, h: number) =>
+        [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+
+    /** A point as a stable string, for counting distinct edges. */
+    const key2 = (p: { x: number; y: number }): string => `${p.x.toFixed(6)},${p.y.toFixed(6)}`;
+
+    /** Signed area by the shoelace formula, summed over rings — a hole subtracts. */
+    const area = (rings: { x: number; y: number }[][]): number =>
+        rings.reduce((sum, r) => {
+            let a = 0;
+            for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += r[j].x * r[i].y - r[i].x * r[j].y;
+            return sum + a / 2;
+        }, 0);
+
+    // Two 100×100 squares overlapping in a 50×50 corner: the areas are all exact integers, which
+    // is what makes every operation checkable by one number instead of by vertex lists.
+    const A = [sq(0, 0, 100, 100)];
+    const B = [sq(50, 50, 100, 100)];
+
+    test("union keeps both, minus the seam through the overlap", () => {
+        const r = booleanRings(A, B, "union");
+        expect(area(r)).toBeCloseTo(17500, 6);   // 10000 + 10000 − 2500 counted twice
+        expect(r.length).toBe(1);                 // one L-shaped ring, not two squares
+        // EIGHT vertices — the L's own corners and no others. An edge must only be split where
+        // it actually meets the other SEGMENT, not where it meets the infinite line through it:
+        // those phantom cuts leave the area right and litter the result with collinear vertices,
+        // which every later operation then has to carry.
+        expect(r[0].length).toBe(8);
+    });
+
+    test("an edge that crosses the other shape TWICE is split in order along itself", () => {
+        // A bar straight through the square: each of its long edges meets the square twice, so
+        // the crossing list per edge has two entries and the pieces are only contiguous if that
+        // list is sorted. Unsorted, the splits interleave and the walk chains the wrong ends.
+        const bar = [sq(-50, 40, 200, 20)];
+        expect(area(booleanRings(A, bar, "union"))).toBeCloseTo(12000, 6);   // 10000 + 4000 − 2000
+        const x = booleanRings(A, bar, "exclude");
+        expect(area(x)).toBeCloseTo(10000, 6);   // the square in two halves + the bar's two ends
+        // The four surviving regions touch at the crossing points, so they come back CONNECTED
+        // through those vertices rather than as four separate rings — same region either way, and
+        // the region is what matters, so it is sampled directly rather than counted.
+        expect(insideRings(x, 50, 50)).toBe(false);   // the overlap: excluded
+        expect(insideRings(x, 50, 20)).toBe(true);    // the square above the bar
+        expect(insideRings(x, 50, 80)).toBe(true);    // …and below it
+        expect(insideRings(x, -25, 50)).toBe(true);   // the bar's left end, outside the square
+    });
+
+    test("a vertex where several pieces meet hands out each continuation exactly once", () => {
+        // Four pieces meet at each of the bar's crossing points. A walk that re-read a piece
+        // instead of consuming it would either loop on one edge or leave another ring unclosed.
+        const bar = [sq(-50, 40, 200, 20)];
+        const rings = booleanRings(A, bar, "exclude");
+        const edges = rings.flatMap(r => r.map((p, i) => `${key2(p)}->${key2(r[(i + 1) % r.length])}`));
+        expect(new Set(edges).size).toBe(edges.length);   // no edge appears twice
+    });
+
+    test("the output has no zero-length edges, even when the input had a repeated vertex", () => {
+        // A repeated vertex is a directionless edge: it chains to itself, and it is a latent
+        // zero-length edge for whatever operation runs on the result next.
+        const doubled = [[{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }]];
+        const r = booleanRings(doubled, B, "union");
+        expect(area(r)).toBeCloseTo(17500, 6);
+        for (const ring of r) {
+            for (let i = 0; i < ring.length; i++) {
+                const next = ring[(i + 1) % ring.length];
+                expect(Math.hypot(ring[i].x - next.x, ring[i].y - next.y)).toBeGreaterThan(1e-9);
+            }
+        }
+    });
+
+    test("intersect keeps only the overlap", () => {
+        const r = booleanRings(A, B, "intersect");
+        expect(area(r)).toBeCloseTo(2500, 6);
+        expect(r.length).toBe(1);
+    });
+
+    test("subtract removes B from A, and is not symmetric", () => {
+        expect(area(booleanRings(A, B, "subtract"))).toBeCloseTo(7500, 6);
+        expect(area(booleanRings(B, A, "subtract"))).toBeCloseTo(7500, 6);
+        // …but they are different shapes: A−B keeps A's top-left corner, B−A keeps B's bottom-right.
+        const ab = booleanRings(A, B, "subtract")[0];
+        const ba = booleanRings(B, A, "subtract")[0];
+        expect(ab.some(p => p.x === 0 && p.y === 0)).toBe(true);
+        expect(ba.some(p => p.x === 0 && p.y === 0)).toBe(false);
+    });
+
+    test("exclude keeps both minus the overlap", () => {
+        const r = booleanRings(A, B, "exclude");
+        expect(area(r)).toBeCloseTo(15000, 6);   // 17500 − 2500
+    });
+
+    test("shapes that do not touch are returned unchanged by union, and vanish under intersect", () => {
+        const far = [sq(500, 500, 10, 10)];
+        expect(area(booleanRings(A, far, "union"))).toBeCloseTo(10100, 6);
+        expect(booleanRings(A, far, "intersect")).toEqual([]);
+        expect(area(booleanRings(A, far, "subtract"))).toBeCloseTo(10000, 6);
+    });
+
+    test("a shape fully inside another becomes a HOLE when subtracted", () => {
+        // The reversal that makes subtract work: the inner ring must run the opposite way, or
+        // the nonzero rule fills the hole straight back in.
+        const outer = [sq(0, 0, 100, 100)];
+        const inner = [sq(25, 25, 50, 50)];
+        const r = booleanRings(outer, inner, "subtract");
+        expect(area(r)).toBeCloseTo(10000 - 2500, 6);
+        expect(r.length).toBe(2);                                  // the outline and the hole
+        // …and the hole is genuinely a hole: a point in the middle is no longer inside.
+        expect(insideRings(r, 50, 50)).toBe(false);
+        expect(insideRings(r, 5, 5)).toBe(true);
+    });
+
+    test("the result round-trips through commands and back", () => {
+        const cmds = booleanPaths(ringsToCommands(A), ringsToCommands(B), "union");
+        expect(pathError("core.path", cmds)).toBeNull();           // the LOADER would accept it
+        expect(cmds[0].c).toBe("M");
+        expect(cmds[cmds.length - 1].c).toBe("Z");
+        expect(area(commandsToRings(cmds))).toBeCloseTo(17500, 6);
+    });
+
+    test("an open subpath is treated as closed, like the fill that paints it", () => {
+        const open: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 100 }, { c: "L", x: 0, y: 100 }];
+        expect(area(commandsToRings(open))).toBeCloseTo(10000, 6);
+        // …and a closing point that repeats the start is not stored twice (it would be a
+        // zero-length edge, which carries no direction to chain by).
+        const closed: PathCommand[] = [...open, { c: "L", x: 0, y: 0 }, { c: "Z" }];
+        expect(commandsToRings(closed)[0].length).toBe(4);
+    });
+
+    test("curves are flattened, so a boolean on them is polygonal — and says so by its point count", () => {
+        // A circle-ish shape made of two cubics. The result is a polyline at the flattening
+        // resolution; this pins the behaviour rather than pretending the curve survives.
+        const blob: PathCommand[] = [
+            { c: "M", x: 0, y: 50 },
+            { c: "C", x1: 0, y1: 0, x2: 100, y2: 0, x: 100, y: 50 },
+            { c: "C", x1: 100, y1: 100, x2: 0, y2: 100, x: 0, y: 50 },
+            { c: "Z" }
+        ];
+        const rings = commandsToRings(blob);
+        expect(rings.length).toBe(1);
+        expect(rings[0].length).toBe(32);                 // 2 curves × 16 segments
+        const cut = booleanPaths(blob, ringsToCommands([sq(-10, -10, 60, 200)]), "subtract");
+        expect(cut.length).toBeGreaterThan(3);
+        expect(pathError("core.path", cut)).toBeNull();
+    });
+
+    test("a run that cannot be closed is dropped, never emitted as an open ring", () => {
+        // Degenerate input: a "ring" of two points has no area and no third vertex to chain
+        // through. It must not produce a phantom shape.
+        const degenerate = [[{ x: 0, y: 0 }, { x: 10, y: 10 }]];
+        expect(booleanRings(degenerate, A, "union").every(r => r.length >= 3)).toBe(true);
+        expect(booleanRings(A, degenerate, "intersect")).toEqual([]);
     });
 });
