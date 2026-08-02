@@ -11,7 +11,9 @@ import { DeleteNodeAction } from "../../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../../core/actions/TransactionAction";
 import { EditorState, panBy, screenToWorld } from "../EditorState";
 import { computeGeometry, ComputedState, selectionBounds } from "../../core/geometry/GeometryEngine";
-import { handleAtPoint, groupHandleAtPoint } from "../../core/geometry/SelectionHandles";
+import { handleAtPoint, groupHandleAtPoint, vertexIndexOf, vertexHandleAtPoint } from "../../core/geometry/SelectionHandles";
+import { movePathVertex, normalizePathNode } from "../../core/geometry/PathBuilder";
+import { UpdateNodePathAction } from "../../core/actions/UpdateNodePathAction";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupScaleInput } from "../../core/geometry/GroupTransform";
 import { resolveScene } from "../../core/document/Components";
 import { geometryActionFor, isHandleOffered, isEditableNode, transformActionFor } from "../../core/actions/nodeEdit";
@@ -53,6 +55,12 @@ export class ToolController {
     // Rotate mode — grabbing the rotate knob spins the node about its world-AABB centre.
     // Each move live-commits a coalesced UpdateNodeTransformAction, so a CONTINUOUS drag is one
     // undo step (subject to the history coalesce window, exactly like a slider drag).
+    // Vertex drag — moving one on-curve point of a `core.path`. Live-committed and coalesced
+    // like rotate, so a continuous drag is one undo step.
+    private vertexNodeId: string | null = null;
+    private vertexIndex = -1;
+    private vertexStartX = 0;
+    private vertexStartY = 0;
     private rotateMode = false;
     private rotateNodeId: string | null = null;
     private rotateCenterX = 0;
@@ -158,7 +166,10 @@ export class ToolController {
                 // else fall through: a body click/drag on the multi-selection goes to the tool.
             } else {
                 // 0/1 root: per-node handles, hit-tested over `roots` so picking matches drawing.
-                const hit = handleAtPoint(computed, roots, w.x, w.y, vp.zoom);
+                // VERTEX handles are checked FIRST: they sit inside the box, so a corner
+                // handle would otherwise swallow a vertex that happens to land near it.
+                const hit = vertexHandleAtPoint(doc, computed, roots, w.x, w.y, vp.zoom)
+                    ?? handleAtPoint(computed, roots, w.x, w.y, vp.zoom);
                 const c = hit ? computed.nodes.get(hit.nodeId) : undefined;
                 // Resolved against the EXPANDED document so an instance COPY's handles work: its
                 // geometry (master + any existing override) is only visible there. The resize
@@ -172,6 +183,16 @@ export class ToolController {
                         // draws exactly this set, so falling through to the tool is what the user
                         // sees — better than a control that silently does nothing.
                         this.activeTool?.onMouseDown?.(e, canvasRect, computed);
+                        return;
+                    }
+                    const vi = vertexIndexOf(hit.handle);
+                    if (vi !== null) {
+                        this.vertexNodeId = hit.nodeId;
+                        this.vertexIndex = vi;
+                        this.vertexStartX = w.x;
+                        this.vertexStartY = w.y;
+                        this.editorState.isDragging = true;
+                        e.preventDefault();
                         return;
                     }
                     if (hit.handle === "rotate") {
@@ -220,6 +241,31 @@ export class ToolController {
             panBy(this.editorState.viewport, e.clientX - this.panLastX, e.clientY - this.panLastY);
             this.panLastX = e.clientX;
             this.panLastY = e.clientY;
+            this.refresh();
+            return;
+        }
+
+        if (this.vertexNodeId !== null) {
+            const doc = this.dispatcher.getDocument();
+            const node = resolveScene(doc).nodes.get(this.vertexNodeId);
+            if (!node?.path) { this.resetVertex(); this.refresh(); return; }
+            const w = screenToWorld(this.editorState.viewport, canvasRect, e.clientX, e.clientY);
+            // The delta is measured in WORLD space but applied to LOCAL commands, so it is only
+            // correct while the node is translation-only — a rotated or scaled path would need
+            // the inverse of its world matrix. Refused rather than silently skewed.
+            const dx = w.x - this.vertexStartX;
+            const dy = w.y - this.vertexStartY;
+            this.vertexStartX = w.x;
+            this.vertexStartY = w.y;
+            const moved = movePathVertex(node.path, this.vertexIndex, dx, dy);
+            // Re-normalize: dragging outward otherwise leaves ink outside the node's box, and
+            // bounds are what selection, snapping, culling and hit-testing all read.
+            const norm = normalizePathNode(node.geometry, moved);
+            const geo = geometryActionFor(doc, this.vertexNodeId, { x: norm.geometry.x, y: norm.geometry.y, width: norm.geometry.width, height: norm.geometry.height });
+            const actions: Action[] = [];
+            if (geo) actions.push(geo);
+            actions.push(new UpdateNodePathAction(doc, this.vertexNodeId, norm.path));
+            this.dispatcher.dispatchAction(new TransactionAction(doc, `vertex:${this.vertexNodeId}`, actions), { coalesce: true });
             this.refresh();
             return;
         }
@@ -475,13 +521,20 @@ export class ToolController {
         this.editorState.isDragging = false;
     }
 
+    private resetVertex(): void {
+        this.vertexNodeId = null;
+        this.vertexIndex = -1;
+    }
+
     onMouseUp(e: MouseEvent): void {
+        if (this.vertexNodeId !== null) { this.resetVertex(); this.editorState.isDragging = false; }
         if (this.panMode) {
             this.panMode = false;
             this.editorState.isDragging = false;
             this.refresh();
             return;
         }
+
 
         if (this.rotateMode) {
             // The rotation was already live-committed (coalesced) during the drag; just end.

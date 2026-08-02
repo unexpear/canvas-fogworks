@@ -111,6 +111,20 @@ function penCommands(points, closed): PathCommand[];          // WORLD space
 function pathBounds(commands): Rect;                          // INCLUDES control points — never clips the ink
 function translatePath(commands, dx, dy): PathCommand[];
 function penNodeFrom(points, closed): { geometry: Rect; path: PathCommand[] } | null;  // null = what dimensionError would refuse
+// VERTEX editing. Moving a point carries the control handles that belong to it (a cubic's
+// x2/y2 is the IN handle of its own endpoint; the NEXT command's x1/y1 is that point's OUT
+// handle), or the curve warps instead of translating. On a CLOSED path the M and the final
+// drawing command are the same point, so the first vertex moves its twin too.
+function pathVertices(commands): PathVertex[];                       // on-curve points; Z contributes none
+function movePathVertex(commands, index, dx, dy): PathCommand[];
+// After an edit, commands go back onto a (0,0) origin with the BOX moved to match — bounds are
+// what selection, snapping, culling and hit-testing read, so ink outside the box breaks them all.
+function normalizePathNode(geometry, commands): { geometry: Rect; path: PathCommand[] };
+// geometry/SelectionHandles.ts — a selected `core.path` also shows one handle per vertex, in
+// WORLD space, named `vertex:N` so a grab identifies the command without re-deriving it from a
+// position two vertices could share.
+function pathVertexHandles(doc, state, selectedNodeIds): SelectionHandle[];
+function vertexIndexOf(handle: string): number | null;
 ```
 
 `applyMutations` detaches before inserting, so an index measured against the list as it looks
@@ -390,6 +404,11 @@ new UpdateNodeStyleAction(doc, nodeId: string, style: Partial<Style>);
 new UpdateNodeTransformAction(doc, nodeId: string, transform: Partial<Transform>); // rotation/scale/origin
 new UpdateNodeLayoutAction(doc, nodeId: string, layout: Partial<Layout>);          // M2 layout (container/grid/grow/constraints/position/margin)
 new TransactionAction(doc, label: string, actions: Action[]);
+// Two patches for the SAME node merge later-wins. Object fields (geometry/transform/style/layout)
+// merge FIELD BY FIELD — their actions emit partials, and a move + a resize must both land.
+// Everything else is a whole-value spread, which also preserves KEY PRESENCE (the `in`-read
+// contract of variant/variants/slot/slotContent/states/hidden/locked: carrying the key with
+// `undefined` is how a clear is expressed).
 
 // applyMutations.ts — the single mutation site
 function applyMutationsToDocument(doc: ProjectDocument, propertyDeltas: Map<string, NodeDelta>): void;

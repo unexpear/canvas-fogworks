@@ -18,7 +18,7 @@ import { SetNodeFlagsAction } from "../actions/SetNodeFlagsAction";
 import { resolveLayerDrop } from "../../editor/layerDrop";
 import { selectionForRowClick } from "../../editor/layerSelection";
 import { filterLayers } from "../../editor/layerFilter";
-import { PenPoint, penCommands, pathBounds, translatePath, penNodeFrom } from "../geometry/PathBuilder";
+import { PenPoint, penCommands, pathBounds, translatePath, penNodeFrom, pathVertices, movePathVertex, normalizePathNode } from "../geometry/PathBuilder";
 import { UpdateNodePathAction } from "../actions/UpdateNodePathAction";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
@@ -40,7 +40,7 @@ import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds,
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
-import { selectionHandles, handleAtPoint, groupRotateHandle, groupHandleAtPoint, groupCornerHandles, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
+import { selectionHandles, handleAtPoint, groupRotateHandle, groupHandleAtPoint, groupCornerHandles, HANDLE_SIZE_PX, ROTATE_OFFSET_PX , pathVertexHandles, vertexIndexOf, vertexHandleAtPoint} from "../geometry/SelectionHandles";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../geometry/GroupTransform";
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
 import { rulerTicks, niceStep } from "../geometry/Ruler";
@@ -5239,6 +5239,101 @@ describe("M2 grid", () => {
         expect(p.layout.container).toBeUndefined(); // not both — and crucially not NEITHER
     });
 
+    test("a transaction that patches one node TWICE keeps both fields — including `path`", () => {
+        // The merge was a hand-written allow-list of patch fields, so everything added to
+        // `PatchDelta` afterwards was silently dropped whenever two actions patched the same
+        // node inside one transaction. A vertex drag is exactly that shape — a geometry action
+        // plus a path action — and it moved the node's BOX while leaving the ink behind.
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", {
+            id: "P", type: "core.path", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 40, height: 40 },
+            style: { fill: "#111111", opacity: 1 }, layout: {},
+            path: [{ c: "M", x: 0, y: 0 }, { c: "L", x: 40, y: 40 }]
+        });
+        doc.rootNodeUuids = ["P"];
+        const dispatcher = new ActionDispatcher(doc);
+        const next: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 60, y: 10 }];
+        expect(dispatcher.dispatchAction(new TransactionAction(doc, "vertex:P", [
+            new UpdateNodeGeometryAction(doc, "P", { x: 5, y: 7, width: 60, height: 10 }),
+            new UpdateNodePathAction(doc, "P", next)
+        ])).success).toBe(true);
+        const p = dispatcher.getDocument().nodes.get("P")!;
+        expect(p.path).toEqual(next);                                  // the field the merge dropped
+        expect(p.geometry).toMatchObject({ x: 5, y: 7, width: 60 });   // and the one it always kept
+    });
+
+    test("…and an `in`-read layer flag survives the same merge", () => {
+        // A second field family, dropped by the same allow-list: `hidden`/`locked` are read with
+        // `in` (clearing is a real edit), so losing the KEY is what breaks them, not losing a value.
+        const doc = createDocWithParentChild();
+        const dispatcher = new ActionDispatcher(doc);
+        expect(dispatcher.dispatchAction(new TransactionAction(doc, "hide-and-move", [
+            new SetNodeFlagsAction(doc, "child-001", { hidden: true }),
+            new MoveNodeAction(doc, "child-001", 12, 34)
+        ])).success).toBe(true);
+        const c = dispatcher.getDocument().nodes.get("child-001")!;
+        expect(c.hidden).toBe(true);
+        expect(c.geometry).toMatchObject({ x: 12, y: 34 });
+    });
+
+    test("a move and a resize in one transaction keep BOTH halves of the geometry", () => {
+        // The two actions emit PARTIAL geometry — `{x,y}` and `{width,height}` — so the merge
+        // has to go field by field. Whole-value last-wins would silently discard the move.
+        const doc = createDocWithParentChild();
+        const dispatcher = new ActionDispatcher(doc);
+        expect(dispatcher.dispatchAction(new TransactionAction(doc, "move+resize", [
+            new MoveNodeAction(doc, "child-001", 11, 22),
+            new ResizeNodeAction(doc, "child-001", 33, 44)
+        ])).success).toBe(true);
+        expect(dispatcher.getDocument().nodes.get("child-001")!.geometry)
+            .toEqual({ x: 11, y: 22, width: 33, height: 44 });
+    });
+
+    test("two layout edits in one transaction keep the field the second one never mentions", () => {
+        // Same reason as geometry, and the case that actually reaches a user: set the spacing,
+        // then set the grid. The grid patch carries only `grid` (plus the `container: undefined`
+        // that expresses exclusivity), so a whole-value merge would drop the spacing.
+        const doc = createDocWithParentChild();
+        const dispatcher = new ActionDispatcher(doc);
+        expect(dispatcher.dispatchAction(new TransactionAction(doc, "spacing-then-grid", [
+            new UpdateNodeLayoutAction(doc, "parent-001", { spacing: 12 }),
+            new UpdateNodeLayoutAction(doc, "parent-001", { grid: { columns: [{ px: 20 }], rowHeight: { px: 20 } } })
+        ])).success).toBe(true);
+        const p = dispatcher.getDocument().nodes.get("parent-001")!;
+        expect(p.layout.grid).toBeDefined();
+        expect(p.layout.spacing).toBe(12);
+    });
+
+    test("when both patches carry the same field, the LATER action wins", () => {
+        // The direction of the merge, which the mixed-field tests above cannot see: they pass
+        // whichever way the spread runs. A path edited twice in one transaction must end at the
+        // second value — the reverse order would make a transaction read back-to-front.
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", {
+            id: "P", type: "core.path", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 40, height: 40 },
+            style: { fill: "#111111", opacity: 1 }, layout: {},
+            path: [{ c: "M", x: 0, y: 0 }, { c: "L", x: 40, y: 40 }]
+        });
+        doc.rootNodeUuids = ["P"];
+        const dispatcher = new ActionDispatcher(doc);
+        const second: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 2, y: 2 }];
+        expect(dispatcher.dispatchAction(new TransactionAction(doc, "twice", [
+            new UpdateNodePathAction(doc, "P", [{ c: "M", x: 0, y: 0 }, { c: "L", x: 1, y: 1 }]),
+            new UpdateNodePathAction(doc, "P", second)
+        ])).success).toBe(true);
+        expect(dispatcher.getDocument().nodes.get("P")!.path).toEqual(second);
+    });
+
+    test("the patch merge is a SPREAD, so the NEXT field added cannot be dropped in silence", () => {
+        // The behavioural tests above only cover the fields that exist today. This is the guard
+        // that survives the next one: an allow-list would have to be edited to stay correct,
+        // and nothing forces that edit — a spread is correct without being touched.
+        const src = readFileSync(resolve(__dirname, "../actions/TransactionAction.ts"), "utf8");
+        expect(src).toMatch(/function mergePatch[^{]*\{\s*return \{\s*\.\.\.target,\s*\.\.\.source,/);
+    });
+
     test("isLayoutContainer recognises a grid; grid and flex-container are mutually exclusive", () => {
         expect(isLayoutContainer({ layout: { grid: { columns: [{ px: 10 }], rowHeight: { px: 10 } } } })).toBe(true);
 
@@ -10219,5 +10314,148 @@ describe("PathBuilder", () => {
         expect(src).toMatch(/if \(name !== "pen" && leaving\) leaving\.cancel\(\)/);
         const model = readFileSync(resolve(__dirname, "../../renderer/RenderModel.ts"), "utf8");
         expect(model).toMatch(/state\.pendingPath && state\.pendingPath\.length > 1/);
+    });
+});
+
+
+// ─── Vertex editing: moving the ink inside a path's box ───
+describe("Path vertex editing", () => {
+    /** An OPEN cubic path: M, C, C — so a middle vertex has a handle on both sides of it. */
+    const curve: PathCommand[] = [
+        { c: "M", x: 0, y: 0 },
+        { c: "C", x1: 10, y1: -10, x2: 30, y2: -10, x: 40, y: 0 },
+        { c: "C", x1: 50, y1: 10, x2: 70, y2: 10, x: 80, y: 0 }
+    ];
+
+    test("vertices are the ON-CURVE points — Z contributes none", () => {
+        // Z closes back to the start, which is already listed; a handle there would be a second
+        // draggable dot on one position, and dragging the phantom would do nothing.
+        const closed: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 10, y: 0 }, { c: "L", x: 10, y: 10 }, { c: "Z" }];
+        expect(pathVertices(closed)).toEqual([
+            { index: 0, x: 0, y: 0 }, { index: 1, x: 10, y: 0 }, { index: 2, x: 10, y: 10 }
+        ]);
+
+        // A path CLOSED by a drawing command back to the start stores that point twice —
+        // the `M` and the final `L` are the same place. Listing both stacks two draggable
+        // dots on one position, and since `movePathVertex` moves the pair together, the
+        // duplicate would look like a handle that does nothing while its twin works.
+        // Live verification found this; a node test asserting a count would not have.
+        const drawnClosed: PathCommand[] = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 10, y: 0 }, { c: "L", x: 10, y: 10 },
+            { c: "L", x: 0, y: 0 }, { c: "Z" }
+        ];
+        expect(pathVertices(drawnClosed).map(v => v.index)).toEqual([0, 1, 2]);
+
+        // …but a path closed by `Z` ALONE keeps all three: `Z` draws the closing line itself,
+        // so no point is stored twice. Treating every closed path as having a duplicate drops
+        // a real vertex from the more common shape — which is why the check compares POSITIONS
+        // rather than assuming from the presence of a Z.
+        expect(pathVertices(closed).map(v => v.index)).toEqual([0, 1, 2]);
+        // And moving the start of a Z-closed path must not drag the unrelated last point.
+        const movedZ = movePathVertex(closed, 0, 3, 3);
+        expect(movedZ[0]).toEqual({ c: "M", x: 3, y: 3 });
+        expect(movedZ[2]).toEqual({ c: "L", x: 10, y: 10 });
+    });
+
+    test("moving a vertex carries BOTH of its handles, so the curve translates rather than warps", () => {
+        // The middle point (index 1) owns the IN handle on its own command (x2,y2) and the OUT
+        // handle on the NEXT one (x1,y1). Moving the point alone would anchor the curve to where
+        // the point used to be — the most obvious way for a vertex editor to feel broken.
+        const moved = movePathVertex(curve, 1, 5, 5);
+        expect(moved[1]).toEqual({ c: "C", x1: 10, y1: -10, x2: 35, y2: -5, x: 45, y: 5 });
+        expect(moved[2]).toEqual({ c: "C", x1: 55, y1: 15, x2: 70, y2: 10, x: 80, y: 0 });
+        expect(moved[0]).toEqual({ c: "M", x: 0, y: 0 });   // untouched
+    });
+
+    test("on a CLOSED path the first vertex moves its twin too, or the shape tears open", () => {
+        const closed: PathCommand[] = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 10, y: 0 }, { c: "L", x: 10, y: 10 },
+            { c: "L", x: 0, y: 0 }, { c: "Z" }
+        ];
+        const moved = movePathVertex(closed, 0, -4, -4);
+        expect(moved[0]).toEqual({ c: "M", x: -4, y: -4 });
+        expect(moved[3]).toEqual({ c: "L", x: -4, y: -4 });   // the closing command followed it
+        expect(moved[1]).toEqual({ c: "L", x: 10, y: 0 });    // and nothing else did
+    });
+
+    test("moving a vertex that does not exist changes nothing", () => {
+        expect(movePathVertex(curve, 99, 5, 5)).toEqual(curve);
+        const closed: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 5, y: 5 }, { c: "Z" }];
+        expect(movePathVertex(closed, 2, 5, 5)).toEqual(closed);   // index 2 is the Z
+        // `pathError` only requires the path to OPEN with an M, so a Z followed directly by
+        // a curve is a document that loads. Without the Z guard, asking to move the Z would
+        // treat the following command as "the next point" and drag its control handle — a
+        // real edit to a curve nobody touched.
+        const afterZ: PathCommand[] = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 5, y: 0 }, { c: "Z" },
+            { c: "C", x1: 25, y1: 5, x2: 30, y2: 5, x: 35, y: 0 }
+        ];
+        expect(pathError("core.path", afterZ)).toBeNull();   // it really does load
+        expect(movePathVertex(afterZ, 2, 7, 7)).toEqual(afterZ);
+    });
+
+    test("re-normalizing moves the BOX so it still contains the ink", () => {
+        // Dragging outward leaves negative coordinates inside a box that no longer holds them.
+        // The node would still DRAW correctly — the commands are placed by the world matrix —
+        // but its bounds would be wrong, and bounds are what selection, snapping, culling and
+        // hit-testing all read.
+        const box = { x: 100, y: 100, width: 80, height: 10 };
+        const dragged = movePathVertex(curve, 0, -20, -30);
+        const norm = normalizePathNode(box, dragged);
+        // y reaches -40, not -30: moving the point dragged its OUT handle (10,-10) to
+        // (-10,-40), and bounds include control points. The handle extends the box further
+        // than the point does, which is exactly why bounds are taken over the control hull.
+        expect(norm.geometry).toEqual({ x: 80, y: 60, width: 100, height: 50 });
+        expect(pathBounds(norm.path)).toEqual({ x: 0, y: 0, width: 100, height: 50 });
+    });
+
+    test("a normalized path is still one the LOADER accepts", () => {
+        const norm = normalizePathNode({ x: 0, y: 0, width: 80, height: 10 }, movePathVertex(curve, 2, 15, -25));
+        expect(pathError("core.path", norm.path)).toBeNull();
+        expect(dimensionError("core.path", norm.geometry.width, norm.geometry.height)).toBeNull();
+    });
+
+    test("a selected path shows a handle per vertex, named by command index", () => {
+        // The index is in the HANDLE, not re-derived from a position — two vertices can sit on
+        // the same point (a closed path's first and last), and a position could not tell them apart.
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.path", parent: null, children: [], geometry: { x: 100, y: 50, width: 80, height: 10 }, style: { fill: "#111111", opacity: 1 }, layout: {}, path: curve });
+        doc.rootNodeUuids = ["P"];
+        const handles = pathVertexHandles(doc, computeGeometry(doc), ["P"]);
+        expect(handles.map(h => h.handle)).toEqual(["vertex:0", "vertex:1", "vertex:2"]);
+        expect(handles[0]).toMatchObject({ nodeId: "P", cx: 100, cy: 50 });   // WORLD space
+        expect(vertexIndexOf("vertex:2")).toBe(2);
+        expect(vertexIndexOf("se")).toBeNull();
+        // A non-path node contributes none.
+        doc.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#111111", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["P", "R"];
+        expect(pathVertexHandles(doc, computeGeometry(doc), ["R"])).toEqual([]);
+    });
+
+    test("a vertex handle is GRABBABLE, from the same list the renderer draws", () => {
+        // The drift this closes: the handles were added to the renderer only, so they
+        // appeared on screen and dragging one did nothing. Both sides now read one producer.
+        const doc = createEmptyDocument();
+        doc.nodes.set("P", { id: "P", type: "core.path", parent: null, children: [], geometry: { x: 100, y: 50, width: 80, height: 10 }, style: { fill: "#111111", opacity: 1 }, layout: {}, path: curve });
+        doc.rootNodeUuids = ["P"];
+        const computed = computeGeometry(doc);
+        const drawn = pathVertexHandles(doc, computed, ["P"]);
+        for (const h of drawn) {
+            expect(vertexHandleAtPoint(doc, computed, ["P"], h.cx, h.cy, 1)).toMatchObject({ handle: h.handle });
+        }
+        expect(vertexHandleAtPoint(doc, computed, ["P"], 9999, 9999, 1)).toBeNull();
+        // …and the controller checks vertices BEFORE box corners, which sit around them.
+        const src = readFileSync(resolve(__dirname, "../../editor/tools/ToolController.ts"), "utf8");
+        expect(src).toMatch(/vertexHandleAtPoint\(doc, computed, roots, w\.x, w\.y, vp\.zoom\)[\s\S]{0,40}\?\?[\s\S]{0,20}handleAtPoint\(/);
+    });
+
+    test("the controller drags a vertex through the path action, box and all", () => {
+        const src = readFileSync(resolve(__dirname, "../../editor/tools/ToolController.ts"), "utf8");
+        expect(src).toMatch(/const vi = vertexIndexOf\(hit\.handle\);/);
+        expect(src).toMatch(/movePathVertex\(node\.path, this\.vertexIndex, dx, dy\)/);
+        // The BOX has to move with the ink, or bounds go stale.
+        expect(src).toMatch(/normalizePathNode\(node\.geometry, moved\)/);
+        // …and both halves land as ONE transaction, so a drag is one undo.
+        expect(src).toMatch(/new TransactionAction\(doc, `vertex:\$\{this\.vertexNodeId\}`, actions\)/);
     });
 });

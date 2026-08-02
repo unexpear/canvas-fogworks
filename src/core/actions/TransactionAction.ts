@@ -28,11 +28,27 @@ function cloneWorkingDocument(doc: ReadonlyDocument): ProjectDocument {
 
 type PatchDelta = Extract<NodeDelta, { kind: "patch" }>;
 
-/** Merge two patches for the same node; the later one wins field by field. */
+/**
+ * Merge two patches for the same node; the later one wins field by field.
+ *
+ * The spread comes FIRST and is what makes this total. Listing the fields by hand — which is
+ * what this did — is an allow-list, and every field added to `PatchDelta` afterwards was
+ * silently dropped by any transaction that merged two patches on one node: `path`, `hidden`,
+ * `locked`, `variant`, `variants`, `slot`, `slotContent`, `states`. A vertex drag (a geometry
+ * action + a path action, one node, one transaction) is how that surfaced — the box moved and
+ * the ink did not. A spread also preserves KEY PRESENCE, which is the `in`-read contract those
+ * fields depend on: a source that carries `slot: undefined` still clears it.
+ *
+ * The four object-valued fields are then merged field-by-field on purpose: their actions emit
+ * PARTIALs, so a whole-value last-wins would drop the earlier action's fields. `layout`'s
+ * grid ⊕ container exclusivity rides along inside the patch as an explicit `undefined`, and a
+ * field-by-field merge is what lets it resolve last-wins instead of dropping both.
+ */
 function mergePatch(target: PatchDelta, source: PatchDelta): PatchDelta {
     return {
+        ...target,
+        ...source,
         kind: "patch",
-        reparent: source.reparent ?? target.reparent,
         geometry: (source.geometry || target.geometry)
             ? { ...target.geometry, ...source.geometry } : undefined,
         transform: (source.transform || target.transform)
@@ -40,12 +56,7 @@ function mergePatch(target: PatchDelta, source: PatchDelta): PatchDelta {
         style: (source.style || target.style)
             ? { ...target.style, ...source.style } : undefined,
         layout: (source.layout || target.layout)
-            ? { ...target.layout, ...source.layout } : undefined,
-        text: source.text ?? target.text,
-        src: source.src ?? target.src,
-        name: source.name ?? target.name,
-        // Whole-map value: last-wins (the ACTION already merged field-by-field before emitting).
-        overrides: source.overrides ?? target.overrides
+            ? { ...target.layout, ...source.layout } : undefined
     };
 }
 

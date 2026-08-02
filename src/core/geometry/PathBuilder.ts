@@ -125,3 +125,120 @@ export function penNodeFrom(points: readonly PenPoint[], closed: boolean): { geo
     if (box.width === 0 && box.height === 0) return null;
     return { geometry: box, path: translatePath(world, -box.x, -box.y) };
 }
+
+/**
+ * The index of a final drawing command that lands back ON the start point, or -1.
+ *
+ * `Z` closes a subpath with an implicit straight line, so `[M, L, L, Z]` has THREE distinct
+ * points. A pen that closes by drawing back to the start produces `[M, L, L, L(start), Z]`,
+ * where the last command stores the start point a SECOND time. Only that second form has a
+ * duplicate — assuming every closed path has one drops a real vertex from the triangle a `Z`
+ * closes, which is precisely the wrong answer in the more common case.
+ */
+function duplicateClosingIndex(commands: readonly PathCommand[]): number {
+    if (commands.length < 3) return -1;
+    if (commands[commands.length - 1].c !== "Z") return -1;
+    const start = commands[0];
+    const last = commands[commands.length - 2];
+    if (start.c === "Z" || last.c === "Z") return -1;
+    return start.x === last.x && start.y === last.y ? commands.length - 2 : -1;
+}
+
+/** One on-curve point of a path, and which command carries it. */
+export interface PathVertex {
+    /** Index into the command array. */
+    index: number;
+    x: number;
+    y: number;
+}
+
+/**
+ * The ON-CURVE points of a path, in LOCAL space — what a vertex editor shows as handles.
+ *
+ * `Z` carries no point: it closes back to the start, which is already listed. Showing a handle
+ * there would put two draggable dots on one position, and dragging the phantom would do nothing.
+ */
+export function pathVertices(commands: readonly PathCommand[]): PathVertex[] {
+    // A final command that lands back ON the start stores that point twice; listing both puts
+    // two draggable dots on one position, and `movePathVertex` moves the pair together, so the
+    // duplicate would look like a handle that does nothing while its twin works. A path closed
+    // by `Z` ALONE has no duplicate — `Z` carries no point.
+    const duplicate = duplicateClosingIndex(commands);
+    const out: PathVertex[] = [];
+    commands.forEach((cmd, index) => {
+        if (cmd.c === "Z" || index === duplicate) return;
+        out.push({ index, x: cmd.x, y: cmd.y });
+    });
+    return out;
+}
+
+/**
+ * Move one on-curve point, carrying the control handles that belong to it.
+ *
+ * A cubic's `x2,y2` is the IN handle of its own endpoint, and the NEXT command's `x1,y1` is the
+ * OUT handle of that same point. Moving the point without them would leave the curve anchored
+ * to where the point used to be, so the shape would warp rather than translate — the single
+ * most obvious way for a vertex editor to feel broken.
+ *
+ * A closed path's `M` and its final `L`/`C` back to the start are the SAME point, so moving the
+ * first vertex moves the closing command's endpoint too; otherwise closing the shape would tear
+ * it open.
+ */
+export function movePathVertex(commands: readonly PathCommand[], index: number, dx: number, dy: number): PathCommand[] {
+    const target = commands[index];
+    if (!target || target.c === "Z") return [...commands];
+    const closed = commands.length > 0 && commands[commands.length - 1].c === "Z";
+    const isFirst = index === 0;
+    // When the path closes by drawing back to the start, that point is stored twice and the
+    // first vertex has a TWIN; moving only one would tear the shape open. A path closed by `Z`
+    // alone has no twin, and moving its start must not drag an unrelated last point with it.
+    const twin = duplicateClosingIndex(commands);
+
+    return commands.map((cmd, i) => {
+        const movesPoint = i === index || (isFirst && i === twin);
+        // The FOLLOWING command's first control point is the OUT handle of the moved point.
+        const follows = i === index + 1 || (isFirst && closed && i === 1);
+        const px = movesPoint ? dx : 0;
+        const py = movesPoint ? dy : 0;
+
+        switch (cmd.c) {
+            case "Z":
+                return { c: "Z" };
+            case "M":
+            case "L":
+                return { c: cmd.c, x: cmd.x + px, y: cmd.y + py };
+            case "Q":
+                return {
+                    c: "Q",
+                    x1: cmd.x1 + (follows ? dx : 0), y1: cmd.y1 + (follows ? dy : 0),
+                    x: cmd.x + px, y: cmd.y + py
+                };
+            case "C":
+                return {
+                    c: "C",
+                    // x1/y1 is the OUT handle of the PREVIOUS point; x2/y2 the IN handle of this one.
+                    x1: cmd.x1 + (follows ? dx : 0), y1: cmd.y1 + (follows ? dy : 0),
+                    x2: cmd.x2 + px, y2: cmd.y2 + py,
+                    x: cmd.x + px, y: cmd.y + py
+                };
+        }
+    });
+}
+
+
+/**
+ * Re-normalize a path node after an edit: commands back onto a (0,0) origin, with the box moved
+ * to match, so the node's geometry still describes where its ink is.
+ *
+ * Dragging a vertex outward otherwise leaves commands with negative coordinates inside a box
+ * that no longer contains them — the node would still DRAW correctly (the commands are placed
+ * by the world matrix) but its bounds would be wrong, and bounds are what selection, snapping,
+ * culling and hit-testing all read.
+ */
+export function normalizePathNode(geometry: Rect, commands: readonly PathCommand[]): { geometry: Rect; path: PathCommand[] } {
+    const box = pathBounds(commands);
+    return {
+        geometry: { x: geometry.x + box.x, y: geometry.y + box.y, width: box.width, height: box.height },
+        path: translatePath(commands, -box.x, -box.y)
+    };
+}

@@ -151,7 +151,14 @@ text, triangle, N-gon and image). Triangle and N-gon both author `core.path` com
 polygon is not a new node type, just a path with N generated vertices — so the shared
 `pathError` has an edit-path caller as well as the loader. The vertex maths lives in the pure
 `geometry/Polygon`, normalized so the polygon fills the box you drag, which makes the 3-gon
-come out as exactly the box-filling triangle the editor already shipped. `FrameSelectionAction` is the editor's only way to
+come out as exactly the box-filling triangle the editor already shipped. The **pen** (`PenTool`) and
+**vertex editing** author the same commands through `geometry/PathBuilder`: a pen click/drag builds
+world-space `PenPoint`s and re-bases them onto a box (`penNodeFrom`), and dragging a vertex handle
+moves the point *and* the handles on both sides of it (`movePathVertex`), then re-normalizes the box
+around the ink (`normalizePathNode`) — bounds are what selection, snapping, culling and hit-testing
+all read, so ink that outgrew its box would break all four. The vertex handles the renderer draws and
+the ones a press grabs come from ONE producer, `pathVertexHandles`; adding them to the renderer alone
+is exactly the drift that made them appear and do nothing. `FrameSelectionAction` is the editor's only way to
 BUILD a hierarchy: nesting existed at the document layer from the start, but nothing in the UI
 could create a parent, so every drawn node was a root and auto-layout, constraints and
 multi-node component masters were unreachable by drawing.

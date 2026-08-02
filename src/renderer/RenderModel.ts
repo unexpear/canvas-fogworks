@@ -29,7 +29,7 @@ import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
-import { selectionHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
+import { selectionHandles, pathVertexHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
 import { isGroupRotatable, isGroupResizable } from "../core/geometry/GroupTransform";
 import { isHandleOffered } from "../core/actions/nodeEdit";
 import { RendererState } from "./RendererState";
@@ -567,6 +567,11 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
         // `isHandleOffered` rule, which the picker and the hover cursor read too, so what is
         // drawn, what a press grabs, and what the pointer promises cannot drift apart.
         selectionHandles(computed, roots, z)
+            .filter(h => isHandleOffered(doc, h.nodeId, h.handle))
+            .forEach(h => items.push(handleItem(h, z)));
+        // A selected `core.path` also shows a handle per on-curve POINT. Same gate, because
+        // a vertex drag records the same kind of edit and an instance copy can back it too.
+        pathVertexHandles(doc, computed, roots)
             .filter(h => isHandleOffered(doc, h.nodeId, h.handle))
             .forEach(h => items.push(handleItem(h, z)));
     }

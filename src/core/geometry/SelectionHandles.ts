@@ -13,14 +13,20 @@
  */
 
 import { ComputedState, selectionBounds } from "./GeometryEngine";
-import { Rect } from "./Matrix";
+import { ReadonlyDocument } from "../document/Document";
+import { pathVertices } from "./PathBuilder";
+import { Rect , applyToPoint} from "./Matrix";
 
 /** Resize-handle square edge length in SCREEN pixels. */
 export const HANDLE_SIZE_PX = 8;
 /** How far above the selection's top edge the rotate handle sits, in SCREEN pixels. */
 export const ROTATE_OFFSET_PX = 22;
 
-export type HandleId = "nw" | "ne" | "sw" | "se" | "rotate";
+/** A box handle, or a path VERTEX naming its command index (`vertex:3`). The vertex form
+ *  is a template literal rather than a separate field so one `handle` string still
+ *  identifies a grab completely — which is what lets the renderer, the picker and the
+ *  hover cursor keep reading exactly one thing. */
+export type HandleId = "nw" | "ne" | "sw" | "se" | "rotate" | `vertex:${number}`;
 
 export interface SelectionHandle {
     nodeId: string;
@@ -139,6 +145,74 @@ export function groupHandleAtPoint(
     if (hit(knob)) return knob;
     if (includeCorners) {
         for (const c of groupCornerHandles(state, rootIds, zoom)) if (hit(c)) return c;
+    }
+    return null;
+}
+
+/**
+ * VERTEX handles for a `core.path` — one per on-curve point, in WORLD space.
+ *
+ * Kept separate from `selectionHandles` because they answer a different question: the corner
+ * handles resize the node's BOX, while these move the ink inside it. A path shows both, and a
+ * vertex handle names its command index (`vertex:3`) so the drag knows which point it holds
+ * without re-deriving it from a position that two vertices could share.
+ *
+ * Positions come from the node's WORLD matrix, so a rotated or scaled path still shows its
+ * vertices where they are drawn rather than where they are stored.
+ */
+export function pathVertexHandles(
+    doc: ReadonlyDocument,
+    state: ComputedState,
+    selectedNodeIds: readonly string[]
+): SelectionHandle[] {
+    const handles: SelectionHandle[] = [];
+    for (const nodeId of selectedNodeIds) {
+        const node = doc.nodes.get(nodeId);
+        // The type check is belt-and-braces: `pathError` already guarantees only a
+        // `core.path` can carry `path` on both the load and edit paths, so no reachable
+        // document distinguishes the two conditions — it is not mutation-killable, and it
+        // is here so this function does not depend on that guarantee to be correct.
+        if (!node || node.type !== "core.path" || !node.path) continue;
+        const c = state.nodes.get(nodeId);
+        if (!c) continue;
+        for (const v of pathVertices(node.path)) {
+            const w = applyToPoint(c.world, v.x, v.y);
+            if (!Number.isFinite(w.x) || !Number.isFinite(w.y)) continue;
+            handles.push({ nodeId, handle: `vertex:${v.index}`, cx: w.x, cy: w.y, cursor: "move" });
+        }
+    }
+    return handles;
+}
+
+/** The command index a `vertex:N` handle names, or null for any other handle. */
+export function vertexIndexOf(handle: string): number | null {
+    if (!handle.startsWith("vertex:")) return null;
+    const n = Number(handle.slice("vertex:".length));
+    return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+/**
+ * The VERTEX handle under a world point, or null.
+ *
+ * Deliberately built from `pathVertexHandles` — the same producer the renderer draws from — so
+ * what is drawn and what a press grabs cannot drift. Adding the handles to the renderer alone
+ * is exactly that drift: they appeared, and dragging one did nothing.
+ *
+ * Scanned BACK to front, like `handleAtPoint`, so the later-drawn vertex wins when two overlap.
+ */
+export function vertexHandleAtPoint(
+    doc: ReadonlyDocument,
+    state: ComputedState,
+    selectedNodeIds: readonly string[],
+    x: number,
+    y: number,
+    zoom: number
+): SelectionHandle | null {
+    const half = HANDLE_SIZE_PX / flooredZoom(zoom) / 2;
+    const handles = pathVertexHandles(doc, state, selectedNodeIds);
+    for (let i = handles.length - 1; i >= 0; i--) {
+        const h = handles[i];
+        if (Math.abs(x - h.cx) <= half && Math.abs(y - h.cy) <= half) return h;
     }
     return null;
 }
