@@ -248,8 +248,61 @@ function buildGrid(
  * on screen. This is why content depends on `viewport`/`size`, not just `z`: the
  * "one item per in-flow node" shape now holds only for the on-screen subset.
  */
+
+/**
+ * A node's EFFECTIVE opacity: its own, multiplied by every ancestor's (schema 32).
+ *
+ * Opacity used to be per-node, so setting a GROUP to 50% did nothing at all to its contents —
+ * a control the layer panel would have offered while it quietly had no effect. Multiplying down
+ * is what every design tool means by group opacity, and it is computed HERE rather than baked
+ * into the scene because the stored value, and the one the inspector shows, must stay the
+ * node's OWN. Only the drawing changes.
+ *
+ * NOT true group compositing: a real group is rasterized once and then faded, so two
+ * overlapping children show as one shape. Multiplying per child means they show THROUGH each
+ * other. Matching that needs an offscreen layer per group in both backends — the same gap the
+ * canvas backend already documents for per-op `globalAlpha`.
+ */
+function effectiveOpacity(doc: ReadonlyDocument, id: string, memo: Map<string, number>): number {
+    const cached = memo.get(id);
+    if (cached !== undefined) return cached;
+
+    // In practice the climb almost never takes more than one step: `buildContent` walks in
+    // DRAW order, which is parents-first, so an ancestor is already memoized by the time a
+    // child asks. Shortening the loop is therefore not mutation-killable through that
+    // caller — it is written as a full climb because nothing in the signature promises the
+    // caller will keep that order.
+    // Walk UP collecting the chain, then fold DOWN — one pass, and every node on the way gets
+    // memoized rather than just the one asked for. `seen` stops a circular parent chain: the
+    // scene walk already drops those before they reach here, so it is defence in depth against
+    // a future caller rather than a live path — and therefore not mutation-killable through
+    // `buildContent`, which is the only caller today.
+    const chain: string[] = [];
+    const seen = new Set<string>();
+    let cur: string | null | undefined = id;
+    let acc = 1;
+    while (cur != null && !seen.has(cur)) {
+        const hit = memo.get(cur);
+        if (hit !== undefined) { acc = hit; break; }   // an ancestor is already resolved
+        const node = doc.nodes.get(cur);
+        if (!node) break;
+        seen.add(cur);
+        chain.push(cur);
+        cur = node.parent ?? null;
+    }
+    for (let i = chain.length - 1; i >= 0; i--) {
+        const own = doc.nodes.get(chain[i])!.style.opacity;
+        acc *= typeof own === "number" ? own : 1;
+        memo.set(chain[i], acc);
+    }
+    return memo.get(id) ?? acc;
+}
+
+
 function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number, visible: Box): DrawItem[] {
     const items: DrawItem[] = [];
+    // Effective opacity is a product up the tree, so memoize it across the frame.
+    const opacityMemo = new Map<string, number>();
     // Design tokens (M5): every COLOR slot resolves "$token" references against the store
     // under the document's active theme — right here in the model, so both backends agree
     // and a theme switch repaints via the normal dispatch → refresh path. Presence checks
@@ -323,7 +376,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "rect", x, y, width, height };
             paint = {
                 fill: color(sty.fill),
-                opacity: sty.opacity, shadow, blur,
+                opacity: effectiveOpacity(doc, node.id, opacityMemo), shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeDash: null,
@@ -336,7 +389,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "ellipse", cx: width / 2, cy: height / 2, rx: width / 2, ry: height / 2 };
             paint = {
                 fill: color(sty.fill),
-                opacity: sty.opacity, shadow, blur,
+                opacity: effectiveOpacity(doc, node.id, opacityMemo), shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeDash: null,
@@ -351,7 +404,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "line", x1: 0, y1: 0, x2: width, y2: height };
             paint = {
                 fill: null,
-                opacity: sty.opacity, shadow, blur,
+                opacity: effectiveOpacity(doc, node.id, opacityMemo), shadow, blur,
                 // `||` not `??`: an empty-string stroke also falls back to `fill`, so a line
                 // is never invisible (a line's stroke IS its body, unlike a rect's border).
                 // The fallback picks the RAW winner first, THEN resolves — so a token stroke
@@ -366,13 +419,13 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         } else if (node.type === "core.text") {
             shape = { kind: "text", x, y, width, height, text: node.text ?? "Text", fontSize: fontSizeOf(sty.fontSize) };
             paint = {
-                fill: color(sty.fill), opacity: sty.opacity, stroke: null, strokeWidth: null,
+                fill: color(sty.fill), opacity: effectiveOpacity(doc, node.id, opacityMemo), stroke: null, strokeWidth: null,
                 strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
             };
         } else if (node.type === "core.image") {
             shape = { kind: "image", x, y, width, height, href: node.src ?? null };
             paint = {
-                fill: null, opacity: sty.opacity, stroke: null, strokeWidth: null,
+                fill: null, opacity: effectiveOpacity(doc, node.id, opacityMemo), stroke: null, strokeWidth: null,
                 strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
             };
         } else if (node.type === "core.path") {
@@ -382,7 +435,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "path", commands: node.path ?? [] };
             paint = {
                 fill: color(sty.fill),
-                opacity: sty.opacity, shadow, blur,
+                opacity: effectiveOpacity(doc, node.id, opacityMemo), shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeDash: null,

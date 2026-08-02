@@ -4288,8 +4288,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 30→31 landed for layer flags.)
-        expect(() => migrateIfNeeded(legacy, "32")).toThrow('Migration not implemented for document schema "31"');
+        // time a real migration is added — here, when 31→32 landed for inherited opacity.)
+        expect(() => migrateIfNeeded(legacy, "33")).toThrow('Migration not implemented for document schema "32"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -9851,5 +9851,85 @@ describe("resolveLayerDrop", () => {
         expect(src).toMatch(/const ok = layerDrag\.id && layerDrag\.id !== id[\s\S]{0,160}resolveLayerDrop\(/);
         expect(src).toMatch(/onDoubleClick=\{e => \{ e\.stopPropagation\(\); setRenaming\(true\); \}\}/);
         expect(src).toMatch(/contentActionFor\(dispatcher\.getDocument\(\), id, \{ name \}\)/);
+    });
+});
+
+
+// ─── Opacity inherits (schema 32), and the layer panel can set it ───
+describe("Opacity: a group's fade reaches its contents", () => {
+    /** Deliberately THREE levels deep: a two-level fixture cannot tell "multiply by the parent"
+     *  apart from "multiply by every ancestor", which is the mistake a shallow fixture hides. */
+    function nestedDoc(outer = 1, middle = 1, leaf = 1): ProjectDocument {
+        const doc = createEmptyDocument();
+        const mk = (id: string, kids: string[], parent: string | null, opacity: number) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent, children: kids, geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#4a90d9", opacity }, layout: {} });
+        mk("OUT", ["MID"], null, outer);
+        mk("MID", ["LEAF"], "OUT", middle);
+        mk("LEAF", [], "MID", leaf);
+        doc.rootNodeUuids = ["OUT"];
+        return doc;
+    }
+    const stateFor = (doc: ProjectDocument) =>
+        ({ viewport: { x: 0, y: 0, zoom: 1 }, selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(doc) }) as unknown as import("../../renderer/RendererState").RendererState;
+    const paintedOpacity = (doc: ProjectDocument, id: string) =>
+        buildRenderModel({ width: 800, height: 600 }, doc, stateFor(doc)).content.find(i => i.nodeId === id)!.paint.opacity;
+
+    test("a node draws at its own opacity times EVERY ancestor's, not just its parent's", () => {
+        const doc = nestedDoc(0.5, 0.5, 0.5);
+        expect(paintedOpacity(doc, "OUT")).toBeCloseTo(0.5);
+        expect(paintedOpacity(doc, "MID")).toBeCloseTo(0.25);
+        expect(paintedOpacity(doc, "LEAF")).toBeCloseTo(0.125);   // 0.5³ — two levels would say 0.25
+    });
+
+    test("fading a GROUP fades its contents — the thing that used to do nothing", () => {
+        const opaque = nestedDoc(1, 1, 1);
+        expect(paintedOpacity(opaque, "LEAF")).toBeCloseTo(1);
+        const faded = nestedDoc(0.4, 1, 1);
+        expect(paintedOpacity(faded, "LEAF")).toBeCloseTo(0.4);   // only the OUTER changed
+    });
+
+    test("the STORED value stays the node's own — the inspector must not show the product", () => {
+        // Computed in the render model precisely so this stays true; baking it into the scene
+        // would make the inspector read back a number nobody typed.
+        const doc = nestedDoc(0.5, 0.5, 0.5);
+        expect(doc.nodes.get("LEAF")!.style.opacity).toBe(0.5);
+        expect(resolveScene(doc).nodes.get("LEAF")!.style.opacity).toBe(0.5);
+    });
+
+    test("a cyclic parent chain renders NOTHING, so the opacity climb never meets one", () => {
+        // My first version of this asserted `not.toThrow()` and passed whether or not the
+        // climb was guarded — a test that looks like coverage and is not. What actually
+        // happens is that the scene walk drops the whole cycle, so `buildContent` never
+        // reaches such a node. The guard in `effectiveOpacity` is therefore defence in
+        // depth against a FUTURE caller, and cannot be killed by mutation through this one.
+        const doc = nestedDoc(0.5, 0.5, 0.5);
+        doc.nodes.get("OUT")!.parent = "LEAF";
+        const model = buildRenderModel({ width: 800, height: 600 }, doc, stateFor(doc));
+        expect(model.content).toEqual([]);
+    });
+
+    test("opacity from the layer panel is ROUTED, so a copy gets an override", () => {
+        // The fault this avoids: dispatching a raw action at a virtual id fails validation and
+        // the control silently does nothing.
+        const doc = createEmptyDocument();
+        doc.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 40, height: 40 }, style: { fill: "#4a90d9", opacity: 1 }, layout: {} });
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 100, y: 0, width: 40, height: 40 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "M" });
+        doc.rootNodeUuids = ["M", "I"];
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(styleActionFor(dispatcher.getDocument(), "I::M", { opacity: 0.3 })!);
+        expect(resolveScene(dispatcher.getDocument()).nodes.get("I::M")!.style.opacity).toBe(0.3);
+        expect(dispatcher.getDocument().nodes.get("M")!.style.opacity).toBe(1);   // master untouched
+    });
+
+    test("the panel's opacity field edits THIS node and routes through the seam", () => {
+        // Counting the call site: `styleActionFor` appears many times in App.tsx, so matching the
+        // bare name would pass with the layer control deleted — the audit fault from the slots
+        // and states slices, twice recorded and twice repeated.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/onOpacity=\{opacity => \{/);
+        expect(src).toMatch(/styleActionFor\(dispatcher\.getDocument\(\), id, \{ opacity \}\)/);
+        expect(src).toMatch(/onOpacity\(Math\.min\(1, Math\.max\(0, pct \/ 100\)\)\)/);
+        // …and it refuses a half-typed value rather than snapping the node to invisible.
+        expect(src).toMatch(/if \(!Number\.isFinite\(pct\)\) return;/);
     });
 });

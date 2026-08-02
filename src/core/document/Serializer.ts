@@ -281,6 +281,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "28") { raw = migrate_28_to_29(raw); version = "29"; }
     if (version === "29") { raw = migrate_29_to_30(raw); version = "30"; }
     if (version === "30") { raw = migrate_30_to_31(raw); version = "31"; }
+    if (version === "31") { raw = migrate_31_to_32(raw); version = "32"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -564,6 +565,18 @@ function migrate_21_to_22(raw: any): any {
  * is already a valid schema-31 one. The bump is required because an OLD BUILD would ignore
  * `hidden` and DRAW a node the file says to hide — a different picture, silently.
  */
+/**
+ * 31 -> 32: opacity INHERITS — a node now draws at its own opacity times every ancestor's.
+ *
+ * Nothing stored changes, which is exactly why the bump matters: this is an INTERPRETATION
+ * change, the other half of the rule. The same file draws differently on either side — an old
+ * build renders the children of a 50%% group fully opaque — so a version guard is the only
+ * thing that stops the two from silently disagreeing about the same document.
+ */
+function migrate_31_to_32(raw: any): any {
+    return { ...raw, version: "32" };
+}
+
 function migrate_30_to_31(raw: any): any {
     return { ...raw, version: "31" };
 }

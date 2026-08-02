@@ -986,6 +986,13 @@ export function App() {
                                             refresh();
                                         }}
                                         onDragEnd={() => setLayerDrag({ id: "", over: null, position: null })}
+                                        onOpacity={opacity => {
+                                            // ROUTED, so a copy gets a style override instead of
+                                            // a raw action at an id the document does not hold.
+                                            const action = styleActionFor(dispatcher.getDocument(), id, { opacity });
+                                            if (action) dispatcher.dispatchAction(action, { coalesce: true });
+                                            refresh();
+                                        }}
                                         onRename={name => {
                                             // The SAME routed content edit the inspector's Name
                                             // field uses, so a copy is refused here too.
@@ -2174,7 +2181,7 @@ function TokensPanel({ dispatcher, refresh }: { dispatcher: ActionDispatcher; re
     );
 }
 
-function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout, inheritedHidden, inheritedLocked, onSelect, onToggle, onFlag, label, dropHint, onDragStart, onDragOver, onDrop, onDragEnd, onRename }: {
+function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout, inheritedHidden, inheritedLocked, onSelect, onToggle, onFlag, label, dropHint, onDragStart, onDragOver, onDrop, onDragEnd, onRename, onOpacity }: {
     node: ReadonlyNode; depth: number; selected: boolean; collapsed: boolean; hasChildren: boolean;
     isAutoLayout: boolean;
     /** True when an ANCESTOR is hidden/locked — both inherit, so the row shows the effect
@@ -2186,6 +2193,7 @@ function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout,
     dropHint: DropPosition | null;
     onDragStart: () => void; onDragOver: (position: DropPosition) => void; onDrop: () => void; onDragEnd: () => void;
     onRename: (name: string) => void;
+    onOpacity: (opacity: number) => void;
 }) {
     const [hover, setHover] = useState(false);
     const [renaming, setRenaming] = useState(false);
@@ -2253,6 +2261,26 @@ function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout,
                     onDoubleClick={e => { e.stopPropagation(); setRenaming(true); }}
                     style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                 >{label}</span>
+            )}
+            {/* Opacity, as a percentage. Shown on hover or whenever it is not 100 — a layer
+                that is half-faded should say so without being hovered. It edits this node's
+                OWN opacity; what you see on canvas is that multiplied by its ancestors'. */}
+            {(hover || node.style.opacity < 1) && (
+                <input
+                    type="number" min={0} max={100} step={5}
+                    value={Math.round(node.style.opacity * 100)}
+                    title="Opacity %"
+                    onClick={e => e.stopPropagation()}
+                    onChange={e => {
+                        const pct = parseFloat(e.target.value);
+                        // Skip a half-typed value rather than substituting 0 — the same rule
+                        // NumInput follows, for the same reason: `|| 0` makes a node vanish.
+                        if (!Number.isFinite(pct)) return;
+                        onOpacity(Math.min(1, Math.max(0, pct / 100)));
+                    }}
+                    style={{ width: 34, fontSize: 9, padding: "0 2px", background: UI.bg, color: UI.textDim,
+                        border: `1px solid ${UI.line}`, borderRadius: 2 }}
+                />
             )}
             {/* Hide and lock. Shown on hover or when SET, so the panel stays quiet but a
                 hidden/locked node always says so — a control you cannot see is a state you
