@@ -22,6 +22,8 @@ import { handleAtPoint, ROTATE_OFFSET_PX } from "../core/geometry/SelectionHandl
 import { IDENTITY } from "../core/geometry/Matrix";
 
 const SIZE = { width: 800, height: 600 };
+/** A hand-built ComputedNode's ink: a plain square box, the default for every non-shape type. */
+const BOX = { kind: "box", radius: 0 } as const;
 
 function stateFor(doc: ProjectDocument, over?: Partial<RendererState>): RendererState {
     return {
@@ -110,7 +112,7 @@ describe("buildRenderModel — content", () => {
         const doc = { nodes: new Map([["x", node]]) } as unknown as ReadonlyDocument;
         const computed: ComputedState = {
             order: ["x"],
-            nodes: new Map([["x", { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 } }]]), locked: new Set<string>()
+            nodes: new Map([["x", { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 }, shape: BOX }]]), locked: new Set<string>()
         };
         const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed, viewport: { x: 0, y: 0, zoom: 1 } };
         const item = buildRenderModel(SIZE, doc, state).content[0];
@@ -129,7 +131,7 @@ describe("buildRenderModel — content", () => {
         const doc = { nodes: new Map([["x", node]]) } as unknown as ReadonlyDocument;
         const computed: ComputedState = {
             order: ["x"],
-            nodes: new Map([["x", { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: NaN, height: 10 } }]]), locked: new Set<string>()
+            nodes: new Map([["x", { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: NaN, height: 10 }, shape: BOX }]]), locked: new Set<string>()
         };
         const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed, viewport: { x: 0, y: 0, zoom: 1 } };
         expect(buildRenderModel(SIZE, doc, state).content.length).toBe(0);
@@ -580,7 +582,7 @@ describe("buildRenderModel — culling", () => {
         const doc = { nodes: new Map([["x", node]]) } as unknown as ReadonlyDocument;
         const computed: ComputedState = {
             order: ["x"],
-            nodes: new Map([["x", { world: { ...IDENTITY, e: 2000, f: 2000 }, local: { x: 0, y: 0, width: 40, height: 40 }, bounds: { x: 2000, y: 2000, width: 40, height: 40 } }]]), locked: new Set<string>()
+            nodes: new Map([["x", { world: { ...IDENTITY, e: 2000, f: 2000 }, local: { x: 0, y: 0, width: 40, height: 40 }, bounds: { x: 2000, y: 2000, width: 40, height: 40 }, shape: BOX }]]), locked: new Set<string>()
         };
         const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed, viewport: { x: 0, y: 0, zoom: 1 } };
         expect(buildRenderModel(SIZE, doc, state).content.length).toBe(0);

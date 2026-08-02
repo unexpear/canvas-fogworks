@@ -163,6 +163,23 @@ BUILD a hierarchy: nesting existed at the document layer from the start, but not
 could create a parent, so every drawn node was a root and auto-layout, constraints and
 multi-node component masters were unreachable by drawing.
 
+**Picking follows the INK, not the box (`geometry/ShapeHit`).** Alongside each node's box the
+engine derives what that node actually covers — an ellipse fills its box, a `core.line` is the box
+diagonal, a `core.path` is its own commands, everything else is the (possibly rounded) box — and
+`hitTest` runs that test in local space instead of the local rectangle. The empty half of a
+triangle, the corner outside a circle and the cut-off corner of a rounded rect all used to select
+a node that draws nothing there and, worse, swallow the click meant for whatever sits behind. Each
+variant mirrors exactly what `buildRenderModel` emits for that type, because the point is that hit
+and ink agree; a path's INTERIOR follows its FILL rather than an explicit `Z`, since both backends
+close an open subpath implicitly when they fill it, and nonzero winding is summed across subpaths
+so a donut keeps its hole. Curves are flattened at a FIXED 16 segments — an adaptive count would
+make the same click hit at one zoom and miss at another.
+
+Path **bounds are tight** (`pathBounds`), taken over each axis's bezier turning points rather than
+the control hull: a handle routinely reaches far outside the curve it shapes, and a box drawn
+around it left the selection frame visibly larger than the shape — with snapping, culling,
+alignment and the marquee all working from that phantom margin.
+
 The renderer's `buildRenderModel` also
 uses that world AABB to **cull** off-screen content — dropping any node whose bounds
 don't intersect the viewport's world rect — so a large document only pays for what is

@@ -181,7 +181,22 @@ function toMatrixString(m: Mat2D): string;                 // SVG/Canvas ready
 function isTranslationOnly(m: Mat2D): boolean;
 
 // geometry/GeometryEngine.ts — Milestone 1: intent → computed results
-interface ComputedNode { world: Mat2D; local: Rect; bounds: Rect }
+interface ComputedNode { world: Mat2D; local: Rect; bounds: Rect; shape: HitShape }
+
+// ShapeHit.ts — what a node's INK covers in its LOCAL box, so picking follows the drawing.
+// Derived once per node by the engine (like `locked`), read by the pickers.
+type HitShape =
+    | { kind: "box"; radius: number }              // rectangle/text/image/instance; radius resolved like the renderer's
+    | { kind: "ellipse" }                          // fills its box
+    | { kind: "line" }                             // the box DIAGONAL, top-left → bottom-right
+    | { kind: "path"; commands: readonly PathCommand[]; filled: boolean };
+function hitsShape(shape: HitShape, width: number, height: number, x: number, y: number, tolerance: number): boolean;
+function flattenPath(commands: readonly PathCommand[]): { points: {x: number; y: number}[]; closed: boolean }[]; // 16 segments per curve, FIXED so a pick cannot depend on zoom
+function isPaintBearing(fill: string): boolean;   // "", "none", "transparent" = no paint
+// A path's INTERIOR is its FILL: both backends close an open subpath implicitly when filling,
+// so `filled` (not an explicit `Z`) decides whether the inside is pickable. Nonzero winding is
+// summed ACROSS subpaths, which is what gives a donut its hole. The outline always hits within
+// `tolerance`, which is how a bare stroke is picked at all.
 interface ComputedState { order: string[]; nodes: Map<string, ComputedNode>; locked: ReadonlySet<string> }
 // `locked` is INHERITED (a locked group locks its contents) and computed during the same
 // parents-first walk, so `hitTest` and `nodesInRect` read one answer rather than each deriving
@@ -198,7 +213,7 @@ function computeGeometry(
 // expanded id space: a copy is dirty when any node on its `::` path is — its master node,
 // the instance whose overrides / variant / slot fills shape it, or any master between.
 // `incremental === full` is property-tested over instanced documents too.
-function hitTest(computed: ComputedState, x: number, y: number, tolerance?: number, includeVirtual?: boolean): string | null; // local-space, DOM-free; `tolerance` (world units, default 0) is a pick halo so thin/zero-extent targets (an axis-aligned line) stay selectable; `includeVirtual` is the DEEP pick (alt-click) that selects an instance COPY instead of the instance. By default a virtual hit RESOLVES to its owning instance rather than being skipped, so content drawn OUTSIDE the instance's own box is still clickable; `nodesInRect` resolves the same way and dedupes
+function hitTest(computed: ComputedState, x: number, y: number, tolerance?: number, includeVirtual?: boolean): string | null; // local-space, DOM-free; tests the node's INK (`hitsShape`), not its box — a triangle's empty corner passes the click THROUGH to whatever is drawn behind; `tolerance` (world units, default 0) is a pick halo so thin/zero-extent targets (an axis-aligned line) stay selectable; `includeVirtual` is the DEEP pick (alt-click) that selects an instance COPY instead of the instance. By default a virtual hit RESOLVES to its owning instance rather than being skipped, so content drawn OUTSIDE the instance's own box is still clickable; `nodesInRect` resolves the same way and dedupes
 function nodesInRect(computed: ComputedState, rect: Rect): string[]; // marquee (box) select: ids whose WORLD bounds OVERLAP rect (touch, not containment), in draw order; DOM-free
 function toLocal(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;
 function toWorld(s: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null;

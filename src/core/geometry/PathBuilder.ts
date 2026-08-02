@@ -72,12 +72,51 @@ export function penCommands(points: readonly PenPoint[], closed: boolean): PathC
 }
 
 /**
- * The box a set of commands occupies, INCLUDING control points.
+ * Where on a curve one axis turns around: the roots of its derivative inside (0,1).
  *
- * Control points can sit outside the curve they shape, so a box drawn from on-curve points
- * alone would clip the ink. Using the control hull is the safe direction — the box is at worst
- * too large, never too small. (A TIGHT box needs bezier extrema, which is the same deferral
- * `pathError`'s doc comment already records for path bounds.)
+ * A cubic's derivative is the quadratic `at² + bt + c` with `a = A − 2B + C`, `b = 2(B − A)`,
+ * `c = A` for the successive differences `A = p1−p0`, `B = p2−p1`, `C = p3−p2`. `a ≈ 0` is the
+ * degenerate case where the derivative is LINEAR (evenly spaced control points), which the
+ * quadratic formula would answer by dividing by zero.
+ */
+function cubicRoots(p0: number, p1: number, p2: number, p3: number): number[] {
+    const A = p1 - p0, B = p2 - p1, C = p3 - p2;
+    const a = A - 2 * B + C, b = 2 * (B - A), c = A;
+    const inRange = (t: number): boolean => t > 0 && t < 1;
+    if (Math.abs(a) < 1e-12) return Math.abs(b) < 1e-12 ? [] : [-c / b].filter(inRange);
+    const disc = b * b - 4 * a * c;
+    if (disc < 0) return [];                       // no turn: the axis is monotonic across the segment
+    const s = Math.sqrt(disc);
+    return [(-b + s) / (2 * a), (-b - s) / (2 * a)].filter(inRange);
+}
+
+function cubicAt(p0: number, p1: number, p2: number, p3: number, t: number): number {
+    const u = 1 - t;
+    return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+}
+
+/** A quadratic's single turning point, or null when it has none inside (0,1). */
+function quadRoot(p0: number, p1: number, p2: number): number | null {
+    const den = p0 - 2 * p1 + p2;
+    if (den === 0) return null;            // the derivative is constant: no turn
+    const t = (p0 - p1) / den;
+    return t > 0 && t < 1 ? t : null;
+}
+
+function quadAt(p0: number, p1: number, p2: number, t: number): number {
+    const u = 1 - t;
+    return u * u * p0 + 2 * u * t * p1 + t * t * p2;
+}
+
+/**
+ * The box a set of commands occupies — the TIGHT one, around the ink itself.
+ *
+ * A curve's control points routinely sit outside the curve they shape, so the control hull
+ * (which this used to return) draws a box with empty margins on the curved sides: the selection
+ * frame stops matching the shape, and every consumer of bounds — snapping, culling, alignment,
+ * the marquee — works from a rectangle bigger than anything visible. The exact answer is the
+ * segment endpoints plus each axis's turning points, which is what a bezier's derivative gives
+ * in closed form. A quadratic has the single root `(p0−p1)/(p0−2p1+p2)`.
  */
 export function pathBounds(commands: readonly PathCommand[]): Rect {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -87,11 +126,26 @@ export function pathBounds(commands: readonly PathCommand[]): Rect {
         if (x > maxX) maxX = x;
         if (y > maxY) maxY = y;
     };
+    // The bounds of a curve need the point it STARTS from, so the walk carries the current
+    // point — the one thing a per-command scan cannot see.
+    let cx = 0, cy = 0;
+    let started = false;
     for (const cmd of commands) {
         if (cmd.c === "Z") continue;
+        // Each root is seen as a WHOLE point on the curve: the axis that turns contributes its
+        // extremum, and the other axis contributes a coordinate that is genuinely on the ink,
+        // so it can never widen the box past the curve.
+        if (cmd.c === "C" && started) {
+            const ts = [...cubicRoots(cx, cmd.x1, cmd.x2, cmd.x), ...cubicRoots(cy, cmd.y1, cmd.y2, cmd.y)];
+            for (const t of ts) see(cubicAt(cx, cmd.x1, cmd.x2, cmd.x, t), cubicAt(cy, cmd.y1, cmd.y2, cmd.y, t));
+        } else if (cmd.c === "Q" && started) {
+            for (const t of [quadRoot(cx, cmd.x1, cmd.x), quadRoot(cy, cmd.y1, cmd.y)]) {
+                if (t !== null) see(quadAt(cx, cmd.x1, cmd.x, t), quadAt(cy, cmd.y1, cmd.y, t));
+            }
+        }
         see(cmd.x, cmd.y);
-        if (cmd.c === "C") { see(cmd.x1, cmd.y1); see(cmd.x2, cmd.y2); }
-        if (cmd.c === "Q") { see(cmd.x1, cmd.y1); }
+        cx = cmd.x; cy = cmd.y;
+        started = true;
     }
     if (minX === Infinity) return { x: 0, y: 0, width: 0, height: 0 };
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };

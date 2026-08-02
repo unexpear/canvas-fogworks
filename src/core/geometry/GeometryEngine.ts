@@ -32,6 +32,8 @@
 import { DeepReadonly, ReadonlyDocument } from "../document/Document";
 import { Geometry, Margins, Node } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
+import { resolveNumber } from "../document/Variables";
+import { HitShape, hitsShape, isPaintBearing } from "./ShapeHit";
 import { resolveScene, isVirtualId, ownerInstanceOf, VIRTUAL_ID_SEP } from "../document/Components";
 import { expandDirtyForLayout, isAbsolute, isLayoutContainer, layoutChildren, layoutGridChildren, measureIntrinsicSizes, resolveConstraints } from "./LayoutEngine";
 import {
@@ -46,6 +48,14 @@ export interface ComputedNode {
     local: Rect;
     /** Axis-aligned bounds of that box in WORLD space (rotation-aware). */
     bounds: Rect;
+    /**
+     * What the node's INK covers inside that local box (`ShapeHit`) — an ellipse, the box
+     * diagonal of a line, a path's own commands, or the (possibly rounded) box.
+     *
+     * Derived here for the same reason `locked` is: the pickers read one answer instead of
+     * each re-deriving it from the node, and it cannot drift from the walk that placed the box.
+     */
+    shape: HitShape;
 }
 
 export interface ComputedState {
@@ -64,6 +74,23 @@ export interface ComputedState {
 }
 
 export type PendingGeometry = Map<string, Partial<Geometry>> | null | undefined;
+
+/**
+ * The ink a node covers, by type — the picking half of what `buildRenderModel` draws.
+ *
+ * The two must agree, so this reads the same fields the renderer does, including resolving a
+ * `$token` radius through the same `resolveNumber`. An unresolvable one falls back to a square
+ * corner exactly as the renderer falls back to no rounding, so the two stay in step even when
+ * the token is broken.
+ */
+function hitShapeOf(node: DeepReadonly<Node>, doc: ReadonlyDocument): HitShape {
+    if (node.type === "core.ellipse") return { kind: "ellipse" };
+    if (node.type === "core.line") return { kind: "line" };
+    if (node.type === "core.path") return { kind: "path", commands: node.path ?? [], filled: isPaintBearing(node.style.fill) };
+    const raw = node.style.radius;
+    const r = raw === undefined ? null : typeof raw === "number" ? raw : resolveNumber(doc.variables, raw, doc.activeTheme);
+    return { kind: "box", radius: r !== null && r > 0 ? r : 0 };
+}
 
 /** Local matrix for one node from its stored geometry + optional transform. */
 function localMatrix(geo: Rect, t: { rotation?: number; scaleX?: number; scaleY?: number; origin?: { x: number; y: number } } | undefined): Mat2D {
@@ -237,7 +264,7 @@ export function computeGeometry(
         const boxAtOrigin: Rect = { x: 0, y: 0, width: local.width, height: local.height };
 
         order.push(id);
-        nodes.set(id, { world, local, bounds: transformRectToAABB(world, boxAtOrigin) });
+        nodes.set(id, { world, local, bounds: transformRectToAABB(world, boxAtOrigin), shape: hitShapeOf(node, doc) });
         layoutContainerPass(doc, node, local, laidOut, measured);
     }
 
@@ -359,7 +386,10 @@ export function toWorld(state: ComputedState, nodeId: string, x: number, y: numb
  *
  * Walks draw order in reverse so the front-most wins, and tests in each node's LOCAL
  * space via the inverse matrix — so a rotated node hit-tests against its true shape,
- * not its bounding box.
+ * not its bounding box. The local test is against the node's INK (`hitsShape`), not its
+ * box: the empty half of a triangle, the corner outside an ellipse and the interior of an
+ * open pen stroke all used to select a node that draws nothing there, and — the part that
+ * actually costs you work — swallow the click meant for whatever is drawn behind them.
  *
  * `tolerance` (world units, default 0) is a pick halo that inflates both the AABB
  * reject and the local box. Its point: a ZERO-EXTENT node — an axis-aligned
@@ -386,7 +416,7 @@ export function hitTest(
         if (x < b.x - tolerance || y < b.y - tolerance || x > b.x + b.width + tolerance || y > b.y + b.height + tolerance) continue;
         const p = toLocal(state, id, x, y);
         if (!p) continue;
-        if (p.x >= -tolerance && p.y >= -tolerance && p.x <= c.local.width + tolerance && p.y <= c.local.height + tolerance) {
+        if (hitsShape(c.shape, c.local.width, c.local.height, p.x, p.y, tolerance)) {
             // A VIRTUAL node (an instance's materialized copy, M6) RESOLVES to its instance by
             // DEFAULT, so a plain click on instance content selects the INSTANCE — the thing you
             // usually want to move. `includeVirtual` is the deep-pick (alt-click): it selects the

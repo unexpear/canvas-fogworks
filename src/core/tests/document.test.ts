@@ -37,6 +37,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
+import { flattenPath, hitsShape, isPaintBearing } from "../geometry/ShapeHit";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
@@ -60,6 +61,9 @@ import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
 import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow, TrackSize, layoutError, newGridPatch, mergeLayout, transformError, Layout, variantError, variantSelectionError , slotError, slotContentError} from "../document/Node";
 import { parseTrackList, formatTrackList } from "../document/TrackList";
+
+/** A hand-built ComputedNode's ink: a plain square box (what every non-shape type gets). */
+const BOX = { kind: "box", radius: 0 } as const;
 
 function createDocWithRectangle(): ProjectDocument {
     const doc = createEmptyDocument();
@@ -1204,8 +1208,8 @@ describe("nodesInRect (box select)", () => {
     });
 
     test("non-finite bounds are skipped, never thrown", () => {
-        const ok: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 } };
-        const bad: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: NaN, y: 0, width: 10, height: 10 } };
+        const ok: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 }, shape: BOX };
+        const bad: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: NaN, y: 0, width: 10, height: 10 }, shape: BOX };
         const cs: ComputedState = { order: ["bad", "ok"], nodes: new Map([["bad", bad], ["ok", ok]]), locked: new Set<string>() };
         expect(nodesInRect(cs, { x: -100, y: -100, width: 1000, height: 1000 })).toEqual(["ok"]);
     });
@@ -1400,8 +1404,8 @@ describe("selectionHandles + handleAtPoint", () => {
     });
 
     test("selectionHandles skips a node with non-finite bounds, never throws", () => {
-        const ok: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 } };
-        const bad: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: NaN, y: 0, width: 10, height: 10 } };
+        const ok: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 }, shape: BOX };
+        const bad: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: NaN, y: 0, width: 10, height: 10 }, shape: BOX };
         const cs: ComputedState = { order: ["bad", "ok"], nodes: new Map([["bad", bad], ["ok", ok]]), locked: new Set<string>() };
         expect(selectionHandles(cs, ["bad", "ok"], 1).map(h => h.nodeId)).toEqual(["ok", "ok", "ok", "ok", "ok"]); // 5 for ok, none for bad
     });
@@ -10216,12 +10220,44 @@ describe("PathBuilder", () => {
         expect(closed.slice(open.length)).toEqual([{ c: "L", x: 0, y: 0 }, { c: "Z" }]);
     });
 
-    test("bounds include CONTROL points, so the box never clips the ink", () => {
-        // A control point can sit outside the curve it shapes. Over-large is the safe direction;
-        // a tight box needs bezier extrema, which stays the documented deferral.
+    test("bounds are TIGHT around the ink — a control point outside the curve is not in the box", () => {
+        // `M 0 0 C 0 -50 10 0 10 0`: the handle reaches y = -50, but the curve it shapes peaks
+        // at t = 1/3, where y = 3(2/3)²(1/3)(-50) = -200/9 ≈ -22.22. The old bounds took the
+        // control HULL and returned -50, so a curved node's frame carried 27.8 units of empty
+        // margin — the selection box visibly did not match the shape, and every consumer of
+        // bounds (snapping, culling, alignment, the marquee) worked from that phantom.
         const cmds = penCommands([P(0, 0, 0, -50), P(10, 0)], false);
-        expect(pathBounds(cmds)).toEqual({ x: 0, y: -50, width: 10, height: 50 });
+        const b = pathBounds(cmds);
+        expect(b.x).toBe(0);
+        expect(b.width).toBe(10);
+        expect(b.y).toBeCloseTo(-200 / 9, 10);
+        expect(b.height).toBeCloseTo(200 / 9, 10);
         expect(pathBounds([])).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+        // The same curve moved off the origin. A curve's extrema depend on where it STARTS,
+        // which is the one thing a per-command scan cannot see — carrying the current point
+        // wrongly would leave this box measured from (0,0) and wildly too tall.
+        const moved = pathBounds([{ c: "M", x: 100, y: 100 }, { c: "C", x1: 100, y1: 50, x2: 110, y2: 100, x: 110, y: 100 }]);
+        expect(moved.x).toBe(100);
+        expect(moved.width).toBe(10);
+        expect(moved.y).toBeCloseTo(100 - 200 / 9, 10);
+        expect(moved.height).toBeCloseTo(200 / 9, 10);
+    });
+
+    test("a curve that never turns is bounded by its endpoints alone", () => {
+        // The degenerate branch: evenly spaced controls make the derivative LINEAR, so the
+        // quadratic formula would divide by zero. A monotonic curve's extremes ARE its ends.
+        const straightish: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "C", x1: 10, y1: 10, x2: 20, y2: 20, x: 30, y: 30 }];
+        expect(pathBounds(straightish)).toEqual({ x: 0, y: 0, width: 30, height: 30 });
+        // …but a LINEAR derivative is not the same as NO turn. With y running 0,-40,-40,0 the
+        // quadratic's leading term vanishes while a real root survives at t = 1/2, where the
+        // curve reaches -30. Falling through to the quadratic formula divides by zero and loses
+        // it — the box would collapse to the endpoints and clip 30 units of visible ink.
+        const flatDeriv: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "C", x1: 0, y1: -40, x2: 60, y2: -40, x: 60, y: 0 }];
+        expect(pathBounds(flatDeriv)).toEqual({ x: 0, y: -30, width: 60, height: 30 });
+        // A QUADRATIC turns too, and its single root is (p0−p1)/(p0−2p1+p2) = 1/2 here,
+        // where y = 25 — half of the handle's 50, and the whole reason the hull was wrong.
+        const quad: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "Q", x1: 10, y1: 50, x: 20, y: 0 }];
+        expect(pathBounds(quad)).toEqual({ x: 0, y: 0, width: 20, height: 25 });
     });
 
     test("translate moves every coordinate, control points included", () => {
@@ -10402,11 +10438,21 @@ describe("Path vertex editing", () => {
         const box = { x: 100, y: 100, width: 80, height: 10 };
         const dragged = movePathVertex(curve, 0, -20, -30);
         const norm = normalizePathNode(box, dragged);
-        // y reaches -40, not -30: moving the point dragged its OUT handle (10,-10) to
-        // (-10,-40), and bounds include control points. The handle extends the box further
-        // than the point does, which is exactly why bounds are taken over the control hull.
-        expect(norm.geometry).toEqual({ x: 80, y: 60, width: 100, height: 50 });
-        expect(pathBounds(norm.path)).toEqual({ x: 0, y: 0, width: 100, height: 50 });
+        // x is exact from the endpoints (-20 → 80, so the box starts 20 to the LEFT of 100).
+        expect(norm.geometry.x).toBe(80);
+        expect(norm.geometry.width).toBe(100);
+        // y is where the curve actually turns, NOT where its handles reach. Moving the point
+        // dragged its OUT handle from (10,-10) to (-10,-40), and the old control-hull bounds
+        // put the box top at that -40 — 8 units of empty margin above ink that only reaches
+        // -32.01. The curve's own minimum is the root of its derivative, which is the number
+        // the frame has to agree with if it is to hug the shape.
+        expect(norm.geometry.y).toBeCloseTo(67.987, 3);
+        expect(norm.geometry.height).toBeCloseTo(39.513, 3);
+        // …and re-basing puts that same tight box at the origin.
+        const rebased = pathBounds(norm.path);
+        expect(rebased.x).toBe(0);
+        expect(rebased.y).toBeCloseTo(0, 10);
+        expect(rebased.height).toBeCloseTo(39.513, 3);
     });
 
     test("a normalized path is still one the LOADER accepts", () => {
@@ -10457,5 +10503,170 @@ describe("Path vertex editing", () => {
         expect(src).toMatch(/normalizePathNode\(node\.geometry, moved\)/);
         // …and both halves land as ONE transaction, so a drag is one undo.
         expect(src).toMatch(/new TransactionAction\(doc, `vertex:\$\{this\.vertexNodeId\}`, actions\)/);
+    });
+});
+
+// ─── Picking the SHAPE, not the box it lives in ───
+describe("Shape-accurate hit-testing", () => {
+    /** A node of any type with an explicit box, and optional path/style extras. */
+    const shapeNode = (id: string, type: string, box: { x: number; y: number; width: number; height: number }, extra: Partial<Node> = {}): Node =>
+        ({ id, type, parent: null, children: [], geometry: box, style: { fill: "#111111", opacity: 1 }, layout: {}, ...extra } as Node);
+
+    const docWith = (...nodes: Node[]): ProjectDocument => {
+        const doc = createEmptyDocument();
+        for (const n of nodes) doc.nodes.set(n.id, n);
+        doc.rootNodeUuids = nodes.map(n => n.id);
+        return doc;
+    };
+
+    /** A right triangle filling a 100x100 box: the hypotenuse runs (0,100) to (100,0). */
+    const TRIANGLE: PathCommand[] = [{ c: "M", x: 0, y: 100 }, { c: "L", x: 100, y: 100 }, { c: "L", x: 100, y: 0 }, { c: "Z" }];
+
+    test("a triangle's EMPTY corner is not part of the triangle", () => {
+        // The whole point. (10,10) is inside the node's box and nowhere near its ink — the
+        // hypotenuse is x + y = 100, and the shape is the x + y > 100 side.
+        const doc = docWith(shapeNode("T", "core.path", { x: 0, y: 0, width: 100, height: 100 }, { path: TRIANGLE }));
+        const cs = computeGeometry(doc);
+        expect(hitTest(cs, 80, 80)).toBe("T");    // inside the ink
+        expect(hitTest(cs, 99, 1)).toBe("T");     // the far corner IS part of this triangle
+        expect(hitTest(cs, 10, 10)).toBeNull();   // in the box, not in the shape
+    });
+
+    test("the click that misses a shape reaches what is drawn BEHIND it", () => {
+        // The cost of box-picking was never the wrong selection alone — it was that the empty
+        // corner of a shape on top swallowed clicks meant for the thing underneath.
+        const doc = docWith(
+            shapeNode("BG", "core.rectangle", { x: 0, y: 0, width: 200, height: 200 }),
+            shapeNode("T", "core.path", { x: 0, y: 0, width: 100, height: 100 }, { path: TRIANGLE })
+        );
+        const cs = computeGeometry(doc);
+        expect(hitTest(cs, 80, 80)).toBe("T");    // the triangle is in front where it has ink
+        expect(hitTest(cs, 10, 10)).toBe("BG");   // and passes the click through where it has none
+    });
+
+    test("an ellipse is picked as an ellipse, corners and all", () => {
+        const doc = docWith(shapeNode("E", "core.ellipse", { x: 0, y: 0, width: 100, height: 60 }));
+        const cs = computeGeometry(doc);
+        expect(hitTest(cs, 50, 30)).toBe("E");    // centre
+        expect(hitTest(cs, 99, 1)).toBeNull();    // box corner, outside the curve
+        expect(hitTest(cs, 1, 30)).toBe("E");     // on the horizontal axis, just inside the left edge
+    });
+
+    test("a line is its diagonal, not its bounding box", () => {
+        const doc = docWith(shapeNode("L", "core.line", { x: 0, y: 0, width: 100, height: 100 }));
+        const cs = computeGeometry(doc);
+        expect(hitTest(cs, 50, 51, 2)).toBe("L");   // ~0.7 from the diagonal
+        expect(hitTest(cs, 90, 10, 2)).toBeNull();  // the far corner of the box, 56 away from the ink
+        // A SEGMENT, not the infinite line through it: (-20,-20) sits exactly on the diagonal's
+        // extension, 28 beyond the end. Without the clamp it would measure as distance zero and
+        // a line would be grabbable from anywhere along the ray it points down.
+        expect(hitsShape({ kind: "line" }, 100, 100, -20, -20, 2)).toBe(false);
+    });
+
+    test("a rounded rectangle's cut-off corner is outside it", () => {
+        const round = docWith(shapeNode("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }, { style: { fill: "#111111", opacity: 1, radius: 20 } }));
+        const square = docWith(shapeNode("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }));
+        // (2,2) is 18,18 past the corner arc's centre: 18^2 + 18^2 = 648 > 20^2.
+        expect(hitTest(computeGeometry(round), 2, 2)).toBeNull();
+        expect(hitTest(computeGeometry(square), 2, 2)).toBe("R");   // same point, no radius
+        expect(hitTest(computeGeometry(round), 50, 2)).toBe("R");   // the straight edge between the arcs
+    });
+
+    test("a radius past half the shorter side draws a circle, and picks like one", () => {
+        // The clamp. An unclamped 200 on a 100x100 box would put the arc centres 200 in from
+        // each edge — outside the box entirely — and shrink the pickable region to nothing,
+        // while the renderer draws a plain circle. (20,20) is 42.4 from the centre, inside a
+        // radius-50 circle and nowhere near an arc centred at (200,200).
+        const doc = docWith(shapeNode("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }, { style: { fill: "#111111", opacity: 1, radius: 200 } }));
+        expect(hitTest(computeGeometry(doc), 20, 20)).toBe("R");
+        expect(hitTest(computeGeometry(doc), 5, 5)).toBeNull();   // still outside the circle
+    });
+
+    test("an UNFILLED path is only its stroke", () => {
+        // Three sides of a square, never closed, painted with no fill: the middle is air, and
+        // a click there has to reach whatever is behind rather than grabbing the stroke's node.
+        const open: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 100 }, { c: "L", x: 0, y: 100 }];
+        const doc = docWith(shapeNode("O", "core.path", { x: 0, y: 0, width: 100, height: 100 }, { path: open, style: { fill: "none", opacity: 1 } }));
+        const cs = computeGeometry(doc);
+        expect(hitTest(cs, 50, 1, 2)).toBe("O");     // on the stroke
+        expect(hitTest(cs, 50, 50, 2)).toBeNull();   // in the middle: 50 from every segment
+    });
+
+    test("…but a FILLED path is picked over its fill, closed or not", () => {
+        // Found in the live app: a pen stroke finished with Enter is OPEN, and both backends
+        // close it implicitly when they fill it — so it paints a solid region. Gating the
+        // interior on an explicit `Z` made that shape selectable only along its own edge,
+        // while it drew as a solid lump. Picking follows the PAINT, not the punctuation.
+        const open: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 100 }, { c: "L", x: 0, y: 100 }];
+        const doc = docWith(shapeNode("F", "core.path", { x: 0, y: 0, width: 100, height: 100 }, { path: open }));
+        expect(hitTest(computeGeometry(doc), 50, 50, 2)).toBe("F");
+        // "none", "" and "transparent" are the three ways a document says "no paint".
+        expect(isPaintBearing("#ff0000")).toBe(true);
+        expect(isPaintBearing("  NONE ")).toBe(false);
+        expect(isPaintBearing("")).toBe(false);
+        expect(isPaintBearing("transparent")).toBe(false);
+    });
+
+    test("a rotated shape hits where it is DRAWN", () => {
+        // The test runs in local space through the inverse world matrix, so rotation needs no
+        // special case — but it is the case that proves the shape travels with the node.
+        const doc = docWith(shapeNode("T", "core.path", { x: 0, y: 0, width: 100, height: 100 }, { path: TRIANGLE, transform: { rotation: Math.PI } }));
+        const cs = computeGeometry(doc);
+        // A half-turn about the box centre maps local (80,80) to world (20,20) and back.
+        expect(hitTest(cs, 20, 20)).toBe("T");
+        expect(hitTest(cs, 90, 90)).toBeNull();
+    });
+
+    test("a donut has a HOLE: opposite windings cancel", () => {
+        // Two closed subpaths wound in opposite directions. Nonzero — the rule both backends
+        // fill with — cancels them to 0 in the middle, so the hole is not clickable, which is
+        // the only answer that matches what is painted.
+        const donut: PathCommand[] = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 100 }, { c: "L", x: 0, y: 100 }, { c: "Z" },
+            { c: "M", x: 30, y: 30 }, { c: "L", x: 30, y: 70 }, { c: "L", x: 70, y: 70 }, { c: "L", x: 70, y: 30 }, { c: "Z" }
+        ];
+        const doc = docWith(shapeNode("D", "core.path", { x: 0, y: 0, width: 100, height: 100 }, { path: donut }));
+        const cs = computeGeometry(doc);
+        expect(hitTest(cs, 10, 50)).toBe("D");     // the ring
+        expect(hitTest(cs, 50, 50)).toBeNull();    // the hole
+    });
+
+    test("nonzero, not even-odd: a doubly-wound region is solid", () => {
+        // The same square traced twice in the same direction. Even-odd counts two crossings and
+        // calls the middle a hole; nonzero counts winding 2 and calls it solid — and solid is
+        // what SVG's default fill-rule and Canvas's fill() both paint.
+        const twice: PathCommand[] = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 100 }, { c: "L", x: 0, y: 100 },
+            { c: "L", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 100 }, { c: "L", x: 0, y: 100 }, { c: "Z" }
+        ];
+        expect(hitsShape({ kind: "path", commands: twice, filled: true }, 100, 100, 50, 50, 0)).toBe(true);
+    });
+
+    test("flattening splits at every M and closes only on Z", () => {
+        const cmds: PathCommand[] = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 10, y: 0 }, { c: "Z" },
+            { c: "M", x: 20, y: 0 }, { c: "L", x: 30, y: 0 }
+        ];
+        const subs = flattenPath(cmds);
+        expect(subs.map(s => s.closed)).toEqual([true, false]);
+        expect(subs.map(s => s.points.length)).toEqual([2, 2]);
+        // An `M` with no `Z` before it STILL starts a new run — otherwise two separate strokes
+        // join into one, and the phantom segment between them is pickable ink nobody drew.
+        const noZ = flattenPath([{ c: "M", x: 0, y: 0 }, { c: "L", x: 10, y: 0 }, { c: "M", x: 90, y: 0 }, { c: "L", x: 99, y: 0 }]);
+        expect(noZ.map(s => s.points.length)).toEqual([2, 2]);
+        // A curve becomes a polyline of fixed length — deterministic, so a pick cannot depend
+        // on the zoom it happened to be taken at.
+        const curved = flattenPath([{ c: "M", x: 0, y: 0 }, { c: "C", x1: 0, y1: 10, x2: 10, y2: 10, x: 10, y: 0 }]);
+        expect(curved[0].points.length).toBe(17);          // the start point + 16 segments
+        expect(curved[0].points[16]).toEqual({ x: 10, y: 0 });  // and it lands exactly on the endpoint
+    });
+
+    test("the pick halo still reaches a zero-extent node", () => {
+        // The tolerance's original job, unchanged by the shape test: an axis-aligned line has
+        // no area at all, so without a halo only a mathematically exact click could select it.
+        const doc = docWith(shapeNode("H", "core.line", { x: 0, y: 50, width: 100, height: 0 }));
+        const cs = computeGeometry(doc);
+        expect(hitTest(cs, 50, 52, 3)).toBe("H");
+        expect(hitTest(cs, 50, 52, 0)).toBeNull();
     });
 });
