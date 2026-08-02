@@ -175,6 +175,13 @@ close an open subpath implicitly when they fill it, and nonzero winding is summe
 so a donut keeps its hole. Curves are flattened at a FIXED 16 segments — an adaptive count would
 make the same click hit at one zoom and miss at another.
 
+**One display list, three consumers.** `emitSVG` draws it, `emitCanvas` draws it, and
+`exportSVG` serializes it — so a feature that reaches the model reaches all three without a second
+description of any shape. Text is the one place that needed care: the two backends and the exporter
+each lay it out, so the HARD BREAK rule is a single shared `textParagraphs` and only the MEASURED
+wrapping is per-backend (the canvas has `measureText`; a pure exporter has nothing to measure with,
+which is why exported text honours newlines but does not wrap).
+
 **Booleans work on outlines, not node types (`geometry/ShapeToPath` → `geometry/PathBoolean` →
 `actions/booleanActions`).** A rectangle and an ellipse can be combined because both convert to
 commands first, by the same rules `ShapeHit` and `buildRenderModel` use — the three now agree on
