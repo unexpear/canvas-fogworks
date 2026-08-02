@@ -40,6 +40,24 @@ export function isPaintBearing(fill: string): boolean {
 }
 
 /**
+ * The ink a node covers, by type — the picking half of what `buildRenderModel` draws.
+ *
+ * Lives HERE, with the type it produces, rather than inside the geometry engine: the boolean
+ * resolver needs the same answer and cannot import the engine (the engine imports the resolver).
+ * The corner radius arrives already RESOLVED, so this needs no document and no variable store —
+ * the caller does the token lookup with the same `resolveNumber` the renderer uses.
+ */
+export function hitShapeOf(
+    node: { type: string; path?: readonly PathCommand[]; style: { fill: string } },
+    radius: number
+): HitShape {
+    if (node.type === "core.ellipse") return { kind: "ellipse" };
+    if (node.type === "core.line") return { kind: "line" };
+    if (node.type === "core.path") return { kind: "path", commands: node.path ?? [], filled: isPaintBearing(node.style.fill) };
+    return { kind: "box", radius: radius > 0 ? radius : 0 };
+}
+
+/**
  * How many straight segments approximate one curve for hit-testing.
  *
  * Flattening, not exact root-finding: a point-in-curve test has no closed form, and 16

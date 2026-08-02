@@ -159,7 +159,7 @@ export const CURRENT_VERSION: string =
  *         a schema-21 build would IGNORE the overrides and render every instance identically,
  *         silently misstating the document.
  */
-export const SCHEMA_VERSION = "32";
+export const SCHEMA_VERSION = "33";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

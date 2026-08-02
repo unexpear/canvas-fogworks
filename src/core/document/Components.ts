@@ -34,6 +34,12 @@
 import { ProjectDocument, ReadonlyDocument } from "./Document";
 import { dimensionError, Geometry, Layout, layoutError, mergeLayout, Node, slotContentError, STATES_MAX, Style, styleError, srcValueError, Transform, transformError, variantNameError } from "./Node";
 import { ReadonlyNode } from "./SceneGraph";
+import { PathCommand } from "./Node";
+import { Mat2D, compose } from "../geometry/Matrix";
+import { hitShapeOf } from "../geometry/ShapeHit";
+import { shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
+import { booleanPaths } from "../geometry/PathBoolean";
+import { normalizePathNode } from "../geometry/PathBuilder";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
  *  Reserved: a stored node id may not contain it (checked on the edit AND load paths). */
@@ -686,8 +692,123 @@ export function applyActiveState(doc: ReadonlyDocument): ReadonlyDocument {
 export function resolveScene(doc: ReadonlyDocument): ReadonlyDocument {
     // Hidden FIRST: a hidden node takes no part in anything downstream, including being
     // copied into an instance. Then the active state, then expansion — so a master in its
-    // hover state produces hovered copies.
-    return expandInstances(applyActiveState(dropHidden(doc)));
+    // hover state produces hovered copies. Booleans resolve LAST, once every operand a
+    // combination could see actually exists: an instance's copies are only real after
+    // expansion, and a hidden operand must already be gone rather than silently combined.
+    return resolveBooleans(expandInstances(applyActiveState(dropHidden(doc))));
+}
+
+/** Local matrix for a node from its geometry + transform — the engine's own composition rule. */
+function nodeMatrix(geo: Geometry, t: Transform | undefined): Mat2D {
+    if (!t) return { a: 1, b: 0, c: 0, d: 1, e: geo.x, f: geo.y };
+    const ox = (t.origin?.x ?? 0.5) * geo.width;
+    const oy = (t.origin?.y ?? 0.5) * geo.height;
+    return compose(geo.x, geo.y, t.rotation ?? 0, t.scaleX ?? 1, t.scaleY ?? 1, ox, oy);
+}
+
+/**
+ * Turn every `core.boolean` into the `core.path` it draws as (schema 33).
+ *
+ * This is what makes the operation NON-DESTRUCTIVE: the document keeps the operands as an
+ * ordinary subtree, and the combination is derived every time the scene resolves — so moving a
+ * child, restyling it, or changing the operation updates the result, and undo is just an edit to
+ * a child. The destructive `booleanAction` bakes the same `booleanPaths` result into a flat path;
+ * this keeps it alive.
+ *
+ * Resolving HERE rather than in the renderer is the whole point: every consumer below — layout,
+ * hit-testing, snapping, culling, both backends — sees an ordinary path and needs no knowledge
+ * that a boolean exists. It is the same trick `expandInstances` plays.
+ *
+ * Children are combined in the BOOLEAN's own space (each child's local matrix applied to its
+ * outline), and INNERMOST FIRST, so a boolean of booleans resolves bottom-up. The result node
+ * keeps the boolean's transform and style, and takes its box from the result's own tight bounds —
+ * the stored box is derived data, which is why `dimensionError` treats it permissively.
+ *
+ * A boolean with fewer than two usable operands resolves to an EMPTY path rather than
+ * disappearing: the node stays selectable, so dropping a shape into it is still possible.
+ */
+export function resolveBooleans(doc: ReadonlyDocument): ReadonlyDocument {
+    let any = false;
+    doc.nodes.forEach(n => { if (n.type === "core.boolean") any = true; });
+    if (!any) return doc;
+
+    const nodes = new Map<string, Node>();
+    doc.nodes.forEach((n, id) => nodes.set(id, n as Node));
+    const gone = new Set<string>();
+
+    /** A node's outline in ITS OWN space, resolving a nested boolean first. */
+    const outlineOf = (id: string): PathCommand[] | null => {
+        const node = nodes.get(id);
+        if (!node) return null;
+        if (node.type === "core.boolean") resolveOne(id);
+        const resolved = nodes.get(id);
+        if (!resolved) return null;
+        const raw = resolved.style.radius;
+        const radius = typeof raw === "number" ? raw : 0;   // a token radius is not resolvable here; square is the safe read
+        const shape = hitShapeOf(resolved, radius);
+        return shapeToCommands(shape, resolved.geometry.width, resolved.geometry.height);
+    };
+
+    const resolving = new Set<string>();
+    const resolveOne = (id: string): void => {
+        const node = nodes.get(id);
+        if (!node || node.type !== "core.boolean" || resolving.has(id)) return;
+        resolving.add(id);   // a malformed cycle resolves to nothing rather than recursing forever
+
+        const operands: PathCommand[][] = [];
+        for (const childId of node.children) {
+            const child = nodes.get(childId);
+            const local = outlineOf(childId);
+            if (!child || !local) continue;
+            operands.push(transformCommands(nodeMatrix(child.geometry, child.transform), local));
+        }
+
+        let result: PathCommand[] = operands.length > 0 ? operands[0] : [];
+        for (let i = 1; i < operands.length; i++) {
+            result = booleanPaths(result, operands[i], node.booleanOp ?? "union");
+        }
+
+        for (const childId of node.children) bury(childId, gone, nodes);
+        if (result.length === 0) {
+            nodes.set(id, { ...node, type: "core.path", children: [], path: undefined, booleanOp: undefined });
+            return;
+        }
+        const norm = normalizePathNode(node.geometry, result);
+        nodes.set(id, {
+            ...node,
+            type: "core.path",
+            children: [],
+            geometry: { ...node.geometry, ...norm.geometry },
+            path: norm.path,
+            booleanOp: undefined
+        });
+    };
+
+    doc.nodes.forEach((n, id) => { if (n.type === "core.boolean") resolveOne(id); });
+
+    const kept = new Map<string, Node>();
+    nodes.forEach((n, id) => {
+        if (gone.has(id)) return;
+        const children = n.children.filter(c => !gone.has(c));
+        kept.set(id, children.length === n.children.length ? n : { ...n, children });
+    });
+
+    return {
+        version: doc.version,
+        metadata: doc.metadata as ProjectDocument["metadata"],
+        nodes: kept,
+        rootNodeUuids: doc.rootNodeUuids.filter(id => !gone.has(id)),
+        variables: doc.variables as ProjectDocument["variables"],
+        activeTheme: doc.activeTheme,
+        activeState: doc.activeState
+    } as ProjectDocument;
+}
+
+/** Mark a node and its whole subtree as removed from the resolved scene. */
+function bury(id: string, gone: Set<string>, nodes: ReadonlyMap<string, Node>): void {
+    if (gone.has(id)) return;
+    gone.add(id);
+    for (const childId of nodes.get(id)?.children ?? []) bury(childId, gone, nodes);
 }
 
 /**

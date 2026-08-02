@@ -30,10 +30,10 @@
  */
 
 import { DeepReadonly, ReadonlyDocument } from "../document/Document";
-import { Geometry, Margins, Node } from "../document/Node";
+import { Geometry, Margins, Node, PathCommand } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
 import { resolveNumber } from "../document/Variables";
-import { HitShape, hitsShape, isPaintBearing } from "./ShapeHit";
+import { HitShape, hitsShape, hitShapeOf } from "./ShapeHit";
 import { resolveScene, isVirtualId, ownerInstanceOf, VIRTUAL_ID_SEP } from "../document/Components";
 import { expandDirtyForLayout, isAbsolute, isLayoutContainer, layoutChildren, layoutGridChildren, measureIntrinsicSizes, resolveConstraints } from "./LayoutEngine";
 import {
@@ -83,13 +83,10 @@ export type PendingGeometry = Map<string, Partial<Geometry>> | null | undefined;
  * corner exactly as the renderer falls back to no rounding, so the two stay in step even when
  * the token is broken.
  */
-function hitShapeOf(node: DeepReadonly<Node>, doc: ReadonlyDocument): HitShape {
-    if (node.type === "core.ellipse") return { kind: "ellipse" };
-    if (node.type === "core.line") return { kind: "line" };
-    if (node.type === "core.path") return { kind: "path", commands: node.path ?? [], filled: isPaintBearing(node.style.fill) };
+function shapeOf(node: DeepReadonly<Node>, doc: ReadonlyDocument): HitShape {
     const raw = node.style.radius;
     const r = raw === undefined ? null : typeof raw === "number" ? raw : resolveNumber(doc.variables, raw, doc.activeTheme);
-    return { kind: "box", radius: r !== null && r > 0 ? r : 0 };
+    return hitShapeOf(node as unknown as { type: string; path?: readonly PathCommand[]; style: { fill: string } }, r ?? 0);
 }
 
 /** Local matrix for one node from its stored geometry + optional transform. */
@@ -264,7 +261,7 @@ export function computeGeometry(
         const boxAtOrigin: Rect = { x: 0, y: 0, width: local.width, height: local.height };
 
         order.push(id);
-        nodes.set(id, { world, local, bounds: transformRectToAABB(world, boxAtOrigin), shape: hitShapeOf(node, doc) });
+        nodes.set(id, { world, local, bounds: transformRectToAABB(world, boxAtOrigin), shape: shapeOf(node, doc) });
         layoutContainerPass(doc, node, local, laidOut, measured);
     }
 

@@ -3,7 +3,7 @@
  * @description Shared types used across all Actions and History tracking.
  */
 
-import { Node, Geometry, Style, Layout, Transform, VariantKey, StateDefinition, PathCommand, RESERVED_NODE_ID } from "../document/Node";
+import { Node, Geometry, Style, Layout, Transform, VariantKey, StateDefinition, PathCommand, BooleanOp, RESERVED_NODE_ID } from "../document/Node";
 import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
 import { InstanceOverride } from "../document/Components";
 
@@ -70,6 +70,9 @@ export type NodeDelta =
         locked?: boolean;
         /** `core.path` drawing commands — a whole-array replace (a path is edited as a shape). */
         path?: PathCommand[];
+        /** `core.boolean`'s operation (schema 33). A whole-value replace; `in`-read like the
+         *  other optional fields so clearing it (back to the default union) is expressible. */
+        booleanOp?: BooleanOp;
     }
     /**
      * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme

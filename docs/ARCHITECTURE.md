@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v32 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v33 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -182,8 +182,15 @@ what a node's outline IS, which is what lets a boolean, a hit test and the drawi
 same shape. The combine runs in WORLD space (the only space nodes with different parents and
 transforms share), folds bottom-most first so `subtract` cuts the shapes above out of the one
 below, and lands as ONE transaction: create the result, set its commands, delete the operands —
-one undo. It is destructive for now; a `core.boolean` node that keeps its children and resolves at
-derivation time is the natural next form, and calls the same `booleanPaths`.
+one undo.
+
+That flat form is the *bake*. The default is a **`core.boolean` node** (schema 33) that keeps its
+operands as an ordinary subtree and is resolved by `resolveBooleans` inside `resolveScene` — so
+moving a child, restyling it or switching the operation re-derives the shape, and undo is just an
+edit to a child. Resolving at the display seam is what keeps the cost at zero everywhere else:
+layout, picking, snapping, culling and both backends see an ordinary `core.path` and need no
+knowledge that booleans exist. It is the same trick `expandInstances` plays for components, and
+the reason a second node type cost no changes below the seam.
 
 **The selection frame is the node's own box, turned with it (`geometry/OrientedBox`).** The frame,
 its four handles and the rotate knob all come from the world matrix applied to the local box, not

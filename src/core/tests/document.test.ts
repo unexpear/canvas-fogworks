@@ -41,7 +41,10 @@ import { flattenPath, hitsShape, isPaintBearing } from "../geometry/ShapeHit";
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
 import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
-import { booleanAction } from "../actions/booleanActions";
+import { booleanAction, makeBooleanNodeAction } from "../actions/booleanActions";
+import { SetBooleanOpAction } from "../actions/SetBooleanOpAction";
+import { resolveBooleans } from "../document/Components";
+import { BooleanOp, booleanOpError } from "../document/Node";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
@@ -4308,8 +4311,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 31→32 landed for inherited opacity.)
-        expect(() => migrateIfNeeded(legacy, "33")).toThrow('Migration not implemented for document schema "32"');
+        // time a real migration is added — here, when 32→33 landed for `core.boolean`.)
+        expect(() => migrateIfNeeded(legacy, "34")).toThrow('Migration not implemented for document schema "33"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -11197,5 +11200,215 @@ describe("Shape to path, and boolean actions", () => {
         // The turned square reaches 50·√2 from the centre, so the union is wider than 100.
         expect(g.width).toBeCloseTo(100 * Math.SQRT2, 3);
         expect(g.x).toBeCloseTo(50 - 50 * Math.SQRT2, 3);
+    });
+});
+
+// ─── A LIVE boolean: the operands stay, the shape is derived ───
+describe("core.boolean — the non-destructive combine", () => {
+    const mk = (id: string, box: { x: number; y: number; width: number; height: number }, extra: Partial<Node> = {}): Node =>
+        ({ id, type: "core.rectangle", parent: null, children: [], geometry: box, style: { fill: "#111111", opacity: 1 }, layout: {}, ...extra } as Node);
+    const docOf = (...nodes: Node[]): ProjectDocument => {
+        const doc = createEmptyDocument();
+        for (const n of nodes) doc.nodes.set(n.id, n);
+        doc.rootNodeUuids = nodes.filter(n => n.parent == null).map(n => n.id);
+        return doc;
+    };
+    const area = (rings: { x: number; y: number }[][]): number =>
+        rings.reduce((sum, r) => {
+            let a = 0;
+            for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += r[j].x * r[i].y - r[i].x * r[j].y;
+            return sum + a / 2;
+        }, 0);
+
+    /** Two overlapping 100×100 squares wrapped in a live boolean, children re-based onto it. */
+    const liveDoc = (op?: BooleanOp): ProjectDocument => {
+        const doc = docOf(
+            { id: "B", type: "core.boolean", parent: null, children: ["A1", "A2"],
+              geometry: { x: 0, y: 0, width: 150, height: 150 },
+              style: { fill: "#ff0000", opacity: 1 }, layout: {}, ...(op ? { booleanOp: op } : {}) } as Node,
+            mk("A1", { x: 0, y: 0, width: 100, height: 100 }, { parent: "B" }),
+            mk("A2", { x: 50, y: 50, width: 100, height: 100 }, { parent: "B" })
+        );
+        doc.rootNodeUuids = ["B"];
+        return doc;
+    };
+
+    test("resolves to a PATH carrying the combined shape, with the operands gone from the scene", () => {
+        const scene = resolveBooleans(liveDoc());
+        const node = scene.nodes.get("B")!;
+        expect(node.type).toBe("core.path");
+        expect(scene.nodes.has("A1")).toBe(false);   // the operands are not drawn separately
+        expect(scene.nodes.has("A2")).toBe(false);
+        expect(node.children).toEqual([]);
+        expect(area(commandsToRings(node.path!))).toBeCloseTo(17500, 3);   // the union
+        expect(node.style.fill).toBe("#ff0000");     // the BOOLEAN's paint, not an operand's
+    });
+
+    test("the operation is what changes the shape — and it stays an edit, not a bake", () => {
+        expect(area(commandsToRings(resolveBooleans(liveDoc("union")).nodes.get("B")!.path!))).toBeCloseTo(17500, 3);
+        expect(area(commandsToRings(resolveBooleans(liveDoc("intersect")).nodes.get("B")!.path!))).toBeCloseTo(2500, 3);
+        expect(area(commandsToRings(resolveBooleans(liveDoc("subtract")).nodes.get("B")!.path!))).toBeCloseTo(7500, 3);
+        expect(area(commandsToRings(resolveBooleans(liveDoc("exclude")).nodes.get("B")!.path!))).toBeCloseTo(15000, 3);
+        // Absent means union, which is what makes every pre-33 document valid for this field.
+        expect(area(commandsToRings(resolveBooleans(liveDoc()).nodes.get("B")!.path!))).toBeCloseTo(17500, 3);
+    });
+
+    test("MOVING an operand re-derives the result — the point of keeping them", () => {
+        const doc = liveDoc("intersect");
+        const before = area(commandsToRings(resolveBooleans(doc).nodes.get("B")!.path!));
+        doc.nodes.get("A2")!.geometry.x = 75;      // slide the overlap from 50×50 to 25×50
+        const after = area(commandsToRings(resolveBooleans(doc).nodes.get("B")!.path!));
+        expect(before).toBeCloseTo(2500, 3);
+        expect(after).toBeCloseTo(1250, 3);
+    });
+
+    test("the resolved box is the RESULT's tight bounds, not the stored one", () => {
+        // The stored box is derived data — a stale save must not place the shape. The union of
+        // the two squares spans 150×150 from the boolean's own origin.
+        const doc = liveDoc();
+        doc.nodes.get("B")!.geometry = { x: 10, y: 20, width: 9999, height: 1 };
+        const node = resolveBooleans(doc).nodes.get("B")!;
+        expect(node.geometry).toMatchObject({ x: 10, y: 20, width: 150, height: 150 });
+        expect(pathBounds(node.path!)).toEqual({ x: 0, y: 0, width: 150, height: 150 });
+    });
+
+    test("a rotated operand is combined where it is DRAWN inside the boolean", () => {
+        const doc = liveDoc();
+        doc.nodes.get("A2")!.transform = { rotation: Math.PI / 4 };
+        const node = resolveBooleans(doc).nodes.get("B")!;
+        // The turned square reaches 50·√2 from its own centre, past the un-turned 150.
+        expect(node.geometry.width).toBeGreaterThan(150);
+    });
+
+    test("a boolean of BOOLEANS resolves innermost first", () => {
+        const doc = docOf(
+            { id: "OUT", type: "core.boolean", parent: null, children: ["IN", "C"],
+              geometry: { x: 0, y: 0, width: 200, height: 200 }, style: { fill: "#111111", opacity: 1 }, layout: {},
+              booleanOp: "subtract" } as Node,
+            { id: "IN", type: "core.boolean", parent: "OUT", children: ["A1", "A2"],
+              geometry: { x: 0, y: 0, width: 150, height: 150 }, style: { fill: "#111111", opacity: 1 }, layout: {},
+              booleanOp: "union" } as Node,
+            mk("A1", { x: 0, y: 0, width: 100, height: 100 }, { parent: "IN" }),
+            mk("A2", { x: 50, y: 50, width: 100, height: 100 }, { parent: "IN" }),
+            mk("C", { x: 0, y: 0, width: 50, height: 50 }, { parent: "OUT" })
+        );
+        doc.rootNodeUuids = ["OUT"];
+        const scene = resolveBooleans(doc);
+        expect(scene.nodes.get("OUT")!.type).toBe("core.path");
+        expect(scene.nodes.has("IN")).toBe(false);
+        // (A1 ∪ A2) minus the 50×50 corner square: 17500 − 2500.
+        expect(area(commandsToRings(scene.nodes.get("OUT")!.path!))).toBeCloseTo(15000, 3);
+    });
+
+    test("a boolean with nothing usable resolves to an EMPTY path, not to nothing", () => {
+        // It must stay in the scene and stay selectable, or an empty one could never be filled.
+        const doc = docOf({ id: "B", type: "core.boolean", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#111111", opacity: 1 }, layout: {} } as Node);
+        const node = resolveBooleans(doc).nodes.get("B")!;
+        expect(node.type).toBe("core.path");
+        expect(node.path).toBeUndefined();
+    });
+
+    test("a cycle resolves to nothing rather than recursing forever", () => {
+        const doc = docOf({ id: "B", type: "core.boolean", parent: null, children: ["B"],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#111111", opacity: 1 }, layout: {} } as Node);
+        expect(() => resolveBooleans(doc)).not.toThrow();
+    });
+
+    test("everything downstream sees the resolved path — geometry, picking and the renderer", () => {
+        // The reason resolution lives at the display seam: no consumer needs to know booleans
+        // exist. `computeGeometry` calls `resolveScene`, so this is the whole pipeline at once.
+        const cs = computeGeometry(liveDoc());
+        expect(cs.nodes.get("B")!.shape.kind).toBe("path");
+        expect(cs.nodes.has("A1")).toBe(false);
+        expect(cs.nodes.get("B")!.bounds).toEqual({ x: 0, y: 0, width: 150, height: 150 });
+        // A click in the union's L-shaped arm hits it; one in the corner it does not cover misses.
+        expect(hitTest(cs, 120, 120)).toBe("B");
+        expect(hitTest(cs, 130, 20)).toBeNull();
+    });
+
+    test("a live boolean round-trips through save and load", () => {
+        const doc = liveDoc("subtract");
+        const loaded = deserializeDocument(serializeDocument(doc));
+        expect(loaded.nodes.get("B")!.type).toBe("core.boolean");
+        expect(loaded.nodes.get("B")!.booleanOp).toBe("subtract");
+        expect(loaded.nodes.get("B")!.children).toEqual(["A1", "A2"]);   // the operands survive
+        expect(area(commandsToRings(resolveBooleans(loaded).nodes.get("B")!.path!))).toBeCloseTo(7500, 3);
+    });
+
+    test("the LOADER refuses a bad operation, and one on the wrong node type", () => {
+        expect(booleanOpError("core.boolean", undefined)).toBeNull();
+        expect(booleanOpError("core.boolean", "union")).toBeNull();
+        expect(booleanOpError("core.boolean", "substract")).toContain("must be one of");
+        expect(booleanOpError("core.rectangle", "union")).toContain("only a core.boolean");
+        const doc = liveDoc();
+        (doc.nodes.get("B") as Node).booleanOp = "nonsense" as BooleanOp;
+        expect(() => deserializeDocument(serializeDocument(doc))).toThrow(/must be one of/);
+    });
+
+    test("the action wraps a selection into a live node, re-basing each child onto it", () => {
+        const doc = docOf(
+            mk("A", { x: 200, y: 300, width: 100, height: 100 }),
+            mk("B", { x: 250, y: 350, width: 100, height: 100 })
+        );
+        const dispatcher = new ActionDispatcher(doc);
+        const action = makeBooleanNodeAction(doc, computeGeometry(doc), ["A", "B"], "subtract", "BOOL")!;
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const after = dispatcher.getDocument();
+        const node = after.nodes.get("BOOL")!;
+        expect(node.type).toBe("core.boolean");
+        expect(node.booleanOp).toBe("subtract");
+        expect(node.geometry).toMatchObject({ x: 200, y: 300, width: 150, height: 150 });
+        expect([...node.children].sort()).toEqual(["A", "B"]);
+        expect(after.nodes.get("A")!.parent).toBe("BOOL");
+        // Re-based: A sat at the union's origin, B 50 in from it — so they land where they were.
+        expect(after.nodes.get("A")!.geometry).toMatchObject({ x: 0, y: 0 });
+        expect(after.nodes.get("B")!.geometry).toMatchObject({ x: 50, y: 50 });
+        // …and the whole wrap is ONE undo.
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.has("BOOL")).toBe(false);
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry).toMatchObject({ x: 200, y: 300 });
+    });
+
+    test("switching the operation is a single undoable edit", () => {
+        const doc = liveDoc("union");
+        const dispatcher = new ActionDispatcher(doc);
+        expect(dispatcher.dispatchAction(new SetBooleanOpAction(doc, "B", "intersect")).success).toBe(true);
+        expect(area(commandsToRings(resolveBooleans(dispatcher.getDocument()).nodes.get("B")!.path!))).toBeCloseTo(2500, 3);
+        dispatcher.undo();
+        expect(area(commandsToRings(resolveBooleans(dispatcher.getDocument()).nodes.get("B")!.path!))).toBeCloseTo(17500, 3);
+        // The operands were never touched by either direction.
+        expect(dispatcher.getDocument().nodes.has("A1")).toBe(true);
+    });
+
+    test("the wrap refuses what it cannot re-base", () => {
+        const one = docOf(mk("A", { x: 0, y: 0, width: 10, height: 10 }));
+        expect(makeBooleanNodeAction(one, computeGeometry(one), ["A"], "union", "X")).toBeNull();
+        // Different parents: each child would need re-expressing through a different chain.
+        const split = docOf(
+            mk("P", { x: 0, y: 0, width: 500, height: 500 }, { children: ["A"] }),
+            mk("A", { x: 0, y: 0, width: 10, height: 10 }, { parent: "P" }),
+            mk("B", { x: 100, y: 100, width: 10, height: 10 })
+        );
+        split.rootNodeUuids = ["P", "B"];
+        expect(makeBooleanNodeAction(split, computeGeometry(split), ["A", "B"], "union", "X")).toBeNull();
+        // A laid-out child's stored x/y is dead data the container computes.
+        const flex = docOf(
+            mk("P", { x: 0, y: 0, width: 500, height: 500 }, { children: ["A", "B"], layout: { container: { direction: "row" } } }),
+            mk("A", { x: 0, y: 0, width: 10, height: 10 }, { parent: "P" }),
+            mk("B", { x: 0, y: 0, width: 10, height: 10 }, { parent: "P" })
+        );
+        flex.rootNodeUuids = ["P"];
+        expect(makeBooleanNodeAction(flex, computeGeometry(flex), ["A", "B"], "union", "X")).toBeNull();
+    });
+
+    test("the toolbar offers the live combine, the flatten, and the operation switcher", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        // A plain click builds the LIVE node; Alt flattens. Both from one handler.
+        expect(src).toMatch(/onClick=\{e => runBoolean\(op, !e\.altKey\)\}/);
+        expect(src).toMatch(/live[\s\S]{0,200}makeBooleanNodeAction\(doc, computeGeometry\(doc\), es\.selectedNodeIds, op, id\)[\s\S]{0,120}booleanAction\(/);
+        // …and a selected boolean node offers its operation, with the current one marked.
+        expect(src).toMatch(/type === "core\.boolean" && \(/);
+        expect(src).toMatch(/onClick=\{\(\) => setBooleanOp\(op\)\}/);
     });
 });

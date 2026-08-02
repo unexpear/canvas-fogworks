@@ -12,7 +12,7 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError, layoutError, dimensionError, pathError, srcError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError } from "./Node";
+import { transformError, layoutError, dimensionError, pathError, booleanOpError, srcError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError } from "./Node";
 import { componentError, overrideAgainstMasterError, overridesError, statesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
 
@@ -47,6 +47,11 @@ function checkNodeRanges(node: ReadonlyNode): void {
     // node) wherever it appears, sharing `pathError` with the edit path.
     const pathErr = pathError(node.type, node.path);
     if (pathErr) throw new Error(`Invalid document: node "${node.id}" ${pathErr}.`);
+    // `booleanOp` (schema 33): only a `core.boolean` may carry one, and it must name a real
+    // operation — a hand-edited "substract" would otherwise resolve as the default union and
+    // draw a shape the file never described.
+    const boolErr = booleanOpError(node.type, node.booleanOp);
+    if (boolErr) throw new Error(`Invalid document: node "${node.id}" ${boolErr}.`);
     // `src` (schema 23) is hand-editable and, since the image tool inlines a picked file as a
     // data: URL, potentially enormous — bounded and scheme-checked by the shared `srcError`.
     const srcErr = srcError(node.type, node.src);

@@ -21,12 +21,17 @@ import { AddNodeAction } from "./AddNodeAction";
 import { DeleteNodeAction } from "./DeleteNodeAction";
 import { TransactionAction } from "./TransactionAction";
 import { UpdateNodePathAction } from "./UpdateNodePathAction";
+import { SetBooleanOpAction } from "./SetBooleanOpAction";
+import { ReparentNodeAction } from "./ReparentNodeAction";
+import { MoveNodeAction } from "./MoveNodeAction";
 import { ReadonlyDocument } from "../document/Document";
 import { PathCommand } from "../document/Node";
 import { resolveScene } from "../document/Components";
 import { selectionRoots } from "../document/SceneGraph";
 import { ComputedState } from "../geometry/GeometryEngine";
-import { BooleanOp, booleanPaths } from "../geometry/PathBoolean";
+import { isLayoutContainer } from "../geometry/LayoutEngine";
+import { booleanPaths } from "../geometry/PathBoolean";
+import { BooleanOp } from "../document/Node";
 import { normalizePathNode } from "../geometry/PathBuilder";
 import { shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
 
@@ -104,4 +109,60 @@ export function booleanAction(
     for (const operand of operands) actions.push(new DeleteNodeAction(doc, operand.id));
 
     return new TransactionAction(doc, `boolean:${op}`, actions);
+}
+
+/**
+ * Wrap the selection in a LIVE `core.boolean` node (schema 33) — the non-destructive combine.
+ *
+ * The operands become its children and stay editable: move one, restyle it, or change the
+ * operation, and the result follows, because the combination is derived at the display seam
+ * rather than baked. `booleanAction` above is the same maths flattened into a plain path; this is
+ * the form a design tool actually wants, and the flat one is what "flatten" should mean later.
+ *
+ * The new node's box is the operands' union in their shared parent space, and each child is
+ * re-based onto it — the same reparenting `FrameSelectionAction` does, and for the same reason:
+ * `geometry.x/y` is parent-relative, so a child that moves house has to be re-expressed.
+ *
+ * Null when fewer than two operands share a parent, or when any of them is a laid-out child (its
+ * stored x/y is dead data that a container computes, so re-basing it would move the wrong thing).
+ */
+export function makeBooleanNodeAction(
+    doc: ReadonlyDocument,
+    computed: ComputedState,
+    selectedNodeIds: readonly string[],
+    op: BooleanOp,
+    newId: string
+): Action | null {
+    const roots = selectionRoots(resolveScene(doc), [...selectedNodeIds]);
+    const ids = computed.order.filter(id => roots.includes(id) && doc.nodes.has(id));
+    if (ids.length < 2) return null;
+
+    const nodes = ids.map(id => doc.nodes.get(id)!);
+    // ONE parent: the new node is inserted there, and every child's stored position is relative
+    // to it. Mixing parents would need each child re-expressed through a different chain.
+    const parent = nodes[0].parent ?? null;
+    if (nodes.some(n => (n.parent ?? null) !== parent)) return null;
+    // A laid-out child's position is computed by its container, so its stored x/y is dead data.
+    const parentNode = parent != null ? doc.nodes.get(parent) : undefined;
+    if (parentNode && isLayoutContainer(parentNode)) return null;
+
+    const minX = Math.min(...nodes.map(n => n.geometry.x));
+    const minY = Math.min(...nodes.map(n => n.geometry.y));
+    const maxX = Math.max(...nodes.map(n => n.geometry.x + n.geometry.width));
+    const maxY = Math.max(...nodes.map(n => n.geometry.y + n.geometry.height));
+    if (!(maxX > minX || maxY > minY)) return null;
+
+    const actions: Action[] = [
+        new AddNodeAction(
+            doc, "core.boolean", minX, minY, maxX - minX, maxY - minY,
+            nodes[0].style.fill, newId, parent, undefined, nodes[0].style.stroke, nodes[0].style.strokeWidth
+        ),
+        new SetBooleanOpAction(doc, newId, op)
+    ];
+    for (const node of nodes) {
+        actions.push(new ReparentNodeAction(doc, node.id, newId));
+        // Re-based INTO the new box, so the child lands where it already was on screen.
+        actions.push(new MoveNodeAction(doc, node.id, node.geometry.x - minX, node.geometry.y - minY));
+    }
+    return new TransactionAction(doc, `boolean-node:${op}`, actions);
 }

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v32 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v33 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -36,7 +36,7 @@ interface DocumentMetadata {       // runtime shape (date is a live Date)
 Every object in `nodes` (`Node.ts`). **Nodes are never mutated directly — only via Actions.**
 
 ```ts
-const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path", "core.instance"] as const;
+const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path", "core.instance", "core.boolean"] as const;
 type NodeType = typeof NODE_TYPES[number];   // derived — one edit adds a type
 function isNodeType(v: unknown): v is NodeType;  // membership, checked on BOTH paths
 // Stored node ids are constrained on BOTH paths (AddNodeAction + Integrity): not the
@@ -619,6 +619,36 @@ several masters, and nested instances that MULTIPLY rather than add): a per-path
 `INSTANCE_MAX_NODES`. A stopped expansion draws nothing — it never throws. A **dangling**
 `componentId` is valid at rest and draws nothing, so deleting a master can never make a
 document unloadable (the same rule dangling `$token` aliases follow).
+
+## Boolean nodes (schema 33)
+
+A `core.boolean` combines its CHILDREN — it is the non-destructive form of union / subtract /
+intersect / exclude.
+
+```ts
+const BOOLEAN_OPS = ["union", "subtract", "intersect", "exclude"] as const;
+type BooleanOp = typeof BOOLEAN_OPS[number];
+interface Node { booleanOp?: BooleanOp }                       // absent = "union"
+function booleanOpError(type: NodeType, op: unknown): string | null;   // shared load + edit
+```
+
+The operands stay in the document as an ordinary subtree; the combined shape is DERIVED, by
+`resolveBooleans` inside `resolveScene`. So moving a child, restyling it, or switching the
+operation re-derives the result, and undo is just an edit to a child. Everything downstream —
+layout, picking, snapping, culling, both backends — sees an ordinary `core.path` and needs no
+knowledge that booleans exist, exactly as it needs none about instances.
+
+**Field invariants**
+
+| Field | Rule | Enforced |
+|-------|------|----------|
+| `booleanOp` | only on a `core.boolean`; one of the four names; absent = `"union"` | `booleanOpError`, shared by `Integrity` (load) and `SetBooleanOpAction` (edit) |
+| `geometry.width/height` | DERIVED — the resolver sizes the node from the result's tight bounds | `dimensionError` takes the permissive rule (like `core.path`), since a stored box may be stale |
+| `children` | the operands, combined in order, innermost boolean first | `resolveBooleans` (a cycle resolves to nothing rather than recursing) |
+| `style` | paints the RESULT | the resolved path keeps the boolean's own style |
+
+`booleanAction` (destructive) bakes the same `booleanPaths` result into a plain `core.path` and
+deletes the operands; `makeBooleanNodeAction` builds this live form instead.
 
 ## Serialization
 

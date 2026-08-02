@@ -17,7 +17,7 @@ function isNumberToken(v: unknown): boolean {
  * it, and both validation paths check membership against it — so adding a type is
  * one edit, and an unknown type cannot slip in through a hand-edited file.
  */
-export const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path", "core.instance"] as const;
+export const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path", "core.instance", "core.boolean"] as const;
 export type NodeType = typeof NODE_TYPES[number];
 
 /**
@@ -66,7 +66,10 @@ export function dimensionError(type: NodeType, width: number, height: number): s
     // declared bbox) may collapse ONE axis — a horizontal/vertical line, or a flat path bbox.
     // A `core.instance` mirrors its MASTER's box, which may itself be a line/path, so it takes
     // the same rule — otherwise a horizontal rule could never be instanced.
-    if (type === "core.line" || type === "core.path" || type === "core.instance") {
+    // A `core.boolean` is sized by the RESULT of combining its children, so its stored box is
+    // derived data that a stale save may not match; it takes the permissive rule for the same
+    // reason a path does — the box is a declared bbox, not the shape.
+    if (type === "core.line" || type === "core.path" || type === "core.instance" || type === "core.boolean") {
         if (width < 0 || height < 0) return "dimensions must be >= 0";
         if (width === 0 && height === 0) return "must have a non-zero extent on at least one axis";
         return null;
@@ -108,6 +111,26 @@ const PATH_COMMAND_COORDS: Record<string, readonly string[]> = {
  * absent `text`/`src`); only a `core.path` may carry path data; a present path must be a
  * non-empty, bounded array opening with `M`, every command a known letter with finite coords.
  */
+/** The four boolean operations, in the order the toolbar offers them. */
+export const BOOLEAN_OPS = ["union", "subtract", "intersect", "exclude"] as const;
+export type BooleanOp = typeof BOOLEAN_OPS[number];
+
+/**
+ * Shared validator for `Node.booleanOp` (schema 33) — the edit path and the loader run this one.
+ *
+ * Type-aware like `pathError`: only a `core.boolean` may carry an operation, so a file that puts
+ * one on a rectangle is refused rather than silently ignored. Absent is legal and means `"union"`,
+ * which is what makes every pre-33 document a valid 33 one for this field.
+ */
+export function booleanOpError(type: NodeType, op: unknown): string | null {
+    if (op === undefined) return null;
+    if (type !== "core.boolean") return "only a core.boolean node may carry a boolean operation";
+    if (typeof op !== "string" || !(BOOLEAN_OPS as readonly string[]).includes(op)) {
+        return `booleanOp must be one of ${BOOLEAN_OPS.join(", ")}`;
+    }
+    return null;
+}
+
 export function pathError(type: NodeType, path: unknown): string | null {
     if (path === undefined) return null;
     if (type !== "core.path") return "only a core.path node may carry path data";
@@ -216,6 +239,15 @@ export interface Node {
     src?: string;
     /** `core.path` drawing commands (absolute, local-space). Absent = an empty path. See `PathCommand`. */
     path?: PathCommand[];
+    /**
+     * `core.boolean` → how its CHILDREN combine (schema 33). The node keeps its operands as an
+     * ordinary subtree and the combination is DERIVED, at the display seam, so the operation
+     * stays editable: move a child and the result follows. Absent = `"union"`.
+     *
+     * The stored `geometry.width/height` of such a node is derived data — the resolver sizes it
+     * from the result — and its `style` paints that result.
+     */
+    booleanOp?: BooleanOp;
     /**
      * `core.instance` → the id of the MASTER node this instance copies (M6). The master is an
      * ordinary node subtree in the same document. Absent = an empty instance (draws nothing);

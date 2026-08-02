@@ -38,8 +38,9 @@ import { PenTool } from "../editor/tools/PenTool";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../editor/tools/ShapeTool";
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { alignAction, distributeAction } from "../core/actions/alignActions";
-import { booleanAction } from "../core/actions/booleanActions";
-import { BooleanOp } from "../core/geometry/PathBoolean";
+import { booleanAction, makeBooleanNodeAction } from "../core/actions/booleanActions";
+import { SetBooleanOpAction } from "../core/actions/SetBooleanOpAction";
+import { BooleanOp } from "../core/document/Node";
 import { DuplicateNodesAction } from "../core/actions/DuplicateNodesAction";
 import { DeleteNodeAction } from "../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../core/actions/TransactionAction";
@@ -321,13 +322,27 @@ export function App() {
      * shapes' old outlines. The result's id is minted here because both halves of the transaction
      * (create the node, then set its commands) have to name it.
      */
-    const runBoolean = useCallback((op: BooleanOp) => {
+    const runBoolean = useCallback((op: BooleanOp, live: boolean) => {
         const doc = dispatcher.getDocument();
         const id = crypto.randomUUID();
-        const action = booleanAction(doc, computeGeometry(doc), es.selectedNodeIds, op, id);
+        // LIVE keeps the operands as children of a `core.boolean` and derives the shape every
+        // frame; FLATTEN bakes it into one path and consumes them. Same maths, different
+        // permanence — so the choice is the user's, not a default buried in the code.
+        const action = live
+            ? makeBooleanNodeAction(doc, computeGeometry(doc), es.selectedNodeIds, op, id)
+            : booleanAction(doc, computeGeometry(doc), es.selectedNodeIds, op, id);
         if (action && dispatcher.dispatchAction(action).success) {
             es.selectedNodeIds = [id];   // select the result, not the shapes that no longer exist
         }
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    /** Re-point a selected `core.boolean` at a different operation — the live form's payoff. */
+    const setBooleanOp = useCallback((op: BooleanOp) => {
+        const doc = dispatcher.getDocument();
+        const id = es.selectedNodeIds[0];
+        if (!id) return;
+        dispatcher.dispatchAction(new SetBooleanOpAction(doc, id, op));
         refresh();
     }, [dispatcher, es, refresh]);
 
@@ -781,6 +796,25 @@ export function App() {
                         />
                     </label>
                 )}
+                {es.selectedNodeIds.length === 1
+                    && dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.type === "core.boolean" && (
+                    // A LIVE boolean is selected: offer the operation itself. This is the whole
+                    // reason the node form exists — the combine stays a decision, not a bake.
+                    <>
+                        <Divider />
+                        {BOOLEAN_BUTTONS.map(([op, glyph, label]) => (
+                            <button
+                                key={op}
+                                title={label}
+                                onClick={() => setBooleanOp(op)}
+                                style={{
+                                    ...ALIGN_BUTTON_STYLE,
+                                    borderColor: (dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.booleanOp ?? "union") === op ? "#00bfff" : "#2a2a4a"
+                                }}
+                            >{glyph}</button>
+                        ))}
+                    </>
+                )}
                 {es.selectedNodeIds.length >= 2 && (
                     // Align + distribute, shown only for a MULTI-selection — the operations are
                     // meaningless for one node, and a row of dead buttons is worse than none.
@@ -805,12 +839,13 @@ export function App() {
                         ))}
                         <Divider />
                         {/* Booleans — same multi-selection gate as align: one shape has nothing
-                            to combine with. Each replaces the operands with a single path. */}
+                            to combine with. A plain click builds a LIVE boolean node whose
+                            operands stay editable; Alt bakes the result into a flat path. */}
                         {BOOLEAN_BUTTONS.map(([op, glyph, label]) => (
                             <button
                                 key={op}
-                                title={label}
-                                onClick={() => runBoolean(op)}
+                                title={`${label} — hold Alt to flatten into a plain path`}
+                                onClick={e => runBoolean(op, !e.altKey)}
                                 style={ALIGN_BUTTON_STYLE}
                             >{glyph}</button>
                         ))}

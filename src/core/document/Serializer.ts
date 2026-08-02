@@ -54,6 +54,9 @@ function isValidNode(n: any): n is Node {
         // Shallow gate for the M6 instance reference; the semantic rule (only an instance may
         // carry it, non-empty) lives once in `componentError` (Integrity), like the effects.
         isOptionalString(n.componentId) &&
+        // Shallow gate for the schema-33 boolean operation; the semantic rule (only a
+        // `core.boolean`, and one of the four names) lives once in `booleanOpError`.
+        isOptionalString(n.booleanOp) &&
         // Shallow gate for the schema-22 overrides map; the semantic rules live once in
         // `overridesError` (Integrity), like the effects and the path commands.
         (n.overrides === undefined || isPlainObject(n.overrides)) &&
@@ -282,6 +285,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "29") { raw = migrate_29_to_30(raw); version = "30"; }
     if (version === "30") { raw = migrate_30_to_31(raw); version = "31"; }
     if (version === "31") { raw = migrate_31_to_32(raw); version = "32"; }
+    if (version === "32") { raw = migrate_32_to_33(raw); version = "33"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -573,6 +577,19 @@ function migrate_21_to_22(raw: any): any {
  * build renders the children of a 50%% group fully opaque — so a version guard is the only
  * thing that stops the two from silently disagreeing about the same document.
  */
+/**
+ * 32 -> 33: `core.boolean` — a node whose CHILDREN combine, resolved at the display seam.
+ *
+ * Nothing in an existing document changes: the type is new, `booleanOp` is new and optional, and
+ * every schema-32 file is already a valid 33 one. The bump is required because an OLD BUILD
+ * reading a 33 document would not know the type at all — it would draw the operands separately
+ * (or fall back to a placeholder box) instead of the combined shape, which is a different picture
+ * from the same file. That is exactly the disagreement a version guard exists to prevent.
+ */
+function migrate_32_to_33(raw: any): any {
+    return { ...raw, version: "33" };
+}
+
 function migrate_31_to_32(raw: any): any {
     return { ...raw, version: "32" };
 }
