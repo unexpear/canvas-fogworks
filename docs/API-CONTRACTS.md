@@ -245,6 +245,22 @@ function insideRings(rings: readonly Ring[], x: number, y: number): boolean;
 // CURVES ARE FLATTENED (16 segments each) — a boolean of curved shapes returns polylines, not
 // curves. KNOWN LIMIT: exactly collinear overlapping edges are not special-cased.
 
+// ShapeToPath.ts — any node's outline as commands ("convert to path"), the input side of a boolean.
+function ellipseCommands(width: number, height: number): PathCommand[];          // 4 cubics, KAPPA control points
+function rectCommands(width: number, height: number, radius?: number): PathCommand[]; // 4 lines, or lines + corner arcs; radius clamped like picking/drawing
+function shapeToCommands(shape: HitShape, width: number, height: number): PathCommand[] | null;  // null for a `core.line` (a stroke has no interior) and for an empty path
+function transformCommands(m: Mat2D, commands: readonly PathCommand[]): PathCommand[];  // control points included
+
+// booleanActions.ts — the editor-facing combine (a TransactionAction factory, like alignAction).
+function worldCommandsOf(computed: ComputedState, nodeId: string): PathCommand[] | null;
+function booleanAction(doc, computed: ComputedState, selectedNodeIds: readonly string[], op: BooleanOp, newId: string): Action | null;
+// Combines in DRAW order (bottom-most first, so `subtract` cuts the shapes above out of the one
+// below whatever order they were clicked), in WORLD space, and replaces the operands with ONE
+// `core.path` re-based onto its own tight box, inheriting the bottom-most operand's paint. Null —
+// changing nothing — for fewer than two operands with an outline, or an empty result. DESTRUCTIVE;
+// the non-destructive `core.boolean` node is a later slice. `newId` is minted by the CALLER,
+// because both halves of the transaction (create the node, then set its commands) must name it.
+
 // OrientedBox.ts — the node's box as DRAWN, and resizing along its own axes.
 type Quad = [Point, Point, Point, Point];                                   // nw · ne · se · sw
 function boxQuad(world: Mat2D, width: number, height: number, pad?: number): Quad;

@@ -38,6 +38,8 @@ import { PenTool } from "../editor/tools/PenTool";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../editor/tools/ShapeTool";
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { alignAction, distributeAction } from "../core/actions/alignActions";
+import { booleanAction } from "../core/actions/booleanActions";
+import { BooleanOp } from "../core/geometry/PathBoolean";
 import { DuplicateNodesAction } from "../core/actions/DuplicateNodesAction";
 import { DeleteNodeAction } from "../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../core/actions/TransactionAction";
@@ -106,6 +108,13 @@ const ALIGN_BUTTONS: readonly [AlignEdge, string, string][] = [
 const DISTRIBUTE_BUTTONS: readonly [DistributeAxis, string, string][] = [
     ["horizontal", "⇿", "Distribute horizontal spacing evenly"],
     ["vertical", "⇕", "Distribute vertical spacing evenly"]
+];
+/** Boolean controls: operation, glyph, tooltip — one list, like the align row. */
+const BOOLEAN_BUTTONS: readonly [BooleanOp, string, string][] = [
+    ["union", "∪", "Union — merge into one shape"],
+    ["subtract", "∖", "Subtract — cut the shapes above out of the bottom one"],
+    ["intersect", "∩", "Intersect — keep only where they overlap"],
+    ["exclude", "⊖", "Exclude — keep everything except the overlap"]
 ];
 const ALIGN_BUTTON_STYLE: React.CSSProperties = {
     fontSize: 12, padding: "3px 6px", background: "transparent", color: "#ccc",
@@ -303,6 +312,22 @@ export function App() {
         const doc = dispatcher.getDocument();
         const action = alignAction(doc, computeGeometry(doc), es.selectedNodeIds, edge);
         if (action) dispatcher.dispatchAction(action);
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    /**
+     * Combine the selection with a boolean. Geometry is resolved FRESH for the same reason align
+     * does it: the toolbar is clickable at any time, and a stale ComputedState would combine the
+     * shapes' old outlines. The result's id is minted here because both halves of the transaction
+     * (create the node, then set its commands) have to name it.
+     */
+    const runBoolean = useCallback((op: BooleanOp) => {
+        const doc = dispatcher.getDocument();
+        const id = crypto.randomUUID();
+        const action = booleanAction(doc, computeGeometry(doc), es.selectedNodeIds, op, id);
+        if (action && dispatcher.dispatchAction(action).success) {
+            es.selectedNodeIds = [id];   // select the result, not the shapes that no longer exist
+        }
         refresh();
     }, [dispatcher, es, refresh]);
 
@@ -775,6 +800,17 @@ export function App() {
                                 title={`${label} — needs 3 or more`}
                                 disabled={es.selectedNodeIds.length < 3}
                                 onClick={() => runDistribute(axis)}
+                                style={ALIGN_BUTTON_STYLE}
+                            >{glyph}</button>
+                        ))}
+                        <Divider />
+                        {/* Booleans — same multi-selection gate as align: one shape has nothing
+                            to combine with. Each replaces the operands with a single path. */}
+                        {BOOLEAN_BUTTONS.map(([op, glyph, label]) => (
+                            <button
+                                key={op}
+                                title={label}
+                                onClick={() => runBoolean(op)}
                                 style={ALIGN_BUTTON_STYLE}
                             >{glyph}</button>
                         ))}

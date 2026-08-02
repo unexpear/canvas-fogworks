@@ -40,6 +40,8 @@ import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds,
 import { flattenPath, hitsShape, isPaintBearing } from "../geometry/ShapeHit";
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
+import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
+import { booleanAction } from "../actions/booleanActions";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
@@ -11019,5 +11021,181 @@ describe("Path booleans", () => {
         const degenerate = [[{ x: 0, y: 0 }, { x: 10, y: 10 }]];
         expect(booleanRings(degenerate, A, "union").every(r => r.length >= 3)).toBe(true);
         expect(booleanRings(A, degenerate, "intersect")).toEqual([]);
+    });
+});
+
+// ─── Any shape as a path, and the combine that uses it ───
+describe("Shape to path, and boolean actions", () => {
+    const mk = (id: string, type: string, box: { x: number; y: number; width: number; height: number }, extra: Partial<Node> = {}): Node =>
+        ({ id, type, parent: null, children: [], geometry: box, style: { fill: "#111111", opacity: 1 }, layout: {}, ...extra } as Node);
+    const docOf = (...nodes: Node[]): ProjectDocument => {
+        const doc = createEmptyDocument();
+        for (const n of nodes) doc.nodes.set(n.id, n);
+        doc.rootNodeUuids = nodes.map(n => n.id);
+        return doc;
+    };
+    const area = (rings: { x: number; y: number }[][]): number =>
+        rings.reduce((sum, r) => {
+            let a = 0;
+            for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += r[j].x * r[i].y - r[i].x * r[j].y;
+            return sum + a / 2;
+        }, 0);
+
+    test("an ellipse converts to four cubics that trace the same curve the renderer draws", () => {
+        const cmds = ellipseCommands(100, 60);
+        expect(cmds.map(c => c.c)).toEqual(["M", "C", "C", "C", "C", "Z"]);
+        // The four quadrant points are exact; only the control points are the approximation.
+        expect(cmds[0]).toEqual({ c: "M", x: 50, y: 0 });
+        expect(cmds[1]).toMatchObject({ x: 100, y: 30 });
+        expect(cmds[2]).toMatchObject({ x: 50, y: 60 });
+        expect(cmds[3]).toMatchObject({ x: 0, y: 30 });
+        // Measured as a region it comes out 0.13% under πab. That deficit is the FLATTENING —
+        // 64 chords inscribed in the curve, which a 64-gon's (n/2)r²sin(2π/n) predicts to 0.16%
+        // — not the kappa cubic, whose own error is an order of magnitude smaller. Asserted as a
+        // ratio so the claim is about relative accuracy rather than about a scale-dependent gap.
+        expect(area(commandsToRings(cmds)) / (Math.PI * 50 * 30)).toBeCloseTo(1, 2);
+        expect(pathError("core.path", cmds)).toBeNull();
+    });
+
+    test("a rectangle converts to four lines, and a ROUNDED one to lines plus corner arcs", () => {
+        expect(rectCommands(80, 40).map(c => c.c)).toEqual(["M", "L", "L", "L", "Z"]);
+        expect(rectCommands(80, 40, 10).map(c => c.c)).toEqual(["M", "L", "C", "L", "C", "L", "C", "L", "C", "Z"]);
+        // A zero radius must NOT emit four degenerate curves collapsed onto their endpoints.
+        expect(rectCommands(80, 40, 0).length).toBe(5);
+        // The radius is clamped exactly as picking and drawing clamp it: past half the shorter
+        // side a rectangle IS a stadium, and three different answers would be three shapes.
+        const stadium = rectCommands(80, 40, 999);
+        expect(area(commandsToRings(stadium))).toBeCloseTo(Math.PI * 20 * 20 + 40 * 40, -1);
+    });
+
+    test("a line has no interior, so it converts to nothing rather than a sliver", () => {
+        expect(shapeToCommands({ kind: "line" }, 100, 100)).toBeNull();
+        expect(shapeToCommands({ kind: "path", commands: [], filled: true }, 10, 10)).toBeNull();
+    });
+
+    test("transformCommands carries control points through the matrix too", () => {
+        const m = compose(10, 20, 0, 2, 1, 0, 0);
+        const out = transformCommands(m, [{ c: "M", x: 0, y: 0 }, { c: "C", x1: 1, y1: 2, x2: 3, y2: 4, x: 5, y: 6 }, { c: "Z" }]);
+        expect(out[0]).toEqual({ c: "M", x: 10, y: 20 });
+        expect(out[1]).toEqual({ c: "C", x1: 12, y1: 22, x2: 16, y2: 24, x: 20, y: 26 });
+        expect(out[2]).toEqual({ c: "Z" });
+    });
+
+    test("a rectangle and an ellipse can be combined, because both become paths first", () => {
+        // The reason the conversion exists: a boolean is defined on outlines, not node types.
+        const doc = docOf(
+            mk("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }),
+            mk("E", "core.ellipse", { x: 50, y: 50, width: 100, height: 100 })
+        );
+        const dispatcher = new ActionDispatcher(doc);
+        const action = booleanAction(doc, computeGeometry(doc), ["R", "E"], "union", "OUT")!;
+        expect(action).not.toBeNull();
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const after = dispatcher.getDocument();
+        expect(after.nodes.has("R")).toBe(false);          // the operands are consumed
+        expect(after.nodes.has("E")).toBe(false);
+        const out = after.nodes.get("OUT")!;
+        expect(out.type).toBe("core.path");
+        expect(out.path!.length).toBeGreaterThan(4);
+        // Union of a 100x100 square and a circle of radius 50 overlapping in one corner.
+        expect(area(commandsToRings(out.path!))).toBeGreaterThan(10000);
+        expect(pathError("core.path", out.path!)).toBeNull();
+    });
+
+    test("the whole combine is ONE undo, and undo brings both operands back", () => {
+        const doc = docOf(
+            mk("A", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }),
+            mk("B", "core.rectangle", { x: 50, y: 50, width: 100, height: 100 })
+        );
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(booleanAction(doc, computeGeometry(doc), ["A", "B"], "union", "U")!);
+        // The combine has to have HAPPENED before the undo means anything: the operands gone,
+        // the result there. Checking only the post-undo state would pass for an action that
+        // created the result and never removed what it replaced.
+        const mid = dispatcher.getDocument();
+        expect(mid.nodes.has("A")).toBe(false);
+        expect(mid.nodes.has("B")).toBe(false);
+        expect(mid.nodes.has("U")).toBe(true);
+        dispatcher.undo();
+        const back = dispatcher.getDocument();
+        expect(back.nodes.has("A")).toBe(true);
+        expect(back.nodes.has("B")).toBe(true);
+        expect(back.nodes.has("U")).toBe(false);
+    });
+
+    test("the result is re-based onto its own box, and inherits the BOTTOM shape's paint", () => {
+        const doc = docOf(
+            mk("A", "core.rectangle", { x: 200, y: 300, width: 100, height: 100 }, { style: { fill: "#ff0000", opacity: 1 } }),
+            mk("B", "core.rectangle", { x: 250, y: 350, width: 100, height: 100 }, { style: { fill: "#00ff00", opacity: 1 } })
+        );
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(booleanAction(doc, computeGeometry(doc), ["A", "B"], "union", "U")!);
+        const out = dispatcher.getDocument().nodes.get("U")!;
+        expect(out.geometry).toMatchObject({ x: 200, y: 300, width: 150, height: 150 });
+        expect(pathBounds(out.path!)).toEqual({ x: 0, y: 0, width: 150, height: 150 });  // local to its box
+        expect(out.style.fill).toBe("#ff0000");   // A is bottom-most in draw order
+    });
+
+    test("subtract cuts the shapes ABOVE out of the bottom one, whatever order they were clicked", () => {
+        const doc = docOf(
+            mk("A", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }),
+            mk("B", "core.rectangle", { x: 50, y: 50, width: 100, height: 100 })
+        );
+        const forwards = new ActionDispatcher(docOf(
+            mk("A", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }),
+            mk("B", "core.rectangle", { x: 50, y: 50, width: 100, height: 100 })
+        ));
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(booleanAction(doc, computeGeometry(doc), ["B", "A"], "subtract", "U")!);   // clicked top-first
+        forwards.dispatchAction(booleanAction(forwards.getDocument(), computeGeometry(forwards.getDocument()), ["A", "B"], "subtract", "U")!);
+        // Both keep A (the bottom shape) minus B: 7500, and the box starts at A's origin.
+        expect(area(commandsToRings(dispatcher.getDocument().nodes.get("U")!.path!))).toBeCloseTo(7500, 3);
+        expect(dispatcher.getDocument().nodes.get("U")!.geometry).toMatchObject({ x: 0, y: 0 });
+        expect(forwards.getDocument().nodes.get("U")!.geometry).toMatchObject({ x: 0, y: 0 });
+    });
+
+    test("an impossible combine changes nothing at all", () => {
+        const apart = docOf(
+            mk("A", "core.rectangle", { x: 0, y: 0, width: 10, height: 10 }),
+            mk("B", "core.rectangle", { x: 500, y: 500, width: 10, height: 10 })
+        );
+        // Intersecting shapes that do not overlap would otherwise delete both and leave a
+        // zero-area node — work destroyed to produce nothing.
+        expect(booleanAction(apart, computeGeometry(apart), ["A", "B"], "intersect", "U")).toBeNull();
+        // One node is not a combine, and neither is a node with no interior.
+        const one = docOf(mk("A", "core.rectangle", { x: 0, y: 0, width: 10, height: 10 }));
+        expect(booleanAction(one, computeGeometry(one), ["A"], "union", "U")).toBeNull();
+        const withLine = docOf(
+            mk("A", "core.rectangle", { x: 0, y: 0, width: 10, height: 10 }),
+            mk("L", "core.line", { x: 0, y: 0, width: 10, height: 10 })
+        );
+        expect(booleanAction(withLine, computeGeometry(withLine), ["A", "L"], "union", "U")).toBeNull();
+    });
+
+    test("the toolbar's boolean buttons combine the selection and select the result", () => {
+        // The row is gated on a MULTI-selection, like align — and the result must become the
+        // selection, or the user is left holding ids for shapes the combine just deleted.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/BOOLEAN_BUTTONS\.map\(\(\[op, glyph, label\]\)/);
+        // Tied together in ONE match: `es.selectedNodeIds = [id]` also appears in the asset
+        // placer, so asserting it alone would pass even with the boolean handler's copy deleted.
+        expect(src).toMatch(/booleanAction\(doc, computeGeometry\(doc\), es\.selectedNodeIds, op, id\)[\s\S]{0,240}es\.selectedNodeIds = \[id\]/);
+        // All four operations are offered, not a subset.
+        for (const op of ["union", "subtract", "intersect", "exclude"]) expect(src).toContain(`"${op}"`);
+    });
+
+    test("a ROTATED operand is combined where it is drawn", () => {
+        // World space is the only space two nodes with different transforms share. Combining in
+        // stored coordinates would use the un-rotated boxes — shapes that are not on screen.
+        const doc = docOf(
+            mk("A", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }),
+            mk("B", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }, { transform: { rotation: Math.PI / 4 } })
+        );
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(booleanAction(doc, computeGeometry(doc), ["A", "B"], "union", "U")!);
+        const g = dispatcher.getDocument().nodes.get("U")!.geometry;
+        // The turned square reaches 50·√2 from the centre, so the union is wider than 100.
+        expect(g.width).toBeCloseTo(100 * Math.SQRT2, 3);
+        expect(g.x).toBeCloseTo(50 - 50 * Math.SQRT2, 3);
     });
 });

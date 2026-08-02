@@ -175,6 +175,16 @@ close an open subpath implicitly when they fill it, and nonzero winding is summe
 so a donut keeps its hole. Curves are flattened at a FIXED 16 segments — an adaptive count would
 make the same click hit at one zoom and miss at another.
 
+**Booleans work on outlines, not node types (`geometry/ShapeToPath` → `geometry/PathBoolean` →
+`actions/booleanActions`).** A rectangle and an ellipse can be combined because both convert to
+commands first, by the same rules `ShapeHit` and `buildRenderModel` use — the three now agree on
+what a node's outline IS, which is what lets a boolean, a hit test and the drawing describe the
+same shape. The combine runs in WORLD space (the only space nodes with different parents and
+transforms share), folds bottom-most first so `subtract` cuts the shapes above out of the one
+below, and lands as ONE transaction: create the result, set its commands, delete the operands —
+one undo. It is destructive for now; a `core.boolean` node that keeps its children and resolves at
+derivation time is the natural next form, and calls the same `booleanPaths`.
+
 **The selection frame is the node's own box, turned with it (`geometry/OrientedBox`).** The frame,
 its four handles and the rotate knob all come from the world matrix applied to the local box, not
 from the world AABB: an AABB corner is a point a turned node does not touch, so the frame drew
