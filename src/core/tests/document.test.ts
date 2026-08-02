@@ -14,6 +14,7 @@ import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction"
 import { SetVariantAction, SetInstanceVariantAction } from "../actions/VariantActions";
 import { SetSlotAction, SetSlotContentAction } from "../actions/SlotActions";
 import { SetNodeStateAction, SetActiveStateAction } from "../actions/StateActions";
+import { SetNodeFlagsAction } from "../actions/SetNodeFlagsAction";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy , overrideTargetFor} from "../actions/nodeEdit";
@@ -1200,7 +1201,7 @@ describe("nodesInRect (box select)", () => {
     test("non-finite bounds are skipped, never thrown", () => {
         const ok: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 } };
         const bad: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: NaN, y: 0, width: 10, height: 10 } };
-        const cs: ComputedState = { order: ["bad", "ok"], nodes: new Map([["bad", bad], ["ok", ok]]) };
+        const cs: ComputedState = { order: ["bad", "ok"], nodes: new Map([["bad", bad], ["ok", ok]]), locked: new Set<string>() };
         expect(nodesInRect(cs, { x: -100, y: -100, width: 1000, height: 1000 })).toEqual(["ok"]);
     });
 });
@@ -1396,7 +1397,7 @@ describe("selectionHandles + handleAtPoint", () => {
     test("selectionHandles skips a node with non-finite bounds, never throws", () => {
         const ok: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 } };
         const bad: ComputedNode = { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: NaN, y: 0, width: 10, height: 10 } };
-        const cs: ComputedState = { order: ["bad", "ok"], nodes: new Map([["bad", bad], ["ok", ok]]) };
+        const cs: ComputedState = { order: ["bad", "ok"], nodes: new Map([["bad", bad], ["ok", ok]]), locked: new Set<string>() };
         expect(selectionHandles(cs, ["bad", "ok"], 1).map(h => h.nodeId)).toEqual(["ok", "ok", "ok", "ok", "ok"]); // 5 for ok, none for bad
     });
 
@@ -4286,8 +4287,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 29→30 landed for states.)
-        expect(() => migrateIfNeeded(legacy, "31")).toThrow('Migration not implemented for document schema "30"');
+        // time a real migration is added — here, when 30→31 landed for layer flags.)
+        expect(() => migrateIfNeeded(legacy, "32")).toThrow('Migration not implemented for document schema "31"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -9117,7 +9118,7 @@ describe("Picking instance content that overflows the instance box", () => {
         // virtual node whose owner is gone. Returning it would hand the editor an id that
         // isn't in the document — the exact failure the routing seam exists to prevent.
         const cs = computeGeometry(overflowDoc());
-        const damaged: typeof cs = { order: cs.order, nodes: new Map(cs.nodes) };
+        const damaged: typeof cs = { order: cs.order, nodes: new Map(cs.nodes), locked: new Set<string>() };
         damaged.nodes.delete("I");
         expect(hitTest(damaged, 380, 380)).toBeNull();
         expect(nodesInRect(damaged, { x: 350, y: 350, width: 20, height: 20 })).toEqual([]);
@@ -9608,5 +9609,145 @@ describe("States: a document-level selection, like the theme", () => {
         expect((src.match(/new SetNodeStateAction\(/g) ?? []).length).toBe(3);  // capture, re-capture, remove
         expect(src).toMatch(/new SetActiveStateAction\(/);          // show
         expect(src).toMatch(/variantNameError\("state name", name, true\)/); // the shared rule is the authority
+    });
+});
+
+
+// ─── Layer flags (schema 31): hide and lock, with real engine consequences ───
+describe("Layers: hidden and locked", () => {
+    /** A locked background, a group holding two children, and a plain node on top. */
+    function layerDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("BG", { id: "BG", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 200, height: 200 }, style: { fill: "#111111", opacity: 1 }, layout: {} });
+        doc.nodes.set("G", { id: "G", type: "core.rectangle", parent: null, children: ["C1", "C2"], geometry: { x: 0, y: 0, width: 120, height: 40 }, style: { fill: "none", opacity: 1 }, layout: {} });
+        doc.nodes.set("C1", { id: "C1", type: "core.rectangle", parent: "G", children: [], geometry: { x: 0, y: 0, width: 40, height: 40 }, style: { fill: "#ff0000", opacity: 1 }, layout: {} });
+        doc.nodes.set("C2", { id: "C2", type: "core.rectangle", parent: "G", children: [], geometry: { x: 60, y: 0, width: 40, height: 40 }, style: { fill: "#00ff00", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["BG", "G"];
+        return doc;
+    }
+
+    test("HIDING a node removes it from the displayed scene, with its whole subtree", () => {
+        const dispatcher = new ActionDispatcher(layerDoc());
+        dispatcher.dispatchAction(new SetNodeFlagsAction(dispatcher.getDocument(), "G", { hidden: true }));
+        const scene = resolveScene(dispatcher.getDocument());
+
+        expect(scene.nodes.has("G")).toBe(false);
+        expect(scene.nodes.has("C1")).toBe(false);      // the subtree goes with it
+        expect(scene.nodes.has("BG")).toBe(true);
+        expect(scene.rootNodeUuids).toEqual(["BG"]);
+        // …and it is STILL in the stored document, which is the whole difference from deleting.
+        expect(dispatcher.getDocument().nodes.has("G")).toBe(true);
+    });
+
+    test("a hidden node is not drawn, not picked, and takes no auto-layout space", () => {
+        // One flag, three consequences — which is why hiding REMOVES the node from the scene
+        // rather than setting something each consumer has to remember to check.
+        const doc = layerDoc();
+        doc.nodes.get("G")!.layout = { container: { direction: "row", gap: 0, padding: 0 } };
+        doc.nodes.get("C1")!.hidden = true;
+
+        const computed = computeGeometry(doc);
+        expect(computed.nodes.has("C1")).toBe(false);
+        expect(hitTest(computed, 20, 20)).not.toBe("C1");
+        // C2 slides into the space C1 would have taken.
+        expect(computed.nodes.get("C2")!.bounds.x).toBe(0);
+    });
+
+    test("LOCKING a node keeps it drawn but not selectable — clicks pass THROUGH", () => {
+        // Passing through matters: locking a background is only useful if it stops swallowing
+        // clicks meant for what sits on top of it.
+        const doc = layerDoc();
+        doc.nodes.get("BG")!.locked = true;
+        const computed = computeGeometry(doc);
+
+        expect(computed.nodes.has("BG")).toBe(true);           // still drawn
+        expect(computed.locked.has("BG")).toBe(true);
+        expect(hitTest(computed, 20, 20)).toBe("C1");          // the click reaches what is on top
+        expect(hitTest(computed, 180, 180)).toBeNull();        // over ONLY the locked node: nothing
+        expect(nodesInRect(computed, { x: 0, y: 0, width: 300, height: 300 })).not.toContain("BG");
+    });
+
+    test("lock INHERITS — locking a group locks everything inside it", () => {
+        const doc = layerDoc();
+        doc.nodes.get("G")!.locked = true;
+        const computed = computeGeometry(doc);
+        expect(computed.locked.has("C1")).toBe(true);
+        expect(computed.locked.has("C2")).toBe(true);
+        expect(computed.locked.has("BG")).toBe(false);
+        expect(hitTest(computed, 20, 20)).toBe("BG");          // straight through the locked group
+    });
+
+    test("a document with no flags is returned UNCHANGED — it pays nothing", () => {
+        const doc = layerDoc();
+        expect(resolveScene(doc)).toBe(doc);
+        expect(computeGeometry(doc).locked.size).toBe(0);
+    });
+
+    test("clearing a flag stores it ABSENT, so an untouched document stays identical", () => {
+        const dispatcher = new ActionDispatcher(layerDoc());
+        const before = serializeDocument(dispatcher.getDocument());
+        dispatcher.dispatchAction(new SetNodeFlagsAction(dispatcher.getDocument(), "BG", { hidden: true, locked: true }));
+        dispatcher.dispatchAction(new SetNodeFlagsAction(dispatcher.getDocument(), "BG", { hidden: false, locked: false }));
+        const node = dispatcher.getDocument().nodes.get("BG")!;
+        expect(node.hidden).toBeUndefined();
+        expect(node.locked).toBeUndefined();
+        expect(serializeDocument(dispatcher.getDocument())).toBe(before);
+    });
+
+    test("the flags patch is PARTIAL — toggling one never disturbs the other", () => {
+        const dispatcher = new ActionDispatcher(layerDoc());
+        dispatcher.dispatchAction(new SetNodeFlagsAction(dispatcher.getDocument(), "BG", { locked: true }));
+        dispatcher.dispatchAction(new SetNodeFlagsAction(dispatcher.getDocument(), "BG", { hidden: true }));
+        expect(dispatcher.getDocument().nodes.get("BG")!.locked).toBe(true);
+        expect(dispatcher.getDocument().nodes.get("BG")!.hidden).toBe(true);
+    });
+
+    test("flags round-trip", () => {
+        const dispatcher = new ActionDispatcher(layerDoc());
+        dispatcher.dispatchAction(new SetNodeFlagsAction(dispatcher.getDocument(), "BG", { locked: true }));
+        dispatcher.dispatchAction(new SetNodeFlagsAction(dispatcher.getDocument(), "G", { hidden: true }));
+        const d = dispatcher.getDocument();
+        const loaded = deserializeDocument(serializeDocument(d));
+        expect(loaded.nodes.get("BG")!.locked).toBe(true);
+        expect(loaded.nodes.get("G")!.hidden).toBe(true);
+        expect(compareDocuments(d, loaded)).toBe(true);
+    });
+
+    test("the derived scene has NO dangling child references", () => {
+        // Dropping a node without unlisting it from its parent leaves a derived document that
+        // `validateDocumentIntegrity` would refuse — and nothing validates a derived document, so
+        // the inconsistency would just sit there waiting for a consumer that trusts `children`.
+        // Expansion states the same rule about itself; hiding has to hold to it too.
+        const doc = layerDoc();
+        doc.nodes.get("C1")!.hidden = true;
+        const scene = resolveScene(doc);
+        scene.nodes.forEach(n => {
+            for (const childId of n.children) {
+                expect({ parent: n.id, child: childId, present: scene.nodes.has(childId) })
+                    .toEqual({ parent: n.id, child: childId, present: true });
+            }
+        });
+        expect(scene.rootNodeUuids.every(id => scene.nodes.has(id))).toBe(true);
+    });
+
+    test("hiding TERMINATES on a damaged, cyclic document", () => {
+        // Not reachable through the actions, but reachable by hand-editing a file — and this walk
+        // runs on the display path, so without the visited set it recurses until the stack dies.
+        const doc = createEmptyDocument();
+        const mk = (id: string, kids: string[], parent: string | null, extra: Record<string, unknown> = {}) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent, children: kids, geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#111111", opacity: 1 }, layout: {}, ...extra } as never);
+        mk("A", ["B"], null, { hidden: true });
+        mk("B", ["A"], "A");                       // …and back to A
+        doc.rootNodeUuids = ["A"];
+        expect(() => resolveScene(doc)).not.toThrow();
+        expect(resolveScene(doc).nodes.size).toBe(0);   // both buried, once each
+    });
+
+    test("the panel offers both toggles, and shows an INHERITED flag without pretending it is set", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/onFlag\(\{ hidden: !node\.hidden \}\)/);
+        expect(src).toMatch(/onFlag\(\{ locked: !node\.locked \}\)/);
+        expect(src).toMatch(/inheritedHidden \? "default" : "pointer"/);   // an inherited flag is not clickable here
+        expect(src).toMatch(/walk\(n\.children, depth \+ 1, hiddenAbove \|\| !!n\.hidden, lockedAbove \|\| !!n\.locked\)/);
     });
 });

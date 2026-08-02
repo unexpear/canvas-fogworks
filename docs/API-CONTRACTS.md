@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v30 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v31 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -82,7 +82,12 @@ function applyActiveState(doc: ReadonlyDocument): ReadonlyDocument;         // p
 // The scene as DISPLAYED — state first, then instances, so a master in its hover state makes
 // hovered copies. THE seam every consumer reads; calling expandInstances directly would skip
 // states, and a test asserts nothing outside Components does.
-function resolveScene(doc: ReadonlyDocument): ReadonlyDocument;
+function resolveScene(doc: ReadonlyDocument): ReadonlyDocument;  // = expandInstances(applyActiveState(dropHidden(doc)))
+// LAYER FLAGS (schema 31). `dropHidden` removes each hidden node WITH its subtree, so one flag
+// gives all three consequences at once — not drawn, not picked, no auto-layout space — instead
+// of a flag every consumer must remember to check. LOCK is different: a locked node still
+// DRAWS, so it stays in the scene and `ComputedState.locked` is what both pickers skip.
+function dropHidden(doc: ReadonlyDocument): ReadonlyDocument;   // SAME reference when nothing is hidden
 function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializes instances as virtual children; SAME reference when there is nothing to expand
 // Per-instance OVERRIDES (schema 22, M6 slice 2): what one instance changes about its copy,
 // keyed by MASTER NODE ID. Applied during expansion at each level; a key matching no master
@@ -131,7 +136,11 @@ function isTranslationOnly(m: Mat2D): boolean;
 
 // geometry/GeometryEngine.ts — Milestone 1: intent → computed results
 interface ComputedNode { world: Mat2D; local: Rect; bounds: Rect }
-interface ComputedState { order: string[]; nodes: Map<string, ComputedNode> }
+interface ComputedState { order: string[]; nodes: Map<string, ComputedNode>; locked: ReadonlySet<string> }
+// `locked` is INHERITED (a locked group locks its contents) and computed during the same
+// parents-first walk, so `hitTest` and `nodesInRect` read one answer rather than each deriving
+// it. A locked node still draws — the renderer ignores it — it just cannot be selected, and a
+// click passes THROUGH to whatever is behind.
 function computeGeometry(
   doc: ReadonlyDocument,
   pending?: Map<string, Partial<Geometry>> | null,  // drag previews are an INPUT

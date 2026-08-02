@@ -265,6 +265,19 @@ export interface Node {
      * rule `componentId` and `$token` follow.
      */
     slotContent?: Record<string, string>;
+    /**
+     * HIDDEN (schema 31): this node and its subtree are dropped from the displayed scene —
+     * not drawn, not pickable, and not occupying space in an auto-layout parent, the way
+     * `display: none` behaves. It stays in the stored document and in the layer panel, which
+     * is the whole point: hiding is a view decision, not a deletion.
+     */
+    hidden?: boolean;
+    /**
+     * LOCKED (schema 31): still drawn, but not selectable — clicks and marquees pass through
+     * it to whatever is behind. INHERITED: locking a group locks everything inside it, so a
+     * background can be locked once rather than node by node.
+     */
+    locked?: boolean;
     name?: string;
 }
 

@@ -684,5 +684,51 @@ export function applyActiveState(doc: ReadonlyDocument): ReadonlyDocument {
  * directly outside this module would silently skip states, so a test asserts nothing does.
  */
 export function resolveScene(doc: ReadonlyDocument): ReadonlyDocument {
-    return expandInstances(applyActiveState(doc));
+    // Hidden FIRST: a hidden node takes no part in anything downstream, including being
+    // copied into an instance. Then the active state, then expansion — so a master in its
+    // hover state produces hovered copies.
+    return expandInstances(applyActiveState(dropHidden(doc)));
+}
+
+/**
+ * Drop every HIDDEN node (schema 31) — a pure pass returning the scene as it should be DISPLAYED.
+ *
+ * A hidden node is removed with its whole SUBTREE, so nothing inside a hidden group leaks back
+ * in through a child reference. Removing it rather than flagging it is what makes hiding behave
+ * like `display: none` everywhere at once: the renderer never sees it, the pickers never see it,
+ * and an auto-layout parent does not reserve space for it — none of which would follow from a
+ * flag each consumer had to remember to check.
+ *
+ * It stays in the STORED document, so the layer panel still lists it and un-hiding is a toggle
+ * rather than an undo.
+ */
+export function dropHidden(doc: ReadonlyDocument): ReadonlyDocument {
+    let any = false;
+    doc.nodes.forEach(n => { if (n.hidden) any = true; });
+    if (!any) return doc;
+
+    const gone = new Set<string>();
+    const bury = (id: string): void => {
+        if (gone.has(id)) return;                       // cycle-safe, like every walk here
+        gone.add(id);
+        for (const childId of doc.nodes.get(id)?.children ?? []) bury(childId);
+    };
+    doc.nodes.forEach((n, id) => { if (n.hidden) bury(id); });
+
+    const nodes = new Map<string, Node>();
+    doc.nodes.forEach((n, id) => {
+        if (gone.has(id)) return;
+        const kept = n.children.filter(c => !gone.has(c));
+        nodes.set(id, kept.length === n.children.length ? (n as Node) : { ...(n as Node), children: kept });
+    });
+
+    return {
+        version: doc.version,
+        metadata: doc.metadata as ProjectDocument["metadata"],
+        nodes,
+        rootNodeUuids: doc.rootNodeUuids.filter(id => !gone.has(id)),
+        variables: doc.variables as ProjectDocument["variables"],
+        activeTheme: doc.activeTheme,
+        activeState: doc.activeState
+    } as ProjectDocument;
 }

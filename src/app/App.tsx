@@ -19,6 +19,7 @@ import { TrackSize, newGridPatch, VariantKey, variantError, slotError, variantNa
 import { SetVariantAction, SetInstanceVariantAction } from "../core/actions/VariantActions";
 import { SetSlotAction, SetSlotContentAction } from "../core/actions/SlotActions";
 import { SetNodeStateAction, SetActiveStateAction } from "../core/actions/StateActions";
+import { SetNodeFlagsAction } from "../core/actions/SetNodeFlagsAction";
 import { variantProperties, resolveVariantMaster, masterSubtreeIds } from "../core/document/Components";
 import { parseTrackList, formatTrackList } from "../core/document/TrackList";
 import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
@@ -934,7 +935,10 @@ export function App() {
                         // the hierarchy that frames, groups and instances now create.
                         const doc = dispatcher.getDocument();
                         const rows: React.ReactNode[] = [];
-                        const walk = (ids: readonly string[], depth: number) => {
+                        // Both flags INHERIT, so the walk carries them down rather than each row
+                        // re-deriving them by climbing — the panel then agrees with the engine,
+                        // which computes lock the same way during its own parents-first walk.
+                        const walk = (ids: readonly string[], depth: number, hiddenAbove = false, lockedAbove = false) => {
                             for (const id of ids) {
                                 const n = doc.nodes.get(id);
                                 if (!n) continue;
@@ -949,6 +953,12 @@ export function App() {
                                         collapsed={isCollapsed}
                                         hasChildren={hasChildren}
                                         isAutoLayout={n.layout.container !== undefined || n.layout.grid !== undefined}
+                                        inheritedHidden={hiddenAbove}
+                                        inheritedLocked={lockedAbove}
+                                        onFlag={flags => {
+                                            dispatcher.dispatchAction(new SetNodeFlagsAction(dispatcher.getDocument(), id, flags));
+                                            refresh();
+                                        }}
                                         label={n.name || nodeTypeLabels[n.type] || n.type}
                                         onSelect={() => { es.selectedNodeIds = [id]; refresh(); }}
                                         onToggle={() => {
@@ -960,7 +970,7 @@ export function App() {
                                 );
                                 // A collapsed folder hides its subtree; the nodes stay selected and
                                 // rendered, this is purely how much of the tree the panel shows.
-                                if (hasChildren && !isCollapsed) walk(n.children, depth + 1);
+                                if (hasChildren && !isCollapsed) walk(n.children, depth + 1, hiddenAbove || !!n.hidden, lockedAbove || !!n.locked);
                             }
                         };
                         walk(doc.rootNodeUuids, 0);
@@ -2130,9 +2140,13 @@ function TokensPanel({ dispatcher, refresh }: { dispatcher: ActionDispatcher; re
     );
 }
 
-function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout, onSelect, onToggle, label }: {
+function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout, inheritedHidden, inheritedLocked, onSelect, onToggle, onFlag, label }: {
     node: ReadonlyNode; depth: number; selected: boolean; collapsed: boolean; hasChildren: boolean;
-    isAutoLayout: boolean; onSelect: () => void; onToggle: () => void; label: string;
+    isAutoLayout: boolean;
+    /** True when an ANCESTOR is hidden/locked — both inherit, so the row shows the effect
+     *  without pretending the flag is set on this node. */
+    inheritedHidden: boolean; inheritedLocked: boolean;
+    onSelect: () => void; onToggle: () => void; onFlag: (flags: { hidden?: boolean; locked?: boolean }) => void; label: string;
 }) {
     const [hover, setHover] = useState(false);
     const isGroup = hasChildren && (node.style.fill === "none" || !node.style.fill);
@@ -2147,6 +2161,9 @@ function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout,
                 padding: "3px 6px", paddingLeft: 6 + depth * 12,
                 fontSize: 11, borderRadius: 3, cursor: "pointer", marginBottom: 1,
                 background: selected ? "#22436b" : hover ? "#1d1d33" : "transparent",
+                // A hidden row stays LISTED but reads as absent — that is the whole difference
+                // between hiding and deleting, and the panel is where it has to be legible.
+                opacity: node.hidden || inheritedHidden ? 0.4 : 1,
                 borderLeft: selected ? "2px solid #4da3ff" : "2px solid transparent",
                 color: selected ? "#f0f6ff" : "#c8c8d8"
             }}
@@ -2162,6 +2179,24 @@ function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout,
                 {hasChildren ? (isGroup ? "🗀" : "▤") : (LAYER_ICONS[node.type] || "◦")}
             </span>
             <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+            {/* Hide and lock. Shown on hover or when SET, so the panel stays quiet but a
+                hidden/locked node always says so — a control you cannot see is a state you
+                cannot explain. An inherited flag is shown greyed and does nothing on click:
+                the node is not the one holding it. */}
+            <span
+                title={inheritedHidden ? "Hidden by a parent" : node.hidden ? "Show" : "Hide"}
+                onClick={e => { e.stopPropagation(); if (!inheritedHidden) onFlag({ hidden: !node.hidden }); }}
+                style={{ width: 12, textAlign: "center", fontSize: 10, cursor: inheritedHidden ? "default" : "pointer",
+                    color: inheritedHidden ? "#4a4a60" : node.hidden ? "#8a8aa5" : "#5f5f7a",
+                    opacity: hover || node.hidden || inheritedHidden ? 1 : 0 }}
+            >{node.hidden || inheritedHidden ? "◌" : "◉"}</span>
+            <span
+                title={inheritedLocked ? "Locked by a parent" : node.locked ? "Unlock" : "Lock"}
+                onClick={e => { e.stopPropagation(); if (!inheritedLocked) onFlag({ locked: !node.locked }); }}
+                style={{ width: 12, textAlign: "center", fontSize: 10, cursor: inheritedLocked ? "default" : "pointer",
+                    color: inheritedLocked ? "#4a4a60" : node.locked ? "#d8a657" : "#5f5f7a",
+                    opacity: hover || node.locked || inheritedLocked ? 1 : 0 }}
+            >{node.locked || inheritedLocked ? "⊘" : "◇"}</span>
             {/* Badges say what a folder DOES, which is the thing you actually need at a glance. */}
             {isAutoLayout && <span title="Auto-layout" style={{ fontSize: 9, color: "#6f9", opacity: 0.8 }}>⇥</span>}
             {node.type === "core.instance" && <span title="Component instance" style={{ fontSize: 9, color: "#b98cff" }}>⧉</span>}

@@ -148,7 +148,7 @@ export function __apiSurfacePin(): void {
     expectType<Action | null>(styleActionFor(doc, "id", { fill: "#fff" }));
     expectType<{ instanceId: string; masterNodeId: string } | null>(overrideTargetFor(doc, "a::b"));
     expectType<boolean>(isEditableNode(doc, "id"));
-    expectType<string | null>(hitTest({ order: [], nodes: new Map() }, 0, 0, 0, true));
+    expectType<string | null>(hitTest({ order: [], nodes: new Map(), locked: new Set() }, 0, 0, 0, true));
     expectType<string | number | null>(resolveVariable(store, "color/primary", "light"));
     expectType<string>(resolveColor(store, "$color/primary", "dark"));
     expectType<number | null>(resolveNumber(store, "$spacing/gap", "light"));

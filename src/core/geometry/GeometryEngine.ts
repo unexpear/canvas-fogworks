@@ -52,6 +52,15 @@ export interface ComputedState {
     /** Node ids in draw order, back to front. */
     order: string[];
     nodes: Map<string, ComputedNode>;
+    /**
+     * Ids that are LOCKED (schema 31), including everything under a locked ancestor — lock is
+     * inherited, so locking a group locks its contents.
+     *
+     * Computed HERE, during the walk that already visits parents before children, so the two
+     * pickers (`hitTest` and `nodesInRect`) read one answer instead of each deriving it. A
+     * locked node still DRAWS — the renderer ignores this — it just cannot be selected.
+     */
+    locked: ReadonlySet<string>;
 }
 
 export type PendingGeometry = Map<string, Partial<Geometry>> | null | undefined;
@@ -131,6 +140,7 @@ export function computeGeometry(
 
     const order: string[] = [];
     const nodes = new Map<string, ComputedNode>();
+    const locked = new Set<string>();
     // A node is recomputed if it, or any ancestor, is dirty.
     const dirtySubtree = new Set<string>();
     // One scene walk, shared by the measure pass (reversed = bottom-up) and the
@@ -162,6 +172,8 @@ export function computeGeometry(
         const parentComputed = parentId != null ? nodes.get(parentId) : undefined;
         if (parentId != null && !parentComputed) continue;
 
+        // Lock inherits: this node is locked if it says so, or if its parent already is.
+        if (node.locked || (parentId != null && locked.has(parentId))) locked.add(id);
         const selfDirty = !previous || !effectiveDirty || effectiveDirty.has(id) || pending?.has(id) === true;
         const inherited = parentId != null && dirtySubtree.has(parentId);
         if (selfDirty || inherited) dirtySubtree.add(id);
@@ -229,7 +241,7 @@ export function computeGeometry(
         layoutContainerPass(doc, node, local, laidOut, measured);
     }
 
-    return { order, nodes };
+    return { order, nodes, locked };
 }
 
 /**
@@ -384,12 +396,13 @@ export function hitTest(
             // may be drawn outside the instance's own box (expansion re-origins the master root
             // but keeps the master's size, and a laid-out child can reach further still), and
             // skipping meant those pixels hit nothing at all — visible, but dead.
-            if (!includeVirtual && isVirtualId(id)) {
-                const owner = ownerInstanceOf(id);
-                if (owner === null || !state.nodes.has(owner)) continue;
-                return owner;
-            }
-            return id;
+            const target = !includeVirtual && isVirtualId(id) ? ownerInstanceOf(id) : id;
+            if (target === null || !state.nodes.has(target)) continue;
+            // LOCKED (schema 31): still drawn, but the click passes THROUGH to what is behind,
+            // so the scan continues rather than returning null — locking the background is only
+            // useful if it stops swallowing clicks meant for what sits on it.
+            if (state.locked.has(target)) continue;
+            return target;
         }
     }
     return null;
@@ -419,7 +432,7 @@ export function nodesInRect(state: ComputedState, rect: Rect): string[] {
         // that overflows its instance's box must still count, or the marquee misses content the
         // user can plainly see; so a virtual hit RESOLVES to its owner instead of being dropped.
         const target = isVirtualId(id) ? ownerInstanceOf(id) : id;
-        if (target !== null && state.nodes.has(target)) hit.add(target);
+        if (target !== null && state.nodes.has(target) && !state.locked.has(target)) hit.add(target);
     }
     // Draw order, back to front — `order` is the authority, so resolving cannot reorder anything.
     // Today a plain `[...hit]` would give the same answer, because the scene walk is depth-first

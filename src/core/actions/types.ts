@@ -65,6 +65,9 @@ export type NodeDelta =
         slotContent?: Record<string, string>;
         /** Named states (M7). Read with `in`: clearing the last one is a real edit. */
         states?: Record<string, StateDefinition>;
+        /** Layer flags (schema 31). `in`-read, since clearing one is a real edit. */
+        hidden?: boolean;
+        locked?: boolean;
     }
     /**
      * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme

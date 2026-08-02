@@ -110,7 +110,7 @@ describe("buildRenderModel — content", () => {
         const doc = { nodes: new Map([["x", node]]) } as unknown as ReadonlyDocument;
         const computed: ComputedState = {
             order: ["x"],
-            nodes: new Map([["x", { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 } }]])
+            nodes: new Map([["x", { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: 10, height: 10 } }]]), locked: new Set<string>()
         };
         const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed, viewport: { x: 0, y: 0, zoom: 1 } };
         const item = buildRenderModel(SIZE, doc, state).content[0];
@@ -129,7 +129,7 @@ describe("buildRenderModel — content", () => {
         const doc = { nodes: new Map([["x", node]]) } as unknown as ReadonlyDocument;
         const computed: ComputedState = {
             order: ["x"],
-            nodes: new Map([["x", { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: NaN, height: 10 } }]])
+            nodes: new Map([["x", { world: IDENTITY, local: { x: 0, y: 0, width: 10, height: 10 }, bounds: { x: 0, y: 0, width: NaN, height: 10 } }]]), locked: new Set<string>()
         };
         const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed, viewport: { x: 0, y: 0, zoom: 1 } };
         expect(buildRenderModel(SIZE, doc, state).content.length).toBe(0);
@@ -580,7 +580,7 @@ describe("buildRenderModel — culling", () => {
         const doc = { nodes: new Map([["x", node]]) } as unknown as ReadonlyDocument;
         const computed: ComputedState = {
             order: ["x"],
-            nodes: new Map([["x", { world: { ...IDENTITY, e: 2000, f: 2000 }, local: { x: 0, y: 0, width: 40, height: 40 }, bounds: { x: 2000, y: 2000, width: 40, height: 40 } }]])
+            nodes: new Map([["x", { world: { ...IDENTITY, e: 2000, f: 2000 }, local: { x: 0, y: 0, width: 40, height: 40 }, bounds: { x: 2000, y: 2000, width: 40, height: 40 } }]]), locked: new Set<string>()
         };
         const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed, viewport: { x: 0, y: 0, zoom: 1 } };
         expect(buildRenderModel(SIZE, doc, state).content.length).toBe(0);

@@ -64,6 +64,9 @@ function isValidNode(n: any): n is Node {
         // Shallow gates for the schema-29 slot fields; semantics live in `slotError` /
         // `slotContentError` (Integrity).
         isOptionalString(n.slot) &&
+        // Layer flags (schema 31) — plain booleans, so the shallow gate IS the whole rule.
+        (n.hidden === undefined || typeof n.hidden === "boolean") &&
+        (n.locked === undefined || typeof n.locked === "boolean") &&
         (n.slotContent === undefined || isPlainObject(n.slotContent)) &&
         (n.states === undefined || isPlainObject(n.states)) &&
         (n.transform === undefined || (isPlainObject(n.transform) &&
@@ -277,6 +280,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "27") { raw = migrate_27_to_28(raw); version = "28"; }
     if (version === "28") { raw = migrate_28_to_29(raw); version = "29"; }
     if (version === "29") { raw = migrate_29_to_30(raw); version = "30"; }
+    if (version === "30") { raw = migrate_30_to_31(raw); version = "31"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -553,6 +557,17 @@ function migrate_21_to_22(raw: any): any {
  * meaningful way to guess what an arbitrary blob was supposed to mean, and a state nobody
  * can render is exactly as useful gone.
  */
+/**
+ * 30 -> 31: layer flags — `Node.hidden` and `Node.locked`.
+ *
+ * Two new optional booleans, absent meaning visible and unlocked, so every schema-30 document
+ * is already a valid schema-31 one. The bump is required because an OLD BUILD would ignore
+ * `hidden` and DRAW a node the file says to hide — a different picture, silently.
+ */
+function migrate_30_to_31(raw: any): any {
+    return { ...raw, version: "31" };
+}
+
 function migrate_29_to_30(raw: any): any {
     const nodes = raw?.document?.nodes;
     if (nodes && typeof nodes === "object") {

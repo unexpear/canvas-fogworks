@@ -118,6 +118,8 @@ export function applyMutationsToDocument(
                 if ("slot" in delta) node.slot = delta.slot;
                 if ("slotContent" in delta) node.slotContent = delta.slotContent;
                 if ("states" in delta) node.states = delta.states;
+                if ("hidden" in delta) node.hidden = delta.hidden;
+                if ("locked" in delta) node.locked = delta.locked;
                 if (delta.text !== undefined) node.text = delta.text;
                 if (delta.src !== undefined) node.src = delta.src;
                 if (delta.name !== undefined) node.name = delta.name;
