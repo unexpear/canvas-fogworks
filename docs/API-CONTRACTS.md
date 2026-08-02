@@ -194,6 +194,18 @@ function hitsShape(shape: HitShape, width: number, height: number, x: number, y:
 const FLATTEN_TOLERANCE: number;   // 0.05 — how far a polyline may stray from its curve, in the PATH's own units
 const FLATTEN_MAX_DEPTH: number;   // 10 halvings — the bound that keeps a pathological curve from hanging a hot path
 function flattenPath(commands: readonly PathCommand[], tolerance?: number): { points: {x: number; y: number}[]; closed: boolean }[];
+const DISPLAY_DEVIATION_PX: number;   // 0.2 — silhouette error a DRAWN curve may show, in device px
+const DISPLAY_TOLERANCE_MIN: number;  // 1e-4        bounds, because `scale` comes from a document matrix
+const DISPLAY_TOLERANCE_MAX: number;  // 8
+function displayTolerance(scale: number): number;   // device-px-per-world-unit → a flattening tolerance
+function localScaleOf(m: {a,b,c,d}, viewScale: number): number;   // larger row norm x view scale
+// TWO tolerances, and they are different KINDS of number. `FLATTEN_TOLERANCE` is in the path's own
+// units and never moves, because PICKING must answer the same at every magnification. The display
+// one is measured on the SCREEN, because the only drawing error that matters is one a person can
+// see — a fixed world tolerance facets a curve at 20x and wastes a hundred segments on it at
+// 0.05x. QUANTISED to powers of two: a tolerance tracking the zoom continuously would change the
+// vertex count every frame of a pinch and make silhouettes shimmer. Bounded at both ends, and a
+// non-finite or non-positive scale falls back to `FLATTEN_TOLERANCE`.
 // ADAPTIVE de Casteljau subdivision: split at the midpoint until the control hull is flat, so the
 // work follows the curve rather than a fixed count. Still DETERMINISTIC and viewport-independent
 // — the input is the curve's own numbers — which is the property a fixed count was defending.
@@ -792,7 +804,10 @@ function initGL(canvas: HTMLCanvasElement): GLState | null;                     
 function parseColor(css: string): [number, number, number, number] | null;           // #rgb / #rrggbb / #rrggbbaa only; null = do not draw
 function shapeToLocalCommands(shape: Shape, radius: number | null): PathCommand[] | null;   // LOCAL, so a stroke offsets in the units its width means
 interface Draw { vertices: number[]; color: [number, number, number, number] }
-function itemDraws(item: DrawItem): Draw[];   // pure — the tested part; fill then stroke, [] for what it cannot draw
+function itemDraws(item: DrawItem, tolerance?: number): Draw[];   // pure — the tested part; fill then stroke, [] for what it cannot draw
+// `emitWebGL` derives the tolerance PER ITEM from `vp.zoom * dpr` and the item's own matrix. This
+// backend is the only one that needed it: SVG and Canvas hand outlines to a rasterizer that knows
+// the resolution, while a GPU has to be told how many vertices to take.
 function viewMatrix(width: number, height: number, vpX: number, vpY: number, zoom: number): number[];             // world → clip, column-major 3x3
 function renderWebGL(container: HTMLElement, doc: ReadonlyDocument, state: RendererState, onAsyncReady?: () => void): void; // ∘ emitWebGL, falls back to renderCanvas
 type RenderBackend = "svg" | "canvas" | "webgl";

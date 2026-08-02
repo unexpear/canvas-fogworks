@@ -21,6 +21,12 @@
  * is where SVG and Canvas apply `stroke-width` too: a node scaled 2x has a border twice as thick
  * on all three backends rather than on two of them.
  *
+ * CURVES are cut ADAPTIVELY, to how large the shape is on screen rather than to a fixed number of
+ * world units. This backend is the only one that had to care: SVG and Canvas hand an outline to a
+ * rasterizer that already knows the resolution, while a GPU must be told how many vertices to
+ * take. See `displayTolerance` — the budget is a fifth of a device pixel, quantised to powers of
+ * two so a zoom does not re-cut every curve on every frame and make silhouettes shimmer.
+ *
  * DELIBERATE GAPS, stated rather than discovered later:
  *   - TEXT and IMAGES are not drawn at all. Both need a texture path (a glyph atlas, an image
  *     upload) that is its own piece of work, and pretending otherwise would mean a document that
@@ -39,6 +45,7 @@ import { strokeOutline } from "../core/geometry/StrokeOutline";
 import { resolveRings } from "../core/geometry/Resolve";
 import { ellipseCommands, rectCommands, transformCommands } from "../core/geometry/ShapeToPath";
 import { PathCommand } from "../core/document/Node";
+import { FLATTEN_TOLERANCE, displayTolerance, localScaleOf } from "../core/geometry/ShapeHit";
 
 const VERTEX_SHADER = `
 attribute vec2 a_pos;
@@ -170,7 +177,20 @@ function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number |
  * other two backends fill and then stroke the same element. Returning only the fill was why the
  * selection frame could not appear on this backend at all.
  */
-export function itemDraws(item: DrawItem): Draw[] {
+/**
+ * How finely to cut THIS item's curves, given the view scale in device pixels per world unit.
+ *
+ * Pure, and exported for the same reason `itemDraws` is: it is a decision, and a decision that
+ * lives inside the draw loop can only be checked by running a GPU. The item's own matrix scales
+ * the view — flattening happens in local space, so a node scaled 10x needs a tolerance ten times
+ * finer — and an item without one is drawn at the view scale alone (the grid, which is already in
+ * world units).
+ */
+export function itemTolerance(item: DrawItem, viewScale: number): number {
+    return displayTolerance(item.world ? localScaleOf(item.world, viewScale) : viewScale);
+}
+
+export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE): Draw[] {
     const paint = item.paint;
     const local = shapeToLocalCommands(item.shape, paint.radius);
     if (!local) return [];
@@ -181,7 +201,7 @@ export function itemDraws(item: DrawItem): Draw[] {
         // become geometry here. And it makes the rings simple, which ear clipping requires: a
         // self-crossing path used to come out as overlapping triangles on this backend and as
         // the right shape on the other two.
-        const fill = draw(resolveRings(commandsToRings(local), paint.fillRule ?? "nonzero"),
+        const fill = draw(resolveRings(commandsToRings(local, tolerance), paint.fillRule ?? "nonzero"),
             item.world, paint.fill, paint.opacity);
         if (fill) out.push(fill);
     }
@@ -189,7 +209,7 @@ export function itemDraws(item: DrawItem): Draw[] {
         const rings = strokeOutline(local, {
             width: paint.strokeWidth,
             join: paint.strokeJoin, cap: paint.strokeCap, miterLimit: paint.strokeMiterLimit
-        });
+        }, tolerance);
         const stroke = draw(rings, item.world, paint.stroke, paint.opacity);
         if (stroke) out.push(stroke);
     }
@@ -228,8 +248,14 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
 
     // Grid, then content, then overlay — the same order the other backends paint in, because the
     // display list's order IS the z-order and a GPU has no depth buffer here to recover it from.
+    // ADAPTIVE: how finely to cut a curve is decided per item, from how large it is ON SCREEN.
+    // `vp.zoom * dpr` is device pixels per world unit; the item's own matrix scales that again.
+    // The other two backends never needed this — they hand outlines to a rasterizer that knows
+    // the resolution — which is why a fixed world tolerance went unnoticed until a backend had to
+    // commit to a vertex count.
+    const viewScale = vp.zoom * dpr;
     for (const item of [...list.grid.lines, ...list.content, ...list.overlay]) {
-        for (const d of itemDraws(item)) {
+        for (const d of itemDraws(item, itemTolerance(item, viewScale))) {
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.vertices), gl.DYNAMIC_DRAW);
             gl.uniform4fv(colorLoc, d.color);
             gl.drawArrays(gl.TRIANGLES, 0, d.vertices.length / 2);

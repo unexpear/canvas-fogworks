@@ -88,6 +88,60 @@ export const FLATTEN_TOLERANCE = 0.05;
 export const FLATTEN_MAX_DEPTH = 10;
 
 /**
+ * How far a drawn silhouette may stray from its curve, in DEVICE PIXELS.
+ *
+ * The counterpart to `FLATTEN_TOLERANCE`, and deliberately a different kind of number. That one
+ * is in the path's OWN units and never moves, because picking has to hit the same at every
+ * magnification — a click that landed at one zoom and missed at another would be unexplainable.
+ * Drawing has the opposite requirement: the only error that matters is the one a person can SEE,
+ * and that is measured on the screen. A fixed world tolerance is wrong for drawing in both
+ * directions at once — at 20x it is a fifth of a pixel of allowed error blown up to four, so
+ * circles visibly facet, and at 0.05x it spends a hundred segments on a curve three pixels long.
+ *
+ * A fifth of a device pixel is below what a display can show and well below what antialiasing
+ * would hide.
+ */
+export const DISPLAY_DEVIATION_PX = 0.2;
+/** Bounds on the derived tolerance: nothing coarser than this, and nothing finer. */
+export const DISPLAY_TOLERANCE_MAX = 8;
+export const DISPLAY_TOLERANCE_MIN = 1e-4;
+
+/**
+ * The flattening tolerance to DRAW with, given how many device pixels one world unit covers.
+ *
+ * QUANTISED to powers of two, which is the part that makes it usable rather than merely correct.
+ * A tolerance that tracked the zoom continuously would change the triangle count on every frame
+ * of a pinch, and a silhouette whose vertex count changes every frame SHIMMERS. Stepping only at
+ * doublings means a curve is re-cut a handful of times across the whole zoom range and holds
+ * still in between, while never straying more than a factor of two from the ideal — which, on a
+ * fifth-of-a-pixel budget, is still under half a pixel.
+ *
+ * The bounds are not decoration: `scale` is derived from a matrix a document controls, so a node
+ * scaled by 1e9 must not ask for a tolerance of zero and hang the flattener at its depth limit.
+ */
+export function displayTolerance(scale: number): number {
+    if (!Number.isFinite(scale) || scale <= 0) return FLATTEN_TOLERANCE;
+    const ideal = DISPLAY_DEVIATION_PX / scale;
+    const stepped = Math.pow(2, Math.round(Math.log2(ideal)));
+    return Math.min(DISPLAY_TOLERANCE_MAX, Math.max(DISPLAY_TOLERANCE_MIN, stepped));
+}
+
+/**
+ * How many device pixels one LOCAL unit of a node covers, given the view scale and the node's own
+ * world matrix.
+ *
+ * Flattening happens in the node's local space — that is where a stroke width means what it means
+ * — so the tolerance has to be in local units too. A node scaled 10x needs a tolerance ten times
+ * finer to look equally smooth. The larger row norm is used rather than the determinant: under a
+ * non-uniform scale the determinant averages the two axes and would under-tessellate the stretched
+ * one, and erring toward MORE detail is the error that cannot be seen.
+ */
+export function localScaleOf(m: { a: number; b: number; c: number; d: number }, viewScale: number): number {
+    const rx = Math.hypot(m.a, m.b), ry = Math.hypot(m.c, m.d);
+    return Math.max(rx, ry) * viewScale;
+}
+
+/**
  * Hull distance allowed per unit of tolerance. A cubic's true deviation from its chord is at most
  * 3/4 of its worst control-point offset, so this much hull slack still honours the tolerance —
  * and it removes about a third of the subdivisions that measuring the hull directly would force.

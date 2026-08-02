@@ -242,6 +242,26 @@ backends. So alignment is an argument to the outline COMMAND instead: what comes
 `core.path`, and a fill draws identically everywhere. The same reasoning that put the boolean bake
 in the action layer rather than in a renderer.
 
+**Cutting a curve is a question about the SCREEN, and only one backend had to answer it.** Every
+curve here is flattened to `FLATTEN_TOLERANCE` — 0.05 of the path's own units, fixed, deliberately
+viewport-independent so that a click lands the same at every magnification. For picking that is
+exactly right and must not change. For DRAWING it is wrong in both directions at once: at 20x a
+fifth of a pixel of allowed error is blown up to four and circles visibly facet, and at 0.05x a
+hundred segments go into a curve three pixels long.
+
+SVG and Canvas never had to care — they hand an outline to a rasterizer that already knows the
+resolution. A GPU has to be told how many vertices to take, so the WebGL backend now derives its
+tolerance per item from `vp.zoom * dpr` and the item's own matrix (`displayTolerance`,
+`localScaleOf`). A node scaled 10x needs a tolerance ten times finer, and under a non-uniform scale
+it follows the larger axis, because erring toward more detail is the error nobody can see.
+
+The tolerance is QUANTISED to powers of two, which is what makes it usable rather than merely
+correct: one that tracked the zoom continuously would change the vertex count on every frame of a
+pinch, and a silhouette whose vertex count changes every frame shimmers. Two hundred magnifications
+across two octaves produce three tessellations between them. So the engine now carries two
+tolerances that are different KINDS of number — one in world units that never moves, one in device
+pixels that follows the view — and keeping them apart is the whole design.
+
 **A drawn path is not a polygon, and the missing word was the FILL RULE (`geometry/Resolve`).**
 Everything built on top of `Tessellate` inherited a precondition nobody had supplied: ear clipping
 is defined on a SIMPLE polygon, and a path someone draws crosses itself. A five-pointed star drawn

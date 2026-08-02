@@ -37,7 +37,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
-import { flattenPath, hitsShape, isPaintBearing, FLATTEN_TOLERANCE, FLATTEN_MAX_DEPTH, hitShapeOf } from "../geometry/ShapeHit";
+import { flattenPath, hitsShape, isPaintBearing, FLATTEN_TOLERANCE, FLATTEN_MAX_DEPTH, hitShapeOf, displayTolerance, localScaleOf, DISPLAY_DEVIATION_PX, DISPLAY_TOLERANCE_MIN, DISPLAY_TOLERANCE_MAX } from "../geometry/ShapeHit";
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
 import { triangulate, signedArea2, TESSELLATE_MAX_VERTICES } from "../geometry/Tessellate";
@@ -46,7 +46,7 @@ import { resolveRings, insideRule, crossingCount, FILL_RULES, FillRule } from ".
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
 import { outlineStrokeAction, strokeWidthOf } from "../actions/outlineStrokeActions";
-import { itemDraws, parseColor, viewMatrix } from "../../renderer/emitWebGL";
+import { itemDraws, itemTolerance, parseColor, viewMatrix } from "../../renderer/emitWebGL";
 import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
 import { booleanAction, makeBooleanNodeAction } from "../actions/booleanActions";
 import { SetBooleanOpAction } from "../actions/SetBooleanOpAction";
@@ -13660,6 +13660,167 @@ describe("StrokeOutline", () => {
         expect(STROKE_CAPS).toEqual(["butt", "round", "square"]);
         expect(STROKE_ALIGNS).toEqual(["center", "inner", "outer"]);
         expect(DEFAULT_MITER_LIMIT).toBe(4);
+    });
+});
+
+describe("Adaptive decomposition — curves cut to what the screen can show", () => {
+    const circle = (r: number): PathCommand[] => {
+        const k = 0.5522847498307936 * r;
+        return [
+            { c: "M", x: -r, y: 0 },
+            { c: "C", x1: -r, y1: -k, x2: -k, y2: -r, x: 0, y: -r },
+            { c: "C", x1: k, y1: -r, x2: r, y2: -k, x: r, y: 0 },
+            { c: "C", x1: r, y1: k, x2: k, y2: r, x: 0, y: r },
+            { c: "C", x1: -k, y1: r, x2: -r, y2: k, x: -r, y: 0 },
+            { c: "Z" }
+        ];
+    };
+    const item = (tol: number, world: unknown = null) => ({
+        shape: { kind: "path", commands: circle(100) }, world, nodeId: null, role: "content",
+        paint: { fill: "#ff0000", opacity: null, stroke: null, strokeWidth: null, strokeDash: null,
+                 radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null }
+    }) as never;
+    const tris = (tol: number, world: unknown = null): number => {
+        const [d] = itemDraws(item(tol, world), tol);
+        return d.vertices.length / 6;
+    };
+
+    test("a curve is cut FINER on screen and COARSER off it", () => {
+        // The whole point. A fixed world tolerance is wrong in both directions at once: zoomed in
+        // it facets a silhouette, zoomed out it spends a hundred segments on a curve three pixels
+        // long. Neither is a judgement call — both are measured against the same fifth of a pixel.
+        const wayOut = tris(displayTolerance(0.05));     // one world unit = a twentieth of a pixel
+        const normal = tris(displayTolerance(1));
+        const zoomedIn = tris(displayTolerance(20));
+        expect(wayOut).toBeLessThan(normal);
+        expect(normal).toBeLessThan(zoomedIn);
+        // …and the cheap end really is cheap, not merely cheaper.
+        expect(wayOut).toBeLessThan(zoomedIn / 4);
+    });
+
+    test("the tolerance is QUANTISED, so a small zoom change re-cuts nothing", () => {
+        // A tolerance tracking the zoom continuously would change the vertex count every frame of
+        // a pinch, and a silhouette whose vertex count changes every frame shimmers. Stepping only
+        // at doublings means neighbouring zooms agree exactly.
+        // The precise claim is not "neighbouring zooms agree" — two zooms either side of a
+        // doubling do not, and must not. It is that the number of distinct answers is set by the
+        // ZOOM RANGE and not by how many zooms are visited: sweeping two octaves continuously,
+        // two hundred different magnifications produce three tessellations between them.
+        const sweep = new Set<number>();
+        for (let i = 0; i <= 200; i++) sweep.add(displayTolerance(0.5 + (1.5 * i) / 200));
+        expect(sweep.size).toBeLessThanOrEqual(3);
+        expect(displayTolerance(1.01)).toBe(displayTolerance(1));
+        expect(tris(displayTolerance(1.01))).toBe(tris(displayTolerance(1)));
+        // Every value it returns is a power of two, which is what "stepped" means here.
+        for (const s of [0.3, 1, 2.5, 7, 33, 100]) {
+            const t = displayTolerance(s);
+            expect(Math.log2(t)).toBeCloseTo(Math.round(Math.log2(t)), 12);
+        }
+        // And it does step eventually — quantising is not the same as ignoring.
+        expect(displayTolerance(64)).toBeLessThan(displayTolerance(1));
+    });
+
+    test("what it buys is measured in PIXELS, and it holds across the range", () => {
+        // The promise is a fifth of a device pixel of silhouette error, and quantisation may
+        // double it. An inscribed polygon's sagitta on radius r with n sides is r(1 - cos(pi/n)),
+        // so the deviation is computable and can be checked against the budget rather than eyed.
+        for (const scale of [0.5, 1, 4, 20]) {
+            const n = tris(displayTolerance(scale)) + 2;         // an n-gon gives n-2 triangles
+            const sagittaWorld = 100 * (1 - Math.cos(Math.PI / n));
+            expect(sagittaWorld * scale).toBeLessThan(DISPLAY_DEVIATION_PX * 2);
+        }
+    });
+
+    test("a node's OWN scale counts as much as the zoom", () => {
+        // Flattening happens in local space, so a node scaled 10x needs a tolerance ten times
+        // finer to look equally smooth. Reading only the viewport would leave every enlarged
+        // shape faceted no matter how far in you zoomed.
+        const m = { a: 10, b: 0, c: 0, d: 10 };
+        expect(localScaleOf(m, 1)).toBeCloseTo(10, 12);
+        expect(localScaleOf({ a: 1, b: 0, c: 0, d: 1 }, 10)).toBeCloseTo(10, 12);
+        // A ROTATION is not a scale, however much it mixes the terms.
+        const t = Math.PI / 6;
+        const rot = { a: Math.cos(t), b: Math.sin(t), c: -Math.sin(t), d: Math.cos(t) };
+        expect(localScaleOf(rot, 1)).toBeCloseTo(1, 12);
+        // Under a NON-UNIFORM scale it follows the larger axis: erring toward more detail is the
+        // error nobody can see, while averaging the two would under-cut the stretched one.
+        expect(localScaleOf({ a: 1, b: 0, c: 0, d: 9 }, 1)).toBeCloseTo(9, 12);
+    });
+
+    test("absurd scales are CLAMPED rather than trusted", () => {
+        // `scale` comes from a matrix the document controls. A node scaled by a billion must not
+        // ask for a tolerance of zero and drive the flattener into its depth limit on every frame.
+        expect(displayTolerance(1e9)).toBe(DISPLAY_TOLERANCE_MIN);
+        expect(displayTolerance(1e-9)).toBe(DISPLAY_TOLERANCE_MAX);
+        // A collapsed or broken matrix falls back to the fixed tolerance rather than to nothing.
+        expect(displayTolerance(0)).toBe(FLATTEN_TOLERANCE);
+        expect(displayTolerance(-4)).toBe(FLATTEN_TOLERANCE);
+        expect(displayTolerance(NaN)).toBe(FLATTEN_TOLERANCE);
+    });
+
+    test("each ITEM gets its own tolerance, from its own matrix", () => {
+        // The per-item decision is a decision, so it lives in the pure half rather than inside the
+        // draw loop where only a GPU could reach it. A node scaled up needs a finer cut than the
+        // viewport alone would ask for; using the view scale for everything leaves every enlarged
+        // shape faceted however far in you zoom.
+        const plain = { shape: { kind: "rect", x: 0, y: 0, width: 10, height: 10 }, world: null,
+                        nodeId: null, role: "content", paint: {} } as never;
+        const scaled = { shape: { kind: "rect", x: 0, y: 0, width: 10, height: 10 },
+                         world: compose(0, 0, 0, 16, 16, 0, 0), nodeId: null, role: "content", paint: {} } as never;
+        expect(itemTolerance(scaled, 1)).toBeLessThan(itemTolerance(plain, 1));
+        expect(itemTolerance(scaled, 1)).toBe(displayTolerance(16));
+        // No matrix at all — the grid — is drawn at the view scale, not refused.
+        expect(itemTolerance(plain, 4)).toBe(displayTolerance(4));
+    });
+
+    test("the tolerance reaches a STROKE through itemDraws, not just a fill", () => {
+        // Threading it into the fill and forgetting the border would give a shape whose outline
+        // and whose rim were cut to different budgets — visible as a rim that fits at one zoom
+        // and not another.
+        const stroked = (tol: number) => {
+            const [d] = itemDraws({
+                shape: { kind: "ellipse", cx: 100, cy: 100, rx: 100, ry: 100 }, world: null,
+                nodeId: null, role: "content",
+                paint: { fill: null, opacity: null, stroke: "#ffffff", strokeWidth: 8, strokeDash: null,
+                         radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null }
+            } as never, tol);
+            return d.vertices.length;
+        };
+        expect(stroked(displayTolerance(0.25))).toBeLessThan(stroked(displayTolerance(16)));
+    });
+
+    test("PICKING does not become adaptive, and that is the point of two numbers", () => {
+        // Drawing wants the error a person can see; picking wants an answer that does not depend
+        // on the zoom, because a click that landed at one magnification and missed at another
+        // would be unexplainable. The two tolerances are different KINDS of number, so the
+        // display one must not have leaked into the hit test.
+        const shape = { kind: "path" as const, commands: circle(100), filled: true };
+        // A point just inside the rim, at every magnification the same answer.
+        expect(hitsShape(shape, 200, 200, 99, 0, 0)).toBe(hitsShape(shape, 200, 200, 99, 0, 0));
+        expect(FLATTEN_TOLERANCE).toBe(0.05);
+        expect(flattenPath(circle(100)).length).toBe(flattenPath(circle(100)).length);
+        // The default is the FIXED one: an `itemDraws` called without a tolerance must not
+        // silently pick a screen-dependent one either.
+        const [byDefault] = itemDraws(item(0));
+        const [explicit] = itemDraws(item(0), FLATTEN_TOLERANCE);
+        expect(byDefault.vertices.length).toBe(explicit.vertices.length);
+    });
+
+    test("the STROKE outline is cut to the same budget as the fill", () => {
+        // A border is a curve too, and one cut at a different tolerance from the shape it goes
+        // round would show as a rim that fits at one zoom and not another.
+        const coarse = strokeOutline(circle(100), { width: 10 }, displayTolerance(0.25));
+        const fine = strokeOutline(circle(100), { width: 10 }, displayTolerance(16));
+        expect(coarse.flat().length).toBeLessThan(fine.flat().length);
+        // Both still describe the same annulus, to their own accuracy.
+        const area = (rings: { x: number; y: number }[][]): number => Math.abs(rings.reduce((s, r) => {
+            let a = 0;
+            for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += r[j].x * r[i].y - r[i].x * r[j].y;
+            return s + a;
+        }, 0)) / 2;
+        const truth = Math.PI * (105 * 105 - 95 * 95);
+        expect(area(fine) / truth).toBeGreaterThan(0.999);
+        expect(area(coarse) / truth).toBeGreaterThan(0.95);
     });
 });
 

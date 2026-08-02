@@ -253,9 +253,9 @@ export function ringsToCommands(rings: readonly Ring[]): PathCommand[] {
  * has to operate on. A trailing point equal to the first is dropped, since the closing edge is
  * implied and storing it twice would make a zero-length edge.
  */
-export function commandsToRings(commands: readonly PathCommand[]): Ring[] {
+export function commandsToRings(commands: readonly PathCommand[], tolerance?: number): Ring[] {
     const rings: Ring[] = [];
-    for (const sub of flattenPath(commands)) {
+    for (const sub of flattenPath(commands, tolerance)) {
         const pts = sub.points.slice();
         while (pts.length > 1 && same(pts[0], pts[pts.length - 1])) pts.pop();
         if (pts.length >= 3) rings.push(pts);
