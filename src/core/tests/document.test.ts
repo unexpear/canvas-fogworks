@@ -9871,21 +9871,58 @@ describe("Opacity: a group's fade reaches its contents", () => {
     }
     const stateFor = (doc: ProjectDocument) =>
         ({ viewport: { x: 0, y: 0, zoom: 1 }, selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(doc) }) as unknown as import("../../renderer/RendererState").RendererState;
-    const paintedOpacity = (doc: ProjectDocument, id: string) =>
-        buildRenderModel({ width: 800, height: 600 }, doc, stateFor(doc)).content.find(i => i.nodeId === id)!.paint.opacity;
+    const modelFor = (doc: ProjectDocument) => buildRenderModel({ width: 800, height: 600 }, doc, stateFor(doc));
+    const itemFor = (doc: ProjectDocument, id: string) => modelFor(doc).content.find(i => i.nodeId === id)!;
+    /** What the picture ends up at: the item's own alpha times every group around it. */
+    const composited = (doc: ProjectDocument, id: string) => {
+        const model = modelFor(doc);
+        const alpha = new Map(model.groups.map(g => [g.id, g.opacity]));
+        const item = model.content.find(i => i.nodeId === id)!;
+        return (item.groups ?? []).reduce((a, g) => a * (alpha.get(g) ?? 1), item.paint.opacity ?? 1);
+    };
 
-    test("a node draws at its own opacity times EVERY ancestor's, not just its parent's", () => {
+    test("a node is inside EVERY enclosing group, outermost first — not just its parent's", () => {
         const doc = nestedDoc(0.5, 0.5, 0.5);
-        expect(paintedOpacity(doc, "OUT")).toBeCloseTo(0.5);
-        expect(paintedOpacity(doc, "MID")).toBeCloseTo(0.25);
-        expect(paintedOpacity(doc, "LEAF")).toBeCloseTo(0.125);   // 0.5³ — two levels would say 0.25
+        // OUT and MID have children and opacity < 1, so both composite as groups. LEAF has no
+        // children, so it needs none: fading it alone is the same picture.
+        expect(itemFor(doc, "LEAF").groups).toEqual(["OUT", "MID"]);
+        // A group draws INSIDE its own group — its fill has to fade together with its
+        // children, not separately — so MID lists itself, and its item alpha is 1.
+        expect(itemFor(doc, "MID").groups).toEqual(["OUT", "MID"]);
+        expect(itemFor(doc, "MID").paint.opacity).toBe(1);
+        expect(composited(doc, "MID")).toBeCloseTo(0.25);
+        expect(itemFor(doc, "LEAF").paint.opacity).toBe(0.5);  // a leaf keeps its own
+        expect(modelFor(doc).groups).toEqual([{ id: "OUT", opacity: 0.5 }, { id: "MID", opacity: 0.5 }]);
+        // A two-level fixture could not tell this apart from "just the parent": 0.5³.
+        expect(composited(doc, "LEAF")).toBeCloseTo(0.125);
     });
 
     test("fading a GROUP fades its contents — the thing that used to do nothing", () => {
         const opaque = nestedDoc(1, 1, 1);
-        expect(paintedOpacity(opaque, "LEAF")).toBeCloseTo(1);
-        const faded = nestedDoc(0.4, 1, 1);
-        expect(paintedOpacity(faded, "LEAF")).toBeCloseTo(0.4);   // only the OUTER changed
+        expect(opaque.nodes.get("OUT")!.style.opacity).toBe(1);
+        expect(modelFor(opaque).groups).toEqual([]);            // nothing translucent: no groups at all
+        expect(itemFor(opaque, "LEAF").groups).toBeUndefined(); // …and no per-item overhead
+        expect(composited(opaque, "LEAF")).toBeCloseTo(1);
+
+        const faded = nestedDoc(0.4, 1, 1);                     // only the OUTER changed
+        expect(modelFor(faded).groups).toEqual([{ id: "OUT", opacity: 0.4 }]);
+        expect(composited(faded, "LEAF")).toBeCloseTo(0.4);
+    });
+
+    test("a translucent group composites ONCE — that is why it is structure, not a number", () => {
+        // The bug this replaces: multiplying the alpha into each child makes two overlapping
+        // children inside a 50% group read as three tones instead of one. Both children carry
+        // their OWN alpha and sit in the same group, so the backend fades the result once.
+        const doc = createEmptyDocument();
+        const mk = (id: string, kids: string[], parent: string | null, opacity: number) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent, children: kids, geometry: { x: 0, y: 0, width: 50, height: 50 }, style: { fill: "#4a90d9", opacity }, layout: {} });
+        mk("G", ["A", "B"], null, 0.5); mk("A", [], "G", 1); mk("B", [], "G", 1);
+        doc.rootNodeUuids = ["G"];
+        expect(itemFor(doc, "A").paint.opacity).toBe(1);
+        expect(itemFor(doc, "B").paint.opacity).toBe(1);
+        expect(itemFor(doc, "A").groups).toEqual(["G"]);
+        expect(itemFor(doc, "B").groups).toEqual(["G"]);
+        expect(modelFor(doc).groups).toEqual([{ id: "G", opacity: 0.5 }]);
     });
 
     test("the STORED value stays the node's own — the inspector must not show the product", () => {

@@ -245,6 +245,15 @@ export function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dp
     // shadow*/filter are device-space (untouched by the CTM), so effect values are replayed × scale.
     const scale = z * dpr;
     model.grid.lines.forEach(item => drawItem(ctx, item, scale));
-    model.content.forEach(item => drawItem(ctx, item, scale));
+    // OPACITY GROUPS (schema 32): SVG nests a real `<g opacity>` and composites the subtree
+    // once. Canvas cannot without an offscreen layer per group, so it FOLDS the group alphas
+    // into each item instead — the approximation this backend already makes for per-op
+    // `globalAlpha`. Overlapping children inside a translucent group therefore show through
+    // one another here and not in SVG; a true fix needs a layer per group and is not this.
+    const groupAlpha = new Map(model.groups.map(gr => [gr.id, gr.opacity]));
+    for (const item of model.content) {
+        const folded = (item.groups ?? []).reduce((a, id) => a * (groupAlpha.get(id) ?? 1), 1);
+        drawItem(ctx, folded === 1 ? item : { ...item, paint: { ...item.paint, opacity: (item.paint.opacity ?? 1) * folded } }, scale);
+    }
     model.overlay.forEach(item => drawItem(ctx, item, scale));
 }

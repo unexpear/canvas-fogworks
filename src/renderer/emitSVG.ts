@@ -198,7 +198,27 @@ export function emitSVG(container: HTMLElement, model: DisplayList): void {
     }
 
     clearChildren(contentGroup);
-    model.content.forEach(item => appendItem(contentGroup, item));
+    // OPACITY GROUPS (schema 32): a node with children and opacity < 1 composites as one, so
+    // its subtree goes inside a real `<g opacity>` and SVG fades the result once. Folding the
+    // alpha into each child instead makes overlapping children show through each other.
+    // The model lists each item's enclosing groups outermost-first, so nesting is a lookup:
+    // create each `<g>` the first time it is named, then append into the innermost.
+    const groupAlpha = new Map(model.groups.map(gr => [gr.id, gr.opacity]));
+    const groupEls = new Map<string, SVGGElement>();
+    for (const item of model.content) {
+        let parent: SVGGElement = contentGroup;
+        for (const id of item.groups ?? []) {
+            let el = groupEls.get(id);
+            if (!el) {
+                el = document.createElementNS(svgNS, "g") as SVGGElement;
+                el.setAttribute("opacity", String(groupAlpha.get(id) ?? 1));
+                parent.appendChild(el);
+                groupEls.set(id, el);
+            }
+            parent = el;
+        }
+        appendItem(parent, item);
+    }
 
     clearChildren(overlayGroup);
     model.overlay.forEach(item => appendItem(overlayGroup, item));

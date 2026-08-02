@@ -415,4 +415,26 @@ describe("emitCanvas — image", () => {
             setImageReadyCallback(null);
         }
     });
+
+    test("canvas FOLDS the group alphas — it cannot composite a group, and says so", () => {
+        // SVG nests a real `<g opacity>` and fades the subtree once. Canvas has no layer here,
+        // so it multiplies each item by the groups around it — the documented approximation.
+        // Two overlapping children therefore show through each other on canvas and not in SVG;
+        // this test pins the approximation so the gap is a decision rather than a surprise.
+        const doc = createEmptyDocument();
+        const mk = (id: string, kids: string[], parent: string | null, opacity: number) =>
+            doc.nodes.set(id, { id, type: "core.rectangle", parent, children: kids, geometry: { x: 0, y: 0, width: 40, height: 40 }, style: { fill: "#4a90d9", opacity }, layout: {} } as Node);
+        mk("G", ["A"], null, 0.5); mk("A", [], "G", 0.5);
+        doc.rootNodeUuids = ["G"];
+
+        const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed: computeGeometry(doc as ProjectDocument), viewport: { x: 0, y: 0, zoom: 1 } };
+        const model = buildRenderModel(SIZE, doc as ProjectDocument, state);
+        const ctx = new MockCtx();
+        emitCanvas(ctx as unknown as CanvasRenderingContext2D, model, 1);
+
+        const alphas = ctx.calls.filter(c => c.op === "set globalAlpha").map(c => c.args[0] as number);
+        // G draws inside its own group (1 x 0.5) and A inside it too (0.5 x 0.5).
+        expect(alphas).toContain(0.5);
+        expect(alphas.some(a => Math.abs(a - 0.25) < 1e-9)).toBe(true);
+    });
 });

@@ -149,6 +149,18 @@ export interface DrawItem {
     /** `data-resize-handle` for resize hit-testing (handles only). */
     handle?: string;
     role: DrawRole;
+    /**
+     * OPACITY GROUPS this item is inside, outermost first (schema 32).
+     *
+     * A node with children and `opacity < 1` composites as a GROUP: everything inside it is
+     * drawn, then the result is faded once. Multiplying the alpha into each child instead makes
+     * overlapping children show through one another, which is the wrong picture and the reason
+     * this is structure rather than a number.
+     *
+     * `paint.opacity` stays the node's OWN value. A backend that can group (SVG's `<g opacity>`)
+     * uses this; one that cannot folds the group alphas in itself.
+     */
+    groups?: string[];
 }
 
 /**
@@ -171,6 +183,14 @@ export interface DisplayList {
     overlay: DrawItem[];
     /** Deduped filter defs referenced by content items — emitSVG builds `<defs>` from these. */
     defs: FilterDef[];
+    /** The opacity groups `content` items refer to, outermost first. */
+    groups: OpacityGroup[];
+}
+
+/** A node whose subtree composites as one before being faded. */
+export interface OpacityGroup {
+    id: string;
+    opacity: number;
 }
 
 type Box = { x: number; y: number; width: number; height: number };
@@ -250,59 +270,50 @@ function buildGrid(
  */
 
 /**
- * A node's EFFECTIVE opacity: its own, multiplied by every ancestor's (schema 32).
+ * The OPACITY GROUPS enclosing a node, outermost first (schema 32).
  *
- * Opacity used to be per-node, so setting a GROUP to 50% did nothing at all to its contents —
- * a control the layer panel would have offered while it quietly had no effect. Multiplying down
- * is what every design tool means by group opacity, and it is computed HERE rather than baked
- * into the scene because the stored value, and the one the inspector shows, must stay the
- * node's OWN. Only the drawing changes.
+ * A node composites as a group when it has children AND `opacity < 1`: everything inside is
+ * drawn, then the whole result is faded once. Multiplying the alpha into each child instead —
+ * which is what this used to do — makes overlapping children show through one another, so a
+ * translucent group of two overlapping shapes reads as three tones instead of one.
  *
- * NOT true group compositing: a real group is rasterized once and then faded, so two
- * overlapping children show as one shape. Multiplying per child means they show THROUGH each
- * other. Matching that needs an offscreen layer per group in both backends — the same gap the
- * canvas backend already documents for per-op `globalAlpha`.
+ * A node with no children needs no group: fading it alone IS the same picture, and its own
+ * `paint.opacity` says so. A node that IS a group draws its own shape INSIDE that group, so
+ * its item's opacity is 1 and the group carries the value.
+ *
+ * `seen` guards a circular parent chain. The scene walk already drops those before they reach
+ * here, so it is defence in depth against a future caller rather than a live path.
  */
-function effectiveOpacity(doc: ReadonlyDocument, id: string, memo: Map<string, number>): number {
+function opacityGroupsFor(doc: ReadonlyDocument, id: string, memo: Map<string, string[]>): string[] {
     const cached = memo.get(id);
     if (cached !== undefined) return cached;
 
-    // In practice the climb almost never takes more than one step: `buildContent` walks in
-    // DRAW order, which is parents-first, so an ancestor is already memoized by the time a
-    // child asks. Shortening the loop is therefore not mutation-killable through that
-    // caller — it is written as a full climb because nothing in the signature promises the
-    // caller will keep that order.
-    // Walk UP collecting the chain, then fold DOWN — one pass, and every node on the way gets
-    // memoized rather than just the one asked for. `seen` stops a circular parent chain: the
-    // scene walk already drops those before they reach here, so it is defence in depth against
-    // a future caller rather than a live path — and therefore not mutation-killable through
-    // `buildContent`, which is the only caller today.
     const chain: string[] = [];
     const seen = new Set<string>();
     let cur: string | null | undefined = id;
-    let acc = 1;
     while (cur != null && !seen.has(cur)) {
-        const hit = memo.get(cur);
-        if (hit !== undefined) { acc = hit; break; }   // an ancestor is already resolved
+        seen.add(cur);
         const node = doc.nodes.get(cur);
         if (!node) break;
-        seen.add(cur);
-        chain.push(cur);
+        if (isOpacityGroup(node)) chain.push(cur);
         cur = node.parent ?? null;
     }
-    for (let i = chain.length - 1; i >= 0; i--) {
-        const own = doc.nodes.get(chain[i])!.style.opacity;
-        acc *= typeof own === "number" ? own : 1;
-        memo.set(chain[i], acc);
-    }
-    return memo.get(id) ?? acc;
+    chain.reverse();                                   // outermost first, the order a backend nests in
+    memo.set(id, chain);
+    return chain;
 }
+
+/** A node whose subtree must composite before being faded. */
+function isOpacityGroup(node: { children: readonly string[]; style: { opacity: number } }): boolean {
+    return node.children.length > 0 && typeof node.style.opacity === "number" && node.style.opacity < 1;
+}
+
 
 
 function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number, visible: Box): DrawItem[] {
     const items: DrawItem[] = [];
-    // Effective opacity is a product up the tree, so memoize it across the frame.
-    const opacityMemo = new Map<string, number>();
+    // The enclosing opacity groups per node, memoized across the frame.
+    const groupMemo = new Map<string, string[]>();
     // Design tokens (M5): every COLOR slot resolves "$token" references against the store
     // under the document's active theme — right here in the model, so both backends agree
     // and a theme switch repaints via the normal dispatch → refresh path. Presence checks
@@ -376,7 +387,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "rect", x, y, width, height };
             paint = {
                 fill: color(sty.fill),
-                opacity: effectiveOpacity(doc, node.id, opacityMemo), shadow, blur,
+                opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeDash: null,
@@ -389,7 +400,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "ellipse", cx: width / 2, cy: height / 2, rx: width / 2, ry: height / 2 };
             paint = {
                 fill: color(sty.fill),
-                opacity: effectiveOpacity(doc, node.id, opacityMemo), shadow, blur,
+                opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeDash: null,
@@ -404,7 +415,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "line", x1: 0, y1: 0, x2: width, y2: height };
             paint = {
                 fill: null,
-                opacity: effectiveOpacity(doc, node.id, opacityMemo), shadow, blur,
+                opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
                 // `||` not `??`: an empty-string stroke also falls back to `fill`, so a line
                 // is never invisible (a line's stroke IS its body, unlike a rect's border).
                 // The fallback picks the RAW winner first, THEN resolves — so a token stroke
@@ -419,13 +430,13 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         } else if (node.type === "core.text") {
             shape = { kind: "text", x, y, width, height, text: node.text ?? "Text", fontSize: fontSizeOf(sty.fontSize) };
             paint = {
-                fill: color(sty.fill), opacity: effectiveOpacity(doc, node.id, opacityMemo), stroke: null, strokeWidth: null,
+                fill: color(sty.fill), opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
                 strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
             };
         } else if (node.type === "core.image") {
             shape = { kind: "image", x, y, width, height, href: node.src ?? null };
             paint = {
-                fill: null, opacity: effectiveOpacity(doc, node.id, opacityMemo), stroke: null, strokeWidth: null,
+                fill: null, opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
                 strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
             };
         } else if (node.type === "core.path") {
@@ -435,7 +446,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "path", commands: node.path ?? [] };
             paint = {
                 fill: color(sty.fill),
-                opacity: effectiveOpacity(doc, node.id, opacityMemo), shadow, blur,
+                opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeDash: null,
@@ -459,7 +470,10 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             };
         }
 
-        items.push({ shape, paint, world: c.world, nodeId: id, role: "content" });
+        // The enclosing groups travel WITH the item, so a backend that can composite nests it
+        // and one that cannot folds the alphas in itself — neither has to re-walk the tree.
+        const groups = opacityGroupsFor(doc, id, groupMemo);
+        items.push({ shape, paint, world: c.world, nodeId: id, role: "content", ...(groups.length ? { groups } : {}) });
     });
 
     return items;
@@ -612,6 +626,22 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
     return items;
 }
 
+
+/** The opacity groups the visible content refers to, deduped, outermost-first per item. */
+function collectGroups(doc: ReadonlyDocument, content: DrawItem[]): OpacityGroup[] {
+    const out: OpacityGroup[] = [];
+    const seen = new Set<string>();
+    for (const item of content) {
+        for (const id of item.groups ?? []) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            const opacity = doc.nodes.get(id)?.style.opacity;
+            out.push({ id, opacity: typeof opacity === "number" ? opacity : 1 });
+        }
+    }
+    return out;
+}
+
 /** Dedupe (by id) the filter defs referenced by the visible content, in content order. */
 function collectDefs(content: DrawItem[]): FilterDef[] {
     const defs: FilterDef[] = [];
@@ -662,6 +692,7 @@ export function buildRenderModel(
         grid: buildGrid(size, state.viewport, z, prev),
         content,
         overlay: buildOverlay(state, z, doc),
-        defs: collectDefs(content)
+        defs: collectDefs(content),
+        groups: collectGroups(doc, content)
     };
 }
