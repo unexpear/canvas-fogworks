@@ -17,7 +17,7 @@ import { ReadonlyDocument } from "../document/Document";
 import { computeGeometry } from "../geometry/GeometryEngine";
 import { Rect } from "../geometry/Matrix";
 import { toMatrixString } from "../geometry/Matrix";
-import { buildRenderModel, commandsToPathData, effectFilterId as effectId, DrawItem, FilterDef } from "../../renderer/RenderModel";
+import { buildRenderModel, commandsToPathData, textParagraphs, effectFilterId as effectId, DrawItem, FilterDef } from "../../renderer/RenderModel";
 import { RendererState } from "../../renderer/RendererState";
 
 /** Padding around the content, in world units, so strokes and shadows are not clipped. */
@@ -91,10 +91,31 @@ function itemMarkup(item: DrawItem): string {
             return `<line x1="${num(s.x1)}" y1="${num(s.y1)}" x2="${num(s.x2)}" y2="${num(s.y2)}" ${paint}${t}/>`;
         case "path":
             return `<path d="${esc(commandsToPathData(s.commands))}" ${paint}${t}/>`;
-        case "text":
-            // `dominant-baseline` + the box's own y keeps the exported text where the editor
-            // draws it; the editor uses a foreignObject, which has no standalone equivalent.
-            return `<text x="${num(s.x)}" y="${num(s.y + s.fontSize)}" font-size="${num(s.fontSize)}" ${paint}${t}>${esc(s.text)}</text>`;
+        case "text": {
+            // TYPOGRAPHY (schema 34) and hard LINE BREAKS. Both were missing, and both are the
+            // kind of gap that only shows up on export: the editor drew weight, family, spacing
+            // and multiple lines while the exported file was one default-styled run. The model
+            // has already resolved every value, so this is transcription.
+            //
+            // Alignment is SVG's `text-anchor`, which anchors about a POINT — so the x moves with
+            // it, exactly as the canvas backend moves its anchor. The first baseline sits one
+            // font-size below the box top (matching the editor's top-aligned box), and each
+            // further line steps by `fontSize × lineHeight`.
+            //
+            // KNOWN GAP, stated rather than papered over: this does not WRAP. Wrapping needs text
+            // measurement, which a pure exporter has no access to — the canvas backend wraps
+            // because it has `measureText`. Explicit newlines are honoured; a long unbroken
+            // paragraph will run past the box in the exported file where the editor wrapped it.
+            const anchor = s.textAlign === "center" ? "middle" : s.textAlign === "right" ? "end" : "start";
+            const x = s.textAlign === "center" ? s.x + s.width / 2 : s.textAlign === "right" ? s.x + s.width : s.x;
+            const step = s.fontSize * s.lineHeight;
+            const lines = textParagraphs(s.text);
+            const tspans = lines.map((line, i) =>
+                `<tspan x="${num(x)}" y="${num(s.y + s.fontSize + i * step)}">${esc(line)}</tspan>`).join("");
+            const font = ` font-size="${num(s.fontSize)}" font-family="${esc(s.fontFamily)}" font-weight="${num(s.fontWeight)}"`
+                + ` text-anchor="${anchor}"` + (s.letterSpacing !== 0 ? ` letter-spacing="${num(s.letterSpacing)}"` : "");
+            return `<text${font} ${paint}${t}>${tspans}</text>`;
+        }
         case "image":
             return s.href === null ? "" :
                 `<image x="${num(s.x)}" y="${num(s.y)}" width="${num(s.width)}" height="${num(s.height)}" href="${esc(s.href)}"${t}/>`;

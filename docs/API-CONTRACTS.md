@@ -328,6 +328,12 @@ function scanCapabilities(files: readonly SourceFile[]): Capability[];
 // content, not the viewport; grid and selection chrome excluded.
 const EXPORT_MARGIN: number;
 function exportSVG(doc: ReadonlyDocument): string;
+// Built from the SAME DisplayList the editor draws, so shapes, booleans and effects come along
+// without a second description. TEXT carries the schema-34 typography (family, weight, anchor,
+// letter-spacing) and breaks explicit newlines into <tspan>s stepped by the line height, via the
+// shared `textParagraphs`. KNOWN GAP: it does not WRAP — wrapping needs measurement, which a pure
+// exporter has none of, so a long unbroken paragraph runs past the box where the editor wrapped it.
+function textParagraphs(text: string): string[];   // RenderModel — hard breaks only; shared by the exporter and the canvas backend
 
 // editor/shortcuts.ts — maps a key chord to an editor command. PURE, so "what does Shift+Left
 // do?" is a unit test. Ctrl and Cmd are interchangeable; a MODIFIED arrow is left to the
@@ -549,6 +555,29 @@ class HistoryManager {
 // Retention is memory-bounded: DEFAULT_HISTORY_LIMITS = { maxBytes: 128MB, minEntries: 50, maxEntries: 10_000 }
 // Injectable via `new ActionDispatcher(doc, limits)` / `new HistoryManager(doc, limits)`.
 ```
+
+## Scripting (`core/script/`, `editor/ScriptRunner.ts`) — Milestone 15
+
+```ts
+const SCRIPT_MAX_REQUESTS: number;   // 10_000 per run
+const SCRIPT_TIMEOUT_MS: number;     // 2_000 — after which the WORKER IS TERMINATED
+interface ScriptNode { id; type; name; parent; children; x; y; width; height; fill; opacity; text }
+interface ScriptSnapshot { nodes: ScriptNode[] }        // FROZEN, plain, JSON-round-trippable
+type ActionRequest =
+    | { op: "move"; id; x; y } | { op: "resize"; id; width; height }
+    | { op: "style"; id; style } | { op: "text"; id; text }
+    | { op: "create"; nodeType; x; y; width; height; fill? } | { op: "delete"; id };
+function snapshotFor(doc: ReadonlyDocument): ScriptSnapshot;       // from the RESOLVED scene
+function actionRequestError(req: unknown): string | null;          // SHAPE only; values are each Action's job
+function compileScript(doc, requests: readonly unknown[], newId: () => string): { action: Action | null; refusals: string[] };
+function runScript(source: string, snapshot: ScriptSnapshot, timeoutMs?): Promise<ScriptResult>;  // NEVER rejects
+```
+
+The guarantee does not rest on the sandbox. A script is handed plain data and returns plain data;
+`compileScript` builds the Actions and lets **each Action's own validator** decide — the same one
+the inspector and the loader run — so a script can only ask for edits a person could make by hand.
+The run is ONE transaction (one undo) and refusals are reported per request rather than thrown.
+The worker adds depth: no DOM, no preload bridge, and the bootstrap deletes the network globals.
 
 ## Editor (`editor/`)
 

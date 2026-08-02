@@ -1380,10 +1380,19 @@ export function App() {
                             {node.type === "core.text" && (
                                 <InspectorSection title="Text">
                                     <label style={INSPECTOR_LABEL}>Content</label>
-                                    <TextInput
+                                    {/* A TEXTAREA, not an input: an `<input>` strips newlines, so
+                                        multi-line text — which schema 34 made a real thing in both
+                                        backends and the exporter — could not be typed at all. */}
+                                    <textarea
                                         value={node.text ?? ""}
                                         placeholder="Text"
-                                        onChange={v => { editContent({ text: v }); refresh(); }}
+                                        spellCheck={false}
+                                        onChange={e => { editContent({ text: e.target.value }); refresh(); }}
+                                        style={{
+                                            width: "100%", boxSizing: "border-box", height: 54, resize: "vertical",
+                                            fontSize: 11, padding: "4px 6px", background: UI.bg, color: UI.text,
+                                            border: `1px solid ${UI.line}`, borderRadius: 3
+                                        }}
                                     />
                                     <label style={INSPECTOR_LABEL}>Font size</label>
                                     <NumInput
@@ -1901,6 +1910,7 @@ function FoldersDrawer({ onPlaceImage, getDocument }: {
 }) {
     const [tab, setTab] = useState<"source" | "assets" | "export">("source");
     const [exported, setExported] = useState<string | null>(null);
+    const [preview, setPreview] = useState<string | null>(null);
     const [sourceFolder, setSourceFolder] = useState<string | null>(null);
     const [assetFolder, setAssetFolder] = useState<string | null>(null);
     const [findings, setFindings] = useState<Capability[] | null>(null);
@@ -1983,6 +1993,25 @@ function FoldersDrawer({ onPlaceImage, getDocument }: {
                         style={{ width: "100%", boxSizing: "border-box", fontSize: 11, padding: "3px 5px", background: UI.raised, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3, marginBottom: 6 }}
                     />
                     {exported && <div style={{ color: "#6a9", wordBreak: "break-all" }}>Wrote {exported}</div>}
+                    {/* PREVIEW: the same `exportSVG` output, without writing a file. Worth having
+                        on its own — you can read what you are about to hand someone — and it is
+                        the only way to see the export without a native dialog in the way. */}
+                    <button onClick={() => setPreview(exportSVG(getDocument()))} style={DRAWER_BUTTON}>
+                        Preview the SVG
+                    </button>
+                    {preview !== null && (
+                        <textarea
+                            readOnly
+                            value={preview}
+                            data-svg-preview="1"
+                            spellCheck={false}
+                            style={{
+                                width: "100%", height: 140, boxSizing: "border-box", marginTop: 6,
+                                fontSize: 10, fontFamily: "ui-monospace, Consolas, monospace",
+                                background: UI.bg, color: UI.textDim, border: `1px solid ${UI.line}`, borderRadius: 3
+                            }}
+                        />
+                    )}
                     <div style={{ color: "#666", marginTop: 6 }}>
                         The whole document, framed to its own content — no grid, no selection chrome.
                     </div>

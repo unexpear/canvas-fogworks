@@ -67,6 +67,7 @@ import { FrameSelectionAction } from "../actions/FrameSelectionAction";
 import { alignBoxes, distributeBoxes, AlignEdge } from "../geometry/Alignment";
 import { scanCapabilities } from "../scan/CapabilityScan";
 import { exportSVG, EXPORT_MARGIN } from "../export/ExportSVG";
+import { textParagraphs } from "../../renderer/RenderModel";
 import { resolveShortcut, isTypingTarget, NUDGE_STEP, NUDGE_STEP_LARGE } from "../../editor/shortcuts";
 import { DuplicateNodesAction, DUPLICATE_OFFSET } from "../actions/DuplicateNodesAction";
 import { alignAction, distributeAction } from "../actions/alignActions";
@@ -8366,6 +8367,92 @@ describe("scanCapabilities", () => {
 });
 
 // ─── SVG export: the artefact you hand to a developer ───
+describe("exportSVG typography and line breaks", () => {
+    const textDoc = (text: string, style: Record<string, unknown> = {}): ProjectDocument => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("T", { id: "T", type: "core.text", parent: null, children: [], text,
+            geometry: { x: 0, y: 0, width: 200, height: 100 }, layout: {},
+            style: { fill: "#112233", opacity: 1, fontSize: 20, ...style } } as Node);
+        doc.rootNodeUuids = ["T"];
+        return doc;
+    };
+
+    test("the exported text carries the TYPOGRAPHY the editor draws", () => {
+        // The gap this closes: the editor drew family, weight, alignment and spacing while the
+        // exported file was one default-styled run. An exporter that silently drops features is
+        // worse than none, because the difference only shows up in someone else's hands.
+        const svg = exportSVG(textDoc("Hi", {
+            fontFamily: "Inter, sans-serif", fontWeight: 700, letterSpacing: 1.5, textAlign: "center"
+        }));
+        expect(svg).toContain('font-family="Inter, sans-serif"');
+        expect(svg).toContain('font-weight="700"');
+        expect(svg).toContain('letter-spacing="1.5"');
+        expect(svg).toContain('text-anchor="middle"');
+        // Centre-anchored text anchors about a POINT, so the x moves to the box centre — the
+        // same move the canvas backend makes for the same reason.
+        expect(svg).toContain('<tspan x="100"');
+    });
+
+    test("alignment picks the anchor AND the x, on all three sides", () => {
+        expect(exportSVG(textDoc("Hi"))).toContain('text-anchor="start"');
+        expect(exportSVG(textDoc("Hi"))).toContain('<tspan x="0"');
+        expect(exportSVG(textDoc("Hi", { textAlign: "right" }))).toContain('text-anchor="end"');
+        expect(exportSVG(textDoc("Hi", { textAlign: "right" }))).toContain('<tspan x="200"');
+        // `justify` has no SVG anchor either, so it falls back to the left — the same documented
+        // fallback the canvas backend makes.
+        expect(exportSVG(textDoc("Hi", { textAlign: "justify" }))).toContain('text-anchor="start"');
+    });
+
+    test("explicit newlines become tspans, stepped by the LINE HEIGHT", () => {
+        const NL = String.fromCharCode(10);
+        const svg = exportSVG(textDoc("one" + NL + "two" + NL + "three", { lineHeight: 2 }));
+        // First baseline one font-size below the box top, then 20 x 2 per line.
+        expect(svg).toContain('<tspan x="0" y="20">one</tspan>');
+        expect(svg).toContain('<tspan x="0" y="60">two</tspan>');
+        expect(svg).toContain('<tspan x="0" y="100">three</tspan>');
+    });
+
+    test("the hard-break rule is SHARED, so the exporter and both backends cannot disagree", () => {
+        // Runs of spaces and tabs collapse; a newline is a break. One function, three consumers.
+        const NL = String.fromCharCode(10), TAB = String.fromCharCode(9);
+        expect(textParagraphs("a" + NL + "b")).toEqual(["a", "b"]);
+        expect(textParagraphs("a  " + TAB + " b")).toEqual(["a b"]);
+        expect(textParagraphs("")).toEqual([""]);
+        expect(textParagraphs("a" + NL + NL + "b")).toEqual(["a", "", "b"]);
+        const svg = exportSVG(textDoc("a  " + TAB + " b" + NL + "c"));
+        expect(svg).toContain(">a b</tspan>");
+        expect(svg).toContain(">c</tspan>");
+    });
+
+    test("letter-spacing is OMITTED when it is zero, so a plain export stays plain", () => {
+        expect(exportSVG(textDoc("Hi"))).not.toContain("letter-spacing");
+        expect(exportSVG(textDoc("Hi", { letterSpacing: -1 }))).toContain('letter-spacing="-1"');
+    });
+
+    test("the inspector can actually TYPE a newline, and the preview shows what will be written", () => {
+        // Found by exporting from the real app: the export came back as one run because the
+        // Content field was an `<input>`, which strips newlines — so multi-line text, which both
+        // backends and the exporter support, could not be authored at all. A feature with no way
+        // to reach it is not a feature.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/<textarea[\s\S]{0,200}value=\{node\.text \?\? ""\}/);
+        // …and the export can be READ without a native dialog in the way, which is both a
+        // usability win and the only way to verify the exporter end to end.
+        expect(src).toMatch(/setPreview\(exportSVG\(getDocument\(\)\)\)/);
+        expect(src).toMatch(/data-svg-preview="1"/);
+    });
+
+    test("the exported markup is well-formed, and escapes what it interpolates", () => {
+        const svg = exportSVG(textDoc('a & b < c > "d"'));
+        expect(svg).toContain("&amp;");
+        expect(svg).toContain("&lt;");
+        expect(svg).not.toMatch(/<tspan[^>]*>[^<]*&(?!amp;|lt;|gt;|quot;)/);
+        // Every tspan opened is closed, and the text element wraps them.
+        expect((svg.match(/<tspan/g) ?? []).length).toBe((svg.match(/<\/tspan>/g) ?? []).length);
+        expect(svg).toMatch(/<text[^>]*>(<tspan[\s\S]*?<\/tspan>)+<\/text>/);
+    });
+});
+
 describe("exportSVG", () => {
     function docWithNodes(...nodes: Partial<Node>[]): ProjectDocument {
         const doc = createEmptyDocument();

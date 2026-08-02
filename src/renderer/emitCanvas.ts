@@ -39,7 +39,7 @@
  */
 
 import { isTranslationOnly } from "../core/geometry/Matrix";
-import { DisplayList, DrawItem, Paint, Shape } from "./RenderModel";
+import { DisplayList, DrawItem, Paint, Shape, textParagraphs } from "./RenderModel";
 
 /** Matches the SVG background (`svg.style.background`) so the two backends look alike. */
 const BACKGROUND = "#1a1a2e";
@@ -91,9 +91,12 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
     // EXPLICIT newlines break first, then each paragraph wraps on the box width. Collapsing them
     // (as this used to, via a single `\s+` split) made the Canvas backend silently reflow text
     // the SVG backend — now `white-space: pre-wrap` — keeps on separate lines.
+    // The hard breaks come from the SHARED `textParagraphs`, so this backend, the SVG one and the
+    // EXPORTER cannot disagree about where a newline ends a line. Only the MEASURED wrapping below
+    // is this backend's own, because only it can measure.
     const lines: string[] = [];
-    for (const paragraph of text.split("\n")) {
-        const words = paragraph.split(/[^\S\n]+/).filter(w => w.length > 0);
+    for (const paragraph of textParagraphs(text)) {
+        const words = paragraph.split(" ").filter(w => w.length > 0);
         if (words.length === 0) { lines.push(""); continue; }
         let line = "";
         for (const word of words) {

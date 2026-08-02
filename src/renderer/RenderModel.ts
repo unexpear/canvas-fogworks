@@ -86,6 +86,22 @@ export function commandsToPathData(commands: readonly PathCommand[]): string {
 }
 
 /**
+ * Text split into PARAGRAPHS on explicit newlines — the hard breaks, shared by everything that
+ * lays text out.
+ *
+ * A newline is a line in both backends (schema 34), and the exporter has to agree or a document
+ * exports as one run of text it does not look like. Wrapping on the box width is a separate,
+ * MEASURED step that only the canvas backend can do; this is the part that needs no measurement
+ * and therefore must not be re-implemented three times.
+ *
+ * Whitespace WITHIN a paragraph is collapsed to single separators, matching `white-space:
+ * pre-wrap`'s treatment of runs of spaces and tabs.
+ */
+export function textParagraphs(text: string): string[] {
+    return text.split("\n").map(p => p.split(/[^\S\n]+/).filter(w => w.length > 0).join(" "));
+}
+
+/**
  * Resolved appearance. A `null` field is ABSENT (the backend emits no attribute);
  * a non-null field is present with that value — this reproduces the current
  * renderer's attribute presence rules exactly (e.g. the unknown-type fallback rect
