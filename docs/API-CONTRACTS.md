@@ -88,6 +88,21 @@ function resolveScene(doc: ReadonlyDocument): ReadonlyDocument;  // = expandInst
 // of a flag every consumer must remember to check. LOCK is different: a locked node still
 // DRAWS, so it stays in the scene and `ComputedState.locked` is what both pickers skip.
 function dropHidden(doc: ReadonlyDocument): ReadonlyDocument;   // SAME reference when nothing is hidden
+
+```ts
+// editor/layerDrop.ts — what a layer-panel drag resolves to, without the DOM.
+type DropPosition = "before" | "after" | "inside";   // a row's top edge, bottom edge, or middle
+interface LayerDrop { parent: string | null; index: number }  // index measured AFTER the node is detached
+function resolveLayerDrop(doc, dragged, target, position): LayerDrop | null;   // null = refuse the drop
+```
+
+`applyMutations` detaches before inserting, so an index measured against the list as it looks
+now is one too high whenever the node moves DOWN within its own list — the adjustment lives in
+`resolveLayerDrop` with tests rather than in a drag handler. It refuses a no-op, a drop into
+the node's own subtree, and a drop INSIDE an instance (which has no stored children to join);
+`ReparentNodeAction` refuses cycles independently, so this is about not OFFERING a drop that
+would fail. The panel gates its drop indicator on the same call, so the hint and the outcome
+cannot disagree.
 function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializes instances as virtual children; SAME reference when there is nothing to expand
 // Per-instance OVERRIDES (schema 22, M6 slice 2): what one instance changes about its copy,
 // keyed by MASTER NODE ID. Applied during expansion at each level; a key matching no master

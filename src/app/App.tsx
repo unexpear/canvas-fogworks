@@ -20,6 +20,8 @@ import { SetVariantAction, SetInstanceVariantAction } from "../core/actions/Vari
 import { SetSlotAction, SetSlotContentAction } from "../core/actions/SlotActions";
 import { SetNodeStateAction, SetActiveStateAction } from "../core/actions/StateActions";
 import { SetNodeFlagsAction } from "../core/actions/SetNodeFlagsAction";
+import { resolveLayerDrop, DropPosition } from "../editor/layerDrop";
+import { ReparentNodeAction } from "../core/actions/ReparentNodeAction";
 import { variantProperties, resolveVariantMaster, masterSubtreeIds } from "../core/document/Components";
 import { parseTrackList, formatTrackList } from "../core/document/TrackList";
 import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
@@ -221,6 +223,10 @@ export function App() {
     const [backend, setBackend] = useState<RenderBackend>("svg");
     const [showFolders, setShowFolders] = useState(false);
     const [showTokens, setShowTokens] = useState(false);
+    // The layer drag in flight: what is being dragged, and where the pointer currently is.
+    // Kept in React state (not a ref) because the row that is being hovered has to REDRAW to
+    // show the indicator — a ref would move the data without moving the picture.
+    const [layerDrag, setLayerDrag] = useState<{ id: string; over: string | null; position: DropPosition | null }>({ id: "", over: null, position: null });
     // Consolidated UI state — one setState per refresh (React batches it into a
     // single commit). `tick` drives the imperative canvas repaint effect.
     const [ui, setUi] = useState<{ tick: number; selectedNodeId: string | null; canUndo: boolean; canRedo: boolean; truncated: boolean }>({
@@ -957,6 +963,34 @@ export function App() {
                                         inheritedLocked={lockedAbove}
                                         onFlag={flags => {
                                             dispatcher.dispatchAction(new SetNodeFlagsAction(dispatcher.getDocument(), id, flags));
+                                            refresh();
+                                        }}
+                                        dropHint={layerDrag.over === id ? layerDrag.position : null}
+                                        onDragStart={() => setLayerDrag({ id, over: null, position: null })}
+                                        onDragOver={position => {
+                                            // Only show a hint for a drop that would actually be
+                                            // taken — `resolveLayerDrop` decides, so the indicator
+                                            // and the outcome cannot disagree.
+                                            const ok = layerDrag.id && layerDrag.id !== id
+                                                && resolveLayerDrop(dispatcher.getDocument(), layerDrag.id, id, position) !== null;
+                                            setLayerDrag(d => ({ ...d, over: ok ? id : null, position: ok ? position : null }));
+                                        }}
+                                        onDrop={() => {
+                                            const drop = layerDrag.id && layerDrag.position
+                                                ? resolveLayerDrop(dispatcher.getDocument(), layerDrag.id, id, layerDrag.position)
+                                                : null;
+                                            if (drop) {
+                                                dispatcher.dispatchAction(new ReparentNodeAction(dispatcher.getDocument(), layerDrag.id, drop.parent, drop.index));
+                                            }
+                                            setLayerDrag({ id: "", over: null, position: null });
+                                            refresh();
+                                        }}
+                                        onDragEnd={() => setLayerDrag({ id: "", over: null, position: null })}
+                                        onRename={name => {
+                                            // The SAME routed content edit the inspector's Name
+                                            // field uses, so a copy is refused here too.
+                                            const action = contentActionFor(dispatcher.getDocument(), id, { name });
+                                            if (action) dispatcher.dispatchAction(action);
                                             refresh();
                                         }}
                                         label={n.name || nodeTypeLabels[n.type] || n.type}
@@ -2140,18 +2174,37 @@ function TokensPanel({ dispatcher, refresh }: { dispatcher: ActionDispatcher; re
     );
 }
 
-function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout, inheritedHidden, inheritedLocked, onSelect, onToggle, onFlag, label }: {
+function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout, inheritedHidden, inheritedLocked, onSelect, onToggle, onFlag, label, dropHint, onDragStart, onDragOver, onDrop, onDragEnd, onRename }: {
     node: ReadonlyNode; depth: number; selected: boolean; collapsed: boolean; hasChildren: boolean;
     isAutoLayout: boolean;
     /** True when an ANCESTOR is hidden/locked — both inherit, so the row shows the effect
      *  without pretending the flag is set on this node. */
     inheritedHidden: boolean; inheritedLocked: boolean;
     onSelect: () => void; onToggle: () => void; onFlag: (flags: { hidden?: boolean; locked?: boolean }) => void; label: string;
+    /** Drag-to-reorder. `dropHint` is where the pointer currently is within THIS row, so the
+     *  row can draw the line that says what the release will do. */
+    dropHint: DropPosition | null;
+    onDragStart: () => void; onDragOver: (position: DropPosition) => void; onDrop: () => void; onDragEnd: () => void;
+    onRename: (name: string) => void;
 }) {
     const [hover, setHover] = useState(false);
+    const [renaming, setRenaming] = useState(false);
     const isGroup = hasChildren && (node.style.fill === "none" || !node.style.fill);
     return (
         <div
+            draggable={!renaming}
+            onDragStart={e => { e.dataTransfer.effectAllowed = "move"; onDragStart(); }}
+            onDragOver={e => {
+                e.preventDefault();
+                // Top and bottom eighths reorder; the middle reparents INTO the row. A row
+                // that cannot hold children never offers "inside", so the indicator never
+                // promises a drop that would be refused.
+                const r = e.currentTarget.getBoundingClientRect();
+                const t = (e.clientY - r.top) / r.height;
+                onDragOver(t < 0.3 ? "before" : t > 0.7 ? "after" : "inside");
+            }}
+            onDrop={e => { e.preventDefault(); onDrop(); }}
+            onDragEnd={onDragEnd}
             onClick={onSelect}
             onMouseEnter={() => setHover(true)}
             onMouseLeave={() => setHover(false)}
@@ -2164,6 +2217,11 @@ function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout,
                 // A hidden row stays LISTED but reads as absent — that is the whole difference
                 // between hiding and deleting, and the panel is where it has to be legible.
                 opacity: node.hidden || inheritedHidden ? 0.4 : 1,
+                // The drop indicator: a line where it would land, or a ring around the row it
+                // would go inside. Saying which of the two is about to happen is the whole job.
+                boxShadow: dropHint === "before" ? `inset 0 2px 0 ${UI.accent}`
+                    : dropHint === "after" ? `inset 0 -2px 0 ${UI.accent}`
+                    : dropHint === "inside" ? `inset 0 0 0 1px ${UI.accent}` : undefined,
                 borderLeft: selected ? "2px solid #4da3ff" : "2px solid transparent",
                 color: selected ? "#f0f6ff" : "#c8c8d8"
             }}
@@ -2178,7 +2236,24 @@ function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout,
             <span style={{ width: 12, textAlign: "center", color: selected ? "#9ecbff" : "#8a8aa5" }}>
                 {hasChildren ? (isGroup ? "🗀" : "▤") : (LAYER_ICONS[node.type] || "◦")}
             </span>
-            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+            {renaming ? (
+                <input
+                    autoFocus
+                    defaultValue={label}
+                    onClick={e => e.stopPropagation()}
+                    onBlur={e => { setRenaming(false); onRename(e.target.value); }}
+                    onKeyDown={e => {
+                        if (e.key === "Enter") { setRenaming(false); onRename((e.target as HTMLInputElement).value); }
+                        if (e.key === "Escape") setRenaming(false);   // abandon, keep the old name
+                    }}
+                    style={{ flex: 1, minWidth: 0, fontSize: 11, padding: "0 2px", background: UI.bg, color: UI.text, border: `1px solid ${UI.accent}`, borderRadius: 2 }}
+                />
+            ) : (
+                <span
+                    onDoubleClick={e => { e.stopPropagation(); setRenaming(true); }}
+                    style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >{label}</span>
+            )}
             {/* Hide and lock. Shown on hover or when SET, so the panel stays quiet but a
                 hidden/locked node always says so — a control you cannot see is a state you
                 cannot explain. An inherited flag is shown greyed and does nothing on click:

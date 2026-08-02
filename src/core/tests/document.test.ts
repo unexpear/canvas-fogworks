@@ -15,6 +15,7 @@ import { SetVariantAction, SetInstanceVariantAction } from "../actions/VariantAc
 import { SetSlotAction, SetSlotContentAction } from "../actions/SlotActions";
 import { SetNodeStateAction, SetActiveStateAction } from "../actions/StateActions";
 import { SetNodeFlagsAction } from "../actions/SetNodeFlagsAction";
+import { resolveLayerDrop } from "../../editor/layerDrop";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy , overrideTargetFor} from "../actions/nodeEdit";
@@ -9749,5 +9750,106 @@ describe("Layers: hidden and locked", () => {
         expect(src).toMatch(/onFlag\(\{ locked: !node\.locked \}\)/);
         expect(src).toMatch(/inheritedHidden \? "default" : "pointer"/);   // an inherited flag is not clickable here
         expect(src).toMatch(/walk\(n\.children, depth \+ 1, hiddenAbove \|\| !!n\.hidden, lockedAbove \|\| !!n\.locked\)/);
+    });
+});
+
+
+// ─── Layer drag: the arithmetic a drop resolves to ───
+describe("resolveLayerDrop", () => {
+    /** Roots [A, B, C]; B holds [B1, B2]; I is an instance. */
+    function dropDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        const mk = (id: string, kids: string[], parent: string | null, type = "core.rectangle") =>
+            doc.nodes.set(id, { id, type, parent, children: kids, geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#111111", opacity: 1 }, layout: {} } as never);
+        mk("A", [], null); mk("B", ["B1", "B2"], null); mk("C", [], null);
+        mk("B1", [], "B"); mk("B2", [], "B");
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "A" });
+        doc.rootNodeUuids = ["A", "B", "C", "I"];
+        return doc;
+    }
+
+    test("dropping on a row's EDGE reorders among that row's siblings", () => {
+        const doc = dropDoc();
+        expect(resolveLayerDrop(doc, "C", "A", "before")).toEqual({ parent: null, index: 0 });
+        expect(resolveLayerDrop(doc, "A", "C", "after")).toEqual({ parent: null, index: 2 });
+    });
+
+    test("moving DOWN within one list accounts for the node being detached first", () => {
+        // The off-by-one this function exists for: `applyMutations` removes the node before
+        // inserting it, so an index measured against the list as it looks NOW is one too high
+        // whenever the node is moving downwards. Dragging A after B must land it at 1, not 2.
+        const doc = dropDoc();
+        expect(resolveLayerDrop(doc, "A", "B", "after")).toEqual({ parent: null, index: 1 });
+        // …and moving UP needs no adjustment.
+        expect(resolveLayerDrop(doc, "C", "B", "before")).toEqual({ parent: null, index: 1 });
+    });
+
+    test("dropping in a row's MIDDLE reparents INTO it, appended", () => {
+        const doc = dropDoc();
+        expect(resolveLayerDrop(doc, "A", "B", "inside")).toEqual({ parent: "B", index: 2 });
+        expect(resolveLayerDrop(doc, "B1", "A", "inside")).toEqual({ parent: "A", index: 0 });
+    });
+
+    test("a move that changes nothing is REFUSED, so no undo step is pushed for it", () => {
+        const doc = dropDoc();
+        expect(resolveLayerDrop(doc, "A", "B", "before")).toBeNull();   // A is already right there
+        expect(resolveLayerDrop(doc, "A", "A", "after")).toBeNull();    // onto itself
+    });
+
+    test("dropping a node into its own subtree is refused — that is the cycle", () => {
+        const doc = dropDoc();
+        expect(resolveLayerDrop(doc, "B", "B1", "inside")).toBeNull();
+        expect(resolveLayerDrop(doc, "B", "B2", "before")).toBeNull();
+        // …and the ACTION refuses it too, which is the real guarantee.
+        const dispatcher = new ActionDispatcher(dropDoc());
+        expect(dispatcher.dispatchAction(new ReparentNodeAction(dispatcher.getDocument(), "B", "B1", 0)).success).toBe(false);
+    });
+
+    test("dropping INSIDE an instance is refused — it has no stored children to join", () => {
+        // An instance draws its master's subtree; a node parented to it would vanish from the
+        // picture entirely. Refusing beats swallowing it.
+        const doc = dropDoc();
+        expect(resolveLayerDrop(doc, "A", "I", "inside")).toBeNull();
+        expect(resolveLayerDrop(doc, "A", "I", "after")).toEqual({ parent: null, index: 3 });  // beside it is fine
+    });
+
+    test("a resolved drop, dispatched, produces exactly the order it promised", () => {
+        // The arithmetic is only right if the document ends up looking like the indicator said.
+        const dispatcher = new ActionDispatcher(dropDoc());
+        const drop = resolveLayerDrop(dispatcher.getDocument(), "A", "C", "after")!;
+        dispatcher.dispatchAction(new ReparentNodeAction(dispatcher.getDocument(), "A", drop.parent, drop.index));
+        expect(dispatcher.getDocument().rootNodeUuids).toEqual(["B", "C", "A", "I"]);
+
+        const into = resolveLayerDrop(dispatcher.getDocument(), "A", "B", "inside")!;
+        dispatcher.dispatchAction(new ReparentNodeAction(dispatcher.getDocument(), "A", into.parent, into.index));
+        expect(dispatcher.getDocument().nodes.get("B")!.children).toEqual(["B1", "B2", "A"]);
+        expect(dispatcher.getDocument().rootNodeUuids).toEqual(["B", "C", "I"]);
+    });
+
+    test("a damaged tree is refused rather than guessed at", () => {
+        const doc = dropDoc();
+        expect(resolveLayerDrop(doc, "A", "ghost", "before")).toBeNull();
+        expect(resolveLayerDrop(doc, "ghost", "A", "before")).toBeNull();
+    });
+
+    test("a cyclic PARENT chain does not hang the drop resolver", () => {
+        // The ancestor walk climbs `parent` links, which a hand-edited file can make circular.
+        // Not reachable through the actions, but this runs on every dragover — a hang here is a
+        // frozen app, not a wrong answer.
+        const doc = dropDoc();
+        doc.nodes.get("A")!.parent = "C";
+        doc.nodes.get("C")!.parent = "A";
+        expect(() => resolveLayerDrop(doc, "B", "A", "inside")).not.toThrow();
+        expect(resolveLayerDrop(doc, "B", "A", "inside")).toEqual({ parent: "A", index: 0 });
+    });
+
+    test("the panel offers drag AND rename, and shows only drops it would take", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/draggable=\{!renaming\}/);
+        expect(src).toMatch(/new ReparentNodeAction\(dispatcher\.getDocument\(\), layerDrag\.id, drop\.parent, drop\.index\)/);
+        // The indicator is gated on the SAME resolver the drop uses, so the two cannot disagree.
+        expect(src).toMatch(/const ok = layerDrag\.id && layerDrag\.id !== id[\s\S]{0,160}resolveLayerDrop\(/);
+        expect(src).toMatch(/onDoubleClick=\{e => \{ e\.stopPropagation\(\); setRenaming\(true\); \}\}/);
+        expect(src).toMatch(/contentActionFor\(dispatcher\.getDocument\(\), id, \{ name \}\)/);
     });
 });
