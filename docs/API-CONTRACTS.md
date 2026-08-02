@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v29 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v30 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -73,6 +73,16 @@ function mergeOverrides(base: InstanceOverride | undefined, patch: InstanceOverr
 // instance fills a slot inside a nested one — no second addressing scheme.
 function slotError(slot: unknown): string | null;                       // shared load + edit
 function slotContentError(type: string, slotContent: unknown): string | null;  // instances only; shared load + edit
+// STATES (Milestone 7, schema 30): what a node looks like in a named context. A state IS an
+// InstanceOverride — the same shape of statement — so it shares `overrideValueError`. Which
+// state shows is a DOCUMENT-level selection (`ProjectDocument.activeState`), like activeTheme.
+function overrideValueError(label: string, value: unknown): string | null;  // the per-VALUE half, shared by overrides AND states
+function statesError(states: unknown): string | null;                       // any node may carry states; shared load + edit
+function applyActiveState(doc: ReadonlyDocument): ReadonlyDocument;         // pure; SAME reference when nothing defines the active state
+// The scene as DISPLAYED — state first, then instances, so a master in its hover state makes
+// hovered copies. THE seam every consumer reads; calling expandInstances directly would skip
+// states, and a test asserts nothing outside Components does.
+function resolveScene(doc: ReadonlyDocument): ReadonlyDocument;
 function expandInstances(doc: ReadonlyDocument): ReadonlyDocument; // materializes instances as virtual children; SAME reference when there is nothing to expand
 // Per-instance OVERRIDES (schema 22, M6 slice 2): what one instance changes about its copy,
 // keyed by MASTER NODE ID. Applied during expansion at each level; a key matching no master

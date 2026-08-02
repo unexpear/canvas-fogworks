@@ -32,7 +32,7 @@
  */
 
 import { ProjectDocument, ReadonlyDocument } from "./Document";
-import { dimensionError, Geometry, Layout, layoutError, mergeLayout, Node, slotContentError, Style, styleError, srcValueError, Transform, transformError } from "./Node";
+import { dimensionError, Geometry, Layout, layoutError, mergeLayout, Node, slotContentError, STATES_MAX, Style, styleError, srcValueError, Transform, transformError, variantNameError } from "./Node";
 import { ReadonlyNode } from "./SceneGraph";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
@@ -270,6 +270,93 @@ function isPlain(v: unknown): v is Record<string, unknown> {
  * can never smuggle in a value the node itself could not hold. A key that matches NO master
  * node is deliberately allowed: it is inert, exactly like a dangling `componentId` or `$token`.
  */
+/**
+ * The per-VALUE half of override validation — what one `InstanceOverride` may hold.
+ *
+ * Extracted so STATES (schema 30) obey exactly the same rules: a state is the same shape of
+ * statement about a node ("in this context, these fields differ"), and two copies of these
+ * rules would drift the first time a field is added — which is precisely how `mergeOverrides`
+ * silently lost `layout` for a schema.
+ *
+ * `label` prefixes every message, so the caller decides whether this reads as an override or
+ * a state.
+ */
+export function overrideValueError(label: string, value: unknown): string | null {
+    if (!isPlain(value)) return `${label} must be an object`;
+    for (const field of Object.keys(value)) {
+        if (!OVERRIDE_FIELDS.has(field)) return `${label} has an unknown field "${field}"`;
+    }
+    const o = value as InstanceOverride;
+    if (o.geometry !== undefined) {
+        if (!isPlain(o.geometry)) return `${label} geometry must be an object`;
+        for (const [f, v] of Object.entries(o.geometry)) {
+            if (!GEOMETRY_FIELDS.has(f)) return `${label} geometry has an unknown field "${f}"`;
+            if (typeof v !== "number" || !Number.isFinite(v)) return `${label} geometry.${f} must be a finite number`;
+        }
+        // Sizes obey the same floor a STORED node's do. The per-TYPE rule (`dimensionError`)
+        // cannot run here — this validates a bare value with no document to resolve a type
+        // against — but a negative size is invalid for EVERY type, so reject that much rather
+        // than let it hold what no node could. The type-aware half runs in
+        // `overrideAgainstMasterError`, which callers holding the document add on top.
+        const { width, height } = o.geometry as { width?: number; height?: number };
+        if (width !== undefined && width < 0) return `${label} geometry.width must be >= 0`;
+        if (height !== undefined && height < 0) return `${label} geometry.height must be >= 0`;
+    }
+    // Every remaining field goes through the SAME validator its stored counterpart uses, so
+    // this can never hold a value the node itself could not — the rule that keeps a detach
+    // (which bakes overrides into stored nodes) loadable.
+    if (o.style !== undefined) {
+        if (!isPlain(o.style)) return `${label} style must be an object`;
+        const e = styleError(o.style);
+        if (e) return `${label} ${e}`;
+    }
+    if (o.text !== undefined && typeof o.text !== "string") return `${label} text must be a string`;
+    if (o.src !== undefined) {
+        const e = srcValueError(o.src);
+        if (e) return `${label} ${e}`;
+    }
+    if (o.layout !== undefined) {
+        if (!isPlain(o.layout)) return `${label} layout must be an object`;
+        const e = layoutError(o.layout);
+        if (e) return `${label} ${e}`;
+    }
+    if (o.transform !== undefined) {
+        if (!isPlain(o.transform)) return `${label} transform must be an object`;
+        const e = transformError(o.transform);
+        if (e) return `${label} ${e}`;
+    }
+    if (o.slotContent !== undefined) {
+        const e = slotContentError("core.instance", o.slotContent);
+        if (e) return `${label} ${e}`;
+    }
+    return null;
+}
+
+
+
+/**
+ * Validity of a node's `states` (Milestone 7, schema 30), SHARED by the load path
+ * (`Integrity`) and the edit path (`SetNodeStateAction`).
+ *
+ * ANY node may carry states — this is not an instance feature. A state nobody activates simply
+ * never shows, the same way an unfilled slot draws its default, so nothing here has to resolve.
+ * It lives beside `overrideValueError` because that is the rule it reuses: a state and an
+ * override are the same shape of statement about a node.
+ */
+export function statesError(states: unknown): string | null {
+    if (states === undefined) return null;
+    if (!isPlain(states)) return "states must be an object";
+    const entries = Object.entries(states);
+    if (entries.length > STATES_MAX) return `states must have at most ${STATES_MAX} entries`;
+    for (const [name, value] of entries) {
+        const ne = variantNameError("state name", name, true);
+        if (ne) return ne;
+        const ve = overrideValueError(`state "${name}"`, value);
+        if (ve) return ve;
+    }
+    return null;
+}
+
 export function overridesError(type: string, overrides: unknown): string | null {
     if (overrides === undefined) return null;
     if (type !== "core.instance") return "only a core.instance node may carry overrides";
@@ -286,59 +373,8 @@ export function overridesError(type: string, overrides: unknown): string | null 
         if (key.split(VIRTUAL_ID_SEP).some(seg => seg.length === 0)) {
             return `override key "${key}" has an empty path segment`;
         }
-        if (!isPlain(value)) return `override "${key}" must be an object`;
-        for (const field of Object.keys(value)) {
-            if (!OVERRIDE_FIELDS.has(field)) return `override "${key}" has an unknown field "${field}"`;
-        }
-        const o = value as InstanceOverride;
-        if (o.geometry !== undefined) {
-            if (!isPlain(o.geometry)) return `override "${key}" geometry must be an object`;
-            for (const [f, v] of Object.entries(o.geometry)) {
-                if (!GEOMETRY_FIELDS.has(f)) return `override "${key}" geometry has an unknown field "${f}"`;
-                if (typeof v !== "number" || !Number.isFinite(v)) return `override "${key}" geometry.${f} must be a finite number`;
-            }
-            // Sizes obey the same floor a STORED node's do. The per-TYPE rule (`dimensionError`)
-            // can't run here — the override is keyed by master node id and validated without the
-            // document, so the master's type is unknown — but a negative size is invalid for every
-            // type, so reject that much rather than let an override hold what no node could. The
-            // type-aware half runs in `overrideDimensionError`, which callers holding the document
-            // add on top; both paths run it, so neither side of the seam validates less.
-            const { width, height } = o.geometry as { width?: number; height?: number };
-            if (width !== undefined && width < 0) return `override "${key}" geometry.width must be >= 0`;
-            if (height !== undefined && height < 0) return `override "${key}" geometry.height must be >= 0`;
-        }
-        if (o.style !== undefined) {
-            if (!isPlain(o.style)) return `override "${key}" style must be an object`;
-            const e = styleError(o.style);           // the SAME rule a stored style obeys
-            if (e) return `override "${key}" ${e}`;
-        }
-        if (o.text !== undefined && typeof o.text !== "string") return `override "${key}" text must be a string`;
-        if (o.src !== undefined) {
-            // The SAME rule a stored src obeys, minus the part that needs the master's type
-            // (see `overrideAgainstMasterError`). Validating this as merely "a string" let an
-            // override hold a source no node may hold, which a detach then baked into the
-            // document as a stored node — producing a file the loader refuses.
-            const e = srcValueError(o.src);
-            if (e) return `override "${key}" ${e}`;
-        }
-        // Layout and transform go through the SAME validators their stored counterparts use,
-        // so an override cannot hold a layout or transform the node itself could not — the
-        // rule that keeps a detach (which bakes overrides into stored nodes) loadable.
-        if (o.layout !== undefined) {
-            if (!isPlain(o.layout)) return `override "${key}" layout must be an object`;
-            const e = layoutError(o.layout);
-            if (e) return `override "${key}" ${e}`;
-        }
-        if (o.transform !== undefined) {
-            if (!isPlain(o.transform)) return `override "${key}" transform must be an object`;
-            const e = transformError(o.transform);
-            if (e) return `override "${key}" ${e}`;
-        }
-        if (o.slotContent !== undefined) {
-            // The SAME rule a stored instance's slot content obeys.
-            const e = slotContentError("core.instance", o.slotContent);
-            if (e) return `override "${key}" ${e}`;
-        }
+        const ve = overrideValueError(`override "${key}"`, value);
+        if (ve) return ve;
     }
     return null;
 }
@@ -595,4 +631,58 @@ export function expandInstances(doc: ReadonlyDocument): ReadonlyDocument {
         activeTheme: doc.activeTheme
     };
     return expanded;
+}
+
+/**
+ * Apply the document's ACTIVE STATE (Milestone 7, schema 30) — a pure pass returning a derived
+ * document in which every node that defines the active state shows it.
+ *
+ * Modelled on `activeTheme`: one document-level selection, resolved at display time, nothing
+ * persisted about which state a node is "currently" in. A node that does not define the active
+ * state is returned by REFERENCE, and a document where nothing defines it returns unchanged —
+ * so a state-free document pays nothing, exactly as an instance-free one does.
+ *
+ * States apply to STORED nodes, before expansion, so a master in its hover state produces
+ * hovered copies. An instance's own state applies to the instance node itself.
+ */
+export function applyActiveState(doc: ReadonlyDocument): ReadonlyDocument {
+    const active = doc.activeState;
+    if (typeof active !== "string" || active.length === 0) return doc;
+
+    let any = false;
+    doc.nodes.forEach(n => { if (n.states?.[active]) any = true; });
+    if (!any) return doc;
+
+    const nodes = new Map<string, Node>();
+    doc.nodes.forEach((n, id) => {
+        const state = n.states?.[active];
+        // `materializeNode` is the ONE place a node and an override are combined, so a state
+        // lands exactly as an override does — including `mergeLayout`'s exclusivity and the
+        // root-copy rules. `isRoot: false` because this node is not being re-parented: it keeps
+        // its own position and its own constraints.
+        nodes.set(id, state ? materializeNode(n as Node, state, false, id, n.parent ?? null) : (n as Node));
+        if (state) nodes.get(id)!.children = [...n.children];   // materializeNode empties children
+    });
+
+    return {
+        version: doc.version,
+        metadata: doc.metadata as ProjectDocument["metadata"],
+        nodes,
+        rootNodeUuids: [...doc.rootNodeUuids],
+        variables: doc.variables as ProjectDocument["variables"],
+        activeTheme: doc.activeTheme,
+        activeState: doc.activeState
+    } as ProjectDocument;
+}
+
+/**
+ * The scene as it should be DISPLAYED: the active state applied, then instances expanded.
+ *
+ * This is the seam every consumer reads — renderer, geometry, tools, inspector. Order matters:
+ * states resolve on STORED nodes first, so a master in its hover state produces hovered copies;
+ * expanding first would leave every copy showing the base state. Calling `expandInstances`
+ * directly outside this module would silently skip states, so a test asserts nothing does.
+ */
+export function resolveScene(doc: ReadonlyDocument): ReadonlyDocument {
+    return expandInstances(applyActiveState(doc));
 }

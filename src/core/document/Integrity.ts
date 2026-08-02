@@ -12,8 +12,8 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError, layoutError, dimensionError, pathError, srcError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError } from "./Node";
-import { componentError, overrideAgainstMasterError, overridesError } from "./Components";
+import { transformError, layoutError, dimensionError, pathError, srcError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError } from "./Node";
+import { componentError, overrideAgainstMasterError, overridesError, statesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
 
 function checkNodeRanges(node: ReadonlyNode): void {
@@ -73,6 +73,11 @@ function checkNodeRanges(node: ReadonlyNode): void {
     if (slotErr) throw new Error(`Invalid document: node "${node.id}" ${slotErr}.`);
     const scErr = slotContentError(node.type, node.slotContent);
     if (scErr) throw new Error(`Invalid document: node "${node.id}" ${scErr}.`);
+    // States (M7, schema 30). Declared since M0 as `{[key: string]: any}` and validated by
+    // nothing — the dead-but-consumed field the schema doc warns against. Now it obeys the
+    // same per-field rules an instance override does.
+    const stErr = statesError(node.states);
+    if (stErr) throw new Error(`Invalid document: node "${node.id}" ${stErr}.`);
 }
 
 /**
@@ -91,6 +96,13 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
     if (varErr) throw new Error(`Invalid document: ${varErr}.`);
     if (!(THEME_MODES as readonly string[]).includes(doc.activeTheme as string)) {
         throw new Error(`Invalid document: activeTheme must be one of ${THEME_MODES.join("/")} (got "${String(doc.activeTheme)}").`);
+    }
+    // `activeState` (M7) is free-form — any name a node might define — so it is bounded and
+    // reserved-key-checked rather than enumerated. Naming a state NOTHING defines is fine:
+    // the document simply shows its base, the same way an unknown theme never could.
+    if (doc.activeState !== undefined) {
+        const e = variantNameError("activeState", doc.activeState, true);
+        if (e) throw new Error(`Invalid document: ${e}.`);
     }
 
     // 1. Per-node ranges — and no node may claim the reserved document-delta id (it would

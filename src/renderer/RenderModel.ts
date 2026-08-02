@@ -26,7 +26,7 @@ import { ReadonlyDocument } from "../core/document/Document";
 import { PathCommand, Shadow } from "../core/document/Node";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
-import { expandInstances } from "../core/document/Components";
+import { resolveScene } from "../core/document/Components";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
 import { selectionHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
@@ -474,7 +474,7 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
     //    rotatable — each affordance gated on its own eligibility, never per-node handles.
     // Resolved on the EXPANDED tree so a selected instance COPY keeps its handles (a virtual id
     // is absent from the stored map, and `selectionRoots` drops what it cannot resolve).
-    const roots = selectionRoots(expandInstances(doc), state.selectedNodeIds);
+    const roots = selectionRoots(resolveScene(doc), state.selectedNodeIds);
     if (roots.length >= 2) {
         const gb = selectionBounds(computed, roots);
         if (gb && isFiniteRect(gb)) {
@@ -602,7 +602,7 @@ export function buildRenderModel(
     // the same reference when there is nothing to expand, so an instance-free document pays
     // nothing; running it twice (engine + model) is deliberate — the alternative, threading a
     // document through `ComputedState`, would widen a frozen contract for a derived value.
-    const effective = expandInstances(doc);
+    const effective = resolveScene(doc);
     const content = buildContent(effective, state.computed, z, visible);
     return {
         viewport: state.viewport,

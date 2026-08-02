@@ -12,7 +12,7 @@ import { Geometry } from "../../core/document/Node";
 import { selectionRoots } from "../../core/document/SceneGraph";
 import { isAbsolute, isLayoutContainer } from "../../core/geometry/LayoutEngine";
 import { computeGeometry, selectionBounds } from "../../core/geometry/GeometryEngine";
-import { expandInstances, isVirtualId } from "../../core/document/Components";
+import { resolveScene, isVirtualId } from "../../core/document/Components";
 import { computeSnap, snapTargetsExcludingSubtrees, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect } from "../../core/geometry/Matrix";
 import { Tool } from "./ToolController";
@@ -56,7 +56,7 @@ export class MoveTool implements Tool {
         // and its ancestry — which `selectionRoots` walks — only exists once expanded. The
         // commit routes each id through `geometryActionFor`, which turns a virtual node's move
         // into a per-instance override rather than a (nonexistent) stored-geometry edit.
-        const eff = expandInstances(doc);
+        const eff = resolveScene(doc);
         for (const id of selectionRoots(eff, this.editorState.selectedNodeIds)) {
             const node = eff.nodes.get(id);
             if (!node) continue;
@@ -162,7 +162,7 @@ export class MoveTool implements Tool {
         // from the stored map, and treating that as "deleted mid-drag" would silently abandon
         // the drag on its first frame. `computeGeometry` applies pending patches keyed by
         // virtual id just as it does for stored ones, so the preview needs nothing special.
-        const eff = expandInstances(doc);
+        const eff = resolveScene(doc);
         for (const id of [...this.nodeStartPositions.keys()]) {
             const node = eff.nodes.get(id);
             const start = this.nodeStartPositions.get(id);

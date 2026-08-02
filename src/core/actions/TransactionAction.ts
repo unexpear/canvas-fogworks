@@ -90,7 +90,11 @@ export class TransactionAction extends Action {
         // The LAST document-level (variables/theme) delta wins. Each component action builds
         // its delta from the WORKING document at execute time, so a later "switch theme"
         // already carries an earlier "set variable" — last-wins loses nothing.
-        let documentDelta: Extract<NodeDelta, { kind: "variables" }> | null = null;
+        // Document-level deltas travel under ONE key but are not one VALUE: the variable store
+        // and the active state are independent, so a transaction touching both must keep both.
+        // A single slot would silently drop whichever came first.
+        let variablesDelta: Extract<NodeDelta, { kind: "variables" }> | null = null;
+        let activeStateDelta: Extract<NodeDelta, { kind: "activeState" }> | null = null;
 
         for (const action of this.componentActions) {
             action.rebind(working);
@@ -116,7 +120,9 @@ export class TransactionAction extends Action {
                     addedIds.delete(nodeId);
                     propertyEdits.delete(nodeId);
                 } else if (delta.kind === "variables") {
-                    documentDelta = delta;
+                    variablesDelta = delta;
+                } else if (delta.kind === "activeState") {
+                    activeStateDelta = delta;
                 } else {
                     const prev = propertyEdits.get(nodeId) ?? { kind: "patch" as const };
                     propertyEdits.set(nodeId, mergePatch(prev, delta));
@@ -148,7 +154,11 @@ export class TransactionAction extends Action {
             finalDeltas.set(id, { kind: "delete" });
         }
         // The net document-level (variables/theme) state, if any component touched it.
-        if (documentDelta) finalDeltas.set(DOCUMENT_DELTA_KEY, documentDelta);
+        // Only one can occupy the key, so a transaction doing BOTH is refused rather than
+        // silently losing one — no caller does it today, and a wrong answer would be invisible.
+        if (variablesDelta && activeStateDelta) return { updatedNodeIds: new Set(), propertyDeltas: new Map(), success: false };
+        if (variablesDelta) finalDeltas.set(DOCUMENT_DELTA_KEY, variablesDelta);
+        if (activeStateDelta) finalDeltas.set(DOCUMENT_DELTA_KEY, activeStateDelta);
 
         return {
             // The document-delta sentinel is NOT a node id — leaking it would seed the

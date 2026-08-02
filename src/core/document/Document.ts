@@ -159,7 +159,7 @@ export const CURRENT_VERSION: string =
  *         a schema-21 build would IGNORE the overrides and render every instance identically,
  *         silently misstating the document.
  */
-export const SCHEMA_VERSION = "29";
+export const SCHEMA_VERSION = "30";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
@@ -205,7 +205,10 @@ export interface ProjectDocument {
      * override wins over its base value. Persisted, so a document reopens in the theme it was
      * saved in; changed only through an action (undoable). Absent on the wire = "light".
      */
-    activeTheme: ThemeMode;
+    activeTheme: ThemeMode;
+    /** The named STATE every node resolves against (Milestone 7, schema 30) — the same
+     *  document-level-selection shape as `activeTheme`. Absent/empty = the base state. */
+    activeState?: string;
 }
 
 /**

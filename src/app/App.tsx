@@ -12,12 +12,13 @@ import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY 
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor } from "../core/actions/nodeEdit";
-import { expandInstances, isVirtualId } from "../core/document/Components";
+import { resolveScene, isVirtualId } from "../core/document/Components";
 import { SetActiveThemeAction, SetVariableAction, DeleteVariableAction } from "../core/actions/VariableActions";
 import { Variable, VariableStore, variableKeyError, tokenRefFor, tokenKeyOf } from "../core/document/Variables";
-import { TrackSize, newGridPatch, VariantKey, variantError, slotError } from "../core/document/Node";
+import { TrackSize, newGridPatch, VariantKey, variantError, slotError, variantNameError } from "../core/document/Node";
 import { SetVariantAction, SetInstanceVariantAction } from "../core/actions/VariantActions";
 import { SetSlotAction, SetSlotContentAction } from "../core/actions/SlotActions";
+import { SetNodeStateAction, SetActiveStateAction } from "../core/actions/StateActions";
 import { variantProperties, resolveVariantMaster, masterSubtreeIds } from "../core/document/Components";
 import { parseTrackList, formatTrackList } from "../core/document/TrackList";
 import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
@@ -345,7 +346,7 @@ export function App() {
                 if (sel.length === 0) return false;
                 // Routed per node, so nudging an instance COPY writes an override; and one
                 // transaction, so holding an arrow key does not fill the history with steps.
-                const eff = expandInstances(doc);
+                const eff = resolveScene(doc);
                 const moves = selectionRoots(eff, sel).flatMap(id => {
                     const g = eff.nodes.get(id)?.geometry;
                     if (!g) return [];
@@ -561,7 +562,7 @@ export function App() {
     // instance's COPY (a virtual node, alt-clicked). Its edits route through `nodeEdit`, which
     // turns them into per-instance overrides; a raw action would target a node that isn't in the
     // stored document and fail validation, looking like an input that does nothing.
-    const node = selectedNodeId ? expandInstances(dispatcher.getDocument()).nodes.get(selectedNodeId) : undefined;
+    const node = selectedNodeId ? resolveScene(dispatcher.getDocument()).nodes.get(selectedNodeId) : undefined;
     /** Dispatch a geometry/style edit for the selected node, routed for stored vs instance copy. */
     const editSelected = (patch: { geometry?: Partial<Node["geometry"]>; style?: Partial<Node["style"]> }) => {
         if (!selectedNodeId) return;
@@ -629,14 +630,14 @@ export function App() {
      *  apply depends on this, and offering both sets at once would offer dead controls. */
     const parentIsContainer = (() => {
         if (!node?.parent) return false;
-        const parent = expandInstances(dispatcher.getDocument()).nodes.get(node.parent);
+        const parent = resolveScene(dispatcher.getDocument()).nodes.get(node.parent);
         return !!parent && (parent.layout.container !== undefined || parent.layout.grid !== undefined);
     })();
 
     /** …and specifically a GRID parent, which offers spans where a flex parent offers grow. */
     const parentIsGrid = (() => {
         if (!node?.parent) return false;
-        const parent = expandInstances(dispatcher.getDocument()).nodes.get(node.parent);
+        const parent = resolveScene(dispatcher.getDocument()).nodes.get(node.parent);
         return !!parent && parent.layout.grid !== undefined;
     })();
 
@@ -849,6 +850,30 @@ export function App() {
                 >
                     Theme: {dispatcher.getDocument().activeTheme === "light" ? "Light" : "Dark"}
                 </button>
+                {/* Which STATE the whole document shows (M7) — the same document-level
+                    selection shape as the theme, and placed beside it for that reason.
+                    Only appears once something defines a state; otherwise it would be a
+                    control with exactly one option. */}
+                {(() => {
+                    const d = dispatcher.getDocument();
+                    const names = new Set<string>();
+                    d.nodes.forEach(n => { for (const k of Object.keys(n.states ?? {})) names.add(k); });
+                    if (names.size === 0) return null;
+                    return (
+                        <select
+                            title="Show every node in this named state"
+                            value={d.activeState ?? ""}
+                            onChange={e => {
+                                dispatcher.dispatchAction(new SetActiveStateAction(dispatcher.getDocument(), e.target.value || null));
+                                refresh();
+                            }}
+                            style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: d.activeState ? UI.accentSoft : "transparent", color: "#ccc", border: `1px solid ${UI.line}`, borderRadius: 3, cursor: "pointer" }}
+                        >
+                            <option value="">State: base</option>
+                            {[...names].sort().map(n => <option key={n} value={n}>State: {n}</option>)}
+                        </select>
+                    );
+                })()}
                                 <button
                     title="Design tokens — named colours and numbers, with per-theme values"
                     onClick={() => setShowTokens(v => !v)}
@@ -995,6 +1020,11 @@ export function App() {
                                 instance puts in it. */}
                             <InspectorSection title="Slots">
                                 <SlotSection node={node as Node} dispatcher={dispatcher} refresh={refresh} />
+                            </InspectorSection>
+
+                            {/* States (M7): what this node looks like in a named context. */}
+                            <InspectorSection title="States">
+                                <StatesSection node={node as Node} dispatcher={dispatcher} refresh={refresh} />
                             </InspectorSection>
 
                             <InspectorSection title="Position & size">
@@ -1709,6 +1739,76 @@ function TokenSelect({ store, value, onPick }: { store: VariableStore; value: st
  * instance: one picker per slot the master defines, choosing which node to draw there. The
  * slot keeps supplying the box; its own children are the default whenever nothing fills it.
  */
+
+/**
+ * The STATES section — what a node looks like in a named context.
+ *
+ * Defining one CAPTURES the node's current appearance under a name: you style the node the way
+ * you want it to look while hovered, press "Capture", and that becomes the hover state. That is
+ * the only authoring gesture that does not need a second inspector — the node in front of you
+ * IS the editor for the state.
+ */
+function StatesSection({ node, dispatcher, refresh }: { node: Node; dispatcher: ActionDispatcher; refresh: () => void }) {
+    const [newState, setNewState] = useState("");
+    const doc = dispatcher.getDocument();
+    const states = node.states ?? {};
+    const active = doc.activeState;
+
+    return (
+        <>
+            <div style={{ color: UI.textFaint, fontSize: 10, marginBottom: 4 }}>
+                {active
+                    ? `Showing “${active}”. Capture stores this node's current look under a name.`
+                    : "Capture stores this node's current look under a name; the toolbar switches between them."}
+            </div>
+
+            {Object.keys(states).sort().map(name => (
+                <div key={name} style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 4 }}>
+                    <span style={{ flex: 1, color: name === active ? UI.accent : UI.text, fontSize: 11 }}>{name}</span>
+                    <button
+                        title={`Re-capture this node's current look as "${name}"`}
+                        onClick={() => {
+                            dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), node.id, name, { style: { ...node.style } }));
+                            refresh();
+                        }}
+                        style={{ fontSize: 10, padding: "1px 5px", background: "transparent", color: UI.textDim, border: `1px solid ${UI.line}`, borderRadius: 2, cursor: "pointer" }}
+                    >⟳</button>
+                    <button
+                        title={`Remove the "${name}" state from this node`}
+                        onClick={() => {
+                            dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), node.id, name, null));
+                            refresh();
+                        }}
+                        style={{ fontSize: 10, padding: "1px 5px", background: "transparent", color: UI.textDim, border: `1px solid ${UI.line}`, borderRadius: 2, cursor: "pointer" }}
+                    >✕</button>
+                </div>
+            ))}
+
+            <input
+                type="text"
+                value={newState}
+                placeholder="capture as… (e.g. hover)"
+                onChange={e => setNewState(e.target.value)}
+                onKeyDown={e => {
+                    if (e.key !== "Enter") return;
+                    const name = newState.trim();
+                    if (!name) return;
+                    // The shared name rule is the authority; the field only explains a refusal.
+                    const err = variantNameError("state name", name, true);
+                    if (err) { window.alert(`That state can't be used: ${err}.`); return; }
+                    dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), node.id, name, { style: { ...node.style } }));
+                    setNewState("");
+                    refresh();
+                }}
+                style={{
+                    width: "100%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
+                    background: UI.bg, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 2
+                }}
+            />
+        </>
+    );
+}
+
 function SlotSection({ node, dispatcher, refresh }: { node: Node; dispatcher: ActionDispatcher; refresh: () => void }) {
     const doc = dispatcher.getDocument();
 

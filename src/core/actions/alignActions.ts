@@ -24,7 +24,7 @@ import { ReadonlyDocument } from "../document/Document";
 import { TransactionAction } from "./TransactionAction";
 import { geometryActionFor } from "./nodeEdit";
 import { selectionRoots } from "../document/SceneGraph";
-import { expandInstances } from "../document/Components";
+import { resolveScene } from "../document/Components";
 import { ComputedState } from "../geometry/GeometryEngine";
 import { isTranslationOnlyChain } from "../geometry/Snapping";
 import { isAbsolute, isLayoutContainer } from "../geometry/LayoutEngine";
@@ -33,7 +33,7 @@ import { Rect } from "../geometry/Matrix";
 
 /** The nodes an align/distribute may actually move, with their world boxes — in a stable order. */
 function movable(doc: ReadonlyDocument, computed: ComputedState, nodeIds: readonly string[]): { ids: string[]; boxes: Rect[] } {
-    const eff = expandInstances(doc);
+    const eff = resolveScene(doc);
     const ids: string[] = [];
     const boxes: Rect[] = [];
     for (const id of selectionRoots(eff, [...nodeIds])) {
@@ -53,7 +53,7 @@ function movable(doc: ReadonlyDocument, computed: ComputedState, nodeIds: readon
 
 /** Build one transaction from the computed placements, or null when nothing moves. */
 function commit(doc: ReadonlyDocument, ids: string[], boxes: Rect[], placements: Placements, label: string): Action | null {
-    const eff = expandInstances(doc);
+    const eff = resolveScene(doc);
     const actions: Action[] = [];
     placements.forEach((p, i) => {
         const id = ids[i];

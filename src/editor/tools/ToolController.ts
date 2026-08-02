@@ -13,7 +13,7 @@ import { EditorState, panBy, screenToWorld } from "../EditorState";
 import { computeGeometry, ComputedState, selectionBounds } from "../../core/geometry/GeometryEngine";
 import { handleAtPoint, groupHandleAtPoint } from "../../core/geometry/SelectionHandles";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupScaleInput } from "../../core/geometry/GroupTransform";
-import { expandInstances } from "../../core/document/Components";
+import { resolveScene } from "../../core/document/Components";
 import { geometryActionFor, isHandleOffered, isEditableNode, transformActionFor } from "../../core/actions/nodeEdit";
 import { snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect } from "../../core/geometry/Matrix";
@@ -134,7 +134,7 @@ export class ToolController {
             computed = computeGeometry(doc, this.editorState.pendingGeometry);
             // Roots resolved on the EXPANDED tree so a selected instance COPY survives (a virtual
             // id isn't in the stored map, and `selectionRoots` drops what it can't resolve).
-            const roots = selectionRoots(expandInstances(doc), sel);
+            const roots = selectionRoots(resolveScene(doc), sel);
 
             if (roots.length >= 2) {
                 // Group: the rotate knob (a rotatable group) and the corner handles (a
@@ -163,7 +163,7 @@ export class ToolController {
                 // Resolved against the EXPANDED document so an instance COPY's handles work: its
                 // geometry (master + any existing override) is only visible there. The resize
                 // COMMIT routes through `geometryActionFor`, which writes an override for it.
-                const node = hit ? expandInstances(doc).nodes.get(hit.nodeId) : undefined;
+                const node = hit ? resolveScene(doc).nodes.get(hit.nodeId) : undefined;
                 if (hit && c && node) {
                     if (!isHandleOffered(doc, hit.nodeId, hit.handle)) {
                         // An instance COPY offers only the handles whose edit it can record: no
@@ -282,7 +282,7 @@ export class ToolController {
             // Liveness against the EXPANDED tree: an instance COPY is legitimately absent from the
             // stored map, and reading that as "deleted mid-drag" aborts the resize on its very
             // first frame — the same trap MoveTool's preview loop had.
-            if (!expandInstances(doc).nodes.has(this.resizeNodeId)) { this.resetResize(); this.refresh(); return; }
+            if (!resolveScene(doc).nodes.has(this.resizeNodeId)) { this.resetResize(); this.refresh(); return; }
 
             // Alignment snapping: pull the DRAGGED corner (the fixed corner stays put) onto a
             // nearby target edge/centre, then recompute the box from the adjusted delta. The corner
@@ -330,7 +330,7 @@ export class ToolController {
             // selected instance COPY, so the pointer would stay an arrow over handles that ARE
             // drawn and ARE grabbable — and a MIXED selection would take the single-root branch
             // here while the press takes the group branch, promising a grab that doesn't exist.
-            const roots = selectionRoots(expandInstances(doc), sel);
+            const roots = selectionRoots(resolveScene(doc), sel);
             // Match onMouseDown's picking exactly: each group affordance is gated on its own
             // eligibility — so the hover cursor reflects what a press would actually grab.
             if (roots.length >= 2) {

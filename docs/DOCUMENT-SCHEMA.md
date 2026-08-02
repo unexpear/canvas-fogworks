@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v29 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v30 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -15,6 +15,7 @@ interface ProjectDocument {
   nodes: Map<string, Node>;        // UUID → Node, O(1) lookup
   rootNodeUuids: string[];         // top-level nodes, in order
   variables: VariableStore;        // design tokens — LIVE at schema 19 (see VariableStore below)
+  activeState?: string;            // the named STATE every node resolves against (M7, schema 30); absent = base
   activeTheme: ThemeMode;          // "light" | "dark" — the mode token resolution reads (schema 19)
 }
 
@@ -69,7 +70,7 @@ interface Node {
   geometry: Geometry;
   style: Style;
   layout: Layout;
-  states?: Record<string, StateDefinition>; // reserved for Milestone 7
+  states?: Record<string, StateDefinition>; // named STATES (M7, schema 30) — LIVE; a StateDefinition IS an InstanceOverride
   text?: string;                    // core.text
   src?: string;                     // core.image — URL, relative path, or a data:image/* URL (schema 23: srcError)
   path?: PathCommand[];             // core.path (absent = empty path, draws nothing)
@@ -149,7 +150,7 @@ interface LayoutGrid {               // children auto-flow row-major into cells 
   columnGap?: number; rowGap?: number; padding?: number;  // >= 0
 }
 
-interface StateDefinition { [key: string]: any; } // reserved for Milestone 7
+type StateDefinition = InstanceOverride;  // same shape of statement: "in this context, these fields differ"
 ```
 
 A variant SET has no object of its own — it is the masters that name it, so tagging a node
@@ -166,6 +167,14 @@ instance's own master; `OI::IM` names a node inside the expansion of the nested 
 on the owning STORED instance — a virtual instance node cannot hold one — so this is a
 question of addressing, not of storage. A path that resolves to nothing is inert, like any
 dangling key, and `resolveOverridePath` is what the type-aware validator walks.
+
+A STATE says what a node looks like in a named context — `hover`, `pressed`, `error` (M7,
+schema 30). `activeState` selects one for the WHOLE document, exactly as `activeTheme` selects
+a token mode: one choice, resolved at display time, with nothing persisted about a node being
+"currently" hovered. `resolveScene` applies states to STORED nodes and THEN expands instances,
+so a master in its hover state produces hovered copies; the other order would leave every copy
+showing the base. A node that does not define the active state is untouched, and a document
+where nothing defines it is returned unchanged.
 
 A SLOT is a named hole a master leaves for its instances (schema 29). The slot node supplies
 the BOX — position, size, layout — and its own children are the DEFAULT content; an instance's
@@ -651,7 +660,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"27"`; chain tail: …17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing, drops unvalidatable entries — 19→20 number-token radius/fontSize (pass-through), 20→21 components: pass-through for the new type/field but it RENAMES stored ids containing the now-reserved `::`, 21→22 per-instance overrides (pass-through), 22→23 the image `src` rule: DROPS a src the new `srcError` refuses so an older file still opens, 23→24 the same rule reaching a per-instance OVERRIDE `src`: drops the offending entry so the copy just shows the master's source, 24→25 `Style.strokeWidth` (pass-through: a NEW optional field, so nothing previously-valid becomes invalid), 25→26 `layout`/`transform` on a per-instance override (pass-through, same reason), 26→27 variants: `Node.variant` + `Node.variants` (pass-through — two new optional fields), 27→28 override keys became PATHS (pass-through — every old key is a one-segment path — but required in the other direction, since a schema-27 build REJECTS a key containing `::`), 28→29 slots: `Node.slot` + `Node.slotContent` (pass-through — an old build would draw the slot's DEFAULT children instead of the fill)) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (currently `"27"`; chain tail: …17→18 effects, 18→19 design tokens — the first migration with CONTENT: stamps `activeTheme`, coerces legacy string-spacing, drops unvalidatable entries — 19→20 number-token radius/fontSize (pass-through), 20→21 components: pass-through for the new type/field but it RENAMES stored ids containing the now-reserved `::`, 21→22 per-instance overrides (pass-through), 22→23 the image `src` rule: DROPS a src the new `srcError` refuses so an older file still opens, 23→24 the same rule reaching a per-instance OVERRIDE `src`: drops the offending entry so the copy just shows the master's source, 24→25 `Style.strokeWidth` (pass-through: a NEW optional field, so nothing previously-valid becomes invalid), 25→26 `layout`/`transform` on a per-instance override (pass-through, same reason), 26→27 variants: `Node.variant` + `Node.variants` (pass-through — two new optional fields), 27→28 override keys became PATHS (pass-through — every old key is a one-segment path — but required in the other direction, since a schema-27 build REJECTS a key containing `::`), 28→29 slots: `Node.slot` + `Node.slotContent` (pass-through — an old build would draw the slot's DEFAULT children instead of the fill), 29→30 STATES: `Node.states` became a real type + `activeState` — the first SANITIZING migration since 18→19, because `states` was `{[key: string]: any}` validated by nothing, so entries that fail the real rules are DROPPED rather than making the file unloadable) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved

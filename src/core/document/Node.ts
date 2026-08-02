@@ -202,6 +202,15 @@ export interface Node {
      * pure AABB so Milestone 2 layout can compute it.
      */
     transform?: Transform;
+    /**
+     * Named STATES (Milestone 7, schema 30): what this node looks like in a given context —
+     * `{ hover: { style: { fill: "#333" } } }`. The document's `activeState` selects one, and
+     * every node that defines it shows it; nodes that do not are untouched.
+     *
+     * A state is the same shape of statement as a per-instance override ("in this context,
+     * these fields differ"), so it IS one, and shares `overrideValueError` — two copies of
+     * those rules would drift the first time a field was added.
+     */
     states?: Record<string, StateDefinition>;
     text?: string;
     src?: string;
@@ -277,7 +286,7 @@ export const VARIANT_NAME_MAX = 200;
 const RESERVED_VARIANT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 /** One property name or value: non-empty, bounded, and not a reserved key. */
-function variantNameError(what: string, s: unknown, checkReserved: boolean): string | null {
+export function variantNameError(what: string, s: unknown, checkReserved: boolean): string | null {
     if (typeof s !== "string" || s.length === 0) return `${what} must be a non-empty string`;
     if (s.length > VARIANT_NAME_MAX) return `${what} must be at most ${VARIANT_NAME_MAX} characters`;
     if (checkReserved && RESERVED_VARIANT_KEYS.has(s)) return `${what} "${s}" is reserved`;
@@ -843,7 +852,16 @@ export function transformError(t: Partial<Transform>): string | null {
     return null;
 }
 
-/** StateDefinition captures the properties of a node in a specific context (e.g., :hover). */
-export interface StateDefinition {
-    [key: string]: any; // e.g., scale, opacity adjustments
-}
+/**
+ * What a node looks like in one named context (e.g. `hover`) — the same shape as a
+ * per-instance override, deliberately: both say "in this situation, these fields differ".
+ *
+ * Until schema 30 this was `{ [key: string]: any }` — declared, serialized, validated by
+ * nothing and read by nothing, which is the dead-but-consumed field DOCUMENT-SCHEMA warns
+ * against. The 29→30 migration therefore SANITIZES: anything the old type allowed but the
+ * real one does not is dropped, so a file written under the old rules still opens.
+ */
+export type StateDefinition = import("./Components").InstanceOverride;
+
+/** Cap on a node's state map, and on a state NAME — hand-editable, so bounded. */
+export const STATES_MAX = 64;

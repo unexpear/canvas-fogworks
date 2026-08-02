@@ -117,9 +117,16 @@ export function applyMutationsToDocument(
                 if ("variants" in delta) node.variants = delta.variants;
                 if ("slot" in delta) node.slot = delta.slot;
                 if ("slotContent" in delta) node.slotContent = delta.slotContent;
+                if ("states" in delta) node.states = delta.states;
                 if (delta.text !== undefined) node.text = delta.text;
                 if (delta.src !== undefined) node.src = delta.src;
                 if (delta.name !== undefined) node.name = delta.name;
+                return;
+            }
+
+            case "activeState": {
+                // Document-level state (M7): which named state everything resolves against.
+                doc.activeState = delta.activeState;
                 return;
             }
 

@@ -6,6 +6,7 @@
  * stamps, then runs the migration chain; unknown versions throw.
  */
 
+import { statesError } from "./Components";
 import { ProjectDocument, ReadonlyDocument, ThemeMode, createEmptyDocument, SCHEMA_VERSION, SerializedMetadata } from "./Document";
 import { Node, isNodeType, srcError, srcValueError } from "./Node";
 import { variableError, variableKeyError, VARIABLES_MAX } from "./Variables";
@@ -83,6 +84,8 @@ export interface SerializedDocument {
         variables: ProjectDocument["variables"];
         /** Theme mode for token resolution (schema 19). Absent on old/hand-edited files = "light". */
         activeTheme?: ThemeMode;
+        /** The named STATE every node resolves against (M7, schema 30). Absent = the base. */
+        activeState?: string;
     };
 }
 
@@ -106,7 +109,10 @@ export function serializeDocument(doc: ReadonlyDocument): string {
             nodes: Object.fromEntries(doc.nodes) as Record<string, Node>,
             rootNodeUuids: [...doc.rootNodeUuids],
             variables: doc.variables as ProjectDocument["variables"],
-            activeTheme: doc.activeTheme
+            activeTheme: doc.activeTheme,
+            // Omitted when absent, so a document with no state selection serializes exactly as
+            // it did before M7 — `compareDocuments` would otherwise see `undefined` vs missing.
+            ...(doc.activeState !== undefined ? { activeState: doc.activeState } : {})
         }
     };
 
@@ -171,6 +177,11 @@ export function deserializeDocument(json: string): ProjectDocument {
     // bad value — a silent default here would hide "activeTheme": "banana". Absent = "light".
     if ("activeTheme" in migrated.document) {
         doc.activeTheme = migrated.document.activeTheme as ThemeMode;
+    }
+    // Same rule for the active state: copy it through whenever present, even malformed, so
+    // Integrity is the one place that judges it.
+    if ("activeState" in migrated.document) {
+        doc.activeState = migrated.document.activeState as string;
     }
 
     // Reconstruct the Map, validating each node's shape and key/id agreement.
@@ -265,6 +276,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "26") { raw = migrate_26_to_27(raw); version = "27"; }
     if (version === "27") { raw = migrate_27_to_28(raw); version = "28"; }
     if (version === "28") { raw = migrate_28_to_29(raw); version = "29"; }
+    if (version === "29") { raw = migrate_29_to_30(raw); version = "30"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -528,6 +540,37 @@ function migrate_21_to_22(raw: any): any {
  * The bump is required because an OLD BUILD would ignore `slotContent` and draw the slot's
  * DEFAULT children instead of what the instance put there — a different picture, silently.
  */
+/**
+ * 29 -> 30: `Node.states` became a REAL type (M7), and the document gained `activeState`.
+ *
+ * The first sanitizing migration since 18->19, and for the same reason: `states` was declared
+ * as `{ [key: string]: any }` and validated by nothing, so any shape at all could be sitting
+ * in an existing file. Validating it now without sanitizing would make those files
+ * UNLOADABLE — a field nobody could read suddenly bricking documents that used it.
+ *
+ * So each entry is checked against the real rules and DROPPED if it fails, and a node left
+ * with no valid states loses the field entirely. Dropping beats repairing: there is no
+ * meaningful way to guess what an arbitrary blob was supposed to mean, and a state nobody
+ * can render is exactly as useful gone.
+ */
+function migrate_29_to_30(raw: any): any {
+    const nodes = raw?.document?.nodes;
+    if (nodes && typeof nodes === "object") {
+        for (const node of Object.values<any>(nodes)) {
+            const states = node?.states;
+            if (!states || typeof states !== "object" || Array.isArray(states)) {
+                if (states !== undefined) delete node.states;   // not even a map — nothing to keep
+                continue;
+            }
+            for (const [name, def] of Object.entries(states)) {
+                if (statesError({ [name]: def }) !== null) delete states[name];
+            }
+            if (Object.keys(states).length === 0) delete node.states;
+        }
+    }
+    return { ...raw, version: "30" };
+}
+
 function migrate_28_to_29(raw: any): any {
     return { ...raw, version: "29" };
 }

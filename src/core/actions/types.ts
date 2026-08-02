@@ -3,7 +3,7 @@
  * @description Shared types used across all Actions and History tracking.
  */
 
-import { Node, Geometry, Style, Layout, Transform, VariantKey, RESERVED_NODE_ID } from "../document/Node";
+import { Node, Geometry, Style, Layout, Transform, VariantKey, StateDefinition, RESERVED_NODE_ID } from "../document/Node";
 import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
 import { InstanceOverride } from "../document/Components";
 
@@ -63,6 +63,8 @@ export type NodeDelta =
         /** Slots (schema 29). Read with `in` for the same reason: CLEARING is a real edit. */
         slot?: string;
         slotContent?: Record<string, string>;
+        /** Named states (M7). Read with `in`: clearing the last one is a real edit. */
+        states?: Record<string, StateDefinition>;
     }
     /**
      * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme
@@ -71,7 +73,11 @@ export type NodeDelta =
      * from the working document at execute time, "set a variable, then switch theme" carries
      * the earlier edit forward naturally. TERMINAL like add/delete (no property patches ride along).
      */
-    | { kind: "variables"; variables: VariableStore; activeTheme: ThemeMode };
+    | { kind: "variables"; variables: VariableStore; activeTheme: ThemeMode }
+    /** The document-level ACTIVE STATE (M7, schema 30) — which named state every node
+     *  resolves against. `undefined` = the base state. Travels under `DOCUMENT_DELTA_KEY`
+     *  like the variable store, for the same reason: it is one whole-document value. */
+    | { kind: "activeState"; activeState: string | undefined };
 
 /** The result of an action execution. Communicates changes without coupling services. */
 export interface MutationResult {

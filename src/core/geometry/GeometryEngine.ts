@@ -32,7 +32,7 @@
 import { DeepReadonly, ReadonlyDocument } from "../document/Document";
 import { Geometry, Margins, Node } from "../document/Node";
 import { traverseSceneGraph } from "../document/SceneGraph";
-import { expandInstances, isVirtualId, ownerInstanceOf, VIRTUAL_ID_SEP } from "../document/Components";
+import { resolveScene, isVirtualId, ownerInstanceOf, VIRTUAL_ID_SEP } from "../document/Components";
 import { expandDirtyForLayout, isAbsolute, isLayoutContainer, layoutChildren, layoutGridChildren, measureIntrinsicSizes, resolveConstraints } from "./LayoutEngine";
 import {
     Mat2D, IDENTITY, Rect, multiply, compose, invert, applyToPoint,
@@ -119,7 +119,7 @@ export function computeGeometry(
     // document pays nothing. Doing it here (rather than at each call site) is what keeps every
     // consumer — renderer, tools, inspector — reading one consistent scene.
     const stored = doc;
-    doc = expandInstances(doc);
+    doc = resolveScene(doc);
     // The dirty set names STORED ids — that is what actions report — but expansion introduces
     // VIRTUAL ids that no action will ever mention, so a master edit would leave its copies
     // looking clean and reuse a stale entry. Rather than give up reuse entirely (which is what

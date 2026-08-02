@@ -9,10 +9,11 @@ import { createEmptyDocument, ProjectDocument, ReadonlyDocument, CURRENT_VERSION
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, isTokenRef, tokenRefFor, tokenKeyOf, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
-import { expandInstances, componentError, overridesError, overrideAgainstMasterError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES , variantMembers, variantProperties, resolveVariantMaster, masterSubtreeIds, resolveOverridePath} from "../document/Components";
+import { expandInstances, componentError, overridesError, overrideAgainstMasterError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES , variantMembers, variantProperties, resolveVariantMaster, masterSubtreeIds, resolveOverridePath, resolveScene, statesError} from "../document/Components";
 import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
 import { SetVariantAction, SetInstanceVariantAction } from "../actions/VariantActions";
 import { SetSlotAction, SetSlotContentAction } from "../actions/SlotActions";
+import { SetNodeStateAction, SetActiveStateAction } from "../actions/StateActions";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy , overrideTargetFor} from "../actions/nodeEdit";
@@ -4285,8 +4286,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 28→29 landed for slots.)
-        expect(() => migrateIfNeeded(legacy, "30")).toThrow('Migration not implemented for document schema "29"');
+        // time a real migration is added — here, when 29→30 landed for states.)
+        expect(() => migrateIfNeeded(legacy, "31")).toThrow('Migration not implemented for document schema "30"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -9435,5 +9436,177 @@ describe("GeometryEngine dirty tracking with instances", () => {
             prev = incremental;
             dirty.clear();
         }
+    });
+});
+
+
+// ─── States (Milestone 7, schema 30): what a node looks like in a named context ───
+describe("States: a document-level selection, like the theme", () => {
+    function stateDoc(): ProjectDocument {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 40, height: 20 }, style: { fill: "#111111", opacity: 1 }, layout: {} });
+        doc.nodes.set("B", { id: "B", type: "core.rectangle", parent: null, children: [], geometry: { x: 100, y: 0, width: 40, height: 20 }, style: { fill: "#222222", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["A", "B"];
+        return doc;
+    }
+    const resolved = (doc: ReadonlyDocument, id: string) => resolveScene(doc).nodes.get(id)!;
+
+    test("a node shows its state only while that state is ACTIVE", () => {
+        const dispatcher = new ActionDispatcher(stateDoc());
+        dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), "A", "hover", { style: { fill: "#ff0000" }, geometry: { width: 80 } }));
+
+        // Defined but not active: nothing changes.
+        expect(resolved(dispatcher.getDocument(), "A").style.fill).toBe("#111111");
+        dispatcher.dispatchAction(new SetActiveStateAction(dispatcher.getDocument(), "hover"));
+        expect(resolved(dispatcher.getDocument(), "A").style.fill).toBe("#ff0000");
+        expect(resolved(dispatcher.getDocument(), "A").geometry.width).toBe(80);
+        // A node that does not define it is untouched, and returned BY REFERENCE.
+        const d = dispatcher.getDocument();
+        expect(resolveScene(d).nodes.get("B")).toBe(d.nodes.get("B"));
+        // …and back to base.
+        dispatcher.dispatchAction(new SetActiveStateAction(dispatcher.getDocument(), null));
+        expect(resolved(dispatcher.getDocument(), "A").style.fill).toBe("#111111");
+    });
+
+    test("the STORED document never changes — a state is resolved, not applied", () => {
+        const dispatcher = new ActionDispatcher(stateDoc());
+        dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), "A", "hover", { style: { fill: "#ff0000" } }));
+        dispatcher.dispatchAction(new SetActiveStateAction(dispatcher.getDocument(), "hover"));
+        expect(dispatcher.getDocument().nodes.get("A")!.style.fill).toBe("#111111");   // still the base
+        expect(dispatcher.getDocument().activeState).toBe("hover");
+    });
+
+    test("a state-free document is returned UNCHANGED — it pays nothing", () => {
+        const doc = stateDoc();
+        expect(resolveScene(doc)).toBe(doc);
+        doc.activeState = "hover";                 // active, but nothing defines it
+        expect(resolveScene(doc)).toBe(doc);
+    });
+
+    test("a stated node KEEPS its children — the state changes it, not its subtree", () => {
+        // `materializeNode` returns a node with EMPTY children (the caller wires the tree), so
+        // applying a state has to put them back. Without that, styling a container in its hover
+        // state would make everything inside it vanish the moment the state was activated.
+        const doc = stateDoc();
+        doc.nodes.get("A")!.children = ["B"];
+        doc.nodes.get("B")!.parent = "A";
+        doc.rootNodeUuids = ["A"];
+        doc.nodes.get("A")!.states = { hover: { style: { fill: "#00ff00" } } };
+        doc.activeState = "hover";
+
+        const scene = resolveScene(doc);
+        expect(scene.nodes.get("A")!.children).toEqual(["B"]);
+        expect(scene.nodes.get("A")!.style.fill).toBe("#00ff00");
+        // …and the child is really reachable through the scene walk, not merely listed.
+        expect(computeGeometry(doc).nodes.has("B")).toBe(true);
+    });
+
+    test("states reach INSTANCE copies: a master in its hover state makes hovered copies", () => {
+        // The ordering `resolveScene` fixes — states resolve on STORED nodes BEFORE expansion.
+        // Expanding first would leave every copy showing the base.
+        const doc = stateDoc();
+        doc.nodes.get("A")!.states = { hover: { style: { fill: "#00ff00" } } };
+        doc.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [], geometry: { x: 300, y: 0, width: 40, height: 20 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: "A" });
+        doc.rootNodeUuids = [...doc.rootNodeUuids, "I"];
+        doc.activeState = "hover";
+        expect(resolveScene(doc).nodes.get("I::A")!.style.fill).toBe("#00ff00");
+    });
+
+    test("switching state reports every AFFECTED node, so incremental compute cannot go stale", () => {
+        // A document-level change with per-node consequences: the caller's dirty set is built
+        // from `updatedNodeIds`, so an action that reported none would leave the geometry
+        // engine reusing stale entries and the switch invisible until something else moved.
+        const doc = stateDoc();
+        doc.nodes.get("A")!.states = { hover: { geometry: { width: 90 } } };
+        const dispatcher = new ActionDispatcher(doc);
+        const action = new SetActiveStateAction(dispatcher.getDocument(), "hover");
+        const result = action.execute();
+        expect([...result.updatedNodeIds]).toEqual(["A"]);      // B defines nothing — not reported
+
+        // …and the engine, given exactly that set, agrees with a full recompute.
+        const base = computeGeometry(dispatcher.getDocument());
+        dispatcher.dispatchAction(new SetActiveStateAction(dispatcher.getDocument(), "hover"));
+        const live = dispatcher.getDocument();
+        const incremental = computeGeometry(live, null, base, new Set(["A"]));
+        expect(incremental.nodes.get("A")!.bounds.width).toBe(90);
+        expect(incremental.nodes.get("A")!.bounds.width).toBe(computeGeometry(live).nodes.get("A")!.bounds.width);
+    });
+
+    test("a state obeys the SAME field rules an instance override does", () => {
+        expect(statesError({ hover: { style: { opacity: 5 } } })).toMatch("opacity must be within");
+        expect(statesError({ hover: { bogus: 1 } })).toMatch('unknown field "bogus"');
+        expect(statesError({ hover: { geometry: { width: -1 } } })).toMatch("must be >= 0");
+        expect(statesError({ "": {} })).not.toBeNull();
+        expect(statesError(JSON.parse('{"__proto__":{}}'))).not.toBeNull();
+        expect(statesError({ hover: { style: { fill: "#fff" }, layout: { grow: 1 } } })).toBeNull();
+        // …and the ACTION runs them, rather than merely sharing a file with them.
+        const dispatcher = new ActionDispatcher(stateDoc());
+        expect(dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), "A", "hover", { style: { opacity: 5 } } as never)).success).toBe(false);
+        expect(dispatcher.getDocument().nodes.get("A")!.states).toBeUndefined();
+    });
+
+    test("state definitions MERGE, and removing the last one drops the field", () => {
+        const dispatcher = new ActionDispatcher(stateDoc());
+        dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), "A", "hover", { style: { fill: "#ff0000" } }));
+        dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), "A", "hover", { geometry: { width: 60 } }));
+        expect(dispatcher.getDocument().nodes.get("A")!.states!.hover).toEqual({ style: { fill: "#ff0000" }, geometry: { width: 60 } });
+        dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), "A", "hover", null));
+        expect(dispatcher.getDocument().nodes.get("A")!.states).toBeUndefined();
+    });
+
+    test("a state document round-trips, active state included", () => {
+        const dispatcher = new ActionDispatcher(stateDoc());
+        dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), "A", "hover", { style: { fill: "#ff0000" } }));
+        dispatcher.dispatchAction(new SetActiveStateAction(dispatcher.getDocument(), "hover"));
+        const d = dispatcher.getDocument();
+        const loaded = deserializeDocument(serializeDocument(d));
+        expect(loaded.nodes.get("A")!.states).toEqual({ hover: { style: { fill: "#ff0000" } } });
+        expect(loaded.activeState).toBe("hover");
+        expect(compareDocuments(d, loaded)).toBe(true);
+    });
+
+    test("the 29→30 migration SANITIZES the old anything-goes states field", () => {
+        // `states` was `{ [key: string]: any }` and validated by nothing, so a file may hold any
+        // shape at all. Rejecting those now would brick documents that used a field nobody could
+        // read; dropping the unreadable entries opens them instead.
+        const legacy = {
+            version: "29",
+            document: {
+                metadata: { project_name: "p", created_by: "c", date: new Date().toISOString() },
+                nodes: {
+                    A: { id: "A", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#fff", opacity: 1 }, layout: {}, states: { hover: { style: { fill: "#f00" } }, junk: { scale: 1.5 }, alsoJunk: "not an object" } },
+                    B: { id: "B", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#fff", opacity: 1 }, layout: {}, states: { onlyJunk: { nope: true } } },
+                    C: { id: "C", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#fff", opacity: 1 }, layout: {}, states: "not even a map" }
+                },
+                rootNodeUuids: ["A", "B", "C"], variables: {}, activeTheme: "light"
+            }
+        };
+        const loaded = deserializeDocument(JSON.stringify(legacy));
+        expect(loaded.nodes.get("A")!.states).toEqual({ hover: { style: { fill: "#f00" } } });  // the valid one survives
+        expect(loaded.nodes.get("B")!.states).toBeUndefined();   // nothing valid left → field gone
+        expect(loaded.nodes.get("C")!.states).toBeUndefined();   // not even a map
+    });
+
+    test("resolveScene is the ONE seam — nothing outside Components expands instances directly", () => {
+        // Calling `expandInstances` straight would silently skip states, which is exactly the
+        // kind of miss that shows up as "the feature works everywhere except one panel".
+        const roots = ["../../app/App.tsx", "../../renderer/RenderModel.ts", "../../editor/tools/ToolController.ts",
+            "../../editor/tools/MoveTool.ts", "../../core/geometry/GeometryEngine.ts", "../../core/actions/alignActions.ts"];
+        for (const rel of roots) {
+            const src = readFileSync(resolve(__dirname, rel), "utf8");
+            expect({ file: rel, calls: /\bexpandInstances\s*\(/.test(src) }).toEqual({ file: rel, calls: false });
+            expect(src).toMatch(/resolveScene\s*\(/);
+        }
+    });
+
+    test("the UI can DEFINE a state and SHOW one — either alone is useless", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/<StatesSection/);
+        // TWO call sites use the same constructor (re-capture and capture-new), so the
+        // audit must name something unique to each or deleting one still passes.
+        expect(src).toMatch(/setNewState\(""\)/);                    // capture NEW
+        expect((src.match(/new SetNodeStateAction\(/g) ?? []).length).toBe(3);  // capture, re-capture, remove
+        expect(src).toMatch(/new SetActiveStateAction\(/);          // show
+        expect(src).toMatch(/variantNameError\("state name", name, true\)/); // the shared rule is the authority
     });
 });
