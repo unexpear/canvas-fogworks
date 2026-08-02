@@ -198,6 +198,17 @@ function flattenPath(commands: readonly PathCommand[], tolerance?: number): { po
 // work follows the curve rather than a fixed count. Still DETERMINISTIC and viewport-independent
 // — the input is the curve's own numbers — which is the property a fixed count was defending.
 function isPaintBearing(fill: string): boolean;   // "", "none", "transparent" = no paint
+
+// Tessellate.ts — filled outlines as TRIANGLES, the only form a GPU accepts.
+// EAR CLIPPING over the same `Ring`s picking and booleans use, so the GPU fills exactly the
+// outline the other consumers test against. Holes are BRIDGED into the outline by a doubled edge.
+const TESSELLATE_MAX_VERTICES: number;   // 100_000 — the OOM guard, the twin of PATH_MAX_COMMANDS
+function signedArea2(ring: readonly {x: number; y: number}[]): number;   // sign = winding
+function triangulate(rings: readonly Ring[]): number[];   // flat [x0,y0, x1,y1, x2,y2, ...]
+// Rings are classified by SIGNED AREA, not array order: the largest is the outline, opposite
+// winding is a hole, same winding is a separate island. That is the nonzero rule picking and both
+// other backends already obey. Degenerate input returns [] rather than throwing — a shape with no
+// area is legitimate mid-edit and a renderer must not fall over on one.
 // A path's INTERIOR is its FILL: both backends close an open subpath implicitly when filling,
 // so `filled` (not an explicit `Z`) decides whether the inside is pickable. Nonzero winding is
 // summed ACROSS subpaths, which is what gives a donut its hole. The outline always hits within
@@ -725,7 +736,14 @@ function setImageReadyCallback(cb: (() => void) | null): void;       // fired wh
 function renderSVG(container: HTMLElement, doc: ReadonlyDocument, state: RendererState): void;    // buildRenderModel ∘ emitSVG
 function renderCanvas(container: HTMLElement, doc: ReadonlyDocument, state: RendererState, onAsyncReady?: () => void): void; // ∘ emitCanvas (sizes a <canvas> for the DPR; onAsyncReady repaints on image load)
 function clearRenderState(container: HTMLElement): void;             // drop the container's cached prev frame (call when its DOM is cleared)
-type RenderBackend = "svg" | "canvas";
+function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: {x: number; y: number; zoom: number}, dpr?: number): boolean; // GPU transcription; false = unavailable
+function initGL(canvas: HTMLCanvasElement): GLState | null;                          // program + buffer, or null when WebGL is refused
+function parseColor(css: string): [number, number, number, number] | null;           // #rgb / #rrggbb / #rrggbbaa only; null = do not draw
+function shapeToWorldRings(shape: Shape, world: Mat2D | null, radius: number | null, strokeWidth: number | null): Ring[] | null;
+function itemTriangles(item: DrawItem): { vertices: number[]; color: [number, number, number, number] } | null;   // pure — the tested part
+function viewMatrix(width: number, height: number, vpX: number, vpY: number, zoom: number): number[];             // world → clip, column-major 3x3
+function renderWebGL(container: HTMLElement, doc: ReadonlyDocument, state: RendererState, onAsyncReady?: () => void): void; // ∘ emitWebGL, falls back to renderCanvas
+type RenderBackend = "svg" | "canvas" | "webgl";
 function renderScene(container: HTMLElement, doc: ReadonlyDocument, state: RendererState, backend: RenderBackend, onAsyncReady?: () => void): void; // the live backend selector
 ```
 
@@ -734,11 +752,22 @@ function renderScene(container: HTMLElement, doc: ReadonlyDocument, state: Rende
   and never composes coordinates — enforced by importing only the `Mat2D` *type*. `doc`
   supplies only type/style/text/src.
 - `renderScene(container, doc, state, backend)` is the app entry point: it dispatches to
-  `renderSVG` or `renderCanvas`, and on a backend switch clears the container (removing the
+  `renderSVG`, `renderCanvas` or `renderWebGL`, and on a backend switch clears the container (removing the
   other backend's element) + drops the SVG grid cache (`clearRenderState`). `renderSVG`
   measures the container and threads the previous `DisplayList` (so an unchanged grid reuses
   its lines by reference); `renderCanvas` sizes a `<canvas>` for the device pixel ratio (model
   in CSS px, backing store in device px, DPR passed to `emitCanvas`).
+- **The GPU backend is a PREVIEW, and says so.** `emitWebGL` is the third transcriber over the
+  same `DisplayList`, but it is the first that cannot draw everything: a GPU takes triangles, so
+  every filled shape goes through `shapeToWorldRings` → `triangulate` first, and the things that
+  need a texture or an offset curve are not drawn at all. The gaps are DELIBERATE and listed in
+  the module header — no text, no images, strokes only for `line` shapes, no effects or dashes.
+  A backend that quietly drops content is worse than one that admits what it cannot do, so the
+  toolbar labels it a preview. `renderWebGL` FALLS BACK to `renderCanvas` when a context cannot
+  be had (old GPU, headless run, driver refusal); a renderer that shows nothing cannot be
+  diagnosed by a user. The pure half (`itemTriangles`, `parseColor`, `viewMatrix`,
+  `shapeToWorldRings`) is unit-tested in the `node` env like every other piece of geometry;
+  the buffer uploads and draw calls are the untested DOM boundary, browser-smoke-verified.
 - `DisplayList` is plain, serializable data — asserted directly in unit tests. `emitSVG`
   and `emitCanvas` are backend transcribers over the SAME list; each does zero coordinate
   arithmetic (canvas folds DPR into the base CTM then post-multiplies `world` via

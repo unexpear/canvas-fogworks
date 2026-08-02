@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v36 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (847) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (33) = 949 tests.
+> 🔒 Frozen contract · schema v36 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (867) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (33) = 969 tests.
 
 ## Philosophy
 
@@ -11,8 +11,11 @@ serializer) — the layer every other layer trusts. That layer is deterministic,
 and has no DOM, so it is tested exhaustively with fast unit tests. The renderer's
 **pure model** (`buildRenderModel → DisplayList`) is DOM-free too and unit-tested the same
 way; the **Canvas backend** (`emitCanvas`) is unit-tested via a recording-mock ctx (its call
-sequence IS its output). Only the DOM shims — `emitSVG`'s output, the `renderSVG`/`renderCanvas`/
-`renderScene` wiring, and pixel-level SVG↔canvas parity — stay validated by targeted browser
+sequence IS its output). The **GPU backend** is split so the same rule holds: everything that
+turns a shape into numbers (`itemTriangles`, `shapeToWorldRings`, `parseColor`, `viewMatrix`, and
+`geometry/Tessellate` beneath them) is pure and tested in the `node` env; only the buffer uploads
+and draw calls need a GPU. Only the DOM shims — `emitSVG`'s output, the `renderSVG`/`renderCanvas`/
+`renderWebGL`/`renderScene` wiring, and pixel-level parity between the three — stay validated by targeted browser
 smoke tests (the Canvas backend was live-verified end-to-end: background, grid, a drawn rect,
 selection overlay, and a clean SVG↔Canvas toggle).
 
@@ -22,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 949 tests
+npm test                                   # jest (ts-jest), 969 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -33,7 +36,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (949 tests)
+## What is covered (969 tests)
 
 | Area | Representative cases |
 |------|----------------------|

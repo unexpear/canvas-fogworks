@@ -29,9 +29,9 @@ Everything in the engine — now and in every future milestone — rests on thes
 5. **The renderer is completely independent, and split into a pure model + a backend.**
    `buildRenderModel(size, document, RendererState) → DisplayList` is a pure, DOM-free
    read (testable in the `node` env like the layout engine); a backend transcribes the
-   display list to the screen — `emitSVG` to DOM elements, or `emitCanvas` to a 2D context.
-   `renderScene` picks the live backend (`renderSVG`/`renderCanvas` compose model + backend);
-   picking is DOM-free, so both are interchangeable. Nothing here holds a reference to the
+   display list to the screen — `emitSVG` to DOM elements, `emitCanvas` to a 2D context, or
+   `emitWebGL` to triangles on the GPU. `renderScene` picks the live backend; picking is
+   DOM-free, so they are interchangeable (the GPU one is a preview — see below). Nothing here holds a reference to the
    dispatcher, and nothing can write.
 
 ## 2. Layered design
@@ -172,12 +172,18 @@ a node that draws nothing there and, worse, swallow the click meant for whatever
 variant mirrors exactly what `buildRenderModel` emits for that type, because the point is that hit
 and ink agree; a path's INTERIOR follows its FILL rather than an explicit `Z`, since both backends
 close an open subpath implicitly when they fill it, and nonzero winding is summed across subpaths
-so a donut keeps its hole. Curves are flattened at a FIXED 16 segments — an adaptive count would
-make the same click hit at one zoom and miss at another.
+so a donut keeps its hole. Curves are flattened by ADAPTIVE de Casteljau subdivision: a cubic is
+split at its midpoint until its control hull is flat to `FLATTEN_TOLERANCE` (0.05 of the path's own
+units), bounded at `FLATTEN_MAX_DEPTH` halvings. The tolerance is read from the CURVE, never from
+the zoom or the viewport, which is the property the earlier fixed 16 segments was defending — an
+adaptive count driven by screen size would make the same click hit at one zoom and miss at another.
+A fixed count could not defend accuracy at the same time: 16 segments is wasteful on a short curve
+and visibly wrong on a long one, and both errors land in picking, booleans and now tessellation,
+which all share this one flattener.
 
-**One display list, three consumers.** `emitSVG` draws it, `emitCanvas` draws it, and
-`exportSVG` serializes it — so a feature that reaches the model reaches all three without a second
-description of any shape. Text is the one place that needed care: the two backends and the exporter
+**One display list, four consumers.** `emitSVG` draws it, `emitCanvas` draws it, `emitWebGL`
+draws it, and `exportSVG` serializes it — so a feature that reaches the model reaches all four
+without a second description of any shape. Text is the one place that needed care: the backends and the exporter
 each lay it out, so the HARD BREAK rule is a single shared `textParagraphs` and only the MEASURED
 wrapping is per-backend (the canvas has `measureText`; a pure exporter has nothing to measure with,
 which is why exported text honours newlines but does not wrap).
@@ -190,6 +196,27 @@ same shape. The combine runs in WORLD space (the only space nodes with different
 transforms share), folds bottom-most first so `subtract` cuts the shapes above out of the one
 below, and lands as ONE transaction: create the result, set its commands, delete the operands —
 one undo.
+
+**A fill becomes TRIANGLES for the GPU, by the same outline everything else uses
+(`geometry/Tessellate`).** SVG and Canvas both take an outline and a fill rule and rasterize it
+for us; a GPU takes triangles and nothing else. Rather than let the GPU backend invent a fourth
+private idea of what a shape is, `emitWebGL` converts through `ShapeToPath` → `commandsToRings`
+— the same conversions picking and booleans go through — and `triangulate` ear-clips the result.
+So the GPU fills exactly the outline a click tests against, and the hard part is a pure function
+tested in the `node` env rather than something only a GPU can answer for.
+
+Ear clipping was chosen for the reason edge classification was chosen for the booleans: every
+step is separately checkable, and each of its three conditions is held by a shape that fails
+without it — a star (convexity), a slit reaching across the shape (containment), a rounded
+rectangle (the reflex restriction, which reads like a speed filter and is not one). It is O(n²)
+worst case, which is the right trade here: the alternative is substantially more code for a
+speed-up at vertex counts a design document does not reach, and this runs once per shape per
+change, not per frame.
+
+The GPU backend is a **PREVIEW and says so in the toolbar**. It draws fills; text and images need
+a texture path, arbitrary strokes need curve offsetting, and effects need render targets — none of
+which exist yet, and all of which are stated in the module header rather than discovered later. A
+backend that silently drops content when you switch to it is worse than one that admits its gaps.
 
 That flat form is the *bake*. The default is a **`core.boolean` node** (schema 33) that keeps its
 operands as an ordinary subtree and is resolved by `resolveBooleans` inside `resolveScene` — so
@@ -305,11 +332,11 @@ Layout output today is expressed *as* geometry (computed local rects), not as a 
 |-------|-------|----------------|
 | Document | `core/document/{Document,Node,Serializer}.ts`, `core/ids/UUID.ts` | Source of truth, types, (de)serialization, identity |
 | Document integrity | `core/document/{SceneGraph,Integrity}.ts` | Tree traversal/draw order; structural + range validation on load |
-| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine,SelectionHandles,Snapping,Ruler,GroupTransform}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**); DOM-free handle geometry + alignment snapping (move + resize; any translation-only chain) + group ops — union-box snapping, a group rotate knob + corner handles, `GroupTransform.rotateGroup` (rigid multi-node rotation about a shared pivot) and `scaleGroup` (proportional group resize about a fixed corner; transform-free groups only — a rotated set would shear) (**M4**) |
+| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine,SelectionHandles,Snapping,Ruler,GroupTransform,Tessellate}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**); DOM-free handle geometry + alignment snapping (move + resize; any translation-only chain) + group ops — union-box snapping, a group rotate knob + corner handles, `GroupTransform.rotateGroup` (rigid multi-node rotation about a shared pivot) and `scaleGroup` (proportional group resize about a fixed corner; transform-free groups only — a rotated set would shear) (**M4**) |
 | Actions | `core/actions/{Action,types,applyMutations}.ts` + `*Action.ts` | Declarative mutations + delta protocol |
 | Dispatch/History | `core/actions/{ActionDispatcher,HistoryManager}.ts` | Only write path; snapshot undo/redo |
 | Editor | `editor/EditorState.ts`, `editor/tools/*`, `editor/{shortcuts,layerDrop,layerSelection,layerFilter}.ts` | Ephemeral state; input → Actions. The RULES a panel or tool applies are pure modules with tests, not logic inside a handler: which command a chord means, what a layer drag resolves to (parent + an index measured AFTER the node is detached), what a row click selects (a shift range spans the VISIBLE order, and the anchor does not move), and which rows a search leaves (a match keeps every ancestor, so the panel shows the path to it) |
-| Renderer | `renderer/{RenderModel,emitSVG,emitCanvas,SVGRenderer,CanvasRenderer,renderScene}.ts` | Pure `(doc, state) → DisplayList`, then thin SVG + Canvas backends (Canvas lazily loads + caches images, word-wraps text via `measureText`); `renderScene` selects the live backend; every COLOR slot resolves `$token` references against `doc.variables` under `doc.activeTheme` in the model (M5) |
+| Renderer | `renderer/{RenderModel,emitSVG,emitCanvas,emitWebGL,SVGRenderer,CanvasRenderer,WebGLRenderer,renderScene}.ts` | Pure `(doc, state) → DisplayList`, then thin SVG + Canvas + WebGL backends (Canvas lazily loads + caches images, word-wraps text via `measureText`; WebGL triangulates fills via `geometry/Tessellate` and falls back to Canvas when no context can be had); `renderScene` selects the live backend; every COLOR slot resolves `$token` references against `doc.variables` under `doc.activeTheme` in the model (M5) |
 | App | `app/App.tsx`, `app/index.tsx`, `app/index.html` | React shell + wiring |
 | Shell | `electron/{main.js,preload.js}` | Native window, menus, file IO via IPC |
 | Build | `scripts/build.js` | Three esbuild bundles → `dist/` |

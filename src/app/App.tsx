@@ -1094,11 +1094,11 @@ export function App() {
                     🗀 Folders
                 </button>
 <button
-                    title="Switch the rendering backend (both draw the same display list)"
-                    onClick={() => setBackend(b => (b === "svg" ? "canvas" : "svg"))}
+                    title="Switch the rendering backend — all three draw the same display list. WebGL is a PREVIEW: it fills shapes as triangles on the GPU and does not yet draw text, images, strokes or effects."
+                    onClick={() => setBackend(b => (b === "svg" ? "canvas" : b === "canvas" ? "webgl" : "svg"))}
                     style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
                 >
-                    Backend: {backend === "svg" ? "SVG" : "Canvas"}
+                    Backend: {backend === "svg" ? "SVG" : backend === "canvas" ? "Canvas" : "WebGL (fills)"}
                 </button>
                 {startedFromCorruptSave && (
                     <span

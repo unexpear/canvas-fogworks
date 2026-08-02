@@ -10,9 +10,10 @@
 import { ReadonlyDocument } from "../core/document/Document";
 import { renderSVG, clearRenderState } from "./SVGRenderer";
 import { renderCanvas } from "./CanvasRenderer";
+import { renderWebGL } from "./WebGLRenderer";
 import { RendererState } from "./RendererState";
 
-export type RenderBackend = "svg" | "canvas";
+export type RenderBackend = "svg" | "canvas" | "webgl";
 
 export function renderScene(
     container: HTMLElement,
@@ -29,5 +30,8 @@ export function renderScene(
     }
     // `onAsyncReady` repaints when a lazily-loaded resource (a Canvas image) finishes decoding.
     if (backend === "canvas") renderCanvas(container, doc, state, onAsyncReady);
+    // WEBGL draws fills as triangles; it falls back to Canvas by itself when no context is
+    // available, so this dispatch never has to know whether a GPU is there.
+    else if (backend === "webgl") renderWebGL(container, doc, state, onAsyncReady);
     else renderSVG(container, doc, state);
 }

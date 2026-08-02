@@ -40,6 +40,8 @@ import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds,
 import { flattenPath, hitsShape, isPaintBearing, FLATTEN_TOLERANCE, FLATTEN_MAX_DEPTH } from "../geometry/ShapeHit";
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
+import { triangulate, signedArea2, TESSELLATE_MAX_VERTICES } from "../geometry/Tessellate";
+import { itemTriangles, parseColor, viewMatrix } from "../../renderer/emitWebGL";
 import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
 import { booleanAction, makeBooleanNodeAction } from "../actions/booleanActions";
 import { SetBooleanOpAction } from "../actions/SetBooleanOpAction";
@@ -12312,5 +12314,269 @@ describe("Adaptive curve flattening", () => {
         const ratio = nearExact / (Math.PI * 1000 * 1000);
         expect(ratio).toBeGreaterThan(1);
         expect(ratio).toBeCloseTo(1.00027, 4);
+    });
+});
+
+// ─── Triangulation: a fill as the GPU sees it ───
+describe("Tessellate", () => {
+    /** Total area of a triangle list — the number that must match the shape it came from. */
+    const triArea = (t: number[]): number => {
+        let a = 0;
+        for (let i = 0; i < t.length; i += 6) {
+            a += Math.abs((t[i + 2] - t[i]) * (t[i + 5] - t[i + 1]) - (t[i + 4] - t[i]) * (t[i + 3] - t[i + 1])) / 2;
+        }
+        return a;
+    };
+    const tris = (t: number[]): number => t.length / 6;
+    const sq = (x: number, y: number, w: number, h: number) =>
+        [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+
+    test("a square becomes two triangles covering exactly its area", () => {
+        const t = triangulate([sq(0, 0, 100, 50)]);
+        expect(tris(t)).toBe(2);                 // n − 2 triangles for an n-gon
+        expect(triArea(t)).toBeCloseTo(5000, 6);
+    });
+
+    test("a CONCAVE shape is clipped correctly — the notch is not filled in", () => {
+        // An L. A naive fan from one vertex would cover the notch; ear clipping must not.
+        const L = [
+            { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 40 },
+            { x: 40, y: 40 }, { x: 40, y: 100 }, { x: 0, y: 100 }
+        ];
+        const t = triangulate([L]);
+        expect(tris(t)).toBe(4);                 // 6 vertices → 4 triangles
+        expect(triArea(t)).toBeCloseTo(100 * 40 + 40 * 60, 6);
+        // Area alone cannot tell a tessellation from an overlapping fan — `triArea` sums
+        // ABSOLUTE areas, so a triangle covering the notch adds to the total just like a real
+        // one. Every triangle's CENTROID must be inside the shape; that is what "these triangles
+        // are the fill" means, and it is the assertion a fan fails.
+        for (let i = 0; i < t.length; i += 6) {
+            const cx = (t[i] + t[i + 2] + t[i + 4]) / 3, cy = (t[i + 1] + t[i + 3] + t[i + 5]) / 3;
+            expect(insideRings([L], cx, cy)).toBe(true);
+        }
+    });
+
+    test("a STAR — five reflex corners — is clipped, not fanned", () => {
+        // An L has one reflex corner and it happens never to come up first, so dropping either
+        // ear condition still produced the right answer there. A star cannot be fanned by
+        // accident: every other vertex is reflex, so a triangulator that ignores convexity, or
+        // that ignores whether a vertex sits inside the candidate ear, spills triangles outside
+        // the shape immediately.
+        const star: { x: number; y: number }[] = [];
+        for (let i = 0; i < 10; i++) {
+            const a = (Math.PI / 5) * i - Math.PI / 2;
+            const r = i % 2 === 0 ? 100 : 40;
+            star.push({ x: r * Math.cos(a), y: r * Math.sin(a) });
+        }
+        const t = triangulate([star]);
+        expect(tris(t)).toBe(8);                                   // 10 vertices → 8 triangles
+        // Ten identical spikes: 10 x (1/2)·R·r·sin(36 degrees).
+        expect(triArea(t)).toBeCloseTo(10 * 0.5 * 100 * 40 * Math.sin(Math.PI / 5), 4);
+        for (let i = 0; i < t.length; i += 6) {
+            const cx = (t[i] + t[i + 2] + t[i + 4]) / 3, cy = (t[i + 1] + t[i + 3] + t[i + 5]) / 3;
+            expect(insideRings([star], cx, cy)).toBe(true);
+        }
+    });
+
+    test("a SLIT reaching across the shape is not tessellated over", () => {
+        // The containment half of the ear test only bites when a reflex vertex intrudes from FAR
+        // AWAY — in a star every reflex corner is the candidate ear's own neighbour, so it is
+        // excluded from the scan and convexity alone gets the right answer. Here a thin slit is
+        // cut up from the bottom edge, and its tip sits inside the ear of the top-right corner:
+        // the two vertices are five steps apart in the ring. Without containment that corner is
+        // clipped and the triangle covers the slit, which is a hole in the shape.
+        const slit = [
+            { x: 0, y: 0 }, { x: 85, y: 0 }, { x: 88, y: 90 }, { x: 91, y: 0 },
+            { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }
+        ];
+        const t = triangulate([slit]);
+        expect(tris(t)).toBe(5);                                   // 7 vertices → 5 triangles
+        // The square less the slit: 100x100 minus a 6-wide, 90-tall triangle.
+        expect(triArea(t)).toBeCloseTo(100 * 100 - (6 * 90) / 2, 6);
+        for (let i = 0; i < t.length; i += 6) {
+            const cx = (t[i] + t[i + 2] + t[i + 4]) / 3, cy = (t[i + 1] + t[i + 3] + t[i + 5]) / 3;
+            expect(insideRings([slit], cx, cy)).toBe(true);
+        }
+    });
+
+    test("a COLLINEAR corner is never clipped into a zero-area triangle", () => {
+        // Real paths carry redundant vertices constantly — a midpoint on a straight edge, a
+        // rectangle drawn as five points. Such a corner turns neither way, and a triangle built on
+        // it has no area: it paints nothing, costs a draw, and is the degenerate input every
+        // downstream consumer has to special-case. So the ear test rejects a corner that is merely
+        // NOT reflex; it demands a genuine turn.
+        const square = [
+            { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 },
+            { x: 0, y: 50 }                                      // collinear on the left edge
+        ];
+        const t = triangulate([square]);
+        expect(triArea(t)).toBeCloseTo(10000, 6);
+        for (let i = 0; i < t.length; i += 6) {
+            const a = Math.abs((t[i + 2] - t[i]) * (t[i + 5] - t[i + 1])
+                - (t[i + 3] - t[i + 1]) * (t[i + 4] - t[i])) / 2;
+            expect(a).toBeGreaterThan(0);
+        }
+    });
+
+    test("a HOLE is a hole: the triangles cover the ring, not the disc", () => {
+        // The property that makes this usable at all. Bridging joins the hole to the outline with
+        // a doubled edge, which encloses no area — so the total is outer minus inner exactly.
+        const outer = sq(0, 0, 100, 100);
+        const inner = [...sq(25, 25, 50, 50)].reverse();     // opposite winding = a hole
+        const t = triangulate([outer, inner]);
+        expect(triArea(t)).toBeCloseTo(10000 - 2500, 6);
+        expect(tris(t)).toBeGreaterThan(4);
+    });
+
+    test("winding does not matter — the same shape tessellates to the same area either way", () => {
+        // Rings arrive from `commandsToRings` in whatever direction the author drew, so a
+        // triangulator that only worked for one winding would fill some shapes and not others.
+        const cw = triangulate([sq(0, 0, 60, 30)]);
+        const ccw = triangulate([[...sq(0, 0, 60, 30)].reverse()]);
+        expect(triArea(cw)).toBeCloseTo(1800, 6);
+        expect(triArea(ccw)).toBeCloseTo(1800, 6);
+    });
+
+    test("the OUTLINE is the largest ring, not the first one given", () => {
+        // Order is an accident of how a path was written; area is a fact about the shape.
+        const inner = [...sq(25, 25, 50, 50)].reverse();
+        const outer = sq(0, 0, 100, 100);
+        expect(triArea(triangulate([inner, outer]))).toBeCloseTo(7500, 6);
+    });
+
+    test("two SAME-winding rings are separate islands, both filled", () => {
+        const t = triangulate([sq(0, 0, 40, 40), sq(200, 200, 20, 20)]);
+        expect(triArea(t)).toBeCloseTo(1600 + 400, 6);
+    });
+
+    test("a flattened CURVE tessellates to its own area", () => {
+        // The path this actually takes in the app: commands → rings → triangles. The area is the
+        // flattened ellipse's, so it is compared against the polygon, not against pi·ab — the
+        // tessellation must add nothing and lose nothing.
+        const rings = commandsToRings(ellipseCommands(200, 120));
+        const polygonArea = Math.abs(rings.reduce((sum, r) => sum + signedArea2(r) / 2, 0));
+        expect(triArea(triangulate(rings))).toBeCloseTo(polygonArea, 6);
+    });
+
+    test("degenerate input yields no triangles rather than throwing", () => {
+        // A shape mid-edit is a legitimate thing to have on a canvas; a renderer must not fall
+        // over on one.
+        expect(triangulate([])).toEqual([]);
+        expect(triangulate([[{ x: 0, y: 0 }, { x: 1, y: 1 }]])).toEqual([]);          // two points
+        expect(triangulate([[{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }]]))       // collinear
+            .toHaveLength(6);                                                          // one zero-area triangle
+        expect(triArea(triangulate([[{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }]]))).toBeCloseTo(0, 9);
+    });
+
+    test("REPEATED vertices do not stall the clipping — the whole shape is still covered", () => {
+        // Found by tessellating a fully-rounded rectangle: the radius clamp turns its straight
+        // edges into zero-length `L`s, so the ring carries doubled points. A zero-length edge is
+        // never an ear (its corner is degenerate), so clipping found none and stopped with a
+        // partial fan — 116 triangles of 130, covering 2365 units of 7853.
+        const rings = commandsToRings(rectCommands(100, 100, 50));
+        const polygon = Math.abs(signedArea2(rings[0]) / 2);
+        expect(triArea(triangulate(rings))).toBeCloseTo(polygon, 6);
+
+        // The same thing stated in the smallest possible way: a square with every corner doubled.
+        const doubled = [
+            { x: 0, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 0 },
+            { x: 10, y: 10 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 10 }
+        ];
+        expect(triArea(triangulate([doubled]))).toBeCloseTo(100, 6);
+    });
+
+    test("a vertex budget bounds the work, because this runs on document data", () => {
+        const huge = [Array.from({ length: TESSELLATE_MAX_VERTICES + 1 }, (_, i) => ({ x: i, y: i % 2 }))];
+        expect(triangulate(huge)).toEqual([]);
+    });
+
+    test("a self-intersecting ring stops instead of spinning", () => {
+        // A bowtie has no ear at some stage; the guard emits what it has rather than looping.
+        const bowtie = [{ x: 0, y: 0 }, { x: 100, y: 100 }, { x: 100, y: 0 }, { x: 0, y: 100 }];
+        const t = triangulate([bowtie]);
+        expect(Number.isFinite(triArea(t))).toBe(true);
+        expect(t.length % 6).toBe(0);
+    });
+});
+
+// ─── The GPU backend's pure half ───
+describe("emitWebGL geometry", () => {
+    const item = (shape: unknown, paint: Record<string, unknown> = {}, world: unknown = null) => ({
+        shape, world, nodeId: null, role: "content",
+        paint: { fill: "#ff0000", opacity: null, stroke: null, strokeWidth: null, strokeDash: null,
+                 radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null, ...paint }
+    }) as never;
+    const area = (t: number[]): number => {
+        let a = 0;
+        for (let i = 0; i < t.length; i += 6) {
+            a += Math.abs((t[i + 2] - t[i]) * (t[i + 5] - t[i + 1]) - (t[i + 4] - t[i]) * (t[i + 3] - t[i + 1])) / 2;
+        }
+        return a;
+    };
+
+    test("a shape becomes triangles covering its own area, in WORLD space", () => {
+        const world = compose(100, 200, 0, 1, 1, 0, 0);
+        const tri = itemTriangles(item({ kind: "rect", x: 0, y: 0, width: 40, height: 20 }, {}, world))!;
+        expect(area(tri.vertices)).toBeCloseTo(800, 6);
+        // Placed by the item's matrix, not left at the local origin.
+        expect(Math.min(...tri.vertices.filter((_, i) => i % 2 === 0))).toBeCloseTo(100, 6);
+        expect(Math.min(...tri.vertices.filter((_, i) => i % 2 === 1))).toBeCloseTo(200, 6);
+    });
+
+    test("the shapes it fills come from the SAME conversions picking and booleans use", () => {
+        // A rounded rect and an ellipse must fill exactly the outline the hit test accepts,
+        // otherwise the GPU draws one shape and the pointer finds another.
+        const rounded = itemTriangles(item({ kind: "rect", x: 0, y: 0, width: 100, height: 100 }, { radius: 50 }))!;
+        expect(area(rounded.vertices)).toBeCloseTo(Math.PI * 50 * 50, -1);   // a radius-50 round rect IS a circle
+        const ell = itemTriangles(item({ kind: "ellipse", cx: 50, cy: 30, rx: 50, ry: 30 }))!;
+        expect(area(ell.vertices)).toBeCloseTo(Math.PI * 50 * 30, -1);
+    });
+
+    test("a LINE is stroked as a quad, because it has no interior to fill", () => {
+        const tri = itemTriangles(item({ kind: "line", x1: 0, y1: 0, x2: 100, y2: 0 },
+            { fill: null, stroke: "#00ff00", strokeWidth: 4 }))!;
+        expect(area(tri.vertices)).toBeCloseTo(400, 6);
+        expect(tri.color).toEqual([0, 1, 0, 1]);
+        // A zero-length line draws nothing rather than a degenerate sliver.
+        expect(itemTriangles(item({ kind: "line", x1: 5, y1: 5, x2: 5, y2: 5 },
+            { fill: null, stroke: "#00ff00", strokeWidth: 4 }))).toBeNull();
+    });
+
+    test("what it CANNOT draw, it declines to draw — no silent wrong output", () => {
+        // Text and images need a texture path this backend does not have. An outline item
+        // (`fill: "none"`) would paint a solid block over the shape it is meant to outline.
+        expect(itemTriangles(item({ kind: "text", x: 0, y: 0, width: 10, height: 10, text: "hi", fontSize: 10, fontFamily: "sans-serif", fontWeight: 400, textAlign: "left", lineHeight: 1.2, letterSpacing: 0 }))).toBeNull();
+        expect(itemTriangles(item({ kind: "image", x: 0, y: 0, width: 10, height: 10, href: "x.png" }))).toBeNull();
+        expect(itemTriangles(item({ kind: "rect", x: 0, y: 0, width: 10, height: 10 }, { fill: "none" }))).toBeNull();
+        // A colour it cannot parse is skipped rather than drawn in the wrong one.
+        expect(itemTriangles(item({ kind: "rect", x: 0, y: 0, width: 10, height: 10 }, { fill: "rebeccapurple" }))).toBeNull();
+    });
+
+    test("colours and opacity reach the GPU as components", () => {
+        expect(parseColor("#f00")).toEqual([1, 0, 0, 1]);
+        expect(parseColor("#00ff0080")![3]).toBeCloseTo(128 / 255, 6);
+        expect(parseColor("nonsense")).toBeNull();
+        // Item opacity MULTIPLIES the colour's own alpha — one blend, not two.
+        const tri = itemTriangles(item({ kind: "rect", x: 0, y: 0, width: 4, height: 4 }, { fill: "#ffffff80", opacity: 0.5 }))!;
+        expect(tri.color[3]).toBeCloseTo((128 / 255) * 0.5, 6);
+    });
+
+    test("the view matrix maps world to clip exactly as the other backends map it to screen", () => {
+        // screen = z·world − vp, then screen → clip. A world point at the viewport origin must
+        // land at the top-left of clip space, and one canvas-width away at the right edge.
+        const m = viewMatrix(800, 600, 0, 0, 1);
+        const apply = (x: number, y: number) => [m[0] * x + m[3] * y + m[6], m[1] * x + m[4] * y + m[7]];
+        expect(apply(0, 0)[0]).toBeCloseTo(-1, 9);
+        expect(apply(0, 0)[1]).toBeCloseTo(1, 9);
+        expect(apply(800, 600)[0]).toBeCloseTo(1, 9);
+        expect(apply(800, 600)[1]).toBeCloseTo(-1, 9);
+        // Zoom and pan compose the same way they do on screen.
+        const z = viewMatrix(800, 600, 100, 50, 2);
+        const applyZ = (x: number, y: number) => [z[0] * x + z[3] * y + z[6], z[1] * x + z[4] * y + z[7]];
+        // Clip ORIGIN is the canvas CENTRE, not the viewport origin: at zoom 2 with the viewport
+        // at (100,50), the world point that lands mid-canvas is (250,175) — 2x−100 = 400 and
+        // 2y−50 = 300, the middle of an 800x600 canvas.
+        expect(applyZ(250, 175)[0]).toBeCloseTo(0, 9);
+        expect(applyZ(250, 175)[1]).toBeCloseTo(0, 9);
     });
 });
