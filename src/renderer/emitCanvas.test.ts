@@ -293,8 +293,10 @@ describe("emitCanvas — paint, transform, grid", () => {
     test("a selection outline (fill 'none') skips fill, and world:null items get NO transform", () => {
         const doc = docWith({ type: "core.rectangle", geometry: { x: 10, y: 20, width: 30, height: 40 }, style: { fill: "#fff", opacity: 1 } });
         const c = run(doc, { selectedNodeIds: ["n1"] }).calls;
-        // Outline rect is at bounds±pad = (7,17,36,46); it must NOT fill (fill:"none") and NOT transform.
-        const b = bracket(c, "rect", a => JSON.stringify(a) === "[7,17,36,46]");
+        // The frame is the node's own box as a closed QUAD, so it arrives as a path starting at
+        // the padded top-left (7,17) — not as a rect. It must NOT fill (fill:"none") and NOT transform.
+        const b = bracket(c, "moveTo", a => JSON.stringify(a) === "[7,17]");
+        expect(ops(b)).toContain("closePath");
         expect(ops(b)).not.toContain("fill");
         expect(ops(b)).not.toContain("translate");
         expect(ops(b)).not.toContain("transform");

@@ -228,7 +228,22 @@ type HandleId = "nw" | "ne" | "sw" | "se" | "rotate";
 interface SelectionHandle { nodeId: string; handle: HandleId; cx: number; cy: number; cursor: string } // center in WORLD
 // `zoom` places the rotate knob (fixed screen px above the box) and, for handleAtPoint, sizes the grab square
 // (HANDLE_SIZE_PX/floored-zoom) — the SAME square the renderer draws, so grab==draw at every zoom.
-function selectionHandles(s: ComputedState, selectedNodeIds: readonly string[], zoom: number): SelectionHandle[]; // 4 corners + rotate per selected node
+function selectionFrame(s: ComputedState, nodeId: string, pad?: number): Quad | null;  // the node's OWN box in world (nw·ne·se·sw), turned with it; `pad` is a WORLD distance, converted per axis so the gap is even on all four edges under any scale
+function selectionHandles(s: ComputedState, selectedNodeIds: readonly string[], zoom: number): SelectionHandle[]; // 4 corners + rotate per selected node — on the TURNED box, not the world AABB; each cursor comes from the direction its corner points on screen, and the knob rides the turned top edge
+
+// OrientedBox.ts — the node's box as DRAWN, and resizing along its own axes.
+type Quad = [Point, Point, Point, Point];                                   // nw · ne · se · sw
+function boxQuad(world: Mat2D, width: number, height: number, pad?: number): Quad;
+function axisLengths(world: Mat2D): { ux: number; uy: number };             // world length of one local unit per axis (the matrix COLUMNS)
+function quadCenter(q: Quad): Point;
+function cursorForDirection(dx: number, dy: number): string;                // nearest of the 4 CSS resize cursors
+function worldDeltaToLocal(world: Mat2D, dx: number, dy: number): Point;    // {0,0} for a singular matrix, never Infinity
+function localLinear(parentWorld: Mat2D, world: Mat2D): Mat2D;              // the node's own rotate∘scale, recovered from the engine's matrices
+function resizeBox(handle: string, box: Box, dLocal: Point, m: Mat2D, origin?: Point, minSize?: number): Box;
+// resizeBox holds the OPPOSITE corner where it is drawn: x' = x + Δo + M(Δf − Δo), where Δo is the
+// transform-origin's shift (it is a FRACTION of the size, so resizing moves it) and Δf the fixed
+// corner's. With no transform M = I and it collapses to the plain `x' = x + Δf`. Dragging past the
+// opposite corner CLAMPS to `minSize` — it does not flip the box.
 function handleAtPoint(s: ComputedState, selectedNodeIds: readonly string[], x: number, y: number, zoom: number): SelectionHandle | null; // handle under a world point; back-to-front (rotate beats a grazed corner)
 // GROUP handles (multi-select): the editor shows ONE rotate knob above the union box (selectionBounds), not per-node handles.
 function groupRotateHandle(s: ComputedState, rootIds: readonly string[], zoom: number): SelectionHandle | null;  // the group's single rotate knob (nodeId ""), or null if no finite union box

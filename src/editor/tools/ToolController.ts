@@ -18,7 +18,8 @@ import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotat
 import { resolveScene } from "../../core/document/Components";
 import { geometryActionFor, isHandleOffered, isEditableNode, transformActionFor } from "../../core/actions/nodeEdit";
 import { snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
-import { Rect } from "../../core/geometry/Matrix";
+import { Rect, Mat2D, IDENTITY } from "../../core/geometry/Matrix";
+import { localLinear, resizeBox, worldDeltaToLocal } from "../../core/geometry/OrientedBox";
 import { ReadonlyDocument } from "../../core/document/Document";
 import { selectionRoots } from "../../core/document/SceneGraph";
 
@@ -51,6 +52,13 @@ export class ToolController {
     // The node's WORLD-minus-STORED origin offset (constant for a translation chain), so the snap
     // (which runs in world) maps to the stored-geometry resize: {0,0} for a top-level node.
     private resizeSnapOffset: { x: number; y: number } = { x: 0, y: 0 };
+    // The node's frame AT THE PRESS: its world matrix (world delta → the box's own units), the
+    // local rotate∘scale that maps a box vector into PARENT space, and its transform-origin
+    // fraction. Captured once rather than re-read per frame, because the live preview changes the
+    // very matrix the gesture is measured against — re-reading it would make the box chase itself.
+    private resizeWorld: Mat2D = IDENTITY;
+    private resizeLinear: Mat2D = IDENTITY;
+    private resizeOriginFraction: { x: number; y: number } = { x: 0.5, y: 0.5 };
 
     // Rotate mode — grabbing the rotate knob spins the node about its world-AABB centre.
     // Each move live-commits a coalesced UpdateNodeTransformAction, so a CONTINUOUS drag is one
@@ -219,6 +227,17 @@ export class ToolController {
                         width: node.geometry.width,
                         height: node.geometry.height
                     };
+                    // The gesture's reference frame. `resizeLinear` = parentWorld⁻¹ · world,
+                    // linear part only: the box→parent map, which is what the stored x/y are in.
+                    // Derived from the matrices the ENGINE published rather than re-deriving
+                    // rotate∘scale from the node's fields, so the two conventions cannot drift.
+                    this.resizeWorld = c.world;
+                    const parentWorld = node.parent ? computed.nodes.get(node.parent)?.world ?? IDENTITY : IDENTITY;
+                    this.resizeLinear = localLinear(parentWorld, c.world);
+                    this.resizeOriginFraction = {
+                        x: node.transform?.origin?.x ?? 0.5,
+                        y: node.transform?.origin?.y ?? 0.5
+                    };
                     // Enable snapping for a translation-only chain (world snap delta == stored delta),
                     // capturing the constant world↔stored origin offset so the world snap maps to stored.
                     if (isTranslationOnlyChain(doc, hit.nodeId)) {
@@ -341,8 +360,12 @@ export class ToolController {
                 dy += snap.dy;
             }
 
+            // Into the node's OWN units. A rotated node's handles sit on its turned corners, so a
+            // drag has to be read along those axes — applying the world delta straight to
+            // width/height made a turned node grow sideways relative to the direction dragged.
+            const d = worldDeltaToLocal(this.resizeWorld, dx, dy);
             // Preview via geometry override — no document mutation until commit.
-            const g = this.computeResizedGeometry(this.resizeHandle, this.resizeOrigin, dx, dy);
+            const g = resizeBox(this.resizeHandle, this.resizeOrigin, d, this.resizeLinear, this.resizeOriginFraction);
             this.resizePreview = g;
             this.editorState.pendingGeometry = new Map([[this.resizeNodeId, g]]);
             if (this.resizeSnapTargets) {

@@ -175,6 +175,18 @@ close an open subpath implicitly when they fill it, and nonzero winding is summe
 so a donut keeps its hole. Curves are flattened at a FIXED 16 segments — an adaptive count would
 make the same click hit at one zoom and miss at another.
 
+**The selection frame is the node's own box, turned with it (`geometry/OrientedBox`).** The frame,
+its four handles and the rotate knob all come from the world matrix applied to the local box, not
+from the world AABB: an AABB corner is a point a turned node does not touch, so the frame drew
+bigger than the shape with its handles floating in empty space. Each cursor is picked from the
+direction its corner actually points on screen, and the knob rides the turned top edge. Resizing
+then runs in the node's OWN units — the pointer delta is mapped through the inverse of the world
+matrix captured at the press — and the stored position is compensated for the transform-origin's
+shift, so the corner opposite the one being dragged stays exactly where it is drawn. (The origin is
+a FRACTION of the node's size, so changing the size moves it and swings the whole box; without the
+compensation the anchor slides out from under the cursor.) Dragging a corner past its opposite
+clamps at the minimum size rather than flipping the box.
+
 Path **bounds are tight** (`pathBounds`), taken over each axis's bezier turning points rather than
 the control hull: a handle routinely reaches far outside the curve it shapes, and a box drawn
 around it left the selection frame visibly larger than the shape — with snapping, culling,

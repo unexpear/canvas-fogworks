@@ -151,7 +151,18 @@ describe("buildRenderModel — overlay", () => {
         expect(outlines.length).toBe(1);
         expect(handles.length).toBe(5); // 4 corners + rotate
 
-        expect(outlines[0].shape).toEqual({ kind: "rect", x: b.x - 3, y: b.y - 3, width: b.width + 6, height: b.height + 6 });
+        // The frame is the node's OWN box, closed — a quad, not an axis-aligned rect. Unrotated,
+        // its corners land exactly where the padded AABB used to be.
+        expect(outlines[0].shape).toEqual({
+            kind: "path",
+            commands: [
+                { c: "M", x: b.x - 3, y: b.y - 3 },
+                { c: "L", x: b.x + b.width + 3, y: b.y - 3 },
+                { c: "L", x: b.x + b.width + 3, y: b.y + b.height + 3 },
+                { c: "L", x: b.x - 3, y: b.y + b.height + 3 },
+                { c: "Z" }
+            ]
+        });
         expect(outlines[0].paint).toMatchObject({ fill: "none", stroke: "#00bfff", strokeWidth: 1.5, pointerEvents: false });
         expect(outlines[0].world).toBeNull();
 

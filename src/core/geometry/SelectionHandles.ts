@@ -5,8 +5,10 @@
  * and so hit-testing needs no DOM: the Canvas backend has no `data-resize-handle` element
  * to read, yet resize/rotate must still work under it.
  *
- * Positions are read from each node's precomputed world AABB (`bounds`) — no coordinate
- * composition — so this is safe for the render model to depend on. Both the handle size and
+ * Positions come from each node's precomputed world MATRIX applied to its own box (`OrientedBox`),
+ * so a rotated node's handles sit on the shape's corners rather than on an axis-aligned box it
+ * does not touch. The composition is the engine's — this module only applies the matrix it
+ * published — so the render model may still depend on it. Both the handle size and
  * the rotate-handle offset are fixed SCREEN pixels, so callers pass `zoom`; the conversion to
  * world (and the zoom floor) lives here ONCE, which is what keeps the drawn square and the
  * grabbable square identical at every zoom.
@@ -16,6 +18,7 @@ import { ComputedState, selectionBounds } from "./GeometryEngine";
 import { ReadonlyDocument } from "../document/Document";
 import { pathVertices } from "./PathBuilder";
 import { Rect , applyToPoint} from "./Matrix";
+import { boxQuad, cursorForDirection, quadCenter, Quad } from "./OrientedBox";
 
 /** Resize-handle square edge length in SCREEN pixels. */
 export const HANDLE_SIZE_PX = 8;
@@ -31,7 +34,7 @@ export type HandleId = "nw" | "ne" | "sw" | "se" | "rotate" | `vertex:${number}`
 export interface SelectionHandle {
     nodeId: string;
     handle: HandleId;
-    /** Handle CENTER in world coordinates (a corner of the node's world AABB, or the rotate knob above it). */
+    /** Handle CENTER in world coordinates (a corner of the node's own rotated box, or the rotate knob off its top edge). */
     cx: number;
     cy: number;
     /** CSS cursor for the handle. */
@@ -49,24 +52,55 @@ function flooredZoom(zoom: number): number {
 }
 
 /**
+ * The world-space frame of one node's box: its four corners as DRAWN, optionally padded.
+ *
+ * Null for a node that is missing or whose corners are not finite. Shared by the renderer (which
+ * strokes it) and the handles below (which sit on it), so the frame and its grips cannot drift.
+ */
+export function selectionFrame(state: ComputedState, nodeId: string, pad: number = 0): Quad | null {
+    const c = state.nodes.get(nodeId);
+    // Both rects: `local` is what the frame is built from, and `bounds` is the engine's own
+    // finiteness summary for the node — a garbage entry should contribute no frame either way.
+    if (!c || !isFiniteRect(c.local) || !isFiniteRect(c.bounds)) return null;
+    const q = boxQuad(c.world, c.local.width, c.local.height, pad);
+    return q.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)) ? q : null;
+}
+
+/**
  * Every handle for the selection, in selection order and — per node — nw · ne · sw · se ·
- * rotate. The four corners come straight from the world AABB (zoom-independent); the rotate
- * knob sits `ROTATE_OFFSET_PX` screen px above the top edge's centre (so it needs `zoom`). A
- * node missing from the computed state, or with a non-finite AABB, contributes none — never throws.
+ * rotate.
+ *
+ * The corners are the ROTATED box's corners, not the world AABB's. An AABB corner is a point the
+ * node does not touch as soon as it is turned, so the handles floated off the shape and dragging
+ * one resized along world axes while the user watched rotated ones. Each cursor is chosen from
+ * the direction its corner actually points on screen, for the same reason: `se` stays the
+ * bottom-right of the BOX, but which way that is depends on the rotation.
+ *
+ * The rotate knob sits `ROTATE_OFFSET_PX` screen px off the top edge (so it needs `zoom`), along
+ * the outward normal — measured away from the box centre, so a flipped or negatively scaled node
+ * still puts the knob outside itself rather than through its own middle.
  */
 export function selectionHandles(state: ComputedState, selectedNodeIds: readonly string[], zoom: number): SelectionHandle[] {
     const rotateOffset = ROTATE_OFFSET_PX / flooredZoom(zoom);
     const handles: SelectionHandle[] = [];
     for (const nodeId of selectedNodeIds) {
-        const c = state.nodes.get(nodeId);
-        if (!c || !isFiniteRect(c.bounds)) continue;
-        const b = c.bounds;
+        const q = selectionFrame(state, nodeId);
+        if (!q) continue;
+        const [nw, ne, se, sw] = q;
+        const centre = quadCenter(q);
+        const cursorAt = (p: { x: number; y: number }): string => cursorForDirection(p.x - centre.x, p.y - centre.y);
+        // Outward from the TOP edge: the midpoint pushed away from the centre. A zero-length
+        // direction (a fully collapsed box) leaves the knob on the edge rather than at NaN.
+        const midTop = { x: (nw.x + ne.x) / 2, y: (nw.y + ne.y) / 2 };
+        const outX = midTop.x - centre.x, outY = midTop.y - centre.y;
+        const len = Math.hypot(outX, outY);
+        const nx = len > 0 ? outX / len : 0, ny = len > 0 ? outY / len : -1;
         handles.push(
-            { nodeId, handle: "nw", cx: b.x, cy: b.y, cursor: "nwse-resize" },
-            { nodeId, handle: "ne", cx: b.x + b.width, cy: b.y, cursor: "nesw-resize" },
-            { nodeId, handle: "sw", cx: b.x, cy: b.y + b.height, cursor: "nesw-resize" },
-            { nodeId, handle: "se", cx: b.x + b.width, cy: b.y + b.height, cursor: "nwse-resize" },
-            { nodeId, handle: "rotate", cx: b.x + b.width / 2, cy: b.y - rotateOffset, cursor: "grab" }
+            { nodeId, handle: "nw", cx: nw.x, cy: nw.y, cursor: cursorAt(nw) },
+            { nodeId, handle: "ne", cx: ne.x, cy: ne.y, cursor: cursorAt(ne) },
+            { nodeId, handle: "sw", cx: sw.x, cy: sw.y, cursor: cursorAt(sw) },
+            { nodeId, handle: "se", cx: se.x, cy: se.y, cursor: cursorAt(se) },
+            { nodeId, handle: "rotate", cx: midTop.x + nx * rotateOffset, cy: midTop.y + ny * rotateOffset, cursor: "grab" }
         );
     }
     return handles;

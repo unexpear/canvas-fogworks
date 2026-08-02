@@ -9,11 +9,12 @@
  * transcribe this list to DOM/canvas API calls and do no arithmetic.
  *
  * Renderer invariant (mechanically enforced): this module imports no coordinate-
- * composition from the geometry layer — only the `Mat2D` *type* and `selectionHandles`
- * (which itself only reads precomputed `bounds` corners), never `multiply`/`compose`.
- * Positions come straight from `ComputedState` (`world`/`local`/`bounds`); the model
- * never composes coordinates. It reads shape params from `local.width/height`, places
- * by the pre-computed `world`, and outlines/handles from world-space `bounds`.
+ * composition from the geometry layer — only the `Mat2D`/`Quad` *types* and
+ * `selectionHandles`/`selectionFrame` (which apply the matrix the ENGINE published, and
+ * compose nothing themselves), never `multiply`/`compose`. Positions come straight from
+ * `ComputedState` (`world`/`local`/`bounds`); the model never composes coordinates. It
+ * reads shape params from `local.width/height`, places by the pre-computed `world`, and
+ * takes the selection frame + handles as finished world-space points.
  *
  * Design tokens (M5): every COLOR slot (fill, stroke, shadow.color, the line's
  * stroke||fill fallback) resolves `$token` references against `doc.variables` under
@@ -29,7 +30,8 @@ import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
-import { selectionHandles, pathVertexHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
+import { selectionHandles, selectionFrame, pathVertexHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
+import { Quad } from "../core/geometry/OrientedBox";
 import { isGroupRotatable, isGroupResizable } from "../core/geometry/GroupTransform";
 import { isHandleOffered } from "../core/actions/nodeEdit";
 import { RendererState } from "./RendererState";
@@ -497,6 +499,37 @@ function outlineItem(
     };
 }
 
+/**
+ * A node's own frame — the four corners of its ROTATED box, closed.
+ *
+ * Emitted as a `path` rather than a new primitive: a quad IS a closed path, both backends
+ * already draw one, and the alternative (an axis-aligned `rect`) is precisely the thing that
+ * made a turned node's frame bigger than the node. The points are already WORLD space, so the
+ * item carries no matrix — same as every other overlay.
+ */
+function frameItem(quad: Quad, stroke: string, strokeWidth: number): DrawItem {
+    const [nw, ne, se, sw] = quad;
+    return {
+        shape: {
+            kind: "path",
+            commands: [
+                { c: "M", x: nw.x, y: nw.y },
+                { c: "L", x: ne.x, y: ne.y },
+                { c: "L", x: se.x, y: se.y },
+                { c: "L", x: sw.x, y: sw.y },
+                { c: "Z" }
+            ]
+        },
+        paint: {
+            fill: "none", opacity: null, stroke, strokeWidth,
+            strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
+        },
+        world: null,
+        nodeId: null,
+        role: "outline"
+    };
+}
+
 /** A resize/rotate handle as a draw item — a white square (corner) or circle (rotate knob). */
 function handleItem(h: SelectionHandle, z: number): DrawItem {
     const HS = HANDLE_SIZE_PX / z;
@@ -525,12 +558,16 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
     computed.order.forEach((id: string) => {
         const c = computed.nodes.get(id);
         if (!c || !isFiniteRect(c.bounds)) return;
-        const geo = c.bounds;
-        if (selectedSet.has(id)) {
-            items.push(outlineItem(geo, 3 / z, "#00bfff", 1.5 / z));
-        } else if (state.hoveredNodeId === id) {
-            items.push(outlineItem(geo, 2 / z, "#ffffff44", 1 / z));
-        }
+        // The node's OWN box, turned with it — not the world AABB. Padding is applied in the
+        // node's local units inside `selectionFrame`, so the gap is even on all four sides
+        // however the node is rotated or scaled.
+        const selected = selectedSet.has(id);
+        if (!selected && state.hoveredNodeId !== id) return;
+        const quad = selectionFrame(computed, id, (selected ? 3 : 2) / z);
+        if (!quad) return;
+        items.push(selected
+            ? frameItem(quad, "#00bfff", 1.5 / z)
+            : frameItem(quad, "#ffffff44", 1 / z));
     });
 
     // Handles (world-space). Positions come from the SHARED `selectionHandles`/`groupRotateHandle`/

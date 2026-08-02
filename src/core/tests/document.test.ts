@@ -38,10 +38,11 @@ import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
 import { flattenPath, hitsShape, isPaintBearing } from "../geometry/ShapeHit";
+import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
-import { selectionHandles, handleAtPoint, groupRotateHandle, groupHandleAtPoint, groupCornerHandles, HANDLE_SIZE_PX, ROTATE_OFFSET_PX , pathVertexHandles, vertexIndexOf, vertexHandleAtPoint} from "../geometry/SelectionHandles";
+import { selectionHandles, selectionFrame, handleAtPoint, groupRotateHandle, groupHandleAtPoint, groupCornerHandles, HANDLE_SIZE_PX, ROTATE_OFFSET_PX , pathVertexHandles, vertexIndexOf, vertexHandleAtPoint} from "../geometry/SelectionHandles";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../geometry/GroupTransform";
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
 import { rulerTicks, niceStep } from "../geometry/Ruler";
@@ -1631,7 +1632,11 @@ describe("ToolController DOM-free resize", () => {
         tc.onMouseDown(md(50, 50), rect); // A's SE ≈ (50,50) (barely rotated)
         tc.onMouseMove(md(97, 50), rect); // near T's left (100), but A is rotated → snapping disabled
         tc.onMouseUp(md(97, 50));
-        expect(dispatcher.getDocument().nodes.get("A")!.geometry.width).toBe(97); // raw 97, NOT snapped
+        // Raw, NOT snapped (a snap would have pulled it to 100). Not exactly 97 because the drag
+        // is now measured along the node's OWN axis: 47 world units across a 0.0001 rad rotation
+        // is 47·cos(0.0001) of the node's width.
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry.width).toBeCloseTo(97, 6);
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry.width).not.toBeCloseTo(100, 1);
     });
 });
 
@@ -1665,10 +1670,14 @@ describe("ToolController rotate", () => {
     });
 
     test("rotation is RELATIVE to the node's existing rotation (adds the drag delta)", () => {
-        const { dispatcher, tc } = harness(Math.PI / 2); // a 100×100 square rotated 90° has the same AABB
-        tc.onMouseDown(md(50, -ROTATE_OFFSET_PX), rect); // knob still at (50,−off) since the AABB is unchanged
-        tc.onMouseMove(md(100, 50), rect);               // +90° drag
-        tc.onMouseUp(md(100, 50));
+        // The knob rides the node's OWN top edge, so a 90°-turned square puts it to the RIGHT:
+        // local mid-top (50,0) rotates about the centre (50,50) to (100,50), and the knob sits
+        // ROTATE_OFFSET_PX further out along that direction. (The AABB is unchanged for a square
+        // — which is exactly why the old axis-aligned knob stayed put and looked detached.)
+        const { dispatcher, tc } = harness(Math.PI / 2);
+        tc.onMouseDown(md(100 + ROTATE_OFFSET_PX, 50), rect); // grab: pointer angle 0 about the centre
+        tc.onMouseMove(md(50, 150), rect);                    // straight BELOW the centre → +90°
+        tc.onMouseUp(md(50, 150));
         expect(rotOf(dispatcher)).toBeCloseTo(Math.PI, 10); // π/2 initial + π/2 delta
     });
 
@@ -1719,8 +1728,8 @@ describe("ToolController rotate", () => {
 
     test("Escape reverts to a NON-zero initial rotation", () => {
         const { dispatcher, tc } = harness(Math.PI / 2);
-        tc.onMouseDown(md(50, -ROTATE_OFFSET_PX), rect);
-        tc.onMouseMove(md(100, 50), rect); // +90° → ~π
+        tc.onMouseDown(md(100 + ROTATE_OFFSET_PX, 50), rect);   // the knob follows the turned top edge
+        tc.onMouseMove(md(50, 150), rect); // +90° → ~π
         expect(rotOf(dispatcher)).toBeCloseTo(Math.PI, 10);
         tc.onKeyDown(key("Escape"));
         expect(rotOf(dispatcher)).toBeCloseTo(Math.PI / 2, 10); // back to the initial π/2
@@ -10668,5 +10677,189 @@ describe("Shape-accurate hit-testing", () => {
         const cs = computeGeometry(doc);
         expect(hitTest(cs, 50, 52, 3)).toBe("H");
         expect(hitTest(cs, 50, 52, 0)).toBeNull();
+    });
+});
+
+// ─── The selection frame is the node's OWN box, turned with it ───
+describe("Oriented selection frame", () => {
+    const mkNode = (id: string, box: { x: number; y: number; width: number; height: number }, transform?: Node["transform"]): Node =>
+        ({ id, type: "core.rectangle", parent: null, children: [], geometry: box, style: { fill: "#111111", opacity: 1 }, layout: {}, ...(transform ? { transform } : {}) } as Node);
+    const docOf = (n: Node): ProjectDocument => {
+        const doc = createEmptyDocument();
+        doc.nodes.set(n.id, n);
+        doc.rootNodeUuids = [n.id];
+        return doc;
+    };
+
+    test("a 45°-turned square's frame is a diamond, not the square that contains it", () => {
+        // The AABB of a 100x100 square turned 45° is 141.42 on a side, and NONE of its corners
+        // touch the node. That box was the old selection frame: visibly bigger than the shape,
+        // with four handles floating in empty space.
+        const doc = docOf(mkNode("A", { x: 0, y: 0, width: 100, height: 100 }, { rotation: Math.PI / 4 }));
+        const cs = computeGeometry(doc);
+        const q = selectionFrame(cs, "A")!;
+        const d = 50 * Math.SQRT2;                       // half-diagonal: 70.71
+        expect(q[0].x).toBeCloseTo(50, 6); expect(q[0].y).toBeCloseTo(50 - d, 6);   // nw → top point
+        expect(q[1].x).toBeCloseTo(50 + d, 6); expect(q[1].y).toBeCloseTo(50, 6);   // ne → right point
+        expect(q[2].x).toBeCloseTo(50, 6); expect(q[2].y).toBeCloseTo(50 + d, 6);   // se → bottom point
+        expect(q[3].x).toBeCloseTo(50 - d, 6); expect(q[3].y).toBeCloseTo(50, 6);   // sw → left point
+        // The AABB's own corner, for contrast — a point the frame no longer visits.
+        expect(cs.nodes.get("A")!.bounds.x).toBeCloseTo(50 - d, 6);
+    });
+
+    test("handles sit on those corners, and each cursor points the way its corner does", () => {
+        const doc = docOf(mkNode("A", { x: 0, y: 0, width: 100, height: 100 }, { rotation: Math.PI / 4 }));
+        const hs = selectionHandles(computeGeometry(doc), ["A"], 1);
+        const d = 50 * Math.SQRT2;
+        expect(hs.map(h => h.handle)).toEqual(["nw", "ne", "sw", "se", "rotate"]);
+        expect(hs[0].cx).toBeCloseTo(50, 6);
+        expect(hs[0].cy).toBeCloseTo(50 - d, 6);
+        // `nw` is still the box's top-left, but on screen it now points straight UP — so the
+        // cursor has to be the vertical one, not the fixed diagonal it used to carry.
+        expect(hs[0].cursor).toBe("ns-resize");
+        expect(hs[1].cursor).toBe("ew-resize");   // `ne` points right
+        // …and the knob rides the TURNED top edge: its midpoint is (50 + d/2, 50 − d/2), and the
+        // knob sits ROTATE_OFFSET_PX further out along that same up-and-right diagonal.
+        const off = ROTATE_OFFSET_PX * Math.SQRT1_2;
+        expect(hs[4].cx).toBeCloseTo(50 + d / 2 + off, 6);
+        expect(hs[4].cy).toBeCloseTo(50 - d / 2 - off, 6);
+    });
+
+    test("the frame's padding is the same distance off every edge, whatever the scale", () => {
+        // The pad is a SCREEN distance, so it converts into local units per axis. A node scaled
+        // 2x horizontally needs half as much local padding on that axis to sit the same distance
+        // away on screen — a single local pad would show a fat gap on one side and a thin one on
+        // the other.
+        const doc = docOf(mkNode("A", { x: 0, y: 0, width: 100, height: 100 }, { scaleX: 2, scaleY: 1 }));
+        const cs = computeGeometry(doc);
+        const bare = selectionFrame(cs, "A")!;
+        const padded = selectionFrame(cs, "A", 4)!;
+        expect(padded[0].x).toBeCloseTo(bare[0].x - 4, 6);   // 4 world units left of the corner
+        expect(padded[0].y).toBeCloseTo(bare[0].y - 4, 6);   // …and 4 above it
+        expect(padded[2].x).toBeCloseTo(bare[2].x + 4, 6);
+        expect(padded[2].y).toBeCloseTo(bare[2].y + 4, 6);
+
+        // Rotation AND non-uniform scale together, which is the only arrangement that tells the
+        // matrix's COLUMNS (the transformed axes — what an axis length is) apart from its rows.
+        // A quarter turn with scaleX 2 sends local +x down at double length and local +y left at
+        // single, so the frame's corner steps 4 world units along each of those two directions.
+        const skewed = docOf(mkNode("B", { x: 0, y: 0, width: 100, height: 100 }, { rotation: Math.PI / 2, scaleX: 2, scaleY: 1 }));
+        const cs2 = computeGeometry(skewed);
+        const b2 = selectionFrame(cs2, "B")!, p2 = selectionFrame(cs2, "B", 4)!;
+        expect(p2[0].x).toBeCloseTo(b2[0].x + 4, 6);
+        expect(p2[0].y).toBeCloseTo(b2[0].y - 4, 6);
+    });
+
+    test("a degenerate node contributes no frame rather than NaN corners", () => {
+        const doc = docOf(mkNode("A", { x: 0, y: 0, width: 10, height: 10 }));
+        const cs = computeGeometry(doc);
+        cs.nodes.get("A")!.bounds.width = NaN;
+        expect(selectionFrame(cs, "A")).toBeNull();
+        expect(selectionFrame(cs, "missing")).toBeNull();
+    });
+});
+
+// ─── Resizing runs along the node's OWN axes ───
+describe("Oriented resize", () => {
+    const rect = { left: 0, top: 0 } as DOMRect;
+    const md = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+
+    /** A 100x50 node turned a quarter turn: its local +x axis points DOWN in world. */
+    const turned = () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 100, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {}, transform: { rotation: Math.PI / 2 } });
+        doc.rootNodeUuids = ["A"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A"];
+        return { dispatcher, es, tc: new ToolController(dispatcher, es, () => { }) };
+    };
+
+    test("dragging a corner grows the axis the user is pulling along, not the world one", () => {
+        // The quarter turn puts the box's WIDTH axis along world +y. Pulling the `se` handle
+        // DOWNWARD must therefore make the node wider, not taller. Applying the world delta
+        // straight to width/height — what it used to do — grew the wrong side entirely.
+        const { dispatcher, tc } = turned();
+        tc.onMouseDown(md(25, 75), rect);    // the `se` corner in world
+        tc.onMouseMove(md(25, 95), rect);    // 20 world units DOWN = +20 along the node's width
+        tc.onMouseUp(md(25, 95));
+        const g = dispatcher.getDocument().nodes.get("A")!.geometry;
+        expect(g.width).toBeCloseTo(120, 6);
+        expect(g.height).toBeCloseTo(50, 6);
+    });
+
+    test("…and the opposite corner stays exactly where it is drawn", () => {
+        // The compensation that makes the drag feel anchored. A node rotates about a point given
+        // as a FRACTION of its size, so changing the size moves that point and swings the whole
+        // box; without correcting the stored position for it, the corner the user is not touching
+        // slides out from under itself as soon as the drag starts.
+        const { dispatcher, tc } = turned();
+        const before = selectionFrame(computeGeometry(dispatcher.getDocument()), "A")![0];
+        expect(before.x).toBeCloseTo(75, 6);
+        expect(before.y).toBeCloseTo(-25, 6);
+        tc.onMouseDown(md(25, 75), rect);
+        tc.onMouseMove(md(25, 95), rect);
+        tc.onMouseUp(md(25, 95));
+        const after = selectionFrame(computeGeometry(dispatcher.getDocument()), "A")![0];
+        expect(after.x).toBeCloseTo(before.x, 6);
+        expect(after.y).toBeCloseTo(before.y, 6);
+        // The stored box moved to pay for the origin shift — the corner staying put is the point.
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry).toMatchObject({ x: -10, y: 10 });
+    });
+
+    test("dragging a corner past its opposite CLAMPS instead of flipping the box", () => {
+        // A deliberate change: the old world-space maths let the box invert through the fixed
+        // corner (min/max on the two x's). Under a rotation-origin that is a confusing state to
+        // land in, and the minimum was already being clamped to 1 — so it now stops there.
+        const { dispatcher, tc } = turned();
+        tc.onMouseDown(md(25, 75), rect);
+        tc.onMouseMove(md(25, -500), rect);   // far past the fixed corner
+        tc.onMouseUp(md(25, -500));
+        const g = dispatcher.getDocument().nodes.get("A")!.geometry;
+        expect(g.width).toBe(1);
+        expect(g.height).toBeGreaterThan(0);
+    });
+
+    test("an unrotated node resizes exactly as before", () => {
+        // The identity case has to be untouched: `m = I` collapses the compensation to the
+        // familiar "move the origin by the corner delta", which is what every existing test asserts.
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [], geometry: { x: 10, y: 20, width: 100, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["A"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState(); es.selectedNodeIds = ["A"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        tc.onMouseDown(md(10, 20), rect);     // the `nw` corner
+        tc.onMouseMove(md(0, 10), rect);      // out and up by 10
+        tc.onMouseUp(md(0, 10));
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry).toEqual({ x: 0, y: 10, width: 110, height: 60 });
+    });
+
+    test("worldDeltaToLocal and localLinear invert the frame they are given", () => {
+        const w = compose(0, 0, Math.PI / 2, 1, 1, 50, 25);
+        const d = worldDeltaToLocal(w, 0, 20);            // straight down in world
+        expect(d.x).toBeCloseTo(20, 10);                  // = along the node's +x
+        expect(d.y).toBeCloseTo(0, 10);
+        // SCALE is what makes the determinant matter: 20 world units along an axis drawn at 2x
+        // is only 10 of the node's own units, and a drag that skipped the division would grow
+        // the box twice as fast as the pointer moved.
+        const scaled = compose(0, 0, 0, 2, 1, 0, 0);
+        expect(worldDeltaToLocal(scaled, 20, 0).x).toBeCloseTo(10, 10);
+        expect(worldDeltaToLocal(scaled, 0, 20).y).toBeCloseTo(20, 10);
+        // A collapsed transform has no invertible direction; answer zero rather than Infinity.
+        expect(worldDeltaToLocal({ a: 0, b: 0, c: 0, d: 0, e: 0, f: 0 }, 5, 5)).toEqual({ x: 0, y: 0 });
+        // localLinear strips the PARENT: a child of a turned parent, itself unturned, is identity.
+        const parent = compose(0, 0, Math.PI / 2, 1, 1, 0, 0);
+        const l = localLinear(parent, parent);
+        expect(l.a).toBeCloseTo(1, 10); expect(l.b).toBeCloseTo(0, 10);
+        expect(l.c).toBeCloseTo(0, 10); expect(l.d).toBeCloseTo(1, 10);
+    });
+
+    test("cursorForDirection names the nearest of the four CSS resize cursors", () => {
+        expect(cursorForDirection(1, 1)).toBe("nwse-resize");
+        expect(cursorForDirection(1, -1)).toBe("nesw-resize");
+        expect(cursorForDirection(-1, -1)).toBe("nwse-resize");   // opposite directions share one
+        expect(cursorForDirection(1, 0)).toBe("ew-resize");
+        expect(cursorForDirection(0, 1)).toBe("ns-resize");
+        expect(cursorForDirection(0, 0)).toBe("nwse-resize");     // no direction → a stable default
     });
 });
