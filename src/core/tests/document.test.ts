@@ -45,6 +45,7 @@ import { booleanAction, makeBooleanNodeAction } from "../actions/booleanActions"
 import { SetBooleanOpAction } from "../actions/SetBooleanOpAction";
 import { resolveBooleans } from "../document/Components";
 import { BooleanOp, booleanOpError } from "../document/Node";
+import { TEXT_ALIGNS, FONT_FAMILY_MAX } from "../document/Node";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
@@ -4312,7 +4313,7 @@ describe("Guards the suite did not previously protect", () => {
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
         // time a real migration is added — here, when 32→33 landed for `core.boolean`.)
-        expect(() => migrateIfNeeded(legacy, "34")).toThrow('Migration not implemented for document schema "33"');
+        expect(() => migrateIfNeeded(legacy, "35")).toThrow('Migration not implemented for document schema "34"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -11410,5 +11411,97 @@ describe("core.boolean — the non-destructive combine", () => {
         // …and a selected boolean node offers its operation, with the current one marked.
         expect(src).toMatch(/type === "core\.boolean" && \(/);
         expect(src).toMatch(/onClick=\{\(\) => setBooleanOp\(op\)\}/);
+    });
+});
+
+// ─── Typography (schema 34) ───
+describe("Typography", () => {
+    test("every field is validated on BOTH paths, with the ranges the inspector clamps to", () => {
+        const ok = (patch: object) => styleError({ fill: "#000", opacity: 1, ...patch });
+        expect(ok({})).toBeNull();
+        expect(ok({ fontFamily: "Inter, sans-serif", fontWeight: 700, textAlign: "center", lineHeight: 1.5, letterSpacing: -0.5 })).toBeNull();
+        // Tokens are legal in every NUMBER slot, exactly like fontSize and radius.
+        expect(ok({ fontWeight: "$type/bold", lineHeight: "$type/tight", letterSpacing: "$type/loose" })).toBeNull();
+
+        expect(ok({ fontFamily: "x".repeat(FONT_FAMILY_MAX + 1) })).toContain("fontFamily");
+        expect(ok({ fontFamily: 12 })).toContain("fontFamily");
+        expect(ok({ fontWeight: 0 })).toContain("fontWeight");
+        expect(ok({ fontWeight: 1001 })).toContain("fontWeight");
+        expect(ok({ textAlign: "middle" })).toContain("textAlign");
+        expect(ok({ lineHeight: 0 })).toContain("lineHeight");       // a zero-height line is not a choice
+        expect(ok({ letterSpacing: Infinity })).toContain("letterSpacing");
+        // …but letter spacing may be NEGATIVE: tightening is a real typographic decision.
+        expect(ok({ letterSpacing: -2 })).toBeNull();
+    });
+
+    test("a typographic style round-trips, and a bad one is refused by the LOADER", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("T", { id: "T", type: "core.text", parent: null, children: [], text: "Hi",
+            geometry: { x: 0, y: 0, width: 100, height: 40 }, layout: {},
+            style: { fill: "#111111", opacity: 1, fontFamily: "Inter", fontWeight: 600, textAlign: "right", lineHeight: 1.4, letterSpacing: 1.5 } });
+        doc.rootNodeUuids = ["T"];
+        const loaded = deserializeDocument(serializeDocument(doc));
+        expect(loaded.nodes.get("T")!.style).toMatchObject({
+            fontFamily: "Inter", fontWeight: 600, textAlign: "right", lineHeight: 1.4, letterSpacing: 1.5
+        });
+        (doc.nodes.get("T")!.style as { textAlign?: string }).textAlign = "middle";
+        expect(() => deserializeDocument(serializeDocument(doc))).toThrow(/textAlign/);
+    });
+
+    test("the render model RESOLVES every slot — tokens, ranges and defaults — so backends decide nothing", () => {
+        const doc = createEmptyDocument();
+        doc.variables = {
+            "type/bold": { type: "font", value: 800 },
+            "type/loose": { type: "spacing", value: 3 },
+            "type/broken": { type: "font", value: 99999 }        // resolves, but out of range
+        } as unknown as typeof doc.variables;
+        doc.nodes.set("T", { id: "T", type: "core.text", parent: null, children: [], text: "Hi",
+            geometry: { x: 0, y: 0, width: 100, height: 40 }, layout: {},
+            style: { fill: "#111111", opacity: 1, fontWeight: "$type/bold", letterSpacing: "$type/loose", lineHeight: "$type/broken" } });
+        doc.rootNodeUuids = ["T"];
+        const state = ({ selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed: computeGeometry(doc), viewport: { x: 0, y: 0, zoom: 1 } }) as unknown as import("../../renderer/RendererState").RendererState;
+        const shape = buildRenderModel({ width: 800, height: 600 }, doc, state).content[0].shape as { fontWeight: number; letterSpacing: number; lineHeight: number; fontFamily: string };
+        expect(shape.fontWeight).toBe(800);
+        expect(shape.letterSpacing).toBe(3);
+        // An out-of-RANGE resolved token falls back visibly-but-harmlessly, like radius/fontSize:
+        // the store only promises a finite number, and a legal `spacing` is an illegal line height.
+        expect(shape.lineHeight).toBe(1.2);
+        expect(shape.fontFamily).toBe("sans-serif");   // absent → the default stack
+    });
+
+    test("an empty font family falls back rather than emitting an empty CSS stack", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("T", { id: "T", type: "core.text", parent: null, children: [], text: "Hi",
+            geometry: { x: 0, y: 0, width: 100, height: 40 }, layout: {},
+            style: { fill: "#111111", opacity: 1, fontFamily: "   " } });
+        doc.rootNodeUuids = ["T"];
+        const state = ({ selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed: computeGeometry(doc), viewport: { x: 0, y: 0, zoom: 1 } }) as unknown as import("../../renderer/RendererState").RendererState;
+        const shape = buildRenderModel({ width: 800, height: 600 }, doc, state).content[0].shape as { fontFamily: string };
+        expect(shape.fontFamily).toBe("sans-serif");
+    });
+
+    test("the SVG backend keeps explicit newlines and applies every typography slot", () => {
+        // `emitSVG` needs a DOM, so it is asserted at the source like the other DOM-only rules.
+        // `pre-wrap` is the load-bearing one: the default `normal` collapses a newline to a
+        // space, which is why two-line text was impossible to author before schema 34.
+        const src = readFileSync(resolve(__dirname, "../../renderer/emitSVG.ts"), "utf8");
+        expect(src).toMatch(/div\.style\.whiteSpace = "pre-wrap";/);
+        expect(src).toMatch(/div\.style\.fontFamily = shape\.fontFamily;/);
+        expect(src).toMatch(/div\.style\.fontWeight = String\(shape\.fontWeight\);/);
+        expect(src).toMatch(/div\.style\.textAlign = shape\.textAlign;/);
+        // Unitless line-height is the CSS meaning of a MULTIPLE — appending "px" would make 1.4
+        // a 1.4-pixel line and collapse the text into one band.
+        expect(src).toMatch(/div\.style\.lineHeight = String\(shape\.lineHeight\);/);
+        expect(src).toMatch(/div\.style\.letterSpacing = `\$\{shape\.letterSpacing\}px`;/);
+    });
+
+    test("the inspector offers every control, clamped to the validator's own ranges", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/style: \{ fontFamily: v \}/);
+        expect(src).toMatch(/fontWeight: Math\.min\(1000, Math\.max\(1, v\)\)/);
+        expect(src).toMatch(/lineHeight: Math\.max\(0\.01, v\)/);
+        expect(src).toMatch(/style: \{ letterSpacing: v \}/);       // NOT clamped: negative is legal
+        expect(src).toMatch(/TEXT_ALIGNS\.map\(a =>/);
+        expect(src).toMatch(/if \(v\.length > FONT_FAMILY_MAX\) return;/);
     });
 });

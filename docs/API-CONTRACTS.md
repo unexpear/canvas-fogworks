@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v33 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v34 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -230,6 +230,21 @@ interface SelectionHandle { nodeId: string; handle: HandleId; cx: number; cy: nu
 // (HANDLE_SIZE_PX/floored-zoom) — the SAME square the renderer draws, so grab==draw at every zoom.
 function selectionFrame(s: ComputedState, nodeId: string, pad?: number): Quad | null;  // the node's OWN box in world (nw·ne·se·sw), turned with it; `pad` is a WORLD distance, converted per axis so the gap is even on all four edges under any scale
 function selectionHandles(s: ComputedState, selectedNodeIds: readonly string[], zoom: number): SelectionHandle[]; // 4 corners + rotate per selected node — on the TURNED box, not the world AABB; each cursor comes from the direction its corner points on screen, and the knob rides the turned top edge
+
+// TYPOGRAPHY (schema 34). Five optional Style fields; absent means what was drawn before.
+const TEXT_ALIGNS: readonly ["left", "center", "right", "justify"];
+const FONT_FAMILY_MAX: number;                             // cap on the font STACK string
+interface Style {
+    fontFamily?: string;        // a CSS font STACK, not a resolved face (there is no font loading)
+    fontWeight?: number | string;   // 100-900, or a number token; absent = 400
+    textAlign?: TextAlign;          // absent = "left"
+    lineHeight?: number | string;   // a MULTIPLE of the font size (CSS unitless); absent = 1.2
+    letterSpacing?: number | string; // world units, MAY be negative; absent = 0
+}
+// All five are resolved in the RENDER MODEL (token looked up, range checked, default applied), so
+// the backends transcribe and decide nothing. An out-of-range resolved token falls back like
+// radius/fontSize. An explicit NEWLINE is a hard line break in both backends (SVG sets
+// `white-space: pre-wrap`); `justify` has no canvas equivalent and falls back to left there.
 
 // PathBoolean.ts — union / subtract / intersect / exclude on closed shapes, by edge classification:
 // split every edge where it crosses the other shape, classify each piece by its MIDPOINT, keep what

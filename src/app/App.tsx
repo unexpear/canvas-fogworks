@@ -40,7 +40,7 @@ import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { alignAction, distributeAction } from "../core/actions/alignActions";
 import { booleanAction, makeBooleanNodeAction } from "../core/actions/booleanActions";
 import { SetBooleanOpAction } from "../core/actions/SetBooleanOpAction";
-import { BooleanOp } from "../core/document/Node";
+import { BooleanOp, TEXT_ALIGNS, FONT_FAMILY_MAX } from "../core/document/Node";
 import { DuplicateNodesAction } from "../core/actions/DuplicateNodesAction";
 import { DeleteNodeAction } from "../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../core/actions/TransactionAction";
@@ -1277,6 +1277,48 @@ export function App() {
                                     <NumInput
                                         value={typeof node.style.fontSize === "number" ? node.style.fontSize : 14}
                                         onChange={v => { editSelected({ style: { fontSize: Math.max(1, v) } }); refresh(); }}
+                                    />
+                                    {/* Typography (schema 34). Each control clamps to the same range the
+                                        shared `styleError` enforces, so the inspector cannot author a
+                                        style the loader would refuse. */}
+                                    <label style={INSPECTOR_LABEL}>Font family</label>
+                                    <TextInput
+                                        value={node.style.fontFamily ?? ""}
+                                        placeholder="sans-serif"
+                                        onChange={v => {
+                                            if (v.length > FONT_FAMILY_MAX) return;
+                                            editSelected({ style: { fontFamily: v } });
+                                            refresh();
+                                        }}
+                                    />
+                                    <label style={INSPECTOR_LABEL}>Weight</label>
+                                    <NumInput
+                                        value={typeof node.style.fontWeight === "number" ? node.style.fontWeight : 400}
+                                        onChange={v => { editSelected({ style: { fontWeight: Math.min(1000, Math.max(1, v)) } }); refresh(); }}
+                                    />
+                                    <label style={INSPECTOR_LABEL}>Align</label>
+                                    <div style={{ display: "flex", gap: 4 }}>
+                                        {TEXT_ALIGNS.map(a => (
+                                            <button
+                                                key={a}
+                                                title={`Align ${a}`}
+                                                onClick={() => { editSelected({ style: { textAlign: a } }); refresh(); }}
+                                                style={{
+                                                    ...ALIGN_BUTTON_STYLE, flex: 1,
+                                                    borderColor: (node.style.textAlign ?? "left") === a ? "#00bfff" : "#2a2a4a"
+                                                }}
+                                            >{a === "left" ? "⇤" : a === "center" ? "⇹" : a === "right" ? "⇥" : "≡"}</button>
+                                        ))}
+                                    </div>
+                                    <label style={INSPECTOR_LABEL}>Line height (× size)</label>
+                                    <NumInput
+                                        value={typeof node.style.lineHeight === "number" ? node.style.lineHeight : 1.2}
+                                        onChange={v => { editSelected({ style: { lineHeight: Math.max(0.01, v) } }); refresh(); }}
+                                    />
+                                    <label style={INSPECTOR_LABEL}>Letter spacing</label>
+                                    <NumInput
+                                        value={typeof node.style.letterSpacing === "number" ? node.style.letterSpacing : 0}
+                                        onChange={v => { editSelected({ style: { letterSpacing: v } }); refresh(); }}
                                     />
                                 </InspectorSection>
                             )}

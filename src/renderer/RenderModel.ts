@@ -24,7 +24,7 @@
  */
 
 import { ReadonlyDocument } from "../core/document/Document";
-import { PathCommand, Shadow } from "../core/document/Node";
+import { PathCommand, Shadow, TextAlign } from "../core/document/Node";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
@@ -53,7 +53,13 @@ export type Shape =
     | { kind: "ellipse"; cx: number; cy: number; rx: number; ry: number }
     | { kind: "line"; x1: number; y1: number; x2: number; y2: number }
     | { kind: "path"; commands: readonly PathCommand[] }
-    | { kind: "text"; x: number; y: number; width: number; height: number; text: string; fontSize: number }
+    | {
+        kind: "text"; x: number; y: number; width: number; height: number; text: string;
+        /** Typography, all RESOLVED here (tokens looked up, ranges checked, defaults applied)
+         *  so both backends transcribe numbers and strings and decide nothing. */
+        fontSize: number; fontFamily: string; fontWeight: number; textAlign: TextAlign;
+        lineHeight: number; letterSpacing: number
+    }
     | { kind: "image"; x: number; y: number; width: number; height: number; href: string | null };
 
 /** Compile error if a `PathCommand` variant is ever added without a `commandsToPathData` case. */
@@ -333,6 +339,19 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         const r = typeof raw === "number" ? raw : resolveNumber(store, raw, theme);
         return r !== null && r > 0 ? r : null; // 0/negative/broken → no corner radius (matches the old `sty.radius ? …` truthiness)
     };
+    /**
+     * A resolved NUMBER slot with a range and a fallback (schema 34 typography).
+     *
+     * The same rule `radiusOf`/`fontSizeOf` follow, generalised because there are now five of
+     * them: resolve a token, range-check the RESULT (the store only promises a finite number —
+     * a legal `spacing` variable is an illegal font weight), and fall back visibly-but-harmlessly
+     * rather than letting a broken token reach a backend.
+     */
+    const numberSlot = (raw: number | string | undefined, fallback: number, min: number, max: number): number => {
+        if (raw === undefined) return fallback;
+        const n = typeof raw === "number" ? raw : resolveNumber(store, raw, theme);
+        return n !== null && n >= min && n <= max ? n : fallback;
+    };
     const fontSizeOf = (raw: number | string | undefined): number => {
         if (raw === undefined) return 14;
         const r = typeof raw === "number" ? raw : resolveNumber(store, raw, theme);
@@ -430,7 +449,17 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 pointerEvents: true
             };
         } else if (node.type === "core.text") {
-            shape = { kind: "text", x, y, width, height, text: node.text ?? "Text", fontSize: fontSizeOf(sty.fontSize) };
+            shape = {
+                kind: "text", x, y, width, height, text: node.text ?? "Text",
+                fontSize: fontSizeOf(sty.fontSize),
+                fontFamily: sty.fontFamily && sty.fontFamily.trim() !== "" ? sty.fontFamily : "sans-serif",
+                fontWeight: numberSlot(sty.fontWeight, 400, 1, 1000),
+                textAlign: sty.textAlign ?? "left",
+                // `normal` in a browser is ~1.2, which is what the Canvas backend already used to
+                // break lines — so an absent line height keeps the two backends where they were.
+                lineHeight: numberSlot(sty.lineHeight, 1.2, 0.01, 100),
+                letterSpacing: numberSlot(sty.letterSpacing, 0, -1e6, 1e6)
+            };
             paint = {
                 fill: color(sty.fill), opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
                 strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur

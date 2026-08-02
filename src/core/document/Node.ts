@@ -418,6 +418,12 @@ export interface Shadow {
     color: string;   // colour value or token id, like `fill` (not parsed)
 }
 
+/** Horizontal text alignment inside a node's box (schema 34). */
+export const TEXT_ALIGNS = ["left", "center", "right", "justify"] as const;
+export type TextAlign = typeof TEXT_ALIGNS[number];
+/** Cap on a font STACK string — hand-editable and it reaches CSS, so it is bounded like `name`. */
+export const FONT_FAMILY_MAX = 200;
+
 /** Style holds the visual attributes that define appearance. */
 export interface Style {
     fill: string;      // Color value or token ID (e.g., "$color/primary")
@@ -434,6 +440,23 @@ export interface Style {
     opacity: number;
     /** Text font size in world units (defaults to 14) — a number, or a number-token reference (schema 20). */
     fontSize?: number | string;
+    /**
+     * TYPOGRAPHY (schema 34). Every one of these is optional and absent means the old default,
+     * so a schema-33 document draws identically — the bump is for the fields themselves.
+     *
+     * `fontFamily` is a CSS font STACK ("Inter, sans-serif"), not a resolved face: the app has
+     * no font loading, so what a family means is the platform's answer, and pretending
+     * otherwise would be a promise the renderer cannot keep.
+     */
+    fontFamily?: string;
+    /** 100–900, or a number token. Absent = 400. */
+    fontWeight?: number | string;
+    /** Horizontal alignment inside the node's box. Absent = "left". */
+    textAlign?: TextAlign;
+    /** A MULTIPLE of the font size (CSS unitless line-height), > 0. Absent = 1.2, the browser's `normal`. */
+    lineHeight?: number | string;
+    /** Extra space between characters, in WORLD units like `fontSize`. May be negative (tightening). Absent = 0. */
+    letterSpacing?: number | string;
     shadow?: Shadow;   // Drop shadow (schema 18); absent = none
     blur?: number;     // Whole-node gaussian blur radius in world units, >= 0 (schema 18); absent/0 = none
 }
@@ -457,6 +480,20 @@ export function styleError(s: Partial<Style>): string | null {
         && (typeof s.radius !== "number" || !Number.isFinite(s.radius) || s.radius < 0)) return "style.radius must be >= 0 or a $token";
     if ("fontSize" in s && s.fontSize !== undefined && !isNumberToken(s.fontSize)
         && (typeof s.fontSize !== "number" || !Number.isFinite(s.fontSize) || s.fontSize <= 0)) return "style.fontSize must be > 0 or a $token";
+    // TYPOGRAPHY (schema 34). Same shape as fontSize: a concrete number in range, or a token.
+    // `fontFamily` is a bounded string — hand-editable, and it reaches CSS, so it is capped like
+    // `name` rather than left unbounded.
+    if ("fontFamily" in s && s.fontFamily !== undefined
+        && (typeof s.fontFamily !== "string" || s.fontFamily.length > FONT_FAMILY_MAX)) return `style.fontFamily must be a string of at most ${FONT_FAMILY_MAX} characters`;
+    if ("fontWeight" in s && s.fontWeight !== undefined && !isNumberToken(s.fontWeight)
+        && (typeof s.fontWeight !== "number" || !Number.isFinite(s.fontWeight) || s.fontWeight < 1 || s.fontWeight > 1000)) return "style.fontWeight must be within [1, 1000] or a $token";
+    if ("textAlign" in s && s.textAlign !== undefined
+        && !(TEXT_ALIGNS as readonly string[]).includes(s.textAlign as string)) return `style.textAlign must be one of ${TEXT_ALIGNS.join(", ")}`;
+    if ("lineHeight" in s && s.lineHeight !== undefined && !isNumberToken(s.lineHeight)
+        && (typeof s.lineHeight !== "number" || !Number.isFinite(s.lineHeight) || s.lineHeight <= 0)) return "style.lineHeight must be > 0 or a $token";
+    // Letter spacing is the one that may be NEGATIVE — tightening is a real typographic choice.
+    if ("letterSpacing" in s && s.letterSpacing !== undefined && !isNumberToken(s.letterSpacing)
+        && (typeof s.letterSpacing !== "number" || !Number.isFinite(s.letterSpacing))) return "style.letterSpacing must be a finite number or a $token";
     // strokeWidth (schema 25): same shape as radius — >= 0 (0 means "no visible border") or a token.
     if ("strokeWidth" in s && s.strokeWidth !== undefined && !isNumberToken(s.strokeWidth)
         && (typeof s.strokeWidth !== "number" || !Number.isFinite(s.strokeWidth) || s.strokeWidth < 0)) return "style.strokeWidth must be >= 0 or a $token";

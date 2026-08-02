@@ -286,6 +286,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "30") { raw = migrate_30_to_31(raw); version = "31"; }
     if (version === "31") { raw = migrate_31_to_32(raw); version = "32"; }
     if (version === "32") { raw = migrate_32_to_33(raw); version = "33"; }
+    if (version === "33") { raw = migrate_33_to_34(raw); version = "34"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -586,6 +587,21 @@ function migrate_21_to_22(raw: any): any {
  * (or fall back to a placeholder box) instead of the combined shape, which is a different picture
  * from the same file. That is exactly the disagreement a version guard exists to prevent.
  */
+/**
+ * 33 -> 34: TYPOGRAPHY — fontFamily, fontWeight, textAlign, lineHeight, letterSpacing.
+ *
+ * Five new optional style fields, each absent meaning the value already being drawn, so every
+ * schema-33 document is a valid 34 one and looks the same. The bump is required for a smaller
+ * reason that is easy to miss: an OLD BUILD reading a 34 file would IGNORE them and draw the
+ * text left-aligned at weight 400 in the default family, which is a different picture from the
+ * same file. It also carries one INTERPRETATION change — an explicit newline is now a hard line
+ * break in both backends (the SVG one sets `white-space: pre-wrap`) where it used to collapse to
+ * a space, so text that was authored as one paragraph draws as several.
+ */
+function migrate_33_to_34(raw: any): any {
+    return { ...raw, version: "34" };
+}
+
 function migrate_32_to_33(raw: any): any {
     return { ...raw, version: "33" };
 }

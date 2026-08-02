@@ -56,6 +56,7 @@ class MockCtx {
     private _lineWidth = 1; get lineWidth() { return this._lineWidth; } set lineWidth(v: number) { this._lineWidth = v; this.log("set lineWidth", v); }
     private _globalAlpha = 1; get globalAlpha() { return this._globalAlpha; } set globalAlpha(v: number) { this._globalAlpha = v; this.log("set globalAlpha", v); }
     private _font = ""; get font() { return this._font; } set font(v: string) { this._font = v; this.log("set font", v); }
+    private _textAlign = ""; get textAlign() { return this._textAlign; } set textAlign(v: string) { this._textAlign = v; this.log("set textAlign", v); }
     private _textBaseline = ""; get textBaseline() { return this._textBaseline; } set textBaseline(v: string) { this._textBaseline = v; this.log("set textBaseline", v); }
     private _shadowColor = ""; get shadowColor() { return this._shadowColor; } set shadowColor(v: string) { this._shadowColor = v; this.log("set shadowColor", v); }
     private _shadowBlur = 0; get shadowBlur() { return this._shadowBlur; } set shadowBlur(v: number) { this._shadowBlur = v; this.log("set shadowBlur", v); }
@@ -184,8 +185,8 @@ describe("emitCanvas — shapes", () => {
     test("text: a short line stays a SINGLE fillText, top baseline, clipped to the box", () => {
         const doc = docWith({ type: "core.text", text: "hi", style: { fill: "#111", opacity: 1, fontSize: 20 } });
         const b = bracket(run(doc).calls, "fillText");
-        expect(ops(b)).toEqual(["save", "translate", "set font", "set globalAlpha", "set fillStyle", "set textBaseline", "beginPath", "rect", "clip", "fillText", "restore"]);
-        expect(call(b, "set font")!.args).toEqual(["20px sans-serif"]);
+        expect(ops(b)).toEqual(["save", "translate", "set font", "set globalAlpha", "set fillStyle", "set textBaseline", "beginPath", "rect", "clip", "set textAlign", "fillText", "restore"]);   // textAlign is set after the clip, before the first line (schema 34)
+        expect(call(b, "set font")!.args).toEqual(["400 20px sans-serif"]);   // weight + size + family (schema 34)
         expect(call(b, "set textBaseline")!.args).toEqual(["top"]);
         expect(call(b, "fillText")!.args).toEqual(["hi", 0, 0]);
     });
@@ -233,7 +234,7 @@ describe("emitCanvas — shapes", () => {
         expect(ops(b)).toContain("clip"); // overflow is cropped by the box clip, not dropped
     });
 
-    test("ALL whitespace (newlines, tabs, runs) collapses and breaks — matching the HTML backend", () => {
+    test("a NEWLINE is a hard break; tabs and runs still collapse", () => {
         // "aaaa\nbbbb\tcccc" with box 100 (10px/char): words [aaaa,bbbb,cccc] exactly like
         // spaces — a \n inside a "word" would have made one overlong unwrapped line.
         const doc = docWith({
@@ -243,9 +244,45 @@ describe("emitCanvas — shapes", () => {
         });
         const b = bracket(run(doc).calls, "fillText");
         expect(b.filter(c => c.op === "fillText").map(c => c.args)).toEqual([
-            ["aaaa bbbb", 0, 0],  // \n collapsed to a single-space separator (90px fits)
-            ["cccc dddd", 0, 12]  // \t and the double space likewise
+            ["aaaa", 0, 0],        // the \n ends the line, short though it is
+            ["bbbb cccc", 0, 12],  // \t and the double space are still just separators
+            ["dddd", 0, 24]        // …and the paragraph still wraps on the box width
         ]);
+    });
+
+    test("line height scales the line STEP, so leading is a real control", () => {
+        // 10px font at 2.0 -> a 20px step, not the browser-normal 12. The wrap itself is
+        // unchanged: line height moves lines apart, it does not decide where they break.
+        const doc = docWith({
+            type: "core.text", text: "aaaa bbbb cccc",
+            geometry: { x: 0, y: 0, width: 100, height: 200 },
+            style: { fill: "#111", opacity: 1, fontSize: 10, lineHeight: 2 }
+        });
+        const b = bracket(run(doc).calls, "fillText");
+        expect(b.filter(c => c.op === "fillText").map(c => c.args)).toEqual([
+            ["aaaa bbbb", 0, 0],
+            ["cccc", 0, 20]
+        ]);
+    });
+
+    test("alignment moves the ANCHOR, because that is how canvas aligns", () => {
+        // Canvas draws about an anchor point rather than inside a box, so alignment has to move
+        // the x it is given as well as set `textAlign` -- otherwise centred text draws centred
+        // ON the left edge, half of it outside the node.
+        const mk = (textAlign: string) => docWith({
+            type: "core.text", text: "aa",
+            geometry: { x: 0, y: 0, width: 100, height: 50 },
+            style: { fill: "#111", opacity: 1, fontSize: 10, textAlign } as never
+        });
+        const at = (align: string) => {
+            const b = bracket(run(mk(align)).calls, "fillText");
+            return { align: (call(b, "set textAlign") || { args: ["left"] }).args[0], x: b.filter(c => c.op === "fillText")[0].args[1] };
+        };
+        expect(at("left")).toEqual({ align: "left", x: 0 });
+        expect(at("center")).toEqual({ align: "center", x: 50 });
+        expect(at("right")).toEqual({ align: "right", x: 100 });
+        // `justify` has no canvas equivalent -- it falls back to left rather than inventing one.
+        expect(at("justify")).toEqual({ align: "left", x: 0 });
     });
 
     test("empty / whitespace-only text emits ONE empty fillText (draws nothing, never throws)", () => {

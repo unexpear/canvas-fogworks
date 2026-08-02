@@ -81,7 +81,12 @@ describe("buildRenderModel — content", () => {
     test("text → text shape carrying content + fontSize, fill as color", () => {
         const doc = docWith({ type: "core.text", text: "Hello", style: { fill: "#0af", opacity: 1, fontSize: 20 } });
         const item = buildRenderModel(SIZE, doc, stateFor(doc)).content[0];
-        expect(item.shape).toEqual({ kind: "text", x: 0, y: 0, width: 200, height: 100, text: "Hello", fontSize: 20 });
+        // Every typography slot is RESOLVED here, defaults included, so both backends transcribe
+        // and neither decides. The defaults reproduce what was drawn before schema 34.
+        expect(item.shape).toEqual({
+            kind: "text", x: 0, y: 0, width: 200, height: 100, text: "Hello", fontSize: 20,
+            fontFamily: "sans-serif", fontWeight: 400, textAlign: "left", lineHeight: 1.2, letterSpacing: 0
+        });
         expect(item.paint.fill).toBe("#0af");
         expect(item.paint.opacity).toBe(1);
     });

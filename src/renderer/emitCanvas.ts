@@ -88,21 +88,26 @@ function unreachable(x: never): never {
  * `breakFlexLines` uses. Empty/whitespace-only text → one empty line (fillText draws nothing).
  */
 function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-    const words = text.split(/\s+/).filter(w => w.length > 0); // collapse runs, drop leading/trailing
-    if (words.length === 0) return [""];
+    // EXPLICIT newlines break first, then each paragraph wraps on the box width. Collapsing them
+    // (as this used to, via a single `\s+` split) made the Canvas backend silently reflow text
+    // the SVG backend — now `white-space: pre-wrap` — keeps on separate lines.
     const lines: string[] = [];
-    let line = "";
-    for (const word of words) {
-        const candidate = line === "" ? word : `${line} ${word}`;
-        if (line !== "" && ctx.measureText(candidate).width > maxWidth) {
-            lines.push(line);
-            line = word;
-        } else {
-            line = candidate;
+    for (const paragraph of text.split("\n")) {
+        const words = paragraph.split(/[^\S\n]+/).filter(w => w.length > 0);
+        if (words.length === 0) { lines.push(""); continue; }
+        let line = "";
+        for (const word of words) {
+            const candidate = line === "" ? word : `${line} ${word}`;
+            if (line !== "" && ctx.measureText(candidate).width > maxWidth) {
+                lines.push(line);
+                line = word;
+            } else {
+                line = candidate;
+            }
         }
+        lines.push(line);
     }
-    lines.push(line);
-    return lines;
+    return lines.length > 0 ? lines : [""];
 }
 
 function fillAndStroke(ctx: CanvasRenderingContext2D, paint: Paint): void {
@@ -161,7 +166,14 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): v
             // browser's `normal` (~1.2 × font size) so the two backends break comparably —
             // exact metric parity with the SVG `<foreignObject>`'s HTML layout stays the
             // documented inherent gap (canvas measures, the browser typesets).
-            ctx.font = `${shape.fontSize}px sans-serif`;
+            // Typography (schema 34), all resolved by the model. `font` carries weight and family
+            // and must be set BEFORE measuring; `letterSpacing` is a newer context property, so it
+            // is feature-detected rather than assumed (it also feeds `measureText`, which is why it
+            // is set before wrapping rather than after).
+            ctx.font = `${shape.fontWeight} ${shape.fontSize}px ${shape.fontFamily}`;
+            if ("letterSpacing" in ctx) {
+                (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = `${shape.letterSpacing}px`;
+            }
             if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
             if (paint.fill !== null) ctx.fillStyle = paint.fill;
             ctx.textBaseline = "top";
@@ -169,10 +181,17 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): v
             ctx.rect(shape.x, shape.y, shape.width, shape.height);
             ctx.clip();
             {
-                const lineHeight = shape.fontSize * 1.2;
+                const lineHeight = shape.fontSize * shape.lineHeight;
                 const lines = wrapText(ctx, shape.text, shape.width);
+                // Canvas aligns about an ANCHOR, so the anchor moves with the alignment rather
+                // than the text. `justify` has no canvas equivalent and falls back to left — a
+                // documented gap, like the wider metric difference between the two backends.
+                ctx.textAlign = shape.textAlign === "center" ? "center" : shape.textAlign === "right" ? "right" : "left";
+                const anchorX = shape.textAlign === "center" ? shape.x + shape.width / 2
+                    : shape.textAlign === "right" ? shape.x + shape.width
+                        : shape.x;
                 for (let i = 0; i < lines.length; i++) {
-                    ctx.fillText(lines[i], shape.x, shape.y + i * lineHeight);
+                    ctx.fillText(lines[i], anchorX, shape.y + i * lineHeight);
                 }
             }
             return;

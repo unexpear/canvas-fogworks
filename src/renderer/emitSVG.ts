@@ -148,6 +148,16 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         div.style.height = "100%";
         if (paint.fill !== null) div.style.color = paint.fill;
         div.style.fontSize = `${shape.fontSize}px`;
+        // Typography (schema 34). The model resolved every one of these, so this is transcription:
+        // family and weight as given, alignment as CSS, line height as a UNITLESS multiple (the
+        // CSS meaning), letter spacing in the same world units as the font size.
+        div.style.fontFamily = shape.fontFamily;
+        div.style.fontWeight = String(shape.fontWeight);
+        div.style.textAlign = shape.textAlign;
+        div.style.lineHeight = String(shape.lineHeight);
+        div.style.letterSpacing = `${shape.letterSpacing}px`;
+        // Explicit newlines are honoured; the browser still wraps on the box width.
+        div.style.whiteSpace = "pre-wrap";
         div.style.overflow = "hidden";
         div.textContent = shape.text;
         fo.appendChild(div);
