@@ -44,6 +44,8 @@ import { BooleanOp, TEXT_ALIGNS, FONT_FAMILY_MAX, StateDefinition } from "../cor
 import { blendStates, easingAt, TRIGGERS, EASINGS, TRANSITION_MAX_MS, Interaction, Trigger, Easing } from "../core/document/Prototype";
 import { lerpViewport } from "../editor/EditorState";
 import { SetInteractionsAction } from "../core/actions/SetInteractionsAction";
+import { compileScript, snapshotFor } from "../core/script/ScriptApi";
+import { runScript } from "../editor/ScriptRunner";
 import { applyActiveState } from "../core/document/Components";
 import { DuplicateNodesAction } from "../core/actions/DuplicateNodesAction";
 import { DeleteNodeAction } from "../core/actions/DeleteNodeAction";
@@ -246,6 +248,7 @@ export function App() {
     const [backend, setBackend] = useState<RenderBackend>("svg");
     const [showFolders, setShowFolders] = useState(false);
     const [showTokens, setShowTokens] = useState(false);
+    const [showScript, setShowScript] = useState(false);
     // The layer drag in flight: what is being dragged, and where the pointer currently is.
     // Kept in React state (not a ref) because the row that is being hovered has to REDRAW to
     // show the indicator — a ref would move the data without moving the picture.
@@ -1077,6 +1080,13 @@ export function App() {
                     ◈ Tokens
                 </button>
                 <button
+                    title="Scripts — run a small program against the document; it can only emit the same Actions you can"
+                    onClick={() => setShowScript(v => !v)}
+                    style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: showScript ? UI.accentSoft : "transparent", color: "#ccc", border: `1px solid ${UI.line}`, borderRadius: 3, cursor: "pointer" }}
+                >
+                    &gt;_ Script
+                </button>
+                <button
                     title="Folders — scan a codebase for capabilities with no UI, or browse an image folder"
                     onClick={() => setShowFolders(v => !v)}
                     style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: showFolders ? UI.accentSoft : "transparent", color: "#ccc", border: `1px solid ${UI.line}`, borderRadius: 3, cursor: "pointer" }}
@@ -1250,6 +1260,12 @@ export function App() {
                     <div style={{ position: "absolute", top: 0, left: 0, width: RULER, height: RULER, background: UI.panel, borderRight: `1px solid ${UI.line}`, borderBottom: "1px solid #2a2a4a" }} />
                 </div>
 
+                {showScript && (
+                    <div style={{ width: 300, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
+                        <div style={PANEL_HEADING}>Script</div>
+                        <ScriptPanel dispatcher={dispatcher} refresh={refresh} />
+                    </div>
+                )}
                 {showTokens && (
                     <div style={{ width: 230, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
                         <div style={PANEL_HEADING}>Tokens</div>
@@ -2418,6 +2434,86 @@ function TrackListInput({ value, placeholder, allowEmpty, onCommit }: {
                 }}
             />
             {error && <div style={{ fontSize: 10, color: UI.warn, marginBottom: 4 }}>{error}</div>}
+        </>
+    );
+}
+
+/**
+ * The SCRIPT panel (Milestone 15) — write a small program, run it, see what it did.
+ *
+ * The panel is deliberately thin, because none of the safety lives here: the script runs in a
+ * worker (`runScript`) and comes back as plain data, which `compileScript` turns into ordinary
+ * Actions — the same ones the inspector builds — inside ONE transaction. So a script is one undo,
+ * and a script cannot do anything a person could not do by hand.
+ *
+ * Refusals are SHOWN. A script that asked for twelve things and got ten is a fact its author
+ * needs; swallowing the two would leave them debugging a program that looked like it ran.
+ */
+function ScriptPanel({ dispatcher, refresh }: { dispatcher: ActionDispatcher; refresh: () => void }) {
+    const [source, setSource] = useState(
+        "// `api.nodes` is a snapshot; every call queues one edit.\n" +
+        "for (const n of api.nodes) {\n" +
+        "  if (n.type === \"core.rectangle\") api.style(n.id, { fill: \"#00bfff\" });\n" +
+        "}\n"
+    );
+    const [output, setOutput] = useState<string[]>([]);
+    const [busy, setBusy] = useState(false);
+
+    const run = async () => {
+        setBusy(true);
+        setOutput([]);
+        const doc = dispatcher.getDocument();
+        const result = await runScript(source, snapshotFor(doc));
+        const lines = [...result.log];
+        if (result.error) lines.push(`error: ${result.error}`);
+
+        // Compile against the CURRENT document — the script ran against a snapshot, and anything
+        // that changed underneath it is caught by each Action's own validator rather than assumed.
+        const compiled = compileScript(dispatcher.getDocument(), result.requests, () => crypto.randomUUID());
+        lines.push(...compiled.refusals.map(r => `refused ${r}`));
+        if (compiled.action) {
+            const ok = dispatcher.dispatchAction(compiled.action).success;
+            lines.push(ok ? `applied ${result.requests.length - compiled.refusals.length} edit(s) — one undo`
+                : "the transaction was refused as a whole");
+        } else if (!result.error) {
+            lines.push("nothing to apply");
+        }
+        setOutput(lines);
+        setBusy(false);
+        refresh();
+    };
+
+    return (
+        <>
+            <div style={{ color: UI.textFaint, fontSize: 10, marginBottom: 6 }}>
+                Runs in a sandbox with no page, no filesystem and no network. It can only ask for
+                edits — each one is validated, and the whole run is a single undo.
+            </div>
+            <textarea
+                value={source}
+                onChange={e => setSource(e.target.value)}
+                spellCheck={false}
+                style={{
+                    width: "100%", height: 180, boxSizing: "border-box", fontSize: 11,
+                    fontFamily: "ui-monospace, Consolas, monospace", padding: 6,
+                    background: UI.bg, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3
+                }}
+            />
+            <button
+                onClick={run}
+                disabled={busy}
+                style={{
+                    marginTop: 6, width: "100%", fontSize: 11, padding: "4px 8px",
+                    background: busy ? "transparent" : UI.accentSoft, color: "#ccc",
+                    border: `1px solid ${UI.line}`, borderRadius: 3, cursor: busy ? "default" : "pointer"
+                }}
+            >{busy ? "Running…" : "▶ Run"}</button>
+            {output.length > 0 && (
+                <pre style={{
+                    marginTop: 8, fontSize: 10, whiteSpace: "pre-wrap", color: UI.textDim,
+                    background: UI.bg, border: `1px solid ${UI.line}`, borderRadius: 3, padding: 6
+                }}>{output.join("\n")}</pre>
+            )}
         </>
     );
 }

@@ -50,6 +50,8 @@ import { blendColor, blendStates, easingAt, interactionFor, interactionsError, I
 import { applyActiveState } from "../document/Components";
 import { SetInteractionsAction } from "../actions/SetInteractionsAction";
 import { viewportToFit, lerpViewport } from "../../editor/EditorState";
+import { compileScript, snapshotFor, actionRequestError, SCRIPT_MAX_REQUESTS } from "../script/ScriptApi";
+import { WORKER_BOOTSTRAP } from "../../editor/ScriptRunner";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
@@ -11883,5 +11885,150 @@ describe("Prototype navigation", () => {
         // and "playing is not editing" has to cover where you are looking, not just the document.
         expect(src).toMatch(/es\.playReturnViewport = \{ \.\.\.es\.viewport \};/);
         expect(src).toMatch(/Object\.assign\(es\.viewport, es\.playReturnViewport\);/);
+    });
+});
+
+// ─── Scripting (M15): the boundary between a program and the document ───
+describe("Script API", () => {
+    const scriptDoc = (): ProjectDocument => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [], name: "Box",
+            geometry: { x: 10, y: 20, width: 100, height: 50 }, style: { fill: "#ff0000", opacity: 1 }, layout: {} } as Node);
+        doc.nodes.set("T", { id: "T", type: "core.text", parent: null, children: [], text: "hi",
+            geometry: { x: 0, y: 0, width: 80, height: 20 }, style: { fill: "#111111", opacity: 1 }, layout: {} } as Node);
+        doc.rootNodeUuids = ["A", "T"];
+        return doc;
+    };
+    const ids = (() => { let n = 0; return () => `new-${n++}`; })();
+
+    test("the snapshot is PLAIN, FROZEN data — no document, no methods, no live reference", () => {
+        // The first half of the guarantee: a script cannot reach the document because it is never
+        // given anything connected to it.
+        const doc = scriptDoc();
+        const snap = snapshotFor(doc);
+        expect(Object.isFrozen(snap)).toBe(true);
+        expect(Object.isFrozen(snap.nodes[0])).toBe(true);
+        const a = snap.nodes.find(n => n.id === "A")!;
+        expect(a).toEqual({
+            id: "A", type: "core.rectangle", name: "Box", parent: null, children: [],
+            x: 10, y: 20, width: 100, height: 50, fill: "#ff0000", opacity: 1, text: null
+        });
+        // Everything survives a JSON round trip, which is what "plain" means in practice.
+        expect(JSON.parse(JSON.stringify(snap))).toEqual(snap);
+    });
+
+    test("requests are shape-checked, and an unknown operation is simply not one", () => {
+        expect(actionRequestError({ op: "move", id: "A", x: 1, y: 2 })).toBeNull();
+        expect(actionRequestError({ op: "evil", id: "A" })).toContain("unknown operation");
+        expect(actionRequestError("move A 1 2")).toContain("must be an object");
+        expect(actionRequestError({ op: "move", id: "A", x: "1", y: 2 })).toContain("move needs");
+        expect(actionRequestError({ op: "move", id: "A", x: NaN, y: 2 })).toContain("move needs");
+        expect(actionRequestError({ op: "create", nodeType: "core.evil", x: 0, y: 0, width: 1, height: 1 })).toContain("create needs");
+        expect(actionRequestError({ op: "style", id: "A", style: [] })).toContain("style needs");
+        expect(actionRequestError({ op: "delete", id: "" })).toContain("delete needs");
+    });
+
+    test("a script's requests become ONE transaction — the whole run is a single undo", () => {
+        const doc = scriptDoc();
+        const dispatcher = new ActionDispatcher(doc);
+        const { action, refusals } = compileScript(doc, [
+            { op: "move", id: "A", x: 200, y: 300 },
+            { op: "style", id: "A", style: { fill: "#00ff00" } },
+            { op: "text", id: "T", text: "changed" }
+        ], ids);
+        expect(refusals).toEqual([]);
+        expect(dispatcher.dispatchAction(action!).success).toBe(true);
+        const after = dispatcher.getDocument();
+        expect(after.nodes.get("A")!.geometry).toMatchObject({ x: 200, y: 300 });
+        expect(after.nodes.get("A")!.style.fill).toBe("#00ff00");
+        expect(after.nodes.get("T")!.text).toBe("changed");
+        // ONE undo puts all three back: a script that half-ran would be worse than one that did not.
+        dispatcher.undo();
+        const back = dispatcher.getDocument();
+        expect(back.nodes.get("A")!.geometry).toMatchObject({ x: 10, y: 20 });
+        expect(back.nodes.get("A")!.style.fill).toBe("#ff0000");
+        expect(back.nodes.get("T")!.text).toBe("hi");
+    });
+
+    test("a request cannot author anything the SCHEMA refuses — the Action's own validator decides", () => {
+        // The load-bearing property: this module holds no copy of the schema's rules, so a script
+        // is bounded by exactly the same validators the inspector and the loader run.
+        const doc = scriptDoc();
+        // The legal request comes FIRST, so a refusal that discarded what was already queued
+        // would be caught: "one bad line kills the run" is a different, much worse behaviour.
+        const { action, refusals } = compileScript(doc, [
+            { op: "move", id: "A", x: 1, y: 1 },                    // legal, and must survive
+            { op: "resize", id: "A", width: 0, height: 0 },         // a rectangle needs positive dimensions
+            { op: "style", id: "A", style: { opacity: 5 } }         // out of [0,1]
+        ], ids);
+        expect(refusals.length).toBe(2);
+        expect(refusals[0]).toContain("resize refused");
+        expect(refusals[1]).toContain("style refused");
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(action!);
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry).toMatchObject({ x: 1, y: 1, width: 100 });
+    });
+
+    test("a request naming a node that is not EDITABLE is refused, not guessed at", () => {
+        const doc = scriptDoc();
+        const { action, refusals } = compileScript(doc, [{ op: "move", id: "nope", x: 0, y: 0 }], ids);
+        expect(action).toBeNull();
+        expect(refusals[0]).toContain('no editable node "nope"');
+        // An instance COPY has no stored identity — editing one means writing an override, which
+        // is a different operation with different rules. Inventing it here would let a script
+        // reach through a component silently.
+        const withCopy = compileScript(doc, [{ op: "move", id: "I::MC", x: 0, y: 0 }], ids);
+        expect(withCopy.action).toBeNull();
+        expect(withCopy.refusals[0]).toContain("no editable node");
+    });
+
+    test("create and delete work, and a bad request never blocks the good ones", () => {
+        const doc = scriptDoc();
+        const dispatcher = new ActionDispatcher(doc);
+        const { action, refusals } = compileScript(doc, [
+            { op: "create", nodeType: "core.ellipse", x: 5, y: 5, width: 30, height: 30, fill: "#0000ff" },
+            { op: "nonsense" },
+            { op: "delete", id: "T" }
+        ], () => "made");
+        expect(refusals.length).toBe(1);
+        expect(dispatcher.dispatchAction(action!).success).toBe(true);
+        expect(dispatcher.getDocument().nodes.get("made")!.type).toBe("core.ellipse");
+        expect(dispatcher.getDocument().nodes.has("T")).toBe(false);
+    });
+
+    test("an empty or entirely-refused run produces NO action, so it pushes no undo step", () => {
+        const doc = scriptDoc();
+        expect(compileScript(doc, [], ids).action).toBeNull();
+        expect(compileScript(doc, [{ op: "move", id: "ghost", x: 0, y: 0 }], ids).action).toBeNull();
+    });
+
+    test("a runaway script is bounded by a request cap, reported rather than silently truncated", () => {
+        const doc = scriptDoc();
+        const many = new Array(SCRIPT_MAX_REQUESTS + 1).fill({ op: "move", id: "A", x: 1, y: 1 });
+        const { action, refusals } = compileScript(doc, many, ids);
+        expect(action).toBeNull();
+        expect(refusals[0]).toContain("at most");
+    });
+
+    test("the SANDBOX removes what a worker still has, and cannot be reached from user code", () => {
+        // `runScript` needs a Worker, which the node test env has none of — so the bootstrap is
+        // asserted as source, the same way the DOM-only backend rules are.
+        for (const global of ["fetch", "XMLHttpRequest", "WebSocket", "importScripts", "indexedDB"]) {
+            expect(WORKER_BOOTSTRAP).toContain(`self.${global} = undefined`);
+        }
+        // User code is compiled in its OWN scope, so it cannot see the requests array it feeds.
+        expect(WORKER_BOOTSTRAP).toContain('new Function("api", source)(api)');
+        // …and the api it is given cannot be swapped out from under the host.
+        expect(WORKER_BOOTSTRAP).toContain("Object.freeze({");
+    });
+
+    test("the panel compiles against the CURRENT document and shows every refusal", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        // The script ran against a SNAPSHOT; anything that changed underneath it must be caught
+        // by the validators rather than assumed away.
+        expect(src).toMatch(/compileScript\(dispatcher\.getDocument\(\), result\.requests,/);
+        expect(src).toMatch(/lines\.push\(\.\.\.compiled\.refusals\.map/);
+        // One dispatch, so one undo.
+        expect(src).toMatch(/dispatcher\.dispatchAction\(compiled\.action\)\.success/);
     });
 });

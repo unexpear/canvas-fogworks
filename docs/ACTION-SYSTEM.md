@@ -250,6 +250,16 @@ that resolves last-wins instead of dropping both.
 
 Because every change is a validated, serializable, reversible Action funnelled through
 one dispatcher:
+- **Milestone 15 (Scripting) is now real, and it is that promise mechanised.** A script runs
+  in a WORKER (no DOM, no preload bridge, and the network globals deleted by the bootstrap), and
+  the boundary is plain data in both directions: it receives a frozen SNAPSHOT, never the
+  document, and returns REQUESTS, never Actions. `compileScript` turns those into ordinary
+  Actions, each one validated by the SAME validator the inspector and the loader run — so a
+  script can only ask for edits a person could make by hand, and the whole run lands as one
+  transaction, one undo. Refusals are reported per request rather than thrown, because one bad
+  line must not discard the good ones. A runaway script is stopped by TERMINATING the worker;
+  that is the only reliable interrupt for a loop, and the reason scripts are not run on the
+  main thread at all.
 - **Milestone 14 (AI)** and **Milestone 15 (Plugins)** can only ever emit Actions — they
   cannot corrupt the document or bypass history.
 - **Milestone 16 (Collaboration)** gets a clean, linear, serializable revision stream to
