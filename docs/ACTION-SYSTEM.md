@@ -231,6 +231,18 @@ the effects of the previous ones (e.g. create-a-node-then-move-it in one transac
 using the same `applyMutationsToDocument` as the live path. If any component fails
 validation, the whole transaction is rejected.
 
+**Merging two patches for the same node** (`mergePatch`) is **later-wins**, and the merge is a
+**spread** — deliberately total, not a list of fields. A hand-written allow-list is correct only
+until the next field is added to `PatchDelta`, and nothing forces that edit: the list silently ate
+`path`, `hidden`, `locked`, `variant`, `variants`, `slot`, `slotContent` and `states`, which
+surfaced as a vertex drag (a geometry action + a path action) moving a node's box and leaving its
+ink behind. A spread also preserves **key presence**, which is exactly what the `in`-read fields
+need — carrying a key with `undefined` is how they express a *clear*. The four object-valued
+fields (`geometry`, `transform`, `style`, `layout`) still merge **field by field**, because their
+actions emit partials: a move (`{x,y}`) and a resize (`{width,height}`) in one transaction must
+both land, and `layout`'s grid ⊕ container exclusivity rides along as an explicit `undefined`
+that resolves last-wins instead of dropping both.
+
 ## 6. Why this matters downstream
 
 Because every change is a validated, serializable, reversible Action funnelled through
