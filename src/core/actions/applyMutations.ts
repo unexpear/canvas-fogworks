@@ -122,6 +122,7 @@ export function applyMutationsToDocument(
                 if ("locked" in delta) node.locked = delta.locked;
                 if (delta.path !== undefined) node.path = delta.path;
                 if ("booleanOp" in delta) node.booleanOp = delta.booleanOp;
+                if ("interactions" in delta) node.interactions = delta.interactions;
                 if (delta.text !== undefined) node.text = delta.text;
                 if (delta.src !== undefined) node.src = delta.src;
                 if (delta.name !== undefined) node.name = delta.name;

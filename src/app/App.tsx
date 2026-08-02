@@ -41,6 +41,9 @@ import { alignAction, distributeAction } from "../core/actions/alignActions";
 import { booleanAction, makeBooleanNodeAction } from "../core/actions/booleanActions";
 import { SetBooleanOpAction } from "../core/actions/SetBooleanOpAction";
 import { BooleanOp, TEXT_ALIGNS, FONT_FAMILY_MAX } from "../core/document/Node";
+import { blendStates, easingAt, TRIGGERS, EASINGS, TRANSITION_MAX_MS, Interaction, Trigger, Easing } from "../core/document/Prototype";
+import { SetInteractionsAction } from "../core/actions/SetInteractionsAction";
+import { applyActiveState } from "../core/document/Components";
 import { DuplicateNodesAction } from "../core/actions/DuplicateNodesAction";
 import { DeleteNodeAction } from "../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../core/actions/TransactionAction";
@@ -51,7 +54,7 @@ import { IMAGE_SRC_MAX, srcError } from "../core/document/Node";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
 import { scanCapabilities, Capability } from "../core/scan/CapabilityScan";
 import { exportSVG } from "../core/export/ExportSVG";
-import { ReadonlyDocument } from "../core/document/Document";
+import { ReadonlyDocument, ProjectDocument } from "../core/document/Document";
 import { AddNodeAction } from "../core/actions/AddNodeAction";
 
 
@@ -117,6 +120,12 @@ const BOOLEAN_BUTTONS: readonly [BooleanOp, string, string][] = [
     ["intersect", "∩", "Intersect — keep only where they overlap"],
     ["exclude", "⊖", "Exclude — keep everything except the overlap"]
 ];
+/** The compact select/input used by the prototype rows — one style so the row lines up. */
+const SELECT_STYLE: React.CSSProperties = {
+    fontSize: 11, padding: "2px 4px", background: "#12121f", color: "#ccc",
+    border: "1px solid #2a2a4a", borderRadius: 3, boxSizing: "border-box"
+};
+
 const ALIGN_BUTTON_STYLE: React.CSSProperties = {
     fontSize: 12, padding: "3px 6px", background: "transparent", color: "#ccc",
     border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer", minWidth: 24
@@ -511,7 +520,18 @@ export function App() {
 
     useEffect(() => {
         if (canvasRef.current) {
-            const doc = dispatcher.getDocument();
+            // PLAY MODE (M7): the scene is the prototype's current state, or a frame part-way
+            // between two of them. Both are ordinary DOCUMENTS produced by a pure function, so
+            // everything below — geometry, picking, both backends — is unchanged; an animation
+            // frame is just another frame, exactly as a drag preview is.
+            const stored = dispatcher.getDocument();
+            const doc: ReadonlyDocument = !es.playing
+                ? stored
+                : es.transition
+                    ? blendStates(stored, es.transition.from, es.transition.to,
+                        easingAt(es.transition.easing, (Date.now() - es.transition.startedAt) / es.transition.duration),
+                        applyActiveState)
+                    : applyActiveState({ ...(stored as ProjectDocument), activeState: es.playState ?? undefined } as ProjectDocument);
             const pendingKeys = new Set(es.pendingGeometry ? [...es.pendingGeometry.keys()] : []);
 
             // The dirty set the engine consumes must be a SUPERSET of everything whose
@@ -538,6 +558,14 @@ export function App() {
                 viewport: es.viewport
             };
             renderScene(canvasRef.current, doc, rendererState, backend, refresh);
+
+            // The animation clock. A transition is redrawn until its duration is up, then cleared
+            // — so the running state is derived from a TIMESTAMP rather than accumulated per
+            // frame, and a dropped frame lands in the right place instead of drifting.
+            if (es.playing && es.transition) {
+                if (Date.now() - es.transition.startedAt >= es.transition.duration) es.transition = null;
+                requestAnimationFrame(() => refresh());
+            }
         }
     }, [ui.tick, dispatcher, backend]);
 
@@ -635,6 +663,24 @@ export function App() {
         if (action) dispatcher.dispatchAction(action, { coalesce: true });
     };
     /** Content edits (text / src / name) — routed, so a copy gets an override where it can. */
+    /**
+     * Interaction edits (M7). A whole-array replace through `SetInteractionsAction`, since a
+     * node's interactions are edited as a LIST. Not routed through `nodeEdit` like style and
+     * geometry: an instance override cannot carry interactions, so a copy's prototype behaviour
+     * comes from its master — which is what makes a component's button behave the same everywhere.
+     */
+    const writeInteractions = (next: Interaction[]) => {
+        if (!selectedNodeId) return;
+        const d = dispatcher.getDocument();
+        dispatcher.dispatchAction(new SetInteractionsAction(d, selectedNodeId, next));
+    };
+    const currentInteractions = (): Interaction[] =>
+        [...(selectedNodeId ? dispatcher.getDocument().nodes.get(selectedNodeId)?.interactions ?? [] : [])];
+    const addInteraction = () => writeInteractions([...currentInteractions(), { trigger: "click", state: null }]);
+    const removeInteraction = (i: number) => writeInteractions(currentInteractions().filter((_, k) => k !== i));
+    const setInteraction = (i: number, patch: Partial<Interaction>) =>
+        writeInteractions(currentInteractions().map((it, k) => (k === i ? { ...it, ...patch } : it)));
+
     const editContent = (patch: { text?: string; src?: string; name?: string }) => {
         if (!selectedNodeId) return;
         const action = contentActionFor(dispatcher.getDocument(), selectedNodeId, patch);
@@ -867,6 +913,25 @@ export function App() {
                 >
                     ⧉̲ Frame
                 </button>
+                <Divider />
+                {/* PLAY (M7): run the prototype. Leaving play mode drops the run's state and its
+                    transition, so the document is exactly as it was — playing is not editing. */}
+                <button
+                    title={es.playing ? "Stop — back to editing" : "Play the prototype: clicks and hovers fire interactions"}
+                    onClick={() => {
+                        es.playing = !es.playing;
+                        es.playState = null;
+                        es.transition = null;
+                        if (es.playing) es.selectedNodeIds = [];   // nothing is selected in a prototype
+                        refresh();
+                    }}
+                    style={{
+                        fontSize: 11, padding: "3px 10px", borderRadius: 3, cursor: "pointer",
+                        background: es.playing ? "#00bfff" : "transparent",
+                        color: es.playing ? "#0b0b18" : "#ccc",
+                        border: `1px solid ${es.playing ? "#00bfff" : "#2a2a4a"}`
+                    }}
+                >{es.playing ? "■ Stop" : "▶ Play"}</button>
                 <Divider />
                 <ToolButton icon="↩" label="Undo" disabled={!ui.canUndo} onClick={() => { dispatcher.undo(); refresh(); }} />
                 <ToolButton icon="↪" label="Redo" disabled={!ui.canRedo} onClick={() => { dispatcher.redo(); refresh(); }} />
@@ -1322,6 +1387,46 @@ export function App() {
                                     />
                                 </InspectorSection>
                             )}
+
+                            {/* PROTOTYPE (M7, schema 35). A trigger, the state it selects, and how
+                                long the change takes. The state NAME is free text on purpose: a
+                                dangling one is inert, so naming a state before defining it is a
+                                legitimate order of work rather than an error. */}
+                            <InspectorSection title="Prototype">
+                                {(node.interactions ?? []).map((it, i) => (
+                                    <div key={i} style={{ display: "flex", gap: 4, marginBottom: 4, alignItems: "center" }}>
+                                        <select
+                                            value={it.trigger}
+                                            onChange={e => { setInteraction(i, { trigger: e.target.value as Trigger }); refresh(); }}
+                                            style={{ ...SELECT_STYLE, width: 66 }}
+                                        >{TRIGGERS.map(t => <option key={t} value={t}>{t}</option>)}</select>
+                                        <input
+                                            value={it.state ?? ""}
+                                            placeholder="(base)"
+                                            title="The named state to select — empty means the base state"
+                                            onChange={e => { setInteraction(i, { state: e.target.value === "" ? null : e.target.value }); refresh(); }}
+                                            style={{ ...SELECT_STYLE, flex: 1, minWidth: 0 }}
+                                        />
+                                        <input
+                                            type="number"
+                                            value={it.duration ?? 0}
+                                            title="Transition duration in ms (0 = instant)"
+                                            onChange={e => { setInteraction(i, { duration: Math.max(0, Math.min(TRANSITION_MAX_MS, Number(e.target.value) || 0)) }); refresh(); }}
+                                            style={{ ...SELECT_STYLE, width: 52 }}
+                                        />
+                                        <select
+                                            value={it.easing ?? "linear"}
+                                            onChange={e => { setInteraction(i, { easing: e.target.value as Easing }); refresh(); }}
+                                            style={{ ...SELECT_STYLE, width: 84 }}
+                                        >{EASINGS.map(t => <option key={t} value={t}>{t}</option>)}</select>
+                                        <button title="Remove" onClick={() => { removeInteraction(i); refresh(); }} style={ALIGN_BUTTON_STYLE}>×</button>
+                                    </div>
+                                ))}
+                                <button
+                                    onClick={() => { addInteraction(); refresh(); }}
+                                    style={{ ...ALIGN_BUTTON_STYLE, width: "100%" }}
+                                >+ Add interaction</button>
+                            </InspectorSection>
 
                             {node.type === "core.image" && (
                                 <InspectorSection title="Image">

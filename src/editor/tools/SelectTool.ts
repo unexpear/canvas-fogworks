@@ -15,7 +15,7 @@ import { EditorState, screenToWorld } from "../EditorState";
 import { Tool } from "./ToolController";
 
 /** Pick halo in SCREEN pixels — converted to world (÷ zoom) so thin/hairline targets stay grabbable. */
-const PICK_RADIUS_PX = 4;
+export const PICK_RADIUS_PX = 4;
 /**
  * A press→release whose pointer moved less than this (SCREEN px, per axis) is a CLICK, not a
  * marquee. It is load-bearing for ROTATED/sheared nodes: `pick` rejects against the EXACT

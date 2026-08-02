@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v34 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v35 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -649,6 +649,41 @@ knowledge that booleans exist, exactly as it needs none about instances.
 
 `booleanAction` (destructive) bakes the same `booleanPaths` result into a plain `core.path` and
 deletes the operands; `makeBooleanNodeAction` builds this live form instead.
+
+## Prototype interactions (schema 35, Milestone 7)
+
+A node can respond to a pointer. This is what makes a document a PROTOTYPE rather than a picture.
+
+```ts
+const TRIGGERS = ["click", "hover", "press"] as const;
+const EASINGS = ["linear", "ease-in", "ease-out", "ease-in-out"] as const;
+const TRANSITION_MAX_MS: number;   // 60_000 — a hand-editable field, so bounded
+const INTERACTIONS_MAX: number;    // 64 per node — the OOM guard, like STATES_MAX
+interface Interaction { trigger: Trigger; state: string | null; duration?: number; easing?: Easing }
+interface Node { interactions?: Interaction[] }
+function interactionsError(interactions: unknown): string | null;   // shared load + edit
+```
+
+The only thing an interaction can DO is select a named state, because that mechanism already
+exists (schema 30) and `applyActiveState` is a pure pass every consumer reads through. A dangling
+state name is INERT, not invalid — deleting a state must never make a document unloadable, the
+same rule `componentId`, `$token` aliases and slot fills follow. `state: null` means the base
+state, which is what makes hover reversible without a second concept.
+
+**Transitions are the engine's first time dimension**, and they do not bend the architecture:
+`blendStates(doc, from, to, t, applyState)` is a PURE function returning an ordinary document, so
+an animation frame is just another frame — exactly as a drag preview is an input rather than a
+mutation. It interpolates geometry, opacity, fill/stroke, transform (rotation and scale, from the
+IDENTITY when one side has none) and the concrete numeric style slots. At `t = 0` and `t = 1` it
+returns the corresponding state's own document, so a finished transition is indistinguishable
+from having selected that state.
+
+| Rule | Why |
+|------|-----|
+| a running prototype's state lives in EDITOR state, not `activeState` | playing must not edit the document; stopping leaves it exactly as it was |
+| a numeric style slot blends only when BOTH ends are concrete | a `$token` is a reference; averaging it with a number produces neither |
+| a non-hex colour SNAPS at the halfway point | it has no channels to mix before the render model resolves it — visible and explainable beats silently wrong |
+| easing CLAMPS outside [0,1] | a frame that arrives late must land on the end state, not past it |
 
 ## Serialization
 

@@ -6,6 +6,7 @@
 import { Node, Geometry, Style, Layout, Transform, VariantKey, StateDefinition, PathCommand, BooleanOp, RESERVED_NODE_ID } from "../document/Node";
 import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
 import { InstanceOverride } from "../document/Components";
+import { Interaction } from "../document/Prototype";
 
 /**
  * The reserved `propertyDeltas` key a DOCUMENT-LEVEL delta (kind "variables") travels
@@ -73,6 +74,10 @@ export type NodeDelta =
         /** `core.boolean`'s operation (schema 33). A whole-value replace; `in`-read like the
          *  other optional fields so clearing it (back to the default union) is expressible. */
         booleanOp?: BooleanOp;
+        /** Prototype interactions (schema 35). A whole-array replace, `in`-read so that
+         *  removing the last one (delta value `undefined`) clears the field rather than
+         *  being mistaken for "not mentioned". */
+        interactions?: Interaction[];
     }
     /**
      * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme

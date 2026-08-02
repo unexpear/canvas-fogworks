@@ -5,6 +5,7 @@
  */
 
 import { isTokenRef } from "./Variables";
+import { Interaction } from "./Prototype";
 
 /** A `"$token"` reference in a NUMBER slot (radius/fontSize, schema 20). Same syntax as color
  *  tokens; the resolved value's range is checked at render time (broken → visible fallback). */
@@ -248,6 +249,11 @@ export interface Node {
      * from the result — and its `style` paints that result.
      */
     booleanOp?: BooleanOp;
+    /**
+     * Prototype INTERACTIONS (Milestone 7, schema 35): what a pointer gesture on this node does.
+     * Absent = the node is not interactive. See `Prototype.interactionsError`.
+     */
+    interactions?: Interaction[];
     /**
      * `core.instance` → the id of the MASTER node this instance copies (M6). The master is an
      * ordinary node subtree in the same document. Absent = an empty instance (draws nothing);

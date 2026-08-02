@@ -10,7 +10,9 @@ import { UpdateNodeTransformAction } from "../../core/actions/UpdateNodeTransfor
 import { DeleteNodeAction } from "../../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../../core/actions/TransactionAction";
 import { EditorState, panBy, screenToWorld } from "../EditorState";
-import { computeGeometry, ComputedState, selectionBounds } from "../../core/geometry/GeometryEngine";
+import { computeGeometry, ComputedState, hitTest, selectionBounds } from "../../core/geometry/GeometryEngine";
+import { interactionFor, Trigger } from "../../core/document/Prototype";
+import { PICK_RADIUS_PX } from "./SelectTool";
 import { handleAtPoint, groupHandleAtPoint, vertexIndexOf, vertexHandleAtPoint } from "../../core/geometry/SelectionHandles";
 import { movePathVertex, normalizePathNode } from "../../core/geometry/PathBuilder";
 import { UpdateNodePathAction } from "../../core/actions/UpdateNodePathAction";
@@ -136,6 +138,15 @@ export class ToolController {
             return;
         }
 
+        // PLAY MODE (M7): the canvas is the prototype, not the editor. A press fires whatever the
+        // node under it says to do and nothing else happens — no selection, no handles, no tool.
+        // Panning above still works, because navigating a prototype is not editing it.
+        if (this.editorState.playing) {
+            this.firePlayTrigger(e, canvasRect, "click");
+            e.preventDefault();
+            return;
+        }
+
         // Handle picking in WORLD space — no DOM read, so it works under any backend (the Canvas
         // surface has no `data-resize-handle` element). Geometry is resolved once here and handed to
         // the active tool on fall-through, so a plain click that misses the handles doesn't recompute
@@ -255,7 +266,48 @@ export class ToolController {
         this.activeTool?.onMouseDown?.(e, canvasRect, computed);
     }
 
+    /**
+     * Fire the interaction under the pointer, if any (play mode).
+     *
+     * Picking is the ORDINARY `hitTest`, so a prototype responds to the shape you can see — the
+     * empty corner of a triangle passes the click through to whatever is behind it, exactly as it
+     * does while editing. A node with no matching interaction is not a miss to report; a
+     * prototype is mostly non-interactive surface.
+     *
+     * The transition is recorded with the CURRENT active state as its origin, so a run of clicks
+     * always animates from where the screen actually is rather than from where the last one
+     * started. Duration 0 means no transition at all — the app applies the state and is done.
+     */
+    private firePlayTrigger(e: MouseEvent, canvasRect: DOMRect, trigger: Trigger): boolean {
+        const doc = this.dispatcher.getDocument();
+        const computed = computeGeometry(doc);
+        const vp = this.editorState.viewport;
+        const w = screenToWorld(vp, canvasRect, e.clientX, e.clientY);
+        const hit = hitTest(computed, w.x, w.y, PICK_RADIUS_PX / Math.max(0.01, vp.zoom));
+        if (!hit) return false;
+        // The scene is the RESOLVED one (an instance's copy is what a prototype user clicks), so
+        // the interaction is read from the resolved node — a copy inherits its master's.
+        const node = resolveScene(doc).nodes.get(hit);
+        const interaction = node ? interactionFor(node, trigger) : null;
+        if (!interaction) return false;
+
+        const from = this.editorState.playState;
+        this.editorState.playState = interaction.state;
+        const duration = interaction.duration ?? 0;
+        this.editorState.transition = duration > 0
+            ? { from, to: interaction.state, startedAt: Date.now(), duration, easing: interaction.easing ?? "linear" }
+            : null;
+        this.refresh();
+        return true;
+    }
+
     onMouseMove(e: MouseEvent, canvasRect: DOMRect): void {
+        // Play mode: a move is a HOVER trigger and nothing else — no drag, no marquee, no handles.
+        if (this.editorState.playing) {
+            this.firePlayTrigger(e, canvasRect, "hover");
+            return;
+        }
+
         if (this.panMode) {
             panBy(this.editorState.viewport, e.clientX - this.panLastX, e.clientY - this.panLastY);
             this.panLastX = e.clientX;

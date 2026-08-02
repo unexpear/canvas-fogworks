@@ -13,6 +13,7 @@
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
 import { transformError, layoutError, dimensionError, pathError, booleanOpError, srcError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError } from "./Node";
+import { interactionsError } from "./Prototype";
 import { componentError, overrideAgainstMasterError, overridesError, statesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
 
@@ -52,6 +53,11 @@ function checkNodeRanges(node: ReadonlyNode): void {
     // draw a shape the file never described.
     const boolErr = booleanOpError(node.type, node.booleanOp);
     if (boolErr) throw new Error(`Invalid document: node "${node.id}" ${boolErr}.`);
+    // `interactions` (schema 35): a hand-editable array of trigger/state pairs. A dangling STATE
+    // name is deliberately allowed (it selects nothing, so the base shows) — the same rule every
+    // other reference here follows.
+    const interErr = interactionsError(node.interactions);
+    if (interErr) throw new Error(`Invalid document: node "${node.id}" ${interErr}.`);
     // `src` (schema 23) is hand-editable and, since the image tool inlines a picked file as a
     // data: URL, potentially enormous — bounded and scheme-checked by the shared `srcError`.
     const srcErr = srcError(node.type, node.src);

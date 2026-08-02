@@ -3,6 +3,7 @@
  * @description Runtime editor context. Never serialized to the document.
  */
 
+import { Easing } from "../core/document/Prototype";
 import { Geometry, PathCommand } from "../core/document/Node";
 import { SnapGuide } from "../core/geometry/Snapping";
 
@@ -15,6 +16,24 @@ export interface EditorState {
     activeTool: string;
     /** True while a tool is actively dragging (drives the "grabbing" cursor). */
     isDragging: boolean;
+    /**
+     * PLAY MODE (Milestone 7): the canvas stops being an editor and becomes the prototype. A
+     * click fires the interaction under the pointer instead of selecting; nothing is editable.
+     * Ephemeral, like selection — a prototype run is not a document change.
+     */
+    playing: boolean;
+    /**
+     * The state the RUNNING prototype is in. Separate from `ProjectDocument.activeState` on
+     * purpose: playing a prototype must not edit the document, so a run's state lives here and
+     * disappears when play stops — the document is exactly as it was.
+     */
+    playState: string | null;
+    /**
+     * The transition currently running, or null. `startedAt` is a timestamp the app's clock
+     * compares against; the blend factor is derived from it per frame rather than stored, so a
+     * dropped frame lands in the right place instead of accumulating drift.
+     */
+    transition: { from: string | null; to: string | null; startedAt: number; duration: number; easing: Easing } | null;
     /** Ephemeral rectangle-tool drag preview, drawn by the renderer; never persisted. */
     previewRect: { x: number; y: number; width: number; height: number } | null;
     /**
@@ -113,6 +132,9 @@ export function createEditorState(): EditorState {
         hoverCursor: null,
         activeTool: "select",
         isDragging: false,
+        playing: false,
+        playState: null,
+        transition: null,
         previewRect: null,
         marqueeRect: null,
         snapGuides: null,

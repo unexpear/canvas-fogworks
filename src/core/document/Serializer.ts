@@ -57,6 +57,9 @@ function isValidNode(n: any): n is Node {
         // Shallow gate for the schema-33 boolean operation; the semantic rule (only a
         // `core.boolean`, and one of the four names) lives once in `booleanOpError`.
         isOptionalString(n.booleanOp) &&
+        // Shallow gate for the schema-35 interactions array; the semantic rules live once in
+        // `interactionsError`, like the path commands and the boolean op.
+        (n.interactions === undefined || Array.isArray(n.interactions)) &&
         // Shallow gate for the schema-22 overrides map; the semantic rules live once in
         // `overridesError` (Integrity), like the effects and the path commands.
         (n.overrides === undefined || isPlainObject(n.overrides)) &&
@@ -287,6 +290,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "31") { raw = migrate_31_to_32(raw); version = "32"; }
     if (version === "32") { raw = migrate_32_to_33(raw); version = "33"; }
     if (version === "33") { raw = migrate_33_to_34(raw); version = "34"; }
+    if (version === "34") { raw = migrate_34_to_35(raw); version = "35"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -598,6 +602,18 @@ function migrate_21_to_22(raw: any): any {
  * break in both backends (the SVG one sets `white-space: pre-wrap`) where it used to collapse to
  * a space, so text that was authored as one paragraph draws as several.
  */
+/**
+ * 34 -> 35: prototype INTERACTIONS — `Node.interactions` (trigger, target state, transition).
+ *
+ * One new optional array; absent means the node is not interactive, so every schema-34 document
+ * is already a valid 35 one and looks identical AT REST. The bump matters for what happens when
+ * it is not at rest: an old build ignores the field, so a prototype that responds to a click in
+ * one build is inert in the other — the same file, two different documents to use.
+ */
+function migrate_34_to_35(raw: any): any {
+    return { ...raw, version: "35" };
+}
+
 function migrate_33_to_34(raw: any): any {
     return { ...raw, version: "34" };
 }

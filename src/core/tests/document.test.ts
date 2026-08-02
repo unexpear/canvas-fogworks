@@ -46,6 +46,9 @@ import { SetBooleanOpAction } from "../actions/SetBooleanOpAction";
 import { resolveBooleans } from "../document/Components";
 import { BooleanOp, booleanOpError } from "../document/Node";
 import { TEXT_ALIGNS, FONT_FAMILY_MAX } from "../document/Node";
+import { blendColor, blendStates, easingAt, interactionFor, interactionsError, Interaction, Trigger, TRANSITION_MAX_MS, INTERACTIONS_MAX } from "../document/Prototype";
+import { applyActiveState } from "../document/Components";
+import { SetInteractionsAction } from "../actions/SetInteractionsAction";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
 import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
@@ -4313,7 +4316,7 @@ describe("Guards the suite did not previously protect", () => {
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
         // time a real migration is added — here, when 32→33 landed for `core.boolean`.)
-        expect(() => migrateIfNeeded(legacy, "35")).toThrow('Migration not implemented for document schema "34"');
+        expect(() => migrateIfNeeded(legacy, "36")).toThrow('Migration not implemented for document schema "35"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -11503,5 +11506,213 @@ describe("Typography", () => {
         expect(src).toMatch(/style: \{ letterSpacing: v \}/);       // NOT clamped: negative is legal
         expect(src).toMatch(/TEXT_ALIGNS\.map\(a =>/);
         expect(src).toMatch(/if \(v\.length > FONT_FAMILY_MAX\) return;/);
+    });
+});
+
+// ─── Prototyping (M7, schema 35): interactions and state transitions ───
+describe("Prototype interactions and transitions", () => {
+    /** A red 100x100 square with a "big" state that doubles it and turns it blue. */
+    const protoDoc = (interactions?: Interaction[]): ProjectDocument => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", {
+            id: "A", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 },
+            style: { fill: "#ff0000", opacity: 1 }, layout: {},
+            states: { big: { geometry: { x: 40, y: 80, width: 200, height: 200 }, text: "after", style: { fill: "#0000ff", opacity: 0.5 } } },
+            ...(interactions ? { interactions } : {})
+        } as Node);
+        doc.rootNodeUuids = ["A"];
+        return doc;
+    };
+
+    test("the validator shares one rule with the loader, and a dangling state stays legal", () => {
+        expect(interactionsError(undefined)).toBeNull();
+        expect(interactionsError([{ trigger: "click", state: "big", duration: 200, easing: "ease-out" }])).toBeNull();
+        expect(interactionsError([{ trigger: "hover", state: null }])).toBeNull();
+        // A state that does not exist is INERT, not invalid — deleting a state must never make a
+        // document unloadable, the same rule componentId and $token aliases follow.
+        expect(interactionsError([{ trigger: "click", state: "never-defined" }])).toBeNull();
+
+        expect(interactionsError("nope")).toContain("must be an array");
+        expect(interactionsError([{ trigger: "swipe", state: null }])).toContain("trigger");
+        expect(interactionsError([{ trigger: "click", state: 7 }])).toContain("state");
+        expect(interactionsError([{ trigger: "click", state: null, duration: -1 }])).toContain("duration");
+        expect(interactionsError([{ trigger: "click", state: null, duration: TRANSITION_MAX_MS + 1 }])).toContain("duration");
+        expect(interactionsError([{ trigger: "click", state: null, easing: "bouncy" }])).toContain("easing");
+        expect(interactionsError(new Array(INTERACTIONS_MAX + 1).fill({ trigger: "click", state: null }))).toContain("at most");
+    });
+
+    test("interactions round-trip, and a bad one is refused by the LOADER", () => {
+        const doc = protoDoc([{ trigger: "click", state: "big", duration: 250, easing: "ease-in-out" }]);
+        const loaded = deserializeDocument(serializeDocument(doc));
+        expect(loaded.nodes.get("A")!.interactions).toEqual([{ trigger: "click", state: "big", duration: 250, easing: "ease-in-out" }]);
+        (doc.nodes.get("A")!.interactions as Interaction[])[0].trigger = "swipe" as Trigger;
+        expect(() => deserializeDocument(serializeDocument(doc))).toThrow(/trigger/);
+    });
+
+    test("easing clamps rather than extrapolates, so an overshooting clock lands on the end", () => {
+        expect(easingAt("linear", 0.25)).toBeCloseTo(0.25, 10);
+        expect(easingAt("ease-in", 0.5)).toBeCloseTo(0.25, 10);
+        expect(easingAt("ease-out", 0.5)).toBeCloseTo(0.75, 10);
+        expect(easingAt("ease-in-out", 0.5)).toBeCloseTo(0.5, 10);
+        expect(easingAt("ease-in-out", 0.25)).toBeCloseTo(0.125, 10);
+        // A frame that arrives late must not push the animation PAST its target.
+        expect(easingAt("ease-out", 1.4)).toBe(1);
+        expect(easingAt("linear", -3)).toBe(0);
+        expect(easingAt(undefined, 0.3)).toBeCloseTo(0.3, 10);   // absent = linear
+    });
+
+    test("colours blend per channel, and anything unresolvable SNAPS at the halfway point", () => {
+        expect(blendColor("#000000", "#ffffff", 0.5)).toBe("#808080");
+        expect(blendColor("#f00", "#00f", 0.5)).toBe("#800080");    // short hex expands first
+        expect(blendColor("#ff0000", "#0000ff", 0)).toBe("#ff0000");
+        // A token has no channels to mix before the render model resolves it, so it snaps —
+        // visible and explainable, rather than a silently wrong colour.
+        expect(blendColor("$color/a", "#ffffff", 0.4)).toBe("$color/a");
+        expect(blendColor("$color/a", "#ffffff", 0.6)).toBe("#ffffff");
+    });
+
+    test("blendStates is a pure function of time — the frame part-way between two states", () => {
+        const doc = protoDoc();
+        const at = (t: number) => blendStates(doc, null, "big", t, applyActiveState).nodes.get("A")!;
+        // The ENDS are exactly the states themselves, so a finished transition is
+        // indistinguishable from having simply selected that state.
+        expect(at(0).geometry).toEqual({ x: 0, y: 0, width: 100, height: 100 });
+        expect(at(0).style.fill).toBe("#ff0000");
+        expect(at(1).geometry).toEqual({ x: 40, y: 80, width: 200, height: 200 });
+        expect(at(1).style.fill).toBe("#0000ff");
+        // …and the middle is the interpolation, on every animatable field at once.
+        const mid = at(0.5);
+        expect(mid.geometry).toEqual({ x: 20, y: 40, width: 150, height: 150 });
+        expect(mid.style.opacity).toBeCloseTo(0.75, 10);
+        expect(mid.style.fill).toBe("#800080");
+        // A field that cannot be interpolated (text) proves the ENDS are the states themselves
+        // rather than the target blended at t=0 — at 0 the text is still the one being left.
+        expect(at(0).text).toBeUndefined();
+        expect(at(1).text).toBe("after");
+        // The document is untouched: an animation is a derivation, not a mutation.
+        expect(doc.nodes.get("A")!.geometry.width).toBe(100);
+    });
+
+    test("a transition blends the transform too, from the identity when one side has none", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", {
+            id: "A", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000000", opacity: 1 }, layout: {},
+            states: { spun: { transform: { rotation: Math.PI, scaleX: 3 } } }
+        } as Node);
+        doc.rootNodeUuids = ["A"];
+        const mid = blendStates(doc, null, "spun", 0.5, applyActiveState).nodes.get("A")!;
+        expect(mid.transform!.rotation).toBeCloseTo(Math.PI / 2, 10);
+        expect(mid.transform!.scaleX).toBeCloseTo(2, 10);   // 1 (absent = identity) → 3
+        expect(mid.transform!.scaleY).toBeCloseTo(1, 10);
+    });
+
+    test("a numeric style slot interpolates only when BOTH ends are concrete", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", {
+            id: "A", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 },
+            style: { fill: "#000000", opacity: 1, radius: 0, strokeWidth: "$size/hair" }, layout: {},
+            states: { r: { style: { radius: 20, strokeWidth: 8 } } }
+        } as Node);
+        doc.rootNodeUuids = ["A"];
+        const mid = blendStates(doc, null, "r", 0.5, applyActiveState).nodes.get("A")!;
+        expect(mid.style.radius).toBe(10);
+        // A token is a REFERENCE; averaging it with a number would produce neither, so the
+        // target's value stands and the change is a switch rather than a blend.
+        expect(mid.style.strokeWidth).toBe(8);
+    });
+
+    test("interactionFor picks the first match for a trigger", () => {
+        const node = { interactions: [
+            { trigger: "hover", state: "a" }, { trigger: "click", state: "b" }, { trigger: "click", state: "c" }
+        ] as Interaction[] };
+        expect(interactionFor(node, "click")!.state).toBe("b");
+        expect(interactionFor(node, "hover")!.state).toBe("a");
+        expect(interactionFor(node, "press")).toBeNull();
+        expect(interactionFor({}, "click")).toBeNull();
+    });
+
+    test("PLAY MODE: a click fires the interaction under the pointer instead of selecting", () => {
+        const doc = protoDoc([{ trigger: "click", state: "big", duration: 300, easing: "ease-out" }]);
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        const tc = new ToolController(dispatcher, es, () => { });
+        const rect = { left: 0, top: 0 } as DOMRect;
+        const md = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+
+        es.playing = true;
+        tc.onMouseDown(md(50, 50), rect);
+        expect(es.playState).toBe("big");
+        expect(es.transition).toMatchObject({ from: null, to: "big", duration: 300, easing: "ease-out" });
+        // Nothing was selected, and — the point — the DOCUMENT did not change.
+        expect(es.selectedNodeIds).toEqual([]);
+        expect(dispatcher.getDocument().nodes.get("A")!.geometry.width).toBe(100);
+    });
+
+    test("PLAY MODE: a click on empty canvas, or on a node with no interaction, does nothing", () => {
+        const doc = protoDoc();                      // no interactions at all
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        const tc = new ToolController(dispatcher, es, () => { });
+        const rect = { left: 0, top: 0 } as DOMRect;
+        const md = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        es.playing = true;
+        tc.onMouseDown(md(50, 50), rect);            // on the node, but it has nothing to say
+        expect(es.playState).toBeNull();
+        tc.onMouseDown(md(900, 900), rect);          // empty canvas
+        expect(es.playState).toBeNull();
+        expect(es.selectedNodeIds).toEqual([]);      // and STILL nothing is selected
+    });
+
+    test("PLAY MODE: a transition runs FROM wherever the screen currently is", () => {
+        // Two clicks in a row must animate from the state the last one left, not from the base —
+        // otherwise a second click restarts the animation from the beginning of the first.
+        const doc = protoDoc([{ trigger: "click", state: "big", duration: 100 }]);
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        const tc = new ToolController(dispatcher, es, () => { });
+        const rect = { left: 0, top: 0 } as DOMRect;
+        const md = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        es.playing = true;
+        tc.onMouseDown(md(50, 50), rect);
+        tc.onMouseDown(md(50, 50), rect);
+        expect(es.transition).toMatchObject({ from: "big", to: "big" });
+    });
+
+    test("PLAY MODE: a zero-duration interaction switches with no transition at all", () => {
+        const doc = protoDoc([{ trigger: "click", state: "big" }]);
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        const tc = new ToolController(dispatcher, es, () => { });
+        const rect = { left: 0, top: 0 } as DOMRect;
+        es.playing = true;
+        tc.onMouseDown({ clientX: 50, clientY: 50, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent, rect);
+        expect(es.playState).toBe("big");
+        expect(es.transition).toBeNull();
+    });
+
+    test("the interactions action replaces the whole list, and stores an empty one as ABSENT", () => {
+        const doc = protoDoc();
+        const dispatcher = new ActionDispatcher(doc);
+        expect(dispatcher.dispatchAction(new SetInteractionsAction(doc, "A", [{ trigger: "click", state: "big" }])).success).toBe(true);
+        expect(dispatcher.getDocument().nodes.get("A")!.interactions).toEqual([{ trigger: "click", state: "big" }]);
+        expect(dispatcher.dispatchAction(new SetInteractionsAction(dispatcher.getDocument(), "A", [])).success).toBe(true);
+        // ABSENT, not `[]` — a node that lost its last interaction equals one that never had any.
+        expect(dispatcher.getDocument().nodes.get("A")!.interactions).toBeUndefined();
+        // …and an invalid list is refused by the same rule the loader uses.
+        expect(new SetInteractionsAction(dispatcher.getDocument(), "A", [{ trigger: "swipe" } as unknown as Interaction]).validate()).toBe(false);
+    });
+
+    test("the app plays through the pure blend and stops without touching the document", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        // The scene shown while playing is a DERIVED document, not an edited one.
+        expect(src).toMatch(/blendStates\(stored, es\.transition\.from, es\.transition\.to,/);
+        expect(src).toMatch(/easingAt\(es\.transition\.easing, \(Date\.now\(\) - es\.transition\.startedAt\) \/ es\.transition\.duration\)/);
+        // The clock re-derives from a TIMESTAMP each frame rather than accumulating.
+        expect(src).toMatch(/requestAnimationFrame\(\(\) => refresh\(\)\)/);
+        // Stopping clears the run's state, so the document is exactly as it was.
+        expect(src).toMatch(/es\.playing = !es\.playing;[\s\S]{0,120}es\.playState = null;[\s\S]{0,60}es\.transition = null;/);
     });
 });
