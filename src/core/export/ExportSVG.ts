@@ -59,6 +59,9 @@ function paintAttrs(item: DrawItem): string {
     else parts.push(`fill="none"`);
     if (p.stroke !== null) parts.push(`stroke="${esc(p.stroke)}"`);
     if (p.strokeWidth !== null) parts.push(`stroke-width="${num(p.strokeWidth)}"`);
+    if (p.strokeJoin !== undefined) parts.push(`stroke-linejoin="${esc(p.strokeJoin)}"`);
+    if (p.strokeCap !== undefined) parts.push(`stroke-linecap="${esc(p.strokeCap)}"`);
+    if (p.strokeMiterLimit !== undefined) parts.push(`stroke-miterlimit="${num(p.strokeMiterLimit)}"`);
     if (p.strokeDash !== null) parts.push(`stroke-dasharray="${esc(p.strokeDash)}"`);
     if (p.opacity !== null) parts.push(`opacity="${num(p.opacity)}"`);
     const filter = filterIdOf(item);

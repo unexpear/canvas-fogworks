@@ -41,7 +41,10 @@ import { flattenPath, hitsShape, isPaintBearing, FLATTEN_TOLERANCE, FLATTEN_MAX_
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
 import { triangulate, signedArea2, TESSELLATE_MAX_VERTICES } from "../geometry/Tessellate";
-import { itemTriangles, parseColor, viewMatrix } from "../../renderer/emitWebGL";
+import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
+import { StrokeAlign } from "../geometry/StrokeOutline";
+import { outlineStrokeAction, strokeWidthOf } from "../actions/outlineStrokeActions";
+import { itemDraws, parseColor, viewMatrix } from "../../renderer/emitWebGL";
 import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
 import { booleanAction, makeBooleanNodeAction } from "../actions/booleanActions";
 import { SetBooleanOpAction } from "../actions/SetBooleanOpAction";
@@ -876,6 +879,55 @@ describe("variableStoreError / variableError", () => {
         expect(loaded.nodes.get("n")!.style.radius).toBe("$radius/medium");
         const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1, radius: "big" }, layout: {} } } } });
         expect(() => deserializeDocument(bad)).toThrow("radius");
+    });
+
+    test("stroke corners and ends are a closed vocabulary on BOTH paths (schema 37)", () => {
+        // The join and cap names reach `stroke-linejoin`/`stroke-linecap` and Canvas's
+        // `lineJoin`/`lineCap` verbatim, so an unknown one is not a harmless string: it is an
+        // attribute the browser ignores, silently drawing a different picture from the one the
+        // document describes. Both the edit path and the load path go through this one check.
+        expect(styleError({ strokeJoin: "round" })).toBeNull();
+        expect(styleError({ strokeCap: "square" })).toBeNull();
+        // Cast: TypeScript already refuses these, which is why the RUNTIME check exists —
+        // it guards a hand-edited file, where no type ever ran.
+        expect(styleError({ strokeJoin: "rounded" as never })).toMatch("strokeJoin");
+        expect(styleError({ strokeCap: "flat" as never })).toMatch("strokeCap");
+        // The miter limit is SVG's ratio of miter length to stroke width. Below 1 it would ask
+        // for a miter shorter than the stroke is wide, which no join can be.
+        expect(styleError({ strokeMiterLimit: 1 })).toBeNull();
+        expect(styleError({ strokeMiterLimit: 10 })).toBeNull();
+        expect(styleError({ strokeMiterLimit: 0.5 })).toMatch("strokeMiterLimit");
+        expect(styleError({ strokeMiterLimit: Infinity })).toMatch("strokeMiterLimit");
+        // Absent stays absent — the defaults are what all three backends already drew.
+        expect(styleError({})).toBeNull();
+
+        // EDIT path: the dispatcher refuses the same values.
+        const doc = createEmptyDocument();
+        doc.nodes.set("n", { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["n"];
+        const dispatcher = new ActionDispatcher(doc);
+        expect(dispatcher.dispatchAction(new UpdateNodeStyleAction(dispatcher.getDocument(), "n", { strokeJoin: "round" })).success).toBe(true);
+        expect(dispatcher.dispatchAction(new UpdateNodeStyleAction(dispatcher.getDocument(), "n", { strokeJoin: "rounded" as never })).success).toBe(false);
+
+        // LOAD path: the same rule, and a valid document round-trips its corners unchanged.
+        const loaded = deserializeDocument(serializeDocument(dispatcher.getDocument()));
+        expect(loaded.nodes.get("n")!.style.strokeJoin).toBe("round");
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1, strokeCap: "flat" }, layout: {} } } } });
+        expect(() => deserializeDocument(bad)).toThrow("strokeCap");
+    });
+
+    test("a schema-36 document migrates to 37 and draws identically", () => {
+        // Purely additive: the absent values ARE the old behaviour, so the migration adds nothing
+        // but the stamp. The bump exists so an OLD build refuses a document whose corners it
+        // would silently draw mitred.
+        const v36 = { version: "36", document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1, stroke: "#f00", strokeWidth: 2 }, layout: {} } } } };
+        const loaded = deserializeDocument(JSON.stringify(v36));
+        const node = loaded.nodes.get("n")!;
+        expect(node.style.strokeJoin).toBeUndefined();
+        expect(node.style.strokeCap).toBeUndefined();
+        expect(node.style.strokeMiterLimit).toBeUndefined();
+        expect(node.style.strokeWidth).toBe(2);
+        expect(JSON.parse(serializeDocument(loaded)).version).toBe(SCHEMA_VERSION);
     });
 
     test("a mixed transaction's updatedNodeIds lists the NODE, never the \"__document__\" sentinel", () => {
@@ -4321,8 +4373,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — here, when 32→33 landed for `core.boolean`.)
-        expect(() => migrateIfNeeded(legacy, "37")).toThrow('Migration not implemented for document schema "36"');
+        // time a real migration is added — most recently when 36→37 landed for stroke joins.)
+        expect(() => migrateIfNeeded(legacy, "38")).toThrow('Migration not implemented for document schema "37"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -12500,6 +12552,454 @@ describe("Tessellate", () => {
 });
 
 // ─── The GPU backend's pure half ───
+describe("Outline stroke", () => {
+    const mk = (id: string, type: Node["type"], box: { x: number; y: number; width: number; height: number }, style: object = {}): Node =>
+        ({ id, type, parent: null, children: [], geometry: box,
+           style: { fill: "#0000ff", opacity: 1, ...style } as Node["style"], layout: {} });
+    const docOf = (...nodes: Node[]): ProjectDocument => {
+        const doc = createEmptyDocument();
+        for (const n of nodes) doc.nodes.set(n.id, n);
+        doc.rootNodeUuids = nodes.map(n => n.id);
+        return doc;
+    };
+    const area = (rings: { x: number; y: number }[][]): number => {
+        const a = rings.map(r => {
+            let s = 0;
+            for (let i = 0, j = r.length - 1; i < r.length; j = i++) s += r[j].x * r[i].y - r[i].x * r[j].y;
+            return Math.abs(s) / 2;
+        }).sort((x, y) => y - x);
+        return a.length === 0 ? 0 : a[0] - a.slice(1).reduce((n, x) => n + x, 0);
+    };
+
+    test("a border becomes a path, and the shape keeps its fill without one", () => {
+        // Outlining a border must not throw away the shape it went round: what changes is that
+        // the border stops being a parameter and starts being geometry you can select and cut.
+        const doc = docOf(mk("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 },
+            { stroke: "#ff0000", strokeWidth: 10 }));
+        const dispatcher = new ActionDispatcher(doc);
+        const action = outlineStrokeAction(doc, computeGeometry(doc), ["R"], ["OUT"])!;
+        expect(action).not.toBeNull();
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const after = dispatcher.getDocument();
+
+        const out = after.nodes.get("OUT")!;
+        expect(out.type).toBe("core.path");
+        expect(out.style.fill).toBe("#ff0000");             // the BORDER's colour becomes the fill
+        expect(area(commandsToRings(out.path!))).toBeCloseTo(110 * 110 - 90 * 90, 4);
+        expect(pathError("core.path", out.path!)).toBeNull();
+
+        // The original survives, minus its border — and the fields are GONE, not blanked, so it
+        // serialises exactly like a node that never had one.
+        const src = after.nodes.get("R")!;
+        expect(src.style.fill).toBe("#0000ff");
+        expect(src.style.stroke).toBeUndefined();
+        expect(src.style.strokeWidth).toBeUndefined();
+        expect(JSON.parse(JSON.stringify(src.style))).not.toHaveProperty("stroke");
+    });
+
+    test("outlining twice is a no-op the second time", () => {
+        // The new path carries no stroke of its own and the source has lost its one, so there is
+        // nothing left to outline. Without that, the command would keep producing new geometry
+        // from geometry it just produced.
+        const doc = docOf(mk("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 },
+            { stroke: "#ff0000", strokeWidth: 10 }));
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(outlineStrokeAction(doc, computeGeometry(doc), ["R"], ["OUT"])!);
+        const after = dispatcher.getDocument();
+        expect(outlineStrokeAction(after, computeGeometry(after), ["R", "OUT"], ["X", "Y"])).toBeNull();
+    });
+
+    test("ALIGNMENT is the command's argument, and inner keeps the silhouette", () => {
+        // It is not a document field precisely because no backend could draw it. As an argument
+        // to a conversion it is exact — what comes out is a fill, which all three draw alike.
+        // A FRESH document per case: the dispatcher mutates the one it is given, so a shared doc
+        // would lose its border to the first conversion and the next two would read the first
+        // one's result back — three identical numbers and a test that proves nothing.
+        const outlineWith = (align: StrokeAlign): { x: number; y: number }[][] => {
+            const doc = docOf(mk("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 },
+                { stroke: "#ff0000", strokeWidth: 10 }));
+            const d = new ActionDispatcher(doc);
+            d.dispatchAction(outlineStrokeAction(doc, computeGeometry(doc), ["R"], ["OUT"], align)!);
+            return commandsToRings(d.getDocument().nodes.get("OUT")!.path!);
+        };
+        // Asserted as AREA, not as a coordinate: the new path is re-based onto its own tight box
+        // (`normalizePathNode`), so its numbers are relative to that box and only the region it
+        // covers is comparable across the three.
+        expect(area(outlineWith("inner"))).toBeCloseTo(100 * 100 - 80 * 80, 4);     // silhouette kept
+        expect(area(outlineWith("outer"))).toBeCloseTo(120 * 120 - 100 * 100, 4);   // grown, shape whole
+        expect(area(outlineWith("center"))).toBeCloseTo(110 * 110 - 90 * 90, 4);    // straddling
+    });
+
+    test("the JOIN the node was drawn with is the join it is outlined with", () => {
+        // Otherwise the conversion would change the picture: a rounded corner would come back
+        // mitred, which is the one thing an "outline" must never do.
+        const box = { x: 0, y: 0, width: 100, height: 100 };
+        const outlineJoin = (join: string | undefined): number => {
+            const doc = docOf(mk("R", "core.rectangle", box, { stroke: "#f00", strokeWidth: 10, strokeJoin: join }));
+            const d = new ActionDispatcher(doc);
+            d.dispatchAction(outlineStrokeAction(doc, computeGeometry(doc), ["R"], ["OUT"])!);
+            return area(commandsToRings(d.getDocument().nodes.get("OUT")!.path!));
+        };
+        // Four corner triangles of half-width 5 — the same difference `StrokeOutline` asserts.
+        expect(outlineJoin("miter") - outlineJoin("bevel")).toBeCloseTo(4 * (5 * 5) / 2, 4);
+        expect(outlineJoin(undefined)).toBeCloseTo(outlineJoin("miter"), 6);   // absent = miter
+    });
+
+    test("a scaled node's border is outlined at the thickness it is DRAWN at", () => {
+        // `stroke-width` is in local units and the transform scales it, on every backend. An
+        // outline computed in world space would come back a uniform width and match nothing on
+        // screen.
+        const node = mk("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 },
+            { stroke: "#f00", strokeWidth: 10 });
+        const doc = docOf({ ...node, transform: { scaleX: 3, scaleY: 3 } } as Node);
+        const d = new ActionDispatcher(doc);
+        d.dispatchAction(outlineStrokeAction(doc, computeGeometry(doc), ["R"], ["OUT"])!);
+        expect(area(commandsToRings(d.getDocument().nodes.get("OUT")!.path!))).toBeCloseTo((110 * 110 - 90 * 90) * 9, 3);
+    });
+
+    test("a HAIRLINE cannot be outlined, and says so by declining", () => {
+        // An absent width is one SCREEN pixel at any zoom. It has no world-unit thickness, so
+        // there is no fixed area to turn into a shape — outlining it would bake in whatever zoom
+        // happened to be current, which is exactly the zoom-dependence the rest of the geometry
+        // is built to avoid.
+        const doc = docOf(mk("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }, { stroke: "#f00" }));
+        expect(outlineStrokeAction(doc, computeGeometry(doc), ["R"], ["OUT"])).toBeNull();
+        // Nor a zero width, nor a shape with no stroke colour at all.
+        const zero = docOf(mk("Z", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }, { stroke: "#f00", strokeWidth: 0 }));
+        expect(outlineStrokeAction(zero, computeGeometry(zero), ["Z"], ["OUT"])).toBeNull();
+        const bare = docOf(mk("B", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }));
+        expect(outlineStrokeAction(bare, computeGeometry(bare), ["B"], ["OUT"])).toBeNull();
+    });
+
+    test("a stroke WIDTH TOKEN resolves before it is outlined", () => {
+        // The width on screen is the token's value, so the outline has to be too — reading the
+        // raw "$size/border" string would be a silent no-op.
+        const doc = docOf(mk("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 },
+            { stroke: "#f00", strokeWidth: "$size/border" }));
+        doc.variables["size/border"] = { type: "spacing", value: 10 };
+        expect(strokeWidthOf(doc, "R")).toBe(10);
+        const d = new ActionDispatcher(doc);
+        d.dispatchAction(outlineStrokeAction(doc, computeGeometry(doc), ["R"], ["OUT"])!);
+        expect(area(commandsToRings(d.getDocument().nodes.get("OUT")!.path!))).toBeCloseTo(110 * 110 - 90 * 90, 4);
+    });
+
+    test("the whole conversion is ONE undo", () => {
+        // Three actions per node — create the path, set its commands, strip the border — and a
+        // user who presses undo once expects the border back, not two thirds of it.
+        const doc = docOf(mk("R", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 },
+            { stroke: "#ff0000", strokeWidth: 10 }));
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(outlineStrokeAction(doc, computeGeometry(doc), ["R"], ["OUT"])!);
+        dispatcher.undo();
+        const back = dispatcher.getDocument();
+        expect(back.nodes.has("OUT")).toBe(false);
+        expect(back.nodes.get("R")!.style.stroke).toBe("#ff0000");
+        expect(back.nodes.get("R")!.style.strokeWidth).toBe(10);
+    });
+
+    test("a whole selection converts in one transaction, skipping what it cannot", () => {
+        const doc = docOf(
+            mk("A", "core.rectangle", { x: 0, y: 0, width: 100, height: 100 }, { stroke: "#f00", strokeWidth: 10 }),
+            mk("B", "core.ellipse", { x: 200, y: 0, width: 100, height: 100 }, { stroke: "#0f0", strokeWidth: 4 }),
+            mk("C", "core.rectangle", { x: 400, y: 0, width: 100, height: 100 })          // no border
+        );
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(outlineStrokeAction(doc, computeGeometry(doc), ["A", "B", "C"], ["P", "Q", "R"])!);
+        const after = dispatcher.getDocument();
+        expect(after.nodes.has("P")).toBe(true);
+        expect(after.nodes.has("Q")).toBe(true);
+        expect(after.nodes.has("R")).toBe(false);      // C had nothing to outline, so no id was spent
+        expect(after.nodes.get("C")!.style.fill).toBe("#0000ff");
+    });
+});
+
+describe("StrokeOutline", () => {
+    /** Signed twice-area of a ring — winding and size in one number. */
+    const signed2 = (r: { x: number; y: number }[]): number => {
+        let a = 0;
+        for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += r[j].x * r[i].y - r[i].x * r[j].y;
+        return a;
+    };
+    const ringArea = (r: { x: number; y: number }[]): number => Math.abs(signed2(r)) / 2;
+    /** What the stroke actually covers: the outer ring less every ring it encloses. */
+    const covered = (rings: { x: number; y: number }[][]): number => {
+        const areas = rings.map(ringArea).sort((a, b) => b - a);
+        return areas.length === 0 ? 0 : areas[0] - areas.slice(1).reduce((n, a) => n + a, 0);
+    };
+    const line = (x1: number, y1: number, x2: number, y2: number): PathCommand[] =>
+        [{ c: "M", x: x1, y: y1 }, { c: "L", x: x2, y: y2 }];
+    const closedSquare = (s: number, anticlockwise = false): PathCommand[] => {
+        const pts = [{ x: 0, y: 0 }, { x: s, y: 0 }, { x: s, y: s }, { x: 0, y: s }];
+        const order = anticlockwise ? [...pts].reverse() : pts;
+        return [{ c: "M" as const, x: order[0].x, y: order[0].y },
+            ...order.slice(1).map(p => ({ c: "L" as const, x: p.x, y: p.y })), { c: "Z" as const }];
+    };
+
+    test("a straight line with butt caps is exactly a rectangle", () => {
+        // The simplest possible claim, and the one every other case is measured against: a
+        // stroke of width w along a length L covers L*w and nothing more.
+        const rings = strokeOutline(line(0, 0, 100, 0), { width: 10 });
+        expect(rings.length).toBe(1);                    // an OPEN subpath is one ring, not two
+        expect(rings[0].length).toBe(4);
+        expect(covered(rings)).toBeCloseTo(100 * 10, 6);
+    });
+
+    test("a SQUARE cap extends the stroke by half a width at each end", () => {
+        const rings = strokeOutline(line(0, 0, 100, 0), { width: 10, cap: "square" });
+        expect(covered(rings)).toBeCloseTo((100 + 10) * 10, 6);
+    });
+
+    test("a ROUND cap adds a half-disc at each end", () => {
+        const rings = strokeOutline(line(0, 0, 100, 0), { width: 10, cap: "round" });
+        // Two half-discs of radius 5 = one whole disc. An inscribed polygon is always SMALLER
+        // than its circle, and short by at most a band of `tol` around the circumference — that
+        // is the bound the tolerance implies, and the honest one to assert. (A flat "within 1%"
+        // fails here for a real reason: at r = 5 a 0.05 sagitta is 1.1% of the area.)
+        const slack = 2 * Math.PI * 5 * FLATTEN_TOLERANCE;
+        expect(covered(rings)).toBeLessThanOrEqual(100 * 10 + Math.PI * 25);
+        expect(covered(rings)).toBeGreaterThan(100 * 10 + Math.PI * 25 - slack);
+    });
+
+    test("a closed shape is TWO rings — an outer edge and a hole", () => {
+        // This is what makes a border a border rather than a filled blob: the middle must be left
+        // empty, by the same nonzero rule every other consumer already uses.
+        const rings = strokeOutline(closedSquare(100), { width: 10 });
+        expect(rings.length).toBe(2);
+        const areas = rings.map(ringArea).sort((a, b) => b - a);
+        expect(areas[0]).toBeCloseTo(110 * 110, 6);      // 5 outside each edge
+        expect(areas[1]).toBeCloseTo(90 * 90, 6);        // 5 inside each edge
+    });
+
+    test("the hole winds OPPOSITE the outer ring", () => {
+        // Same winding would make the nonzero rule fill straight through the middle, and would
+        // make `triangulate` read the inner ring as a separate island rather than as a hole.
+        const rings = strokeOutline(closedSquare(100), { width: 10 });
+        expect(Math.sign(signed2(rings[0]))).not.toBe(Math.sign(signed2(rings[1])));
+    });
+
+    test("INNER alignment keeps the shape's silhouette exactly", () => {
+        // The reason this module produces geometry rather than two more style attributes:
+        // neither SVG nor Canvas can draw a border that stays inside the shape, and a UI frame
+        // almost always wants one — an outer border grows the box it is supposed to outline.
+        const rings = strokeOutline(closedSquare(100), { width: 10, align: "inner" });
+        const areas = rings.map(ringArea).sort((a, b) => b - a);
+        expect(areas[0]).toBeCloseTo(100 * 100, 6);      // the silhouette is untouched
+        expect(areas[1]).toBeCloseTo(80 * 80, 6);
+    });
+
+    test("OUTER alignment grows the shape and leaves it whole", () => {
+        const rings = strokeOutline(closedSquare(100), { width: 10, align: "outer" });
+        const areas = rings.map(ringArea).sort((a, b) => b - a);
+        expect(areas[0]).toBeCloseTo(120 * 120, 6);
+        expect(areas[1]).toBeCloseTo(100 * 100, 6);
+    });
+
+    test("alignment follows the SHAPE's winding, not the drawing direction", () => {
+        // An author does not choose a winding, they drag a mouse. If "inner" meant "left of
+        // travel" the same border would land inside one rectangle and outside its mirror image.
+        const cw = strokeOutline(closedSquare(100), { width: 10, align: "inner" });
+        const ccw = strokeOutline(closedSquare(100, true), { width: 10, align: "inner" });
+        expect(covered(ccw)).toBeCloseTo(covered(cw), 6);
+        expect(Math.max(...ccw.map(ringArea))).toBeCloseTo(100 * 100, 6);
+    });
+
+    test("a MITER join fills the corner square; a BEVEL cuts it off", () => {
+        // The difference between them is exactly the little triangle outside the bevel, and on a
+        // right angle that triangle is half the square of the half-width — at all four corners.
+        const miter = strokeOutline(closedSquare(100), { width: 10, join: "miter" });
+        const bevel = strokeOutline(closedSquare(100), { width: 10, join: "bevel" });
+        expect(covered(miter) - covered(bevel)).toBeCloseTo(4 * (5 * 5) / 2, 6);
+    });
+
+    test("a ROUND join replaces the corner with a quarter disc", () => {
+        const round = strokeOutline(closedSquare(100), { width: 10, join: "round" });
+        const bevel = strokeOutline(closedSquare(100), { width: 10, join: "bevel" });
+        // Four quarter-discs of radius 5 — one whole disc — less the four bevel triangles
+        // already counted. Bounded by the same circumference band as the round cap.
+        const expected = Math.PI * 25 - 4 * (5 * 5) / 2;
+        const slack = 2 * Math.PI * 5 * FLATTEN_TOLERANCE;
+        expect(round.length).toBe(2);
+        expect(covered(round) - covered(bevel)).toBeLessThanOrEqual(expected);
+        expect(covered(round) - covered(bevel)).toBeGreaterThan(expected - slack);
+    });
+
+    test("the MITER LIMIT turns a spike into a bevel", () => {
+        // A nearly doubled-back corner has an unbounded miter — without the limit a thin wedge
+        // throws a spike far past the shape. SVG measures the limit as miter length over stroke
+        // WIDTH, and past it the join must become exactly a bevel, not something in between.
+        const wedge: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 200, y: 2 }, { c: "L", x: 0, y: 4 }];
+        const far = (rings: { x: number; y: number }[][]): number => Math.max(...rings.flat().map(p => p.x));
+        const limited = strokeOutline(wedge, { width: 10, join: "miter", miterLimit: DEFAULT_MITER_LIMIT });
+        const generous = strokeOutline(wedge, { width: 10, join: "miter", miterLimit: 1000 });
+        const bevelled = strokeOutline(wedge, { width: 10, join: "bevel" });
+        expect(far(generous)).toBeGreaterThan(far(limited));
+        expect(far(limited)).toBeCloseTo(far(bevelled), 6);
+    });
+
+    test("the INNER side of a corner is TRIMMED, not folded over itself", () => {
+        // The two offset edges overlap on the inside of a turn. Emitting them untrimmed makes a
+        // self-intersecting ring, which the nonzero rule hides on SVG and Canvas and the
+        // triangulator cannot — the same stroke would look right on two backends and wrong on
+        // the third. The trim keeps the ring simple, so its own area IS the covered area.
+        const elbow: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 100 }];
+        const rings = strokeOutline(elbow, { width: 10, join: "miter" });
+        expect(rings.length).toBe(1);
+        // Each arm runs from its butt cap to the MITER point, so each is 105 x 10, and they
+        // share the 10 x 10 square at the corner: 1050 + 1050 - 100.
+        expect(covered(rings)).toBeCloseTo(105 * 10 + 105 * 10 - 100, 6);
+    });
+
+    test("a stroke wider than the shape stays BOUNDED — the fallback never spikes", () => {
+        // When the offsets cross beyond the segments themselves there is no trim point, and the
+        // fallback runs the outline through the centreline vertex. What that buys is not a simple
+        // ring — a stroke this wide covers itself, and no single ring can describe a region that
+        // overlaps itself — it is that the corner does not throw a spike. Every join is capped at
+        // `miterLimit` half-widths from a centreline vertex, so the whole outline stays inside
+        // the path's own box grown by that much, and nothing is NaN.
+        const tight: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 6, y: 0 }, { c: "L", x: 6, y: 6 }];
+        const half = 20;
+        const rings = strokeOutline(tight, { width: half * 2, join: "miter" });
+        expect(rings.length).toBe(1);
+        const reach = DEFAULT_MITER_LIMIT * half;
+        for (const p of rings.flat()) {
+            expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
+            expect(p.x).toBeGreaterThanOrEqual(0 - reach);
+            expect(p.x).toBeLessThanOrEqual(6 + reach);
+            expect(p.y).toBeGreaterThanOrEqual(0 - reach);
+            expect(p.y).toBeLessThanOrEqual(6 + reach);
+        }
+    });
+
+    test("the miter limit is a ratio to the STROKE WIDTH, and it flips at exactly that ratio", () => {
+        // SVG defines the limit as miter length / stroke WIDTH, and for a corner of angle t the
+        // miter length is width / sin(t/2) — so the ratio is 1/sin(t/2) and nothing else. A right
+        // angle gives sqrt(2) = 1.41421..., which is a number the join must flip either side of.
+        // Measuring against the HALF width instead would silently double every limit, and would
+        // be invisible to any test that only used the default 4 on a shape far from the boundary.
+        const ratio = 1 / Math.sin(Math.PI / 4);
+        const at = (miterLimit: number): number => covered(strokeOutline(closedSquare(100), { width: 10, join: "miter", miterLimit }));
+        const bevel = covered(strokeOutline(closedSquare(100), { width: 10, join: "bevel" }));
+        expect(at(ratio + 0.01) - bevel).toBeCloseTo(4 * (5 * 5) / 2, 6);   // just above: mitred
+        expect(at(ratio - 0.01)).toBeCloseTo(bevel, 6);                      // just below: bevelled
+    });
+
+    test("an overshooting inner trim is REFUSED, and the fallback is the centreline vertex", () => {
+        // The trim point is only the outline where it lies within both edges. On a corner too
+        // tight for the width it lands beyond them, and using it anyway pulls the inner boundary
+        // out past where the stroke reaches. The documented fallback runs through the vertex, and
+        // that gives a region computable by hand — which is how this number was arrived at rather
+        // than by reading it off the implementation.
+        //
+        // Arms 10 long, width 30. Outer boundary: (0,-15) -> miter (25,-15) -> (25,10). Inner
+        // boundary, with the fallback: (0,15) -> (10,15) -> (10,0) -> (-5,0) -> (-5,10). Butt
+        // caps close both ends; the shoelace of those eight points is 1650, so the area is 825.
+        const elbow: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 10, y: 0 }, { c: "L", x: 10, y: 10 }];
+        const rings = strokeOutline(elbow, { width: 30, join: "miter" });
+        expect(rings.length).toBe(1);
+        expect(covered(rings)).toBeCloseTo(825, 6);
+    });
+
+    test("a round cap bulges PAST the end, not back over the stroke", () => {
+        // Both arcs have the same two endpoints; only the direction of sweep says which side of
+        // the chord they bulge to. Taking the wrong one draws a cap folded back over the stroke —
+        // and the two errors can cancel in a total area, so this is asserted as REACH: the
+        // outline must extend half a width beyond each end of the line and no less.
+        const rings = strokeOutline(line(0, 0, 100, 0), { width: 10, cap: "round" });
+        const xs = rings.flat().map(p => p.x);
+        expect(Math.min(...xs)).toBeCloseTo(-5, 6);
+        expect(Math.max(...xs)).toBeCloseTo(105, 6);
+        // A butt cap, by contrast, stops dead at the ends.
+        const butt = strokeOutline(line(0, 0, 100, 0), { width: 10 }).flat().map(p => p.x);
+        expect(Math.min(...butt)).toBeCloseTo(0, 6);
+        expect(Math.max(...butt)).toBeCloseTo(100, 6);
+    });
+
+    test("an UNEQUAL corner refuses the trim from either side", () => {
+        // The trim has to lie within BOTH offset edges, and a corner can fail that in two
+        // independent ways: the crossing can land before the incoming edge began, or past where
+        // the outgoing one ends. An L with equal arms fails both at once, so either bound alone
+        // still looks sufficient — only an L with a LONG arm and a SHORT one separates them.
+        //
+        // What is asserted is the documented fallback itself: with no trim available the outline
+        // runs through the CENTRELINE VERTEX. That is a point, not an area, so it says exactly
+        // what the rule says and needs no arithmetic to stand in for it.
+        const has = (rings: { x: number; y: number }[][], x: number, y: number): boolean =>
+            rings.flat().some(p => Math.abs(p.x - x) < 1e-9 && Math.abs(p.y - y) < 1e-9);
+        // Long arm in, short arm out: the crossing overshoots the OUTGOING edge.
+        const longThenShort: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 5 }];
+        expect(has(strokeOutline(longThenShort, { width: 30 }), 100, 0)).toBe(true);
+        // Short arm in, long arm out: it starts before the INCOMING edge.
+        const shortThenLong: PathCommand[] = [{ c: "M", x: 100, y: 5 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 0, y: 0 }];
+        expect(has(strokeOutline(shortThenLong, { width: 30 }), 100, 0)).toBe(true);
+        // Where a trim DOES exist it is used, so the vertex is not on the outline at all.
+        const roomy: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }, { c: "L", x: 100, y: 100 }];
+        expect(has(strokeOutline(roomy, { width: 30 }), 100, 0)).toBe(false);
+    });
+
+    test("a CURVE is stroked at the flattening tolerance, not at a fixed segment count", () => {
+        // A stroked circle is the case that shows the flattener is being read: the band between
+        // the two offsets must have the area of an annulus, which a fixed segment count would be
+        // visibly short of on a large radius.
+        const r = 200, k = 0.5522847498307936 * r;
+        const circle: PathCommand[] = [
+            { c: "M", x: -r, y: 0 },
+            { c: "C", x1: -r, y1: -k, x2: -k, y2: -r, x: 0, y: -r },
+            { c: "C", x1: k, y1: -r, x2: r, y2: -k, x: r, y: 0 },
+            { c: "C", x1: r, y1: k, x2: k, y2: r, x: 0, y: r },
+            { c: "C", x1: -k, y1: r, x2: -r, y2: k, x: -r, y: 0 },
+            { c: "Z" }
+        ];
+        const rings = strokeOutline(circle, { width: 20 });
+        expect(rings.length).toBe(2);
+        // pi(210^2 - 190^2). The residual is the KAPPA circle's own 0.027% bulge plus the
+        // flattening chord, so this is a tight RELATIVE bound rather than an exact equality.
+        const expected = Math.PI * (210 * 210 - 190 * 190);
+        expect(covered(rings) / expected).toBeGreaterThan(0.999);
+        expect(covered(rings) / expected).toBeLessThan(1.001);
+    });
+
+    test("a zero or unusable width draws nothing", () => {
+        // Legitimate mid-edit states, not errors — the same answer `triangulate` gives for a
+        // degenerate ring.
+        expect(strokeOutline(line(0, 0, 100, 0), { width: 0 })).toEqual([]);
+        expect(strokeOutline(line(0, 0, 100, 0), { width: -5 })).toEqual([]);
+        expect(strokeOutline(line(0, 0, 100, 0), { width: NaN })).toEqual([]);
+        expect(strokeOutline([{ c: "M", x: 0, y: 0 }], { width: 10 })).toEqual([]);
+    });
+
+    test("an OPEN subpath ignores alignment rather than picking a side", () => {
+        // There is no inside to be inside of. Silently offsetting to one side would put a
+        // "border" somewhere the author never asked for and could not predict.
+        const centre = covered(strokeOutline(line(0, 0, 100, 0), { width: 10 }));
+        for (const align of STROKE_ALIGNS) {
+            expect(covered(strokeOutline(line(0, 0, 100, 0), { width: 10, align }))).toBeCloseTo(centre, 6);
+        }
+    });
+
+    test("the stroke of a shape is a fill the OTHER consumers can take", () => {
+        // The whole point of producing geometry: what comes out must be usable by the pieces that
+        // already exist, with no special case for "this one came from a stroke".
+        const rings = strokeOutline(closedSquare(100), { width: 10 });
+        const t = triangulate(rings);
+        let a = 0;
+        for (let i = 0; i < t.length; i += 6) {
+            a += Math.abs((t[i + 2] - t[i]) * (t[i + 5] - t[i + 1]) - (t[i + 4] - t[i]) * (t[i + 3] - t[i + 1])) / 2;
+        }
+        expect(a).toBeCloseTo(110 * 110 - 90 * 90, 6);
+        expect(commandsToRings(ringsToCommands(rings)).length).toBe(2);
+    });
+
+    test("the join, cap and align vocabularies are the SVG ones", () => {
+        // These strings reach `stroke-linejoin`/`stroke-linecap` and Canvas's `lineJoin`/
+        // `lineCap` verbatim. A private spelling would need a translation table in every
+        // backend, which is exactly the drift this codebase designs out.
+        expect(STROKE_JOINS).toEqual(["miter", "round", "bevel"]);
+        expect(STROKE_CAPS).toEqual(["butt", "round", "square"]);
+        expect(STROKE_ALIGNS).toEqual(["center", "inner", "outer"]);
+        expect(DEFAULT_MITER_LIMIT).toBe(4);
+    });
+});
+
 describe("emitWebGL geometry", () => {
     const item = (shape: unknown, paint: Record<string, unknown> = {}, world: unknown = null) => ({
         shape, world, nodeId: null, role: "content",
@@ -12516,40 +13016,88 @@ describe("emitWebGL geometry", () => {
 
     test("a shape becomes triangles covering its own area, in WORLD space", () => {
         const world = compose(100, 200, 0, 1, 1, 0, 0);
-        const tri = itemTriangles(item({ kind: "rect", x: 0, y: 0, width: 40, height: 20 }, {}, world))!;
-        expect(area(tri.vertices)).toBeCloseTo(800, 6);
+        const [fill] = itemDraws(item({ kind: "rect", x: 0, y: 0, width: 40, height: 20 }, {}, world));
+        expect(area(fill.vertices)).toBeCloseTo(800, 6);
         // Placed by the item's matrix, not left at the local origin.
-        expect(Math.min(...tri.vertices.filter((_, i) => i % 2 === 0))).toBeCloseTo(100, 6);
-        expect(Math.min(...tri.vertices.filter((_, i) => i % 2 === 1))).toBeCloseTo(200, 6);
+        expect(Math.min(...fill.vertices.filter((_, i) => i % 2 === 0))).toBeCloseTo(100, 6);
+        expect(Math.min(...fill.vertices.filter((_, i) => i % 2 === 1))).toBeCloseTo(200, 6);
     });
 
     test("the shapes it fills come from the SAME conversions picking and booleans use", () => {
         // A rounded rect and an ellipse must fill exactly the outline the hit test accepts,
         // otherwise the GPU draws one shape and the pointer finds another.
-        const rounded = itemTriangles(item({ kind: "rect", x: 0, y: 0, width: 100, height: 100 }, { radius: 50 }))!;
+        const [rounded] = itemDraws(item({ kind: "rect", x: 0, y: 0, width: 100, height: 100 }, { radius: 50 }));
         expect(area(rounded.vertices)).toBeCloseTo(Math.PI * 50 * 50, -1);   // a radius-50 round rect IS a circle
-        const ell = itemTriangles(item({ kind: "ellipse", cx: 50, cy: 30, rx: 50, ry: 30 }))!;
+        const [ell] = itemDraws(item({ kind: "ellipse", cx: 50, cy: 30, rx: 50, ry: 30 }));
         expect(area(ell.vertices)).toBeCloseTo(Math.PI * 50 * 30, -1);
     });
 
-    test("a LINE is stroked as a quad, because it has no interior to fill", () => {
-        const tri = itemTriangles(item({ kind: "line", x1: 0, y1: 0, x2: 100, y2: 0 },
-            { fill: null, stroke: "#00ff00", strokeWidth: 4 }))!;
+    test("a bordered shape is TWO draws — fill then stroke, in that order", () => {
+        // The other two backends fill an element and then stroke it. Returning only the fill was
+        // why a border could not appear on this backend at all.
+        const draws = itemDraws(item({ kind: "rect", x: 0, y: 0, width: 100, height: 100 },
+            { fill: "#ff0000", stroke: "#00ff00", strokeWidth: 10 }));
+        expect(draws.length).toBe(2);
+        expect(draws[0].color).toEqual([1, 0, 0, 1]);
+        expect(area(draws[0].vertices)).toBeCloseTo(10000, 6);
+        expect(draws[1].color).toEqual([0, 1, 0, 1]);
+        // A centred 10-wide border on a 100 square: 110^2 - 90^2.
+        expect(area(draws[1].vertices)).toBeCloseTo(110 * 110 - 90 * 90, 6);
+    });
+
+    test("an OUTLINE item draws its border and NOT a block over the shape", () => {
+        // The selection frame is `fill: "none"` plus a stroke. Filling it would paint a solid
+        // block over the very shape it outlines; skipping the item entirely (which is what this
+        // backend used to do) loses the frame. It is one draw, and it is the border.
+        const draws = itemDraws(item({ kind: "rect", x: 0, y: 0, width: 100, height: 100 },
+            { fill: "none", stroke: "#ffffff", strokeWidth: 2 }));
+        expect(draws.length).toBe(1);
+        expect(area(draws[0].vertices)).toBeCloseTo(102 * 102 - 98 * 98, 6);
+    });
+
+    test("a stroke is offset in LOCAL space, so a scaled node's border scales too", () => {
+        // SVG puts the element inside a transform and Canvas strokes under the CTM, so both
+        // thicken a scaled node's border. Offsetting after the transform would hold the width
+        // constant in world units and this backend alone would disagree.
+        const world = compose(0, 0, 0, 3, 3, 0, 0);
+        const [stroke] = itemDraws(item({ kind: "rect", x: 0, y: 0, width: 100, height: 100 },
+            { fill: null, stroke: "#ffffff", strokeWidth: 10 }, world));
+        expect(area(stroke.vertices)).toBeCloseTo((110 * 110 - 90 * 90) * 9, 6);
+    });
+
+    test("a LINE is stroked with its caps, because it has no interior to fill", () => {
+        const [tri] = itemDraws(item({ kind: "line", x1: 0, y1: 0, x2: 100, y2: 0 },
+            { fill: null, stroke: "#00ff00", strokeWidth: 4 }));
         expect(area(tri.vertices)).toBeCloseTo(400, 6);
         expect(tri.color).toEqual([0, 1, 0, 1]);
+        // Caps are the document's now, not hard-coded: a square cap adds half a width at each end.
+        const [capped] = itemDraws(item({ kind: "line", x1: 0, y1: 0, x2: 100, y2: 0 },
+            { fill: null, stroke: "#00ff00", strokeWidth: 4, strokeCap: "square" }));
+        expect(area(capped.vertices)).toBeCloseTo(104 * 4, 6);
         // A zero-length line draws nothing rather than a degenerate sliver.
-        expect(itemTriangles(item({ kind: "line", x1: 5, y1: 5, x2: 5, y2: 5 },
-            { fill: null, stroke: "#00ff00", strokeWidth: 4 }))).toBeNull();
+        expect(itemDraws(item({ kind: "line", x1: 5, y1: 5, x2: 5, y2: 5 },
+            { fill: null, stroke: "#00ff00", strokeWidth: 4 }))).toEqual([]);
+    });
+
+    test("the JOIN reaches the GPU, so a rounded corner is round there too", () => {
+        const square = { kind: "rect" as const, x: 0, y: 0, width: 100, height: 100 };
+        const paint = { fill: null, stroke: "#ffffff", strokeWidth: 10 };
+        const [miter] = itemDraws(item(square, { ...paint, strokeJoin: "miter" }));
+        const [bevel] = itemDraws(item(square, { ...paint, strokeJoin: "bevel" }));
+        // Four corner triangles of half-width 5 — the same difference `StrokeOutline` asserts.
+        expect(area(miter.vertices) - area(bevel.vertices)).toBeCloseTo(4 * (5 * 5) / 2, 6);
     });
 
     test("what it CANNOT draw, it declines to draw — no silent wrong output", () => {
-        // Text and images need a texture path this backend does not have. An outline item
-        // (`fill: "none"`) would paint a solid block over the shape it is meant to outline.
-        expect(itemTriangles(item({ kind: "text", x: 0, y: 0, width: 10, height: 10, text: "hi", fontSize: 10, fontFamily: "sans-serif", fontWeight: 400, textAlign: "left", lineHeight: 1.2, letterSpacing: 0 }))).toBeNull();
-        expect(itemTriangles(item({ kind: "image", x: 0, y: 0, width: 10, height: 10, href: "x.png" }))).toBeNull();
-        expect(itemTriangles(item({ kind: "rect", x: 0, y: 0, width: 10, height: 10 }, { fill: "none" }))).toBeNull();
+        // Text and images need a texture path this backend does not have.
+        expect(itemDraws(item({ kind: "text", x: 0, y: 0, width: 10, height: 10, text: "hi", fontSize: 10, fontFamily: "sans-serif", fontWeight: 400, textAlign: "left", lineHeight: 1.2, letterSpacing: 0 }))).toEqual([]);
+        expect(itemDraws(item({ kind: "image", x: 0, y: 0, width: 10, height: 10, href: "x.png" }))).toEqual([]);
         // A colour it cannot parse is skipped rather than drawn in the wrong one.
-        expect(itemTriangles(item({ kind: "rect", x: 0, y: 0, width: 10, height: 10 }, { fill: "rebeccapurple" }))).toBeNull();
+        expect(itemDraws(item({ kind: "rect", x: 0, y: 0, width: 10, height: 10 }, { fill: "rebeccapurple" }))).toEqual([]);
+        // A stroke with no width is not a hairline guess — the model resolves widths, and a null
+        // one means nothing was asked for.
+        expect(itemDraws(item({ kind: "rect", x: 0, y: 0, width: 10, height: 10 },
+            { fill: null, stroke: "#fff", strokeWidth: null }))).toEqual([]);
     });
 
     test("colours and opacity reach the GPU as components", () => {
@@ -12557,7 +13105,7 @@ describe("emitWebGL geometry", () => {
         expect(parseColor("#00ff0080")![3]).toBeCloseTo(128 / 255, 6);
         expect(parseColor("nonsense")).toBeNull();
         // Item opacity MULTIPLIES the colour's own alpha — one blend, not two.
-        const tri = itemTriangles(item({ kind: "rect", x: 0, y: 0, width: 4, height: 4 }, { fill: "#ffffff80", opacity: 0.5 }))!;
+        const [tri] = itemDraws(item({ kind: "rect", x: 0, y: 0, width: 4, height: 4 }, { fill: "#ffffff80", opacity: 0.5 }));
         expect(tri.color[3]).toBeCloseTo((128 / 255) * 0.5, 6);
     });
 

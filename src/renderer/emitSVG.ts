@@ -87,6 +87,19 @@ function applyTail(el: SVGElement, item: DrawItem): void {
     if (!paint.pointerEvents) el.style.pointerEvents = "none";
 }
 
+/**
+ * Corner and end treatment, wherever a stroke is set (schema 37).
+ *
+ * One function rather than three lines repeated at each stroke site, because "the line shape
+ * forgot one of them" is precisely the drift a shared helper removes. Absent = emit nothing, and
+ * the SVG default is then what the renderer drew before these fields existed.
+ */
+function applyStrokeCorners(el: SVGElement, paint: Paint): void {
+    if (paint.strokeJoin !== undefined) el.setAttribute("stroke-linejoin", paint.strokeJoin);
+    if (paint.strokeCap !== undefined) el.setAttribute("stroke-linecap", paint.strokeCap);
+    if (paint.strokeMiterLimit !== undefined) el.setAttribute("stroke-miterlimit", String(paint.strokeMiterLimit));
+}
+
 function applyRectPaint(el: SVGElement, paint: Paint): void {
     if (paint.fill !== null) el.setAttribute("fill", paint.fill);
     if (paint.opacity !== null) el.setAttribute("opacity", String(paint.opacity));
@@ -94,6 +107,7 @@ function applyRectPaint(el: SVGElement, paint: Paint): void {
     if (paint.stroke !== null) el.setAttribute("stroke", paint.stroke);
     if (paint.strokeWidth !== null) el.setAttribute("stroke-width", String(paint.strokeWidth));
     if (paint.strokeDash !== null) el.setAttribute("stroke-dasharray", paint.strokeDash);
+    applyStrokeCorners(el, paint);
 }
 
 function appendItem(group: SVGGElement, item: DrawItem): void {
@@ -126,6 +140,7 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         el.setAttribute("y2", String(shape.y2));
         if (paint.stroke !== null) el.setAttribute("stroke", paint.stroke);
         if (paint.strokeWidth !== null) el.setAttribute("stroke-width", String(paint.strokeWidth));
+        applyStrokeCorners(el, paint);
         if (paint.opacity !== null) el.setAttribute("opacity", String(paint.opacity));
         applyTail(el, item);
         group.appendChild(el);

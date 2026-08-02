@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v36 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v37 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -198,6 +198,23 @@ function flattenPath(commands: readonly PathCommand[], tolerance?: number): { po
 // work follows the curve rather than a fixed count. Still DETERMINISTIC and viewport-independent
 // — the input is the curve's own numbers — which is the property a fixed count was defending.
 function isPaintBearing(fill: string): boolean;   // "", "none", "transparent" = no paint
+
+// StrokeOutline.ts — a BORDER as fillable rings, so a stroke can be geometry and not a parameter.
+// POLYLINE OFFSETTING over the same `flattenPath` picking and tessellation use. The two sides of
+// a corner are not symmetric: the OUTER side gets the join, the INNER side is TRIMMED to where
+// the offsets cross (untrimmed it would self-intersect, which nonzero hides on SVG/Canvas and the
+// triangulator cannot). The join/cap vocabularies live in `document/Node` — this re-exports them.
+type StrokeJoin = "miter" | "round" | "bevel";   // = document/Node's, not a second spelling
+type StrokeCap = "butt" | "round" | "square";
+const STROKE_ALIGNS: readonly ["center", "inner", "outer"];
+type StrokeAlign = typeof STROKE_ALIGNS[number];
+interface StrokeStyle { width: number; join?: StrokeJoin; cap?: StrokeCap; miterLimit?: number; align?: StrokeAlign }
+function strokeOutline(commands: readonly PathCommand[], style: StrokeStyle, tolerance?: number): Ring[];
+// A CLOSED subpath yields two rings (outer edge + hole, wound opposite); an OPEN one yields a
+// single ring, up one side and back the other through the caps. ALIGNMENT is measured against the
+// shape's own winding, not the drawing direction, so a rectangle drawn either way gets the same
+// inside border — and on an open subpath there is no inside, so align is treated as "center".
+// Width <= 0 or a path with no length returns [] rather than throwing.
 
 // Tessellate.ts — filled outlines as TRIANGLES, the only form a GPU accepts.
 // EAR CLIPPING over the same `Ring`s picking and booleans use, so the GPU fills exactly the
@@ -739,8 +756,9 @@ function clearRenderState(container: HTMLElement): void;             // drop the
 function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: {x: number; y: number; zoom: number}, dpr?: number): boolean; // GPU transcription; false = unavailable
 function initGL(canvas: HTMLCanvasElement): GLState | null;                          // program + buffer, or null when WebGL is refused
 function parseColor(css: string): [number, number, number, number] | null;           // #rgb / #rrggbb / #rrggbbaa only; null = do not draw
-function shapeToWorldRings(shape: Shape, world: Mat2D | null, radius: number | null, strokeWidth: number | null): Ring[] | null;
-function itemTriangles(item: DrawItem): { vertices: number[]; color: [number, number, number, number] } | null;   // pure — the tested part
+function shapeToLocalCommands(shape: Shape, radius: number | null): PathCommand[] | null;   // LOCAL, so a stroke offsets in the units its width means
+interface Draw { vertices: number[]; color: [number, number, number, number] }
+function itemDraws(item: DrawItem): Draw[];   // pure — the tested part; fill then stroke, [] for what it cannot draw
 function viewMatrix(width: number, height: number, vpX: number, vpY: number, zoom: number): number[];             // world → clip, column-major 3x3
 function renderWebGL(container: HTMLElement, doc: ReadonlyDocument, state: RendererState, onAsyncReady?: () => void): void; // ∘ emitWebGL, falls back to renderCanvas
 type RenderBackend = "svg" | "canvas" | "webgl";

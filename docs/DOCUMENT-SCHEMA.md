@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v36 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v37 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -92,6 +92,13 @@ interface Style {
   fill: string;             // color OR token id, e.g. "$color/primary" (resolved against variables, M5)
   stroke?: string;
   strokeWidth?: number | string; // border thickness in WORLD units, >= 0, or a number-token (schema 25); absent = a 1-SCREEN-px hairline
+  strokeJoin?: "miter" | "round" | "bevel";   // how a corner turns (schema 37); absent = "miter"
+  strokeCap?: "butt" | "round" | "square";    // how an open end finishes (schema 37); absent = "butt"
+  strokeMiterLimit?: number;                  // miter length / stroke width, >= 1 (schema 37); absent = 4
+  // NO strokeAlign, deliberately. Neither SVG nor Canvas can draw an inside or outside border, so
+  // a document field for one would render three different ways on three backends. Alignment is an
+  // argument to the OUTLINE STROKE command instead (`actions/outlineStrokeActions`), whose result
+  // is a plain `core.path` — and a fill draws identically everywhere.
   radius?: number | string; // corner radius, or a NUMBER-token "$radius/medium" (schema 20)
   opacity: number;          // 0..1 — INHERITED since schema 32: a node draws at its own × every ancestor's
   fontSize?: number | string; // core.text; world units, default 14 — number or a number-token (schema 20)

@@ -14,13 +14,17 @@
  * triangles are the form that cost disappears in. This is the seam that makes that possible, not
  * the finished optimisation — see the gaps below.
  *
- * DELIBERATE GAPS, stated rather than discovered later. This backend draws FILLS:
+ * STROKES are now geometry too. `geometry/StrokeOutline` turns a border into rings the same way
+ * a fill already was, so this backend draws both, with the document's own joins and caps — and
+ * the selection frame, which is an outline item and used to be skipped entirely, now appears.
+ * The offsetting happens in LOCAL space and the rings are transformed afterwards, because that
+ * is where SVG and Canvas apply `stroke-width` too: a node scaled 2x has a border twice as thick
+ * on all three backends rather than on two of them.
+ *
+ * DELIBERATE GAPS, stated rather than discovered later:
  *   - TEXT and IMAGES are not drawn at all. Both need a texture path (a glyph atlas, an image
  *     upload) that is its own piece of work, and pretending otherwise would mean a document that
  *     silently loses content when the backend is switched.
- *   - STROKES are drawn only for `line` shapes (as a quad). Stroking an arbitrary outline means
- *     offsetting it — a separate algorithm with its own joins and caps — and an approximation
- *     would be visibly wrong at corners.
  *   - EFFECTS (shadow, blur) and dashes are ignored; those are per-fragment work needing render
  *     targets.
  * The app offers this backend as a preview and says so, because a backend that quietly drops
@@ -31,7 +35,9 @@ import { DisplayList, DrawItem, Shape } from "./RenderModel";
 import { Mat2D } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
 import { triangulate } from "../core/geometry/Tessellate";
+import { strokeOutline } from "../core/geometry/StrokeOutline";
 import { ellipseCommands, rectCommands, transformCommands } from "../core/geometry/ShapeToPath";
+import { PathCommand } from "../core/document/Node";
 
 const VERTEX_SHADER = `
 attribute vec2 a_pos;
@@ -103,70 +109,84 @@ export function parseColor(css: string): [number, number, number, number] | null
 }
 
 /**
- * A shape as world-space RINGS, or null when this backend does not draw it.
+ * A shape as PathCommands in its OWN local space, or null when this backend does not draw it.
  *
  * Every conversion here is one the engine already owns — an ellipse is `ellipseCommands`, a
- * rectangle is `rectCommands` (rounded corners included), a path is its own commands — so the
- * GPU fills exactly the outline that picking tests and booleans cut. A fourth private idea of
- * "what shape is this" is the drift this codebase keeps designing out.
+ * rectangle is `rectCommands` (rounded corners included), a path is its own commands, a line is
+ * the two-point path it has always been — so the GPU works on exactly the outline picking tests
+ * and booleans cut. A fourth private idea of "what shape is this" is the drift this codebase
+ * keeps designing out.
+ *
+ * LOCAL, not world, because a stroke is offset by a width and the width means local units: SVG
+ * puts the element inside a transform and Canvas strokes under the CTM, so both thicken a scaled
+ * node's border. Offsetting after the transform would keep it a constant world width and this
+ * backend alone would disagree.
  */
-export function shapeToWorldRings(shape: Shape, world: Mat2D | null, radius: number | null, strokeWidth: number | null): Ring[] | null {
-    let commands;
+export function shapeToLocalCommands(shape: Shape, radius: number | null): PathCommand[] | null {
     switch (shape.kind) {
-        case "rect": commands = rectCommands(shape.width, shape.height, radius ?? 0).map(c =>
-            c.c === "Z" ? c : { ...c, x: c.x + shape.x, y: c.y + shape.y }); break;
-        case "ellipse": commands = ellipseCommands(shape.rx * 2, shape.ry * 2).map(c =>
-            c.c === "Z" ? c : { ...c, x: c.x + shape.cx - shape.rx, y: c.y + shape.cy - shape.ry }); break;
-        case "path": commands = [...shape.commands]; break;
-        case "line": {
-            // A line has no interior, so its STROKE is the shape: a quad of `strokeWidth` about
-            // the segment. Zero-length lines and zero widths produce nothing rather than a
-            // degenerate sliver.
-            const w = strokeWidth ?? 1;
-            const dx = shape.x2 - shape.x1, dy = shape.y2 - shape.y1;
-            const len = Math.hypot(dx, dy);
-            if (len === 0 || w <= 0) return null;
-            const nx = (-dy / len) * (w / 2), ny = (dx / len) * (w / 2);
-            const ring: Ring = [
-                { x: shape.x1 + nx, y: shape.y1 + ny }, { x: shape.x2 + nx, y: shape.y2 + ny },
-                { x: shape.x2 - nx, y: shape.y2 - ny }, { x: shape.x1 - nx, y: shape.y1 - ny }
-            ];
-            return [world ? transformRing(ring, world) : ring];
-        }
+        case "rect": return rectCommands(shape.width, shape.height, radius ?? 0).map(c =>
+            c.c === "Z" ? c : { ...c, x: c.x + shape.x, y: c.y + shape.y });
+        case "ellipse": return ellipseCommands(shape.rx * 2, shape.ry * 2).map(c =>
+            c.c === "Z" ? c : { ...c, x: c.x + shape.cx - shape.rx, y: c.y + shape.cy - shape.ry });
+        case "path": return [...shape.commands];
+        // A line is an OPEN two-point path. It has no interior, so only its stroke ever draws —
+        // which is now the same code path as every other shape's stroke, caps included, rather
+        // than a hand-rolled quad that could only ever be butt-capped.
+        case "line": return [{ c: "M", x: shape.x1, y: shape.y1 }, { c: "L", x: shape.x2, y: shape.y2 }];
         // Text and images need a texture path this backend does not have; see the module note.
         default: return null;
     }
-    const placed = world ? transformCommands(world, commands) : commands;
-    return commandsToRings(placed);
 }
 
 function transformRing(ring: Ring, m: Mat2D): Ring {
     return ring.map(p => ({ x: m.a * p.x + m.c * p.y + m.e, y: m.b * p.x + m.d * p.y + m.f }));
 }
 
+/** One draw: the triangles and the colour they are filled with. */
+export interface Draw {
+    vertices: number[];
+    color: [number, number, number, number];
+}
+
+function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number | null): Draw | null {
+    const color = parseColor(css);
+    if (!color) return null;                      // not a colour it can parse: skip, never guess
+    const placed = world ? rings.map(r => transformRing(r, world)) : rings;
+    const vertices = triangulate(placed);
+    if (vertices.length === 0) return null;
+    if (opacity !== null) color[3] *= opacity;    // MULTIPLY — one blend, not two
+    return { vertices, color };
+}
+
 /**
- * The triangles and colour one item contributes, or null when it draws nothing.
+ * Everything one item contributes: its fill, its stroke, or both, in paint order.
  *
  * Pure, and exported for exactly that reason: this is where a shape becomes geometry, so it is
  * the part worth testing in the `node` environment. What is left in `emitWebGL` below is buffer
  * uploads and draw calls, which only a GPU can answer for.
+ *
+ * A list rather than one draw, because a bordered shape is two of them and always was — the
+ * other two backends fill and then stroke the same element. Returning only the fill was why the
+ * selection frame could not appear on this backend at all.
  */
-export function itemTriangles(item: DrawItem): { vertices: number[]; color: [number, number, number, number] } | null {
+export function itemDraws(item: DrawItem): Draw[] {
     const paint = item.paint;
-    // An OUTLINE item carries `fill: "none"` (the selection frame). It is skipped — with no
-    // stroking, filling it would paint a solid block over the shape it is meant to outline —
-    // but NOT by a separate test for the string: `parseColor` already refuses anything that is
-    // not a hex colour, and a second check for "none" was provably equivalent to nothing.
-    const source = item.shape.kind === "line" ? paint.stroke : paint.fill;
-    if (source === null) return null;
-    const color = parseColor(source);
-    if (!color) return null;
-    const rings = shapeToWorldRings(item.shape, item.world, paint.radius, paint.strokeWidth);
-    if (!rings || rings.length === 0) return null;
-    const vertices = triangulate(rings);
-    if (vertices.length === 0) return null;
-    if (paint.opacity !== null) color[3] *= paint.opacity;
-    return { vertices, color };
+    const local = shapeToLocalCommands(item.shape, paint.radius);
+    if (!local) return [];
+    const out: Draw[] = [];
+    if (paint.fill !== null) {
+        const fill = draw(commandsToRings(local), item.world, paint.fill, paint.opacity);
+        if (fill) out.push(fill);
+    }
+    if (paint.stroke !== null && paint.strokeWidth !== null && paint.strokeWidth > 0) {
+        const rings = strokeOutline(local, {
+            width: paint.strokeWidth,
+            join: paint.strokeJoin, cap: paint.strokeCap, miterLimit: paint.strokeMiterLimit
+        });
+        const stroke = draw(rings, item.world, paint.stroke, paint.opacity);
+        if (stroke) out.push(stroke);
+    }
+    return out;
 }
 
 /** The viewport matrix as the 3x3 the shader takes: world → clip space, column-major. */
@@ -202,11 +222,11 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
     // Grid, then content, then overlay — the same order the other backends paint in, because the
     // display list's order IS the z-order and a GPU has no depth buffer here to recover it from.
     for (const item of [...list.grid.lines, ...list.content, ...list.overlay]) {
-        const tri = itemTriangles(item);
-        if (!tri) continue;
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(tri.vertices), gl.DYNAMIC_DRAW);
-        gl.uniform4fv(colorLoc, tri.color);
-        gl.drawArrays(gl.TRIANGLES, 0, tri.vertices.length / 2);
+        for (const d of itemDraws(item)) {
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.vertices), gl.DYNAMIC_DRAW);
+            gl.uniform4fv(colorLoc, d.color);
+            gl.drawArrays(gl.TRIANGLES, 0, d.vertices.length / 2);
+        }
     }
     return true;
 }

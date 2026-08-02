@@ -24,7 +24,7 @@
  */
 
 import { ReadonlyDocument } from "../core/document/Document";
-import { PathCommand, Shadow, TextAlign } from "../core/document/Node";
+import { PathCommand, Shadow, StrokeCap, StrokeJoin, TextAlign } from "../core/document/Node";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
@@ -114,6 +114,18 @@ export interface Paint {
     opacity: number | null;
     stroke: string | null;
     strokeWidth: number | null;
+    /**
+     * Corner and end treatment, and the miter cutoff (schema 37).
+     *
+     * OPTIONAL rather than `null`-when-absent, unlike every other field here, and deliberately:
+     * these three only mean anything alongside a stroke, and an absent one is not "draw nothing"
+     * but "draw what you already drew" — SVG's own defaults, which all three backends used
+     * before the fields existed. Writing them as explicit nulls at the dozen sites that build a
+     * Paint would say something the document never said.
+     */
+    strokeJoin?: StrokeJoin;
+    strokeCap?: StrokeCap;
+    strokeMiterLimit?: number;
     strokeDash: string | null;
     radius: number | null;
     cursor: string | null;
@@ -427,6 +439,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
+                strokeJoin: sty.strokeJoin, strokeCap: sty.strokeCap, strokeMiterLimit: sty.strokeMiterLimit,
                 strokeDash: null,
                 radius: radiusOf(sty.radius),
                 cursor: "pointer",
@@ -440,6 +453,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
+                strokeJoin: sty.strokeJoin, strokeCap: sty.strokeCap, strokeMiterLimit: sty.strokeMiterLimit,
                 strokeDash: null,
                 radius: null,
                 cursor: "pointer",
@@ -459,6 +473,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 // wins over a token fill exactly like concrete colors.
                 stroke: color(sty.stroke || sty.fill),
                 strokeWidth: strokeWidthOf(sty.strokeWidth),
+                strokeJoin: sty.strokeJoin, strokeCap: sty.strokeCap, strokeMiterLimit: sty.strokeMiterLimit,
                 strokeDash: null,
                 radius: null,
                 cursor: "pointer",
@@ -496,6 +511,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
+                strokeJoin: sty.strokeJoin, strokeCap: sty.strokeCap, strokeMiterLimit: sty.strokeMiterLimit,
                 strokeDash: null,
                 radius: null,
                 cursor: "pointer",

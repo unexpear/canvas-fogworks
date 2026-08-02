@@ -292,6 +292,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "33") { raw = migrate_33_to_34(raw); version = "34"; }
     if (version === "34") { raw = migrate_34_to_35(raw); version = "35"; }
     if (version === "35") { raw = migrate_35_to_36(raw); version = "36"; }
+    if (version === "36") { raw = migrate_36_to_37(raw); version = "37"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -618,6 +619,18 @@ function migrate_21_to_22(raw: any): any {
  * state, exactly as before. The bump is required for the same reason 34->35 was: an old build
  * ignores it, so a prototype that changes screen in one build stays put in the other.
  */
+/**
+ * 36 -> 37: stroke JOIN, CAP and MITER LIMIT — `Style.strokeJoin`, `strokeCap`, `strokeMiterLimit`.
+ *
+ * Additive, and every absent value is the one all three backends already used ("miter", "butt",
+ * 4), so a schema-36 document draws identically and needs no rewriting. The bump is required for
+ * the same reason 34->35 was: an OLD build ignores the fields, so a shape whose corners are
+ * rounded in one build is mitred in the other — the same file, two different drawings.
+ */
+function migrate_36_to_37(raw: any): any {
+    return { ...raw, version: "37" };
+}
+
 function migrate_35_to_36(raw: any): any {
     return { ...raw, version: "36" };
 }

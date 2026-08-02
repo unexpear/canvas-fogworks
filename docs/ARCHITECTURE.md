@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v36 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v37 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -197,6 +197,29 @@ transforms share), folds bottom-most first so `subtract` cuts the shapes above o
 below, and lands as ONE transaction: create the result, set its commands, delete the operands —
 one undo.
 
+**A STROKE stops being a parameter (`geometry/StrokeOutline` → `actions/outlineStrokeActions`).**
+Until this slice a border was something only a rasterizer knew about: SVG and Canvas take a width
+and a colour and draw it themselves, so no layer here ever had to know what area a border covers.
+Three things wanted that answer and could not have it — a GPU, which fills triangles and cannot
+"stroke"; an OUTLINE STROKE command, which every design tool has; and stroke ALIGNMENT, which
+neither backend can express. One pure module answers all three, by POLYLINE OFFSETTING over the
+same `flattenPath` picking and tessellation already use.
+
+The two sides of a corner are not symmetric, and that asymmetry is the whole algorithm. The OUTER
+side opens up and the JOIN fills it — a miter, degrading to a bevel past `miterLimit` exactly as
+SVG defines it, or a round arc, or a bevel. The INNER side folds over itself, and the correct
+outline is the two offset edges TRIMMED to where they cross. Leaving them untrimmed would make a
+self-intersecting ring, which the nonzero rule hides on SVG and Canvas and the triangulator cannot
+— the same stroke would look right on two backends and wrong on the third.
+
+ALIGNMENT is the piece that shows where a feature belongs. `Style` carries `strokeJoin`,
+`strokeCap` and `strokeMiterLimit` (schema 37) because all three backends draw those natively from
+the document's own values. It carries no `strokeAlign`, because an inside border is not something
+SVG or Canvas can draw — a document field for it would render three different ways on three
+backends. So alignment is an argument to the outline COMMAND instead: what comes out is a
+`core.path`, and a fill draws identically everywhere. The same reasoning that put the boolean bake
+in the action layer rather than in a renderer.
+
 **A fill becomes TRIANGLES for the GPU, by the same outline everything else uses
 (`geometry/Tessellate`).** SVG and Canvas both take an outline and a fill rule and rasterize it
 for us; a GPU takes triangles and nothing else. Rather than let the GPU backend invent a fourth
@@ -213,9 +236,11 @@ worst case, which is the right trade here: the alternative is substantially more
 speed-up at vertex counts a design document does not reach, and this runs once per shape per
 change, not per frame.
 
-The GPU backend is a **PREVIEW and says so in the toolbar**. It draws fills; text and images need
-a texture path, arbitrary strokes need curve offsetting, and effects need render targets — none of
-which exist yet, and all of which are stated in the module header rather than discovered later. A
+The GPU backend is a **PREVIEW and says so in the toolbar**. It draws fills AND strokes — the
+latter through `StrokeOutline`, offset in local space and transformed afterwards so a scaled
+node's border thickens exactly as it does on the other two, and which is also why the selection
+frame now appears there at all. What it still cannot do is text and images (a texture path) and
+effects (render targets); both are stated in the module header rather than discovered later. A
 backend that silently drops content when you switch to it is worse than one that admits its gaps.
 
 That flat form is the *bake*. The default is a **`core.boolean` node** (schema 33) that keeps its
@@ -332,7 +357,7 @@ Layout output today is expressed *as* geometry (computed local rects), not as a 
 |-------|-------|----------------|
 | Document | `core/document/{Document,Node,Serializer}.ts`, `core/ids/UUID.ts` | Source of truth, types, (de)serialization, identity |
 | Document integrity | `core/document/{SceneGraph,Integrity}.ts` | Tree traversal/draw order; structural + range validation on load |
-| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine,SelectionHandles,Snapping,Ruler,GroupTransform,Tessellate}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**); DOM-free handle geometry + alignment snapping (move + resize; any translation-only chain) + group ops — union-box snapping, a group rotate knob + corner handles, `GroupTransform.rotateGroup` (rigid multi-node rotation about a shared pivot) and `scaleGroup` (proportional group resize about a fixed corner; transform-free groups only — a rotated set would shear) (**M4**) |
+| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine,SelectionHandles,Snapping,Ruler,GroupTransform,Tessellate,StrokeOutline}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**); DOM-free handle geometry + alignment snapping (move + resize; any translation-only chain) + group ops — union-box snapping, a group rotate knob + corner handles, `GroupTransform.rotateGroup` (rigid multi-node rotation about a shared pivot) and `scaleGroup` (proportional group resize about a fixed corner; transform-free groups only — a rotated set would shear) (**M4**) |
 | Actions | `core/actions/{Action,types,applyMutations}.ts` + `*Action.ts` | Declarative mutations + delta protocol |
 | Dispatch/History | `core/actions/{ActionDispatcher,HistoryManager}.ts` | Only write path; snapshot undo/redo |
 | Editor | `editor/EditorState.ts`, `editor/tools/*`, `editor/{shortcuts,layerDrop,layerSelection,layerFilter}.ts` | Ephemeral state; input → Actions. The RULES a panel or tool applies are pure modules with tests, not logic inside a handler: which command a chord means, what a layer drag resolves to (parent + an index measured AFTER the node is detached), what a row click selects (a shift range spans the VISIBLE order, and the anchor does not move), and which rows a search leaves (a match keeps every ancestor, so the panel shows the path to it) |

@@ -39,6 +39,9 @@ import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, supportsPaintMode, clampS
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { alignAction, distributeAction } from "../core/actions/alignActions";
 import { booleanAction, makeBooleanNodeAction } from "../core/actions/booleanActions";
+import { outlineStrokeAction } from "../core/actions/outlineStrokeActions";
+import { STROKE_ALIGNS, StrokeAlign } from "../core/geometry/StrokeOutline";
+import { STROKE_CAPS, STROKE_JOINS } from "../core/document/Node";
 import { SetBooleanOpAction } from "../core/actions/SetBooleanOpAction";
 import { BooleanOp, TEXT_ALIGNS, FONT_FAMILY_MAX, StateDefinition } from "../core/document/Node";
 import { blendStates, easingAt, TRIGGERS, EASINGS, TRANSITION_MAX_MS, Interaction, Trigger, Easing } from "../core/document/Prototype";
@@ -346,6 +349,26 @@ export function App() {
             : booleanAction(doc, computeGeometry(doc), es.selectedNodeIds, op, id);
         if (action && dispatcher.dispatchAction(action).success) {
             es.selectedNodeIds = [id];   // select the result, not the shapes that no longer exist
+        }
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    /**
+     * Turn the selection's BORDERS into paths — the stroke equivalent of the boolean bake.
+     *
+     * Alignment is asked for here rather than stored on the node, because it is a property of the
+     * conversion and not of the document: no backend can draw an inside border, so a node that
+     * claimed to have one would look different depending on which backend was live. Outlined, it
+     * is a fill, and a fill is a fill everywhere.
+     */
+    const runOutlineStroke = useCallback((align: StrokeAlign) => {
+        const doc = dispatcher.getDocument();
+        // One id per selected node, minted here for the same reason the boolean's is: both halves
+        // of each node's transaction have to name it, and unused ones simply go unspent.
+        const ids = es.selectedNodeIds.map(() => crypto.randomUUID());
+        const action = outlineStrokeAction(doc, computeGeometry(doc), es.selectedNodeIds, ids, align);
+        if (action && dispatcher.dispatchAction(action).success) {
+            es.selectedNodeIds = ids.filter(id => dispatcher.getDocument().nodes.has(id));
         }
         refresh();
     }, [dispatcher, es, refresh]);
@@ -1094,11 +1117,11 @@ export function App() {
                     🗀 Folders
                 </button>
 <button
-                    title="Switch the rendering backend — all three draw the same display list. WebGL is a PREVIEW: it fills shapes as triangles on the GPU and does not yet draw text, images, strokes or effects."
+                    title="Switch the rendering backend — all three draw the same display list. WebGL is a PREVIEW: it fills and strokes shapes as triangles on the GPU, and does not yet draw text, images or effects."
                     onClick={() => setBackend(b => (b === "svg" ? "canvas" : b === "canvas" ? "webgl" : "svg"))}
                     style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
                 >
-                    Backend: {backend === "svg" ? "SVG" : backend === "canvas" ? "Canvas" : "WebGL (fills)"}
+                    Backend: {backend === "svg" ? "SVG" : backend === "canvas" ? "Canvas" : "WebGL (preview)"}
                 </button>
                 {startedFromCorruptSave && (
                     <span
@@ -1367,6 +1390,36 @@ export function App() {
                                             value={typeof node.style.radius === "number" ? node.style.radius : 0}
                                             onChange={v => { editSelected({ style: { radius: Math.max(0, v) } }); refresh(); }}
                                         /></div>
+                                </div>
+                                {/* Corners and ends (schema 37). SVG's own vocabulary, so what is
+                                    picked here is literally what reaches the attribute. */}
+                                <div style={INSPECTOR_GRID}>
+                                    <div><label style={INSPECTOR_LABEL}>Join</label>
+                                        <select
+                                            value={node.style.strokeJoin ?? "miter"}
+                                            onChange={e => { editSelected({ style: { strokeJoin: e.target.value as typeof STROKE_JOINS[number] } }); refresh(); }}
+                                            style={{ ...SELECT_STYLE, width: "100%" }}
+                                        >{STROKE_JOINS.map(j => <option key={j} value={j}>{j}</option>)}</select></div>
+                                    <div><label style={INSPECTOR_LABEL}>Cap</label>
+                                        <select
+                                            value={node.style.strokeCap ?? "butt"}
+                                            onChange={e => { editSelected({ style: { strokeCap: e.target.value as typeof STROKE_CAPS[number] } }); refresh(); }}
+                                            style={{ ...SELECT_STYLE, width: "100%" }}
+                                        >{STROKE_CAPS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                                </div>
+                                {/* ALIGNMENT is not a field on the node — it is how the border is
+                                    BAKED, because neither SVG nor Canvas can draw one off-centre.
+                                    Outlined it becomes a path, and every backend agrees on it. */}
+                                <label style={INSPECTOR_LABEL}>Outline stroke</label>
+                                <div style={{ display: "flex", gap: 4 }}>
+                                    {STROKE_ALIGNS.map(a => (
+                                        <button
+                                            key={a}
+                                            onClick={() => runOutlineStroke(a)}
+                                            title={`Convert the border into a path, sitting ${a === "center" ? "astride" : a} the shape's edge. The border stops being a parameter and becomes geometry you can select, cut and reshape.`}
+                                            style={{ ...ALIGN_BUTTON_STYLE, flex: 1, fontSize: 11 }}
+                                        >{a}</button>
+                                    ))}
                                 </div>
                                 <label style={INSPECTOR_LABEL}>Opacity</label>
                                 <input

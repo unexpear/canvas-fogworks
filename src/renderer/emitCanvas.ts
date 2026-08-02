@@ -124,6 +124,10 @@ function fillAndStroke(ctx: CanvasRenderingContext2D, paint: Paint): void {
     if (paint.stroke !== null) {
         ctx.strokeStyle = paint.stroke;
         if (paint.strokeWidth !== null) ctx.lineWidth = paint.strokeWidth;
+        // The document's spellings ARE Canvas's, so these are assignments, not a lookup table.
+        if (paint.strokeJoin !== undefined) ctx.lineJoin = paint.strokeJoin;
+        if (paint.strokeCap !== undefined) ctx.lineCap = paint.strokeCap;
+        if (paint.strokeMiterLimit !== undefined) ctx.miterLimit = paint.strokeMiterLimit;
         if (paint.strokeDash !== null) ctx.setLineDash(paint.strokeDash.split(" ").map(Number));
         ctx.stroke();
     }

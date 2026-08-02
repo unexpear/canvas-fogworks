@@ -424,6 +424,21 @@ export interface Shadow {
     color: string;   // colour value or token id, like `fill` (not parsed)
 }
 
+/**
+ * How a stroke turns a corner and how it ends (schema 37).
+ *
+ * SVG's spellings, because they reach `stroke-linejoin`/`stroke-linecap` and Canvas's
+ * `lineJoin`/`lineCap` verbatim. They live HERE rather than beside the offsetting geometry for
+ * the same reason `TEXT_ALIGNS` does: the document layer owns what a document may say, and
+ * `geometry/StrokeOutline` reads them from here — the other direction would be a cycle.
+ */
+export const STROKE_JOINS = ["miter", "round", "bevel"] as const;
+export type StrokeJoin = typeof STROKE_JOINS[number];
+export const STROKE_CAPS = ["butt", "round", "square"] as const;
+export type StrokeCap = typeof STROKE_CAPS[number];
+/** SVG's default miter limit, and what every backend falls back to when none is given. */
+export const DEFAULT_MITER_LIMIT = 4;
+
 /** Horizontal text alignment inside a node's box (schema 34). */
 export const TEXT_ALIGNS = ["left", "center", "right", "justify"] as const;
 export type TextAlign = typeof TEXT_ALIGNS[number];
@@ -441,6 +456,22 @@ export interface Style {
      * should thicken as you zoom in, unlike the selection chrome, which stays hairline).
      */
     strokeWidth?: number | string;
+    /**
+     * How a stroke turns a corner, ends, and when a miter gives up (schema 37).
+     *
+     * The values are SVG's spellings, and they are passed to `stroke-linejoin`/`stroke-linecap`
+     * and to Canvas's `lineJoin`/`lineCap` verbatim — a private vocabulary would need a
+     * translation table in every backend. Absent means the value all three already drew:
+     * "miter", "butt", and a limit of 4.
+     *
+     * Stroke ALIGNMENT is deliberately NOT here. Neither SVG nor Canvas can draw an inside or
+     * outside border, so a document field for it would render differently on different backends
+     * — it lives on the Outline Stroke command instead, where the result is a fill every backend
+     * draws identically. See `geometry/StrokeOutline`.
+     */
+    strokeJoin?: StrokeJoin;
+    strokeCap?: StrokeCap;
+    strokeMiterLimit?: number;
     /** Corner radius — a number, or a NUMBER-token reference like "$radius/medium" (schema 20). */
     radius?: number | string;
     opacity: number;
@@ -503,6 +534,15 @@ export function styleError(s: Partial<Style>): string | null {
     // strokeWidth (schema 25): same shape as radius — >= 0 (0 means "no visible border") or a token.
     if ("strokeWidth" in s && s.strokeWidth !== undefined && !isNumberToken(s.strokeWidth)
         && (typeof s.strokeWidth !== "number" || !Number.isFinite(s.strokeWidth) || s.strokeWidth < 0)) return "style.strokeWidth must be >= 0 or a $token";
+    // Stroke corners and ends (schema 37): a closed vocabulary each, checked the same way
+    // `textAlign` is. The miter limit is >= 1 because SVG says so — a ratio below 1 would mean a
+    // miter shorter than the stroke is wide, which no join can be.
+    if ("strokeJoin" in s && s.strokeJoin !== undefined
+        && !(STROKE_JOINS as readonly string[]).includes(s.strokeJoin as string)) return `style.strokeJoin must be one of ${STROKE_JOINS.join(", ")}`;
+    if ("strokeCap" in s && s.strokeCap !== undefined
+        && !(STROKE_CAPS as readonly string[]).includes(s.strokeCap as string)) return `style.strokeCap must be one of ${STROKE_CAPS.join(", ")}`;
+    if ("strokeMiterLimit" in s && s.strokeMiterLimit !== undefined
+        && (typeof s.strokeMiterLimit !== "number" || !Number.isFinite(s.strokeMiterLimit) || s.strokeMiterLimit < 1)) return "style.strokeMiterLimit must be >= 1";
     if ("blur" in s && s.blur !== undefined && (!Number.isFinite(s.blur) || (s.blur as number) < 0)) return "style.blur must be finite and >= 0";
     if ("shadow" in s && s.shadow !== undefined) {
         const sh = s.shadow as Partial<Shadow>;
