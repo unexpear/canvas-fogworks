@@ -191,7 +191,12 @@ type HitShape =
     | { kind: "line" }                             // the box DIAGONAL, top-left → bottom-right
     | { kind: "path"; commands: readonly PathCommand[]; filled: boolean };
 function hitsShape(shape: HitShape, width: number, height: number, x: number, y: number, tolerance: number): boolean;
-function flattenPath(commands: readonly PathCommand[]): { points: {x: number; y: number}[]; closed: boolean }[]; // 16 segments per curve, FIXED so a pick cannot depend on zoom
+const FLATTEN_TOLERANCE: number;   // 0.05 — how far a polyline may stray from its curve, in the PATH's own units
+const FLATTEN_MAX_DEPTH: number;   // 10 halvings — the bound that keeps a pathological curve from hanging a hot path
+function flattenPath(commands: readonly PathCommand[], tolerance?: number): { points: {x: number; y: number}[]; closed: boolean }[];
+// ADAPTIVE de Casteljau subdivision: split at the midpoint until the control hull is flat, so the
+// work follows the curve rather than a fixed count. Still DETERMINISTIC and viewport-independent
+// — the input is the curve's own numbers — which is the property a fixed count was defending.
 function isPaintBearing(fill: string): boolean;   // "", "none", "transparent" = no paint
 // A path's INTERIOR is its FILL: both backends close an open subpath implicitly when filling,
 // so `filled` (not an explicit `Z`) decides whether the inside is pickable. Nonzero winding is

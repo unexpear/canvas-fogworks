@@ -37,7 +37,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
-import { flattenPath, hitsShape, isPaintBearing } from "../geometry/ShapeHit";
+import { flattenPath, hitsShape, isPaintBearing, FLATTEN_TOLERANCE, FLATTEN_MAX_DEPTH } from "../geometry/ShapeHit";
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
 import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
@@ -11096,8 +11096,8 @@ describe("Path booleans", () => {
     });
 
     test("curves are flattened, so a boolean on them is polygonal — and says so by its point count", () => {
-        // A circle-ish shape made of two cubics. The result is a polyline at the flattening
-        // resolution; this pins the behaviour rather than pretending the curve survives.
+        // A circle-ish shape made of two cubics. The result is a polyline, not curves — this
+        // records the LOSS honestly rather than pretending the curve survives a boolean.
         const blob: PathCommand[] = [
             { c: "M", x: 0, y: 50 },
             { c: "C", x1: 0, y1: 0, x2: 100, y2: 0, x: 100, y: 50 },
@@ -11106,7 +11106,11 @@ describe("Path booleans", () => {
         ];
         const rings = commandsToRings(blob);
         expect(rings.length).toBe(1);
-        expect(rings[0].length).toBe(32);                 // 2 curves × 16 segments
+        // The point count is no longer a constant to pin: subdivision follows the curve's own
+        // flatness, so a 100-unit blob takes what it takes. What is worth asserting is that it
+        // IS a polyline of real segments, and that the shape survives — see the flattening
+        // tolerance tests for the accuracy claim itself.
+        expect(rings[0].length).toBeGreaterThan(4);
         const cut = booleanPaths(blob, ringsToCommands([sq(-10, -10, 60, 200)]), "subtract");
         expect(cut.length).toBeGreaterThan(3);
         expect(pathError("core.path", cut)).toBeNull();
@@ -12117,5 +12121,196 @@ describe("Script API", () => {
         expect(src).toMatch(/lines\.push\(\.\.\.compiled\.refusals\.map/);
         // One dispatch, so one undo.
         expect(src).toMatch(/dispatcher\.dispatchAction\(compiled\.action\)\.success/);
+    });
+});
+
+// ─── Tessellation: how a curve becomes a polyline ───
+describe("Adaptive curve flattening", () => {
+    /** The exact point on a cubic at t — the truth a flattening is measured against. */
+    const cubicPoint = (p: number[][], t: number): { x: number; y: number } => {
+        const u = 1 - t;
+        const at = (i: number) => u * u * u * p[0][i] + 3 * u * u * t * p[1][i] + 3 * u * t * t * p[2][i] + t * t * t * p[3][i];
+        return { x: at(0), y: at(1) };
+    };
+    /** Worst distance from the true curve to the flattened polyline — the number the tolerance promises. */
+    const maxDeviation = (p: number[][], pts: { x: number; y: number }[]): number => {
+        let worst = 0;
+        for (let i = 0; i <= 500; i++) {
+            const q = cubicPoint(p, i / 500);
+            let best = Infinity;
+            for (let j = 1; j < pts.length; j++) {
+                const a = pts[j - 1], b = pts[j];
+                const dx = b.x - a.x, dy = b.y - a.y, len = dx * dx + dy * dy;
+                const u = len === 0 ? 0 : Math.max(0, Math.min(1, ((q.x - a.x) * dx + (q.y - a.y) * dy) / len));
+                best = Math.min(best, Math.hypot(a.x + u * dx - q.x, a.y + u * dy - q.y));
+            }
+            worst = Math.max(worst, best);
+        }
+        return worst;
+    };
+    /** A circular quadrant of radius r as a cubic — the shape an ellipse is made of. */
+    const K = 0.5522847498307936;
+    const quadrant = (r: number): number[][] => [[r, 0], [r, r * K], [r * K, r], [0, r]];
+    const asCommands = (p: number[][]): PathCommand[] => [
+        { c: "M", x: p[0][0], y: p[0][1] },
+        { c: "C", x1: p[1][0], y1: p[1][1], x2: p[2][0], y2: p[2][1], x: p[3][0], y: p[3][1] }
+    ];
+
+    test("the flattening HOLDS its tolerance, at every size", () => {
+        // The property the whole change is for. A fixed segment count cannot state this at all:
+        // its error is proportional to the shape, so it is only ever true for one size.
+        // SUB-UNIT radii included on purpose: a flatness measured as a raw cross product instead
+        // of a distance is an area, and an area UNDER-reports once the chord is shorter than a
+        // unit — so a tiny curve would quietly stop subdividing while a large one over-subdivided.
+        for (const r of [0.5, 2, 10, 50, 200, 1000, 5000]) {
+            const p = quadrant(r);
+            const pts = flattenPath(asCommands(p))[0].points;
+            expect(maxDeviation(p, pts)).toBeLessThanOrEqual(FLATTEN_TOLERANCE);
+        }
+        // ASYMMETRIC, so the two inner controls sit at different distances from the chord and
+        // only the FARTHER one bounds the curve. A test that looks at one control point passes
+        // every symmetric curve and fails exactly here.
+        const lopsided = [[0, 0], [10, 0], [900, 400], [1000, 0]];
+        expect(maxDeviation(lopsided, flattenPath(asCommands(lopsided))[0].points)).toBeLessThanOrEqual(FLATTEN_TOLERANCE);
+        const mirrored = [[0, 0], [100, 400], [990, 0], [1000, 0]];
+        expect(maxDeviation(mirrored, flattenPath(asCommands(mirrored))[0].points)).toBeLessThanOrEqual(FLATTEN_TOLERANCE);
+
+        // A TINY, sharply curved case: the chord is a fifth of a unit while the controls stand
+        // well off it. This is the only arrangement where a flatness measured as a raw cross
+        // product (a distance times a length) comes out SMALLER than the true distance, so the
+        // curve is called flat when it is not. Every larger curve hides the error by
+        // over-subdividing instead.
+        const tiny = [[0, 0], [0.2, 0.15], [-0.2, 0.15], [0.2, 0]];
+        expect(maxDeviation(tiny, flattenPath(asCommands(tiny))[0].points)).toBeLessThanOrEqual(FLATTEN_TOLERANCE);
+
+        // The DEFAULT tolerance is pinned to a literal, not to the constant under test: a test
+        // that reads `FLATTEN_TOLERANCE` moves with it, so loosening the default would go unnoticed.
+        expect(maxDeviation(quadrant(1000), flattenPath(asCommands(quadrant(1000)))[0].points)).toBeLessThanOrEqual(0.05);
+    });
+
+    test("a SMALL curve costs fewer segments than a large one — the work follows the need", () => {
+        const small = flattenPath(asCommands(quadrant(10)))[0].points.length;
+        const large = flattenPath(asCommands(quadrant(1000)))[0].points.length;
+        expect(small).toBeLessThan(large);
+        // The old fixed 16 spent the same on both: too coarse at 1000 (1.3 units of error) and
+        // wasteful at 10, where the curve is already flat to well inside the tolerance.
+        expect(small).toBeLessThan(16);
+        expect(large).toBeGreaterThan(16);
+    });
+
+    test("a straight 'curve' is ONE segment — a flat cubic needs no subdivision at all", () => {
+        const straight: PathCommand[] = [
+            { c: "M", x: 0, y: 0 },
+            { c: "C", x1: 10, y1: 0, x2: 20, y2: 0, x: 30, y: 0 }
+        ];
+        expect(flattenPath(straight)[0].points).toEqual([{ x: 0, y: 0 }, { x: 30, y: 0 }]);
+    });
+
+    test("a coarser tolerance buys fewer points, and still holds", () => {
+        const p = quadrant(200);
+        const fine = flattenPath(asCommands(p), 0.01)[0].points;
+        const coarse = flattenPath(asCommands(p), 1)[0].points;
+        expect(coarse.length).toBeLessThan(fine.length);
+        expect(maxDeviation(p, fine)).toBeLessThanOrEqual(0.01);
+        expect(maxDeviation(p, coarse)).toBeLessThanOrEqual(1);
+    });
+
+    test("it is DETERMINISTIC and viewport-independent — the same curve, always the same points", () => {
+        // The property the fixed count was defending, and the one that must survive: picking
+        // cannot depend on zoom, or the same click would hit at one magnification and miss at
+        // another. The input is the curve's own numbers and nothing else.
+        const p = quadrant(137.5);
+        const a = flattenPath(asCommands(p))[0].points;
+        const b = flattenPath(asCommands(p))[0].points;
+        expect(a).toEqual(b);
+        // Splitting at the midpoint means the halves are the SAME curve, so the flattening of a
+        // curve and of its two halves agree on the shared point.
+        expect(a[a.length - 1]).toEqual({ x: 0, y: 137.5 });
+    });
+
+    test("a pathological curve terminates against the depth cap", () => {
+        // Coincident control points defeat a flatness test; the cap is what stops a hot path
+        // reached on every hit test from becoming a hang.
+        // A ONE-SIDED curve with coincident endpoints: the chord is degenerate, so the hull
+        // distance stays enormous for many levels. Measured, it takes 7486 segments uncapped and
+        // stops at the cap's 1024 — a symmetric spike, by contrast, collapses in four and proves
+        // nothing, which is what an earlier version of this test used.
+        const evil: PathCommand[] = [
+            { c: "M", x: 0, y: 0 },
+            { c: "C", x1: 1e6, y1: 1e6, x2: 1e6, y2: -1e6, x: 0, y: 0 }
+        ];
+        const pts = flattenPath(evil)[0].points;
+        expect(pts.length).toBeLessThanOrEqual(Math.pow(2, FLATTEN_MAX_DEPTH) + 1);
+        expect(pts.every(q => Number.isFinite(q.x) && Number.isFinite(q.y))).toBe(true);
+
+        // …and a curve whose ENDS coincide but which really does enclose area must still be
+        // traced, not collapsed to a point: a degenerate chord means "no line to measure
+        // against", not "flat".
+        const teardrop: PathCommand[] = [
+            { c: "M", x: 0, y: 0 },
+            { c: "C", x1: 100, y1: 0, x2: 100, y2: 100, x: 0, y: 0 }
+        ];
+        const loop = flattenPath(teardrop)[0].points;
+        expect(loop.length).toBeGreaterThan(8);
+        expect(Math.max(...loop.map(q => q.x))).toBeGreaterThan(50);
+    });
+
+    test("a QUADRATIC is flattened by the same rule, through its cubic equivalent", () => {
+        // One flatness measure, not two: a quadratic IS a cubic with its controls at the 2/3
+        // points, so a second formula would only be a copy to keep in step.
+        const q: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "Q", x1: 500, y1: 1000, x: 1000, y: 0 }];
+        const pts = flattenPath(q)[0].points;
+        expect(pts.length).toBeGreaterThan(4);
+        expect(pts[pts.length - 1]).toEqual({ x: 1000, y: 0 });
+        // The conversion has to be RIGHT, and THIS is the assertion that can tell. The ratio only
+        // feeds the flatness TEST — the points themselves are generated by splitting the
+        // quadratic — so a wrong ratio never moves a point off the curve; it changes how soon
+        // subdivision stops. The elevated cubic is the SAME curve, so it must tessellate to the
+        // same points, and a wrong ratio breaks that equality while every deviation check passes.
+        const equivalent: PathCommand[] = [
+            { c: "M", x: 0, y: 0 },
+            { c: "C", x1: (2 / 3) * 500, y1: (2 / 3) * 1000, x2: 1000 + (2 / 3) * (500 - 1000), y2: (2 / 3) * 1000, x: 1000, y: 0 }
+        ];
+        // Same COUNT — that is the part the ratio decides — and the same points to within
+        // floating-point noise. Not bit-identical: splitting a quadratic and splitting its
+        // elevated cubic are the same curve computed two different ways, and they land a few
+        // ulps apart (15.502929687499996 against 15.5029296875).
+        const viaQuad = flattenPath(q)[0].points;
+        const viaCubic = flattenPath(equivalent)[0].points;
+        expect(viaQuad.length).toBe(viaCubic.length);
+        viaQuad.forEach((pt, i) => {
+            expect(pt.x).toBeCloseTo(viaCubic[i].x, 9);
+            expect(pt.y).toBeCloseTo(viaCubic[i].y, 9);
+        });
+        const flat: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "Q", x1: 5, y1: 0, x: 10, y: 0 }];
+        expect(flattenPath(flat)[0].points).toEqual([{ x: 0, y: 0 }, { x: 10, y: 0 }]);
+    });
+
+    test("the ELLIPSE a boolean sees is now accurate to its tolerance, not to a segment count", () => {
+        // Two different errors live here and they must not be conflated. The FLATTENING error is
+        // measured against the curve it approximates — so compare the default tolerance to a
+        // near-exact one, not to the circle.
+        const big = ellipseCommands(2000, 2000);
+        const areaOf = (rings: { x: number; y: number }[][]) => Math.abs(rings.reduce((sum, r) => {
+            let a = 0;
+            for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += r[j].x * r[i].y - r[i].x * r[j].y;
+            return sum + a / 2;
+        }, 0));
+        const coarse = areaOf(flattenPath(big).map(sp => sp.points));
+        const nearExact = areaOf(flattenPath(big, 0.0005).map(sp => sp.points));
+        // Bounded by the TOLERANCE, not by a precision digit picked to make the test pass: an
+        // inscribed polygon loses area in proportion to how far its chords sit inside the curve,
+        // so a 0.05 chord bound on a radius-1000 circle can cost at most ~0.05/1000 of the area.
+        // The measured deficit is 0.0025%, comfortably inside that.
+        expect(Math.abs(1 - coarse / nearExact)).toBeLessThan(FLATTEN_TOLERANCE / 1000);
+        expect(coarse).toBeLessThan(nearExact);            // inscribed: always a little short
+
+        // The RESIDUAL against a true circle is the KAPPA cubic's own error — four cubics bulge
+        // about 0.027% outside the circle they approximate — and no amount of subdivision removes
+        // it. Stating which error is which is the point: one is ours to fix, the other is the
+        // representation, and the old fixed-count flattening hid both in one number.
+        const ratio = nearExact / (Math.PI * 1000 * 1000);
+        expect(ratio).toBeGreaterThan(1);
+        expect(ratio).toBeCloseTo(1.00027, 4);
     });
 });

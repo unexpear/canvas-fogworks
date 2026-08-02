@@ -58,24 +58,41 @@ export function hitShapeOf(
 }
 
 /**
- * How many straight segments approximate one curve for hit-testing.
+ * How far a flattened polyline may stray from the curve it replaces, in the PATH's OWN units.
  *
- * Flattening, not exact root-finding: a point-in-curve test has no closed form, and 16
- * segments put the worst-case chord error far below a pixel for any curve a person can
- * draw at a sane zoom. It is a FIXED count on purpose — an adaptive one would make picking
- * depend on the viewport, so the same click could hit at one zoom and miss at another.
+ * This used to be a fixed 16 segments per curve, defended as "the same click must hit at every
+ * zoom". The determinism was right; the knob was wrong. A fixed count is an error that scales
+ * with the shape: measured against a circular quadrant, 16 segments stray 0.013 units on a
+ * radius-10 icon (detail nobody can see, paid for on every hit test) and 1.3 units on a
+ * radius-1000 shape — so a boolean cutting a large circle was more than a pixel wrong while a
+ * small one wasted work. The error follows r·θ²/8n², so no single n is right for both.
+ *
+ * A TOLERANCE fixes both ends: subdivide until the curve is flat to within this distance, and no
+ * further. It stays viewport-independent — the input is the curve's own geometry and nothing
+ * else — so the same click still hits at every zoom, which was the property worth keeping.
+ *
+ * CONSEQUENCE, named rather than hidden: the tolerance is in the path's own coordinate space, so
+ * a node scaled 100x is flattened in ITS units, not the world's. Scaling is rare on paths and the
+ * alternative — a world-space tolerance — would make flattening depend on the transform chain,
+ * which is how a shape starts hit-testing differently in two places.
  */
-const CURVE_SEGMENTS = 16;
+export const FLATTEN_TOLERANCE = 0.05;
 
-function cubicAt(p0: number, p1: number, p2: number, p3: number, t: number): number {
-    const u = 1 - t;
-    return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
-}
+/**
+ * Recursion cap for the subdivision, in halvings — at most 2^depth segments per curve.
+ *
+ * A curve with coincident or non-finite control points can defeat any flatness test, and this is
+ * a hot path reached on every hit test; a bound is the difference between a slow frame and a
+ * hung app. 10 allows 1024 segments, far past what the tolerance asks for on any real shape.
+ */
+export const FLATTEN_MAX_DEPTH = 10;
 
-function quadAt(p0: number, p1: number, p2: number, t: number): number {
-    const u = 1 - t;
-    return u * u * p0 + 2 * u * t * p1 + t * t * p2;
-}
+/**
+ * Hull distance allowed per unit of tolerance. A cubic's true deviation from its chord is at most
+ * 3/4 of its worst control-point offset, so this much hull slack still honours the tolerance —
+ * and it removes about a third of the subdivisions that measuring the hull directly would force.
+ */
+const HULL_SLACK = 4 / 3;
 
 /** One connected run of points, and whether it closes back on itself. */
 export interface Subpath {
@@ -84,12 +101,93 @@ export interface Subpath {
 }
 
 /**
+ * How far the control points of a cubic stray from its chord — the flatness measure.
+ *
+ * A cubic stays within 3/4 of its worst control-point offset from the chord — so a hull distance
+ * of `d` guarantees a true deviation of at most `3d/4`, and the caller may allow `4/3 ·
+ * tolerance` of hull distance and still keep its promise. That factor is applied by the callers
+ * rather than here, so this function reports one plain, checkable quantity.
+ *
+ * Measuring the hull rather than the curve is what makes the test cheap enough for a hot path:
+ * it needs no curve evaluation at all, only two cross products, and it can never UNDER-report,
+ * which is the direction that matters for a bound.
+ *
+ * Distances are computed against the chord's LINE, scaled by its length once at the end, so the
+ * hot path does one square root instead of four.
+ */
+function cubicFlatness(
+    x0: number, y0: number, x1: number, y1: number,
+    x2: number, y2: number, x3: number, y3: number
+): number {
+    const dx = x3 - x0, dy = y3 - y0;
+    const len = Math.hypot(dx, dy);
+    // A degenerate chord (the ends coincide) has no line to measure against; fall back to the
+    // straight distance from the start, which still shrinks under subdivision.
+    if (len === 0) return Math.max(Math.hypot(x1 - x0, y1 - y0), Math.hypot(x2 - x0, y2 - y0));
+    const d1 = Math.abs((x1 - x0) * dy - (y1 - y0) * dx);
+    const d2 = Math.abs((x2 - x0) * dy - (y2 - y0) * dx);
+    return Math.max(d1, d2) / len;
+}
+
+/**
+ * Subdivide a cubic until it is flat, appending the END point of each flat piece.
+ *
+ * De Casteljau at t = 0.5, which splits a cubic into two exactly — so this is subdivision, not
+ * re-sampling, and the pieces are the same curve. Halving is what makes the result deterministic:
+ * the split points depend only on the control points, never on a step count, a zoom or a clock.
+ *
+ * The start point is NOT appended: the caller already has it, either as the subpath's first point
+ * or as the previous segment's end. Emitting it again would put a zero-length edge into every
+ * boolean, which is precisely the kind of directionless piece the chaining step has to drop.
+ */
+function flattenCubic(
+    out: { x: number; y: number }[],
+    x0: number, y0: number, x1: number, y1: number,
+    x2: number, y2: number, x3: number, y3: number,
+    tolerance: number, depth: number
+): void {
+    if (depth >= FLATTEN_MAX_DEPTH || cubicFlatness(x0, y0, x1, y1, x2, y2, x3, y3) <= tolerance * HULL_SLACK) {
+        out.push({ x: x3, y: y3 });
+        return;
+    }
+    const x01 = (x0 + x1) / 2, y01 = (y0 + y1) / 2;
+    const x12 = (x1 + x2) / 2, y12 = (y1 + y2) / 2;
+    const x23 = (x2 + x3) / 2, y23 = (y2 + y3) / 2;
+    const x012 = (x01 + x12) / 2, y012 = (y01 + y12) / 2;
+    const x123 = (x12 + x23) / 2, y123 = (y12 + y23) / 2;
+    const mx = (x012 + x123) / 2, my = (y012 + y123) / 2;
+    flattenCubic(out, x0, y0, x01, y01, x012, y012, mx, my, tolerance, depth + 1);
+    flattenCubic(out, mx, my, x123, y123, x23, y23, x3, y3, tolerance, depth + 1);
+}
+
+/** The quadratic twin — same halving, same "append the end only" rule. */
+function flattenQuad(
+    out: { x: number; y: number }[],
+    x0: number, y0: number, x1: number, y1: number, x2: number, y2: number,
+    tolerance: number, depth: number
+): void {
+    // A quadratic IS a cubic with its controls at the 2/3 points, so one flatness measure serves
+    // both rather than a second formula to keep in step.
+    const c1x = x0 + (2 / 3) * (x1 - x0), c1y = y0 + (2 / 3) * (y1 - y0);
+    const c2x = x2 + (2 / 3) * (x1 - x2), c2y = y2 + (2 / 3) * (y1 - y2);
+    if (depth >= FLATTEN_MAX_DEPTH || cubicFlatness(x0, y0, c1x, c1y, c2x, c2y, x2, y2) <= tolerance * HULL_SLACK) {
+        out.push({ x: x2, y: y2 });
+        return;
+    }
+    const x01 = (x0 + x1) / 2, y01 = (y0 + y1) / 2;
+    const x12 = (x1 + x2) / 2, y12 = (y1 + y2) / 2;
+    const mx = (x01 + x12) / 2, my = (y01 + y12) / 2;
+    flattenQuad(out, x0, y0, x01, y01, mx, my, tolerance, depth + 1);
+    flattenQuad(out, mx, my, x12, y12, x2, y2, tolerance, depth + 1);
+}
+
+/**
  * Path commands as polylines — one per subpath (an `M` starts a new one).
  *
  * Kept exported because it is the shared answer to "where does this path actually go":
  * hit-testing needs it, and so will outline stroking and boolean ops.
  */
-export function flattenPath(commands: readonly PathCommand[]): Subpath[] {
+export function flattenPath(commands: readonly PathCommand[], tolerance: number = FLATTEN_TOLERANCE): Subpath[] {
     const subpaths: Subpath[] = [];
     let current: Subpath | null = null;
     let cx = 0, cy = 0;
@@ -119,15 +217,9 @@ export function flattenPath(commands: readonly PathCommand[]): Subpath[] {
         if (cmd.c === "L") {
             current.points.push({ x: cmd.x, y: cmd.y });
         } else if (cmd.c === "C") {
-            for (let i = 1; i <= CURVE_SEGMENTS; i++) {
-                const t = i / CURVE_SEGMENTS;
-                current.points.push({ x: cubicAt(cx, cmd.x1, cmd.x2, cmd.x, t), y: cubicAt(cy, cmd.y1, cmd.y2, cmd.y, t) });
-            }
+            flattenCubic(current.points, cx, cy, cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.x, cmd.y, tolerance, 0);
         } else {
-            for (let i = 1; i <= CURVE_SEGMENTS; i++) {
-                const t = i / CURVE_SEGMENTS;
-                current.points.push({ x: quadAt(cx, cmd.x1, cmd.x, t), y: quadAt(cy, cmd.y1, cmd.y, t) });
-            }
+            flattenQuad(current.points, cx, cy, cmd.x1, cmd.y1, cmd.x, cmd.y, tolerance, 0);
         }
         cx = cmd.x; cy = cmd.y;
     }

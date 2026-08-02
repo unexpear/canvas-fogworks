@@ -18,7 +18,9 @@
  * not curves. That is a real loss of fidelity and it is deliberate: exact bezier-bezier clipping
  * needs curve-curve intersection and splitting, which is a much larger piece of work, and an
  * approximation that is honest about being one beats a curve-preserving result that is subtly
- * wrong at the joins. The resolution is `flattenPath`'s fixed 16 segments per curve.
+ * wrong at the joins. The fidelity is `flattenPath`'s TOLERANCE: subdivision follows each
+ * curve's own flatness, so a large shape is cut as accurately as a small one — which a fixed
+ * segment count could not do, its error being proportional to the shape.
  *
  * KNOWN LIMIT, stated rather than hidden: shapes that share an edge exactly (collinear overlap)
  * are not special-cased. A shared edge is classified by its midpoint like any other, which keeps
