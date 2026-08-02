@@ -34,6 +34,7 @@ import { createEditorState, EditorState, zoomAt } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
+import { PenTool } from "../editor/tools/PenTool";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../editor/tools/ShapeTool";
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { alignAction, distributeAction } from "../core/actions/alignActions";
@@ -285,7 +286,10 @@ export function App() {
             move: new MoveTool(dispatcher, es, refresh),
             // One ShapeTool per basic shape, keyed by the SAME names the toolbar maps over.
             ...Object.fromEntries(SHAPE_KINDS.map(kind =>
-                [kind, new ShapeTool(dispatcher, es, refresh, kind, pickImageSource, () => polygonSidesRef.current, () => paintModeRef.current, () => strokeWidthRef.current)]))
+                [kind, new ShapeTool(dispatcher, es, refresh, kind, pickImageSource, () => polygonSidesRef.current, () => paintModeRef.current, () => strokeWidthRef.current)])),
+            // The PEN — the first way to create a `core.path`, which has been renderable since
+            // schema 17 with no way to author one.
+            pen: new PenTool(dispatcher, es, refresh, () => paintModeRef.current === "outline" ? "none" : "#4a90d9")
         };
         toolController.setTool(toolsRef.current.select);
     }
@@ -402,6 +406,10 @@ export function App() {
         }
     }, [dispatcher, es, refresh]);
     const setTool = useCallback((name: string) => {
+        // Switching away mid-stroke abandons it: a preview that outlived its tool would hang
+        // on screen with nothing able to finish or cancel it.
+        const leaving = toolsRef.current.pen as PenTool | undefined;
+        if (name !== "pen" && leaving) leaving.cancel();
         toolController.setTool(toolsRef.current[name] ?? toolsRef.current.select);
         es.activeTool = name;
         setToolName(name);
@@ -485,6 +493,7 @@ export function App() {
                 previewRect: es.previewRect,
                 marqueeRect: es.marqueeRect,
                 snapGuides: es.snapGuides,
+                pendingPath: es.pendingPath,
                 computed,
                 viewport: es.viewport
             };
@@ -689,6 +698,12 @@ export function App() {
                         onClick={() => setTool(kind)}
                     />
                 ))}
+                <ToolButton icon="✒" label="Pen" active={toolName === "pen"} onClick={() => setTool("pen")} />
+                {toolName === "pen" && (
+                    <span style={{ fontSize: 10, color: UI.textFaint, marginRight: 8 }}>
+                        click to add · drag to curve · click the first point to close · Enter to finish
+                    </span>
+                )}
                 {supportsPaintMode(toolName) && (
                     // Shown only for shapes the choice means something for — a line is already
                     // nothing but a stroke, and an image draws its own pixels.

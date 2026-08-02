@@ -102,6 +102,15 @@ function selectionForRowClick(visible, current, anchor, clicked, mods): { select
 // anything beneath it does, so the panel shows the PATH to every hit; the caller treats a
 // filtered tree as fully expanded, since a hit inside a collapsed group must be reachable.
 function filterLayers(doc, query, labelOf): { visible: Set<string>; matched: Set<string>; inactive: boolean };
+// geometry/PathBuilder.ts — pen points → a `core.path` node. Commands are stored LOCAL to the
+// node's box while a pen draws in WORLD space, so the box is derived from the points and every
+// coordinate re-based onto it. A point stores its OUT handle; the IN handle is its mirror, so a
+// curve is smooth by construction. A segment is a LINE when neither end has a handle.
+interface PenPoint { x: number; y: number; hx?: number; hy?: number }
+function penCommands(points, closed): PathCommand[];          // WORLD space
+function pathBounds(commands): Rect;                          // INCLUDES control points — never clips the ink
+function translatePath(commands, dx, dy): PathCommand[];
+function penNodeFrom(points, closed): { geometry: Rect; path: PathCommand[] } | null;  // null = what dimensionError would refuse
 ```
 
 `applyMutations` detaches before inserting, so an index measured against the list as it looks

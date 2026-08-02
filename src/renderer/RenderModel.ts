@@ -623,6 +623,22 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
         });
     }
 
+    // The PEN stroke in progress (schema 17's `core.path`, finally drawable). An overlay,
+    // because it is not in the document yet — committing it is what puts it there. Drawn
+    // with no fill so the shape reads as a line being built rather than a solid.
+    if (state.pendingPath && state.pendingPath.length > 1) {
+        items.push({
+            shape: { kind: "path", commands: state.pendingPath },
+            paint: {
+                fill: "none", opacity: null, stroke: "#00bfff", strokeWidth: 1 / z,
+                strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
+            },
+            world: null,
+            nodeId: null,
+            role: "preview"
+        });
+    }
+
     return items;
 }
 

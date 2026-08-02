@@ -3,7 +3,7 @@
  * @description Runtime editor context. Never serialized to the document.
  */
 
-import { Geometry } from "../core/document/Node";
+import { Geometry, PathCommand } from "../core/document/Node";
 import { SnapGuide } from "../core/geometry/Snapping";
 
 export interface EditorState {
@@ -28,6 +28,9 @@ export interface EditorState {
      * drag snaps the moving node's edges/centre onto another node's; never persisted.
      */
     snapGuides: SnapGuide[] | null;
+    /** The pen stroke in progress, in WORLD space (schema 17's `core.path`, finally drawable).
+     *  Drawn as an overlay so an unfinished path is visible without existing in the document. */
+    pendingPath: PathCommand[] | null;
     /**
      * Ephemeral per-node patches to STORED (parent-relative) geometry, used to
      * preview a move/resize drag WITHOUT mutating the document. These are fed
@@ -113,6 +116,7 @@ export function createEditorState(): EditorState {
         previewRect: null,
         marqueeRect: null,
         snapGuides: null,
+        pendingPath: null,
         pendingGeometry: null,
         viewport: { x: 0, y: 0, zoom: 1 }
     };

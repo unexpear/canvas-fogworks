@@ -18,6 +18,8 @@ import { SetNodeFlagsAction } from "../actions/SetNodeFlagsAction";
 import { resolveLayerDrop } from "../../editor/layerDrop";
 import { selectionForRowClick } from "../../editor/layerSelection";
 import { filterLayers } from "../../editor/layerFilter";
+import { PenPoint, penCommands, pathBounds, translatePath, penNodeFrom } from "../geometry/PathBuilder";
+import { UpdateNodePathAction } from "../actions/UpdateNodePathAction";
 import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy , overrideTargetFor} from "../actions/nodeEdit";
@@ -10082,5 +10084,140 @@ describe("filterLayers", () => {
         expect(src).toMatch(/filter\.inactive \? collapsedLayers\.has\(id\) : false/);
         // …and a filtered-out row is skipped before it is rendered or added to the order.
         expect(src).toMatch(/if \(!filter\.inactive && !filter\.visible\.has\(id\)\) continue;/);
+    });
+});
+
+
+// ─── The pen: turning points into a core.path node ───
+describe("PathBuilder", () => {
+    const P = (x: number, y: number, hx?: number, hy?: number): PenPoint =>
+        hx === undefined ? { x, y } : { x, y, hx, hy };
+
+    test("a segment with no handles is a LINE, not a degenerate curve", () => {
+        // Emitting a cubic for everything would draw identically and turn a plain polygon into
+        // coincident control points nobody can edit.
+        expect(penCommands([P(0, 0), P(10, 0), P(10, 10)], false)).toEqual([
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 10, y: 0 }, { c: "L", x: 10, y: 10 }
+        ]);
+    });
+
+    test("a handle on EITHER end makes the segment a cubic", () => {
+        // The out handle of the start, and the IN handle of the end — which is the end's own
+        // handle mirrored, so a curve is smooth by construction.
+        expect(penCommands([P(0, 0, 5, -5), P(10, 0)], false)).toEqual([
+            { c: "M", x: 0, y: 0 },
+            { c: "C", x1: 5, y1: -5, x2: 10, y2: 0, x: 10, y: 0 }
+        ]);
+        expect(penCommands([P(0, 0), P(10, 0, 15, 5)], false)).toEqual([
+            { c: "M", x: 0, y: 0 },
+            { c: "C", x1: 0, y1: 0, x2: 5, y2: -5, x: 10, y: 0 }   // in-handle = mirror of (15,5)
+        ]);
+    });
+
+    test("closing adds the wrap-around segment AND a Z", () => {
+        const open = penCommands([P(0, 0), P(10, 0), P(10, 10)], false);
+        const closed = penCommands([P(0, 0), P(10, 0), P(10, 10)], true);
+        expect(closed.slice(0, open.length)).toEqual(open);
+        expect(closed.slice(open.length)).toEqual([{ c: "L", x: 0, y: 0 }, { c: "Z" }]);
+    });
+
+    test("bounds include CONTROL points, so the box never clips the ink", () => {
+        // A control point can sit outside the curve it shapes. Over-large is the safe direction;
+        // a tight box needs bezier extrema, which stays the documented deferral.
+        const cmds = penCommands([P(0, 0, 0, -50), P(10, 0)], false);
+        expect(pathBounds(cmds)).toEqual({ x: 0, y: -50, width: 10, height: 50 });
+        expect(pathBounds([])).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+    });
+
+    test("translate moves every coordinate, control points included", () => {
+        const cmds: PathCommand[] = [
+            { c: "M", x: 1, y: 2 },
+            { c: "C", x1: 3, y1: 4, x2: 5, y2: 6, x: 7, y: 8 },
+            { c: "Q", x1: 9, y1: 10, x: 11, y: 12 },
+            { c: "Z" }
+        ];
+        expect(translatePath(cmds, 100, 200)).toEqual([
+            { c: "M", x: 101, y: 202 },
+            { c: "C", x1: 103, y1: 204, x2: 105, y2: 206, x: 107, y: 208 },
+            { c: "Q", x1: 109, y1: 210, x: 111, y: 212 },
+            { c: "Z" }
+        ]);
+    });
+
+    test("a finished stroke becomes a BOX plus commands LOCAL to it", () => {
+        // The thing that made `core.path` unauthorable: commands are stored local to the node's
+        // box, but a pen draws in world space.
+        const built = penNodeFrom([P(100, 100), P(140, 100), P(140, 130)], true)!;
+        expect(built.geometry).toEqual({ x: 100, y: 100, width: 40, height: 30 });
+        expect(built.path).toEqual([
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 40, y: 0 }, { c: "L", x: 40, y: 30 },
+            { c: "L", x: 0, y: 0 }, { c: "Z" }
+        ]);
+    });
+
+    test("it refuses exactly what the document would refuse", () => {
+        // Checked before an action is built, so a stray click leaves nothing behind rather than
+        // failing validation somewhere the user cannot see.
+        expect(penNodeFrom([], false)).toBeNull();
+        expect(penNodeFrom([P(5, 5)], false)).toBeNull();              // one point is not a path
+        expect(penNodeFrom([P(5, 5), P(5, 5)], false)).toBeNull();     // no extent on EITHER axis
+        // …but a single-axis collapse is legal for a path, so a flat stroke must survive.
+        const flat = penNodeFrom([P(0, 0), P(50, 0)], false)!;
+        expect(flat.geometry).toEqual({ x: 0, y: 0, width: 50, height: 0 });
+        expect(dimensionError("core.path", flat.geometry.width, flat.geometry.height)).toBeNull();
+    });
+
+    test("everything the pen builds is a path the LOADER accepts", () => {
+        // The closure that matters: `pathError` is the loader's rule, and the pen must not be
+        // able to author something a reload refuses.
+        const cases: Array<[PenPoint[], boolean]> = [
+            [[P(0, 0), P(10, 10)], false],
+            [[P(0, 0, 5, 5), P(10, 10, 15, 5)], true],
+            [[P(0, 0), P(10, 0), P(10, 10), P(0, 10)], true]
+        ];
+        for (const [pts, closed] of cases) {
+            const built = penNodeFrom(pts, closed)!;
+            expect(built).not.toBeNull();
+            expect(pathError("core.path", built.path)).toBeNull();
+        }
+    });
+
+    test("a pen path dispatched through the ACTION lands in the document and round-trips", () => {
+        const doc = createEmptyDocument();
+        const built = penNodeFrom([P(20, 20), P(60, 20), P(60, 50)], true)!;
+        const dispatcher = new ActionDispatcher(doc);
+        const id = "pen-1";
+        dispatcher.dispatchAction(new AddNodeAction(dispatcher.getDocument(), "core.path",
+            built.geometry.x, built.geometry.y, built.geometry.width, built.geometry.height, "#4a90d9", id));
+        dispatcher.dispatchAction(new UpdateNodePathAction(dispatcher.getDocument(), id, built.path));
+
+        const d = dispatcher.getDocument();
+        expect(d.nodes.get(id)!.path).toEqual(built.path);
+        const loaded = deserializeDocument(serializeDocument(d));
+        expect(loaded.nodes.get(id)!.path).toEqual(built.path);
+        expect(compareDocuments(d, loaded)).toBe(true);
+    });
+
+    test("the path action refuses what the loader refuses, and refuses a non-path node", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#111111", opacity: 1 }, layout: {} });
+        doc.nodes.set("P", { id: "P", type: "core.path", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#111111", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["R", "P"];
+        const dispatcher = new ActionDispatcher(doc);
+        // Not opening with M — the loader's rule, reached through the action.
+        expect(dispatcher.dispatchAction(new UpdateNodePathAction(dispatcher.getDocument(), "P", [{ c: "L", x: 1, y: 1 }] as never)).success).toBe(false);
+        // Path data on a rectangle.
+        expect(dispatcher.dispatchAction(new UpdateNodePathAction(dispatcher.getDocument(), "R", [{ c: "M", x: 0, y: 0 }])).success).toBe(false);
+        expect(dispatcher.getDocument().nodes.get("P")!.path).toBeUndefined();
+    });
+
+    test("the pen is wired as a tool and previews before it commits", () => {
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/pen: new PenTool\(/);
+        expect(src).toMatch(/pendingPath: es\.pendingPath/);
+        // Switching tools mid-stroke must abandon it, or the preview outlives the tool.
+        expect(src).toMatch(/if \(name !== "pen" && leaving\) leaving\.cancel\(\)/);
+        const model = readFileSync(resolve(__dirname, "../../renderer/RenderModel.ts"), "utf8");
+        expect(model).toMatch(/state\.pendingPath && state\.pendingPath\.length > 1/);
     });
 });

@@ -3,7 +3,7 @@
  * @description Shared types used across all Actions and History tracking.
  */
 
-import { Node, Geometry, Style, Layout, Transform, VariantKey, StateDefinition, RESERVED_NODE_ID } from "../document/Node";
+import { Node, Geometry, Style, Layout, Transform, VariantKey, StateDefinition, PathCommand, RESERVED_NODE_ID } from "../document/Node";
 import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
 import { InstanceOverride } from "../document/Components";
 
@@ -68,6 +68,8 @@ export type NodeDelta =
         /** Layer flags (schema 31). `in`-read, since clearing one is a real edit. */
         hidden?: boolean;
         locked?: boolean;
+        /** `core.path` drawing commands — a whole-array replace (a path is edited as a shape). */
+        path?: PathCommand[];
     }
     /**
      * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme
