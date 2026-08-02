@@ -123,12 +123,17 @@ export function applyMutationsToDocument(
                 if (delta.path !== undefined) node.path = delta.path;
                 if ("booleanOp" in delta) node.booleanOp = delta.booleanOp;
                 if ("interactions" in delta) node.interactions = delta.interactions;
+                if ("track" in delta) node.track = delta.track;
                 if (delta.text !== undefined) node.text = delta.text;
                 if (delta.src !== undefined) node.src = delta.src;
                 if (delta.name !== undefined) node.name = delta.name;
                 return;
             }
 
+            case "timeline": {
+                doc.timeline = delta.timeline;
+                return;
+            }
             case "activeState": {
                 // Document-level state (M7): which named state everything resolves against.
                 doc.activeState = delta.activeState;

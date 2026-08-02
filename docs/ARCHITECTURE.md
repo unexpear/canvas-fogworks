@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v38 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v39 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -241,6 +241,37 @@ SVG or Canvas can draw — a document field for it would render three different 
 backends. So alignment is an argument to the outline COMMAND instead: what comes out is a
 `core.path`, and a fill draws identically everywhere. The same reasoning that put the boolean bake
 in the action layer rather than in a renderer.
+
+**ANIMATION is one mechanism, not four (`document/Timeline`).** Cutout animation, frame-by-frame,
+tweening and onion skinning sound like four features. They are one plus a display option, and
+saying so is what kept the whole thing small.
+
+A KEYFRAME is a statement that certain fields differ at a certain time — and this engine already
+had that statement twice over. An instance OVERRIDE and a named STATE are both "in this context
+these fields differ", sharing `overrideValueError` and `materializeNode`. A keyframe is the same
+shape with a frame number on it, so it inherited both and animation added no second definition of
+what a node may say about itself. TWEENING is `blendNode`, written for state transitions and
+identical here. FRAME-BY-FRAME is tweening turned off: a keyframe marked `hold` shows its values
+until the next one and then snaps, which is what a sequence of cels does — a flag, not a second
+animation model. CUTOUT animation is keyframes on a rig's TRANSFORMS, and the scene graph already
+composes a parent's matrix into its children, so animating an upper arm carries the forearm and
+this module knows nothing about limbs.
+
+`applyFrame` slots into `resolveScene` beside `applyActiveState`, so a document at a frame is an
+ORDINARY document: layout, picking, snapping, culling, all three backends and the exporter needed
+no changes at all. TIME is applied BEFORE states, because a keyframe says where a node is and a
+state says how it looks in a situation, so a situation may override the animation rather than the
+reverse. A document nobody animated is returned by reference and costs exactly what it did before.
+
+ONION SKINNING is not animation — it draws neighbouring frames faintly, so it lives in the renderer
+(`RendererState.ghosts`). The app derives those frames because the model reads every position from
+a `ComputedState` and composes none itself; ghosts are drawn BEHIND and made unpickable, since a
+ghost is a picture of another moment and clicking one would select a node where it isn't.
+
+The PLAYHEAD is ephemeral. Scrubbing is not an edit — an undo step per frame would bury a day's
+work under a second of dragging — so it lives in editor state and is stamped onto a shallow copy,
+the same treatment the marquee and the drag preview get. `doc.frame` records only where the
+playhead was when the file was saved.
 
 **Cutting a curve is a question about the SCREEN, and only one backend had to answer it.** Every
 curve here is flattened to `FLATTEN_TOLERANCE` — 0.05 of the path's own units, fixed, deliberately

@@ -7,6 +7,7 @@ import { Node, Geometry, Style, Layout, Transform, VariantKey, StateDefinition, 
 import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
 import { InstanceOverride } from "../document/Components";
 import { Interaction } from "../document/Prototype";
+import { Keyframe } from "../document/Timeline";
 
 /**
  * The reserved `propertyDeltas` key a DOCUMENT-LEVEL delta (kind "variables") travels
@@ -78,6 +79,8 @@ export type NodeDelta =
          *  removing the last one (delta value `undefined`) clears the field rather than
          *  being mistaken for "not mentioned". */
         interactions?: Interaction[];
+        /** KEYFRAMES (schema 39). Same rule as `interactions`: `undefined` CLEARS the field. */
+        track?: Keyframe[];
     }
     /**
      * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme
@@ -90,7 +93,10 @@ export type NodeDelta =
     /** The document-level ACTIVE STATE (M7, schema 30) — which named state every node
      *  resolves against. `undefined` = the base state. Travels under `DOCUMENT_DELTA_KEY`
      *  like the variable store, for the same reason: it is one whole-document value. */
-    | { kind: "activeState"; activeState: string | undefined };
+    | { kind: "activeState"; activeState: string | undefined }
+    /** The document's CLOCK (schema 39). Whole-value, like `activeState`, and travels under
+     *  `DOCUMENT_DELTA_KEY`. `undefined` removes it, which is how a document stops being animated. */
+    | { kind: "timeline"; timeline: { frames: number; fps: number } | undefined };
 
 /** The result of an action execution. Communicates changes without coupling services. */
 export interface MutationResult {

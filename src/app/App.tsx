@@ -40,6 +40,9 @@ import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { alignAction, distributeAction } from "../core/actions/alignActions";
 import { booleanAction, makeBooleanNodeAction } from "../core/actions/booleanActions";
 import { outlineStrokeAction } from "../core/actions/outlineStrokeActions";
+import { onionFrames, Keyframe } from "../core/document/Timeline";
+import { SetTrackAction } from "../core/actions/SetTrackAction";
+import { SetTimelineAction } from "../core/actions/SetTimelineAction";
 import { STROKE_ALIGNS, StrokeAlign } from "../core/geometry/StrokeOutline";
 import { FILL_RULES, STROKE_CAPS, STROKE_JOINS } from "../core/document/Node";
 import { SetBooleanOpAction } from "../core/actions/SetBooleanOpAction";
@@ -373,6 +376,66 @@ export function App() {
         refresh();
     }, [dispatcher, es, refresh]);
 
+    /**
+     * Advance the playhead while the timeline runs.
+     *
+     * Wall-clock driven rather than one-frame-per-tick, so an animation authored at 12 fps plays
+     * at 12 fps whether the machine manages 60 redraws a second or 20. It LOOPS, because the
+     * thing you want while animating is to watch the same second over and over.
+     */
+    useEffect(() => {
+        const timeline = dispatcher.getDocument().timeline;
+        if (!es.playingTimeline || !timeline) return;
+        const startedAt = Date.now();
+        const from = Math.round(es.frame ?? 0);
+        const id = window.setInterval(() => {
+            const elapsed = ((Date.now() - startedAt) / 1000) * timeline.fps;
+            es.frame = (from + Math.floor(elapsed)) % timeline.frames;
+            refresh();
+        }, 1000 / Math.min(60, timeline.fps * 2));
+        return () => window.clearInterval(id);
+    }, [dispatcher, es, refresh, es.playingTimeline]);
+
+    /**
+     * Put a KEYFRAME on the selected node at the playhead, holding what it looks like NOW.
+     *
+     * The values captured are the node's own stored geometry, transform and opacity, which is the
+     * thing a user has just finished arranging. Animating is therefore the same gesture as
+     * editing — move the shape, press the key — rather than a separate mode with its own notion of
+     * where things are.
+     */
+    const addKeyframe = useCallback((hold: boolean) => {
+        const doc = dispatcher.getDocument();
+        const id = es.selectedNodeIds[0];
+        const node = id ? doc.nodes.get(id) : undefined;
+        if (!node) return;
+        const frame = Math.round(es.frame ?? 0);
+        const values = {
+            geometry: { x: node.geometry.x, y: node.geometry.y, width: node.geometry.width, height: node.geometry.height },
+            transform: node.transform ? { ...node.transform } : undefined,
+            style: { opacity: node.style.opacity }
+        };
+        // Replace the keyframe already on this frame rather than adding a second one: two
+        // keyframes at one time is not a drawing anybody can mean, and the shared validator
+        // refuses it — better to make the obvious gesture do the obvious thing.
+        const track: Keyframe[] = [...(node.track ?? [])].filter(k => k.frame !== frame);
+        track.push({ frame, hold: hold || undefined, values } as Keyframe);
+        track.sort((a, b) => a.frame - b.frame);
+        dispatcher.dispatchAction(new SetTrackAction(doc, id, track));
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    /** Remove whatever keyframe sits on the playhead — the other half of authoring a track. */
+    const removeKeyframe = useCallback(() => {
+        const doc = dispatcher.getDocument();
+        const id = es.selectedNodeIds[0];
+        const node = id ? doc.nodes.get(id) : undefined;
+        if (!node?.track) return;
+        const frame = Math.round(es.frame ?? 0);
+        dispatcher.dispatchAction(new SetTrackAction(doc, id, node.track.filter(k => k.frame !== frame)));
+        refresh();
+    }, [dispatcher, es, refresh]);
+
     /** Re-point a selected `core.boolean` at a different operation — the live form's payoff. */
     const setBooleanOp = useCallback((op: BooleanOp) => {
         const doc = dispatcher.getDocument();
@@ -551,7 +614,15 @@ export function App() {
             // between two of them. Both are ordinary DOCUMENTS produced by a pure function, so
             // everything below — geometry, picking, both backends — is unchanged; an animation
             // frame is just another frame, exactly as a drag preview is.
-            const stored = dispatcher.getDocument();
+            // THE PLAYHEAD is ephemeral, and stamped onto a shallow copy rather than written
+            // into the document. Scrubbing is not an edit: pushing an undo step per frame would
+            // bury a day's work under a second of dragging, and the same reasoning keeps a
+            // marquee and a drag preview out of the document too. `doc.frame` is still a real
+            // field — it records where the playhead was when the file was SAVED — but the app
+            // does not write to it while you scrub.
+            const base = dispatcher.getDocument();
+            const stored: ReadonlyDocument = es.frame !== undefined
+                ? ({ ...(base as ProjectDocument), frame: es.frame } as ReadonlyDocument) : base;
             const doc: ReadonlyDocument = !es.playing
                 ? stored
                 : es.transition
@@ -594,7 +665,19 @@ export function App() {
             prevPendingRef.current = pendingKeys;
             dirtyNodesRef.current = new Set();
 
+            // ONION SKINS: neighbouring frames, derived here because the renderer reads every
+            // position from a ComputedState and composes none itself. Nearer frames are drawn
+            // less faintly, so which way time runs is readable at a glance.
+            const ghosts = es.onion && es.frame !== undefined && base.timeline
+                ? onionFrames(es.frame, es.onion, es.onion, base.timeline.frames).map((f: number) => {
+                    const ghostDoc = { ...(base as ProjectDocument), frame: f } as ReadonlyDocument;
+                    const distance = Math.abs(f - (es.frame as number));
+                    return { doc: ghostDoc, computed: computeGeometry(ghostDoc), opacity: 0.28 / distance };
+                })
+                : undefined;
+
             const rendererState: RendererState = {
+                ghosts,
                 selectedNodeIds: es.selectedNodeIds,
                 hoveredNodeId: es.hoveredNodeId,
                 previewRect: es.previewRect,
@@ -1123,6 +1206,20 @@ export function App() {
                 >
                     Backend: {backend === "svg" ? "SVG" : backend === "canvas" ? "Canvas" : "WebGL (preview)"}
                 </button>
+                {/* A document has no clock until somebody asks for one, so a still drawing carries
+                    no timeline strip and serialises exactly as it did before animation existed. */}
+                <button
+                    title="Give this document a timeline (24 frames at 12fps), or take it away again"
+                    onClick={() => {
+                        const d = dispatcher.getDocument();
+                        dispatcher.dispatchAction(new SetTimelineAction(d, d.timeline ? undefined : { frames: 24, fps: 12 }));
+                        es.frame = d.timeline ? undefined : 0;
+                        refresh();
+                    }}
+                    style={{ fontSize: 11, padding: "3px 8px", marginLeft: 4, background: "transparent",
+                             color: dispatcher.getDocument().timeline ? UI.accent : "#ccc",
+                             border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
+                >⏱ Timeline</button>
                 {startedFromCorruptSave && (
                     <span
                         title={`The previous autosave could not be read and was kept at "${CORRUPT_BACKUP_KEY}". Saving now will replace it.`}
@@ -1796,6 +1893,39 @@ export function App() {
 
                 </div>
             </div>
+
+            {/* THE TIMELINE (schema 39). Shown once a document has a clock, so a still document
+                is exactly as uncluttered as it was before animation existed. */}
+            {(() => { const timeline = dispatcher.getDocument().timeline; return timeline ? (
+                <div style={{ padding: "4px 10px", background: UI.panel, borderTop: `1px solid ${UI.line}`,
+                              display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#ccc" }}>
+                    <button style={ALIGN_BUTTON_STYLE} title="Play the timeline from the playhead"
+                        onClick={() => { es.playingTimeline = !es.playingTimeline; refresh(); }}>
+                        {es.playingTimeline ? "⏸" : "▶"}
+                    </button>
+                    <input
+                        type="range" min={0} max={timeline.frames - 1} step={1}
+                        value={Math.round(es.frame ?? 0)}
+                        onChange={e => { es.frame = parseInt(e.target.value, 10); refresh(); }}
+                        style={{ flex: 1 }}
+                        title="Scrub the playhead. Scrubbing is not an edit — it pushes no undo step."
+                    />
+                    <span style={{ width: 84, textAlign: "right", color: "#888" }}>
+                        {Math.round(es.frame ?? 0)} / {timeline.frames - 1} · {timeline.fps}fps
+                    </span>
+                    <button style={ALIGN_BUTTON_STYLE} onClick={() => addKeyframe(false)}
+                        title="Key the selected node here, TWEENING from it to the next keyframe">◆ Key</button>
+                    <button style={ALIGN_BUTTON_STYLE} onClick={() => addKeyframe(true)}
+                        title="Key the selected node here and HOLD it until the next keyframe — frame-by-frame animation">◼ Hold</button>
+                    <button style={ALIGN_BUTTON_STYLE} onClick={removeKeyframe}
+                        title="Remove the keyframe on this frame">✕</button>
+                    <button style={{ ...ALIGN_BUTTON_STYLE, color: es.onion ? UI.accent : "#ccc" }}
+                        onClick={() => { es.onion = es.onion ? undefined : 2; refresh(); }}
+                        title="ONION SKIN: draw the neighbouring frames faintly behind this one. Ghosts are not pickable — they are a picture of another moment.">
+                        ◐ Onion
+                    </button>
+                </div>
+            ) : null; })()}
 
             <div style={{ padding: "3px 10px", background: UI.panel, borderTop: `1px solid ${UI.line}`, fontSize: 10, color: "#555", display: "flex", justifyContent: "space-between" }}>
                 <span>{toolName.charAt(0).toUpperCase() + toolName.slice(1)} tool</span>

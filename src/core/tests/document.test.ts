@@ -43,6 +43,10 @@ import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRin
 import { triangulate, signedArea2, TESSELLATE_MAX_VERTICES } from "../geometry/Tessellate";
 import { convexPieces, isConvexRing, convexOverlaps, piecesOverlap, piecesArea, rectRing, DECOMPOSE_MAX_PIECES } from "../geometry/ConvexDecompose";
 import { resolveRings, insideRule, crossingCount, FILL_RULES, FillRule } from "../geometry/Resolve";
+import { applyFrame, trackError, timelineError, onionFrames, keyframesAt, TIMELINE_MAX_FRAMES, FPS_MAX } from "../document/Timeline";
+import { SetTrackAction } from "../actions/SetTrackAction";
+import { SetTimelineAction } from "../actions/SetTimelineAction";
+import { overrideValueError } from "../document/Components";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
 import { outlineStrokeAction, strokeWidthOf } from "../actions/outlineStrokeActions";
@@ -4375,8 +4379,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 37→38 landed for the fill rule.)
-        expect(() => migrateIfNeeded(legacy, "39")).toThrow('Migration not implemented for document schema "38"');
+        // time a real migration is added — most recently when 38→39 landed for animation.)
+        expect(() => migrateIfNeeded(legacy, "40")).toThrow('Migration not implemented for document schema "39"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -12652,6 +12656,252 @@ describe("The FILL RULE reaches every consumer (schema 38)", () => {
             return sum + s;
         }, 0)) / 2;
         expect(a).toBeCloseTo(truth, 6);
+    });
+});
+
+describe("Timeline — cutout, frame-by-frame, tweening, onion skinning (schema 39)", () => {
+    const doc = (...nodes: Node[]): ProjectDocument => {
+        const d = createEmptyDocument();
+        for (const n of nodes) d.nodes.set(n.id, n);
+        d.rootNodeUuids = nodes.filter(n => !n.parent).map(n => n.id);
+        return d;
+    };
+    const node = (id: string, x: number, extra: Partial<Node> = {}): Node =>
+        ({ id, type: "core.rectangle", parent: null, children: [], geometry: { x, y: 0, width: 50, height: 50 },
+           style: { fill: "#000", opacity: 1 }, layout: {}, ...extra } as Node);
+    const at = (d: ProjectDocument, frame: number): ReadonlyDocument => { d.frame = frame; return resolveScene(d); };
+    const xOf = (d: ReadonlyDocument, id: string): number => d.nodes.get(id)!.geometry.x;
+
+    test("TWEENING: between two keyframes a node is interpolated", () => {
+        // The arithmetic is `blendNode`, written for state transitions and reused verbatim. Two
+        // copies of it would drift the first time a field learned to interpolate.
+        const d = doc(node("A", 0, { track: [
+            { frame: 0, values: { geometry: { x: 0 } } },
+            { frame: 10, values: { geometry: { x: 100 } } }
+        ] }));
+        expect(xOf(at(d, 0), "A")).toBeCloseTo(0, 9);
+        expect(xOf(at(d, 5), "A")).toBeCloseTo(50, 9);
+        expect(xOf(at(d, 10), "A")).toBeCloseTo(100, 9);
+    });
+
+    test("FRAME BY FRAME: a held keyframe stays put until the next replaces it", () => {
+        // Not a different animation model — a flag. A held keyframe is a drawing that stays on
+        // screen until the next drawing appears, which is what a sequence of cels is.
+        const d = doc(node("A", 0, { track: [
+            { frame: 0, hold: true, values: { geometry: { x: 0 } } },
+            { frame: 10, hold: true, values: { geometry: { x: 100 } } }
+        ] }));
+        expect(xOf(at(d, 0), "A")).toBe(0);
+        expect(xOf(at(d, 9), "A")).toBe(0);      // no drift whatsoever between the two
+        expect(xOf(at(d, 10), "A")).toBe(100);   // and then it snaps
+    });
+
+    test("EASING shapes the tween, and only when it is not held", () => {
+        const eased = doc(node("A", 0, { track: [
+            { frame: 0, easing: "ease-in", values: { geometry: { x: 0 } } },
+            { frame: 10, values: { geometry: { x: 100 } } }
+        ] }));
+        const linear = doc(node("A", 0, { track: [
+            { frame: 0, values: { geometry: { x: 0 } } },
+            { frame: 10, values: { geometry: { x: 100 } } }
+        ] }));
+        expect(xOf(at(eased, 3), "A")).toBeLessThan(xOf(at(linear, 3), "A"));   // slow to start
+        expect(xOf(at(eased, 0), "A")).toBeCloseTo(0, 9);
+        expect(xOf(at(eased, 10), "A")).toBeCloseTo(100, 9);
+    });
+
+    test("CUTOUT: animating a parent carries its children, with no rig code anywhere", () => {
+        // The scene graph already composes a parent's matrix into its children, so a keyframe on
+        // an upper arm moves the forearm and the hand. This module knows nothing about limbs, and
+        // that is the point of applying time at the display seam.
+        const upper = node("UPPER", 0, { children: ["FORE"], track: [
+            { frame: 0, values: { transform: { rotation: 0 } } },
+            { frame: 10, values: { transform: { rotation: 90 } } }
+        ] });
+        const fore = node("FORE", 60, { parent: "UPPER" });
+        const d = doc(upper, fore);
+        const world = (frame: number) => {
+            d.frame = frame;
+            return computeGeometry(d).nodes.get("FORE")!.world;
+        };
+        const a = world(0), b = world(10);
+        // The child never received a keyframe, and yet it has moved — through its parent.
+        expect(Math.abs(a.e - b.e) + Math.abs(a.f - b.f)).toBeGreaterThan(1);
+        expect(d.nodes.get("FORE")!.track).toBeUndefined();
+    });
+
+    test("outside the track's range the nearest keyframe is HELD, not extrapolated", () => {
+        // Extrapolating would send a shape flying off in both directions from a two-keyframe
+        // track. Before the first keyframe the animation has not started; after the last it has
+        // finished.
+        const d = doc(node("A", 0, { track: [
+            { frame: 5, values: { geometry: { x: 20 } } },
+            { frame: 10, values: { geometry: { x: 40 } } }
+        ] }));
+        expect(xOf(at(d, 0), "A")).toBe(20);
+        expect(xOf(at(d, 4), "A")).toBe(20);
+        expect(xOf(at(d, 99), "A")).toBe(40);
+    });
+
+    test("a document nobody animated is returned BY REFERENCE", () => {
+        // `resolveScene` runs on every derivation, so a document with no track must cost exactly
+        // what it did before the timeline existed — not a rebuilt node map every frame.
+        const plain = doc(node("A", 0));
+        expect(applyFrame(plain, 7)).toBe(plain);
+        expect(applyFrame(plain, undefined)).toBe(plain);
+        // And a frame that is not a number changes nothing rather than throwing.
+        expect(applyFrame(plain, NaN as number)).toBe(plain);
+    });
+
+    test("the derived document does NOT name the frame it was derived at", () => {
+        // `resolveScene` applies the track to whatever it is given. A derived document that still
+        // named its frame would be re-animated on the next pass — the exact trap `blendStates`
+        // fell into with `activeState`, where a two-second transition landed in one frame.
+        const d = doc(node("A", 0, { track: [
+            { frame: 0, values: { geometry: { x: 0 } } },
+            { frame: 10, values: { geometry: { x: 100 } } }
+        ] }));
+        d.frame = 5;
+        const once = applyFrame(d, 5);
+        expect(once.frame).toBeUndefined();
+        expect(xOf(applyFrame(once, 5) as ReadonlyDocument, "A")).toBeCloseTo(50, 9);
+    });
+
+    test("a track is validated by the SAME rules on both paths", () => {
+        const values = (v: unknown) => overrideValueError("keyframe", v);
+        expect(trackError([{ frame: 0, values: {} }], values)).toBeNull();
+        expect(trackError(undefined, values)).toBeNull();
+        // TIMING is what this rule adds; the values are `overrideValueError`'s business.
+        expect(trackError([{ frame: 1.5, values: {} }], values)).toMatch("whole number");
+        expect(trackError([{ frame: -1, values: {} }], values)).toMatch("whole number");
+        expect(trackError([{ frame: 5, values: {} }, { frame: 2, values: {} }], values)).toMatch("ascending");
+        expect(trackError([{ frame: 5, values: {} }, { frame: 5, values: {} }], values)).toMatch("ascending");
+        expect(trackError([{ frame: 0, easing: "boing", values: {} }], values)).toMatch("easing");
+        expect(trackError([{ frame: 0, hold: "yes", values: {} }], values)).toMatch("hold");
+        expect(trackError("nope", values)).toMatch("array");
+        // A bad VALUE is refused by the shared rule, not by a second copy of it here.
+        expect(trackError([{ frame: 0, values: { style: { opacity: 5 } } }], values)).toMatch("opacity");
+
+        // EDIT path: the dispatcher refuses exactly what the loader would.
+        const d = doc(node("A", 0));
+        const dispatcher = new ActionDispatcher(d);
+        expect(dispatcher.dispatchAction(new SetTrackAction(dispatcher.getDocument(), "A",
+            [{ frame: 0, values: { geometry: { x: 5 } } }])).success).toBe(true);
+        expect(dispatcher.dispatchAction(new SetTrackAction(dispatcher.getDocument(), "A",
+            [{ frame: 2, values: {} }, { frame: 1, values: {} }] as never)).success).toBe(false);
+        // LOAD path: a hand-edited file cannot say what the editor could not.
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {}, track: [{ frame: 2, values: {} }, { frame: 1, values: {} }] } } } });
+        expect(() => deserializeDocument(bad)).toThrow("ascending");
+    });
+
+    test("an EMPTY track removes the field rather than storing nothing twice", () => {
+        // A node whose animation was deleted must serialise exactly like one that was never
+        // animated — the discipline `SetInteractionsAction` and Outline Stroke both follow.
+        const d = doc(node("A", 0, { track: [{ frame: 0, values: { geometry: { x: 5 } } }] }));
+        const dispatcher = new ActionDispatcher(d);
+        dispatcher.dispatchAction(new SetTrackAction(dispatcher.getDocument(), "A", []));
+        expect(dispatcher.getDocument().nodes.get("A")!.track).toBeUndefined();
+        expect(JSON.parse(JSON.stringify(dispatcher.getDocument().nodes.get("A")))).not.toHaveProperty("track");
+    });
+
+    test("the CLOCK is validated, and a playhead past the end is not an error", () => {
+        expect(timelineError(undefined)).toBeNull();
+        expect(timelineError({ frames: 24, fps: 12 })).toBeNull();
+        expect(timelineError({ frames: 0, fps: 12 })).toMatch("frames");
+        expect(timelineError({ frames: 1.5, fps: 12 })).toMatch("frames");
+        expect(timelineError({ frames: TIMELINE_MAX_FRAMES + 1, fps: 12 })).toMatch("frames");
+        expect(timelineError({ frames: 10, fps: 0 })).toMatch("fps");
+        expect(timelineError({ frames: 10, fps: FPS_MAX + 1 })).toMatch("fps");
+        // A frame beyond the end holds the last keyframe, so refusing to OPEN such a file would
+        // be a cure worse than the disease.
+        const d = doc(node("A", 0, { track: [{ frame: 0, values: { geometry: { x: 7 } } }] }));
+        d.timeline = { frames: 5, fps: 12 };
+        d.frame = 900;
+        expect(xOf(resolveScene(d), "A")).toBe(7);
+        expect(deserializeDocument(serializeDocument(d)).frame).toBe(900);
+    });
+
+    test("EVERY field of a patch delta reaches the node — structurally, not by example", () => {
+        // `applyMutations` applies a patch by a hand-written list of fields, and a hand-written
+        // list over a growing union is a latent field-eater: `track` was dropped by it while the
+        // dispatch still reported success, exactly as `TransactionAction.mergePatch` once dropped
+        // `path`. Behavioural tests only ever cover the fields that exist today, so this one is
+        // STRUCTURAL — it names every field at once and fails the moment a new one is added
+        // without being wired, which is the only kind of test that can catch the next occurrence.
+        const d = doc(node("A", 0));
+        const delta = {
+            kind: "patch" as const,
+            geometry: { x: 11 }, transform: { rotation: 12 }, style: { opacity: 0.5 },
+            layout: { horizontalAlignment: "right" as const },
+            name: "renamed", text: "hi", src: "x.png", path: [{ c: "M" as const, x: 1, y: 2 }],
+            hidden: true, locked: true, variant: "v", variants: ["v"], slot: "s",
+            slotContent: { s: "A" }, states: { hover: {} }, booleanOp: "union" as const,
+            interactions: [{ trigger: "click" as const, state: "hover" }],
+            track: [{ frame: 0, values: {} }]
+        };
+        // Applied DIRECTLY, with no action or transaction in between: the thing under test is the
+        // field list itself, and routing through a dispatcher would only add ways to be wrong.
+        applyMutationsToDocument(d, new Map([["A", delta as never]]));
+        const after = d.nodes.get("A")! as unknown as Record<string, unknown>;
+        // Every key of the delta except its tag must be observable on the node afterwards.
+        for (const key of Object.keys(delta)) {
+            if (key === "kind") continue;
+            expect([key, after[key] !== undefined]).toEqual([key, true]);
+        }
+        expect(after.name).toBe("renamed");
+        expect((after.track as unknown[]).length).toBe(1);
+    });
+
+    test("a transaction carrying TWO document-level changes is refused, not half-applied", () => {
+        // The variable store, the active state and the clock all travel under one key, so only one
+        // can occupy it. Losing the others would be invisible — the dispatch would report success
+        // and the document would simply not say what it was told to. The guard existed for two
+        // claimants and had no test; the timeline is the third, and a pairwise comparison would
+        // have quietly stopped covering them all the moment it arrived.
+        const d = doc(node("A", 0));
+        const dispatcher = new ActionDispatcher(d);
+        const live = dispatcher.getDocument();
+        const both = new TransactionAction(live, "two document deltas", [
+            new SetActiveStateAction(live, "hover"),
+            new SetTimelineAction(live, { frames: 24, fps: 12 })
+        ]);
+        expect(dispatcher.dispatchAction(both).success).toBe(false);
+        // …and NEITHER landed: a refusal that half-applied would be worse than the loss it prevents.
+        expect(dispatcher.getDocument().timeline).toBeUndefined();
+        expect(dispatcher.getDocument().activeState).toBeUndefined();
+        // ONE of them inside a transaction is fine — the guard bounds the collision, it does not
+        // ban document-level changes from transactions altogether.
+        const single = dispatcher.getDocument();
+        expect(dispatcher.dispatchAction(new TransactionAction(single, "one document delta", [
+            new SetTimelineAction(single, { frames: 24, fps: 12 })
+        ])).success).toBe(true);
+        expect(dispatcher.getDocument().timeline).toEqual({ frames: 24, fps: 12 });
+    });
+
+    test("ONION SKINNING picks the neighbours and never the current frame", () => {
+        // A ghost of the frame you are on would only darken it. The choice of frames is a
+        // decision and lives here; drawing them faintly is plumbing and lives in the renderer.
+        expect(onionFrames(5, 2, 2, 24)).toEqual([3, 4, 6, 7]);
+        expect(onionFrames(0, 3, 1, 24)).toEqual([1]);          // clamped at the start
+        expect(onionFrames(23, 1, 5, 24)).toEqual([22]);        // and at the end
+        expect(onionFrames(5, 0, 0, 24)).toEqual([]);
+    });
+
+    test("a timeline SURVIVES a round trip, and an unanimated document is untouched by it", () => {
+        const d = doc(node("A", 0, { track: [
+            { frame: 0, hold: true, values: { geometry: { x: 0 } } },
+            { frame: 8, easing: "ease-out", values: { geometry: { x: 60 } } }
+        ] }));
+        d.timeline = { frames: 24, fps: 12 };
+        d.frame = 3;
+        const back = deserializeDocument(serializeDocument(d));
+        expect(back.timeline).toEqual({ frames: 24, fps: 12 });
+        expect(back.frame).toBe(3);
+        expect(back.nodes.get("A")!.track).toEqual(d.nodes.get("A")!.track);
+        // A document with no animation serialises without any of the three fields at all.
+        const plain = JSON.parse(serializeDocument(doc(node("B", 0))));
+        expect(plain.document).not.toHaveProperty("timeline");
+        expect(plain.document).not.toHaveProperty("frame");
     });
 });
 

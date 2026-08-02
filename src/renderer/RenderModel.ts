@@ -811,7 +811,22 @@ export function buildRenderModel(
     // nothing; running it twice (engine + model) is deliberate — the alternative, threading a
     // document through `ComputedState`, would widen a frozen contract for a derived value.
     const effective = resolveScene(doc);
-    const content = buildContent(effective, state.computed, z, visible);
+    // ONION SKINS first, so they sit BEHIND the frame being worked on — a ghost drawn over the
+    // real thing would be a smear rather than a reference. Each is built by the same
+    // `buildContent` as the live frame and then made faint and unpickable: a ghost is a picture of
+    // another moment, and clicking one would select a node where it ISN'T.
+    const ghosts: DrawItem[] = [];
+    for (const ghost of state.ghosts ?? []) {
+        const items = buildContent(resolveScene(ghost.doc), ghost.computed, z, visible);
+        for (const item of items) {
+            ghosts.push({
+                ...item,
+                nodeId: null,
+                paint: { ...item.paint, opacity: (item.paint.opacity ?? 1) * ghost.opacity, pointerEvents: false, cursor: null }
+            });
+        }
+    }
+    const content = [...ghosts, ...buildContent(effective, state.computed, z, visible)];
     return {
         viewport: state.viewport,
         grid: buildGrid(size, state.viewport, z, prev),

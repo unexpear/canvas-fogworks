@@ -14,6 +14,8 @@ import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
 import { transformError, layoutError, dimensionError, pathError, booleanOpError, srcError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError } from "./Node";
 import { interactionsError } from "./Prototype";
+import { timelineError, trackError } from "./Timeline";
+import { overrideValueError } from "./Components";
 import { componentError, overrideAgainstMasterError, overridesError, statesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
 
@@ -60,6 +62,11 @@ function checkNodeRanges(node: ReadonlyNode): void {
     if (interErr) throw new Error(`Invalid document: node "${node.id}" ${interErr}.`);
     // `src` (schema 23) is hand-editable and, since the image tool inlines a picked file as a
     // data: URL, potentially enormous — bounded and scheme-checked by the shared `srcError`.
+    // `track` (schema 39): the TIMING is checked here and the VALUES by `overrideValueError`,
+    // which is the rule a state and an instance override already obey — animation added a field,
+    // not a second definition of what a node may say about itself.
+    const trackErr = trackError(node.track, v => overrideValueError("keyframe", v));
+    if (trackErr) throw new Error(`Invalid document: node "${node.id}" ${trackErr}.`);
     const srcErr = srcError(node.type, node.src);
     if (srcErr) throw new Error(`Invalid document: node "${node.id}" ${srcErr}.`);
     // `componentId` (M6): only an instance may carry one; a DANGLING reference is deliberately
@@ -105,6 +112,14 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
     // the edit path (variable actions) so load and edit cannot drift.
     const varErr = variableStoreError(doc.variables);
     if (varErr) throw new Error(`Invalid document: ${varErr}.`);
+    // The clock (schema 39). `frame` is NOT range-checked against it: a frame past the end is
+    // clamped by the track lookup, which holds the last keyframe, and refusing to open a file
+    // because its playhead was left beyond the end would be a cure worse than the disease.
+    const tlErr = timelineError(doc.timeline);
+    if (tlErr) throw new Error(`Invalid document: ${tlErr}.`);
+    if (doc.frame !== undefined && (!Number.isFinite(doc.frame) || doc.frame < 0)) {
+        throw new Error(`Invalid document: frame must be a finite number >= 0.`);
+    }
     if (!(THEME_MODES as readonly string[]).includes(doc.activeTheme as string)) {
         throw new Error(`Invalid document: activeTheme must be one of ${THEME_MODES.join("/")} (got "${String(doc.activeTheme)}").`);
     }

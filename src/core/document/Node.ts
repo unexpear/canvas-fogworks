@@ -236,6 +236,15 @@ export interface Node {
      * those rules would drift the first time a field was added.
      */
     states?: Record<string, StateDefinition>;
+    /**
+     * KEYFRAMES over time (schema 39) — the node's animation.
+     *
+     * A keyframe is the same statement a state and an instance override make ("here these fields
+     * differ"), with a frame number and a note on how to leave it. That is why animating a node
+     * needed no new field rules: `overrideValueError` already governs the values, and
+     * `materializeNode` already applies them. See `document/Timeline`.
+     */
+    track?: Keyframe[];
     text?: string;
     src?: string;
     /** `core.path` drawing commands (absolute, local-space). Absent = an empty path. See `PathCommand`. */
@@ -1007,6 +1016,8 @@ export function transformError(t: Partial<Transform>): string | null {
  * real one does not is dropped, so a file written under the old rules still opens.
  */
 export type StateDefinition = import("./Components").InstanceOverride;
+/** A node's keyframe — declared in `document/Timeline`, referenced here like `Interaction`. */
+export type Keyframe = import("./Timeline").Keyframe;
 
 /** Cap on a node's state map, and on a state NAME — hand-editable, so bounded. */
 export const STATES_MAX = 64;

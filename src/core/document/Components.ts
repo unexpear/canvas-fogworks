@@ -40,6 +40,7 @@ import { hitShapeOf } from "../geometry/ShapeHit";
 import { shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
 import { booleanPaths } from "../geometry/PathBoolean";
 import { normalizePathNode } from "../geometry/PathBuilder";
+import { applyFrame } from "./Timeline";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
  *  Reserved: a stored node id may not contain it (checked on the edit AND load paths). */
@@ -695,7 +696,12 @@ export function resolveScene(doc: ReadonlyDocument): ReadonlyDocument {
     // hover state produces hovered copies. Booleans resolve LAST, once every operand a
     // combination could see actually exists: an instance's copies are only real after
     // expansion, and a hidden operand must already be gone rather than silently combined.
-    return resolveBooleans(expandInstances(applyActiveState(dropHidden(doc))));
+    // TIME first, before states: a keyframe says where a node IS, and a state (a hover, say)
+    // says how it looks in a situation — so a situation may override the animation, not the other
+    // way round. Everything after this point sees an ordinary, un-animated document, which is why
+    // layout, picking, snapping, culling, all three backends and the exporter needed no changes
+    // when time was added.
+    return resolveBooleans(expandInstances(applyActiveState(applyFrame(dropHidden(doc), doc.frame))));
 }
 
 /** Local matrix for a node from its geometry + transform — the engine's own composition rule. */

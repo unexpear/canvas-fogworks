@@ -159,7 +159,9 @@ export const CURRENT_VERSION: string =
  *         a schema-21 build would IGNORE the overrides and render every instance identically,
  *         silently misstating the document.
  */
-export const SCHEMA_VERSION = "38";
+import type { TimelineSettings } from "./Timeline";
+
+export const SCHEMA_VERSION = "39";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
@@ -205,7 +207,17 @@ export interface ProjectDocument {
      * override wins over its base value. Persisted, so a document reopens in the theme it was
      * saved in; changed only through an action (undoable). Absent on the wire = "light".
      */
-    activeTheme: ThemeMode;
+    activeTheme: ThemeMode;
+    /**
+     * The document's own clock, and where it is on it (schema 39).
+     *
+     * `frame` sits beside `activeState` for the same reason that does: it is a statement about
+     * which derivation to show, and every consumer reaches the shown document through
+     * `resolveScene`. Absent `timeline` means the document is not animated, and `applyFrame`
+     * returns it by reference — a document nobody animated must cost what it always did.
+     */
+    timeline?: TimelineSettings;
+    frame?: number;
     /** The named STATE every node resolves against (Milestone 7, schema 30) — the same
      *  document-level-selection shape as `activeTheme`. Absent/empty = the base state. */
     activeState?: string;

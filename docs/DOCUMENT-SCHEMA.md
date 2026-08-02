@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v38 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v39 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -87,6 +87,23 @@ interface Node {
 
 interface Geometry { x: number; y: number; width: number; height: number; }
 // COORDINATE SPACE: x/y are PARENT-RELATIVE. See the rule below.
+
+// ANIMATION (schema 39). A document has no clock until somebody asks for one.
+interface TimelineSettings { frames: number; fps: number }   // frames >= 1, fps in [1, 240]
+// Document.timeline?: TimelineSettings   — absent = not animated
+// Document.frame?: number                — where the playhead was SAVED (the live one is ephemeral)
+// Node.track?: Keyframe[]                — the node's animation
+interface Keyframe {
+  frame: number;            // whole, >= 0, and the track must be in ASCENDING order
+  hold?: boolean;           // stay put until the next keyframe — the whole of frame-by-frame
+  easing?: Easing;          // shapes the tween LEAVING this keyframe; ignored when held
+  values: StateDefinition;  // the same statement a state and an instance override make
+}
+// A keyframe is a StateDefinition at a time, so it inherits `overrideValueError` and
+// `materializeNode`; a TWEEN is `blendNode`, written for state transitions. Animation added a
+// field, not a second definition of what a node may say about itself. Outside a track's range the
+// nearest keyframe is HELD, never extrapolated. `applyFrame` runs inside `resolveScene`, so a
+// document at a frame is an ORDINARY document and nothing below the display seam knows time exists.
 
 interface Style {
   fill: string;             // color OR token id, e.g. "$color/primary" (resolved against variables, M5)

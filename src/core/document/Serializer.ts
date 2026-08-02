@@ -95,6 +95,9 @@ export interface SerializedDocument {
         activeTheme?: ThemeMode;
         /** The named STATE every node resolves against (M7, schema 30). Absent = the base. */
         activeState?: string;
+        /** The document's clock and where it is on it (schema 39). Absent = not animated. */
+        timeline?: { frames: number; fps: number };
+        frame?: number;
     };
 }
 
@@ -121,7 +124,11 @@ export function serializeDocument(doc: ReadonlyDocument): string {
             activeTheme: doc.activeTheme,
             // Omitted when absent, so a document with no state selection serializes exactly as
             // it did before M7 — `compareDocuments` would otherwise see `undefined` vs missing.
-            ...(doc.activeState !== undefined ? { activeState: doc.activeState } : {})
+            ...(doc.activeState !== undefined ? { activeState: doc.activeState } : {}),
+            // Omitted when absent for the same reason: a document nobody animated must serialize
+            // byte-for-byte as it did before the timeline existed.
+            ...(doc.timeline !== undefined ? { timeline: doc.timeline } : {}),
+            ...(doc.frame !== undefined ? { frame: doc.frame } : {})
         }
     };
 
@@ -191,6 +198,14 @@ export function deserializeDocument(json: string): ProjectDocument {
     // Integrity is the one place that judges it.
     if ("activeState" in migrated.document) {
         doc.activeState = migrated.document.activeState as string;
+    }
+    // And the clock: copied through whenever present, malformed included, so `Integrity` remains
+    // the single judge of it.
+    if ("timeline" in migrated.document) {
+        doc.timeline = migrated.document.timeline as { frames: number; fps: number };
+    }
+    if ("frame" in migrated.document) {
+        doc.frame = migrated.document.frame as number;
     }
 
     // Reconstruct the Map, validating each node's shape and key/id agreement.
@@ -294,6 +309,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "35") { raw = migrate_35_to_36(raw); version = "36"; }
     if (version === "36") { raw = migrate_36_to_37(raw); version = "37"; }
     if (version === "37") { raw = migrate_37_to_38(raw); version = "38"; }
+    if (version === "38") { raw = migrate_38_to_39(raw); version = "39"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -637,6 +653,18 @@ function migrate_21_to_22(raw: any): any {
  * the author asked for a hole — the same file, two different drawings, which is precisely what
  * 31->32 (inherited opacity) was for.
  */
+/**
+ * 38 -> 39: ANIMATION — `Document.timeline`, `Document.frame`, and `Node.track`.
+ *
+ * Additive: absent means the document is not animated, which every schema-38 document is, so it
+ * loads and draws identically. The bump is required for the interpretation reason rather than the
+ * shape one — an OLD build ignores the fields and shows every frame of an animation as its
+ * authored pose, which is a different drawing of the same file.
+ */
+function migrate_38_to_39(raw: any): any {
+    return { ...raw, version: "39" };
+}
+
 function migrate_37_to_38(raw: any): any {
     return { ...raw, version: "38" };
 }

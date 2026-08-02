@@ -131,7 +131,14 @@ export function blendColor(from: string, to: string, t: number): string {
 }
 
 /** The numeric and colour fields a transition animates, blended between two versions of a node. */
-function blendNode(from: Node, to: Node, t: number): Node {
+/**
+ * One node interpolated toward another — exported because a TIMELINE tween is the same question.
+ *
+ * A transition between two states and a tween between two keyframes differ only in what supplies
+ * the endpoints; the arithmetic in between is identical, and two copies of it would drift the
+ * first time a field learned to interpolate. See `document/Timeline`.
+ */
+export function blendNode(from: Node, to: Node, t: number): Node {
     const out: Node = { ...to };
     out.geometry = {
         x: lerp(from.geometry.x, to.geometry.x, t),

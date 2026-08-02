@@ -106,6 +106,7 @@ export class TransactionAction extends Action {
         // A single slot would silently drop whichever came first.
         let variablesDelta: Extract<NodeDelta, { kind: "variables" }> | null = null;
         let activeStateDelta: Extract<NodeDelta, { kind: "activeState" }> | null = null;
+        let timelineDelta: Extract<NodeDelta, { kind: "timeline" }> | null = null;
 
         for (const action of this.componentActions) {
             action.rebind(working);
@@ -134,6 +135,8 @@ export class TransactionAction extends Action {
                     variablesDelta = delta;
                 } else if (delta.kind === "activeState") {
                     activeStateDelta = delta;
+                } else if (delta.kind === "timeline") {
+                    timelineDelta = delta;
                 } else {
                     const prev = propertyEdits.get(nodeId) ?? { kind: "patch" as const };
                     propertyEdits.set(nodeId, mergePatch(prev, delta));
@@ -164,12 +167,15 @@ export class TransactionAction extends Action {
             if (everAdded.has(id)) continue; // created and destroyed within the transaction
             finalDeltas.set(id, { kind: "delete" });
         }
-        // The net document-level (variables/theme) state, if any component touched it.
-        // Only one can occupy the key, so a transaction doing BOTH is refused rather than
-        // silently losing one — no caller does it today, and a wrong answer would be invisible.
-        if (variablesDelta && activeStateDelta) return { updatedNodeIds: new Set(), propertyDeltas: new Map(), success: false };
-        if (variablesDelta) finalDeltas.set(DOCUMENT_DELTA_KEY, variablesDelta);
-        if (activeStateDelta) finalDeltas.set(DOCUMENT_DELTA_KEY, activeStateDelta);
+        // The net document-level state (variables / active state / the clock), if any component
+        // touched it. They all travel under ONE key, so only one can occupy it, and a transaction
+        // doing more than one is REFUSED rather than silently losing the others — a wrong answer
+        // there would be invisible. Counted rather than compared pairwise: the pairwise test was
+        // right for two claimants and would have quietly stopped covering them all the moment a
+        // third arrived, which is what the timeline is.
+        const documentDeltas = [variablesDelta, activeStateDelta, timelineDelta].filter(d => d !== null);
+        if (documentDeltas.length > 1) return { updatedNodeIds: new Set(), propertyDeltas: new Map(), success: false };
+        if (documentDeltas.length === 1) finalDeltas.set(DOCUMENT_DELTA_KEY, documentDeltas[0] as NodeDelta);
 
         return {
             // The document-delta sentinel is NOT a node id — leaking it would seed the

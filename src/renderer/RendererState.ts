@@ -9,6 +9,7 @@
 import { ComputedState } from "../core/geometry/GeometryEngine";
 import { PathCommand } from "../core/document/Node";
 import { SnapGuide } from "../core/geometry/Snapping";
+import { ReadonlyDocument } from "../core/document/Document";
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -27,5 +28,14 @@ export interface RendererState {
      * positions — it never composes coordinates itself.
      */
     computed: ComputedState;
+    /**
+     * ONION SKINS: neighbouring frames to draw faintly BEHIND the current one (schema 39).
+     *
+     * Each carries its own already-derived document and computed geometry, because the renderer
+     * reads every position from a `ComputedState` and composes none itself. Deriving the other
+     * frames here would break that rule; the app already runs `computeGeometry`, so it supplies
+     * them and the model stays a pure read.
+     */
+    ghosts?: { doc: ReadonlyDocument; computed: ComputedState; opacity: number }[];
     viewport: { x: number; y: number; zoom: number };
 }

@@ -29,6 +29,16 @@ export interface EditorState {
      */
     playState: string | null;
     /**
+     * The PLAYHEAD, and how many frames of onion skin to show either side (schema 39).
+     *
+     * Ephemeral, like the marquee and the drag preview, and for the same reason: scrubbing is not
+     * an edit. `doc.frame` records where the playhead was SAVED; this is where it is now.
+     */
+    frame?: number;
+    onion?: number;
+    /** Whether the TIMELINE is running (distinct from `playing`, which is the prototype). */
+    playingTimeline?: boolean;
+    /**
      * A running NAVIGATION (schema 36): the viewport gliding from where it was to the frame an
      * interaction pointed at. Kept beside the state transition rather than folded into it,
      * because they are independent — one interaction can change the screen, change the state, or
@@ -193,6 +203,8 @@ export function createEditorState(): EditorState {
         isDragging: false,
         playing: false,
         playState: null,
+        frame: undefined,
+        onion: undefined,
         viewportTransition: null,
         playReturnViewport: null,
         transition: null,
