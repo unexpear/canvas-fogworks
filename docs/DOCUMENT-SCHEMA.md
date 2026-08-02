@@ -684,6 +684,8 @@ from having selected that state.
 | a numeric style slot blends only when BOTH ends are concrete | a `$token` is a reference; averaging it with a number produces neither |
 | a non-hex colour SNAPS at the halfway point | it has no channels to mix before the render model resolves it — visible and explainable beats silently wrong |
 | easing CLAMPS outside [0,1] | a frame that arrives late must land on the end state, not past it |
+| the blended document carries NO `activeState` | every consumer resolves through `resolveScene`, which applies it again — naming the target overwrote the interpolation with the target's own values |
+| a captured state records geometry and transform, not just style | `blendStates` interpolates them, so style-only capture left most of the transition machinery with no authorable input |
 
 ## Serialization
 

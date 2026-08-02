@@ -40,7 +40,7 @@ import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { alignAction, distributeAction } from "../core/actions/alignActions";
 import { booleanAction, makeBooleanNodeAction } from "../core/actions/booleanActions";
 import { SetBooleanOpAction } from "../core/actions/SetBooleanOpAction";
-import { BooleanOp, TEXT_ALIGNS, FONT_FAMILY_MAX } from "../core/document/Node";
+import { BooleanOp, TEXT_ALIGNS, FONT_FAMILY_MAX, StateDefinition } from "../core/document/Node";
 import { blendStates, easingAt, TRIGGERS, EASINGS, TRANSITION_MAX_MS, Interaction, Trigger, Easing } from "../core/document/Prototype";
 import { SetInteractionsAction } from "../core/actions/SetInteractionsAction";
 import { applyActiveState } from "../core/document/Components";
@@ -538,12 +538,22 @@ export function App() {
             // geometry changed since `prevComputed`: document edits (accumulated by
             // onChange), nodes with a preview now, and nodes that had one last frame
             // (a released/cancelled drag). The engine propagates to descendants itself.
-            const computed = prevComputedRef.current
+            //
+            // WHILE PLAYING the incremental path is skipped entirely. A prototype frame is a
+            // DIFFERENT DOCUMENT — a state, or a blend part-way to one — and the dirty set only
+            // ever names nodes an ACTION touched, so nothing marks the ones a transition is
+            // animating. Reusing the previous entries drew the animation with stale geometry:
+            // the state applied, the clock ran, and the shape did not move. An under-broad dirty
+            // set is the one failure this engine's `incremental === full` invariant exists to
+            // forbid, and a derived document has no dirty set that could be broad enough.
+            const computed = !es.playing && prevComputedRef.current
                 ? computeGeometry(doc, es.pendingGeometry, prevComputedRef.current,
                     new Set([...dirtyNodesRef.current, ...pendingKeys, ...prevPendingRef.current]))
                 : computeGeometry(doc, es.pendingGeometry);
 
-            prevComputedRef.current = computed;
+            // …and the reuse chain is BROKEN across play, so the first frame back in the editor
+            // does not diff against a state's geometry.
+            prevComputedRef.current = es.playing ? null : computed;
             prevPendingRef.current = pendingKeys;
             dirtyNodesRef.current = new Set();
 
@@ -2059,6 +2069,27 @@ function TokenSelect({ store, value, onPick }: { store: VariableStore; value: st
  */
 
 /**
+ * Everything a captured state records: the node's LOOK, not just its paint.
+ *
+ * Style alone was the original capture, and it made most of the transition machinery
+ * unreachable: `blendStates` interpolates geometry and transform, so a prototype could change
+ * colour but could never move, grow or turn anything — the animation existed and nothing could
+ * author an input for it. A state now pins where the node is and how it is transformed as well
+ * as how it is painted, which is what "this node's current look" already claimed to mean.
+ *
+ * `transform` is included only when the node HAS one, so a state on an untransformed node does
+ * not pin an identity transform onto it — an absent transform and an identity one are the same
+ * picture, but only the absent one leaves a later rotate free to take effect from the base.
+ */
+function captureLook(node: Node): StateDefinition {
+    return {
+        style: { ...node.style },
+        geometry: { ...node.geometry },
+        ...(node.transform ? { transform: { ...node.transform } } : {})
+    };
+}
+
+/**
  * The STATES section — what a node looks like in a named context.
  *
  * Defining one CAPTURES the node's current appearance under a name: you style the node the way
@@ -2086,7 +2117,7 @@ function StatesSection({ node, dispatcher, refresh }: { node: Node; dispatcher: 
                     <button
                         title={`Re-capture this node's current look as "${name}"`}
                         onClick={() => {
-                            dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), node.id, name, { style: { ...node.style } }));
+                            dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), node.id, name, captureLook(node)));
                             refresh();
                         }}
                         style={{ fontSize: 10, padding: "1px 5px", background: "transparent", color: UI.textDim, border: `1px solid ${UI.line}`, borderRadius: 2, cursor: "pointer" }}
@@ -2114,7 +2145,7 @@ function StatesSection({ node, dispatcher, refresh }: { node: Node; dispatcher: 
                     // The shared name rule is the authority; the field only explains a refusal.
                     const err = variantNameError("state name", name, true);
                     if (err) { window.alert(`That state can't be used: ${err}.`); return; }
-                    dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), node.id, name, { style: { ...node.style } }));
+                    dispatcher.dispatchAction(new SetNodeStateAction(dispatcher.getDocument(), node.id, name, captureLook(node)));
                     setNewState("");
                     refresh();
                 }}

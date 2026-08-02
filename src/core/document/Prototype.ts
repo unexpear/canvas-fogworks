@@ -197,6 +197,11 @@ export function blendStates(
         rootNodeUuids: [...b.rootNodeUuids],
         variables: b.variables as ProjectDocument["variables"],
         activeTheme: b.activeTheme,
-        activeState: to ?? undefined
+        // NO active state. The blend has already baked both ends in, and every consumer resolves
+        // through `resolveScene` — which calls `applyActiveState` again. Naming the target here
+        // meant the interpolated geometry was immediately overwritten by the target state's own,
+        // so a 2-second transition landed on its end state in the first frame. A derived document
+        // must not ask to be derived twice.
+        activeState: undefined
     } as ProjectDocument;
 }

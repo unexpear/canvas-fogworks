@@ -11594,6 +11594,23 @@ describe("Prototype interactions and transitions", () => {
         expect(doc.nodes.get("A")!.geometry.width).toBe(100);
     });
 
+    test("the blended document survives the PIPELINE — it must not ask to be resolved twice", () => {
+        // Found live, and invisible to every test that read the blend's own nodes: the returned
+        // document named the TARGET as its active state, and `computeGeometry` resolves through
+        // `resolveScene`, which applies that state again — overwriting the interpolation with the
+        // target's own geometry. A 2-second transition landed on its end state in the first frame.
+        // The assertion therefore goes through the engine, which is what the app actually draws.
+        const doc = protoDoc();
+        const half = blendStates(doc, null, "big", 0.5, applyActiveState);
+        expect(half.activeState).toBeUndefined();
+        expect(computeGeometry(half).nodes.get("A")!.bounds).toEqual({ x: 20, y: 40, width: 150, height: 150 });
+        // …and the ends still resolve to the ends.
+        expect(computeGeometry(blendStates(doc, null, "big", 0, applyActiveState)).nodes.get("A")!.bounds)
+            .toEqual({ x: 0, y: 0, width: 100, height: 100 });
+        expect(computeGeometry(blendStates(doc, null, "big", 1, applyActiveState)).nodes.get("A")!.bounds)
+            .toEqual({ x: 40, y: 80, width: 200, height: 200 });
+    });
+
     test("a transition blends the transform too, from the identity when one side has none", () => {
         const doc = createEmptyDocument();
         doc.nodes.set("A", {
@@ -11705,6 +11722,43 @@ describe("Prototype interactions and transitions", () => {
         expect(new SetInteractionsAction(dispatcher.getDocument(), "A", [{ trigger: "swipe" } as unknown as Interaction]).validate()).toBe(false);
     });
 
+    test("a CAPTURED state records the node's look — geometry and transform, not just paint", () => {
+        // Style alone was the original capture, and it made most of the transition machinery
+        // unreachable: `blendStates` interpolates geometry and transform, so a prototype could
+        // change colour but could never move, grow or turn anything. The animation existed and
+        // nothing could author an input for it.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/function captureLook\(node: Node\): StateDefinition \{[\s\S]{0,300}geometry: \{ \.\.\.node\.geometry \}/);
+        expect(src).toMatch(/\.\.\.\(node\.transform \? \{ transform: \{ \.\.\.node\.transform \} \} : \{\}\)/);
+        // BOTH capture buttons (re-capture and capture-as) go through the one helper, so the
+        // two cannot record different things.
+        expect(src.match(/captureLook\(node\)/g)!.length).toBe(2);
+    });
+
+    test("a state captured from a moved node animates it — the whole point of the blend", () => {
+        // The end-to-end shape of a prototype: a node is arranged, captured under a name, then
+        // moved back; the interaction animates between the two. This is what style-only capture
+        // could not express at all.
+        const doc = createEmptyDocument();
+        const captured = { x: 300, y: 400, width: 200, height: 200 };
+        doc.nodes.set("A", {
+            id: "A", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 },
+            style: { fill: "#ff0000", opacity: 1 }, layout: {},
+            // Exactly what `captureLook` produces: the look at the moment of capture.
+            states: { big: { style: { fill: "#ff0000", opacity: 1 }, geometry: captured } },
+            interactions: [{ trigger: "click", state: "big", duration: 400, easing: "ease-out" }]
+        } as Node);
+        doc.rootNodeUuids = ["A"];
+
+        const mid = blendStates(doc, null, "big", 0.5, applyActiveState).nodes.get("A")!;
+        expect(mid.geometry).toEqual({ x: 150, y: 200, width: 150, height: 150 });
+        const end = blendStates(doc, null, "big", 1, applyActiveState).nodes.get("A")!;
+        expect(end.geometry).toEqual(captured);
+        // …and the stored document still has the node where it was authored.
+        expect(doc.nodes.get("A")!.geometry).toEqual({ x: 0, y: 0, width: 100, height: 100 });
+    });
+
     test("the app plays through the pure blend and stops without touching the document", () => {
         const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         // The scene shown while playing is a DERIVED document, not an edited one.
@@ -11712,6 +11766,12 @@ describe("Prototype interactions and transitions", () => {
         expect(src).toMatch(/easingAt\(es\.transition\.easing, \(Date\.now\(\) - es\.transition\.startedAt\) \/ es\.transition\.duration\)/);
         // The clock re-derives from a TIMESTAMP each frame rather than accumulating.
         expect(src).toMatch(/requestAnimationFrame\(\(\) => refresh\(\)\)/);
+        // A prototype frame is a DIFFERENT document, and the dirty set only names nodes an
+        // ACTION touched — so the incremental path must be skipped while playing, and the reuse
+        // chain broken across it. Reusing it drew the animation with stale geometry: the state
+        // applied, the clock ran, and the shape did not move.
+        expect(src).toMatch(/const computed = !es\.playing && prevComputedRef\.current/);
+        expect(src).toMatch(/prevComputedRef\.current = es\.playing \? null : computed;/);
         // Stopping clears the run's state, so the document is exactly as it was.
         expect(src).toMatch(/es\.playing = !es\.playing;[\s\S]{0,120}es\.playState = null;[\s\S]{0,60}es\.transition = null;/);
     });
