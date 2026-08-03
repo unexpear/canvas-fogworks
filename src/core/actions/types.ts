@@ -126,6 +126,16 @@ export interface DocumentSnapshot {
     variables: ProjectDocument["variables"];
     /** Theme mode (schema 19). Snapshots taken before the field existed hydrate as "light". */
     activeTheme?: ProjectDocument["activeTheme"];
+    /**
+     * The rest of the document-level state, so UNDO restores it.
+     *
+     * `cloneDocument` spreads the whole document and therefore always captured these; it was
+     * `hydrateDocument` that listed fields by hand and quietly dropped whatever it had not been
+     * told about. Naming them here is what makes the compiler catch the next one.
+     */
+    activeState?: ProjectDocument["activeState"];
+    timeline?: ProjectDocument["timeline"];
+    frame?: ProjectDocument["frame"];
 }
 
 /** The serialized payload needed to store history for Undo/Redo */

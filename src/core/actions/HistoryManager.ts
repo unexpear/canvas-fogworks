@@ -45,7 +45,12 @@ function hydrateDocument(raw: DocumentSnapshot): ProjectDocument {
         nodes: new Map<string, Node>(),
         rootNodeUuids: source.rootNodeUuids,
         variables: source.variables,
-        activeTheme: source.activeTheme ?? "light"
+        activeTheme: source.activeTheme ?? "light",
+        // …and the same fields have to survive an UNDO. Restoring a snapshot that had forgotten
+        // them would quietly un-animate a document the moment you pressed undo.
+        activeState: source.activeState,
+        timeline: source.timeline,
+        frame: source.frame
     };
 
     for (const [key, value] of Object.entries(source.nodes || {})) {

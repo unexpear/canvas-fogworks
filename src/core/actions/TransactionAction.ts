@@ -22,7 +22,15 @@ function cloneWorkingDocument(doc: ReadonlyDocument): ProjectDocument {
         ),
         rootNodeUuids: [...doc.rootNodeUuids],
         variables: JSON.parse(JSON.stringify(doc.variables)),
-        activeTheme: doc.activeTheme
+        activeTheme: doc.activeTheme,
+        // Document-level fields a transaction does not TOUCH must still survive it. This clone
+        // listed the ones that existed when it was written, so every field added since was
+        // dropped by any transaction that ran — silently, because a lost field looks exactly
+        // like one nobody set. That is the same hand-written-list hazard `applyMutations` and
+        // `mergePatch` both had; here it cost the active state and then the whole timeline.
+        activeState: doc.activeState,
+        timeline: doc.timeline,
+        frame: doc.frame
     };
 }
 
