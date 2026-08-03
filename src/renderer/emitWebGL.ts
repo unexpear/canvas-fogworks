@@ -44,7 +44,8 @@ import { subdivideTriangles, triangulate } from "../core/geometry/Tessellate";
 import { strokeOutline } from "../core/geometry/StrokeOutline";
 import { resolveRings } from "../core/geometry/Resolve";
 import { depthToClipZ } from "../core/document/Depth";
-import { surfaceNormal } from "../core/document/Mesh";
+import { ReadonlyMesh, heightRange, surfaceNormal, warpHeight } from "../core/document/Mesh";
+import { marchOccluded } from "../core/geometry/RayMarch";
 import { Light, normalize } from "../core/document/Light";
 import { ellipseCommands, rectCommands, transformCommands } from "../core/geometry/ShapeToPath";
 import { PathCommand } from "../core/document/Node";
@@ -53,9 +54,11 @@ import { FLATTEN_TOLERANCE, displayTolerance, localScaleOf } from "../core/geome
 const VERTEX_SHADER = `
 attribute vec2 a_pos;
 attribute vec3 a_normal;
+attribute float a_shadow;
 uniform mat3 u_view;
 uniform float u_z;
 varying vec3 v_normal;
+varying float v_shadow;
 void main() {
     vec3 p = u_view * vec3(a_pos, 1.0);
     // The normal is passed through UNTRANSFORMED and UN-NORMALISED. Untransformed because it is a
@@ -65,6 +68,11 @@ void main() {
     // affine across a cell; normalising here would bake the faceting back in before the fragment
     // shader ever saw it.
     v_normal = a_normal;
+    // Whether this vertex can SEE the key light, marched on the CPU through the mesh's own
+    // heightfield. Interpolated, which is honest about what it is: a per-vertex answer to a
+    // question that is genuinely discontinuous. Per fragment needs the heightfield in the
+    // shader, which needs the texture path this renderer still does not have.
+    v_shadow = a_shadow;
     // z comes from the node's DEPTH, not from the draw order — that is what makes the depth
     // buffer do the deciding rather than the sequence of draw calls.
     gl_Position = vec4(p.xy, u_z, 1.0);
@@ -73,6 +81,7 @@ void main() {
 const FRAGMENT_SHADER = `
 precision mediump float;
 varying vec3 v_normal;
+varying float v_shadow;
 uniform vec4 u_color;
 uniform float u_ambient;
 uniform int u_lightCount;
@@ -93,7 +102,11 @@ void main() {
         // light — unclamped, a second light could make a shape DARKER, which is the least
         // explicable thing a lighting model can do.
         float d = max(dot(n, -u_lightDir[i]), 0.0);
-        lit += u_lightColor[i] * d;
+        // CAST occlusion applies to the KEY light only. The march is one attribute per vertex, so
+        // four lights would be four attributes and four CPU marches per frame; the first light is
+        // the one the drop shadow already privileges, so the scene stays consistent about which
+        // light throws shadows.
+        lit += u_lightColor[i] * d * (i == 0 ? v_shadow : 1.0);
     }
     // The colour is MODULATED, never replaced: a lit red shape is a darker or brighter red, and a
     // model that added light instead would wash every hue toward the light's own.
@@ -112,11 +125,13 @@ export interface GLState {
     program: WebGLProgram;
     buffer: WebGLBuffer;
     normalBuffer: WebGLBuffer;
+    shadowBuffer: WebGLBuffer;
     posLoc: number;
     viewLoc: WebGLUniformLocation | null;
     colorLoc: WebGLUniformLocation | null;
     zLoc: WebGLUniformLocation | null;
     normalLoc: number;
+    shadowLoc: number;
     ambientLoc: WebGLUniformLocation | null;
     lightCountLoc: WebGLUniformLocation | null;
     lightDirLoc: WebGLUniformLocation | null;
@@ -142,18 +157,20 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
     const program = gl.createProgram();
     const buffer = gl.createBuffer();
     const normalBuffer = gl.createBuffer();
-    if (!vs || !fs || !program || !buffer || !normalBuffer) return null;
+    const shadowBuffer = gl.createBuffer();
+    if (!vs || !fs || !program || !buffer || !normalBuffer || !shadowBuffer) return null;
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
     return {
-        gl, program, buffer, normalBuffer,
+        gl, program, buffer, normalBuffer, shadowBuffer,
         posLoc: gl.getAttribLocation(program, "a_pos"),
         viewLoc: gl.getUniformLocation(program, "u_view"),
         colorLoc: gl.getUniformLocation(program, "u_color"),
         zLoc: gl.getUniformLocation(program, "u_z"),
         normalLoc: gl.getAttribLocation(program, "a_normal"),
+        shadowLoc: gl.getAttribLocation(program, "a_shadow"),
         ambientLoc: gl.getUniformLocation(program, "u_ambient"),
         lightCountLoc: gl.getUniformLocation(program, "u_lightCount"),
         lightDirLoc: gl.getUniformLocation(program, "u_lightDir"),
@@ -234,7 +251,42 @@ export interface Draw {
      * difference between a smooth dome and a faceted one.
      */
     normals: number[];
+    /**
+     * One per VERTEX: 1 = this point can see the key light, 0 = something on the surface is in the
+     * way. Empty when the item has no surface or the scene has no light — there is nothing to
+     * occlude and nothing to be occluded from.
+     *
+     * The answer a normal cannot give. A crease beside a raised edge may face the light squarely
+     * and still be dark, because the edge is between it and the light; see `geometry/RayMarch`.
+     */
+    shadow: number[];
     color: [number, number, number, number];
+}
+
+/**
+ * "Can this point see the key light?", for one surface — or null when the answer is always yes.
+ *
+ * Null rather than a function returning `false` everywhere, because the caller uses it to decide
+ * whether to ALLOCATE a per-vertex array at all. The three cases that can cast nothing are worth
+ * separating out here rather than paying for a march that is bound to answer no: no light, a
+ * surface with no relief, and a light at or below the horizon (whose faces `lambert` has already
+ * taken to zero).
+ *
+ * The march runs on the CPU, once per vertex, using the SAME `warpHeight` that shaped the outline
+ * — so what the shadow is cast by and what the shape looks like cannot disagree.
+ */
+function occluderFor(surface: { mesh: ReadonlyMesh; box: { width: number; height: number } },
+                     keyLight: Light | undefined): ((x: number, y: number) => boolean) | null {
+    if (!keyLight) return null;
+    const dir = normalize(keyLight);
+    // `light` stores the direction the light TRAVELS, and the march walks TOWARD the light.
+    if (!dir) return null;
+    const toLight = { x: -dir.x, y: -dir.y, z: -dir.z };
+    if (toLight.z <= 0) return null;
+    const { max } = heightRange(surface.mesh);
+    if (max <= 0) return null;                    // no relief: nothing stands up to block anything
+    const height = (x: number, y: number) => warpHeight(surface.mesh, surface.box, x, y);
+    return (x: number, y: number) => marchOccluded(height, x, y, toLight, max);
 }
 
 /** Straight at the viewer — what an unlit, unmeshed surface faces. */
@@ -255,7 +307,12 @@ function vertexNormal(n: { x: number; y: number; z: number }): { x: number; y: n
 }
 
 function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number | null,
-              surface?: { normal: (x: number, y: number) => { x: number; y: number; z: number }; cell: number }): Draw | null {
+              surface?: {
+                  normal: (x: number, y: number) => { x: number; y: number; z: number };
+                  cell: number;
+                  /** Null when nothing can cast: a flat surface, or a scene with no key light. */
+                  occluded: ((x: number, y: number) => boolean) | null;
+              }): Draw | null {
     const color = parseColor(css);
     if (!color) return null;                      // not a colour it can parse: skip, never guess
     // Tessellated in LOCAL space, then each vertex transformed — the reverse of what this used to
@@ -272,15 +329,18 @@ function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number |
     // Presized, not bounded: JS arrays grow on assignment, so this is an allocation hint and
     // nothing else — a wrong size here changes no output, which is why no test can kill it.
     const normals = new Array<number>((local.length / 2) * 3);
+    const march = surface?.occluded ?? null;
+    const shadow = march ? new Array<number>(local.length / 2) : [];
     for (let i = 0, n = 0; i < local.length; i += 2, n += 3) {
         const lx = local[i], ly = local[i + 1];
         const nrm = surface ? vertexNormal(surface.normal(lx, ly)) : FLAT_NORMAL;
         normals[n] = nrm.x; normals[n + 1] = nrm.y; normals[n + 2] = nrm.z;
+        if (march) shadow[i / 2] = march(lx, ly) ? 0 : 1;
         vertices[i] = world ? world.a * lx + world.c * ly + world.e : lx;
         vertices[i + 1] = world ? world.b * lx + world.d * ly + world.f : ly;
     }
     if (opacity !== null) color[3] *= opacity;    // MULTIPLY — one blend, not two
-    return { vertices, normals, color };
+    return { vertices, normals, shadow, color };
 }
 
 /**
@@ -307,7 +367,8 @@ export function itemTolerance(item: DrawItem, viewScale: number): number {
     return displayTolerance(item.world ? localScaleOf(item.world, viewScale) : viewScale);
 }
 
-export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE): Draw[] {
+export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE,
+                          keyLight?: Light): Draw[] {
     const paint = item.paint;
     const local = shapeToLocalCommands(item.shape, paint.radius);
     if (!local) return [];
@@ -322,7 +383,8 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
             // One CELL of the grid, on its shorter axis: finer than that samples the same bilinear
             // patch twice and buys nothing, coarser leaves the surface's own detail unreachable.
             cell: Math.max(1e-6, Math.min(item.surface.box.width / item.surface.mesh.cols,
-                                          item.surface.box.height / item.surface.mesh.rows))
+                                          item.surface.box.height / item.surface.mesh.rows)),
+            occluded: occluderFor(item.surface, keyLight)
         }
         : undefined;
     if (paint.fill !== null) {
@@ -396,7 +458,7 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
     // commit to a vertex count.
     const viewScale = vp.zoom * dpr;
     for (const item of [...list.grid.lines, ...list.content, ...list.overlay]) {
-        for (const d of itemDraws(item, itemTolerance(item, viewScale))) {
+        for (const d of itemDraws(item, itemTolerance(item, viewScale), list.lights?.[0])) {
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.vertices), gl.DYNAMIC_DRAW);
             gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
             // Normals ride in their own buffer rather than interleaved: the position buffer is
@@ -406,6 +468,18 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.normals), gl.DYNAMIC_DRAW);
             gl.enableVertexAttribArray(state.normalLoc);
             gl.vertexAttribPointer(state.normalLoc, 3, gl.FLOAT, false, 0, 0);
+            // The SHADOW term. A draw with no surface ships none, and every vertex is then fully
+            // lit — set as a constant attribute rather than uploading a buffer of ones, which is
+            // one call instead of one allocation per shape per frame.
+            if (d.shadow.length > 0) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, state.shadowBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.shadow), gl.DYNAMIC_DRAW);
+                gl.enableVertexAttribArray(state.shadowLoc);
+                gl.vertexAttribPointer(state.shadowLoc, 1, gl.FLOAT, false, 0, 0);
+            } else {
+                gl.disableVertexAttribArray(state.shadowLoc);
+                gl.vertexAttrib1f(state.shadowLoc, 1);
+            }
             gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
             gl.uniform1f(zLoc, depthToClipZ(item.depth ?? 0));
             gl.uniform4fv(colorLoc, d.color);

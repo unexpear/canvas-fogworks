@@ -49,11 +49,12 @@ import { SetTimelineAction } from "../actions/SetTimelineAction";
 import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyParallax, DEPTH_MIN, DEPTH_MAX } from "../document/Depth";
 import { Mesh, meshError, restMesh, warpPoint, isIdentityMesh, MESH_MAX_DIVISIONS } from "../document/Mesh";
 import { meshHandles, meshHandleAtPoint, meshIndexOf } from "../geometry/SelectionHandles";
-import { normalAt, surfaceNormal, warpHeight, isFlatMesh } from "../document/Mesh";
+import { normalAt, surfaceNormal, warpHeight, isFlatMesh, heightRange } from "../document/Mesh";
 import { Light, lightsError, ambientError, lambert, shadowOffset, heightAbovePage, LIGHTS_MAX } from "../document/Light";
 import { resolveMeshes } from "../document/Components";
 import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry/CastShadow";
 import { Ring } from "../geometry/PathBoolean";
+import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { overrideValueError } from "../document/Components";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
@@ -12906,6 +12907,62 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         }
     });
 
+    test("the GPU is told which vertices can SEE the key light", () => {
+        // A ridge along one edge, so the ground beside it is genuinely in shadow rather than
+        // merely facing away — the distinction the march exists for.
+        const ridge = (): Mesh => {
+            const m = restMesh(4, 1, box);
+            m.points[1] = { ...m.points[1], z: 120 };     // top row, second column
+            m.points[6] = { ...m.points[6], z: 120 };     // bottom row, second column
+            return m;
+        };
+        const item = (light?: Light, mesh?: Mesh) => itemDraws({
+            shape: { kind: "rect", x: 0, y: 0, width: 100, height: 100 }, world: null, nodeId: null, role: "content",
+            ...(mesh ? { surface: { mesh, box } } : {}),
+            paint: { fill: "#ffffff", opacity: null, stroke: null, strokeWidth: null, strokeDash: null,
+                     radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null }
+        } as never, undefined, light)[0];
+
+        // Lit from the +x side and low, so the ridge throws across the ground to its right.
+        const lit = item({ x: -1, y: 0, z: -0.6, color: "#ffffff", intensity: 1 }, ridge());
+        expect(lit.shadow.length).toBe(lit.vertices.length / 2);
+        const dark = lit.shadow.filter(v => v === 0).length;
+        expect(dark).toBeGreaterThan(0);                       // something IS occluded
+        expect(dark).toBeLessThan(lit.shadow.length);          // …and not everything
+        for (const v of lit.shadow) expect(v === 0 || v === 1).toBe(true);   // binary, no penumbra
+        // WHICH vertices, not merely how many. The highest point on the surface has nothing above
+        // it, so it must be LIT — the assertion that survives the term being inverted, which
+        // "some dark, some light" does not.
+        let best = -Infinity, bestAt = 0;
+        for (let v = 0, k = 0; v < lit.vertices.length; v += 2, k++) {
+            const h = warpHeight(ridge(), box, lit.vertices[v], lit.vertices[v + 1]);
+            if (h > best) { best = h; bestAt = k; }
+        }
+        expect(best).toBeGreaterThan(0);
+        expect(lit.shadow[bestAt]).toBe(1);
+
+        // NO LIGHT: nothing to be occluded from, and no per-vertex array allocated at all.
+        expect(item(undefined, ridge()).shadow).toEqual([]);
+        // NO RELIEF: a flat mesh has nothing standing up to block anything.
+        expect(item({ x: -1, y: 0, z: -0.6, color: "#fff", intensity: 1 }, restMesh(2, 2, box)).shadow).toEqual([]);
+        // NO SURFACE at all — an ordinary unmeshed shape pays nothing.
+        expect(item({ x: -1, y: 0, z: -0.6, color: "#fff", intensity: 1 }).shadow).toEqual([]);
+        // A light BELOW the horizon casts nothing here: `lambert` has already taken those faces to
+        // zero, so marching them would spend the work to agree.
+        expect(item({ x: -1, y: 0, z: 0.6, color: "#fff", intensity: 1 }, ridge()).shadow).toEqual([]);
+    });
+
+    test("heightRange reads the CONTROL POINTS, which bounds the ray exactly", () => {
+        // Exact rather than sampled: a bilinear patch blends its four corners, so nothing inside a
+        // cell is higher than the highest of them. That is what makes the grid a sound bound on
+        // the march — and a bound that is too small silently shortens the ray.
+        expect(heightRange(restMesh(2, 2, box))).toEqual({ min: 0, max: 0 });
+        const m = restMesh(1, 1, box);
+        m.points[3] = { ...m.points[3], z: 55 };
+        m.points[0] = { ...m.points[0], z: -20 };
+        expect(heightRange(m)).toEqual({ min: -20, max: 55 });
+    });
+
     test("the model carries the surface only when a mesh has HEIGHT", () => {
         // A purely in-plane warp faces the viewer everywhere, so shipping its normals would cost
         // a buffer per frame to say "flat" three times per triangle.
@@ -13035,6 +13092,103 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         const fromBelow = lit(-10, { x: 0, y: -1, z: 0, color: "#fff", intensity: 1 })!;
         expect(fromBelow.dy).toBeLessThan(0);
         expect(Math.abs(fromBelow.dx)).toBeCloseTo(0, 9);
+    });
+
+    test("RAY CASTING: a raised edge shadows the ground beside it", () => {
+        // The question a normal cannot answer. The ground next to a step faces the light squarely
+        // — its normal is straight up — and is still in shadow, because the step is in the way.
+        // A surface whose shadowing can be worked out on paper: a wall at x = 50, 100 tall.
+        const step = (x: number) => (x < 50 ? 0 : 100);
+        const h = (x: number, _y: number) => step(x);
+        const s = Math.SQRT1_2;
+        const fromRight = { x: s, y: 0, z: s };      // light over the +x side, 45° up
+        const fromLeft = { x: -s, y: 0, z: s };
+        // At x = 40 the wall is 10 away and 100 tall; a 45° ray has climbed 10 by the time it
+        // reaches it, so the wall is 90 above the ray. Shadowed.
+        expect(marchOccluded(h, 40, 0, fromRight, 100)).toBe(true);
+        // The SAME point with the light on the other side sees nothing but flat ground.
+        expect(marchOccluded(h, 40, 0, fromLeft, 100)).toBe(false);
+        // Far away, still shadowed: at x = 0 the ray has climbed 50 by the wall, which is 100.
+        expect(marchOccluded(h, 0, 0, fromRight, 100)).toBe(true);
+        // ON TOP of the step there is nothing higher, so the march never starts.
+        expect(marchOccluded(h, 60, 0, fromRight, 100)).toBe(false);
+        // A steep enough light clears it — but "steep" has to be measured against the wall, not
+        // guessed. The wall is 100 tall and 10 away, so the ray must gain more than 10 per unit of
+        // run to get over it; at 80° it gains 5.8 and is still 42 short when it arrives, which is
+        // shadowed. At this slope it is above everything before it ever gets there, and the march
+        // stops at that altitude because nothing past it can occlude.
+        expect(marchOccluded(h, 40, 0, { x: 0.17, y: 0, z: 0.985 }, 100)).toBe(true);
+        expect(marchOccluded(h, 40, 0, { x: 0.05, y: 0, z: 0.99875 }, 100)).toBe(false);
+    });
+
+    test("a FLAT surface never shadows itself, whatever the light does", () => {
+        // The property that lets the march run unconditionally. Every fragment of every unmeshed
+        // shape takes this path, and a flat shape that came out uniformly dark would be the most
+        // visible bug lighting could have.
+        const flat = () => 0;
+        const s = Math.SQRT1_2;
+        for (const dir of [{ x: s, y: 0, z: s }, { x: 0, y: s, z: s }, { x: 0, y: 0, z: 1 }, { x: -0.6, y: -0.6, z: 0.53 }]) {
+            expect(marchOccluded(flat, 10, 10, dir, 0)).toBe(false);
+            // …and still not, when something ELSEWHERE is tall so the march genuinely runs. This
+            // is the "strictly above" comparison doing the work: a surface exactly level with the
+            // ray is the ray grazing it, not an occlusion.
+            expect(marchOccluded(flat, 10, 10, dir, 100)).toBe(false);
+        }
+    });
+
+    test("a light at or below the HORIZON is refused rather than marched", () => {
+        // A ray that does not climb never leaves the surface, so the march would either run along
+        // it forever or call everything shadowed. `lambert` has already taken those faces to zero,
+        // which is both the right answer and a cheaper one.
+        const step = (x: number, _y: number) => (x < 50 ? 0 : 100);
+        expect(marchOccluded(step, 40, 0, { x: 1, y: 0, z: 0 }, 100)).toBe(false);
+        // Pointed AT the wall as well as downward — the direction that catches a missing guard.
+        // Without it the march runs backwards along a negative distance, walks into the wall from
+        // the far side and reports the ground shadowed by a light that is underneath it.
+        expect(marchOccluded(step, 40, 0, { x: -0.7, y: 0, z: -0.7 }, 100)).toBe(false);
+        expect(marchOccluded(step, 40, 0, { x: 0.7, y: 0, z: -0.7 }, 100)).toBe(false);
+    });
+
+    test("the ray CLIMBS, so a steep light clears a low obstacle", () => {
+        // The difference between a ray and a nearest-neighbour test. A bump 20 tall between the
+        // point and the light blocks nothing if the ray is 60 up by the time it gets there — and
+        // a march that compared heights against the STARTING height instead of the ray's would
+        // call it shadowed, which is a shape permanently dark under a light directly above it.
+        const bump = (x: number, _y: number) => (x > 50 && x < 60 ? 20 : 0);
+        expect(marchOccluded(bump, 40, 0, { x: 0.3, y: 0, z: 0.954 }, 100)).toBe(false);
+        // Lower the light and the same bump does block it.
+        expect(marchOccluded(bump, 40, 0, { x: 0.95, y: 0, z: 0.312 }, 100)).toBe(true);
+    });
+
+    test("a surface lit exactly along its OWN SLOPE is grazed, not shadowed", () => {
+        // The measure-zero case that is not measure-zero in a design tool: a bevel lit exactly
+        // down its own face. Every sample along the ray sits precisely ON it, so a comparison
+        // written `>=` rather than `>` would take the whole face to black — and the flat-surface
+        // test cannot catch that, because the short-circuit above returns before the loop runs.
+        const ramp = (x: number, _y: number) => x;                 // a 45° slope
+        const s = Math.SQRT1_2;
+        expect(marchOccluded(ramp, 0, 0, { x: s, y: 0, z: s }, 100)).toBe(false);
+        // A shade steeper than the slope and it is clear of the surface; a shade shallower and the
+        // surface genuinely is above the ray.
+        expect(marchOccluded(ramp, 0, 0, { x: 0.6, y: 0, z: 0.8 }, 100)).toBe(false);
+        expect(marchOccluded(ramp, 0, 0, { x: 0.8, y: 0, z: 0.6 }, 100)).toBe(true);
+    });
+
+    test("the march is SAMPLED, and a spike thinner than its step spacing is missed", () => {
+        // Stated rather than discovered. Sixteen samples over the ray resolve relief at about the
+        // scale a mesh cell holds; a feature finer than that is below what the surface can carry
+        // in the first place. This pins the limit so nobody later reads the module note as
+        // pessimism and quietly halves the step count.
+        // Placed BETWEEN samples on purpose. The ray's samples land at exactly x = 6.25i here
+        // (the march length is maxHeight/z and the step is that over 16, so the horizontal
+        // spacing is maxHeight/16 whatever the angle) — a spike at 50 would sit on one and be
+        // found by luck, which would test nothing.
+        const spike = (x: number, _y: number) => (x > 52.95 && x < 53.05 ? 100 : 0);
+        const s = Math.SQRT1_2;
+        expect(marchOccluded(spike, 0, 0, { x: s, y: 0, z: s }, 100)).toBe(false);
+        // Enough samples and it IS found — so the miss is the sampling rate, not the algorithm.
+        expect(marchOccluded(spike, 0, 0, { x: s, y: 0, z: s }, 100, 20000)).toBe(true);
+        expect(RAY_STEPS).toBe(16);
     });
 
     test("a shape's shadow LANDS ON another shape, and only where it overlaps", () => {

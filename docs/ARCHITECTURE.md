@@ -317,9 +317,32 @@ idless, because a shadow is not a thing you can select.
 Finding it cost a correctness bug elsewhere, which is the better half of the story — see the
 boolean note below.
 
-WHAT IS STILL NOT HERE: a cast shadow lands on the receiver's OUTLINE as if the receiver were
-flat, so a shadow crossing a domed shape does not bend over the dome. That is genuinely the part
-that needs the height field in the fragment shader. What exists is SELF-shading, which is what
+**RAY CASTING answers the question a normal cannot (`geometry/RayMarch`).** A crease beside a
+raised edge may face the light squarely and still be dark, because the edge is between it and the
+light. No amount of shading arithmetic finds that; you have to follow the ray and look. The march
+is deliberately the simplest honest form — fixed steps from the surface point toward the light,
+occluded if the surface is ever above the ray — and it is BINARY, because a directional light is
+infinitely far away and its occlusion is total or nothing, the same argument `CastShadow` makes.
+`maxHeight` bounds it: once the ray is above everything, nothing further along can occlude, and
+that altitude is the whole of the ray worth walking. It knows nothing about meshes or lights —
+`height` is injected, exactly as `castShadows` takes an `offsetOf` — so it is pure geometry a mesh,
+an imported heightmap, or a test surface whose shadowing can be worked out on paper can all drive.
+
+Three of its lines turned out to be COST rather than correctness, and the comments now say which:
+the already-above-everything short-circuit, measuring the ray's length from the start height rather
+than from zero, and beginning the loop at step one. Each was written as a guard, and a mutation of
+each changed no answer — the first because a zero-length march reaches the same conclusion, the
+second because a longer ray is still correct and only spreads the same sixteen samples thinner, the
+third because step zero is the point itself and the strict comparison already excludes it. They
+stay, labelled as what they are.
+
+The result rides to the GPU as one term per VERTEX, alongside the normals, and that is an honest
+approximation rather than the right answer: occlusion is genuinely discontinuous, so interpolating
+it across a triangle reads as a soft edge where the model says there is none. Normals had an exact
+fix available at no cost (see the affine argument above); this does not. Per FRAGMENT needs the
+heightfield readable in the shader, which needs the texture path this renderer still has not got —
+and that same path is what would let a CAST shadow bend over a domed receiver, which it currently
+does not: it lands on the receiver's outline as if the receiver were flat. What exists is SELF-shading, which is what
 makes a bevel look like a bevel, and a drop-shadow OFFSET derived from the light and the node's
 depth, which is what a 2D tool has always meant by a drop shadow — the difference being that it is
 now computed from the scene's own light rather than typed in per shape, so moving the light moves

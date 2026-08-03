@@ -82,12 +82,13 @@ import { emitCanvas, setImageReadyCallback } from "../../renderer/emitCanvas";
 import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState } from "../../renderer/emitWebGL";
 import { Keyframe, TimelineSettings, timelineError, trackError, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
 import { DEPTH_MIN, DEPTH_MAX, depthError, depthOf, parallaxRate, parallaxOffset, depthToClipZ, byDepth, applyParallax } from "../document/Depth";
-import { Mesh, ReadonlyMesh, MESH_MAX_DIVISIONS, meshError, restPoint, restMesh, isIdentityMesh, warpPoint, warpCommands, heightOf, warpHeight, surfaceNormal, normalAt, isFlatMesh } from "../document/Mesh";
+import { Mesh, ReadonlyMesh, MESH_MAX_DIVISIONS, meshError, restPoint, restMesh, isIdentityMesh, warpPoint, warpCommands, heightOf, warpHeight, heightRange, surfaceNormal, normalAt, isFlatMesh } from "../document/Mesh";
 import { Light, LIGHTS_MAX, lightsError, ambientError, normalize, lambert, shadowOffset, heightAbovePage } from "../document/Light";
 import { resolveScene, resolveMeshes, resolveBooleans, applyActiveState, dropHidden } from "../document/Components";
 import { BooleanOp, Ring, Point, Piece, windingAt, insideRings, splitAgainst, chainPieces, booleanRings, ringsToCommands, commandsToRings, booleanPaths } from "../geometry/PathBoolean";
 import { FillRule, FILL_RULES, crossingCount, insideRule, resolveRings, resolveWith, resolveBoolean, resolveBooleanPaths } from "../geometry/Resolve";
 import { ShadowShape, CastShadowPatch, shadowPatch, castShadows, SHADOW_ALPHA, CAST_SHADOW_MAX_PAIRS } from "../geometry/CastShadow";
+import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { StrokeStyle, StrokeAlign, STROKE_ALIGNS, strokeOutline } from "../geometry/StrokeOutline";
 import { signedArea2, triangulate, subdivideTriangles, TESSELLATE_MAX_VERTICES, SUBDIVIDE_MAX_DEPTH } from "../geometry/Tessellate";
 import { isConvexRing, convexPieces, convexOverlaps, piecesOverlap, rectRing, piecesArea, edgesOverlap, DECOMPOSE_MAX_PIECES } from "../geometry/ConvexDecompose";
@@ -523,6 +524,12 @@ export function __apiSurfacePin(): void {
     expectType<number>(heightOf({}));
     expectType<number>(warpHeight(mesh, meshBox, 1, 1));
     expectType<boolean>(isFlatMesh(mesh));
+    expectType<{ min: number; max: number }>(heightRange(mesh));
+    // RAY CASTING through a heightfield. `height` is INJECTED — the module knows nothing about
+    // meshes or lights, the same arrangement `castShadows` uses for its offset.
+    expectType<boolean>(marchOccluded(() => 0, 0, 0, { x: 0, y: 0, z: 1 }, 10));
+    expectType<boolean>(marchOccluded(() => 0, 0, 0, { x: 0, y: 0, z: 1 }, 10, 32));
+    expectType<number>(RAY_STEPS);
     expectType<number>(MESH_MAX_DIVISIONS);
     // TWO normals, and the distinction is the contract: `surfaceNormal` is RAW (what the GPU gets,
     // because only an un-normalised vector survives linear interpolation) and `normalAt` is its
@@ -565,10 +572,12 @@ export function __apiSurfacePin(): void {
     expectType<number>(itemTolerance(model.content[0], 1));
     const draws: Draw[] = itemDraws(model.content[0]);
     expectType<Draw[]>(itemDraws(model.content[0], 0.05));
+    expectType<Draw[]>(itemDraws(model.content[0], 0.05, light));
     expectType<number[]>(draws[0]?.vertices ?? []);
     // `normals` is part of the CONTRACT, not an implementation detail: a backend that dropped it
     // would still compile against a `Draw` that never named it, and the shading would go quietly.
     expectType<number[]>(draws[0]?.normals ?? []);
+    expectType<number[]>(draws[0]?.shadow ?? []);
     expectType<[number, number, number, number]>(draws[0]?.color ?? [0, 0, 0, 1]);
     expectType<(gl: WebGLRenderingContext, s: GLState, l: readonly Light[] | undefined, a: number | undefined) => void>(setLighting);
 

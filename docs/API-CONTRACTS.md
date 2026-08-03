@@ -235,6 +235,7 @@ function warpHeight(mesh, box, x, y): number;              // the same bilinear 
 function surfaceNormal(mesh, box, x, y): {x, y, z};        // RAW — un-normalised, zero where the cell collapsed
 function normalAt(mesh, box, x, y): {x, y, z};             // the same, as a UNIT vector
 function isFlatMesh(mesh): boolean;                        // no height anywhere = nothing to light
+function heightRange(mesh): {min, max};                    // from the CONTROL POINTS — exact, and what bounds the ray
 // Both use CENTRED differences because a one-sided step lands outside the box at a CORNER, gets
 // clamped back, and collapses the tangent — which reported every corner of a shape flat. The
 // tangents are DIVIDED BY THEIR STEP, so a sample on the rim (where the span is halved by that
@@ -281,6 +282,19 @@ function resolveBooleanPaths(a, b, op): PathCommand[];                 // the sa
 // question instead of answering it more carefully: the probe samples the two faces either
 // side, never the edge. Coincident survivors are de-duplicated, or a union with a shared edge
 // emits that edge twice.
+
+// RayMarch.ts — can a point SEE the light? (no schema field; derived).
+const RAY_STEPS: number;                                   // 16 — this is per FRAGMENT-equivalent work; a real cost decision
+function marchOccluded(height, x, y, toLight, maxHeight, steps?): boolean;
+// The question a NORMAL cannot answer: a crease beside a raised edge faces the light squarely
+// and is still dark, because the edge is in the way. `height` is INJECTED, so this is pure
+// geometry a mesh, an imported heightmap or a closed-form test surface can all drive.
+// BINARY, like `CastShadow` and for the same reason — a directional light has no penumbra.
+// `maxHeight` bounds the march: once the ray is above everything, nothing further can occlude.
+// Answers false for a light at or below the horizon, whose faces `lambert` has already darkened.
+// SAMPLED: a spike thinner than the step spacing is missed, which is finer relief than a mesh
+// can represent. `Draw.shadow` carries the result per VERTEX; per FRAGMENT needs the heightfield
+// in the shader, which needs the texture path this renderer still does not have.
 
 // CastShadow.ts — one shape darkening another, as GEOMETRY (no schema field; derived).
 const SHADOW_ALPHA: string; const CAST_SHADOW_MAX_PAIRS: number;   // #00000059; 400 — this is quadratic in RAISED shapes
@@ -896,8 +910,14 @@ interface GLState { gl; program; buffer; normalBuffer; posLoc; normalLoc; viewLo
 function initGL(canvas: HTMLCanvasElement): GLState | null;                          // program + buffer, or null when WebGL is refused
 function parseColor(css: string): [number, number, number, number] | null;           // #rgb / #rrggbb / #rrggbbaa only; null = do not draw
 function shapeToLocalCommands(shape: Shape, radius: number | null): PathCommand[] | null;   // LOCAL, so a stroke offsets in the units its width means
-interface Draw { vertices: number[]; normals: number[]; color: [number, number, number, number] }
-function itemDraws(item: DrawItem, tolerance?: number): Draw[];   // pure — the tested part; fill then stroke, [] for what it cannot draw
+interface Draw { vertices: number[]; normals: number[]; shadow: number[]; color: [number, number, number, number] }
+function itemDraws(item: DrawItem, tolerance?: number, keyLight?: Light): Draw[];   // pure — the tested part; fill then stroke, [] for what it cannot draw
+// `shadow` is one term per VERTEX: 1 = this point can see the KEY light, 0 = the surface is in
+// the way (`RayMarch`). EMPTY when there is nothing to occlude or nothing to be occluded from —
+// no surface, no light, no relief, or a light below the horizon — and the backend then sets a
+// constant attribute rather than uploading a buffer of ones. Only `lights[0]` casts: four lights
+// would be four attributes and four CPU marches per frame, and it is the light the drop shadow
+// already privileges.
 function itemTolerance(item: DrawItem, viewScale: number): number;                   // how finely to cut THIS item's curves
 function setLighting(gl, state, lights, ambient): void;                              // once per frame; unlit ⇒ ambient 1, no lights
 // `normals` is one vector per VERTEX (`vertices.length / 2 * 3`), NOT unit — see `surfaceNormal`.

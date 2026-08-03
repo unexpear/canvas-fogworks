@@ -277,6 +277,23 @@ export function warpHeight(mesh: ReadonlyMesh, box: { width: number; height: num
     return top + (bottom - top) * fv;
 }
 
+/**
+ * The tallest and lowest the surface gets.
+ *
+ * Read off the CONTROL POINTS rather than by sampling, and that is exact rather than approximate:
+ * a bilinear patch is a blend of its four corners, so no point inside a cell is higher than the
+ * highest of them. What bounds the ray march is therefore the grid itself.
+ */
+export function heightRange(mesh: ReadonlyMesh): { min: number; max: number } {
+    let min = Infinity, max = -Infinity;
+    for (const p of mesh.points) {
+        const h = heightOf(p);
+        if (h < min) min = h;
+        if (h > max) max = h;
+    }
+    return mesh.points.length === 0 ? { min: 0, max: 0 } : { min, max };
+}
+
 /** Is every height still zero? Then the mesh is flat and lighting it would find nothing. */
 export function isFlatMesh(mesh: ReadonlyMesh): boolean {
     return mesh.points.every(p => heightOf(p) === 0);
