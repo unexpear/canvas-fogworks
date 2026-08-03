@@ -245,6 +245,15 @@ export interface Node {
      * `materializeNode` already applies them. See `document/Timeline`.
      */
     track?: Keyframe[];
+    /**
+     * How far BACK this node sits (schema 40). Absent = 0, the plane of the page.
+     *
+     * Three things read it and nothing else does: display ORDER (far draws first, ahead of the
+     * tree's own order), the GPU's Z-BUFFER, and PARALLAX. A layer panel says which sibling is on
+     * top of which; depth says which is nearer the viewer, and those are different questions.
+     * See `document/Depth`.
+     */
+    depth?: number;
     text?: string;
     src?: string;
     /** `core.path` drawing commands (absolute, local-space). Absent = an empty path. See `PathCommand`. */

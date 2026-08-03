@@ -310,6 +310,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "36") { raw = migrate_36_to_37(raw); version = "37"; }
     if (version === "37") { raw = migrate_37_to_38(raw); version = "38"; }
     if (version === "38") { raw = migrate_38_to_39(raw); version = "39"; }
+    if (version === "39") { raw = migrate_39_to_40(raw); version = "40"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -661,6 +662,17 @@ function migrate_21_to_22(raw: any): any {
  * shape one — an OLD build ignores the fields and shows every frame of an animation as its
  * authored pose, which is a different drawing of the same file.
  */
+/**
+ * 39 -> 40: DEPTH — `Node.depth`, how far back a node sits.
+ *
+ * Additive, and absent means 0, the plane of the page, which is where every schema-39 node
+ * already was — so the document draws identically. The bump is the interpretation kind: an old
+ * build ignores the field and draws a background layer in front of the thing it is behind.
+ */
+function migrate_39_to_40(raw: any): any {
+    return { ...raw, version: "40" };
+}
+
 function migrate_38_to_39(raw: any): any {
     return { ...raw, version: "39" };
 }

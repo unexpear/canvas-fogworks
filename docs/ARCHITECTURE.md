@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v39 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v40 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -241,6 +241,29 @@ SVG or Canvas can draw — a document field for it would render three different 
 backends. So alignment is an argument to the outline COMMAND instead: what comes out is a
 `core.path`, and a fill draws identically everywhere. The same reasoning that put the boolean bake
 in the action layer rather than in a renderer.
+
+**DEPTH is one number and three consumers (`document/Depth`).** A layer panel says which shape is
+on top of which SIBLING; depth says which is nearer the VIEWER, and those are different questions.
+Adding the second one buys three things at once.
+
+ORDER is decided in the MODEL, far first, with the tree's own order breaking ties — sorted there
+rather than in a backend because only one of the three has a depth buffer, and a document that drew
+one way on the GPU and another on SVG would be a document with two meanings. The Z-BUFFER is the
+other half: a vertex carries a clip z that DECREASES with depth, so a fragment nearer the viewer
+wins whatever order its draw call arrived in. Sorting is belt; the depth buffer is braces, and it
+is the half that does not depend on anybody sorting correctly.
+
+PARALLAX is applied at the DISPLAY SEAM as an offset to a node's position, never inside the
+renderer. It has to be: picking, marquee selection and snapping all read the computed geometry, so
+a shape shifted in the renderer alone would draw where it could not be clicked — the rule this
+codebase has already had to learn twice. A layer at depth d follows `1/(1+d)` of a pan; negative
+depth is the FOREGROUND and outruns it. The offset is in world units, so zoom does not pull layers
+apart, and the size is deliberately untouched — a layer that shrank with distance would read as the
+shape resizing itself.
+
+A document that never mentions depth is untouched by all of it: the sort is stable, the item
+carries no depth at all, and `applyParallax` returns the same reference — which matters, because it
+runs on every pan.
 
 **ANIMATION is one mechanism, not four (`document/Timeline`).** Cutout animation, frame-by-frame,
 tweening and onion skinning sound like four features. They are one plus a display option, and

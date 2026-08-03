@@ -46,6 +46,7 @@ import { resolveRings, insideRule, crossingCount, FILL_RULES, FillRule } from ".
 import { applyFrame, trackError, timelineError, onionFrames, keyframesAt, TIMELINE_MAX_FRAMES, FPS_MAX } from "../document/Timeline";
 import { SetTrackAction } from "../actions/SetTrackAction";
 import { SetTimelineAction } from "../actions/SetTimelineAction";
+import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyParallax, DEPTH_MIN, DEPTH_MAX } from "../document/Depth";
 import { overrideValueError } from "../document/Components";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
@@ -4379,8 +4380,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 38→39 landed for animation.)
-        expect(() => migrateIfNeeded(legacy, "40")).toThrow('Migration not implemented for document schema "39"');
+        // time a real migration is added — most recently when 39→40 landed for depth.)
+        expect(() => migrateIfNeeded(legacy, "41")).toThrow('Migration not implemented for document schema "40"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -12659,6 +12660,148 @@ describe("The FILL RULE reaches every consumer (schema 38)", () => {
     });
 });
 
+describe("Depth — order, the z-buffer and parallax from one number (schema 40)", () => {
+    const doc = (...nodes: Node[]): ProjectDocument => {
+        const d = createEmptyDocument();
+        for (const n of nodes) d.nodes.set(n.id, n);
+        d.rootNodeUuids = nodes.map(n => n.id);
+        return d;
+    };
+    const node = (id: string, depth?: number): Node =>
+        ({ id, type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 50, height: 50 },
+           style: { fill: "#000", opacity: 1 }, layout: {}, ...(depth !== undefined ? { depth } : {}) } as Node);
+
+    test("FAR draws first, and the tree's own order breaks ties", () => {
+        // A layer panel says which sibling is on top of which; depth says which is nearer the
+        // viewer. Two different questions, and depth is asked first.
+        const d = doc(node("near", 0), node("far", 5), node("mid", 1));
+        const order = buildRenderModel({ width: 800, height: 600 },
+            d, { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(d), viewport: { x: 0, y: 0, zoom: 1 } })
+            .content.map(i => i.nodeId);
+        expect(order).toEqual(["far", "mid", "near"]);
+    });
+
+    test("a document that never mentions depth draws in exactly the order it always did", () => {
+        // The property that lets the sort run unconditionally. Equal depths compare zero, and a
+        // stable sort then leaves the tree alone.
+        const d = doc(node("a"), node("b"), node("c"));
+        const order = buildRenderModel({ width: 800, height: 600 },
+            d, { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(d), viewport: { x: 0, y: 0, zoom: 1 } })
+            .content.map(i => i.nodeId);
+        expect(order).toEqual(["a", "b", "c"]);
+        // …and carries no depth at all, so nothing downstream can mistake 0 for "layered".
+        expect(buildRenderModel({ width: 800, height: 600 },
+            d, { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(d), viewport: { x: 0, y: 0, zoom: 1 } })
+            .content.every(i => i.depth === undefined)).toBe(true);
+    });
+
+    test("the Z a vertex carries DECREASES with depth, and is clamped inside the clip volume", () => {
+        // A depth buffer keeps the smallest z, so "nearer wins" only holds if the mapping falls.
+        expect(depthToClipZ(-5)).toBeLessThan(depthToClipZ(0));
+        expect(depthToClipZ(0)).toBeLessThan(depthToClipZ(5));
+        // Clamped rather than wrapped: a z outside [-1, 1] is CULLED, and a node that vanished
+        // because somebody typed a big number would look like a bug in everything except the
+        // number.
+        expect(depthToClipZ(1e9)).toBeLessThanOrEqual(0.999);
+        expect(depthToClipZ(-1e9)).toBeGreaterThanOrEqual(-0.999);
+        expect(Math.abs(depthToClipZ(DEPTH_MAX))).toBeLessThan(1);
+        expect(Math.abs(depthToClipZ(DEPTH_MIN))).toBeLessThan(1);
+    });
+
+    test("PARALLAX: a distant layer lags the pan, a near one outruns it, the page does neither", () => {
+        const vp = { x: 200, y: 100, zoom: 1 };
+        // Depth 0 is the page: it tracks the canvas exactly, so the offset is EXACTLY zero — not
+        // nearly zero, because a document with no depth must be untouched.
+        expect(parallaxOffset(0, vp)).toEqual({ x: 0, y: 0 });
+        // EXACTLY positive zero, from a short-circuit rather than from the arithmetic. Multiplying
+        // a NEGATIVE pan by a zero lag gives -0, which is a different value to every strict
+        // comparison and to `Object.is` — and `applyParallax` uses exactly such a comparison to
+        // decide a node needs no new object at all. A -0 there would rebuild every node on every
+        // pan of a canvas scrolled up or left, silently.
+        const negative = parallaxOffset(0, { x: -200, y: -100, zoom: 1 });
+        expect(Object.is(negative.x, 0)).toBe(true);
+        expect(Object.is(negative.y, 0)).toBe(true);
+        // Depth 1 follows half the pan, so it lags by half of it.
+        expect(parallaxRate(1)).toBeCloseTo(0.5, 12);
+        expect(parallaxOffset(1, vp)).toEqual({ x: 100, y: 50 });
+        // Further back lags more, and approaches the full pan without ever reaching it — an
+        // asymptote, so no depth is the one where a layer suddenly pins.
+        expect(parallaxOffset(9, vp).x).toBeCloseTo(180, 9);
+        expect(parallaxOffset(1e6, vp).x).toBeLessThan(200);
+        // NEGATIVE depth is the foreground: it outruns the canvas, so the offset goes the other way.
+        expect(parallaxRate(-1)).toBe(2);
+        expect(parallaxOffset(-1, vp)).toEqual({ x: -200, y: -100 });
+    });
+
+    test("parallax is measured in WORLD units, so zoom does not change the layering", () => {
+        // The offset is added to a node's own position, which is in world units — so it has to be
+        // divided by the zoom. Getting this wrong would make layers drift apart as you zoomed,
+        // which reads as the drawing coming unstuck rather than as depth.
+        const a = parallaxOffset(1, { x: 200, y: 0, zoom: 1 });
+        const b = parallaxOffset(1, { x: 200, y: 0, zoom: 4 });
+        expect(a.x).toBe(100);
+        expect(b.x).toBe(25);
+        expect(parallaxOffset(1, { x: 200, y: 0, zoom: 0 })).toEqual({ x: 0, y: 0 });   // no divide by zero
+    });
+
+    test("parallax moves the node BEFORE geometry, so it can be clicked where it is drawn", () => {
+        // The rule this codebase has already had to learn twice. A shape shifted in the renderer
+        // alone would draw in one place and pick in another.
+        const d = doc(node("bg", 1));
+        const shifted = applyParallax(d, { x: 200, y: 100, zoom: 1 });
+        expect(shifted.nodes.get("bg")!.geometry.x).toBe(100);
+        const computed = computeGeometry(shifted as ProjectDocument);
+        // …and the hit test agrees, because it reads that same geometry.
+        expect(hitTest(computed, 120, 60)).toBe("bg");
+        expect(hitTest(computed, 20, 10)).toBeNull();     // where it would have been unlayered
+    });
+
+    test("an unlayered document is returned BY REFERENCE — a pan must cost nothing", () => {
+        // This runs on every pan, which is the most frequent thing anybody does to a canvas.
+        const flat = doc(node("a"), node("b"));
+        expect(applyParallax(flat, { x: 500, y: 500, zoom: 2 })).toBe(flat);
+        // And a node at depth 0 inside a layered document is passed through untouched.
+        const mixed = doc(node("a"), node("bg", 2));
+        const out = applyParallax(mixed, { x: 200, y: 0, zoom: 1 });
+        expect(out.nodes.get("a")).toBe(mixed.nodes.get("a"));
+        expect(out.nodes.get("bg")).not.toBe(mixed.nodes.get("bg"));
+    });
+
+    test("parallax moves a layer WITHOUT resizing it", () => {
+        // A layer that shrank with distance would read as the shape resizing itself, and a
+        // designer who set a width would find the document disagreeing with them.
+        const d = doc(node("bg", 3));
+        const out = applyParallax(d, { x: 400, y: 400, zoom: 1 });
+        expect(out.nodes.get("bg")!.geometry.width).toBe(50);
+        expect(out.nodes.get("bg")!.geometry.height).toBe(50);
+    });
+
+    test("depth is validated on BOTH paths, and bounded", () => {
+        expect(depthError(undefined)).toBeNull();
+        expect(depthError(0)).toBeNull();
+        expect(depthError(-3.5)).toBeNull();
+        expect(depthError("far")).toMatch("depth");
+        expect(depthError(NaN)).toMatch("depth");
+        expect(depthError(Infinity)).toMatch("depth");
+        // Bounded because it scales a divisor and reaches a clip coordinate.
+        expect(depthError(DEPTH_MAX + 1)).toMatch("depth");
+        expect(depthError(DEPTH_MIN - 1)).toMatch("depth");
+
+        const d = doc(node("A", 2));
+        expect(deserializeDocument(serializeDocument(d)).nodes.get("A")!.depth).toBe(2);
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {}, depth: "far" } } } });
+        expect(() => deserializeDocument(bad)).toThrow("depth");
+    });
+
+    test("a schema-39 document migrates to 40 and draws identically", () => {
+        const v39 = { version: "39", document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } } } };
+        const loaded = deserializeDocument(JSON.stringify(v39));
+        expect(loaded.nodes.get("n")!.depth).toBeUndefined();
+        expect(depthOf(loaded.nodes.get("n")!)).toBe(0);
+        expect(JSON.parse(serializeDocument(loaded)).version).toBe(SCHEMA_VERSION);
+    });
+});
+
 describe("Timeline — cutout, frame-by-frame, tweening, onion skinning (schema 39)", () => {
     const doc = (...nodes: Node[]): ProjectDocument => {
         const d = createEmptyDocument();
@@ -12837,7 +12980,7 @@ describe("Timeline — cutout, frame-by-frame, tweening, onion skinning (schema 
             hidden: true, locked: true, variant: "v", variants: ["v"], slot: "s",
             slotContent: { s: "A" }, states: { hover: {} }, booleanOp: "union" as const,
             interactions: [{ trigger: "click" as const, state: "hover" }],
-            track: [{ frame: 0, values: {} }]
+            track: [{ frame: 0, values: {} }], depth: 3
         };
         // Applied DIRECTLY, with no action or transaction in between: the thing under test is the
         // field list itself, and routing through a dispatcher would only add ways to be wrong.

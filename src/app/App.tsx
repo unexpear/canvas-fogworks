@@ -41,6 +41,8 @@ import { alignAction, distributeAction } from "../core/actions/alignActions";
 import { booleanAction, makeBooleanNodeAction } from "../core/actions/booleanActions";
 import { outlineStrokeAction } from "../core/actions/outlineStrokeActions";
 import { onionFrames, Keyframe } from "../core/document/Timeline";
+import { applyParallax, DEPTH_MIN, DEPTH_MAX } from "../core/document/Depth";
+import { SetDepthAction } from "../core/actions/SetDepthAction";
 import { SetTrackAction } from "../core/actions/SetTrackAction";
 import { SetTimelineAction } from "../core/actions/SetTimelineAction";
 import { STROKE_ALIGNS, StrokeAlign } from "../core/geometry/StrokeOutline";
@@ -621,8 +623,13 @@ export function App() {
             // field — it records where the playhead was when the file was SAVED — but the app
             // does not write to it while you scrub.
             const base = dispatcher.getDocument();
-            const stored: ReadonlyDocument = es.frame !== undefined
+            const timed: ReadonlyDocument = es.frame !== undefined
                 ? ({ ...(base as ProjectDocument), frame: es.frame } as ReadonlyDocument) : base;
+            // PARALLAX (schema 40): a layered node is shifted HERE, before geometry is computed,
+            // so that where it draws is where it can be clicked, marquee-selected and snapped to.
+            // Costs nothing on a document that never mentions depth — the derivation returns the
+            // same reference — which matters because this runs on every pan.
+            const stored = applyParallax(timed as ProjectDocument, es.viewport) as ReadonlyDocument;
             const doc: ReadonlyDocument = !es.playing
                 ? stored
                 : es.transition
@@ -1491,6 +1498,13 @@ export function App() {
                                         <NumInput
                                             value={typeof node.style.strokeWidth === "number" ? node.style.strokeWidth : 0}
                                             onChange={v => { editSelected({ style: { strokeWidth: clampStrokeWidth(v) } }); refresh(); }}
+                                        /></div>
+                                    <div><label style={INSPECTOR_LABEL}>Depth</label>
+                                        <NumInput
+                                            value={node.depth ?? 0}
+                                            onChange={v => { const id = es.selectedNodeIds[0];
+                                                if (id) dispatcher.dispatchAction(new SetDepthAction(dispatcher.getDocument(), id, Math.max(DEPTH_MIN, Math.min(DEPTH_MAX, v))));
+                                                refresh(); }}
                                         /></div>
                                     <div><label style={INSPECTOR_LABEL}>Radius</label>
                                         <NumInput

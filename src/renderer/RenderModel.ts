@@ -25,6 +25,7 @@
 
 import { ReadonlyDocument } from "../core/document/Document";
 import { FillRule, PathCommand, Shadow, StrokeCap, StrokeJoin, TextAlign } from "../core/document/Node";
+import { depthOf } from "../core/document/Depth";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
@@ -187,6 +188,13 @@ export interface DrawItem {
     /** `data-resize-handle` for resize hit-testing (handles only). */
     handle?: string;
     role: DrawRole;
+    /**
+     * How far BACK the item sits (schema 40). Absent = 0, the plane of the page.
+     *
+     * Carried on the ITEM rather than looked up per backend, because all three need it and one
+     * of them (the GPU) needs it per vertex. See `document/Depth`.
+     */
+    depth?: number;
     /**
      * OPACITY GROUPS this item is inside, outermost first (schema 32).
      *
@@ -542,10 +550,16 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         // The enclosing groups travel WITH the item, so a backend that can composite nests it
         // and one that cannot folds the alphas in itself — neither has to re-walk the tree.
         const groups = opacityGroupsFor(doc, id, groupMemo);
-        items.push({ shape, paint, world: c.world, nodeId: id, role: "content", ...(groups.length ? { groups } : {}) });
+        const depth = depthOf(doc.nodes.get(id) ?? {});
+        items.push({ shape, paint, world: c.world, nodeId: id, role: "content",
+            ...(depth !== 0 ? { depth } : {}), ...(groups.length ? { groups } : {}) });
     });
 
-    return items;
+    // FAR FIRST, with the tree's own order breaking ties. Sorting HERE rather than in a backend is
+    // what makes all three agree: only one of them has a depth buffer, and a document that drew
+    // one way on the GPU and another on SVG would be a document with two meanings. `sort` is
+    // stable in every engine this runs on, so a document that never mentions depth is untouched.
+    return items.sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0));
 }
 
 function outlineItem(

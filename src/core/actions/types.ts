@@ -81,6 +81,8 @@ export type NodeDelta =
         interactions?: Interaction[];
         /** KEYFRAMES (schema 39). Same rule as `interactions`: `undefined` CLEARS the field. */
         track?: Keyframe[];
+        /** How far BACK the node sits (schema 40). `undefined` clears it back to the page. */
+        depth?: number;
     }
     /**
      * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme

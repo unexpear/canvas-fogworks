@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v39 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v40 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -210,6 +210,19 @@ function localScaleOf(m: {a,b,c,d}, viewScale: number): number;   // larger row 
 // work follows the curve rather than a fixed count. Still DETERMINISTIC and viewport-independent
 // — the input is the curve's own numbers — which is the property a fixed count was defending.
 function isPaintBearing(fill: string): boolean;   // "", "none", "transparent" = no paint
+
+// Depth.ts — how far BACK a node sits (schema 40). One number, three consumers.
+const DEPTH_MIN: number; const DEPTH_MAX: number;            // -1000 .. 1000
+function depthError(depth: unknown): string | null;          // shared by the edit and load paths
+function depthOf(node: {depth?: number}): number;            // absent = 0, the plane of the page
+function parallaxRate(depth: number): number;                // 1/(1+d) behind, 1-d in front
+function parallaxOffset(depth: number, vp: {x,y,zoom}): {x: number; y: number};   // WORLD units
+function depthToClipZ(depth: number): number;                // DECREASING in depth, clamped inside the volume
+function applyParallax<T>(doc: T, vp: {x,y,zoom}): T;        // same reference when nothing is layered
+// ORDER is sorted in the render MODEL (far first, tree order breaking ties) so all three backends
+// agree; the GPU additionally writes the clip z and runs a real DEPTH_TEST, so nearer wins whatever
+// order a draw call arrived in. PARALLAX is applied at the DISPLAY SEAM, before geometry, so a
+// layer is CLICKABLE where it is drawn — picking, marquee and snapping read that same geometry.
 
 // Resolve.ts — arbitrary contours made SIMPLE under a FILL RULE. The primitive the others assumed.
 // Splits every edge against every edge (its own contour included), keeps a piece only where the

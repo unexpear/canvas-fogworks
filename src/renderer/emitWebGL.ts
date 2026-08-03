@@ -43,6 +43,7 @@ import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
 import { triangulate } from "../core/geometry/Tessellate";
 import { strokeOutline } from "../core/geometry/StrokeOutline";
 import { resolveRings } from "../core/geometry/Resolve";
+import { depthToClipZ } from "../core/document/Depth";
 import { ellipseCommands, rectCommands, transformCommands } from "../core/geometry/ShapeToPath";
 import { PathCommand } from "../core/document/Node";
 import { FLATTEN_TOLERANCE, displayTolerance, localScaleOf } from "../core/geometry/ShapeHit";
@@ -50,9 +51,12 @@ import { FLATTEN_TOLERANCE, displayTolerance, localScaleOf } from "../core/geome
 const VERTEX_SHADER = `
 attribute vec2 a_pos;
 uniform mat3 u_view;
+uniform float u_z;
 void main() {
     vec3 p = u_view * vec3(a_pos, 1.0);
-    gl_Position = vec4(p.xy, 0.0, 1.0);
+    // z comes from the node's DEPTH, not from the draw order — that is what makes the depth
+    // buffer do the deciding rather than the sequence of draw calls.
+    gl_Position = vec4(p.xy, u_z, 1.0);
 }`;
 
 const FRAGMENT_SHADER = `
@@ -68,6 +72,7 @@ interface GLState {
     posLoc: number;
     viewLoc: WebGLUniformLocation | null;
     colorLoc: WebGLUniformLocation | null;
+    zLoc: WebGLUniformLocation | null;
 }
 
 function compile(gl: WebGLRenderingContext, type: number, source: string): WebGLShader | null {
@@ -97,7 +102,8 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
         gl, program, buffer,
         posLoc: gl.getAttribLocation(program, "a_pos"),
         viewLoc: gl.getUniformLocation(program, "u_view"),
-        colorLoc: gl.getUniformLocation(program, "u_color")
+        colorLoc: gl.getUniformLocation(program, "u_color"),
+        zLoc: gl.getUniformLocation(program, "u_z")
     };
 }
 
@@ -230,14 +236,22 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
     if (cached.__vdeGL === undefined) cached.__vdeGL = initGL(canvas);
     const state = cached.__vdeGL;
     if (!state) return false;
-    const { gl, program, buffer, posLoc, viewLoc, colorLoc } = state;
+    const { gl, program, buffer, posLoc, viewLoc, colorLoc, zLoc } = state;
 
     const width = Math.max(1, Math.round(canvas.clientWidth * dpr));
     const height = Math.max(1, Math.round(canvas.clientHeight * dpr));
     if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
     gl.viewport(0, 0, width, height);
     gl.clearColor(0.102, 0.102, 0.180, 1);          // the same #1a1a2e both other backends use
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    // THE Z-BUFFER (schema 40). The model has already sorted far-to-near, so this is braces
+    // rather than belt — but it is the half that does not depend on anybody sorting correctly:
+    // a fragment nearer the viewer wins whatever order its draw call arrived in. LEQUAL rather
+    // than LESS so that equal depths still paint in the order they were issued, which is what
+    // keeps a document with no depth at all drawing exactly as it did before.
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.clearDepth(1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(program);
@@ -257,6 +271,7 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
     for (const item of [...list.grid.lines, ...list.content, ...list.overlay]) {
         for (const d of itemDraws(item, itemTolerance(item, viewScale))) {
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.vertices), gl.DYNAMIC_DRAW);
+            gl.uniform1f(zLoc, depthToClipZ(item.depth ?? 0));
             gl.uniform4fv(colorLoc, d.color);
             gl.drawArrays(gl.TRIANGLES, 0, d.vertices.length / 2);
         }

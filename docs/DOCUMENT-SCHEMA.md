@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v39 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v40 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -87,6 +87,14 @@ interface Node {
 
 interface Geometry { x: number; y: number; width: number; height: number; }
 // COORDINATE SPACE: x/y are PARENT-RELATIVE. See the rule below.
+
+// DEPTH (schema 40). Node.depth?: number in [-1000, 1000]; absent = 0, the plane of the page.
+// ONE number, THREE consumers: display ORDER (far draws first, ahead of the tree's own order, and
+// in the MODEL so all three backends agree), the GPU's Z-BUFFER (a vertex carries a clip z that
+// decreases with depth, so nearer wins whatever order it was drawn in), and PARALLAX (a distant
+// layer follows only 1/(1+d) of a pan; negative depth is the foreground and outruns it).
+// Parallax is applied at the DISPLAY SEAM as a position offset, never in the renderer, so a shape
+// is CLICKABLE where it is drawn — picking, marquee and snapping all read that same geometry.
 
 // ANIMATION (schema 39). A document has no clock until somebody asks for one.
 interface TimelineSettings { frames: number; fps: number }   // frames >= 1, fps in [1, 240]

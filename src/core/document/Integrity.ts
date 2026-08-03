@@ -15,6 +15,7 @@ import { ReadonlyNode } from "./SceneGraph";
 import { transformError, layoutError, dimensionError, pathError, booleanOpError, srcError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError } from "./Node";
 import { interactionsError } from "./Prototype";
 import { timelineError, trackError } from "./Timeline";
+import { depthError } from "./Depth";
 import { overrideValueError } from "./Components";
 import { componentError, overrideAgainstMasterError, overridesError, statesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
@@ -65,6 +66,8 @@ function checkNodeRanges(node: ReadonlyNode): void {
     // `track` (schema 39): the TIMING is checked here and the VALUES by `overrideValueError`,
     // which is the rule a state and an instance override already obey — animation added a field,
     // not a second definition of what a node may say about itself.
+    const depthErr = depthError(node.depth);
+    if (depthErr) throw new Error(`Invalid document: node "${node.id}" ${depthErr}.`);
     const trackErr = trackError(node.track, v => overrideValueError("keyframe", v));
     if (trackErr) throw new Error(`Invalid document: node "${node.id}" ${trackErr}.`);
     const srcErr = srcError(node.type, node.src);
