@@ -44,7 +44,7 @@ import { subdivideTriangles, triangulate } from "../core/geometry/Tessellate";
 import { strokeOutline } from "../core/geometry/StrokeOutline";
 import { resolveRings } from "../core/geometry/Resolve";
 import { depthToClipZ } from "../core/document/Depth";
-import { normalAt } from "../core/document/Mesh";
+import { surfaceNormal } from "../core/document/Mesh";
 import { Light, normalize } from "../core/document/Light";
 import { ellipseCommands, rectCommands, transformCommands } from "../core/geometry/ShapeToPath";
 import { PathCommand } from "../core/document/Node";
@@ -58,9 +58,12 @@ uniform float u_z;
 varying vec3 v_normal;
 void main() {
     vec3 p = u_view * vec3(a_pos, 1.0);
-    // The normal is passed through UNTRANSFORMED. It is a direction in the document's own axes,
-    // and the view matrix is a pan and a zoom — neither of which turns a surface, so transforming
-    // it would only make the lighting swim as you scrolled.
+    // The normal is passed through UNTRANSFORMED and UN-NORMALISED. Untransformed because it is a
+    // direction in the document's own axes and the view matrix is a pan and a zoom — neither of
+    // which turns a surface, so transforming it would only make the lighting swim as you scrolled.
+    // Un-normalised because this varying is about to be interpolated, and only the raw vector is
+    // affine across a cell; normalising here would bake the faceting back in before the fragment
+    // shader ever saw it.
     v_normal = a_normal;
     // z comes from the node's DEPTH, not from the draw order — that is what makes the depth
     // buffer do the deciding rather than the sequence of draw calls.
@@ -76,6 +79,10 @@ uniform int u_lightCount;
 uniform vec3 u_lightDir[4];
 uniform vec3 u_lightColor[4];
 void main() {
+    // PER FRAGMENT, which is the whole reason the vertex stage hands over a raw vector. What
+    // arrives here is the interpolation of three un-normalised normals, and inside one cell of the
+    // mesh that interpolation is exact — so normalising it now yields the surface's own normal at
+    // this pixel rather than a blend of three corner normals that only agrees at the corners.
     vec3 n = normalize(v_normal);
     // AMBIENT is a floor, not a light: it is what a surface shows when nothing reaches it, and
     // without it an unlit face goes to pure black, which is never what a designer means.
@@ -208,12 +215,17 @@ function transformRing(ring: Ring, m: Mat2D): Ring {
 export interface Draw {
     vertices: number[];
     /**
-     * One unit normal per VERTEX, three floats each — so `normals.length` is always
+     * One normal per VERTEX, three floats each — so `normals.length` is always
      * `vertices.length / 2 * 3`.
      *
      * Per vertex rather than per draw because that is the whole point: a mesh whose middle is
      * raised faces a different way there than at its edges, and a single normal for the shape
      * would light a dome exactly like a flat card.
+     *
+     * NOT unit vectors, deliberately — `surfaceNormal`'s raw length is what makes them survive the
+     * GPU's linear interpolation, and the fragment shader normalises what arrives. See the note on
+     * `surfaceNormal`: the raw vector is affine across a cell and a unit one is not, which is the
+     * difference between a smooth dome and a faceted one.
      */
     normals: number[];
     color: [number, number, number, number];
@@ -221,6 +233,20 @@ export interface Draw {
 
 /** Straight at the viewer — what an unlit, unmeshed surface faces. */
 const FLAT_NORMAL = { x: 0, y: 0, z: 1 };
+
+/**
+ * The vector to hand a vertex: the surface's own, or flat where the surface has collapsed.
+ *
+ * A cell whose control points have been dragged onto each other has no tangents and so no normal,
+ * and `surfaceNormal` says so by answering zero. The shader normalises what it is given, and
+ * normalising zero is NaN — which does not draw a dark shape, it draws nothing, on hardware that
+ * discards the fragment and a black hole on hardware that does not. Substituted here rather than
+ * inside `surfaceNormal` because "there is no surface here" is the true answer, and only this
+ * caller has a reason to prefer a lie the GPU can multiply.
+ */
+function vertexNormal(n: { x: number; y: number; z: number }): { x: number; y: number; z: number } {
+    return (n.x === 0 && n.y === 0 && n.z === 0) ? FLAT_NORMAL : n;
+}
 
 function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number | null,
               surface?: { normal: (x: number, y: number) => { x: number; y: number; z: number }; cell: number }): Draw | null {
@@ -242,7 +268,7 @@ function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number |
     const normals = new Array<number>((local.length / 2) * 3);
     for (let i = 0, n = 0; i < local.length; i += 2, n += 3) {
         const lx = local[i], ly = local[i + 1];
-        const nrm = surface ? surface.normal(lx, ly) : FLAT_NORMAL;
+        const nrm = surface ? vertexNormal(surface.normal(lx, ly)) : FLAT_NORMAL;
         normals[n] = nrm.x; normals[n + 1] = nrm.y; normals[n + 2] = nrm.z;
         vertices[i] = world ? world.a * lx + world.c * ly + world.e : lx;
         vertices[i + 1] = world ? world.b * lx + world.d * ly + world.f : ly;
@@ -286,7 +312,7 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
     // it, which only the unresolved document still has.
     const surface = item.surface
         ? {
-            normal: (x: number, y: number) => normalAt(item.surface!.mesh, item.surface!.box, x, y),
+            normal: (x: number, y: number) => surfaceNormal(item.surface!.mesh, item.surface!.box, x, y),
             // One CELL of the grid, on its shorter axis: finer than that samples the same bilinear
             // patch twice and buys nothing, coarser leaves the surface's own detail unreachable.
             cell: Math.max(1e-6, Math.min(item.surface.box.width / item.surface.mesh.cols,

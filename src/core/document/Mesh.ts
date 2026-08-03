@@ -186,20 +186,36 @@ export function heightOf(p: { z?: number }): number {
 }
 
 /**
- * The surface NORMAL at a local-space point, from the mesh read as a heightfield.
+ * The surface normal at a local-space point, UN-NORMALISED — the raw cross product of the two
+ * tangents, kept at whatever length the surface gives it.
  *
- * The grid gives a surface `P(u, v) = (x, y, z)`, and a normal is the cross product of its two
- * tangents. Both tangents come from the same bilinear patch `warpPoint` uses, so the direction a
- * light sees and the outline a click tests are two readings of ONE surface rather than two
- * descriptions that could disagree.
+ * The length is not laziness, it is the entire reason this is separate from `normalAt`. Between
+ * two vertices a GPU interpolates LINEARLY, so a value survives that trip intact only if it is
+ * affine over the triangle. Inside one cell the patch is `P = A + Bu + Cv + Duv`, so its tangents
+ * are `∂u = B + Dv` and `∂v = C + Du`, and their cross product is
  *
- * A FLAT mesh returns exactly (0, 0, 1) — straight at the viewer — which is what an unlit-looking
- * shape needs, and it is exact rather than nearly so, because a lighting term multiplied by a
- * normal that was almost normalised is how a flat fill acquires a faint gradient nobody asked for.
+ *     (B + Dv) × (C + Du) = B×C + u(B×D) + v(D×C)
+ *
+ * — the `uv` term cancels against itself, leaving something AFFINE in `u` and `v`. Interpolating
+ * that and normalising per fragment reproduces the surface's own normal exactly. Normalising first
+ * does not: scaling each vertex's vector to length 1 is a nonlinear step, and what interpolates
+ * afterwards is a different function that meets the truth only at the corners. That gap is the
+ * faceting you can see along triangle edges on a smoothly domed shape.
+ *
+ * The tangents are DIVIDED BY THEIR STEP for the same reason. The samples are clamped inside the
+ * box, so at an edge the step is half what it is inland; leaving that in would make the vector's
+ * length depend on where it was sampled rather than on the surface, and the affine argument above
+ * would hold everywhere except the rim, which is where shapes mostly are.
+ *
+ * Zero length is possible and is left as zero: two control points dragged onto each other collapse
+ * a cell, and there genuinely is no surface there to face anywhere. Callers say what to do about
+ * it — `normalAt` answers straight at the viewer, the GPU path substitutes a flat normal rather
+ * than asking a shader to normalise a zero vector into NaN.
  */
-export function normalAt(mesh: ReadonlyMesh, box: { width: number; height: number }, x: number, y: number): { x: number; y: number; z: number } {
+export function surfaceNormal(mesh: ReadonlyMesh, box: { width: number; height: number }, x: number, y: number): { x: number; y: number; z: number } {
     // A step small enough to stay inside one cell of any grid this bounds allows, and large
-    // enough that the difference is not lost to rounding.
+    // enough that the difference is not lost to rounding. Inside a cell the patch is bilinear, so
+    // a difference over this span is not an approximation of the tangent — it is the tangent.
     const du = Math.max(box.width, 1) / (mesh.cols * 512);
     const dv = Math.max(box.height, 1) / (mesh.rows * 512);
     const at = (px: number, py: number) => {
@@ -212,21 +228,39 @@ export function normalAt(mesh: ReadonlyMesh, box: { width: number; height: numbe
     // itself flat, which is most of the vertices a rectangle has.
     const x0 = Math.max(0, x - du), x1 = Math.min(box.width, x + du);
     const y0 = Math.max(0, y - dv), y1 = Math.min(box.height, y + dv);
+    const sx = x1 - x0, sy = y1 - y0;
+    if (sx === 0 || sy === 0) return { x: 0, y: 0, z: 0 };   // a box with no width or no height
     const ax = at(x1, y), bx = at(x0, y);
     const ay = at(x, y1), by = at(x, y0);
-    const t1 = { x: ax.x - bx.x, y: ax.y - bx.y, z: ax.z - bx.z };
-    const t2 = { x: ay.x - by.x, y: ay.y - by.y, z: ay.z - by.z };
+    const t1 = { x: (ax.x - bx.x) / sx, y: (ax.y - bx.y) / sx, z: (ax.z - bx.z) / sx };
+    const t2 = { x: (ay.x - by.x) / sy, y: (ay.y - by.y) / sy, z: (ay.z - by.z) / sy };
     const n = {
         x: t1.y * t2.z - t1.z * t2.y,
         y: t1.z * t2.x - t1.x * t2.z,
         z: t1.x * t2.y - t1.y * t2.x
     };
-    const len = Math.hypot(n.x, n.y, n.z);
-    if (len === 0) return { x: 0, y: 0, z: 1 };
     // Always toward the VIEWER. The cross product's sign follows the winding of the parameter
     // grid, and a normal that flipped with it would light half the shapes from behind.
-    const s = n.z < 0 ? -1 / len : 1 / len;
-    return { x: n.x * s, y: n.y * s, z: n.z * s };
+    return n.z < 0 ? { x: -n.x, y: -n.y, z: -n.z } : n;
+}
+
+/**
+ * The surface normal at a local-space point, as a UNIT vector.
+ *
+ * The grid gives a surface `P(u, v) = (x, y, z)`, and a normal is the cross product of its two
+ * tangents. Both tangents come from the same bilinear patch `warpPoint` uses, so the direction a
+ * light sees and the outline a click tests are two readings of ONE surface rather than two
+ * descriptions that could disagree.
+ *
+ * A FLAT mesh returns exactly (0, 0, 1) — straight at the viewer — which is what an unlit-looking
+ * shape needs, and it is exact rather than nearly so, because a lighting term multiplied by a
+ * normal that was almost normalised is how a flat fill acquires a faint gradient nobody asked for.
+ */
+export function normalAt(mesh: ReadonlyMesh, box: { width: number; height: number }, x: number, y: number): { x: number; y: number; z: number } {
+    const n = surfaceNormal(mesh, box, x, y);
+    const len = Math.hypot(n.x, n.y, n.z);
+    if (len === 0) return { x: 0, y: 0, z: 1 };
+    return { x: n.x / len, y: n.y / len, z: n.z / len };
 }
 
 /** Height at a local-space point — the same bilinear blend `warpPoint` does, on z. */

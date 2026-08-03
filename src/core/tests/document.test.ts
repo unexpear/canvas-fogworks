@@ -49,7 +49,7 @@ import { SetTimelineAction } from "../actions/SetTimelineAction";
 import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyParallax, DEPTH_MIN, DEPTH_MAX } from "../document/Depth";
 import { Mesh, meshError, restMesh, warpPoint, isIdentityMesh, MESH_MAX_DIVISIONS } from "../document/Mesh";
 import { meshHandles, meshHandleAtPoint, meshIndexOf } from "../geometry/SelectionHandles";
-import { normalAt, warpHeight, isFlatMesh } from "../document/Mesh";
+import { normalAt, surfaceNormal, warpHeight, isFlatMesh } from "../document/Mesh";
 import { Light, lightsError, ambientError, lambert, shadowOffset, LIGHTS_MAX } from "../document/Light";
 import { resolveMeshes } from "../document/Components";
 import { overrideValueError } from "../document/Components";
@@ -12794,12 +12794,102 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
                      radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null }
         } as never);
         expect(lit.normals.length).toBe((lit.vertices.length / 2) * 3);
-        const zs = new Set<number>();
-        for (let i = 2; i < lit.normals.length; i += 3) zs.add(Math.round(lit.normals[i] * 1000));
-        expect(zs.size).toBeGreaterThan(1);
-        // …and every one of them is a UNIT vector, because the shader normalises nothing back.
+        const xs = new Set<number>();
+        for (let i = 0; i < lit.normals.length; i += 3) xs.add(Math.round(lit.normals[i] * 1000));
+        expect(xs.size).toBeGreaterThan(1);
+        // …and they are NOT unit vectors. The raw length is what makes them survive the GPU's
+        // linear interpolation, and the fragment shader normalises what arrives — see the note on
+        // `surfaceNormal`. At least one is longer than 1, which no unit vector ever is.
+        let longest = 0;
         for (let i = 0; i < lit.normals.length; i += 3) {
-            expect(Math.hypot(lit.normals[i], lit.normals[i + 1], lit.normals[i + 2])).toBeCloseTo(1, 6);
+            longest = Math.max(longest, Math.hypot(lit.normals[i], lit.normals[i + 1], lit.normals[i + 2]));
+        }
+        expect(longest).toBeGreaterThan(1.01);
+        // Their DIRECTION is still the surface's own, so nothing about the lighting has moved —
+        // only where the division by the length happens.
+        const surface = raised(60);
+        for (let i = 0, v = 0; i < lit.normals.length; i += 3, v += 2) {
+            const unit = normalAt(surface, box, lit.vertices[v], lit.vertices[v + 1]);
+            const len = Math.hypot(lit.normals[i], lit.normals[i + 1], lit.normals[i + 2]);
+            expect(lit.normals[i] / len).toBeCloseTo(unit.x, 9);
+            expect(lit.normals[i + 2] / len).toBeCloseTo(unit.z, 9);
+        }
+    });
+
+    test("a RAW normal survives interpolation exactly, where a unit one does not", () => {
+        // The reason the GPU is handed un-normalised normals, measured rather than asserted.
+        //
+        // Between two vertices a GPU interpolates linearly, and inside one cell the raw normal is
+        // an affine function of position — so the interpolation IS the surface. Normalising first
+        // is a nonlinear step, and what interpolates afterwards is a different function that meets
+        // the truth only at the corners. The gap between the two is the faceting.
+        const m = raised(100);                            // h = x·y/100 over a single 100×100 cell
+        const corners: [number, number][] = [[0, 0], [100, 0], [0, 100]];
+        const mid = { x: (0 + 100 + 0) / 3, y: (0 + 0 + 100) / 3 };
+        const blend = (f: (x: number, y: number) => { x: number; y: number; z: number }) => {
+            const s = corners.map(([x, y]) => f(x, y));
+            const avg = { x: (s[0].x + s[1].x + s[2].x) / 3, y: (s[0].y + s[1].y + s[2].y) / 3, z: (s[0].z + s[1].z + s[2].z) / 3 };
+            const len = Math.hypot(avg.x, avg.y, avg.z);
+            return { x: avg.x / len, y: avg.y / len, z: avg.z / len };
+        };
+        const truth = normalAt(m, box, mid.x, mid.y);
+        const fromRaw = blend((x, y) => surfaceNormal(m, box, x, y));
+        const fromUnit = blend((x, y) => normalAt(m, box, x, y));
+        // EXACT, to every digit a double carries — not merely closer.
+        expect(fromRaw.x).toBeCloseTo(truth.x, 12);
+        expect(fromRaw.y).toBeCloseTo(truth.y, 12);
+        expect(fromRaw.z).toBeCloseTo(truth.z, 12);
+        // The unit one is wrong by degrees, which is what a facet edge is.
+        expect(Math.abs(fromUnit.x - truth.x)).toBeGreaterThan(0.02);
+        expect(Math.abs(fromUnit.z - truth.z)).toBeGreaterThan(0.01);
+    });
+
+    test("the raw normal's LENGTH does not depend on where in the box it was sampled", () => {
+        // The tangents are divided by their own step. The samples are clamped inside the box, so
+        // at an edge the step is half what it is inland — left in, the vector's length would say
+        // more about the sampling than about the surface, and the affine property the GPU relies
+        // on would hold everywhere except the rim, which is where a shape's vertices mostly are.
+        // h = x·y/100 over one cell, so the surface's own normal is exactly (−y/100, −x/100, 1).
+        const m = raised(100);
+        // ON THE EDGE y = 0, where the centred difference is clamped to HALF its usual span. The
+        // slope must still come out at its full value: undivided, this would read −0.25.
+        expect(surfaceNormal(m, box, 50, 0)).toEqual({ x: 0, y: -0.5, z: 1 });
+        // The corner, where BOTH steps are clamped — the case that made every rectangle vertex
+        // report itself flat once before.
+        expect(surfaceNormal(m, box, 0, 0)).toEqual({ x: 0, y: 0, z: 1 });
+        expect(surfaceNormal(m, box, 100, 0)).toEqual({ x: 0, y: -1, z: 1 });
+        // INLAND, where nothing is clamped, the same rule gives the same kind of answer — so an
+        // edge sample and an interior one are on one scale rather than two.
+        expect(surfaceNormal(m, box, 50, 50).x).toBeCloseTo(-0.5, 9);
+        expect(surfaceNormal(m, box, 50, 50).y).toBeCloseTo(-0.5, 9);
+        // The z component is the in-plane Jacobian, which this mesh leaves at 1 everywhere.
+        expect(surfaceNormal(m, box, 100, 50).z).toBeCloseTo(1, 12);
+        expect(surfaceNormal(m, box, 50, 50).z).toBeCloseTo(1, 12);
+        // A collapsed surface answers ZERO rather than picking a direction — the GPU path
+        // substitutes a flat normal, because a shader normalising zero produces NaN.
+        expect(surfaceNormal(m, { width: 0, height: 100 }, 0, 50)).toEqual({ x: 0, y: 0, z: 0 });
+    });
+
+    test("a COLLAPSED cell never reaches the GPU as a zero normal", () => {
+        // Reachable by dragging: two control points pulled onto each other leave a cell with no
+        // width, so it has no tangents and genuinely no normal. `surfaceNormal` says so. The
+        // shader normalises whatever it is handed, and normalising zero is NaN — which is not a
+        // dark shape, it is a hole.
+        const collapsed = restMesh(2, 1, box);
+        collapsed.points[1] = { ...collapsed.points[0] };     // top-middle onto top-left
+        collapsed.points[4] = { ...collapsed.points[3], z: 40 };
+        collapsed.points[3] = { ...collapsed.points[3], z: 40 };
+        expect(surfaceNormal(collapsed, box, 10, 50)).toEqual({ x: 0, y: 0, z: 0 });
+        const [d] = itemDraws({
+            shape: { kind: "rect", x: 0, y: 0, width: 100, height: 100 }, world: null, nodeId: null, role: "content",
+            surface: { mesh: collapsed, box },
+            paint: { fill: "#ffffff", opacity: null, stroke: null, strokeWidth: null, strokeDash: null,
+                     radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null }
+        } as never);
+        for (let i = 0; i < d.normals.length; i += 3) {
+            const len = Math.hypot(d.normals[i], d.normals[i + 1], d.normals[i + 2]);
+            expect(len).toBeGreaterThan(0);
+            expect(Number.isFinite(len)).toBe(true);
         }
     });
 

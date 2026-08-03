@@ -100,8 +100,10 @@ interface Light { x: number; y: number; z: number; color: string; intensity: num
 // alone is in-plane and tilts nothing. `warpPoint` still reads only x and y, so height changes how
 // a shape is LIT without changing what it covers.
 // NOT DONE, stated plainly: shapes do not cast shadows ON EACH OTHER — that needs a shadow map and
-// the texture path this renderer has never had. What exists is SELF-shading (Lambert per vertex on
-// the GPU) and a drop-shadow OFFSET derived from the light and the node's depth.
+// the texture path this renderer has never had. What exists is SELF-shading (Lambert per FRAGMENT
+// on the GPU — the vertex stage hands over an un-normalised normal, which is what survives linear
+// interpolation intact, and the fragment shader normalises it) and a drop-shadow OFFSET derived
+// from the light and the node's depth, which all three backends draw.
 
 // MESH (schema 41). Node.mesh?: { cols, rows, points } — a grid of control points that BENDS the
 // node's outline. Points are in LOCAL units, row-major, exactly (cols+1)*(rows+1) of them, and

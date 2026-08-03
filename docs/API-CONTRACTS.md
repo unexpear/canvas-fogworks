@@ -231,10 +231,19 @@ function warpPoint(mesh, box, x, y): {x, y};              // BILINEAR; clamped o
 function warpCommands(commands, box, mesh, flatten): PathCommand[];
 function heightOf(p): number;                              // a control point's z; absent = 0
 function warpHeight(mesh, box, x, y): number;              // the same bilinear blend, on z
-function normalAt(mesh, box, x, y): {x, y, z};             // CENTRED differences, clamped inside the box
+function surfaceNormal(mesh, box, x, y): {x, y, z};        // RAW — un-normalised, zero where the cell collapsed
+function normalAt(mesh, box, x, y): {x, y, z};             // the same, as a UNIT vector
 function isFlatMesh(mesh): boolean;                        // no height anywhere = nothing to light
-// `normalAt` uses centred differences because a one-sided step lands outside the box at a CORNER,
-// gets clamped back, and collapses the tangent — which reported every corner of a shape flat.
+// Both use CENTRED differences because a one-sided step lands outside the box at a CORNER, gets
+// clamped back, and collapses the tangent — which reported every corner of a shape flat. The
+// tangents are DIVIDED BY THEIR STEP, so a sample on the rim (where the span is halved by that
+// clamp) has the same scale as one inland.
+// `surfaceNormal` is the one the GPU is given, and its length is the point. Inside one cell the
+// patch is `A + Bu + Cv + Duv`, so the cross product of its tangents is `B×C + u(B×D) + v(D×C)`
+// — AFFINE, which is exactly what linear interpolation between vertices reproduces. Normalising
+// first is a nonlinear step: what interpolates afterwards agrees with the surface only at the
+// corners, and the gap is the faceting visible along triangle edges. The fragment shader
+// normalises what arrives, so the normal is per-FRAGMENT rather than per-vertex.
 // Segments are SUBDIVIDED at the grid's resolution before warping — a warp bends the space
 // BETWEEN two points, so an edge that kept only its ends would chord across every bend.
 
@@ -817,6 +826,8 @@ interface Paint {
   stroke: string | null; strokeWidth: number | null; strokeDash: string | null;
   radius: number | null; cursor: string | null; pointerEvents: boolean;
   shadow: Shadow | null; blur: number | null;   // schema-18 effects (world units), resolved from Style
+  strokeJoin?; strokeCap?; strokeMiterLimit?;   // schema 37 — OPTIONAL, absent = "what you already drew"
+  fillRule?: FillRule;                          // schema 38 — absent = "nonzero", what all three already drew
 }
 type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview" | "marquee";
 interface DrawItem {
@@ -824,14 +835,27 @@ interface DrawItem {
   world: Mat2D | null;          // null → the backend emits no transform
   nodeId: string | null;        // data-node-id; handle? → data-resize-handle
   handle?: string; role: DrawRole;
+  depth?: number;               // schema 40 — absent = 0; the GPU needs it per vertex
+  surface?: { mesh: ReadonlyMesh; box: {width, height} };   // schema 42 — the mesh that CAUSED the bend
+  groups?: string[];            // schema 32 — opacity groups this item is inside, outermost first
 }
+// `surface` is carried separately from the shape because `resolveMeshes` has already turned a
+// meshed node into a path and dropped its mesh: the bend is in the commands by then, and what a
+// light needs is the surface that caused it. Only the unresolved document still has it.
+// A node's drop SHADOW is derived from `lights[0]` and its own depth when `style.shadow` is
+// absent (`shadowOffset`), so moving the scene light moves every shadow together. An explicit
+// `style.shadow` still wins — somebody who set one meant it.
 interface GridModel { sig: string; lines: DrawItem[]; unchanged: boolean }
 interface FilterDef { id: string; shadow: Shadow | null; blur: number | null }  // one <filter> per entry
 interface DisplayList {
   viewport: { x: number; y: number; zoom: number };
   grid: GridModel; content: DrawItem[]; overlay: DrawItem[];
   defs: FilterDef[];            // deduped effect filters (by id); emitSVG builds <defs> from these
+  groups: OpacityGroup[];       // schema 32 — the groups `content` items refer to, outermost first
+  lights?: readonly Light[]; ambient?: number;   // schema 42 — the DOCUMENT's, not a shape's
 }
+// `content` is sorted FAR-to-NEAR by `depth` before the tree's own order; equal depths compare
+// zero, so a document that never mentions depth draws exactly as it always did.
 // Pure, deterministic, INJECTIVE, SVG-id-safe filter id (the twin of commandsToPathData); null = no effect.
 function effectFilterId(shadow: Shadow | null, blur: number | null): string | null;
 
@@ -849,8 +873,17 @@ function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: {x: number;
 function initGL(canvas: HTMLCanvasElement): GLState | null;                          // program + buffer, or null when WebGL is refused
 function parseColor(css: string): [number, number, number, number] | null;           // #rgb / #rrggbb / #rrggbbaa only; null = do not draw
 function shapeToLocalCommands(shape: Shape, radius: number | null): PathCommand[] | null;   // LOCAL, so a stroke offsets in the units its width means
-interface Draw { vertices: number[]; color: [number, number, number, number] }
+interface Draw { vertices: number[]; normals: number[]; color: [number, number, number, number] }
 function itemDraws(item: DrawItem, tolerance?: number): Draw[];   // pure — the tested part; fill then stroke, [] for what it cannot draw
+function itemTolerance(item: DrawItem, viewScale: number): number;                   // how finely to cut THIS item's curves
+function setLighting(gl, state, lights, ambient): void;                              // once per frame; unlit ⇒ ambient 1, no lights
+// `normals` is one vector per VERTEX (`vertices.length / 2 * 3`), NOT unit — see `surfaceNormal`.
+// The raw length is what survives the GPU's linear interpolation, and the FRAGMENT shader
+// normalises what arrives. A collapsed cell's zero normal is replaced with (0,0,1) here rather
+// than in `surfaceNormal`, because normalising zero in a shader is NaN, which is a hole.
+// A shape carrying a `surface` also has its triangles SUBDIVIDED (`subdivideTriangles`) to one
+// mesh cell: a value sampled per vertex can only vary where there are vertices, and ear clipping
+// puts them only on the outline — which is why a dome first came out flat.
 // `emitWebGL` derives the tolerance PER ITEM from `vp.zoom * dpr` and the item's own matrix. This
 // backend is the only one that needed it: SVG and Canvas hand outlines to a rasterizer that knows
 // the resolution, while a GPU has to be told how many vertices to take.
