@@ -32,6 +32,12 @@ npm run lint                               # module-header rule (no ESLint depen
 npm run check                              # typecheck + lint + test + build (the gate)
 ```
 
+- `npm run lint` also refuses a BACKTICK inside a shader template literal. GLSL lives in template
+  strings, so a comment quoting a symbol the way every other comment here does ends the string —
+  and it surfaces as a TS1005 pointing at a line of GLSL, which reads as anything but its cause. It
+  cost a round twice before the check existed. The check itself was verified by reintroducing the
+  bug on purpose: the first version counted matched backtick pairs and passed, because an injected
+  backtick simply becomes the closing one.
 - Runner: **Jest** via **ts-jest**, `testEnvironment: node` (`jest.config.js`).
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
