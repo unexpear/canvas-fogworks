@@ -60,6 +60,7 @@ import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_
 import { StrokeAlign } from "../geometry/StrokeOutline";
 import { outlineStrokeAction, strokeWidthOf } from "../actions/outlineStrokeActions";
 import { itemDraws, itemTolerance, parseColor, viewMatrix, shapeToLocalCommands, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
+import { imageGeneration, resolveImage } from "../../renderer/ImageCache";
 import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
 import { booleanAction, makeBooleanNodeAction } from "../actions/booleanActions";
 import { SetBooleanOpAction } from "../actions/SetBooleanOpAction";
@@ -12955,6 +12956,74 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         expect(item().locals.length).toBe(item().vertices.length);
     });
 
+    test("a decoded image advances the GENERATION, which is what re-uploads the texture", () => {
+        // The GPU needs this and Canvas does not, which is why it exists and why it is easy to
+        // leave out. Canvas hands `drawImage` a live element every frame; a texture is a COPY, so
+        // without a version number the backend either re-encodes every image every frame or keeps
+        // forever the blank bitmap that existed before the load finished.
+        const before = imageGeneration();
+        // No DOM in this environment, so `Image` is supplied — and its `src` setter decodes
+        // immediately, which is the whole event this is about.
+        class FakeImage {
+            onload: (() => void) | null = null;
+            set src(_href: string) { this.onload?.(); }
+        }
+        const had = (globalThis as { Image?: unknown }).Image;
+        (globalThis as { Image?: unknown }).Image = FakeImage;
+        try {
+            expect(resolveImage("gen-test-a.png")).not.toBeNull();
+            expect(imageGeneration()).toBe(before + 1);
+            // CACHED: asking again is not a second decode, so the generation must not move — a
+            // backend keyed on it would otherwise re-upload on every frame that draws the image.
+            expect(resolveImage("gen-test-a.png")).not.toBeNull();
+            expect(imageGeneration()).toBe(before + 1);
+            // A DIFFERENT href is a different decode.
+            expect(resolveImage("gen-test-b.png")).not.toBeNull();
+            expect(imageGeneration()).toBe(before + 2);
+        } finally {
+            if (had === undefined) delete (globalThis as { Image?: unknown }).Image;
+            else (globalThis as { Image?: unknown }).Image = had;
+        }
+        // With no DOM at all it answers null and stays quiet, which is what every other test in
+        // this file relies on.
+        expect(resolveImage("gen-test-c.png")).toBeNull();
+        expect(imageGeneration()).toBe(before + 2);
+    });
+
+    test("an IMAGE reaches the GPU backend instead of being silently dropped", () => {
+        // The gap this backend's own header called out: a document that loses content when you
+        // switch to it. An image is now the same triangles as any other rect with a picture over
+        // them, which is what the heightfield's texture path bought.
+        const img = (href: string | null) => itemDraws({
+            shape: { kind: "image", x: 10, y: 20, width: 80, height: 40, href },
+            world: null, nodeId: "i", role: "content",
+            paint: { fill: null, opacity: 0.5, stroke: null, strokeWidth: null, strokeDash: null,
+                     radius: null, cursor: "pointer", pointerEvents: true, shadow: null, blur: null }
+        } as never);
+
+        const [picture] = img("cat.png");
+        expect(picture).toBeDefined();
+        expect(picture.vertices.length).toBeGreaterThan(0);
+        expect(picture.image).toEqual({ href: "cat.png", x: 10, y: 20, width: 80, height: 40 });
+        // The rect it reports is the one the shader turns into texture coordinates, so it has to
+        // be the shape's OWN rect — not the box at the origin the triangles happen to start from.
+        expect(shapeToLocalCommands({ kind: "image", x: 10, y: 20, width: 80, height: 40, href: "c" }, null))
+            .not.toBeNull();
+        // The item's OPACITY rides in the colour's alpha, because an image has no fill of its own
+        // and the shader multiplies the sampled alpha by it.
+        expect(picture.color[3]).toBeCloseTo(0.5, 9);
+        // An image with NO href is a node with nothing in it — no draw at all rather than a white
+        // rectangle, which is a worse lie than nothing.
+        expect(img(null)).toEqual([]);
+        // An ordinary shape carries no image, so nothing about the existing path changed.
+        const [plain] = itemDraws({
+            shape: { kind: "rect", x: 0, y: 0, width: 10, height: 10 }, world: null, nodeId: null, role: "content",
+            paint: { fill: "#ffffff", opacity: null, stroke: null, strokeWidth: null, strokeDash: null,
+                     radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null }
+        } as never);
+        expect(plain.image).toBeNull();
+    });
+
     test("the packed heightfield ROUND-TRIPS, and its texels sit where the GPU reads them", () => {
         // The fragment shader contains this decode and cannot be tested, so pinning the round trip
         // here is the only checked definition the packing has. An error is not a crash — it is a
@@ -15301,9 +15370,19 @@ describe("emitWebGL geometry", () => {
     });
 
     test("what it CANNOT draw, it declines to draw — no silent wrong output", () => {
-        // Text and images need a texture path this backend does not have.
+        // TEXT still needs a glyph atlas, so it declines rather than drawing something wrong.
         expect(itemDraws(item({ kind: "text", x: 0, y: 0, width: 10, height: 10, text: "hi", fontSize: 10, fontFamily: "sans-serif", fontWeight: 400, textAlign: "left", lineHeight: 1.2, letterSpacing: 0 }))).toEqual([]);
-        expect(itemDraws(item({ kind: "image", x: 0, y: 0, width: 10, height: 10, href: "x.png" }))).toEqual([]);
+        // IMAGES no longer decline: this assertion was the gap, written down as a test. The
+        // heightfield gave this backend a texture path and an image is that path with a picture
+        // in it, so a document no longer loses content when the backend is switched.
+        const pic = itemDraws(item({ kind: "image", x: 0, y: 0, width: 10, height: 10, href: "x.png" }));
+        expect(pic.length).toBe(1);
+        // ONE draw even though this helper supplies a fill: the picture REPLACES the fill rather
+        // than covering it, because a colour under a transparent PNG shows through and Canvas
+        // does not paint one.
+        expect(pic[0].image).not.toBeNull();
+        // …but one with no href still does, because there is nothing to draw.
+        expect(itemDraws(item({ kind: "image", x: 0, y: 0, width: 10, height: 10, href: null }))).toEqual([]);
         // A colour it cannot parse is skipped rather than drawn in the wrong one.
         expect(itemDraws(item({ kind: "rect", x: 0, y: 0, width: 10, height: 10 }, { fill: "rebeccapurple" }))).toEqual([]);
         // A stroke with no width is not a hairline guess — the model resolves widths, and a null

@@ -40,36 +40,15 @@
 
 import { isTranslationOnly } from "../core/geometry/Matrix";
 import { DisplayList, DrawItem, Paint, Shape, textParagraphs } from "./RenderModel";
+import { resolveImage, setImageReadyCallback } from "./ImageCache";
 
 /** Matches the SVG background (`svg.style.background`) so the two backends look alike. */
 const BACKGROUND = "#1a1a2e";
 
-// Async image loading — the one bit of state the immediate-mode backend must keep, because
-// `drawImage` needs a DECODED bitmap, not an href. Each href is loaded once and cached; a load
-// finishing fires the registered repaint callback so the frame redraws with the image present.
-type ImageEntry = { img: HTMLImageElement; loaded: boolean };
-const imageCache = new Map<string, ImageEntry>();
-let onImageReady: (() => void) | null = null;
-
-/** Register the callback invoked when a lazily-loaded image finishes decoding (so the canvas repaints). */
-export function setImageReadyCallback(cb: (() => void) | null): void {
-    onImageReady = cb;
-}
-
-/** The decoded bitmap for an href, or null while it loads / fails (or with no DOM, e.g. node tests). */
-function resolveImage(href: string): HTMLImageElement | null {
-    if (typeof Image === "undefined") return null; // no DOM (unit tests) — draw nothing, exactly as before
-    let entry = imageCache.get(href);
-    if (!entry) {
-        const img = new Image();
-        entry = { img, loaded: false };
-        imageCache.set(href, entry);
-        img.onload = () => { entry!.loaded = true; onImageReady?.(); };
-        // A failed load stays `loaded: false` and is never retried (the entry exists) — draws nothing.
-        img.src = href;
-    }
-    return entry.loaded ? entry.img : null;
-}
+// Image loading lives in `ImageCache`, shared with the GPU backend — one decode serves both, so
+// switching backends from the toolbar does not re-download the document. `setImageReadyCallback`
+// is re-exported here because that is where callers have always imported it from.
+export { setImageReadyCallback };
 
 /** Compile error if a `Shape`/`PathCommand` variant is added without a case here. */
 function unreachable(x: never): never {

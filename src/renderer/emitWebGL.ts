@@ -28,9 +28,10 @@
  * two so a zoom does not re-cut every curve on every frame and make silhouettes shimmer.
  *
  * DELIBERATE GAPS, stated rather than discovered later:
- *   - TEXT and IMAGES are not drawn at all. Both need a texture path (a glyph atlas, an image
- *     upload) that is its own piece of work, and pretending otherwise would mean a document that
- *     silently loses content when the backend is switched.
+ *   - TEXT is not drawn. It needs a GLYPH ATLAS, which is its own piece of work, and pretending
+ *     otherwise would mean a document that silently loses content when the backend is switched.
+ *     IMAGES used to be listed here too and are now drawn: the heightfield gave this backend a
+ *     texture path, and an image is that same path with the picture in it instead of a surface.
  *   - EFFECTS (shadow, blur) and dashes are ignored; those are per-fragment work needing render
  *     targets.
  * The app offers this backend as a preview and says so, because a backend that quietly drops
@@ -50,6 +51,7 @@ import { Light, normalize } from "../core/document/Light";
 import { ellipseCommands, rectCommands, transformCommands } from "../core/geometry/ShapeToPath";
 import { PathCommand } from "../core/document/Node";
 import { FLATTEN_TOLERANCE, displayTolerance, localScaleOf } from "../core/geometry/ShapeHit";
+import { imageGeneration, resolveImage } from "./ImageCache";
 
 const VERTEX_SHADER = `
 attribute vec2 a_pos;
@@ -92,6 +94,9 @@ uniform vec2 u_box;
 uniform float u_hMin;
 uniform float u_hMax;
 uniform float u_hasHeight;
+uniform sampler2D u_image;
+uniform vec4 u_imgRect;
+uniform float u_hasImage;
 
 // The heightfield at a point in LOCAL units. The texture holds 16 bits packed across two
 // channels; these constants are that packing undone, written so every intermediate stays near 1
@@ -145,9 +150,19 @@ void main() {
         // light throws shadows.
         lit += u_lightColor[i] * d * (i == 0 ? vis : 1.0);
     }
+    // An IMAGE supplies the colour; everything else about the fragment is unchanged, so a picture
+    // is lit and shadowed by exactly the arithmetic a fill is. The rect is a uniform rather than a
+    // second attribute because the local position is already interpolated for the heightfield.
+    vec4 base = u_color;
+    if (u_hasImage > 0.5) {
+        base = texture2D(u_image, (v_local - u_imgRect.xy) / u_imgRect.zw);
+        // The image's own alpha, times the item's opacity — which is what u_color.a carries for an
+        // image item, since an image has no fill colour of its own.
+        base.a *= u_color.a;
+    }
     // The colour is MODULATED, never replaced: a lit red shape is a darker or brighter red, and a
     // model that added light instead would wash every hue toward the light's own.
-    gl_FragColor = vec4(u_color.rgb * lit, u_color.a);
+    gl_FragColor = vec4(base.rgb * lit, base.a);
 }`;
 
 /**
@@ -164,6 +179,10 @@ export interface GLState {
     normalBuffer: WebGLBuffer;
     localBuffer: WebGLBuffer;
     heightTex: WebGLTexture;
+    imageTex: WebGLTexture;
+    /** href and generation currently living in `imageTex`, so a frame re-uploads only on change. */
+    imageKey: string | null;
+    imageGen: number;
     posLoc: number;
     viewLoc: WebGLUniformLocation | null;
     colorLoc: WebGLUniformLocation | null;
@@ -179,6 +198,9 @@ export interface GLState {
     hMinLoc: WebGLUniformLocation | null;
     hMaxLoc: WebGLUniformLocation | null;
     hasHeightLoc: WebGLUniformLocation | null;
+    imageLoc: WebGLUniformLocation | null;
+    imgRectLoc: WebGLUniformLocation | null;
+    hasImageLoc: WebGLUniformLocation | null;
 }
 
 function compile(gl: WebGLRenderingContext, type: number, source: string): WebGLShader | null {
@@ -202,13 +224,15 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
     const normalBuffer = gl.createBuffer();
     const localBuffer = gl.createBuffer();
     const heightTex = gl.createTexture();
-    if (!vs || !fs || !program || !buffer || !normalBuffer || !localBuffer || !heightTex) return null;
+    const imageTex = gl.createTexture();
+    if (!vs || !fs || !program || !buffer || !normalBuffer || !localBuffer || !heightTex || !imageTex) return null;
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
     return {
-        gl, program, buffer, normalBuffer, localBuffer, heightTex,
+        gl, program, buffer, normalBuffer, localBuffer, heightTex, imageTex,
+        imageKey: null, imageGen: -1,
         posLoc: gl.getAttribLocation(program, "a_pos"),
         viewLoc: gl.getUniformLocation(program, "u_view"),
         colorLoc: gl.getUniformLocation(program, "u_color"),
@@ -223,7 +247,10 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
         boxLoc: gl.getUniformLocation(program, "u_box"),
         hMinLoc: gl.getUniformLocation(program, "u_hMin"),
         hMaxLoc: gl.getUniformLocation(program, "u_hMax"),
-        hasHeightLoc: gl.getUniformLocation(program, "u_hasHeight")
+        hasHeightLoc: gl.getUniformLocation(program, "u_hasHeight"),
+        imageLoc: gl.getUniformLocation(program, "u_image"),
+        imgRectLoc: gl.getUniformLocation(program, "u_imgRect"),
+        hasImageLoc: gl.getUniformLocation(program, "u_hasImage")
     };
 }
 
@@ -274,7 +301,12 @@ export function shapeToLocalCommands(shape: Shape, radius: number | null): PathC
         // which is now the same code path as every other shape's stroke, caps included, rather
         // than a hand-rolled quad that could only ever be butt-capped.
         case "line": return [{ c: "M", x: shape.x1, y: shape.y1 }, { c: "L", x: shape.x2, y: shape.y2 }];
-        // Text and images need a texture path this backend does not have; see the module note.
+        // An IMAGE is the rect it occupies; what makes it a picture is the texture the fragment
+        // stage samples, not its outline. It went through here as `null` — silently dropped — for
+        // as long as this backend had no way to upload one.
+        case "image": return transformCommands(translation(shape.x, shape.y),
+            rectCommands(shape.width, shape.height, radius ?? 0));
+        // TEXT still needs a glyph atlas, which is its own piece of work; see the module note.
         default: return null;
     }
 }
@@ -311,6 +343,13 @@ export interface Draw {
     locals: number[];
     /** The surface's heights as a texture, or null when there is no relief to march through. */
     height: HeightTexture | null;
+    /**
+     * The picture to sample, and the rect in LOCAL units it fills — null for an ordinary shape.
+     *
+     * The href rather than a bitmap, because this is the PURE half: resolving an href to decoded
+     * pixels is asynchronous and stateful, and belongs with the draw calls.
+     */
+    image: { href: string; x: number; y: number; width: number; height: number } | null;
     color: [number, number, number, number];
 }
 
@@ -401,6 +440,7 @@ function vertexNormal(n: { x: number; y: number; z: number }): { x: number; y: n
 }
 
 function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number | null,
+              image?: { href: string; x: number; y: number; width: number; height: number } | null,
               surface?: {
                   normal: (x: number, y: number) => { x: number; y: number; z: number };
                   cell: number;
@@ -433,7 +473,7 @@ function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number |
         vertices[i + 1] = world ? world.b * lx + world.d * ly + world.f : ly;
     }
     if (opacity !== null) color[3] *= opacity;    // MULTIPLY — one blend, not two
-    return { vertices, normals, locals, height: surface?.height ?? null, color };
+    return { vertices, normals, locals, height: surface?.height ?? null, image: image ?? null, color };
 }
 
 /**
@@ -479,22 +519,38 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
             height: heightTexture(item.surface.mesh, item.surface.box)
         }
         : undefined;
-    if (paint.fill !== null) {
+    // An IMAGE is drawn from its pixels INSTEAD of its fill, never as well. Canvas returns before
+    // it fills for the same reason, and a backend that painted a colour under a picture would show
+    // it through every transparent pixel — which is the kind of difference between backends that
+    // only appears on somebody's PNG with a soft edge.
+    const isImage = item.shape.kind === "image";
+    if (paint.fill !== null && !isImage) {
         // RESOLVED first, which does two jobs at once. It applies the document's fill rule — the
         // GPU has no `fill-rule` to hand to, unlike the other two backends, so the rule has to
         // become geometry here. And it makes the rings simple, which ear clipping requires: a
         // self-crossing path used to come out as overlapping triangles on this backend and as
         // the right shape on the other two.
         const fill = draw(resolveRings(commandsToRings(local, tolerance), paint.fillRule ?? "nonzero"),
-            item.world, paint.fill, paint.opacity, surface);
+            item.world, paint.fill, paint.opacity, null, surface);
         if (fill) out.push(fill);
+    }
+    // AN IMAGE has no fill and is drawn from its own pixels. Its rect is already the geometry that
+    // `shapeToLocalCommands` produced, so this is the same triangles with a texture over them —
+    // and it is lit and shadowed by the same arithmetic as everything else, which is the point of
+    // putting it through the fragment shader rather than blitting it.
+    if (isImage && item.shape.kind === "image" && item.shape.href !== null) {
+        const rect = item.shape;
+        const picture = draw(resolveRings(commandsToRings(local, tolerance), "nonzero"),
+            item.world, "#ffffff", paint.opacity,
+            { href: rect.href!, x: rect.x, y: rect.y, width: rect.width, height: rect.height }, surface);
+        if (picture) out.push(picture);
     }
     if (paint.stroke !== null && paint.strokeWidth !== null && paint.strokeWidth > 0) {
         const rings = strokeOutline(local, {
             width: paint.strokeWidth,
             join: paint.strokeJoin, cap: paint.strokeCap, miterLimit: paint.strokeMiterLimit
         }, tolerance);
-        const stroke = draw(rings, item.world, paint.stroke, paint.opacity, surface);
+        const stroke = draw(rings, item.world, paint.stroke, paint.opacity, null, surface);
         if (stroke) out.push(stroke);
     }
     return out;
@@ -590,6 +646,36 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
                 gl.uniform1f(state.hasHeightLoc, 1);
             } else {
                 gl.uniform1f(state.hasHeightLoc, 0);
+            }
+            // THE PICTURE. Uploaded only when the href or the decode generation has changed —
+            // a texture is a copy, so re-uploading per frame would re-encode every image on
+            // screen, and never re-uploading would keep the blank bitmap that existed before the
+            // load finished. A shape whose image has not decoded yet is SKIPPED rather than drawn
+            // white: a placeholder rectangle is a worse lie than nothing.
+            if (d.image) {
+                const bitmap = resolveImage(d.image.href);
+                if (!bitmap) continue;
+                const gen = imageGeneration();
+                gl.activeTexture(gl.TEXTURE1);
+                gl.bindTexture(gl.TEXTURE_2D, state.imageTex);
+                if (state.imageKey !== d.image.href || state.imageGen !== gen) {
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+                    // NPOT-safe: linear filtering with clamped wrapping needs no mipmaps, which a
+                    // non-power-of-two texture cannot have in WebGL 1. No Y flip — texel row 0 is
+                    // the image's top row, and `v_local` counts down from the rect's top too, so
+                    // the two already agree.
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                    state.imageKey = d.image.href;
+                    state.imageGen = gen;
+                }
+                gl.uniform1i(state.imageLoc, 1);
+                gl.uniform4f(state.imgRectLoc, d.image.x, d.image.y, d.image.width, d.image.height);
+                gl.uniform1f(state.hasImageLoc, 1);
+            } else {
+                gl.uniform1f(state.hasImageLoc, 0);
             }
             gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
             gl.uniform1f(zLoc, depthToClipZ(item.depth ?? 0));

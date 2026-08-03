@@ -902,7 +902,14 @@ function buildRenderModel(
 ): DisplayList;                                          // pure, deterministic
 function emitSVG(container: HTMLElement, model: DisplayList): void;   // SVG DOM transcription
 function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dpr?: number): void; // Canvas 2D transcription
-function setImageReadyCallback(cb: (() => void) | null): void;       // fired when a lazily-loaded Canvas image decodes (→ repaint)
+function setImageReadyCallback(cb: (() => void) | null): void;       // fired when a lazily-loaded image decodes (→ repaint)
+// ImageCache.ts — decoded bitmaps, shared by every backend that draws one.
+function resolveImage(href: string): HTMLImageElement | null;        // null while it loads / fails / no DOM
+function imageGeneration(): number;                                  // bumps on each DECODE — a texture's cue to re-upload
+// ONE cache for all backends: switching Canvas↔WebGL from the toolbar must not re-download the
+// document. A failed load is remembered and never retried. `imageGeneration` exists for the GPU
+// alone — Canvas hands `drawImage` a live element, while a texture is a COPY that would either
+// be re-encoded every frame or keep forever the blank bitmap from before the load finished.
 function renderSVG(container: HTMLElement, doc: ReadonlyDocument, state: RendererState): void;    // buildRenderModel ∘ emitSVG
 function renderCanvas(container: HTMLElement, doc: ReadonlyDocument, state: RendererState, onAsyncReady?: () => void): void; // ∘ emitCanvas (sizes a <canvas> for the DPR; onAsyncReady repaints on image load)
 function clearRenderState(container: HTMLElement): void;             // drop the container's cached prev frame (call when its DOM is cleared)
@@ -911,7 +918,8 @@ interface GLState { gl; program; buffer; normalBuffer; posLoc; normalLoc; viewLo
 function initGL(canvas: HTMLCanvasElement): GLState | null;                          // program + buffer, or null when WebGL is refused
 function parseColor(css: string): [number, number, number, number] | null;           // #rgb / #rrggbb / #rrggbbaa only; null = do not draw
 function shapeToLocalCommands(shape: Shape, radius: number | null): PathCommand[] | null;   // LOCAL, so a stroke offsets in the units its width means
-interface Draw { vertices: number[]; normals: number[]; locals: number[]; height: HeightTexture | null; color: [number, number, number, number] }
+interface Draw { vertices: number[]; normals: number[]; locals: number[]; height: HeightTexture | null;
+                 image: { href; x; y; width; height } | null; color: [number, number, number, number] }
 function itemDraws(item: DrawItem, tolerance?: number): Draw[];   // pure — the tested part; fill then stroke, [] for what it cannot draw
 const HEIGHT_TEX_SIZE: number;                                    // 64 — covers the finest grid a mesh may declare
 interface HeightTexture { data: Uint8Array; size: number; min: number; max: number }   // RGBA; height is 16 bits over R+G

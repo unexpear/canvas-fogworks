@@ -79,6 +79,7 @@ import { renderScene, RenderBackend } from "../../renderer/renderScene";
 import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
 import { emitCanvas, setImageReadyCallback } from "../../renderer/emitCanvas";
+import { resolveImage, imageGeneration } from "../../renderer/ImageCache";
 import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { Keyframe, TimelineSettings, timelineError, trackError, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
 import { DEPTH_MIN, DEPTH_MAX, depthError, depthOf, parallaxRate, parallaxOffset, depthToClipZ, byDepth, applyParallax } from "../document/Depth";
@@ -362,6 +363,10 @@ export function __apiSurfacePin(): void {
     expectType<(c: HTMLElement, m: DisplayList) => void>(emitSVG);
     expectType<(ctx: CanvasRenderingContext2D, m: DisplayList, dpr?: number) => void>(emitCanvas);
     expectType<(cb: (() => void) | null) => void>(setImageReadyCallback);
+    // ONE decode serves every backend, so switching from the toolbar does not re-download the
+    // document. The generation is what lets a TEXTURE know it has something new to upload.
+    expectType<HTMLImageElement | null>(resolveImage("a.png"));
+    expectType<number>(imageGeneration());
 
     // --- Geometry the display seam is built out of (schemas 33–38) -----------
     // Everything below this line was documented in API-CONTRACTS with nothing holding it to the
@@ -580,6 +585,7 @@ export function __apiSurfacePin(): void {
     // The heightfield the FRAGMENT stage marches. Null is a real answer — a flat surface has no
     // relief to occlude with and no range to pack sixteen bits against.
     expectType<HeightTexture | null>(draws[0]?.height ?? null);
+    expectType<{ href: string; x: number; y: number; width: number; height: number } | null>(draws[0]?.image ?? null);
     expectType<HeightTexture | null>(heightTexture(mesh, meshBox));
     expectType<HeightTexture | null>(heightTexture(mesh, meshBox, 32));
     expectType<number>(decodeHeight(0, 0, 0, 1));

@@ -365,8 +365,21 @@ checked — the same standing arrangement as this shader's Lambert term and `lam
 which has a runtime caller either. Both are specifications the GLSL restates; the packing has
 `decodeHeight` for the same reason.
 
-That texture path is also what `emitWebGL`'s remaining gaps have always named: text needs a glyph
-atlas and images need an upload, and neither had anywhere to go before this.
+That texture path is also what `emitWebGL`'s gaps have always named, and IMAGES are now drawn
+because of it — an image is the same path with a picture in it instead of a surface. It is the
+same triangles as any rect, so a picture is lit and shadowed by exactly the arithmetic a fill is,
+which is why it goes through the fragment shader rather than being blitted. The picture REPLACES
+the fill rather than covering it (Canvas returns before it fills, for the same reason: a colour
+under a transparent PNG shows through). Decoded bitmaps moved to `ImageCache`, shared by both
+backends — switching Canvas↔WebGL from the toolbar must not re-download the document — and it
+carries a GENERATION counter that exists for the GPU alone: Canvas hands `drawImage` a live
+element, while a texture is a copy that would otherwise be re-encoded every frame or keep forever
+the blank bitmap from before the load finished. `WebGLRenderer` now registers the image-ready
+callback too, which it had never needed; without it, opening a document straight into the GPU
+backend left images missing until something else happened to repaint.
+
+TEXT remains undrawn on the GPU: a glyph atlas is its own piece of work, and declining is better
+than drawing something wrong.
 
 WHAT IS STILL NOT HERE: a CAST shadow lands on the receiver's OUTLINE as if the receiver were
 flat, so it does not bend over a domed one. That is now the only part of the lighting still
