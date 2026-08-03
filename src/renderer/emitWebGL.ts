@@ -38,7 +38,7 @@
  */
 
 import { DisplayList, DrawItem, Shape } from "./RenderModel";
-import { Mat2D } from "../core/geometry/Matrix";
+import { Mat2D, translation } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
 import { triangulate } from "../core/geometry/Tessellate";
 import { strokeOutline } from "../core/geometry/StrokeOutline";
@@ -179,10 +179,17 @@ export function parseColor(css: string): [number, number, number, number] | null
  */
 export function shapeToLocalCommands(shape: Shape, radius: number | null): PathCommand[] | null {
     switch (shape.kind) {
-        case "rect": return rectCommands(shape.width, shape.height, radius ?? 0).map(c =>
-            c.c === "Z" ? c : { ...c, x: c.x + shape.x, y: c.y + shape.y });
-        case "ellipse": return ellipseCommands(shape.rx * 2, shape.ry * 2).map(c =>
-            c.c === "Z" ? c : { ...c, x: c.x + shape.cx - shape.rx, y: c.y + shape.cy - shape.ry });
+        // TRANSLATED by the shared `transformCommands`, not by a hand-written map over x and y.
+        // The hand-written one moved each command's ENDPOINT and left its CONTROL POINTS behind
+        // at the origin, so any curve offset away from the origin stretched back to it. It hid
+        // for a long time because the two shapes that go through here are usually offset by
+        // nothing: a content rect has `shape.x = 0`, and a content ellipse has `cx - rx = 0`. The
+        // rotate KNOB is neither — a small circle a long way from the origin — and it drew a
+        // spike from the shape to the origin on the GPU, on every selection.
+        case "rect": return transformCommands(translation(shape.x, shape.y),
+            rectCommands(shape.width, shape.height, radius ?? 0));
+        case "ellipse": return transformCommands(translation(shape.cx - shape.rx, shape.cy - shape.ry),
+            ellipseCommands(shape.rx * 2, shape.ry * 2));
         case "path": return [...shape.commands];
         // A line is an OPEN two-point path. It has no interior, so only its stroke ever draws —
         // which is now the same code path as every other shape's stroke, caps included, rather

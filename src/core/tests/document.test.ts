@@ -56,7 +56,7 @@ import { overrideValueError } from "../document/Components";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
 import { outlineStrokeAction, strokeWidthOf } from "../actions/outlineStrokeActions";
-import { itemDraws, itemTolerance, parseColor, viewMatrix } from "../../renderer/emitWebGL";
+import { itemDraws, itemTolerance, parseColor, viewMatrix, shapeToLocalCommands } from "../../renderer/emitWebGL";
 import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
 import { booleanAction, makeBooleanNodeAction } from "../actions/booleanActions";
 import { SetBooleanOpAction } from "../actions/SetBooleanOpAction";
@@ -14694,6 +14694,39 @@ describe("emitWebGL geometry", () => {
         const [bevel] = itemDraws(item(square, { ...paint, strokeJoin: "bevel" }));
         // Four corner triangles of half-width 5 — the same difference `StrokeOutline` asserts.
         expect(area(miter.vertices) - area(bevel.vertices)).toBeCloseTo(4 * (5 * 5) / 2, 6);
+    });
+
+    test("a shape offset from the ORIGIN carries its control points with it", () => {
+        // The bug that drew a spike from every selection to the origin. A hand-written translation
+        // moved each command's endpoint and left its CONTROL POINTS behind, so a curve offset away
+        // from the origin stretched back to it. It hid because the shapes that usually go through
+        // here are offset by nothing — a content rect has x = 0, a content ellipse has cx - rx = 0
+        // — and the one that is not is the rotate KNOB, a small circle a long way out.
+        const knob = shapeToLocalCommands({ kind: "ellipse", cx: 400, cy: 300, rx: 6, ry: 6 } as never, null)!;
+        for (const c of knob) {
+            if (c.c === "Z") continue;
+            // EVERY point of every command — endpoints and control points alike — must sit NEAR
+            // the knob. A control point left at the origin is 500 units away, which is the spike.
+            // The bound is not the radius itself: a cubic circle's control points legitimately sit
+            // OUTSIDE it, at r·sqrt(1 + kappa²) ≈ 1.142r, which is what pulls the curve out to
+            // meet the arc. 1.2r clears that comfortably and is still two orders below the bug.
+            const pts: { x: number; y: number }[] = [{ x: c.x, y: c.y }];
+            if (c.c === "C") pts.push({ x: c.x1, y: c.y1 }, { x: c.x2, y: c.y2 });
+            for (const p of pts) {
+                expect(Math.hypot(p.x - 400, p.y - 300)).toBeLessThanOrEqual(6 * 1.2);
+            }
+        }
+        // A ROUNDED rect has the same hazard: its corners are curves, and its offset is its x/y.
+        const rounded = shapeToLocalCommands({ kind: "rect", x: 500, y: 400, width: 40, height: 40 } as never, 12)!;
+        for (const c of rounded) {
+            if (c.c === "Z") continue;
+            const pts: { x: number; y: number }[] = [{ x: c.x, y: c.y }];
+            if (c.c === "C") pts.push({ x: c.x1, y: c.y1 }, { x: c.x2, y: c.y2 });
+            for (const p of pts) {
+                expect(p.x).toBeGreaterThanOrEqual(500 - 1e-9);
+                expect(p.y).toBeGreaterThanOrEqual(400 - 1e-9);
+            }
+        }
     });
 
     test("what it CANNOT draw, it declines to draw — no silent wrong output", () => {
