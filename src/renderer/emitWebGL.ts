@@ -28,10 +28,11 @@
  * two so a zoom does not re-cut every curve on every frame and make silhouettes shimmer.
  *
  * DELIBERATE GAPS, stated rather than discovered later:
- *   - TEXT is not drawn. It needs a GLYPH ATLAS, which is its own piece of work, and pretending
- *     otherwise would mean a document that silently loses content when the backend is switched.
- *     IMAGES used to be listed here too and are now drawn: the heightfield gave this backend a
- *     texture path, and an image is that same path with the picture in it instead of a surface.
+ *   - EFFECTS and dashes, below. TEXT and IMAGES used to be listed here and are now DRAWN: the
+ *     heightfield gave this backend a texture path, and both are that same path with a bitmap in
+ *     it instead of a surface. Text is rasterised through `TextRaster` — the function the Canvas
+ *     backend also calls — rather than through a glyph atlas, so the two cannot break a line in
+ *     different places. An atlas would be a second typesetter and a second set of answers.
  *   - EFFECTS (shadow, blur) and dashes are ignored; those are per-fragment work needing render
  *     targets.
  * The app offers this backend as a preview and says so, because a backend that quietly drops
@@ -52,6 +53,7 @@ import { ellipseCommands, rectCommands, transformCommands } from "../core/geomet
 import { PathCommand } from "../core/document/Node";
 import { FLATTEN_TOLERANCE, displayTolerance, localScaleOf } from "../core/geometry/ShapeHit";
 import { imageGeneration, resolveImage } from "./ImageCache";
+import { TextShape, drawTextInto, textRasterKey, textRasterScale } from "./TextRaster";
 
 const VERTEX_SHADER = `
 attribute vec2 a_pos;
@@ -180,9 +182,8 @@ export interface GLState {
     localBuffer: WebGLBuffer;
     heightTex: WebGLTexture;
     imageTex: WebGLTexture;
-    /** href and generation currently living in `imageTex`, so a frame re-uploads only on change. */
+    /** What currently lives in `imageTex` — an image's href+generation, or a text raster's key. */
     imageKey: string | null;
-    imageGen: number;
     posLoc: number;
     viewLoc: WebGLUniformLocation | null;
     colorLoc: WebGLUniformLocation | null;
@@ -232,7 +233,7 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
     return {
         gl, program, buffer, normalBuffer, localBuffer, heightTex, imageTex,
-        imageKey: null, imageGen: -1,
+        imageKey: null,
         posLoc: gl.getAttribLocation(program, "a_pos"),
         viewLoc: gl.getUniformLocation(program, "u_view"),
         colorLoc: gl.getUniformLocation(program, "u_color"),
@@ -306,7 +307,11 @@ export function shapeToLocalCommands(shape: Shape, radius: number | null): PathC
         // as long as this backend had no way to upload one.
         case "image": return transformCommands(translation(shape.x, shape.y),
             rectCommands(shape.width, shape.height, radius ?? 0));
-        // TEXT still needs a glyph atlas, which is its own piece of work; see the module note.
+        // TEXT is the rect it occupies too. What makes it readable is the bitmap `TextRaster`
+        // draws — the same function the Canvas backend uses, so the two typeset identically
+        // instead of each having an opinion about where a line breaks.
+        case "text": return transformCommands(translation(shape.x, shape.y),
+            rectCommands(shape.width, shape.height, 0));
         default: return null;
     }
 }
@@ -350,6 +355,15 @@ export interface Draw {
      * pixels is asynchronous and stateful, and belongs with the draw calls.
      */
     image: { href: string; x: number; y: number; width: number; height: number } | null;
+    /**
+     * The text to RASTERISE into this draw's triangles, or null.
+     *
+     * The shape itself rather than a bitmap, for the same reason `image` is an href: turning it
+     * into pixels needs a 2D context and a cache, which is the impure half. What makes this a
+     * rasterised quad rather than a glyph atlas is in `TextRaster` — the GPU shows what Canvas
+     * shows because the same function draws both.
+     */
+    text: TextShape | null;
     color: [number, number, number, number];
 }
 
@@ -422,6 +436,53 @@ export function heightTexture(mesh: ReadonlyMesh, box: { width: number; height: 
     return { data, size, min, max };
 }
 
+/**
+ * Rasterised text, keyed by everything that changes its pixels.
+ *
+ * BOUNDED and evicted oldest-first. A design document has tens of text nodes, but the key includes
+ * the raster SCALE, so zooming through the range mints a few bitmaps per node — and a cache with
+ * no bound is a leak that only shows up after a long session, which is the worst time to find one.
+ */
+const TEXT_CACHE_MAX = 64;
+const textCache = new Map<string, HTMLCanvasElement>();
+
+/**
+ * One text shape as a bitmap, drawn by the SAME function the Canvas backend uses.
+ *
+ * Null with no DOM (the node tests) and for a degenerate box, which is why the caller treats a
+ * missing raster as "skip this draw" rather than as an error.
+ */
+function rasterizeText(shape: TextShape, paint: DrawItem["paint"], scale: number, key: string): HTMLCanvasElement | null {
+    const hit = textCache.get(key);
+    if (hit) {
+        // Re-inserted so eviction is least-recently-USED rather than oldest-created: the text a
+        // person is looking at is the text that would otherwise be thrown away first.
+        textCache.delete(key);
+        textCache.set(key, hit);
+        return hit;
+    }
+    if (typeof document === "undefined") return null;
+    const w = Math.round(shape.width * scale), h = Math.round(shape.height * scale);
+    if (w <= 0 || h <= 0) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    // The shape is drawn at its OWN coordinates, so the context is moved to put the box's origin
+    // at the bitmap's. Translating rather than rewriting the coordinates is what keeps
+    // `drawTextInto` identical to the version the Canvas backend calls.
+    ctx.scale(scale, scale);
+    ctx.translate(-shape.x, -shape.y);
+    drawTextInto(ctx, shape, paint);
+    if (textCache.size >= TEXT_CACHE_MAX) {
+        const oldest = textCache.keys().next();
+        if (!oldest.done) textCache.delete(oldest.value);
+    }
+    textCache.set(key, canvas);
+    return canvas;
+}
+
 /** Straight at the viewer — what an unlit, unmeshed surface faces. */
 const FLAT_NORMAL = { x: 0, y: 0, z: 1 };
 
@@ -441,6 +502,7 @@ function vertexNormal(n: { x: number; y: number; z: number }): { x: number; y: n
 
 function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number | null,
               image?: { href: string; x: number; y: number; width: number; height: number } | null,
+              text?: TextShape | null,
               surface?: {
                   normal: (x: number, y: number) => { x: number; y: number; z: number };
                   cell: number;
@@ -473,7 +535,7 @@ function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number |
         vertices[i + 1] = world ? world.b * lx + world.d * ly + world.f : ly;
     }
     if (opacity !== null) color[3] *= opacity;    // MULTIPLY — one blend, not two
-    return { vertices, normals, locals, height: surface?.height ?? null, image: image ?? null, color };
+    return { vertices, normals, locals, height: surface?.height ?? null, image: image ?? null, text: text ?? null, color };
 }
 
 /**
@@ -519,38 +581,50 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
             height: heightTexture(item.surface.mesh, item.surface.box)
         }
         : undefined;
-    // An IMAGE is drawn from its pixels INSTEAD of its fill, never as well. Canvas returns before
-    // it fills for the same reason, and a backend that painted a colour under a picture would show
-    // it through every transparent pixel — which is the kind of difference between backends that
-    // only appears on somebody's PNG with a soft edge.
-    const isImage = item.shape.kind === "image";
-    if (paint.fill !== null && !isImage) {
+    // An IMAGE and TEXT are both drawn from a BITMAP instead of their fill, never as well.
+    //
+    // For an image, Canvas returns before it fills for the same reason: a colour under a picture
+    // shows through every transparent pixel, which is the kind of divergence that only appears on
+    // somebody's PNG with a soft edge. For text it is not a subtlety at all — `paint.fill` on a
+    // text node is the GLYPH colour, so filling its box would paint a solid rectangle over
+    // whatever is behind it.
+    const isRaster = item.shape.kind === "image" || item.shape.kind === "text";
+    if (paint.fill !== null && !isRaster) {
         // RESOLVED first, which does two jobs at once. It applies the document's fill rule — the
         // GPU has no `fill-rule` to hand to, unlike the other two backends, so the rule has to
         // become geometry here. And it makes the rings simple, which ear clipping requires: a
         // self-crossing path used to come out as overlapping triangles on this backend and as
         // the right shape on the other two.
         const fill = draw(resolveRings(commandsToRings(local, tolerance), paint.fillRule ?? "nonzero"),
-            item.world, paint.fill, paint.opacity, null, surface);
+            item.world, paint.fill, paint.opacity, null, null, surface);
         if (fill) out.push(fill);
     }
     // AN IMAGE has no fill and is drawn from its own pixels. Its rect is already the geometry that
     // `shapeToLocalCommands` produced, so this is the same triangles with a texture over them —
     // and it is lit and shadowed by the same arithmetic as everything else, which is the point of
     // putting it through the fragment shader rather than blitting it.
-    if (isImage && item.shape.kind === "image" && item.shape.href !== null) {
+    if (isRaster && item.shape.kind === "image" && item.shape.href !== null) {
         const rect = item.shape;
         const picture = draw(resolveRings(commandsToRings(local, tolerance), "nonzero"),
             item.world, "#ffffff", paint.opacity,
-            { href: rect.href!, x: rect.x, y: rect.y, width: rect.width, height: rect.height }, surface);
+            { href: rect.href!, x: rect.x, y: rect.y, width: rect.width, height: rect.height }, null, surface);
         if (picture) out.push(picture);
+    }
+    // TEXT is its box, with the typeset result painted over it. The geometry is a rectangle
+    // because that is what a bitmap goes on; everything that makes it text happened in
+    // `TextRaster`, which the Canvas backend runs too — so a line breaks in the same place on
+    // both, which a second typesetter in here could never promise.
+    if (isRaster && item.shape.kind === "text" && item.shape.text.length > 0) {
+        const typeset = draw(resolveRings(commandsToRings(local, tolerance), "nonzero"),
+            item.world, "#ffffff", null, null, item.shape, surface);
+        if (typeset) out.push(typeset);
     }
     if (paint.stroke !== null && paint.strokeWidth !== null && paint.strokeWidth > 0) {
         const rings = strokeOutline(local, {
             width: paint.strokeWidth,
             join: paint.strokeJoin, cap: paint.strokeCap, miterLimit: paint.strokeMiterLimit
         }, tolerance);
-        const stroke = draw(rings, item.world, paint.stroke, paint.opacity, null, surface);
+        const stroke = draw(rings, item.world, paint.stroke, paint.opacity, null, null, surface);
         if (stroke) out.push(stroke);
     }
     return out;
@@ -647,32 +721,49 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
             } else {
                 gl.uniform1f(state.hasHeightLoc, 0);
             }
-            // THE PICTURE. Uploaded only when the href or the decode generation has changed —
-            // a texture is a copy, so re-uploading per frame would re-encode every image on
-            // screen, and never re-uploading would keep the blank bitmap that existed before the
-            // load finished. A shape whose image has not decoded yet is SKIPPED rather than drawn
-            // white: a placeholder rectangle is a worse lie than nothing.
+            // THE PICTURE, or the TYPESET TEXT — one texture unit, because both are a bitmap
+            // stretched over the same rectangle. Uploaded only when the key changes: a texture is
+            // a copy, so re-uploading per frame would re-encode every image on screen, and never
+            // re-uploading would keep the blank bitmap that existed before a load finished. The
+            // key carries the decode generation for an image and the raster parameters for text,
+            // so both cases are one comparison.
+            let source: TexImageSource | null = null;
+            let texKey: string | null = null;
+            let rect: { x: number; y: number; width: number; height: number } | null = null;
             if (d.image) {
                 const bitmap = resolveImage(d.image.href);
+                // A shape whose image has not decoded yet is SKIPPED rather than drawn white: a
+                // placeholder rectangle is a worse lie than nothing.
                 if (!bitmap) continue;
-                const gen = imageGeneration();
+                source = bitmap;
+                texKey = `img:${d.image.href}:${imageGeneration()}`;
+                rect = d.image;
+            } else if (d.text) {
+                const scale = textRasterScale(viewScale);
+                const key = textRasterKey(d.text, item.paint, scale);
+                const raster = rasterizeText(d.text, item.paint, scale, key);
+                if (!raster) continue;
+                source = raster;
+                texKey = `txt:${key}`;
+                rect = d.text;
+            }
+            if (source && texKey && rect) {
                 gl.activeTexture(gl.TEXTURE1);
                 gl.bindTexture(gl.TEXTURE_2D, state.imageTex);
-                if (state.imageKey !== d.image.href || state.imageGen !== gen) {
-                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+                if (state.imageKey !== texKey) {
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
                     // NPOT-safe: linear filtering with clamped wrapping needs no mipmaps, which a
                     // non-power-of-two texture cannot have in WebGL 1. No Y flip — texel row 0 is
-                    // the image's top row, and `v_local` counts down from the rect's top too, so
+                    // the source's top row, and `v_local` counts down from the rect's top too, so
                     // the two already agree.
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-                    state.imageKey = d.image.href;
-                    state.imageGen = gen;
+                    state.imageKey = texKey;
                 }
                 gl.uniform1i(state.imageLoc, 1);
-                gl.uniform4f(state.imgRectLoc, d.image.x, d.image.y, d.image.width, d.image.height);
+                gl.uniform4f(state.imgRectLoc, rect.x, rect.y, rect.width, rect.height);
                 gl.uniform1f(state.hasImageLoc, 1);
             } else {
                 gl.uniform1f(state.hasImageLoc, 0);

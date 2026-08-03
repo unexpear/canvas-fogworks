@@ -378,8 +378,29 @@ the blank bitmap from before the load finished. `WebGLRenderer` now registers th
 callback too, which it had never needed; without it, opening a document straight into the GPU
 backend left images missing until something else happened to repaint.
 
-TEXT remains undrawn on the GPU: a glyph atlas is its own piece of work, and declining is better
-than drawing something wrong.
+**TEXT is drawn too, and the reason there is no GLYPH ATLAS is the interesting part
+(`renderer/TextRaster`).** An atlas is the standard answer and it would have been the wrong one
+here: it means a second typesetter, with its own wrapping, its own kerning and its own idea of
+where a line breaks, drifting from the Canvas backend in ways only a screenshot comparison would
+catch. Text is the one thing in this engine whose shape cannot be computed from the document alone
+— how many words fit a line depends on the font the machine actually has — so there must be
+exactly one answer to it.
+
+So the wrapping moved out of `emitCanvas` UNCHANGED, and the GPU rasterises through that same
+function into an offscreen 2D context and uploads the result. The GPU shows what Canvas shows
+because it IS Canvas. Verified side by side: identical line breaks, identical centring.
+
+What it costs, stated: a raster per text item rather than a shared atlas — more memory, and a
+re-raster when the text or the zoom changes materially. The scale is QUANTISED to powers of two
+for the same reason `displayTolerance` is, so a zoom crosses a rebuild boundary a handful of times
+instead of continuously; the cache key omits POSITION, so dragging a text node does not rebuild
+its bitmap every frame; and the cache is bounded and evicted least-recently-USED, because an
+unbounded one is a leak that only shows after a long session. For a design document — tens of text
+nodes, not thousands of glyphs a frame — that is the cheaper mistake.
+
+A text node's `fill` is its GLYPH colour, so the box is never filled underneath: doing so would
+paint a solid rectangle over whatever is behind it. Same rule as an image, where a colour under a
+transparent PNG shows through.
 
 WHAT IS STILL NOT HERE: a CAST shadow lands on the receiver's OUTLINE as if the receiver were
 flat, so it does not bend over a domed one. That is now the only part of the lighting still

@@ -80,6 +80,7 @@ import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, comma
 import { emitSVG } from "../../renderer/emitSVG";
 import { emitCanvas, setImageReadyCallback } from "../../renderer/emitCanvas";
 import { resolveImage, imageGeneration } from "../../renderer/ImageCache";
+import { TextShape, drawTextInto, textRasterKey, textRasterScale, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
 import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { Keyframe, TimelineSettings, timelineError, trackError, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
 import { DEPTH_MIN, DEPTH_MAX, depthError, depthOf, parallaxRate, parallaxOffset, depthToClipZ, byDepth, applyParallax } from "../document/Depth";
@@ -367,6 +368,15 @@ export function __apiSurfacePin(): void {
     // document. The generation is what lets a TEXTURE know it has something new to upload.
     expectType<HTMLImageElement | null>(resolveImage("a.png"));
     expectType<number>(imageGeneration());
+    // ONE typesetter for every backend that can measure. The GPU rasterises through this rather
+    // than through a glyph atlas, so it cannot break a line where Canvas would not.
+    const textShape: TextShape = { kind: "text", x: 0, y: 0, width: 10, height: 10, text: "hi",
+        fontSize: 10, fontFamily: "sans-serif", fontWeight: 400, textAlign: "left", lineHeight: 1.2, letterSpacing: 0 };
+    expectType<TextShape>(textShape);
+    expectType<(ctx: CanvasRenderingContext2D, s: TextShape, p: Paint) => void>(drawTextInto);
+    expectType<number>(textRasterScale(2));
+    expectType<string>(textRasterKey(textShape, model.content[0].paint, 2));
+    expectType<number>(TEXT_RASTER_MIN); expectType<number>(TEXT_RASTER_MAX);
 
     // --- Geometry the display seam is built out of (schemas 33–38) -----------
     // Everything below this line was documented in API-CONTRACTS with nothing holding it to the
@@ -586,6 +596,7 @@ export function __apiSurfacePin(): void {
     // relief to occlude with and no range to pack sixteen bits against.
     expectType<HeightTexture | null>(draws[0]?.height ?? null);
     expectType<{ href: string; x: number; y: number; width: number; height: number } | null>(draws[0]?.image ?? null);
+    expectType<TextShape | null>(draws[0]?.text ?? null);
     expectType<HeightTexture | null>(heightTexture(mesh, meshBox));
     expectType<HeightTexture | null>(heightTexture(mesh, meshBox, 32));
     expectType<number>(decodeHeight(0, 0, 0, 1));

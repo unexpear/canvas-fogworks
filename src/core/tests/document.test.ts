@@ -61,6 +61,7 @@ import { StrokeAlign } from "../geometry/StrokeOutline";
 import { outlineStrokeAction, strokeWidthOf } from "../actions/outlineStrokeActions";
 import { itemDraws, itemTolerance, parseColor, viewMatrix, shapeToLocalCommands, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { imageGeneration, resolveImage } from "../../renderer/ImageCache";
+import { textRasterScale, textRasterKey, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
 import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
 import { booleanAction, makeBooleanNodeAction } from "../actions/booleanActions";
 import { SetBooleanOpAction } from "../actions/SetBooleanOpAction";
@@ -12990,6 +12991,51 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         expect(imageGeneration()).toBe(before + 2);
     });
 
+    test("the text RASTER scale is quantised, and its key ignores position", () => {
+        // Quantised for the same reason `displayTolerance` is: a raster keyed on the exact zoom
+        // is rebuilt on every wheel tick, and rebuilding a bitmap mid-gesture is what a canvas
+        // hitching while you scroll actually is.
+        expect(textRasterScale(1)).toBe(1);
+        expect(textRasterScale(1.3)).toBe(2);
+        expect(textRasterScale(2)).toBe(2);
+        expect(textRasterScale(2.1)).toBe(4);
+        // A whole zoom range crosses only a handful of rebuild boundaries.
+        expect(new Set([1.1, 1.5, 1.9, 2].map(textRasterScale)).size).toBe(1);
+        // BOUNDED both ways: below 1 there is nothing finer than the screen to resolve, and the
+        // ceiling is what stops a deep zoom asking for a bitmap the GPU will refuse.
+        expect(textRasterScale(0.2)).toBe(TEXT_RASTER_MIN);
+        expect(textRasterScale(1000)).toBe(TEXT_RASTER_MAX);
+        expect(textRasterScale(0)).toBe(TEXT_RASTER_MIN);
+        expect(textRasterScale(NaN)).toBe(TEXT_RASTER_MIN);
+
+        const shape = { kind: "text", x: 5, y: 7, width: 100, height: 40, text: "hello there",
+                        fontSize: 14, fontFamily: "sans-serif", fontWeight: 400, textAlign: "left",
+                        lineHeight: 1.2, letterSpacing: 0 } as never;
+        const moved = { ...(shape as object), x: 900, y: 900 } as never;
+        const paint = { fill: "#000000", opacity: null } as never;
+        // POSITION is absent from the key, because the raster is drawn in local coordinates and
+        // placed by the geometry. Getting this wrong is invisible — the text still looks right, it
+        // is just re-rasterised on every frame of a drag.
+        expect(textRasterKey(shape, paint, 2)).toBe(textRasterKey(moved, paint, 2));
+        // Everything that DOES change the pixels changes the key.
+        expect(textRasterKey(shape, paint, 2)).not.toBe(textRasterKey(shape, paint, 4));
+        expect(textRasterKey(shape, paint, 2))
+            .not.toBe(textRasterKey({ ...(shape as object), text: "hello" } as never, paint, 2));
+        expect(textRasterKey(shape, paint, 2))
+            .not.toBe(textRasterKey({ ...(shape as object), fontSize: 15 } as never, paint, 2));
+        expect(textRasterKey(shape, paint, 2))
+            .not.toBe(textRasterKey({ ...(shape as object), width: 101 } as never, paint, 2));
+        expect(textRasterKey(shape, paint, 2))
+            .not.toBe(textRasterKey(shape, { fill: "#ff0000", opacity: null } as never, 2));
+        // The separator is a NUL, and this is the case that needs it: `text` is followed by
+        // `width`, so a digit can migrate across the boundary. Text "a" in a 12-wide box and text
+        // "a1" in a 2-wide box are different pixels and would share a key if the fields were
+        // simply concatenated — the sort of collision that shows up as one text node wearing
+        // another's bitmap.
+        expect(textRasterKey({ ...(shape as object), text: "a", width: 12 } as never, paint, 1))
+            .not.toBe(textRasterKey({ ...(shape as object), text: "a1", width: 2 } as never, paint, 1));
+    });
+
     test("an IMAGE reaches the GPU backend instead of being silently dropped", () => {
         // The gap this backend's own header called out: a document that loses content when you
         // switch to it. An image is now the same triangles as any other rect with a picture over
@@ -15370,8 +15416,18 @@ describe("emitWebGL geometry", () => {
     });
 
     test("what it CANNOT draw, it declines to draw — no silent wrong output", () => {
-        // TEXT still needs a glyph atlas, so it declines rather than drawing something wrong.
-        expect(itemDraws(item({ kind: "text", x: 0, y: 0, width: 10, height: 10, text: "hi", fontSize: 10, fontFamily: "sans-serif", fontWeight: 400, textAlign: "left", lineHeight: 1.2, letterSpacing: 0 }))).toEqual([]);
+        // TEXT no longer declines either. It is its box with a bitmap over it, typeset by the
+        // SAME function the Canvas backend calls — so the GPU cannot break a line in a different
+        // place, which a glyph atlas in here could never promise.
+        const typed = itemDraws(item({ kind: "text", x: 0, y: 0, width: 10, height: 10, text: "hi", fontSize: 10, fontFamily: "sans-serif", fontWeight: 400, textAlign: "left", lineHeight: 1.2, letterSpacing: 0 }));
+        expect(typed.length).toBe(1);
+        expect(typed[0].text).toMatchObject({ kind: "text", text: "hi" });
+        // ONE draw, though this helper supplies a fill: on a text node `fill` is the GLYPH colour,
+        // so filling the box would paint a solid rectangle over whatever is behind it.
+        expect(typed[0].image).toBeNull();
+        // EMPTY text is a node with nothing in it — no draw, rather than an invisible quad
+        // uploaded and blended every frame.
+        expect(itemDraws(item({ kind: "text", x: 0, y: 0, width: 10, height: 10, text: "", fontSize: 10, fontFamily: "sans-serif", fontWeight: 400, textAlign: "left", lineHeight: 1.2, letterSpacing: 0 }))).toEqual([]);
         // IMAGES no longer decline: this assertion was the gap, written down as a test. The
         // heightfield gave this backend a texture path and an image is that path with a picture
         // in it, so a document no longer loses content when the backend is switched.

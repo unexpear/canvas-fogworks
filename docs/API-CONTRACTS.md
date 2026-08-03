@@ -903,6 +903,19 @@ function buildRenderModel(
 function emitSVG(container: HTMLElement, model: DisplayList): void;   // SVG DOM transcription
 function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dpr?: number): void; // Canvas 2D transcription
 function setImageReadyCallback(cb: (() => void) | null): void;       // fired when a lazily-loaded image decodes (→ repaint)
+// TextRaster.ts — laying text out ONCE, for every backend that can measure.
+type TextShape = Extract<Shape, { kind: "text" }>;
+function drawTextInto(ctx, shape: TextShape, paint: Paint): void;   // wraps + aligns + clips; leaves ctx clipped
+function textRasterScale(viewScale: number): number;                // QUANTISED to powers of two, bounded [1, 8]
+function textRasterKey(shape, paint, scale): string;                // every field that changes the PIXELS; NUL-separated
+const TEXT_RASTER_MIN: number; const TEXT_RASTER_MAX: number;
+// The GPU has NO glyph atlas on purpose: an atlas is a second typesetter with its own wrapping,
+// drifting from Canvas in ways only a screenshot would catch. Rasterising through `drawTextInto`
+// means the GPU shows what Canvas shows because it IS Canvas, drawn once offscreen and uploaded.
+// The key omits POSITION — the raster is drawn in local coordinates and placed by the geometry,
+// so moving a text node must not throw its bitmap away. The scale is quantised for the same
+// reason `displayTolerance` is: an exact-zoom key rebuilds the bitmap on every wheel tick.
+
 // ImageCache.ts — decoded bitmaps, shared by every backend that draws one.
 function resolveImage(href: string): HTMLImageElement | null;        // null while it loads / fails / no DOM
 function imageGeneration(): number;                                  // bumps on each DECODE — a texture's cue to re-upload
@@ -919,7 +932,8 @@ function initGL(canvas: HTMLCanvasElement): GLState | null;                     
 function parseColor(css: string): [number, number, number, number] | null;           // #rgb / #rrggbb / #rrggbbaa only; null = do not draw
 function shapeToLocalCommands(shape: Shape, radius: number | null): PathCommand[] | null;   // LOCAL, so a stroke offsets in the units its width means
 interface Draw { vertices: number[]; normals: number[]; locals: number[]; height: HeightTexture | null;
-                 image: { href; x; y; width; height } | null; color: [number, number, number, number] }
+                 image: { href; x; y; width; height } | null; text: TextShape | null;
+                 color: [number, number, number, number] }
 function itemDraws(item: DrawItem, tolerance?: number): Draw[];   // pure — the tested part; fill then stroke, [] for what it cannot draw
 const HEIGHT_TEX_SIZE: number;                                    // 64 — covers the finest grid a mesh may declare
 interface HeightTexture { data: Uint8Array; size: number; min: number; max: number }   // RGBA; height is 16 bits over R+G

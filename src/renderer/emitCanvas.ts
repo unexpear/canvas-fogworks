@@ -41,6 +41,7 @@
 import { isTranslationOnly } from "../core/geometry/Matrix";
 import { DisplayList, DrawItem, Paint, Shape, textParagraphs } from "./RenderModel";
 import { resolveImage, setImageReadyCallback } from "./ImageCache";
+import { drawTextInto } from "./TextRaster";
 
 /** Matches the SVG background (`svg.style.background`) so the two backends look alike. */
 const BACKGROUND = "#1a1a2e";
@@ -55,42 +56,6 @@ function unreachable(x: never): never {
     throw new Error(`emitCanvas: unhandled variant ${JSON.stringify(x)}`);
 }
 
-/**
- * Greedy word wrap against `maxWidth` using the context's CURRENT font (callers set `font`
- * first). CSS-`normal` semantics, matching the SVG backend's `<foreignObject>` div: ALL
- * whitespace (spaces, tabs, newlines, runs thereof) collapses to single-space separators and
- * is a break opportunity — splitting on `" "` alone would keep a `\n` INSIDE a "word" (canvas
- * renders it as a space on one overlong line while HTML wraps there; review-confirmed
- * divergence). Break between words only; a single word wider than the box gets its own line
- * and overflows (the clip crops it) rather than being split mid-word; the first word of a
- * line always stays (a line is never empty) — the same first-item-always-fits rule
- * `breakFlexLines` uses. Empty/whitespace-only text → one empty line (fillText draws nothing).
- */
-function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-    // EXPLICIT newlines break first, then each paragraph wraps on the box width. Collapsing them
-    // (as this used to, via a single `\s+` split) made the Canvas backend silently reflow text
-    // the SVG backend — now `white-space: pre-wrap` — keeps on separate lines.
-    // The hard breaks come from the SHARED `textParagraphs`, so this backend, the SVG one and the
-    // EXPORTER cannot disagree about where a newline ends a line. Only the MEASURED wrapping below
-    // is this backend's own, because only it can measure.
-    const lines: string[] = [];
-    for (const paragraph of textParagraphs(text)) {
-        const words = paragraph.split(" ").filter(w => w.length > 0);
-        if (words.length === 0) { lines.push(""); continue; }
-        let line = "";
-        for (const word of words) {
-            const candidate = line === "" ? word : `${line} ${word}`;
-            if (line !== "" && ctx.measureText(candidate).width > maxWidth) {
-                lines.push(line);
-                line = word;
-            } else {
-                line = candidate;
-            }
-        }
-        lines.push(line);
-    }
-    return lines.length > 0 ? lines : [""];
-}
 
 function fillAndStroke(ctx: CanvasRenderingContext2D, paint: Paint): void {
     if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
@@ -148,40 +113,9 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): v
             fillAndStroke(ctx, paint);
             return;
         case "text":
-            // Word-WRAPPED text: greedy line breaking against the box width via `measureText`
-            // (set `font` FIRST — measurement depends on it), top-left origin (textBaseline
-            // "top" reproduces the SVG box origin), clipped to the box. Line height mirrors the
-            // browser's `normal` (~1.2 × font size) so the two backends break comparably —
-            // exact metric parity with the SVG `<foreignObject>`'s HTML layout stays the
-            // documented inherent gap (canvas measures, the browser typesets).
-            // Typography (schema 34), all resolved by the model. `font` carries weight and family
-            // and must be set BEFORE measuring; `letterSpacing` is a newer context property, so it
-            // is feature-detected rather than assumed (it also feeds `measureText`, which is why it
-            // is set before wrapping rather than after).
-            ctx.font = `${shape.fontWeight} ${shape.fontSize}px ${shape.fontFamily}`;
-            if ("letterSpacing" in ctx) {
-                (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = `${shape.letterSpacing}px`;
-            }
-            if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
-            if (paint.fill !== null) ctx.fillStyle = paint.fill;
-            ctx.textBaseline = "top";
-            ctx.beginPath();
-            ctx.rect(shape.x, shape.y, shape.width, shape.height);
-            ctx.clip();
-            {
-                const lineHeight = shape.fontSize * shape.lineHeight;
-                const lines = wrapText(ctx, shape.text, shape.width);
-                // Canvas aligns about an ANCHOR, so the anchor moves with the alignment rather
-                // than the text. `justify` has no canvas equivalent and falls back to left — a
-                // documented gap, like the wider metric difference between the two backends.
-                ctx.textAlign = shape.textAlign === "center" ? "center" : shape.textAlign === "right" ? "right" : "left";
-                const anchorX = shape.textAlign === "center" ? shape.x + shape.width / 2
-                    : shape.textAlign === "right" ? shape.x + shape.width
-                        : shape.x;
-                for (let i = 0; i < lines.length; i++) {
-                    ctx.fillText(lines[i], anchorX, shape.y + i * lineHeight);
-                }
-            }
+            // The layout lives in `TextRaster`, shared with the GPU backend — one typesetter, so
+            // the two cannot break a line in different places. This backend used to own it.
+            drawTextInto(ctx, shape, paint);
             return;
         case "image": {
             // Load the href once (cached); draw it when decoded. Until then (or with no href /
