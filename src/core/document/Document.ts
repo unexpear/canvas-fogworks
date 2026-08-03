@@ -161,7 +161,7 @@ export const CURRENT_VERSION: string =
  */
 import type { TimelineSettings } from "./Timeline";
 
-export const SCHEMA_VERSION = "40";
+export const SCHEMA_VERSION = "41";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

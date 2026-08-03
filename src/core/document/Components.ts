@@ -36,11 +36,12 @@ import { dimensionError, Geometry, Layout, layoutError, mergeLayout, Node, slotC
 import { ReadonlyNode } from "./SceneGraph";
 import { PathCommand } from "./Node";
 import { Mat2D, compose } from "../geometry/Matrix";
-import { hitShapeOf } from "../geometry/ShapeHit";
+import { flattenPath, hitShapeOf } from "../geometry/ShapeHit";
 import { shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
 import { booleanPaths } from "../geometry/PathBoolean";
 import { normalizePathNode } from "../geometry/PathBuilder";
 import { applyFrame } from "./Timeline";
+import { isIdentityMesh, warpCommands } from "./Mesh";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
  *  Reserved: a stored node id may not contain it (checked on the edit AND load paths). */
@@ -701,7 +702,7 @@ export function resolveScene(doc: ReadonlyDocument): ReadonlyDocument {
     // way round. Everything after this point sees an ordinary, un-animated document, which is why
     // layout, picking, snapping, culling, all three backends and the exporter needed no changes
     // when time was added.
-    return resolveBooleans(expandInstances(applyActiveState(applyFrame(dropHidden(doc), doc.frame))));
+    return resolveMeshes(resolveBooleans(expandInstances(applyActiveState(applyFrame(dropHidden(doc), doc.frame)))));
 }
 
 /** Local matrix for a node from its geometry + transform — the engine's own composition rule. */
@@ -733,6 +734,60 @@ function nodeMatrix(geo: Geometry, t: Transform | undefined): Mat2D {
  * A boolean with fewer than two usable operands resolves to an EMPTY path rather than
  * disappearing: the node stays selectable, so dropping a shape into it is still possible.
  */
+/**
+ * Every MESHED node as an ordinary `core.path` whose outline the mesh has bent (schema 41).
+ *
+ * Resolved at the display seam, LAST — after booleans, so a warp applies to a combined shape
+ * rather than to one operand of it, and after instances, so a component's copies each bend with
+ * their own mesh. Everything downstream sees a path: picking, marquee selection, snapping,
+ * tessellation, the decomposition and all three backends need no knowledge that meshes exist, and
+ * a warped shape is CLICKABLE exactly where it is drawn.
+ *
+ * A mesh still at REST is skipped, and a document with no mesh at all is returned by reference —
+ * this runs on every derivation, so an unmeshed document must cost what it always did.
+ */
+export function resolveMeshes(doc: ReadonlyDocument): ReadonlyDocument {
+    let any = false;
+    doc.nodes.forEach(n => { if (n.mesh) any = true; });
+    if (!any) return doc;
+
+    const nodes = new Map<string, Node>();
+    doc.nodes.forEach((n, id) => {
+        const mesh = n.mesh;
+        const box = { width: n.geometry.width, height: n.geometry.height };
+        if (!mesh || isIdentityMesh(mesh, box)) { nodes.set(id, n as Node); return; }
+        // The node's OWN outline, by the same conversion picking and the booleans use — so a
+        // warped rectangle bends the rectangle everything else agrees it is.
+        const local = shapeToCommands(hitShapeOf(n as Node, radiusOfNode(n as Node)), box.width, box.height);
+        if (!local) { nodes.set(id, n as Node); return; }
+        const warped = warpCommands(local, box, mesh, flattenPath);
+        if (warped.length === 0) { nodes.set(id, n as Node); return; }
+        // A `core.path`, and the mesh is DROPPED from the derived node: the bend is now in the
+        // commands, and leaving the mesh on would warp the already-warped outline the next time
+        // anything resolved. That is the `activeState` trap in a new costume.
+        const out: Node = { ...(n as Node), type: "core.path", path: warped };
+        delete out.mesh;
+        nodes.set(id, out);
+    });
+
+    return {
+        version: doc.version,
+        metadata: doc.metadata as ProjectDocument["metadata"],
+        nodes,
+        rootNodeUuids: [...doc.rootNodeUuids],
+        variables: doc.variables as ProjectDocument["variables"],
+        activeTheme: doc.activeTheme,
+        activeState: doc.activeState,
+        timeline: doc.timeline,
+        frame: doc.frame
+    } as ProjectDocument;
+}
+
+/** A node's resolved corner radius — only a concrete number can reach a shape conversion. */
+function radiusOfNode(node: Node): number {
+    return typeof node.style.radius === "number" ? node.style.radius : 0;
+}
+
 export function resolveBooleans(doc: ReadonlyDocument): ReadonlyDocument {
     let any = false;
     doc.nodes.forEach(n => { if (n.type === "core.boolean") any = true; });

@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v40 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v41 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -241,6 +241,30 @@ SVG or Canvas can draw — a document field for it would render three different 
 backends. So alignment is an argument to the outline COMMAND instead: what comes out is a
 `core.path`, and a fill draws identically everywhere. The same reasoning that put the boolean bake
 in the action layer rather than in a renderer.
+
+**A shape can BEND, and it stays an ordinary path (`document/Mesh`).** Every shape here was rigid
+until now — the only things that could change one were its own numbers. A mesh is a grid laid over
+a node's box whose points you drag, with the outline following: the envelope warp every serious
+vector editor has, and the thing normals and lighting will hang off, since a flat shape has nothing
+to light.
+
+`resolveMeshes` runs at the display seam, LAST — after booleans, so a warp bends a COMBINED shape
+rather than one operand of it — and turns a meshed node into a `core.path`. That is the whole
+reason it costs so little: picking, marquee selection, snapping, tessellation, the decomposition
+and all three backends see a path. It is also why a warp is CLICKABLE where it is drawn, which a
+deformation applied inside a renderer could never be.
+
+The derived node DROPS its mesh, because the bend is now in the commands and leaving it on would
+warp an already-warped outline on the next derivation — the `activeState` trap in a new costume,
+and a test resolves twice to prove it does not happen.
+
+Deformation is BILINEAR per cell. Smoother schemes exist and every one of them is more arithmetic
+for a difference that only shows on a coarse grid, which a user fixes by adding a row; bilinear is
+exact AT the control points, which is the property somebody dragging one actually checks. Points
+outside the box are CLAMPED rather than extrapolated, because a bilinear patch diverges fast beyond
+its corners and an overhanging outline would be flung across the canvas instead of following the
+edge it is near. Segments are subdivided at the grid's own resolution first: a warp bends the space
+between two points, so an edge that kept only its ends would chord across every bend.
 
 **DEPTH is one number and three consumers (`document/Depth`).** A layer panel says which shape is
 on top of which SIBLING; depth says which is nearer the VIEWER, and those are different questions.

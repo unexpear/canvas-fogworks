@@ -8,6 +8,7 @@ import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from ".
 import { InstanceOverride } from "../document/Components";
 import { Interaction } from "../document/Prototype";
 import { Keyframe } from "../document/Timeline";
+import { Mesh } from "../document/Mesh";
 
 /**
  * The reserved `propertyDeltas` key a DOCUMENT-LEVEL delta (kind "variables") travels
@@ -83,6 +84,8 @@ export type NodeDelta =
         track?: Keyframe[];
         /** How far BACK the node sits (schema 40). `undefined` clears it back to the page. */
         depth?: number;
+        /** The deformation GRID (schema 41). `undefined` clears it, making the node rigid again. */
+        mesh?: Mesh;
     }
     /**
      * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme

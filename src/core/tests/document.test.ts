@@ -47,6 +47,8 @@ import { applyFrame, trackError, timelineError, onionFrames, keyframesAt, TIMELI
 import { SetTrackAction } from "../actions/SetTrackAction";
 import { SetTimelineAction } from "../actions/SetTimelineAction";
 import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyParallax, DEPTH_MIN, DEPTH_MAX } from "../document/Depth";
+import { Mesh, meshError, restMesh, warpPoint, isIdentityMesh, MESH_MAX_DIVISIONS } from "../document/Mesh";
+import { resolveMeshes } from "../document/Components";
 import { overrideValueError } from "../document/Components";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
@@ -4380,8 +4382,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 39→40 landed for depth.)
-        expect(() => migrateIfNeeded(legacy, "41")).toThrow('Migration not implemented for document schema "40"');
+        // time a real migration is added — most recently when 40→41 landed for meshes.)
+        expect(() => migrateIfNeeded(legacy, "42")).toThrow('Migration not implemented for document schema "41"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -12660,6 +12662,146 @@ describe("The FILL RULE reaches every consumer (schema 38)", () => {
     });
 });
 
+describe("Mesh — bending a shape (schema 41)", () => {
+    const box = { width: 100, height: 100 };
+    const doc = (...nodes: Node[]): ProjectDocument => {
+        const d = createEmptyDocument();
+        for (const n of nodes) d.nodes.set(n.id, n);
+        d.rootNodeUuids = nodes.map(n => n.id);
+        return d;
+    };
+    const node = (id: string, mesh?: Mesh): Node =>
+        ({ id, type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 100, height: 100 },
+           style: { fill: "#000", opacity: 1 }, layout: {}, ...(mesh ? { mesh } : {}) } as Node);
+    /** A rest mesh with one corner dragged, which is the smallest real warp. */
+    const pulled = (dx: number, dy: number): Mesh => {
+        const m = restMesh(1, 1, box);
+        m.points[3] = { x: m.points[3].x + dx, y: m.points[3].y + dy };   // bottom-right
+        return m;
+    };
+
+    test("a point lands EXACTLY on the control point it is dragged to", () => {
+        // The property a person dragging a handle actually checks, and the reason bilinear is
+        // enough: it is exact at the corners whatever it does in between.
+        const m = pulled(40, 20);
+        expect(warpPoint(m, box, 100, 100)).toEqual({ x: 140, y: 120 });
+        expect(warpPoint(m, box, 0, 0)).toEqual({ x: 0, y: 0 });
+        expect(warpPoint(m, box, 100, 0)).toEqual({ x: 100, y: 0 });
+        expect(warpPoint(m, box, 0, 100)).toEqual({ x: 0, y: 100 });
+    });
+
+    test("between control points it blends, in both directions", () => {
+        const m = pulled(40, 0);
+        // The bottom edge now runs from (0,100) to (140,100), so its MIDPOINT sits at 70 — it
+        // moved by half the pull, which is not the same as sitting half way along the pull.
+        expect(warpPoint(m, box, 50, 100).x).toBeCloseTo(70, 9);
+        // The right edge runs from (100,0) to (140,100): its midpoint is 120.
+        expect(warpPoint(m, box, 100, 50).x).toBeCloseTo(120, 9);
+        // The dead centre is the average of all four corners: (0 + 100 + 0 + 140) / 4.
+        expect(warpPoint(m, box, 50, 50).x).toBeCloseTo(60, 9);
+        // The far corner is untouched, so a warp is LOCAL rather than a whole-shape transform.
+        expect(warpPoint(m, box, 0, 0)).toEqual({ x: 0, y: 0 });
+    });
+
+    test("a rest mesh is the IDENTITY and is skipped, not applied", () => {
+        // An untouched mesh must cost nothing: a user who turns the tool on and drags nothing
+        // should have the same document they started with.
+        const m = restMesh(3, 2, box);
+        expect(isIdentityMesh(m, box)).toBe(true);
+        expect(warpPoint(m, box, 37, 61).x).toBeCloseTo(37, 9);
+        expect(warpPoint(m, box, 37, 61).y).toBeCloseTo(61, 9);
+        m.points[4] = { x: m.points[4].x + 1, y: m.points[4].y };
+        expect(isIdentityMesh(m, box)).toBe(false);
+    });
+
+    test("points OUTSIDE the box are clamped, not extrapolated", () => {
+        // A shape's ink is not obliged to fit its box, and a bilinear patch diverges fast beyond
+        // its corners — an overhanging outline would be flung across the canvas rather than
+        // following the edge it is near.
+        const m = pulled(40, 0);
+        const far = warpPoint(m, box, 1000, 1000);
+        const corner = warpPoint(m, box, 100, 100);
+        expect(far).toEqual(corner);
+        expect(warpPoint(m, box, -50, -50)).toEqual({ x: 0, y: 0 });
+    });
+
+    test("a warped node resolves into an ordinary PATH, so everything downstream is unchanged", () => {
+        // The whole reason a warp costs so little. Picking, marquee, snapping, tessellation, the
+        // decomposition and all three backends see a path.
+        const d = doc(node("A", pulled(60, 0)));
+        const scene = resolveScene(d);
+        const out = scene.nodes.get("A")!;
+        expect(out.type).toBe("core.path");
+        expect(out.path!.length).toBeGreaterThan(4);
+        expect(pathError("core.path", out.path!)).toBeNull();
+        // The bend is IN the commands now, and the mesh is gone from the derived node — leaving
+        // it on would warp an already-warped outline the next time anything resolved, which is
+        // the `activeState` trap in a new costume.
+        expect(out.mesh).toBeUndefined();
+        const twice = resolveScene(scene);
+        expect(twice.nodes.get("A")!.path!.length).toBe(out.path!.length);
+    });
+
+    test("a warp is CLICKABLE where it is drawn", () => {
+        // The cardinal rule. A deformation applied in a renderer could never satisfy it.
+        // Pulled INWARD, so the test needs no opinion about ink that leaves the box: a point that
+        // used to be well inside the rectangle is now outside the bent shape, and the click passes
+        // through to whatever is behind it.
+        const d = doc(node("A", pulled(-60, 0)));
+        const computed = computeGeometry(d);
+        expect(hitTest(computed, 80, 96)).toBeNull();
+        const rigid = computeGeometry(doc(node("A")));
+        expect(hitTest(rigid, 80, 96)).toBe("A");
+        // …while a point still inside the bent shape keeps hitting it.
+        expect(hitTest(computed, 20, 96)).toBe("A");
+    });
+
+    test("a STRAIGHT edge crossing a bend follows it rather than chording across", () => {
+        // A warp bends the space BETWEEN two points, so a segment that kept only its ends would
+        // cut the corner off every bend. Segments are subdivided at the grid's own resolution.
+        const m = restMesh(2, 1, box);
+        m.points[1] = { x: 50, y: -60 };                 // pull the TOP-MIDDLE control point up
+        const d = doc(node("A", m));
+        const out = resolveScene(d).nodes.get("A")!;
+        const top = Math.min(...out.path!.filter(c => c.c !== "Z").map(c => (c as { y: number }).y));
+        // The outline reaches up toward the dragged point; a chord between the two top corners
+        // would have stayed at y = 0.
+        expect(top).toBeLessThan(-30);
+    });
+
+    test("an unmeshed document is returned BY REFERENCE", () => {
+        const flat = doc(node("A"), node("B"));
+        expect(resolveMeshes(flat)).toBe(flat);
+        // …and a mesh still at rest changes nothing either.
+        const rested = doc(node("A", restMesh(2, 2, box)));
+        expect(resolveMeshes(rested).nodes.get("A")!.type).toBe("core.rectangle");
+    });
+
+    test("a mesh is validated on BOTH paths, and its point count must match its grid", () => {
+        expect(meshError(undefined)).toBeNull();
+        expect(meshError(restMesh(2, 3, box))).toBeNull();
+        expect(meshError({ cols: 0, rows: 1, points: [] })).toMatch("cols");
+        expect(meshError({ cols: 1, rows: 1.5, points: [] })).toMatch("rows");
+        expect(meshError({ cols: MESH_MAX_DIVISIONS + 1, rows: 1, points: [] })).toMatch("cols");
+        // The count is DERIVED from the grid, so a mismatch is not a detail: every lookup indexes
+        // by row and column, and a short array would read `undefined` as a coordinate.
+        expect(meshError({ cols: 1, rows: 1, points: [{ x: 0, y: 0 }] })).toMatch("exactly 4");
+        expect(meshError({ cols: 1, rows: 1, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: NaN, y: 1 }] })).toMatch("finite");
+
+        const d = doc(node("A", pulled(10, 10)));
+        expect(deserializeDocument(serializeDocument(d)).nodes.get("A")!.mesh).toEqual(d.nodes.get("A")!.mesh);
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {}, mesh: { cols: 1, rows: 1, points: [] } } } } });
+        expect(() => deserializeDocument(bad)).toThrow("exactly 4");
+    });
+
+    test("a schema-40 document migrates to 41 and draws identically", () => {
+        const v40 = { version: "40", document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } } } };
+        const loaded = deserializeDocument(JSON.stringify(v40));
+        expect(loaded.nodes.get("n")!.mesh).toBeUndefined();
+        expect(JSON.parse(serializeDocument(loaded)).version).toBe(SCHEMA_VERSION);
+    });
+});
+
 describe("Depth — order, the z-buffer and parallax from one number (schema 40)", () => {
     const doc = (...nodes: Node[]): ProjectDocument => {
         const d = createEmptyDocument();
@@ -12980,7 +13122,8 @@ describe("Timeline — cutout, frame-by-frame, tweening, onion skinning (schema 
             hidden: true, locked: true, variant: "v", variants: ["v"], slot: "s",
             slotContent: { s: "A" }, states: { hover: {} }, booleanOp: "union" as const,
             interactions: [{ trigger: "click" as const, state: "hover" }],
-            track: [{ frame: 0, values: {} }], depth: 3
+            track: [{ frame: 0, values: {} }], depth: 3,
+            mesh: { cols: 1, rows: 1, points: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 0, y: 50 }, { x: 50, y: 50 }] }
         };
         // Applied DIRECTLY, with no action or transaction in between: the thing under test is the
         // field list itself, and routing through a dispatcher would only add ways to be wrong.

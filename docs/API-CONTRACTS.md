@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v40 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v41 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -210,6 +210,18 @@ function localScaleOf(m: {a,b,c,d}, viewScale: number): number;   // larger row 
 // work follows the curve rather than a fixed count. Still DETERMINISTIC and viewport-independent
 // — the input is the curve's own numbers — which is the property a fixed count was defending.
 function isPaintBearing(fill: string): boolean;   // "", "none", "transparent" = no paint
+
+// Mesh.ts — a grid of control points that BENDS a shape (schema 41).
+const MESH_MAX_DIVISIONS: number;                         // 64 — the point count is the product
+interface Mesh { cols: number; rows: number; points: {x: number; y: number}[] }   // row-major, DEFORMED positions
+function meshError(mesh: unknown): string | null;         // shared by the edit and load paths
+function restPoint(mesh, col, row, box): {x, y};          // where a control point starts
+function restMesh(cols, rows, box): Mesh;                 // the grid a user starts from
+function isIdentityMesh(mesh, box): boolean;              // untouched = skipped entirely
+function warpPoint(mesh, box, x, y): {x, y};              // BILINEAR; clamped outside the box
+function warpCommands(commands, box, mesh, flatten): PathCommand[];
+// Segments are SUBDIVIDED at the grid's resolution before warping — a warp bends the space
+// BETWEEN two points, so an edge that kept only its ends would chord across every bend.
 
 // Depth.ts — how far BACK a node sits (schema 40). One number, three consumers.
 const DEPTH_MIN: number; const DEPTH_MAX: number;            // -1000 .. 1000

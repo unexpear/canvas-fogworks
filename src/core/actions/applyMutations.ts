@@ -125,6 +125,7 @@ export function applyMutationsToDocument(
                 if ("interactions" in delta) node.interactions = delta.interactions;
                 if ("track" in delta) node.track = delta.track;
                 if ("depth" in delta) node.depth = delta.depth;
+                if ("mesh" in delta) node.mesh = delta.mesh;
                 if (delta.text !== undefined) node.text = delta.text;
                 if (delta.src !== undefined) node.src = delta.src;
                 if (delta.name !== undefined) node.name = delta.name;

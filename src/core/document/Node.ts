@@ -254,6 +254,14 @@ export interface Node {
      * See `document/Depth`.
      */
     depth?: number;
+    /**
+     * A GRID of control points that BENDS this node's outline (schema 41).
+     *
+     * Resolved at the display seam into an ordinary `core.path`, so nothing downstream knows a
+     * mesh from a drawing. Absent = rigid, which every node was until this field. See
+     * `document/Mesh`.
+     */
+    mesh?: Mesh;
     text?: string;
     src?: string;
     /** `core.path` drawing commands (absolute, local-space). Absent = an empty path. See `PathCommand`. */
@@ -1027,6 +1035,8 @@ export function transformError(t: Partial<Transform>): string | null {
 export type StateDefinition = import("./Components").InstanceOverride;
 /** A node's keyframe — declared in `document/Timeline`, referenced here like `Interaction`. */
 export type Keyframe = import("./Timeline").Keyframe;
+/** A node's deformation grid — declared in `document/Mesh`, referenced here like `Keyframe`. */
+export type Mesh = import("./Mesh").Mesh;
 
 /** Cap on a node's state map, and on a state NAME — hand-editable, so bounded. */
 export const STATES_MAX = 64;

@@ -311,6 +311,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "37") { raw = migrate_37_to_38(raw); version = "38"; }
     if (version === "38") { raw = migrate_38_to_39(raw); version = "39"; }
     if (version === "39") { raw = migrate_39_to_40(raw); version = "40"; }
+    if (version === "40") { raw = migrate_40_to_41(raw); version = "41"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -669,6 +670,17 @@ function migrate_21_to_22(raw: any): any {
  * already was — so the document draws identically. The bump is the interpretation kind: an old
  * build ignores the field and draws a background layer in front of the thing it is behind.
  */
+/**
+ * 40 -> 41: MESHES — `Node.mesh`, a grid of control points that bends a node's outline.
+ *
+ * Additive: absent means rigid, which every schema-40 node was, so the document draws identically.
+ * The bump is the interpretation kind — an old build ignores the field and draws the UNBENT shape,
+ * which is the same file showing a different picture.
+ */
+function migrate_40_to_41(raw: any): any {
+    return { ...raw, version: "41" };
+}
+
 function migrate_39_to_40(raw: any): any {
     return { ...raw, version: "40" };
 }

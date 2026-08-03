@@ -43,6 +43,8 @@ import { outlineStrokeAction } from "../core/actions/outlineStrokeActions";
 import { onionFrames, Keyframe } from "../core/document/Timeline";
 import { applyParallax, DEPTH_MIN, DEPTH_MAX } from "../core/document/Depth";
 import { SetDepthAction } from "../core/actions/SetDepthAction";
+import { SetMeshAction } from "../core/actions/SetMeshAction";
+import { restMesh, MESH_MAX_DIVISIONS } from "../core/document/Mesh";
 import { SetTrackAction } from "../core/actions/SetTrackAction";
 import { SetTimelineAction } from "../core/actions/SetTimelineAction";
 import { STROKE_ALIGNS, StrokeAlign } from "../core/geometry/StrokeOutline";
@@ -1499,6 +1501,28 @@ export function App() {
                                             value={typeof node.style.strokeWidth === "number" ? node.style.strokeWidth : 0}
                                             onChange={v => { editSelected({ style: { strokeWidth: clampStrokeWidth(v) } }); refresh(); }}
                                         /></div>
+                                    <div><label style={INSPECTOR_LABEL}>Warp</label>
+                                        <select
+                                            value={node.mesh ? `${node.mesh.cols}x${node.mesh.rows}` : "off"}
+                                            title="Lay a grid of control points over this shape. Dragging one bends the outline; the result is an ordinary path, so it can be clicked, cut and tessellated like any other."
+                                            onChange={e => {
+                                                const id = es.selectedNodeIds[0];
+                                                if (!id) return;
+                                                const v = e.target.value;
+                                                const box = { width: node.geometry.width, height: node.geometry.height };
+                                                const mesh = v === "off" ? undefined
+                                                    : restMesh(parseInt(v, 10), parseInt(v.split("x")[1], 10), box);
+                                                dispatcher.dispatchAction(new SetMeshAction(dispatcher.getDocument(), id, mesh));
+                                                refresh();
+                                            }}
+                                            style={{ ...SELECT_STYLE, width: "100%" }}
+                                        >
+                                            <option value="off">off</option>
+                                            <option value="1x1">1x1</option>
+                                            <option value="2x2">2x2</option>
+                                            <option value="3x3">3x3</option>
+                                            <option value="4x4">4x4</option>
+                                        </select></div>
                                     <div><label style={INSPECTOR_LABEL}>Depth</label>
                                         <NumInput
                                             value={node.depth ?? 0}

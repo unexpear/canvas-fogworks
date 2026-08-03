@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v40 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v41 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -87,6 +87,15 @@ interface Node {
 
 interface Geometry { x: number; y: number; width: number; height: number; }
 // COORDINATE SPACE: x/y are PARENT-RELATIVE. See the rule below.
+
+// MESH (schema 41). Node.mesh?: { cols, rows, points } — a grid of control points that BENDS the
+// node's outline. Points are in LOCAL units, row-major, exactly (cols+1)*(rows+1) of them, and
+// hold the DEFORMED positions; the rest positions are implied by the box, so a mesh sitting on
+// that grid is the identity and is skipped. Deformation is BILINEAR per cell — exact at the
+// control points, which is what a person dragging one checks. Resolved at the display seam into
+// an ordinary `core.path` (`resolveMeshes`, LAST, after booleans), so nothing downstream knows a
+// mesh from a drawing and a warp is CLICKABLE where it is drawn. Curves are flattened first: a
+// cubic through a bilinear warp is not a cubic, the same trade booleans and strokes already make.
 
 // DEPTH (schema 40). Node.depth?: number in [-1000, 1000]; absent = 0, the plane of the page.
 // ONE number, THREE consumers: display ORDER (far draws first, ahead of the tree's own order, and
