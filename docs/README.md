@@ -63,7 +63,9 @@ src/
                 PathBoolean, Resolve, StrokeOutline,
                 Tessellate, ConvexDecompose
     ids/        UUID
-    tests/      document.test.ts, apiSurface.ts (compile-time API pin)
+    tests/      document.test.ts, apiSurface.ts (compile-time API pin —
+                a module that gains a documented export gains a line
+                there in the SAME commit; see TESTING.md)
   editor/       EditorState + tools/ (Select/Move/Rectangle, ToolController)
   renderer/     RenderModel (pure display list) + emitSVG /  (read-only)
                 emitCanvas / emitWebGL backends +

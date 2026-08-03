@@ -463,6 +463,12 @@ frame now appears there at all. What it still cannot do is text and images (a te
 effects (render targets); both are stated in the module header rather than discovered later. A
 backend that silently drops content when you switch to it is worse than one that admits its gaps.
 
+Its `GLState` — the program, the two buffers and the uniform locations — is EXPORTED, which was
+not a style choice. `initGL` returns it and `setLighting` takes it, both documented in
+API-CONTRACTS, and while it was private neither signature could be written down outside
+`emitWebGL.ts`. Nobody noticed until the API pin tried to state the contract and could not: a
+documented type that cannot be named is a contract with no second party.
+
 That flat form is the *bake*. The default is a **`core.boolean` node** (schema 33) that keeps its
 operands as an ordinary subtree and is resolved by `resolveBooleans` inside `resolveScene` — so
 moving a child, restyling it or switching the operation re-derives the shape, and undo is just an
