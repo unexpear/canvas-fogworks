@@ -12815,6 +12815,38 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         expect(modelOf(node("A")).content[0].surface).toBeUndefined();
     });
 
+    test("a raised shape reaches the GPU with normals that actually VARY", () => {
+        // The end-to-end claim, and the one that was missing: unit tests fed `itemDraws` a surface
+        // directly and passed, while nothing checked that a document produces vertices the surface
+        // can be sampled AT. It did not. A rectangle tessellates to two triangles whose vertices
+        // are only its four CORNERS, and at the rim of a raised mesh the gradient is zero — so
+        // every normal came out (0,0,1) and the Lambert term had nothing to do. Measured live as
+        // 96 normal buffers uploaded and zero of them non-flat.
+        //
+        // The fix is that HEIGHT now subdivides the outline, so the shading has somewhere to live.
+        const raisedDome = restMesh(4, 4, { width: 280, height: 280 });
+        raisedDome.points = raisedDome.points.map((p, i) => {
+            const col = i % 5, row = Math.floor(i / 5);
+            const edge = col === 0 || row === 0 || col === 4 || row === 4;
+            return { ...p, z: edge ? 0 : 150 };
+        });
+        const d = doc({ id: "A", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 280, height: 280 },
+            style: { fill: "#808080", opacity: 1 }, layout: {}, mesh: raisedDome } as Node);
+        const model = buildRenderModel({ width: 800, height: 600 }, d,
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(d), viewport: { x: 0, y: 0, zoom: 1 } });
+        const item = model.content[0];
+        expect(item.surface).toBeDefined();
+        const [drawn] = itemDraws(item);
+        // Enough vertices to sample a surface with, rather than the four a rectangle would give.
+        expect(drawn.vertices.length / 2).toBeGreaterThan(8);
+        const nonFlat = [];
+        for (let i = 0; i < drawn.normals.length; i += 3) {
+            if (Math.abs(drawn.normals[i]) > 1e-3 || Math.abs(drawn.normals[i + 1]) > 1e-3) nonFlat.push(i);
+        }
+        expect(nonFlat.length).toBeGreaterThan(0);
+    });
+
     test("the scene's lights reach the display list, and an unlit document carries none", () => {
         const d = doc(node("A"));
         d.lights = [light(1, 0, -1)];

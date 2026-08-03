@@ -1520,13 +1520,15 @@ export function App() {
                                         /></div>
                                     <div><label style={INSPECTOR_LABEL}>Warp</label>
                                         <select
-                                            value={node.mesh ? `${node.mesh.cols}x${node.mesh.rows}` : "off"}
+                                            value={(() => { const m = dispatcher.getDocument().nodes.get(node.id)?.mesh;
+                                                return m ? `${m.cols}x${m.rows}` : "off"; })()}
                                             title="Lay a grid of control points over this shape. Dragging one bends the outline; the result is an ordinary path, so it can be clicked, cut and tessellated like any other."
                                             onChange={e => {
                                                 const id = es.selectedNodeIds[0];
                                                 if (!id) return;
                                                 const v = e.target.value;
-                                                const box = { width: node.geometry.width, height: node.geometry.height };
+                                                const src = dispatcher.getDocument().nodes.get(id);
+                                                const box = { width: src?.geometry.width ?? node.geometry.width, height: src?.geometry.height ?? node.geometry.height };
                                                 const mesh = v === "off" ? undefined
                                                     : restMesh(parseInt(v, 10), parseInt(v.split("x")[1], 10), box);
                                                 dispatcher.dispatchAction(new SetMeshAction(dispatcher.getDocument(), id, mesh));
@@ -1542,15 +1544,21 @@ export function App() {
                                         </select></div>
                                     <div><label style={INSPECTOR_LABEL}>Height</label>
                                         <NumInput
-                                            value={node.mesh ? Math.max(...node.mesh.points.map(p => p.z ?? 0)) : 0}
+                                            value={(() => { const m = dispatcher.getDocument().nodes.get(node.id)?.mesh;
+                                                return m ? Math.max(...m.points.map(p => p.z ?? 0)) : 0; })()}
                                             onChange={v => {
                                                 const id = es.selectedNodeIds[0];
-                                                if (!id || !node.mesh) return;
+                                                // The STORED mesh, not the resolved one: a raised or warped node
+                                                // resolves to a path with its mesh dropped, so reading it back
+                                                // from the scene would show every control as "off" the moment it
+                                                // started working. The mesh DRAG already had to learn this.
+                                                const stored = id ? dispatcher.getDocument().nodes.get(id) : undefined;
+                                                if (!id || !stored?.mesh) return;
                                                 // Raise the MIDDLE of the grid and leave the rim at zero, which is
                                                 // the shape a bevel has — a grid raised uniformly is still flat, and
                                                 // flat is exactly what a light cannot find.
-                                                const { cols, rows } = node.mesh;
-                                                const points = node.mesh.points.map((p, i) => {
+                                                const { cols, rows } = stored.mesh;
+                                                const points = stored.mesh.points.map((p, i) => {
                                                     const col = i % (cols + 1), row = Math.floor(i / (cols + 1));
                                                     const edge = col === 0 || row === 0 || col === cols || row === rows;
                                                     return { x: p.x, y: p.y, z: edge ? 0 : v };

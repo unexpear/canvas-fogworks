@@ -41,7 +41,7 @@ import { shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
 import { booleanPaths } from "../geometry/PathBoolean";
 import { normalizePathNode } from "../geometry/PathBuilder";
 import { applyFrame } from "./Timeline";
-import { isIdentityMesh, warpCommands } from "./Mesh";
+import { isFlatMesh, isIdentityMesh, warpCommands } from "./Mesh";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
  *  Reserved: a stored node id may not contain it (checked on the edit AND load paths). */
@@ -755,7 +755,13 @@ export function resolveMeshes(doc: ReadonlyDocument): ReadonlyDocument {
     doc.nodes.forEach((n, id) => {
         const mesh = n.mesh;
         const box = { width: n.geometry.width, height: n.geometry.height };
-        if (!mesh || isIdentityMesh(mesh, box)) { nodes.set(id, n as Node); return; }
+        // Converted when the mesh moves the outline (`isIdentityMesh`) OR when it has HEIGHT.
+        // Height changes no coordinate, so it looked like nothing to do — but a rectangle
+        // tessellates to two triangles whose vertices are only its four CORNERS, and at the rim
+        // of a raised mesh the gradient is zero, so every one of them sampled a flat spot and the
+        // shading had nowhere to live. Converting subdivides the outline at the grid's own
+        // resolution, which is where the surface actually varies.
+        if (!mesh || (isIdentityMesh(mesh, box) && isFlatMesh(mesh))) { nodes.set(id, n as Node); return; }
         // The node's OWN outline, by the same conversion picking and the booleans use — so a
         // warped rectangle bends the rectangle everything else agrees it is.
         const local = shapeToCommands(hitShapeOf(n as Node, radiusOfNode(n as Node)), box.width, box.height);

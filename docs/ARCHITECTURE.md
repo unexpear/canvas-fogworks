@@ -258,6 +258,15 @@ Document-level because two shapes lit from different directions do not read as t
 read as a mistake. AMBIENT is separate and is not a light but a floor, without which an unlit face
 goes to pure black.
 
+HEIGHT subdivides the outline, and finding out why took a measurement. Shading needs vertices to
+live on, and a rectangle tessellates to two triangles whose vertices are only its four CORNERS —
+where a raised mesh's gradient is exactly zero. So every normal came out flat and the Lambert term
+had nothing to do, while the unit tests passed because they fed `itemDraws` a surface directly and
+never asked whether a document produces vertices to sample it at. `resolveMeshes` now converts a
+mesh that has height as well as one that warps: the outline is unchanged, but cut at the grid's own
+resolution, which is where the surface varies. Interior tessellation — triangulating the grid
+itself rather than only its boundary — would shade a dome properly and is not done.
+
 The GPU carries ONE NORMAL PER VERTEX, which is the whole point: a mesh raised in the middle faces
 a different way there than at its edges, and a single normal per shape would light a dome exactly
 like a flat card. Tessellation moved into LOCAL space to make that possible — a normal is sampled
