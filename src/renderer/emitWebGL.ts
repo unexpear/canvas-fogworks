@@ -54,11 +54,11 @@ import { FLATTEN_TOLERANCE, displayTolerance, localScaleOf } from "../core/geome
 const VERTEX_SHADER = `
 attribute vec2 a_pos;
 attribute vec3 a_normal;
-attribute float a_shadow;
+attribute vec2 a_local;
 uniform mat3 u_view;
 uniform float u_z;
 varying vec3 v_normal;
-varying float v_shadow;
+varying vec2 v_local;
 void main() {
     vec3 p = u_view * vec3(a_pos, 1.0);
     // The normal is passed through UNTRANSFORMED and UN-NORMALISED. Untransformed because it is a
@@ -68,11 +68,11 @@ void main() {
     // affine across a cell; normalising here would bake the faceting back in before the fragment
     // shader ever saw it.
     v_normal = a_normal;
-    // Whether this vertex can SEE the key light, marched on the CPU through the mesh's own
-    // heightfield. Interpolated, which is honest about what it is: a per-vertex answer to a
-    // question that is genuinely discontinuous. Per fragment needs the heightfield in the
-    // shader, which needs the texture path this renderer still does not have.
-    v_shadow = a_shadow;
+    // The vertex's position in the shape's OWN units, carried so the fragment stage can march
+    // the heightfield from where it actually is. This is what replaced a per-vertex shadow term:
+    // interpolating a POSITION is exact (an affine map across a triangle), where interpolating
+    // the discontinuous answer computed at three corners was not.
+    v_local = a_local;
     // z comes from the node's DEPTH, not from the draw order — that is what makes the depth
     // buffer do the deciding rather than the sequence of draw calls.
     gl_Position = vec4(p.xy, u_z, 1.0);
@@ -81,18 +81,55 @@ void main() {
 const FRAGMENT_SHADER = `
 precision mediump float;
 varying vec3 v_normal;
-varying float v_shadow;
+varying vec2 v_local;
 uniform vec4 u_color;
 uniform float u_ambient;
 uniform int u_lightCount;
 uniform vec3 u_lightDir[4];
 uniform vec3 u_lightColor[4];
+uniform sampler2D u_heightTex;
+uniform vec2 u_box;
+uniform float u_hMin;
+uniform float u_hMax;
+uniform float u_hasHeight;
+
+// The heightfield at a point in LOCAL units. The texture holds 16 bits packed across two
+// channels; these constants are that packing undone, written so every intermediate stays near 1
+// rather than reaching 65535 — mediump is only guaranteed to ±16384, so the obvious
+// naive 'r * 255.0 * 256.0' decode overflows it on exactly the hardware that needs the care.
+float sampleHeight(vec2 p) {
+    vec4 t = texture2D(u_heightTex, clamp(p / u_box, 0.0, 1.0));
+    return u_hMin + (t.r * 0.99610895 + t.g * 0.0038910506) * (u_hMax - u_hMin);
+}
+
+// A TRANSCRIPTION of geometry/RayMarch.marchOccluded, which is where this is specified and
+// tested. Same steps, same bound, same strict comparison — a shader cannot call TypeScript, so
+// the arithmetic is stated twice and only one of the two can be checked. Kept line-for-line
+// alongside it for that reason, exactly as this shader's Lambert term mirrors lambert().
+float visibility(vec2 p) {
+    if (u_hasHeight < 0.5 || u_lightCount == 0) return 1.0;
+    vec3 toLight = -u_lightDir[0];
+    if (toLight.z <= 0.0) return 1.0;
+    float start = sampleHeight(p);
+    if (start >= u_hMax) return 1.0;
+    float dist = (u_hMax - start) / toLight.z;
+    for (int i = 1; i <= 16; i++) {
+        float t = dist * float(i) / 16.0;
+        if (sampleHeight(p + toLight.xy * t) > start + toLight.z * t) return 0.0;
+    }
+    return 1.0;
+}
+
 void main() {
     // PER FRAGMENT, which is the whole reason the vertex stage hands over a raw vector. What
     // arrives here is the interpolation of three un-normalised normals, and inside one cell of the
     // mesh that interpolation is exact — so normalising it now yields the surface's own normal at
     // this pixel rather than a blend of three corner normals that only agrees at the corners.
     vec3 n = normalize(v_normal);
+    // PER FRAGMENT. The occlusion is recomputed at this pixel rather than blended from three
+    // corner answers, which is what makes the shadow's edge an edge: it is discontinuous, and no
+    // amount of interpolation between vertices produces a discontinuity.
+    float vis = visibility(v_local);
     // AMBIENT is a floor, not a light: it is what a surface shows when nothing reaches it, and
     // without it an unlit face goes to pure black, which is never what a designer means.
     vec3 lit = vec3(u_ambient);
@@ -106,7 +143,7 @@ void main() {
         // four lights would be four attributes and four CPU marches per frame; the first light is
         // the one the drop shadow already privileges, so the scene stays consistent about which
         // light throws shadows.
-        lit += u_lightColor[i] * d * (i == 0 ? v_shadow : 1.0);
+        lit += u_lightColor[i] * d * (i == 0 ? vis : 1.0);
     }
     // The colour is MODULATED, never replaced: a lit red shape is a darker or brighter red, and a
     // model that added light instead would wash every hue toward the light's own.
@@ -125,17 +162,23 @@ export interface GLState {
     program: WebGLProgram;
     buffer: WebGLBuffer;
     normalBuffer: WebGLBuffer;
-    shadowBuffer: WebGLBuffer;
+    localBuffer: WebGLBuffer;
+    heightTex: WebGLTexture;
     posLoc: number;
     viewLoc: WebGLUniformLocation | null;
     colorLoc: WebGLUniformLocation | null;
     zLoc: WebGLUniformLocation | null;
     normalLoc: number;
-    shadowLoc: number;
+    localLoc: number;
     ambientLoc: WebGLUniformLocation | null;
     lightCountLoc: WebGLUniformLocation | null;
     lightDirLoc: WebGLUniformLocation | null;
     lightColorLoc: WebGLUniformLocation | null;
+    heightTexLoc: WebGLUniformLocation | null;
+    boxLoc: WebGLUniformLocation | null;
+    hMinLoc: WebGLUniformLocation | null;
+    hMaxLoc: WebGLUniformLocation | null;
+    hasHeightLoc: WebGLUniformLocation | null;
 }
 
 function compile(gl: WebGLRenderingContext, type: number, source: string): WebGLShader | null {
@@ -157,24 +200,30 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
     const program = gl.createProgram();
     const buffer = gl.createBuffer();
     const normalBuffer = gl.createBuffer();
-    const shadowBuffer = gl.createBuffer();
-    if (!vs || !fs || !program || !buffer || !normalBuffer || !shadowBuffer) return null;
+    const localBuffer = gl.createBuffer();
+    const heightTex = gl.createTexture();
+    if (!vs || !fs || !program || !buffer || !normalBuffer || !localBuffer || !heightTex) return null;
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
     return {
-        gl, program, buffer, normalBuffer, shadowBuffer,
+        gl, program, buffer, normalBuffer, localBuffer, heightTex,
         posLoc: gl.getAttribLocation(program, "a_pos"),
         viewLoc: gl.getUniformLocation(program, "u_view"),
         colorLoc: gl.getUniformLocation(program, "u_color"),
         zLoc: gl.getUniformLocation(program, "u_z"),
         normalLoc: gl.getAttribLocation(program, "a_normal"),
-        shadowLoc: gl.getAttribLocation(program, "a_shadow"),
+        localLoc: gl.getAttribLocation(program, "a_local"),
         ambientLoc: gl.getUniformLocation(program, "u_ambient"),
         lightCountLoc: gl.getUniformLocation(program, "u_lightCount"),
         lightDirLoc: gl.getUniformLocation(program, "u_lightDir"),
-        lightColorLoc: gl.getUniformLocation(program, "u_lightColor")
+        lightColorLoc: gl.getUniformLocation(program, "u_lightColor"),
+        heightTexLoc: gl.getUniformLocation(program, "u_heightTex"),
+        boxLoc: gl.getUniformLocation(program, "u_box"),
+        hMinLoc: gl.getUniformLocation(program, "u_hMin"),
+        hMaxLoc: gl.getUniformLocation(program, "u_hMax"),
+        hasHeightLoc: gl.getUniformLocation(program, "u_hasHeight")
     };
 }
 
@@ -252,41 +301,86 @@ export interface Draw {
      */
     normals: number[];
     /**
-     * One per VERTEX: 1 = this point can see the key light, 0 = something on the surface is in the
-     * way. Empty when the item has no surface or the scene has no light — there is nothing to
-     * occlude and nothing to be occluded from.
+     * Each vertex's position in the shape's OWN units, two floats each — what the fragment stage
+     * marches the heightfield from.
      *
-     * The answer a normal cannot give. A crease beside a raised edge may face the light squarely
-     * and still be dark, because the edge is between it and the light; see `geometry/RayMarch`.
+     * A POSITION rather than an answer, and that is the whole change from the per-vertex term this
+     * replaced: interpolating a position across a triangle is exact, where interpolating occlusion
+     * computed at three corners smeared a discontinuity into a gradient.
      */
-    shadow: number[];
+    locals: number[];
+    /** The surface's heights as a texture, or null when there is no relief to march through. */
+    height: HeightTexture | null;
     color: [number, number, number, number];
 }
 
+/** Side of the square heightfield texture. 64 covers the finest grid a mesh may declare. */
+export const HEIGHT_TEX_SIZE = 64;
+
+/** A surface's heights as bytes the GPU can sample, plus the range they were packed against. */
+export interface HeightTexture {
+    /** RGBA, `size * size * 4` bytes. Height is 16 bits split across R (high) and G (low). */
+    data: Uint8Array;
+    size: number;
+    min: number;
+    max: number;
+}
+
 /**
- * "Can this point see the key light?", for one surface — or null when the answer is always yes.
+ * A height read back out of the two bytes it was packed into.
  *
- * Null rather than a function returning `false` everywhere, because the caller uses it to decide
- * whether to ALLOCATE a per-vertex array at all. The three cases that can cast nothing are worth
- * separating out here rather than paying for a march that is bound to answer no: no light, a
- * surface with no relief, and a light at or below the horizon (whose faces `lambert` has already
- * taken to zero).
- *
- * The march runs on the CPU, once per vertex, using the SAME `warpHeight` that shaped the outline
- * — so what the shadow is cast by and what the shape looks like cannot disagree.
+ * Exported and tested because the FRAGMENT SHADER contains this same arithmetic and cannot be
+ * tested — pinning the round trip here is the only way the packing has a checked definition. An
+ * off-by-one in the decode is not a crash; it is a surface subtly the wrong height, which looks
+ * like a lighting bug forever.
  */
-function occluderFor(surface: { mesh: ReadonlyMesh; box: { width: number; height: number } },
-                     keyLight: Light | undefined): ((x: number, y: number) => boolean) | null {
-    if (!keyLight) return null;
-    const dir = normalize(keyLight);
-    // `light` stores the direction the light TRAVELS, and the march walks TOWARD the light.
-    if (!dir) return null;
-    const toLight = { x: -dir.x, y: -dir.y, z: -dir.z };
-    if (toLight.z <= 0) return null;
-    const { max } = heightRange(surface.mesh);
-    if (max <= 0) return null;                    // no relief: nothing stands up to block anything
-    const height = (x: number, y: number) => warpHeight(surface.mesh, surface.box, x, y);
-    return (x: number, y: number) => marchOccluded(height, x, y, toLight, max);
+export function decodeHeight(rByte: number, gByte: number, min: number, max: number): number {
+    return min + ((rByte * 256 + gByte) / 65535) * (max - min);
+}
+
+/**
+ * A mesh's heightfield as a texture — the thing this renderer has never had, and what lets the
+ * ray march run per FRAGMENT instead of per vertex.
+ *
+ * SIXTEEN BITS, split across two channels, rather than the obvious eight. Eight bits over a
+ * 260-unit relief quantises to about one unit, and the march compares a sampled height against a
+ * ray climbing continuously — so the steps in the surface become steps in the shadow's edge,
+ * which is precisely the artifact this replaced a per-vertex term to remove.
+ *
+ * Packed against the surface's OWN range rather than an absolute scale, so all sixteen bits are
+ * spent on the relief that exists. A FLAT surface has no range to pack against and returns null:
+ * there is nothing to occlude with, the shader is told so, and the march never runs.
+ *
+ * Sampled at TEXEL CENTRES — `(i + 0.5) / size` — because that is where `texture2D` reads them.
+ * Aligning the samples to the box's edges instead would put every value half a texel from where
+ * the GPU looks for it, which reads as the whole surface sliding under its own lighting.
+ */
+export function heightTexture(mesh: ReadonlyMesh, box: { width: number; height: number },
+                              size: number = HEIGHT_TEX_SIZE): HeightTexture | null {
+    const { min, max } = heightRange(mesh);
+    if (max <= min) return null;                  // flat: nothing stands up, and no range to pack
+    const span = max - min;
+    const data = new Uint8Array(size * size * 4);
+    for (let row = 0; row < size; row++) {
+        for (let col = 0; col < size; col++) {
+            const x = ((col + 0.5) / size) * box.width;
+            const y = ((row + 0.5) / size) * box.height;
+            const n = (warpHeight(mesh, box, x, y) - min) / span;
+            // The clamp is DEFENSIVE and provably unreachable, which a mutation of it shows:
+            // `warpHeight` clamps its parameters and then blends four control-point heights, so
+            // its result is a convex combination of values inside [min, max] and `n` cannot leave
+            // [0, 1] — not even by rounding, since one ulp of 1.0 is ten orders below the 7.6e-6
+            // it would take to reach the next code. It stays because the failure it prevents is a
+            // WRAP: `n` a hair above 1 gives 65536, whose high byte is 256, which a `Uint8Array`
+            // stores as 0 — turning the tallest point on the surface into the lowest.
+            const v = Math.round(Math.max(0, Math.min(1, n)) * 65535);
+            const i = (row * size + col) * 4;
+            data[i] = v >> 8;
+            data[i + 1] = v & 255;
+            data[i + 3] = 255;
+        }
+    }
+    return { data, size, min, max };
 }
 
 /** Straight at the viewer — what an unlit, unmeshed surface faces. */
@@ -310,8 +404,8 @@ function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number |
               surface?: {
                   normal: (x: number, y: number) => { x: number; y: number; z: number };
                   cell: number;
-                  /** Null when nothing can cast: a flat surface, or a scene with no key light. */
-                  occluded: ((x: number, y: number) => boolean) | null;
+                  /** Null when there is no relief; the shader is then told to skip the march. */
+                  height: HeightTexture | null;
               }): Draw | null {
     const color = parseColor(css);
     if (!color) return null;                      // not a colour it can parse: skip, never guess
@@ -329,18 +423,17 @@ function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number |
     // Presized, not bounded: JS arrays grow on assignment, so this is an allocation hint and
     // nothing else — a wrong size here changes no output, which is why no test can kill it.
     const normals = new Array<number>((local.length / 2) * 3);
-    const march = surface?.occluded ?? null;
-    const shadow = march ? new Array<number>(local.length / 2) : [];
+    const locals = new Array<number>(local.length);
     for (let i = 0, n = 0; i < local.length; i += 2, n += 3) {
         const lx = local[i], ly = local[i + 1];
         const nrm = surface ? vertexNormal(surface.normal(lx, ly)) : FLAT_NORMAL;
         normals[n] = nrm.x; normals[n + 1] = nrm.y; normals[n + 2] = nrm.z;
-        if (march) shadow[i / 2] = march(lx, ly) ? 0 : 1;
+        locals[i] = lx; locals[i + 1] = ly;
         vertices[i] = world ? world.a * lx + world.c * ly + world.e : lx;
         vertices[i + 1] = world ? world.b * lx + world.d * ly + world.f : ly;
     }
     if (opacity !== null) color[3] *= opacity;    // MULTIPLY — one blend, not two
-    return { vertices, normals, shadow, color };
+    return { vertices, normals, locals, height: surface?.height ?? null, color };
 }
 
 /**
@@ -367,8 +460,7 @@ export function itemTolerance(item: DrawItem, viewScale: number): number {
     return displayTolerance(item.world ? localScaleOf(item.world, viewScale) : viewScale);
 }
 
-export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE,
-                          keyLight?: Light): Draw[] {
+export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE): Draw[] {
     const paint = item.paint;
     const local = shapeToLocalCommands(item.shape, paint.radius);
     if (!local) return [];
@@ -384,7 +476,7 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE,
             // patch twice and buys nothing, coarser leaves the surface's own detail unreachable.
             cell: Math.max(1e-6, Math.min(item.surface.box.width / item.surface.mesh.cols,
                                           item.surface.box.height / item.surface.mesh.rows)),
-            occluded: occluderFor(item.surface, keyLight)
+            height: heightTexture(item.surface.mesh, item.surface.box)
         }
         : undefined;
     if (paint.fill !== null) {
@@ -458,7 +550,7 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
     // commit to a vertex count.
     const viewScale = vp.zoom * dpr;
     for (const item of [...list.grid.lines, ...list.content, ...list.overlay]) {
-        for (const d of itemDraws(item, itemTolerance(item, viewScale), list.lights?.[0])) {
+        for (const d of itemDraws(item, itemTolerance(item, viewScale))) {
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.vertices), gl.DYNAMIC_DRAW);
             gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
             // Normals ride in their own buffer rather than interleaved: the position buffer is
@@ -468,17 +560,36 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.normals), gl.DYNAMIC_DRAW);
             gl.enableVertexAttribArray(state.normalLoc);
             gl.vertexAttribPointer(state.normalLoc, 3, gl.FLOAT, false, 0, 0);
-            // The SHADOW term. A draw with no surface ships none, and every vertex is then fully
-            // lit — set as a constant attribute rather than uploading a buffer of ones, which is
-            // one call instead of one allocation per shape per frame.
-            if (d.shadow.length > 0) {
-                gl.bindBuffer(gl.ARRAY_BUFFER, state.shadowBuffer);
-                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.shadow), gl.DYNAMIC_DRAW);
-                gl.enableVertexAttribArray(state.shadowLoc);
-                gl.vertexAttribPointer(state.shadowLoc, 1, gl.FLOAT, false, 0, 0);
+            // LOCAL coordinates, so the fragment stage knows where on the surface it is.
+            gl.bindBuffer(gl.ARRAY_BUFFER, state.localBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.locals), gl.DYNAMIC_DRAW);
+            gl.enableVertexAttribArray(state.localLoc);
+            gl.vertexAttribPointer(state.localLoc, 2, gl.FLOAT, false, 0, 0);
+            // THE HEIGHTFIELD. Re-uploaded per draw rather than cached per node: the mesh is the
+            // thing a person is dragging when this matters, so a cache keyed on it would be
+            // invalidated on exactly the frames it would have paid for. One 64x64 RGBA upload is
+            // 16 KB, which is smaller than the vertex buffer beside it.
+            if (d.height) {
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, state.heightTex);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, d.height.size, d.height.size, 0,
+                    gl.RGBA, gl.UNSIGNED_BYTE, d.height.data);
+                // LINEAR + CLAMP_TO_EDGE, set every upload because they belong to the image and
+                // this texture object is shared between shapes. Linear so the march reads the same
+                // bilinear surface `warpHeight` describes rather than 64 flat steps; clamped so a
+                // ray leaving the box reads the edge instead of wrapping to the far side, which
+                // would have a shape shadowed by its own opposite corner.
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                gl.uniform1i(state.heightTexLoc, 0);
+                gl.uniform2f(state.boxLoc, item.surface!.box.width, item.surface!.box.height);
+                gl.uniform1f(state.hMinLoc, d.height.min);
+                gl.uniform1f(state.hMaxLoc, d.height.max);
+                gl.uniform1f(state.hasHeightLoc, 1);
             } else {
-                gl.disableVertexAttribArray(state.shadowLoc);
-                gl.vertexAttrib1f(state.shadowLoc, 1);
+                gl.uniform1f(state.hasHeightLoc, 0);
             }
             gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
             gl.uniform1f(zLoc, depthToClipZ(item.depth ?? 0));

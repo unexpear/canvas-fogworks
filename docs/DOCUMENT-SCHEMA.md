@@ -112,10 +112,11 @@ interface Light { x: number; y: number; z: number; color: string; intensity: num
 // RAY CASTING through the heightfield (`geometry/RayMarch`) answers what a normal cannot: a
 // crease beside a raised edge faces the light squarely and is still dark, because the edge is in
 // the way. Binary, like the cast shadows and for the same reason — a directional light has no
-// penumbra. Carried to the GPU per VERTEX, so it is blocky at the mesh's own cell scale.
-// STILL NOT DONE, and now the only two things that need the texture path: marching per FRAGMENT
-// rather than per vertex, and a cast shadow BENDING over a domed receiver — it currently lands on
-// the receiver's outline as if the receiver were flat.
+// penumbra. Marched PER FRAGMENT: the mesh crosses to the shader as a 16-bit heightfield texture
+// and each pixel walks it for itself, so the shadow's edge no longer depends on how finely the
+// shape happened to be tessellated.
+// STILL NOT DONE: a cast shadow lands on the receiver's OUTLINE as if the receiver were flat, so
+// it does not bend over a domed one.
 
 // MESH (schema 41). Node.mesh?: { cols, rows, points } — a grid of control points that BENDS the
 // node's outline. Points are in LOCAL units, row-major, exactly (cols+1)*(rows+1) of them, and

@@ -910,14 +910,18 @@ interface GLState { gl; program; buffer; normalBuffer; posLoc; normalLoc; viewLo
 function initGL(canvas: HTMLCanvasElement): GLState | null;                          // program + buffer, or null when WebGL is refused
 function parseColor(css: string): [number, number, number, number] | null;           // #rgb / #rrggbb / #rrggbbaa only; null = do not draw
 function shapeToLocalCommands(shape: Shape, radius: number | null): PathCommand[] | null;   // LOCAL, so a stroke offsets in the units its width means
-interface Draw { vertices: number[]; normals: number[]; shadow: number[]; color: [number, number, number, number] }
-function itemDraws(item: DrawItem, tolerance?: number, keyLight?: Light): Draw[];   // pure — the tested part; fill then stroke, [] for what it cannot draw
-// `shadow` is one term per VERTEX: 1 = this point can see the KEY light, 0 = the surface is in
-// the way (`RayMarch`). EMPTY when there is nothing to occlude or nothing to be occluded from —
-// no surface, no light, no relief, or a light below the horizon — and the backend then sets a
-// constant attribute rather than uploading a buffer of ones. Only `lights[0]` casts: four lights
-// would be four attributes and four CPU marches per frame, and it is the light the drop shadow
-// already privileges.
+interface Draw { vertices: number[]; normals: number[]; locals: number[]; height: HeightTexture | null; color: [number, number, number, number] }
+function itemDraws(item: DrawItem, tolerance?: number): Draw[];   // pure — the tested part; fill then stroke, [] for what it cannot draw
+const HEIGHT_TEX_SIZE: number;                                    // 64 — covers the finest grid a mesh may declare
+interface HeightTexture { data: Uint8Array; size: number; min: number; max: number }   // RGBA; height is 16 bits over R+G
+function heightTexture(mesh, box, size?): HeightTexture | null;   // null = flat: no relief, and no range to pack against
+function decodeHeight(rByte, gByte, min, max): number;            // the shader's decode, given a checked definition
+// `locals` is each vertex's position in the shape's OWN units — what the FRAGMENT stage marches
+// the heightfield from. A position rather than an answer: interpolating a position across a
+// triangle is exact, where interpolating occlusion computed at three corners smeared a
+// discontinuity into a gradient. Only `lights[0]` casts, the light the drop shadow already
+// privileges. SIXTEEN bits because eight quantises a 260-unit relief to a unit, and unit steps in
+// the surface become visible steps in the shadow's edge.
 function itemTolerance(item: DrawItem, viewScale: number): number;                   // how finely to cut THIS item's curves
 function setLighting(gl, state, lights, ambient): void;                              // once per frame; unlit ⇒ ambient 1, no lights
 // `normals` is one vector per VERTEX (`vertices.length / 2 * 3`), NOT unit — see `surfaceNormal`.

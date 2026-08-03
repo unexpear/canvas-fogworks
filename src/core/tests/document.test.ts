@@ -59,7 +59,7 @@ import { overrideValueError } from "../document/Components";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
 import { outlineStrokeAction, strokeWidthOf } from "../actions/outlineStrokeActions";
-import { itemDraws, itemTolerance, parseColor, viewMatrix, shapeToLocalCommands } from "../../renderer/emitWebGL";
+import { itemDraws, itemTolerance, parseColor, viewMatrix, shapeToLocalCommands, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
 import { booleanAction, makeBooleanNodeAction } from "../actions/booleanActions";
 import { SetBooleanOpAction } from "../actions/SetBooleanOpAction";
@@ -12907,49 +12907,79 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         }
     });
 
-    test("the GPU is told which vertices can SEE the key light", () => {
-        // A ridge along one edge, so the ground beside it is genuinely in shadow rather than
-        // merely facing away — the distinction the march exists for.
+    test("the GPU gets the surface as a TEXTURE, and each vertex's place on it", () => {
+        // What replaced a per-vertex shadow term. The fragment stage marches for itself, so what
+        // it needs is the heightfield and a position — not an answer computed at three corners.
         const ridge = (): Mesh => {
             const m = restMesh(4, 1, box);
-            m.points[1] = { ...m.points[1], z: 120 };     // top row, second column
-            m.points[6] = { ...m.points[6], z: 120 };     // bottom row, second column
+            m.points[1] = { ...m.points[1], z: 120 };
+            m.points[6] = { ...m.points[6], z: 120 };
             return m;
         };
-        const item = (light?: Light, mesh?: Mesh) => itemDraws({
+        const item = (mesh?: Mesh) => itemDraws({
             shape: { kind: "rect", x: 0, y: 0, width: 100, height: 100 }, world: null, nodeId: null, role: "content",
             ...(mesh ? { surface: { mesh, box } } : {}),
             paint: { fill: "#ffffff", opacity: null, stroke: null, strokeWidth: null, strokeDash: null,
                      radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null }
-        } as never, undefined, light)[0];
+        } as never)[0];
 
-        // Lit from the +x side and low, so the ridge throws across the ground to its right.
-        const lit = item({ x: -1, y: 0, z: -0.6, color: "#ffffff", intensity: 1 }, ridge());
-        expect(lit.shadow.length).toBe(lit.vertices.length / 2);
-        const dark = lit.shadow.filter(v => v === 0).length;
-        expect(dark).toBeGreaterThan(0);                       // something IS occluded
-        expect(dark).toBeLessThan(lit.shadow.length);          // …and not everything
-        for (const v of lit.shadow) expect(v === 0 || v === 1).toBe(true);   // binary, no penumbra
-        // WHICH vertices, not merely how many. The highest point on the surface has nothing above
-        // it, so it must be LIT — the assertion that survives the term being inverted, which
-        // "some dark, some light" does not.
-        let best = -Infinity, bestAt = 0;
-        for (let v = 0, k = 0; v < lit.vertices.length; v += 2, k++) {
-            const h = warpHeight(ridge(), box, lit.vertices[v], lit.vertices[v + 1]);
-            if (h > best) { best = h; bestAt = k; }
+        const lit = item(ridge());
+        // A LOCAL position per vertex. With no world matrix these are the vertices themselves,
+        // which is the cheapest possible check that they are not the world ones by accident.
+        expect(lit.locals.length).toBe(lit.vertices.length);
+        expect(lit.locals).toEqual(lit.vertices);
+        expect(lit.height).not.toBeNull();
+        expect(lit.height!.size).toBe(HEIGHT_TEX_SIZE);
+        expect(lit.height!.data.length).toBe(HEIGHT_TEX_SIZE * HEIGHT_TEX_SIZE * 4);
+        expect(lit.height!.max).toBe(120);
+        expect(lit.height!.min).toBe(0);
+        // A FLAT mesh has no relief and no range to pack against, so there is no texture and the
+        // shader is told to skip the march entirely.
+        expect(item(restMesh(2, 2, box)).height).toBeNull();
+        // …and a shape with no surface at all pays nothing.
+        expect(item().height).toBeNull();
+        expect(item().locals.length).toBe(item().vertices.length);
+    });
+
+    test("the packed heightfield ROUND-TRIPS, and its texels sit where the GPU reads them", () => {
+        // The fragment shader contains this decode and cannot be tested, so pinning the round trip
+        // here is the only checked definition the packing has. An error is not a crash — it is a
+        // surface subtly the wrong height, which looks like a lighting bug forever.
+        const m = restMesh(1, 1, box);
+        m.points[3] = { ...m.points[3], z: 260 };
+        const tex = heightTexture(m, box)!;
+        expect(tex.min).toBe(0);
+        expect(tex.max).toBe(260);
+        // Sampled at TEXEL CENTRES, which is where `texture2D` reads. Checking the corner texel
+        // against `warpHeight` at that exact point is what catches an off-by-half-a-texel — the
+        // error that reads as the whole surface sliding under its own lighting.
+        const at = (t: typeof tex, col: number, row: number) => {
+            const i = (row * t.size + col) * 4;
+            return decodeHeight(t.data[i], t.data[i + 1], t.min, t.max);
+        };
+        for (const [col, row] of [[0, 0], [63, 63], [31, 17], [63, 0]]) {
+            const x = ((col + 0.5) / tex.size) * box.width;
+            const y = ((row + 0.5) / tex.size) * box.height;
+            // 16 bits over a 260-unit range resolves to 0.004; eight would have been one unit,
+            // and one-unit steps in the surface become visible steps in the shadow's edge.
+            expect(at(tex, col, row)).toBeCloseTo(warpHeight(m, box, x, y), 2);
         }
-        expect(best).toBeGreaterThan(0);
-        expect(lit.shadow[bestAt]).toBe(1);
-
-        // NO LIGHT: nothing to be occluded from, and no per-vertex array allocated at all.
-        expect(item(undefined, ridge()).shadow).toEqual([]);
-        // NO RELIEF: a flat mesh has nothing standing up to block anything.
-        expect(item({ x: -1, y: 0, z: -0.6, color: "#fff", intensity: 1 }, restMesh(2, 2, box)).shadow).toEqual([]);
-        // NO SURFACE at all — an ordinary unmeshed shape pays nothing.
-        expect(item({ x: -1, y: 0, z: -0.6, color: "#fff", intensity: 1 }).shadow).toEqual([]);
-        // A light BELOW the horizon casts nothing here: `lambert` has already taken those faces to
-        // zero, so marching them would spend the work to agree.
-        expect(item({ x: -1, y: 0, z: 0.6, color: "#fff", intensity: 1 }, ridge()).shadow).toEqual([]);
+        expect(decodeHeight(0, 0, 0, 260)).toBe(0);
+        expect(decodeHeight(255, 255, 0, 260)).toBe(260);
+        // NEGATIVE relief packs against its own range, so all sixteen bits go on what exists.
+        const dip = restMesh(1, 1, box);
+        dip.points[0] = { ...dip.points[0], z: -40 };
+        const dipTex = heightTexture(dip, box)!;
+        expect([dipTex.min, dipTex.max]).toEqual([-40, 0]);
+        // Decoded against ITS OWN range, so the deepest texel comes back at -40 rather than at
+        // whatever an absolute scale would have made of it. This is what catches a packing that
+        // normalises by the span but forgets to subtract the floor: with a min of 0 — every case
+        // above — the two are identical, and only a surface that goes BELOW the page tells them
+        // apart.
+        expect(at(dipTex, 0, 0)).toBeCloseTo(warpHeight(dip, box, box.width / 128, box.height / 128), 1);
+        expect(at(dipTex, 0, 0)).toBeLessThan(-38);
+        expect(at(dipTex, 63, 63)).toBeCloseTo(0, 2);
+        expect(heightTexture(restMesh(2, 2, box), box)).toBeNull();
     });
 
     test("heightRange reads the CONTROL POINTS, which bounds the ray exactly", () => {

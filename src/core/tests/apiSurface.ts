@@ -79,7 +79,7 @@ import { renderScene, RenderBackend } from "../../renderer/renderScene";
 import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
 import { emitCanvas, setImageReadyCallback } from "../../renderer/emitCanvas";
-import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState } from "../../renderer/emitWebGL";
+import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { Keyframe, TimelineSettings, timelineError, trackError, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
 import { DEPTH_MIN, DEPTH_MAX, depthError, depthOf, parallaxRate, parallaxOffset, depthToClipZ, byDepth, applyParallax } from "../document/Depth";
 import { Mesh, ReadonlyMesh, MESH_MAX_DIVISIONS, meshError, restPoint, restMesh, isIdentityMesh, warpPoint, warpCommands, heightOf, warpHeight, heightRange, surfaceNormal, normalAt, isFlatMesh } from "../document/Mesh";
@@ -572,12 +572,18 @@ export function __apiSurfacePin(): void {
     expectType<number>(itemTolerance(model.content[0], 1));
     const draws: Draw[] = itemDraws(model.content[0]);
     expectType<Draw[]>(itemDraws(model.content[0], 0.05));
-    expectType<Draw[]>(itemDraws(model.content[0], 0.05, light));
     expectType<number[]>(draws[0]?.vertices ?? []);
     // `normals` is part of the CONTRACT, not an implementation detail: a backend that dropped it
     // would still compile against a `Draw` that never named it, and the shading would go quietly.
     expectType<number[]>(draws[0]?.normals ?? []);
-    expectType<number[]>(draws[0]?.shadow ?? []);
+    expectType<number[]>(draws[0]?.locals ?? []);
+    // The heightfield the FRAGMENT stage marches. Null is a real answer — a flat surface has no
+    // relief to occlude with and no range to pack sixteen bits against.
+    expectType<HeightTexture | null>(draws[0]?.height ?? null);
+    expectType<HeightTexture | null>(heightTexture(mesh, meshBox));
+    expectType<HeightTexture | null>(heightTexture(mesh, meshBox, 32));
+    expectType<number>(decodeHeight(0, 0, 0, 1));
+    expectType<number>(HEIGHT_TEX_SIZE);
     expectType<[number, number, number, number]>(draws[0]?.color ?? [0, 0, 0, 1]);
     expectType<(gl: WebGLRenderingContext, s: GLState, l: readonly Light[] | undefined, a: number | undefined) => void>(setLighting);
 

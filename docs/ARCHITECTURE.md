@@ -336,13 +336,35 @@ second because a longer ray is still correct and only spreads the same sixteen s
 third because step zero is the point itself and the strict comparison already excludes it. They
 stay, labelled as what they are.
 
-The result rides to the GPU as one term per VERTEX, alongside the normals, and that is an honest
-approximation rather than the right answer: occlusion is genuinely discontinuous, so interpolating
-it across a triangle reads as a soft edge where the model says there is none. Normals had an exact
-fix available at no cost (see the affine argument above); this does not. Per FRAGMENT needs the
-heightfield readable in the shader, which needs the texture path this renderer still has not got —
-and that same path is what would let a CAST shadow bend over a domed receiver, which it currently
-does not: it lands on the receiver's outline as if the receiver were flat. What exists is SELF-shading, which is what
+**The march runs per FRAGMENT, and building that meant the TEXTURE PATH this renderer had never
+had.** It shipped once as a per-vertex term, which was the honest approximation available at the
+time and wrong in a specific way: occlusion is genuinely discontinuous, so interpolating an answer
+computed at three corners smeared the shadow's edge into a gradient. Normals had an exact fix at
+no cost (the affine argument above); this had none, because no function of the three corners
+produces a discontinuity between them.
+
+What crosses to the shader now is a POSITION rather than an answer — interpolating a position
+across a triangle is exact — plus the surface itself as a 64x64 texture. Two decisions in that are
+worth keeping: the height is packed into SIXTEEN bits across two channels, because eight quantises
+a 260-unit relief to about a unit and unit steps in the surface become visible steps in the
+shadow's edge; and the decode is written so every intermediate stays near 1 rather than reaching
+65535, because `mediump` is only guaranteed to ±16384 and the obvious decode overflows it on
+exactly the hardware that needs the care. The texels are sampled at their CENTRES, where
+`texture2D` reads them — aligning to the box's edges instead puts every value half a texel from
+where the GPU looks, which reads as the whole surface sliding under its own lighting.
+
+The shader's march is a TRANSCRIPTION of `marchOccluded`, which is where it is specified and
+tested. A shader cannot call TypeScript, so the arithmetic exists twice and only one copy can be
+checked — the same standing arrangement as this shader's Lambert term and `lambert`, neither of
+which has a runtime caller either. Both are specifications the GLSL restates; the packing has
+`decodeHeight` for the same reason.
+
+That texture path is also what `emitWebGL`'s remaining gaps have always named: text needs a glyph
+atlas and images need an upload, and neither had anywhere to go before this.
+
+WHAT IS STILL NOT HERE: a CAST shadow lands on the receiver's OUTLINE as if the receiver were
+flat, so it does not bend over a domed one. That is now the only part of the lighting still
+waiting on work rather than on a missing capability. What exists is SELF-shading, which is what
 makes a bevel look like a bevel, and a drop-shadow OFFSET derived from the light and the node's
 depth, which is what a 2D tool has always meant by a drop shadow — the difference being that it is
 now computed from the scene's own light rather than typed in per shape, so moving the light moves
