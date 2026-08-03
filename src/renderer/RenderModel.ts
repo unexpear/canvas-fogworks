@@ -27,7 +27,7 @@ import { ReadonlyDocument } from "../core/document/Document";
 import { FillRule, PathCommand, Shadow, StrokeCap, StrokeJoin, TextAlign } from "../core/document/Node";
 import { depthOf } from "../core/document/Depth";
 import { ReadonlyMesh, isFlatMesh } from "../core/document/Mesh";
-import { Light } from "../core/document/Light";
+import { Light, shadowOffset } from "../core/document/Light";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
@@ -455,9 +455,28 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         const hasArea = width > 0 && height > 0;
         // The shadow color resolves here too, so `effectFilterId` (and the deduped defs) key on
         // the RESOLVED color — two different tokens resolving to one color share one filter.
+        // A shape floating above the page throws its outline away from the light, and further
+        // the higher it is (schema 42). DERIVED rather than typed in, which is the whole point:
+        // move the light and every shadow moves together, and they cannot disagree with each
+        // other the way hand-set ones always eventually do.
+        //
+        // An EXPLICIT `style.shadow` still wins. Somebody who set one meant it, and a scene light
+        // silently overruling a per-shape decision would be the tool arguing with its user.
+        const nodeDepth = depthOf(doc.nodes.get(id) ?? {});
+        const keyLight = doc.lights?.[0];
+        // No `nodeDepth !== 0` test: `shadowOffset` already returns exactly zero at depth 0, and
+        // the zero check below already refuses that — a second guard for the same case was
+        // provably equivalent to nothing, which a mutation of it demonstrated.
+        const cast = (hasArea && !sty.shadow && keyLight)
+            ? shadowOffset(keyLight, nodeDepth) : null;
         const shadow: Shadow | null = (hasArea && sty.shadow)
             ? { dx: sty.shadow.dx, dy: sty.shadow.dy, blur: sty.shadow.blur, color: color(sty.shadow.color) }
-            : null;
+            : (cast && (cast.x !== 0 || cast.y !== 0))
+                // The blur grows with the throw, because a shadow cast from further away is a
+                // softer one — that is the whole visual difference between a card lying on the
+                // page and one held above it.
+                ? { dx: cast.x, dy: cast.y, blur: Math.hypot(cast.x, cast.y) / 2, color: "#00000059" }
+                : null;
         const blur: number | null = (hasArea && sty.blur) ? sty.blur : null;
 
         let shape: Shape;

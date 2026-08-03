@@ -12900,6 +12900,51 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         expect(nonFlat.length).toBeGreaterThan(0);
     });
 
+    test("a raised shape CASTS a drop shadow, derived from the light rather than typed in", () => {
+        // `shadowOffset` existed and nothing used it, which is a feature without a consumer — the
+        // rule this codebase applies to everything else. This is the consumer: move the light and
+        // every shadow moves together, which hand-set ones cannot do.
+        const lit = (depth: number, light?: Light) => {
+            const d = doc({ id: "A", type: "core.rectangle", parent: null, children: [],
+                geometry: { x: 0, y: 0, width: 100, height: 100 },
+                style: { fill: "#808080", opacity: 1 }, layout: {}, ...(depth ? { depth } : {}) } as Node);
+            if (light) d.lights = [light];
+            return buildRenderModel({ width: 800, height: 600 }, d,
+                { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(d), viewport: { x: 0, y: 0, zoom: 1 } })
+                .content[0].paint.shadow;
+        };
+        const key: Light = { x: 1, y: 0, z: -1, color: "#ffffff", intensity: 1 };
+        // On the page there is nothing to cast onto, so no shadow at all.
+        expect(lit(0, key)).toBeNull();
+        // Unlit, a raised shape still casts nothing: a shadow needs a light to be cast BY.
+        expect(lit(20, undefined)).toBeNull();
+        const near = lit(10, key)!;
+        const far = lit(40, key)!;
+        expect(near.dx).toBeGreaterThan(0);
+        // FURTHER from the page throws further, and softer — the difference between a card lying
+        // on the page and one held above it.
+        expect(far.dx).toBe(4 * near.dx);
+        expect(far.blur).toBeGreaterThan(near.blur);
+        // It follows the light's DIRECTION, so the whole scene agrees about where "away" is.
+        const fromBelow = lit(10, { x: 0, y: -1, z: 0, color: "#fff", intensity: 1 })!;
+        expect(fromBelow.dy).toBeLessThan(0);
+        expect(Math.abs(fromBelow.dx)).toBeCloseTo(0, 9);
+    });
+
+    test("an EXPLICIT shadow still wins over the scene's light", () => {
+        // Somebody who set a shadow meant it. A scene light silently overruling a per-shape
+        // decision would be the tool arguing with its user.
+        const d = doc({ id: "A", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 }, depth: 30,
+            style: { fill: "#808080", opacity: 1, shadow: { dx: 3, dy: 4, blur: 5, color: "#ff0000" } },
+            layout: {} } as Node);
+        d.lights = [{ x: 1, y: 0, z: -1, color: "#ffffff", intensity: 1 }];
+        const shadow = buildRenderModel({ width: 800, height: 600 }, d,
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(d), viewport: { x: 0, y: 0, zoom: 1 } })
+            .content[0].paint.shadow!;
+        expect(shadow).toEqual({ dx: 3, dy: 4, blur: 5, color: "#ff0000" });
+    });
+
     test("the scene's lights reach the display list, and an unlit document carries none", () => {
         const d = doc(node("A"));
         d.lights = [light(1, 0, -1)];

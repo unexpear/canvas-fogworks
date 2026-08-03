@@ -275,6 +275,12 @@ coordinate that produced it. The triangles are unchanged, the transform being af
 document sets ambient to 1 and no lights, multiplying every colour by one, so it draws exactly as
 it did before any of this existed.
 
+A raised shape DOES cast a drop shadow, derived from the scene's light and its own depth rather
+than typed in per shape — so moving the light moves every shadow together and they cannot disagree
+with each other the way hand-set ones eventually do. It throws further and softer the higher the
+shape sits. An EXPLICIT `style.shadow` still wins: somebody who set one meant it, and a scene light
+silently overruling a per-shape decision would be the tool arguing with its user.
+
 WHAT IS NOT HERE: shapes do not cast shadows ON EACH OTHER. That needs a shadow map — a second
 pass from the light's point of view and a depth texture to sample — which is its own piece of work
 and needs the texture path this renderer has never had. What exists is SELF-shading, which is what
