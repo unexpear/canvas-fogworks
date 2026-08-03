@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v42 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1026) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (33) = 1128 tests.
+> 🔒 Frozen contract · schema v42 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1027) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (33) = 1129 tests.
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1128 tests
+npm test                                   # jest (ts-jest), 1129 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -42,7 +42,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1128 tests)
+## What is covered (1129 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -85,7 +85,7 @@ npm run check                              # typecheck + lint + test + build (th
 | **Depth / mesh / lighting (schemas 40–42)** | `depth` drives display ORDER, the GPU's clip **z**, and PARALLAX (an unlayered doc returns BY REFERENCE, so a pan costs nothing); a warped node resolves to an ordinary `core.path` and is **clickable where it is drawn**; a rest mesh is the identity and is skipped; bilinear is **exact at the control points** and clamped outside the box; `lambert` is **clamped at 0** so a second light can never darken; a flat mesh faces the viewer *exactly*; a MIRRORED patch still faces the viewer; the shadow a light casts is **derived** and an explicit `style.shadow` still wins; every one validated on **both** paths + a migration from the previous schema |
 | **The heightfield texture** | the packing ROUND-TRIPS against `warpHeight` at texel CENTRES — where `texture2D` reads, so a half-texel slide is caught; sixteen bits asserted by resolving a 260-unit relief to two decimals, which eight cannot; a surface that goes BELOW the page packs against its own range (the only case that distinguishes normalising by the span from subtracting the floor — every all-positive surface makes the two identical); a flat mesh has no relief and no range and yields NULL rather than a divide by zero; the GPU gets LOCAL positions, checked against the world ones. The shader's own copy of the march and the decode cannot be tested — they are transcriptions of `marchOccluded` and `decodeHeight`, which are, and the live CDP run observes the 16 KB uploads reaching the driver |
 | **Ray casting through a heightfield** | a raised edge shadows the ground BESIDE it (which the ground's own normal calls fully lit); the same point is clear when the light moves to the other side; the ray CLIMBS, so a steep light clears a low bump and a shallow one does not; a surface lit exactly along its OWN SLOPE is grazed rather than blacked out (the `>` vs `>=` case, which the flat-surface test cannot reach because the short-circuit returns first); a flat surface never shadows itself under any direction; a light at or below the HORIZON is refused, including the direction that would otherwise march backwards into a wall; the miss on a spike thinner than the step spacing is asserted, so the stated limit cannot be quietly narrowed. On the GPU path: the term is per vertex and binary, the HIGHEST vertex is lit (the assertion that survives an inversion, which "some dark, some light" does not), and it is empty for no surface / no light / no relief / a light below the horizon |
-| **Cast shadows + the boolean fix** | one shape's shadow lands on another only where they OVERLAP, and misses cleanly when the throw carries it past; only a STRICTLY nearer shape casts (equal depth is the same plane, which is also what stops self-shadowing); the patch is spliced ABOVE its receiver and below its caster, unpickable and idless; an unlit document does no quadratic work at all. **The booleans**: union and intersection of two axis-aligned rectangles at the same `y`, two rectangles merely TOUCHING, and a shape unioned with ITSELF — every one returned empty before, every one asserted by area now — while the non-degenerate case is asserted EQUAL to the old classifier's output, so the replacement is pinned as a fix rather than a change |
+| **Cast shadows + the boolean fix** | a caster throws a SHORTER shadow onto a raised receiver than onto the page (the gap between them, not its own height — invisible with only one raised shape, which is why it shipped wrong and the suite stayed green); one shape's shadow lands on another only where they OVERLAP, and misses cleanly when the throw carries it past; only a STRICTLY nearer shape casts (equal depth is the same plane, which is also what stops self-shadowing); the patch is spliced ABOVE its receiver and below its caster, unpickable and idless; an unlit document does no quadratic work at all. **The booleans**: union and intersection of two axis-aligned rectangles at the same `y`, two rectangles merely TOUCHING, and a shape unioned with ITSELF — every one returned empty before, every one asserted by area now — while the non-degenerate case is asserted EQUAL to the old classifier's output, so the replacement is pinned as a fix rather than a change |
 | **Per-fragment normals** | a triangle's three RAW normals, averaged and normalised, match the surface's own normal to **12 digits**, where the same done with unit normals is off by degrees — the faceting, measured rather than asserted; the raw length does not depend on **where in the box** it was sampled (the rim's step is half the inland one); a COLLAPSED cell never reaches the GPU as a zero normal, because normalising zero in a shader is NaN |
 
 ## The API-surface pin

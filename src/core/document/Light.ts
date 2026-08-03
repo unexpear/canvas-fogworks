@@ -109,23 +109,28 @@ export function heightAbovePage(depth: number): number {
 }
 
 /**
- * The drop-shadow OFFSET a light and a depth imply, in world units.
+ * How far a shape's shadow is thrown, in world units — onto the page, or onto something else.
  *
- * The one kind of shadow a renderer without a depth texture can honestly cast by itself: a shape
- * floating above the page throws its outline away from the light, and further the higher it is.
- * That is what a 2D tool has always meant by a drop shadow — the difference is that it is now
- * DERIVED from the scene's own light rather than typed in per shape, so moving the light moves
- * every shadow and they cannot disagree with each other.
+ * A shadow's length is set by the GAP the light has to cross, not by how high the caster is. A
+ * card floating 40 above the page throws 40 onto the page and only 20 onto another card floating
+ * at 20, because there is only 20 of air between them. `ontoDepth` defaults to 0 because the page
+ * is what a DROP shadow falls on, and that is the older and more common question.
  *
- * Zero at depth 0 and at any depth behind the page: a shape lying on the page, or sunk below it,
- * has nothing to cast onto.
+ * Getting this wrong is not subtle once two things are raised: every shadow in the scene comes out
+ * the same length regardless of what it lands on, so a stack of cards reads as a stack of cards
+ * all floating at the same height. It shipped that way, because with one raised shape and a flat
+ * page the two formulas are identical and every test had exactly one raised shape.
+ *
+ * Zero when there is no gap: a shape lying on the page, one sunk below it, or a receiver level
+ * with the caster.
  */
-export function shadowOffset(light: Light, depth: number): { x: number; y: number } {
+export function shadowOffset(light: Light, depth: number, ontoDepth: number = 0): { x: number; y: number } {
     const dir = normalize(light);
-    const height = heightAbovePage(depth);
+    const gap = heightAbovePage(depth) - heightAbovePage(ontoDepth);
     // The zero short-circuit is not decoration: a negative direction times zero is `-0`, which
     // differs under `Object.is` and would make "has this shadow moved?" answer wrongly. The same
-    // trap `parallaxOffset` has.
-    if (!dir || height === 0) return { x: 0, y: 0 };
-    return { x: dir.x * height, y: dir.y * height };
+    // trap `parallaxOffset` has. `<= 0` rather than `=== 0` because a receiver ABOVE the caster
+    // has no shadow cast on it at all, and a negative gap would throw it toward the light.
+    if (!dir || gap <= 0) return { x: 0, y: 0 };
+    return { x: dir.x * gap, y: dir.y * gap };
 }

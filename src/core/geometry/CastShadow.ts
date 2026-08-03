@@ -109,18 +109,23 @@ export function shadowPatch(caster: readonly Ring[], receiver: readonly Ring[],
  * was nothing to do.
  */
 export function castShadows(shapes: readonly ShadowShape[],
-                            offsetOf: (depth: number) => { x: number; y: number },
+                            offsetOf: (casterDepth: number, receiverDepth: number) => { x: number; y: number },
                             maxPairs: number = CAST_SHADOW_MAX_PAIRS): CastShadowPatch[] {
-    const casters: { shape: ShadowShape; offset: { x: number; y: number } }[] = [];
-    for (const s of shapes) {
-        const offset = offsetOf(s.depth);
-        if (offset.x !== 0 || offset.y !== 0) casters.push({ shape: s, offset });
-    }
+    // A PAIR at a time, because the throw depends on both: the gap the light crosses is between
+    // the caster and what it lands on, so one shape's shadow is a different length on the page
+    // than it is on another raised shape. Pre-computing an offset per caster — which this did
+    // once — makes every shadow in a scene the same length whatever it falls on.
+    const casters = shapes.filter(s => {
+        // Anything with SOMEWHERE below it to cast onto. Cheap, and it keeps the common case (a
+        // document that never touched depth) at one pass with no pairs considered at all.
+        const onPage = offsetOf(s.depth, 0);
+        return onPage.x !== 0 || onPage.y !== 0;
+    });
     if (casters.length === 0) return [];
 
     const out: CastShadowPatch[] = [];
     let pairs = 0;
-    for (const { shape: caster, offset } of casters) {
+    for (const caster of casters) {
         for (const receiver of shapes) {
             // STRICTLY nearer. At equal depth neither shape is above the other, and a `<=` here
             // would have every raised shape in a stack shadow every other one in the same plane.
@@ -132,7 +137,7 @@ export function castShadows(shapes: readonly ShadowShape[],
             if (caster.depth >= receiver.depth) continue;
             if (pairs >= maxPairs) return out;
             pairs++;
-            const rings = shadowPatch(caster.rings, receiver.rings, offset);
+            const rings = shadowPatch(caster.rings, receiver.rings, offsetOf(caster.depth, receiver.depth));
             if (rings.length > 0) out.push({ receiverId: receiver.id, casterId: caster.id, rings });
         }
     }

@@ -314,8 +314,14 @@ texture's texels. A shape casts only on shapes STRICTLY further away, which is a
 shadowing itself; the patch is spliced directly after its receiver in paint order, unpickable and
 idless, because a shadow is not a thing you can select.
 
-Finding it cost a correctness bug elsewhere, which is the better half of the story — see the
-boolean note below.
+A shadow's length is the GAP the light crosses, not the caster's height above the page. That
+distinction is invisible until two things are raised — with one raised shape over a flat page the
+two formulas agree exactly — so it shipped wrong and the whole suite stayed green. A stack of
+cards came out with every shadow the same length, which reads as one flat layer rather than a
+stack.
+
+Finding all this cost a correctness bug elsewhere too, which is the better half of the story — see
+the boolean note below.
 
 **RAY CASTING answers the question a normal cannot (`geometry/RayMarch`).** A crease beside a
 raised edge may face the light squarely and still be dark, because the edge is between it and the

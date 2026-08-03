@@ -841,7 +841,7 @@ function withCastShadows(content: DrawItem[], computed: ComputedState, light: Li
         if (!world) continue;
         shapes.push({ id: item.nodeId, rings: commandsToRings(world), depth: item.depth ?? 0 });
     }
-    const patches = castShadows(shapes, d => shadowOffset(light, d));
+    const patches = castShadows(shapes, (c, r) => shadowOffset(light, c, r));
     if (patches.length === 0) return content;
 
     const byReceiver = new Map<string, Ring[][]>();

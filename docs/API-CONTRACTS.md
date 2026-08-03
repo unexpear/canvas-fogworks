@@ -219,7 +219,7 @@ function ambientError(ambient: unknown): string | null;    // 0..1
 function normalize(v): {x,y,z} | null;                     // null when it has no length
 function lambert(normal, light): number;                   // CLAMPED at 0 — a light must never subtract
 function heightAbovePage(depth: number): number;           // -depth, floored at 0 — `depth` counts AWAY from the viewer
-function shadowOffset(light, depth): {x, y};               // a RAISED shape (negative depth) throws; a sunk one throws nothing
+function shadowOffset(light, depth, ontoDepth?): {x, y};   // the GAP between them, not the caster's height; onto the page by default
 
 // Mesh.ts — a grid of control points that BENDS a shape (schema 41).
 const MESH_MAX_DIVISIONS: number;                         // 64 — the point count is the product
@@ -304,7 +304,8 @@ function shadowPatch(caster, receiver, offset): Ring[];            // the caster
 function castShadows(shapes, offsetOf, maxPairs?): CastShadowPatch[];   // [] when nothing is raised — the common case, per frame
 // A shape casts onto another only when STRICTLY nearer the viewer; equal depth is the same
 // plane and neither is above the other, which is also what stops a shape shadowing itself.
-// `offsetOf` is injected so this module needs to know nothing about lights.         // idempotent on simple input
+// `offsetOf` is injected so this module needs to know nothing about lights, and takes BOTH
+// depths: a card 40 above the page throws 40 onto the page and only 20 onto a card at 20.         // idempotent on simple input
 // IDEMPOTENT by design: callers resolve indiscriminately rather than detecting whether they need
 // to, because detecting self-intersection costs the same O(n^2) as fixing it. Returns [] when the
 // region is empty — two identical contours wound oppositely cancel exactly, and that is an answer.

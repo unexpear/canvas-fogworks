@@ -12786,6 +12786,20 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         // It follows the light's DIRECTION, so moving the light moves every shadow together.
         expect(shadowOffset(light(0, 1, 0), -10)).toEqual({ x: 0, y: 10 });
         expect(shadowOffset({ x: 0, y: 0, z: 0, color: "#fff", intensity: 1 }, -10)).toEqual({ x: 0, y: 0 });
+
+        // The length is set by the GAP the light crosses, not by how high the caster is. A card
+        // 40 above the page throws 40 onto the page and only 20 onto a card floating at 20 —
+        // there is only 20 of air between them. With one raised shape and a flat page the two
+        // formulas are identical, which is why this shipped wrong and no test noticed.
+        expect(shadowOffset(light(1, 0, 0), -40, 0)).toEqual({ x: 40, y: 0 });
+        expect(shadowOffset(light(1, 0, 0), -40, -20)).toEqual({ x: 20, y: 0 });
+        expect(shadowOffset(light(1, 0, 0), -40, -40)).toEqual({ x: 0, y: 0 });   // same plane
+        // A receiver ABOVE the caster gets nothing; a negative gap would throw the shadow toward
+        // the light, which is the one direction a shadow never goes.
+        expect(shadowOffset(light(1, 0, 0), -20, -40)).toEqual({ x: 0, y: 0 });
+        // A receiver SUNK behind the page is no further away than the page itself — the caster is
+        // not casting through it, so the gap floors at the page.
+        expect(shadowOffset(light(1, 0, 0), -40, 25)).toEqual({ x: 40, y: 0 });
     });
 
     test("the GPU gets ONE NORMAL PER VERTEX, and flat ones when there is no surface", () => {
@@ -13295,6 +13309,27 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         const many = [at("A", 0, -40), at("B", 10, -40), ...Array.from({ length: 6 }, (_, i) => at("r" + i, 20, 0))];
         expect(castShadows(many, throwBy, 3).length).toBeLessThanOrEqual(3);
         expect(castShadows(many, throwBy).length).toBe(12);
+    });
+
+    test("one caster throws a SHORTER shadow on a raised receiver than on the page", () => {
+        // The defect the suite could not see, because every test had exactly one raised shape.
+        // Two cards under one card: the shadow on the lower card is longer than the shadow on the
+        // higher one, and getting this wrong makes a whole stack read as one flat layer.
+        const sq = (x: number): Ring => [{ x, y: 0 }, { x: x + 100, y: 0 }, { x: x + 100, y: 100 }, { x, y: 100 }];
+        const key = light(1, 0, 0);
+        const at = (id: string, depth: number): ShadowShape => ({ id, rings: [sq(0)], depth });
+        const patches = castShadows(
+            [at("high", -40), at("mid", -20), at("page", 0)],
+            (c, r) => shadowOffset(key, c, r));
+        const area = (rs: Ring[]) => rs.reduce((n, ring) => n + Math.abs(signedArea2(ring)) / 2, 0);
+        const of = (receiver: string) => area(patches.find(p => p.casterId === "high" && p.receiverId === receiver)!.rings);
+        // Onto the page: thrown 40, so 60 of the 100-wide receiver is covered.
+        expect(of("page")).toBeCloseTo(60 * 100, 6);
+        // Onto the card at 20: only 20 of air between them, so 80 is covered — MORE, not the same.
+        expect(of("mid")).toBeCloseTo(80 * 100, 6);
+        // …and the middle card throws its own, shorter still, onto the page only.
+        expect(patches.filter(p => p.casterId === "mid").map(p => p.receiverId)).toEqual(["page"]);
+        expect(area(patches.find(p => p.casterId === "mid")!.rings)).toBeCloseTo(80 * 100, 6);
     });
 
     test("the cast shadow reaches the display list, ABOVE its receiver and below its caster", () => {
