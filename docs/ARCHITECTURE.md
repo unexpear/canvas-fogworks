@@ -264,8 +264,10 @@ where a raised mesh's gradient is exactly zero. So every normal came out flat an
 had nothing to do, while the unit tests passed because they fed `itemDraws` a surface directly and
 never asked whether a document produces vertices to sample it at. `resolveMeshes` now converts a
 mesh that has height as well as one that warps: the outline is unchanged, but cut at the grid's own
-resolution, which is where the surface varies. Interior tessellation — triangulating the grid
-itself rather than only its boundary — would shade a dome properly and is not done.
+resolution, which is where the surface varies. INTERIOR tessellation finishes the job
+(`subdivideTriangles`): the outline alone still leaves a rectangle as two triangles spanning the
+whole shape, so the triangles are split four ways until no edge is longer than a mesh cell —
+bounded by depth as well as length, because a tolerance alone is a recursion nobody has bounded.
 
 The GPU carries ONE NORMAL PER VERTEX, which is the whole point: a mesh raised in the middle faces
 a different way there than at its edges, and a single normal per shape would light a dome exactly
@@ -274,6 +276,23 @@ from the mesh, the mesh is in local units, and a world-space triangle has no way
 coordinate that produced it. The triangles are unchanged, the transform being affine. An unlit
 document sets ambient to 1 and no lights, multiplying every colour by one, so it draws exactly as
 it did before any of this existed.
+
+Those normals are UN-NORMALISED, and the shading is per-FRAGMENT because of it. Faceting you could
+count along the triangle edges survived every amount of subdivision, because the fault was not a
+shortage of vertices: normalising is nonlinear and it was happening before the GPU's linear
+interpolation. Inside one cell the patch is `A + Bu + Cv + Duv`, so the cross product of its
+tangents is `B×C + u(B×D) + v(D×C)` — the `uv` term cancels against itself and what remains is
+AFFINE, which is exactly what interpolation between three vertices reproduces to the digit. Scaling
+each vertex's vector to length 1 first replaces that with a function agreeing only at the corners,
+and the gap is the facet. So `surfaceNormal` hands over the raw vector, `normalAt` is its
+normalisation for everything on the CPU, and the fragment shader normalises what arrives. The
+tangents are divided by their own step for the same reason: the samples are clamped inside the box,
+so on the rim the span is half what it is inland, and an uncorrected length would say where it was
+sampled rather than what the surface does. The seams that remain are the mesh's own cell
+boundaries, where a bilinear surface genuinely is only C0 — a crease, not an artifact. A COLLAPSED
+cell (two control points dragged onto each other) has no normal at all; `surfaceNormal` answers
+zero, and the substitution to flat happens at the GPU boundary, because normalising zero in a
+shader is NaN and a NaN fragment is a hole rather than a dark shape.
 
 A raised shape DOES cast a drop shadow, derived from the scene's light and its own depth rather
 than typed in per shape — so moving the light moves every shadow together and they cannot disagree

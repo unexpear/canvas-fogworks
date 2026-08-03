@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1112 — `src/core/tests/document.test.ts` (1010) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (33).
+- **Tests:** 1115 — `src/core/tests/document.test.ts` (1013) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (33).
 
 ## Source map
 
@@ -54,16 +54,20 @@ This is the primary defense against architectural drift.
 src/
   core/
     document/   ProjectDocument, Node, Serializer,     (the source of truth)
-                Integrity, SceneGraph
+                Integrity, SceneGraph, Components,
+                Timeline (39), Depth (40), Mesh (41), Light (42)
     actions/    Action + commands, Dispatcher,         (the only write path)
                 HistoryManager, applyMutations, types
     geometry/   Matrix, GeometryEngine (M1),           (intent -> computed results)
-                LayoutEngine (M2 auto-layout)
+                LayoutEngine (M2 auto-layout),
+                PathBoolean, Resolve, StrokeOutline,
+                Tessellate, ConvexDecompose
     ids/        UUID
     tests/      document.test.ts, apiSurface.ts (compile-time API pin)
   editor/       EditorState + tools/ (Select/Move/Rectangle, ToolController)
   renderer/     RenderModel (pure display list) + emitSVG /  (read-only)
-                emitCanvas backends + renderScene selector (SVG/Canvas)
+                emitCanvas / emitWebGL backends +
+                renderScene selector (SVG/Canvas/WebGL)
   app/          App.tsx + React bootstrap
   electron/     main.js (main process), preload.js (contextBridge)
 scripts/build.js   three esbuild builds -> dist/{app,electron}
