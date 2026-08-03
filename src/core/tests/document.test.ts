@@ -48,6 +48,7 @@ import { SetTrackAction } from "../actions/SetTrackAction";
 import { SetTimelineAction } from "../actions/SetTimelineAction";
 import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyParallax, DEPTH_MIN, DEPTH_MAX } from "../document/Depth";
 import { Mesh, meshError, restMesh, warpPoint, isIdentityMesh, MESH_MAX_DIVISIONS } from "../document/Mesh";
+import { meshHandles, meshHandleAtPoint, meshIndexOf } from "../geometry/SelectionHandles";
 import { resolveMeshes } from "../document/Components";
 import { overrideValueError } from "../document/Components";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
@@ -12775,6 +12776,51 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // …and a mesh still at rest changes nothing either.
         const rested = doc(node("A", restMesh(2, 2, box)));
         expect(resolveMeshes(rested).nodes.get("A")!.type).toBe("core.rectangle");
+    });
+
+    test("mesh HANDLES name the control points, not the bent outline's vertices", () => {
+        // The distinction the whole interaction turns on. A warped node resolves to a `core.path`,
+        // so it also grows vertex handles for the RESULT — and dragging one of those would edit
+        // the bend rather than the thing causing it. These come from the node's own mesh.
+        const d = doc(node("A", pulled(40, 0)));
+        const computed = computeGeometry(d);
+        const handles = meshHandles(d, computed, ["A"]);
+        expect(handles.length).toBe(4);                       // a 1x1 grid is four corners
+        expect(handles.map(h => h.handle)).toEqual(["mesh:0", "mesh:1", "mesh:2", "mesh:3"]);
+        // The dragged corner's handle sits where it was dragged TO.
+        expect(handles[3].cx).toBeCloseTo(140, 6);
+        // A node with no mesh grows none, so nothing appears on an ordinary shape.
+        expect(meshHandles(doc(node("B")), computeGeometry(doc(node("B"))), ["B"]).length).toBe(0);
+    });
+
+    test("the picker reads the SAME producer the renderer draws from", () => {
+        // The drift `pathVertexHandles` was written to avoid: handles that appear and do nothing
+        // when pressed. Asserted by grabbing at a handle's own drawn position.
+        const d = doc(node("A", pulled(40, 0)));
+        const computed = computeGeometry(d);
+        const drawn = meshHandles(d, computed, ["A"]);
+        for (const h of drawn) {
+            expect(meshHandleAtPoint(d, computed, ["A"], h.cx, h.cy, 1)?.handle).toBe(h.handle);
+        }
+        // …and a point well away from every one of them grabs nothing.
+        expect(meshHandleAtPoint(d, computed, ["A"], 60, 60, 1)).toBeNull();
+        expect(meshIndexOf("mesh:7")).toBe(7);
+        expect(meshIndexOf("vertex:7")).toBeNull();
+        expect(meshIndexOf("se")).toBeNull();
+    });
+
+    test("the controller checks MESH handles before vertex handles", () => {
+        // A structural assertion, because the ORDER is the whole point and no unit test of the
+        // pickers can see it: a warped node offers both kinds at once, and whichever is asked
+        // first wins. The same technique the vertex handling is pinned with.
+        const src = readFileSync(resolve(__dirname, "../../editor/tools/ToolController.ts"), "utf8");
+        const press = src.indexOf("const hit = meshHandleAtPoint(");
+        expect(press).toBeGreaterThan(-1);
+        // The vertex picker is the FALLBACK of that same expression, not a separate earlier one.
+        expect(src.slice(press, press + 400)).toContain("?? vertexHandleAtPoint(");
+        expect(src).toContain("const mi = meshIndexOf(hit.handle);");
+        // …and the mesh branch returns before the vertex branch is reached.
+        expect(src.indexOf("const mi = meshIndexOf(")).toBeLessThan(src.indexOf("const vi = vertexIndexOf("));
     });
 
     test("a mesh is validated on BOTH paths, and its point count must match its grid", () => {

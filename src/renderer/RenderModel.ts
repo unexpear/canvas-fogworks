@@ -31,7 +31,7 @@ import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
-import { selectionHandles, selectionFrame, pathVertexHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
+import { selectionHandles, selectionFrame, pathVertexHandles, meshHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
 import { Quad } from "../core/geometry/OrientedBox";
 import { isGroupRotatable, isGroupResizable } from "../core/geometry/GroupTransform";
 import { isHandleOffered } from "../core/actions/nodeEdit";
@@ -689,7 +689,7 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
             .forEach(h => items.push(handleItem(h, z)));
         // A selected `core.path` also shows a handle per on-curve POINT. Same gate, because
         // a vertex drag records the same kind of edit and an instance copy can back it too.
-        pathVertexHandles(doc, computed, roots)
+        [...pathVertexHandles(doc, computed, roots), ...meshHandles(doc, computed, roots)]
             .filter(h => isHandleOffered(doc, h.nodeId, h.handle))
             .forEach(h => items.push(handleItem(h, z)));
     }

@@ -29,7 +29,7 @@ export const ROTATE_OFFSET_PX = 22;
  *  is a template literal rather than a separate field so one `handle` string still
  *  identifies a grab completely — which is what lets the renderer, the picker and the
  *  hover cursor keep reading exactly one thing. */
-export type HandleId = "nw" | "ne" | "sw" | "se" | "rotate" | `vertex:${number}`;
+export type HandleId = "nw" | "ne" | "sw" | "se" | "rotate" | `vertex:${number}` | `mesh:${number}`;
 
 export interface SelectionHandle {
     nodeId: string;
@@ -244,6 +244,62 @@ export function vertexHandleAtPoint(
 ): SelectionHandle | null {
     const half = HANDLE_SIZE_PX / flooredZoom(zoom) / 2;
     const handles = pathVertexHandles(doc, state, selectedNodeIds);
+    for (let i = handles.length - 1; i >= 0; i--) {
+        const h = handles[i];
+        if (Math.abs(x - h.cx) <= half && Math.abs(y - h.cy) <= half) return h;
+    }
+    return null;
+}
+
+/**
+ * A handle for every CONTROL POINT of a selected node's mesh (schema 41).
+ *
+ * Built from the node's OWN mesh rather than from the derived path, which is the only thing that
+ * could work: `resolveMeshes` turns a warped node into a `core.path`, so the vertices a user can
+ * see belong to the bent outline and dragging one of THOSE would edit the result instead of the
+ * cause. The mesh points are the cause, and they are what these name.
+ *
+ * The same producer feeds the renderer and the picker — the drift `pathVertexHandles` was written
+ * to avoid, where handles appeared and dragging one did nothing.
+ */
+export function meshHandles(
+    doc: ReadonlyDocument,
+    state: ComputedState,
+    selectedNodeIds: readonly string[]
+): SelectionHandle[] {
+    const handles: SelectionHandle[] = [];
+    for (const nodeId of selectedNodeIds) {
+        const node = doc.nodes.get(nodeId);
+        if (!node?.mesh) continue;
+        const c = state.nodes.get(nodeId);
+        if (!c) continue;
+        node.mesh.points.forEach((p, index) => {
+            const w = applyToPoint(c.world, p.x, p.y);
+            if (!Number.isFinite(w.x) || !Number.isFinite(w.y)) return;
+            handles.push({ nodeId, handle: `mesh:${index}`, cx: w.x, cy: w.y, cursor: "move" });
+        });
+    }
+    return handles;
+}
+
+/** The control-point index a `mesh:N` handle names, or null for any other handle. */
+export function meshIndexOf(handle: string): number | null {
+    if (!handle.startsWith("mesh:")) return null;
+    const n = Number(handle.slice("mesh:".length));
+    return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+/** The MESH handle under a world point, or null — back to front, like every other picker here. */
+export function meshHandleAtPoint(
+    doc: ReadonlyDocument,
+    state: ComputedState,
+    selectedNodeIds: readonly string[],
+    x: number,
+    y: number,
+    zoom: number
+): SelectionHandle | null {
+    const half = HANDLE_SIZE_PX / flooredZoom(zoom) / 2;
+    const handles = meshHandles(doc, state, selectedNodeIds);
     for (let i = handles.length - 1; i >= 0; i--) {
         const h = handles[i];
         if (Math.abs(x - h.cx) <= half && Math.abs(y - h.cy) <= half) return h;

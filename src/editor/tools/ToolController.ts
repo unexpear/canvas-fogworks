@@ -13,7 +13,8 @@ import { EditorState, panBy, screenToWorld, viewportToFit } from "../EditorState
 import { computeGeometry, ComputedState, hitTest, selectionBounds } from "../../core/geometry/GeometryEngine";
 import { interactionFor, Trigger } from "../../core/document/Prototype";
 import { PICK_RADIUS_PX } from "./SelectTool";
-import { handleAtPoint, groupHandleAtPoint, vertexIndexOf, vertexHandleAtPoint } from "../../core/geometry/SelectionHandles";
+import { handleAtPoint, groupHandleAtPoint, vertexIndexOf, vertexHandleAtPoint, meshIndexOf, meshHandleAtPoint } from "../../core/geometry/SelectionHandles";
+import { SetMeshAction } from "../../core/actions/SetMeshAction";
 import { movePathVertex, normalizePathNode } from "../../core/geometry/PathBuilder";
 import { UpdateNodePathAction } from "../../core/actions/UpdateNodePathAction";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupScaleInput } from "../../core/geometry/GroupTransform";
@@ -72,6 +73,10 @@ export class ToolController {
     // Vertex drag — moving one on-curve point of a `core.path`. Live-committed and coalesced
     // like rotate, so a continuous drag is one undo step.
     private vertexNodeId: string | null = null;
+    private meshNodeId: string | null = null;
+    private meshIndex = 0;
+    private meshStartX = 0;
+    private meshStartY = 0;
     private vertexIndex = -1;
     private vertexStartX = 0;
     private vertexStartY = 0;
@@ -191,7 +196,11 @@ export class ToolController {
                 // 0/1 root: per-node handles, hit-tested over `roots` so picking matches drawing.
                 // VERTEX handles are checked FIRST: they sit inside the box, so a corner
                 // handle would otherwise swallow a vertex that happens to land near it.
-                const hit = vertexHandleAtPoint(doc, computed, roots, w.x, w.y, vp.zoom)
+                // MESH points are checked FIRST. A warped node resolves to a `core.path`, so it
+                // also grows vertex handles for the BENT outline — and dragging one of those
+                // would edit the result instead of the cause. The control points are the cause.
+                const hit = meshHandleAtPoint(doc, computed, roots, w.x, w.y, vp.zoom)
+                    ?? vertexHandleAtPoint(doc, computed, roots, w.x, w.y, vp.zoom)
                     ?? handleAtPoint(computed, roots, w.x, w.y, vp.zoom);
                 const c = hit ? computed.nodes.get(hit.nodeId) : undefined;
                 // Resolved against the EXPANDED document so an instance COPY's handles work: its
@@ -206,6 +215,16 @@ export class ToolController {
                         // draws exactly this set, so falling through to the tool is what the user
                         // sees — better than a control that silently does nothing.
                         this.activeTool?.onMouseDown?.(e, canvasRect, computed);
+                        return;
+                    }
+                    const mi = meshIndexOf(hit.handle);
+                    if (mi !== null) {
+                        this.meshNodeId = hit.nodeId;
+                        this.meshIndex = mi;
+                        this.meshStartX = w.x;
+                        this.meshStartY = w.y;
+                        this.editorState.isDragging = true;
+                        e.preventDefault();
                         return;
                     }
                     const vi = vertexIndexOf(hit.handle);
@@ -331,6 +350,29 @@ export class ToolController {
             panBy(this.editorState.viewport, e.clientX - this.panLastX, e.clientY - this.panLastY);
             this.panLastX = e.clientX;
             this.panLastY = e.clientY;
+            this.refresh();
+            return;
+        }
+
+        if (this.meshNodeId !== null) {
+            const doc = this.dispatcher.getDocument();
+            // The node's OWN mesh, from the stored document rather than the resolved scene: the
+            // resolved one has had its mesh removed, the bend being in its commands by then.
+            const node = doc.nodes.get(this.meshNodeId);
+            if (!node?.mesh) { this.meshNodeId = null; this.refresh(); return; }
+            const w = screenToWorld(this.editorState.viewport, canvasRect, e.clientX, e.clientY);
+            const dx = w.x - this.meshStartX;
+            const dy = w.y - this.meshStartY;
+            this.meshStartX = w.x;
+            this.meshStartY = w.y;
+            // The delta is world-space and the points are local, so this is correct exactly while
+            // the node is translation-only — the same limit the vertex drag states, and refused
+            // the same way rather than silently skewed.
+            const points = node.mesh.points.map((p, i) =>
+                i === this.meshIndex ? { x: p.x + dx, y: p.y + dy } : { x: p.x, y: p.y });
+            this.dispatcher.dispatchAction(
+                new SetMeshAction(doc, this.meshNodeId, { cols: node.mesh.cols, rows: node.mesh.rows, points }),
+                { coalesce: true });
             this.refresh();
             return;
         }
@@ -617,10 +659,12 @@ export class ToolController {
 
     private resetVertex(): void {
         this.vertexNodeId = null;
+        this.meshNodeId = null;
         this.vertexIndex = -1;
     }
 
     onMouseUp(e: MouseEvent): void {
+        if (this.meshNodeId !== null) { this.meshNodeId = null; this.editorState.isDragging = false; }
         if (this.vertexNodeId !== null) { this.resetVertex(); this.editorState.isDragging = false; }
         if (this.panMode) {
             this.panMode = false;
