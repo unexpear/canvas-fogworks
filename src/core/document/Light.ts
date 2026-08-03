@@ -90,18 +90,42 @@ export function lambert(normal: { x: number; y: number; z: number }, light: Ligh
 }
 
 /**
+ * How far a shape at `depth` stands ABOVE the page — the quantity a shadow is thrown by.
+ *
+ * The negation is the whole function, and it is here rather than inlined because getting it
+ * backwards is silent: `depth` counts AWAY from the viewer (positive lags the pan, draws first,
+ * takes a larger clip z — all three of `Depth`'s consumers agree), so height counts the other
+ * way. A shape at depth −10 floats ten units in front of the page; one at +10 is sunk ten units
+ * behind it.
+ *
+ * A SUNK shape has height zero rather than a negative one. It is below the page plane, so there
+ * is nothing between it and the page for it to cast onto, and its shadow would fall on whatever
+ * is further back still — which is a shadow this model does not claim to draw. Zero is the honest
+ * answer; a negative height would throw the shadow backwards INTO the light, which is the
+ * defect this function was written with and shipped for two commits.
+ */
+export function heightAbovePage(depth: number): number {
+    return depth < 0 ? -depth : 0;
+}
+
+/**
  * The drop-shadow OFFSET a light and a depth imply, in world units.
  *
- * The one kind of shadow a renderer without a depth texture can honestly cast: a shape floating
- * `depth` above the page throws its outline away from the light, and further the higher it is.
+ * The one kind of shadow a renderer without a depth texture can honestly cast by itself: a shape
+ * floating above the page throws its outline away from the light, and further the higher it is.
  * That is what a 2D tool has always meant by a drop shadow — the difference is that it is now
  * DERIVED from the scene's own light rather than typed in per shape, so moving the light moves
  * every shadow and they cannot disagree with each other.
  *
- * Zero at depth 0: a shape lying on the page has nothing to cast onto.
+ * Zero at depth 0 and at any depth behind the page: a shape lying on the page, or sunk below it,
+ * has nothing to cast onto.
  */
 export function shadowOffset(light: Light, depth: number): { x: number; y: number } {
     const dir = normalize(light);
-    if (!dir || depth === 0) return { x: 0, y: 0 };
-    return { x: dir.x * depth, y: dir.y * depth };
+    const height = heightAbovePage(depth);
+    // The zero short-circuit is not decoration: a negative direction times zero is `-0`, which
+    // differs under `Object.is` and would make "has this shadow moved?" answer wrongly. The same
+    // trap `parallaxOffset` has.
+    if (!dir || height === 0) return { x: 0, y: 0 };
+    return { x: dir.x * height, y: dir.y * height };
 }

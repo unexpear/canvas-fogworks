@@ -83,10 +83,11 @@ import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDr
 import { Keyframe, TimelineSettings, timelineError, trackError, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
 import { DEPTH_MIN, DEPTH_MAX, depthError, depthOf, parallaxRate, parallaxOffset, depthToClipZ, byDepth, applyParallax } from "../document/Depth";
 import { Mesh, ReadonlyMesh, MESH_MAX_DIVISIONS, meshError, restPoint, restMesh, isIdentityMesh, warpPoint, warpCommands, heightOf, warpHeight, surfaceNormal, normalAt, isFlatMesh } from "../document/Mesh";
-import { Light, LIGHTS_MAX, lightsError, ambientError, normalize, lambert, shadowOffset } from "../document/Light";
+import { Light, LIGHTS_MAX, lightsError, ambientError, normalize, lambert, shadowOffset, heightAbovePage } from "../document/Light";
 import { resolveScene, resolveMeshes, resolveBooleans, applyActiveState, dropHidden } from "../document/Components";
 import { BooleanOp, Ring, Point, Piece, windingAt, insideRings, splitAgainst, chainPieces, booleanRings, ringsToCommands, commandsToRings, booleanPaths } from "../geometry/PathBoolean";
-import { FillRule, FILL_RULES, crossingCount, insideRule, resolveRings } from "../geometry/Resolve";
+import { FillRule, FILL_RULES, crossingCount, insideRule, resolveRings, resolveWith, resolveBoolean, resolveBooleanPaths } from "../geometry/Resolve";
+import { ShadowShape, CastShadowPatch, shadowPatch, castShadows, SHADOW_ALPHA, CAST_SHADOW_MAX_PAIRS } from "../geometry/CastShadow";
 import { StrokeStyle, StrokeAlign, STROKE_ALIGNS, strokeOutline } from "../geometry/StrokeOutline";
 import { signedArea2, triangulate, subdivideTriangles, TESSELLATE_MAX_VERTICES, SUBDIVIDE_MAX_DEPTH } from "../geometry/Tessellate";
 import { isConvexRing, convexPieces, convexOverlaps, piecesOverlap, rectRing, piecesArea, edgesOverlap, DECOMPOSE_MAX_PIECES } from "../geometry/ConvexDecompose";
@@ -387,6 +388,12 @@ export function __apiSurfacePin(): void {
     expectType<boolean>(insideRule(rings, 1, 1, "evenodd"));
     expectType<Ring[]>(resolveRings(rings));
     expectType<Ring[]>(resolveRings(rings, "evenodd"));
+    // The general form both the fill rule and the booleans are written in terms of. `resolveWith`
+    // takes a PREDICATE, which is what makes one engine serve both — and what made the booleans
+    // robust at coincident edges, where classifying an edge's own midpoint has no answer.
+    expectType<Ring[]>(resolveWith(rings, () => true));
+    expectType<Ring[]>(resolveBoolean(rings, rings, "union"));
+    expectType<PathCommand[]>(resolveBooleanPaths([pathCmd], [pathCmd], "intersect"));
 
     // Stroke as GEOMETRY (schema 37) — joins and caps the document chose, not a rasterizer's.
     const strokeStyle: StrokeStyle = { width: 2, join: "miter", cap: "round", miterLimit: 4, align: "center" };
@@ -531,6 +538,19 @@ export function __apiSurfacePin(): void {
     expectType<{ x: number; y: number; z: number } | null>(normalize(light));
     expectType<number>(lambert({ x: 0, y: 0, z: 1 }, light));
     expectType<{ x: number; y: number }>(shadowOffset(light, 4));
+    expectType<number>(heightAbovePage(-4));
+
+    // Shape-on-shape shadows, as geometry rather than as a shadow map.
+    const shadowShape: ShadowShape = { id: "A", rings, depth: -10 };
+    expectType<ShadowShape>(shadowShape);
+    expectType<Ring[]>(shadowPatch(rings, rings, { x: 1, y: 1 }));
+    const patches: CastShadowPatch[] = castShadows([shadowShape], () => ({ x: 1, y: 1 }));
+    expectType<CastShadowPatch[]>(castShadows([shadowShape], () => ({ x: 1, y: 1 }), 10));
+    expectType<string>(patches[0]?.receiverId ?? "");
+    expectType<string>(patches[0]?.casterId ?? "");
+    expectType<Ring[]>(patches[0]?.rings ?? []);
+    expectType<string>(SHADOW_ALPHA);
+    expectType<number>(CAST_SHADOW_MAX_PAIRS);
     expectType<number>(LIGHTS_MAX);
     expectType<readonly Light[] | undefined>(model.lights);
     expectType<number | undefined>(model.ambient);

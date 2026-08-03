@@ -46,8 +46,8 @@
  * implementation would resolve by rule. Crossings and touches are handled.
  */
 
-import { FILL_RULES, FillRule } from "../document/Node";
-import { Piece, Ring, chainPieces, splitAgainst, windingAt } from "./PathBoolean";
+import { FILL_RULES, FillRule, PathCommand } from "../document/Node";
+import { BooleanOp, Piece, Ring, chainPieces, commandsToRings, ringsToCommands, splitAgainst, windingAt } from "./PathBoolean";
 
 // The vocabulary is the DOCUMENT's (`document/Node`), re-exported so a caller doing geometry has
 // one import rather than two — the same arrangement the stroke joins and caps use.
@@ -65,6 +65,10 @@ export type { FillRule };
  * has — a shape with detail finer than a millionth of a unit has already lost to that epsilon.
  */
 const PROBE = 1e-6;
+
+/** Point identity for de-duplicating coincident survivors, at `PathBoolean`'s own epsilon. */
+const KEY_EPS = 1e-9;
+const key = (p: { x: number; y: number }): string => `${Math.round(p.x / KEY_EPS)},${Math.round(p.y / KEY_EPS)}`;
 
 /** Number of times a ray from the point crosses the rings — the EVEN-ODD rule's raw material. */
 export function crossingCount(rings: readonly Ring[], x: number, y: number): number {
@@ -108,9 +112,24 @@ export function insideRule(rings: readonly Ring[], x: number, y: number, rule: F
  */
 export function resolveRings(rings: readonly Ring[], rule: FillRule = "nonzero"): Ring[] {
     const usable = rings.filter(r => r.length >= 3);
+    return resolveWith(usable, (x, y) => insideRule(usable, x, y, rule));
+}
+
+/**
+ * The general form: arbitrary contours as simple rings bounding wherever `filled` says.
+ *
+ * `resolveRings` is this with a fill rule; `resolveBoolean` is this with a boolean's membership
+ * test. Both want exactly the same thing — the set of edge pieces where the answer CHANGES across
+ * the edge — and that framing is what makes it robust at coincident edges, which is where the
+ * older midpoint-classifying boolean fails. A midpoint that lies exactly ON another shape's
+ * boundary has no defined inside/outside; the two points either side of it do.
+ */
+export function resolveWith(rings: readonly Ring[], filled: (x: number, y: number) => boolean): Ring[] {
+    const usable = rings.filter(r => r.length >= 3);
     if (usable.length === 0) return [];
 
     const kept: Piece[] = [];
+    const seen = new Set<string>();
     for (const piece of splitAgainst(usable, usable)) {
         const dx = piece.to.x - piece.from.x, dy = piece.to.y - piece.from.y;
         const len = Math.hypot(dx, dy);
@@ -126,10 +145,66 @@ export function resolveRings(rings: readonly Ring[], rule: FillRule = "nonzero")
         // is silent and lands on screen. Note it does NOT protect against a thin SLIVER, whose
         // edges are long and close; nothing here does, and that is the module's stated epsilon.
         const t = Math.min(PROBE, len / 4) / len;
-        const leftFilled = insideRule(usable, mx - dy * t, my + dx * t, rule);
-        const rightFilled = insideRule(usable, mx + dy * t, my - dx * t, rule);
+        const leftFilled = filled(mx - dy * t, my + dx * t);
+        const rightFilled = filled(mx + dy * t, my - dx * t);
         if (leftFilled === rightFilled) continue;             // interior or stray: not a boundary
-        kept.push(leftFilled ? piece : { from: piece.to, to: piece.from });
+        const directed = leftFilled ? piece : { from: piece.to, to: piece.from };
+        // DEDUPED, and only coincident input can produce a duplicate. Two shapes that share an
+        // edge each contribute that edge, and both copies survive the probe because both have the
+        // same face on the same side — so a union of a shape with ITSELF came out as two identical
+        // rings stacked. It fills correctly under nonzero, which is exactly why it would have gone
+        // unnoticed, but this module's whole promise is rings that do not overlap. After directing,
+        // coincident survivors point the same way (fill is on the left of both), so identity of
+        // the directed endpoints is the right test rather than an unordered one.
+        const k = `${key(directed.from)}|${key(directed.to)}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        kept.push(directed);
     }
     return chainPieces(kept);
+}
+
+/**
+ * The boolean of two sets of closed rings — the one this engine uses.
+ *
+ * It replaces a version that classified each edge piece by whether its MIDPOINT lay inside the
+ * other shape. That works until the two shapes share an edge, at which point the midpoint sits
+ * exactly ON the other's boundary and "inside" has no answer: a ray cast from a boundary point
+ * lands on the parity of its own rounding. The visible consequence was not subtle — the UNION and
+ * the INTERSECTION of two axis-aligned rectangles at the same `y` came back EMPTY, and two
+ * rectangles merely touching edge-to-edge unioned to nothing. Aligning two rectangles and merging
+ * them is close to the most ordinary thing anybody does with a boolean tool, and it silently did
+ * nothing. `subtract` and `exclude` happened to survive, which is why it went unnoticed: three of
+ * the four operations have a test that passes.
+ *
+ * Framing it as "where does membership CHANGE across this edge" removes the question rather than
+ * answering it more carefully. The probe samples the two points either side of the piece, never
+ * the piece itself, so a coincident edge is classified by the faces it separates — which is
+ * defined even when the edge lies on top of another.
+ *
+ * The membership tests are the operations' own definitions, nothing more: a point is in the union
+ * when it is in either, in the intersection when it is in both, and so on. NONZERO on each side
+ * separately rather than on the combined set, because two shapes wound oppositely would otherwise
+ * cancel where they overlap and turn a union into an exclusion.
+ */
+export function resolveBoolean(a: readonly Ring[], b: readonly Ring[], op: BooleanOp): Ring[] {
+    const ra = a.filter(r => r.length >= 3);
+    const rb = b.filter(r => r.length >= 3);
+    if (ra.length === 0 && rb.length === 0) return [];
+    const inA = (x: number, y: number) => windingAt(ra, x, y) !== 0;
+    const inB = (x: number, y: number) => windingAt(rb, x, y) !== 0;
+    const filled = (x: number, y: number): boolean => {
+        switch (op) {
+            case "union": return inA(x, y) || inB(x, y);
+            case "intersect": return inA(x, y) && inB(x, y);
+            case "subtract": return inA(x, y) && !inB(x, y);
+            case "exclude": return inA(x, y) !== inB(x, y);
+        }
+    };
+    return resolveWith([...ra, ...rb], filled);
+}
+
+/** The same, on path commands — flattened in, converted back out. */
+export function resolveBooleanPaths(a: readonly PathCommand[], b: readonly PathCommand[], op: BooleanOp): PathCommand[] {
+    return ringsToCommands(resolveBoolean(commandsToRings(a), commandsToRings(b), op));
 }

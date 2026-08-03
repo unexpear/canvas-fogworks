@@ -300,9 +300,26 @@ with each other the way hand-set ones eventually do. It throws further and softe
 shape sits. An EXPLICIT `style.shadow` still wins: somebody who set one meant it, and a scene light
 silently overruling a per-shape decision would be the tool arguing with its user.
 
-WHAT IS NOT HERE: shapes do not cast shadows ON EACH OTHER. That needs a shadow map — a second
-pass from the light's point of view and a depth texture to sample — which is its own piece of work
-and needs the texture path this renderer has never had. What exists is SELF-shading, which is what
+**Shapes DO cast shadows on each other, and a shadow map was the wrong technique for it
+(`geometry/CastShadow`).** That gap was restated three times, each time with the same reasoning: a
+second pass from the light's point of view, a depth texture to sample, a texture path this
+renderer has never had. The reasoning was sound about shadow maps and wrong about the problem. A
+shadow map is what you reach for when the occluder is arbitrary 3D geometry; here every occluder
+is a FLAT shape at a known height under a DIRECTIONAL light, and the shadow such a thing casts is
+its own outline TRANSLATED and INTERSECTED with whatever it lands on. Both halves already existed
+and were hardened. Doing it as geometry means all three backends get it (SVG and Canvas cannot
+sample a depth texture; they can fill a path), it is deterministic and checkable by area in the
+`node` env rather than by running a GPU, and it stays sharp under zoom instead of becoming a
+texture's texels. A shape casts only on shapes STRICTLY further away, which is also what stops it
+shadowing itself; the patch is spliced directly after its receiver in paint order, unpickable and
+idless, because a shadow is not a thing you can select.
+
+Finding it cost a correctness bug elsewhere, which is the better half of the story — see the
+boolean note below.
+
+WHAT IS STILL NOT HERE: a cast shadow lands on the receiver's OUTLINE as if the receiver were
+flat, so a shadow crossing a domed shape does not bend over the dome. That is genuinely the part
+that needs the height field in the fragment shader. What exists is SELF-shading, which is what
 makes a bevel look like a bevel, and a drop-shadow OFFSET derived from the light and the node's
 depth, which is what a 2D tool has always meant by a drop shadow — the difference being that it is
 now computed from the scene's own light rather than typed in per shape, so moving the light moves
@@ -468,6 +485,28 @@ not a style choice. `initGL` returns it and `setLighting` takes it, both documen
 API-CONTRACTS, and while it was private neither signature could be written down outside
 `emitWebGL.ts`. Nobody noticed until the API pin tried to state the contract and could not: a
 documented type that cannot be named is a contract with no second party.
+
+**A correctness bug the shadows found: the booleans dropped shapes that shared an edge.** The
+first shadow patch computed came back empty for two rectangles at the same `y` — the arrangement a
+design tool is largely made of. `PathBoolean.booleanRings` classifies each split edge piece by
+whether its MIDPOINT lies inside the other shape, and a midpoint sitting exactly ON the other's
+boundary has no answer: a ray cast from a boundary point lands on the parity of its own rounding.
+The visible consequence was not subtle. The UNION and the INTERSECTION of two axis-aligned
+rectangles at the same `y` returned EMPTY; two rectangles merely touching edge-to-edge unioned to
+nothing; a shape unioned with ITSELF returned nothing. `subtract` and `exclude` happened to
+survive, which is exactly why it went unnoticed for so long — three of four operations have a
+passing test.
+
+`Resolve` already had the robust engine and did not know it. Its rule is "keep an edge where the
+answer CHANGES across it", with the probe sampling the two faces either side and never the edge
+itself — which is defined even when the edge lies on top of another. Generalising it from a fill
+rule to any membership predicate (`resolveWith`) makes the four booleans fall out as their own
+definitions: in the union when in either, in the intersection when in both. `resolveBoolean` now
+serves every call site — the boolean tool, the live `core.boolean` node, and the shadows. The
+non-degenerate cases come out identical to the digit, which is what says this replaced a broken
+classifier rather than a working one. Coincident survivors are DE-DUPLICATED, or a union across a
+shared edge emits that edge twice and this module's promise of non-overlapping rings quietly stops
+holding — it still fills correctly under nonzero, which is why that too would have gone unseen.
 
 That flat form is the *bake*. The default is a **`core.boolean` node** (schema 33) that keeps its
 operands as an ordinary subtree and is resolved by `resolveBooleans` inside `resolveScene` — so

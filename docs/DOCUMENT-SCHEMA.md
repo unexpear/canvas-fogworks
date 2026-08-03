@@ -99,11 +99,19 @@ interface Light { x: number; y: number; z: number; color: string; intensity: num
 // Mesh control points gain `z` (absent = 0), which is what turns the grid into a SURFACE: a warp
 // alone is in-plane and tilts nothing. `warpPoint` still reads only x and y, so height changes how
 // a shape is LIT without changing what it covers.
-// NOT DONE, stated plainly: shapes do not cast shadows ON EACH OTHER — that needs a shadow map and
-// the texture path this renderer has never had. What exists is SELF-shading (Lambert per FRAGMENT
-// on the GPU — the vertex stage hands over an un-normalised normal, which is what survives linear
-// interpolation intact, and the fragment shader normalises it) and a drop-shadow OFFSET derived
-// from the light and the node's depth, which all three backends draw.
+// Shapes DO now cast shadows on each other, and not via a shadow map. Every occluder here is a
+// flat shape at a known height under a DIRECTIONAL light, so its shadow is its own outline
+// translated and intersected with what it lands on — a boolean, not a pass. That is why all three
+// backends get it, why it is node-testable, and why it stays sharp when you zoom (`CastShadow`).
+// RAISED IS NEGATIVE DEPTH. `depth` counts AWAY from the viewer, so the shape that floats above
+// the page and throws a shadow is the one in FRONT of it; a shape sunk behind the page throws
+// nothing. `shadowOffset` had this backwards for two commits.
+// ALSO HERE: SELF-shading, Lambert per FRAGMENT on the GPU — the vertex stage hands over an
+// un-normalised normal, which is what survives linear interpolation intact, and the fragment
+// shader normalises it.
+// STILL NOT DONE: a cast shadow lands on the receiver's OUTLINE as if the receiver were flat, so
+// it does not bend over a domed surface. That is the part that does need the height field in the
+// fragment shader.
 
 // MESH (schema 41). Node.mesh?: { cols, rows, points } — a grid of control points that BENDS the
 // node's outline. Points are in LOCAL units, row-major, exactly (cols+1)*(rows+1) of them, and

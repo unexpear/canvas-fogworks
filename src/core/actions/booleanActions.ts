@@ -30,7 +30,7 @@ import { resolveScene } from "../document/Components";
 import { selectionRoots } from "../document/SceneGraph";
 import { ComputedState } from "../geometry/GeometryEngine";
 import { isLayoutContainer } from "../geometry/LayoutEngine";
-import { booleanPaths } from "../geometry/PathBoolean";
+import { resolveBooleanPaths } from "../geometry/Resolve";
 import { BooleanOp } from "../document/Node";
 import { normalizePathNode } from "../geometry/PathBuilder";
 import { shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
@@ -85,7 +85,7 @@ export function booleanAction(
 
     let result = operands[0].commands;
     for (let i = 1; i < operands.length; i++) {
-        result = booleanPaths(result, operands[i].commands, op);
+        result = resolveBooleanPaths(result, operands[i].commands, op);
     }
 
     // The new node inherits the BOTTOM-most operand's paint: the result occupies the place the

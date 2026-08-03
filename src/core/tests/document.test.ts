@@ -42,7 +42,7 @@ import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
 import { triangulate, signedArea2, TESSELLATE_MAX_VERTICES, subdivideTriangles, SUBDIVIDE_MAX_DEPTH } from "../geometry/Tessellate";
 import { convexPieces, isConvexRing, convexOverlaps, piecesOverlap, piecesArea, rectRing, DECOMPOSE_MAX_PIECES } from "../geometry/ConvexDecompose";
-import { resolveRings, insideRule, crossingCount, FILL_RULES, FillRule } from "../geometry/Resolve";
+import { resolveRings, insideRule, crossingCount, FILL_RULES, FillRule, resolveBoolean } from "../geometry/Resolve";
 import { applyFrame, trackError, timelineError, onionFrames, keyframesAt, TIMELINE_MAX_FRAMES, FPS_MAX } from "../document/Timeline";
 import { SetTrackAction } from "../actions/SetTrackAction";
 import { SetTimelineAction } from "../actions/SetTimelineAction";
@@ -50,8 +50,10 @@ import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyP
 import { Mesh, meshError, restMesh, warpPoint, isIdentityMesh, MESH_MAX_DIVISIONS } from "../document/Mesh";
 import { meshHandles, meshHandleAtPoint, meshIndexOf } from "../geometry/SelectionHandles";
 import { normalAt, surfaceNormal, warpHeight, isFlatMesh } from "../document/Mesh";
-import { Light, lightsError, ambientError, lambert, shadowOffset, LIGHTS_MAX } from "../document/Light";
+import { Light, lightsError, ambientError, lambert, shadowOffset, heightAbovePage, LIGHTS_MAX } from "../document/Light";
 import { resolveMeshes } from "../document/Components";
+import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry/CastShadow";
+import { Ring } from "../geometry/PathBoolean";
 import { overrideValueError } from "../document/Components";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
@@ -12765,13 +12767,24 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         const back = shadowOffset(light(-1, -1, 0), 0);
         expect(Object.is(back.x, 0)).toBe(true);
         expect(Object.is(back.y, 0)).toBe(true);
-        const near = shadowOffset(light(1, 0, 0), 10);
-        const far = shadowOffset(light(1, 0, 0), 40);
+        // RAISED is NEGATIVE depth, and this is the whole correction. `depth` counts AWAY from the
+        // viewer — its three other consumers all agree: positive lags the pan, draws first, takes
+        // a larger clip z. So the shape that floats above the page and throws a shadow is the one
+        // at negative depth, and height is `-depth`.
+        const near = shadowOffset(light(1, 0, 0), -10);
+        const far = shadowOffset(light(1, 0, 0), -40);
         expect(near).toEqual({ x: 10, y: 0 });
         expect(far.x).toBe(4 * near.x);
+        expect(heightAbovePage(-10)).toBe(10);
+        // A SUNK shape casts nothing. It is below the page, so there is nothing between it and
+        // the page to cast onto — and the version that shipped for two commits threw its shadow
+        // backwards INTO the light here, which is the least physical thing a shadow can do.
+        expect(shadowOffset(light(1, 0, 0), 10)).toEqual({ x: 0, y: 0 });
+        expect(heightAbovePage(10)).toBe(0);
+        expect(heightAbovePage(0)).toBe(0);
         // It follows the light's DIRECTION, so moving the light moves every shadow together.
-        expect(shadowOffset(light(0, 1, 0), 10)).toEqual({ x: 0, y: 10 });
-        expect(shadowOffset({ x: 0, y: 0, z: 0, color: "#fff", intensity: 1 }, 10)).toEqual({ x: 0, y: 0 });
+        expect(shadowOffset(light(0, 1, 0), -10)).toEqual({ x: 0, y: 10 });
+        expect(shadowOffset({ x: 0, y: 0, z: 0, color: "#fff", intensity: 1 }, -10)).toEqual({ x: 0, y: 0 });
     });
 
     test("the GPU gets ONE NORMAL PER VERTEX, and flat ones when there is no surface", () => {
@@ -13007,18 +13020,137 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         // On the page there is nothing to cast onto, so no shadow at all.
         expect(lit(0, key)).toBeNull();
         // Unlit, a raised shape still casts nothing: a shadow needs a light to be cast BY.
-        expect(lit(20, undefined)).toBeNull();
-        const near = lit(10, key)!;
-        const far = lit(40, key)!;
+        expect(lit(-20, undefined)).toBeNull();
+        // RAISED is NEGATIVE depth — depth counts away from the viewer, so the shape that floats
+        // above the page is the one in FRONT of it. A shape SUNK behind the page casts nothing.
+        expect(lit(20, key)).toBeNull();
+        const near = lit(-10, key)!;
+        const far = lit(-40, key)!;
         expect(near.dx).toBeGreaterThan(0);
-        // FURTHER from the page throws further, and softer — the difference between a card lying
+        // HIGHER above the page throws further, and softer — the difference between a card lying
         // on the page and one held above it.
         expect(far.dx).toBe(4 * near.dx);
         expect(far.blur).toBeGreaterThan(near.blur);
         // It follows the light's DIRECTION, so the whole scene agrees about where "away" is.
-        const fromBelow = lit(10, { x: 0, y: -1, z: 0, color: "#fff", intensity: 1 })!;
+        const fromBelow = lit(-10, { x: 0, y: -1, z: 0, color: "#fff", intensity: 1 })!;
         expect(fromBelow.dy).toBeLessThan(0);
         expect(Math.abs(fromBelow.dx)).toBeCloseTo(0, 9);
+    });
+
+    test("a shape's shadow LANDS ON another shape, and only where it overlaps", () => {
+        // The gap the lighting notes have named since lighting existed. A shadow map was the wrong
+        // technique for it: every occluder here is a flat shape at a known height under a
+        // directional light, so its shadow IS its own outline translated — a boolean, not a pass.
+        const sq = (x: number, y: number): Ring => [
+            { x, y }, { x: x + 100, y }, { x: x + 100, y: y + 100 }, { x, y: y + 100 }];
+        const patch = shadowPatch([sq(0, 0)], [sq(50, 0)], { x: 40, y: 0 });
+        expect(patch.length).toBe(1);
+        // The caster spans x 40..140 after the throw; the receiver spans 50..150. The overlap is
+        // 50..140 — 90 wide, full height. Area is the check that survives any winding order.
+        expect(Math.abs(signedArea2(patch[0])) / 2).toBeCloseTo(90 * 100, 6);
+        // MISSES entirely once the throw carries it past the receiver — an empty result rather
+        // than a zero-area ring, so nothing downstream has to filter degenerate shapes.
+        expect(shadowPatch([sq(0, 0)], [sq(50, 0)], { x: 200, y: 0 })).toEqual([]);
+        // A zero offset is a shape ON the page: its shadow sits exactly under itself, where the
+        // shape hides it, so it is refused rather than computed once per pair per frame.
+        expect(shadowPatch([sq(0, 0)], [sq(50, 0)], { x: 0, y: 0 })).toEqual([]);
+    });
+
+    test("BOOLEANS survive shapes that share an edge — the case that returned nothing", () => {
+        // Found by the cast shadows: the first patch computed came back empty for two rectangles
+        // at the same y, which is the arrangement a design tool is made of. The old boolean
+        // classified each edge piece by whether its MIDPOINT was inside the other shape, and a
+        // midpoint lying exactly ON the other's boundary has no answer — a ray cast from a
+        // boundary point lands on the parity of its own rounding.
+        const sq = (x: number, y: number, w = 100, h = 100): Ring =>
+            [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+        const area = (rs: Ring[]) => rs.reduce((s, r) => s + Math.abs(signedArea2(r)) / 2, 0);
+
+        // ALIGNED, overlapping. Union spans x 40..150, intersection 50..140, both full height.
+        expect(area(resolveBoolean([sq(40, 0)], [sq(50, 0)], "union"))).toBeCloseTo(110 * 100, 6);
+        expect(area(resolveBoolean([sq(40, 0)], [sq(50, 0)], "intersect"))).toBeCloseTo(90 * 100, 6);
+        // TOUCHING edge-to-edge: all four operations returned nothing before, including the union
+        // of two rectangles laid side by side, which is how anybody builds a bar out of blocks.
+        expect(area(resolveBoolean([sq(0, 0)], [sq(100, 0)], "union"))).toBeCloseTo(20000, 6);
+        expect(area(resolveBoolean([sq(0, 0)], [sq(100, 0)], "subtract"))).toBeCloseTo(10000, 6);
+        expect(resolveBoolean([sq(0, 0)], [sq(100, 0)], "intersect")).toEqual([]);   // they only touch
+        // IDENTICAL shapes: a shape unioned with itself is itself, and subtracted from itself is
+        // nothing. Every edge here is coincident, so this is the degenerate case at its purest.
+        expect(area(resolveBoolean([sq(0, 0)], [sq(0, 0)], "union"))).toBeCloseTo(10000, 6);
+        expect(area(resolveBoolean([sq(0, 0)], [sq(0, 0)], "intersect"))).toBeCloseTo(10000, 6);
+        expect(resolveBoolean([sq(0, 0)], [sq(0, 0)], "subtract")).toEqual([]);
+        expect(resolveBoolean([sq(0, 0)], [sq(0, 0)], "exclude")).toEqual([]);
+        // NOT a regression: the general, non-degenerate case is unchanged to the digit, which is
+        // what says this replaced a broken classifier rather than a working one.
+        for (const op of ["union", "intersect", "subtract", "exclude"] as const) {
+            expect(area(resolveBoolean([sq(40, 20)], [sq(50, 55)], op)))
+                .toBeCloseTo(area(booleanRings([sq(40, 20)], [sq(50, 55)], op)), 6);
+        }
+        // DISJOINT shapes never touched the degeneracy and still do not.
+        expect(area(resolveBoolean([sq(0, 0)], [sq(500, 0)], "union"))).toBeCloseTo(20000, 6);
+        expect(resolveBoolean([sq(0, 0)], [sq(500, 0)], "intersect")).toEqual([]);
+    });
+
+    test("only a NEARER shape casts onto a further one, and never onto its own plane", () => {
+        const sq = (x: number): Ring => [{ x, y: 0 }, { x: x + 100, y: 0 }, { x: x + 100, y: 100 }, { x, y: 100 }];
+        const at = (id: string, x: number, depth: number): ShadowShape => ({ id, rings: [sq(x)], depth });
+        const throwBy = (d: number) => ({ x: d < 0 ? -d : 0, y: 0 });
+        // "A" floats above the page (negative depth); "B" lies on it. The shadow goes one way.
+        const one = castShadows([at("A", 0, -40), at("B", 50, 0)], throwBy);
+        expect(one.length).toBe(1);
+        expect(one[0]).toMatchObject({ casterId: "A", receiverId: "B" });
+        // SAME plane: neither is above the other, so neither shadows the other. A `<=` here would
+        // have every raised shape in a stack darken every sibling it overlaps.
+        expect(castShadows([at("A", 0, -40), at("B", 50, -40)], throwBy)).toEqual([]);
+        // And the FURTHER shape never casts forward onto the nearer one.
+        const rev = castShadows([at("A", 0, 0), at("B", 50, -40)], throwBy);
+        expect(rev.map(p => p.casterId)).toEqual(["B"]);
+        // A scene with nothing raised does no work at all — the common case, run every frame.
+        expect(castShadows([at("A", 0, 0), at("B", 50, 0)], throwBy)).toEqual([]);
+        // BOUNDED, and it stops rather than truncating a shape's shadow halfway.
+        const many = [at("A", 0, -40), at("B", 10, -40), ...Array.from({ length: 6 }, (_, i) => at("r" + i, 20, 0))];
+        expect(castShadows(many, throwBy, 3).length).toBeLessThanOrEqual(3);
+        expect(castShadows(many, throwBy).length).toBe(12);
+    });
+
+    test("the cast shadow reaches the display list, ABOVE its receiver and below its caster", () => {
+        // Paint order is the whole of it: before the receiver, the receiver paints over its own
+        // shadow; after the caster, the shadow darkens the shape that threw it.
+        const d = doc(
+            { id: "under", type: "core.rectangle", parent: null, children: [],
+              geometry: { x: 50, y: 0, width: 100, height: 100 },
+              style: { fill: "#ffffff", opacity: 1 }, layout: {} } as Node,
+            { id: "over", type: "core.rectangle", parent: null, children: [],
+              geometry: { x: 0, y: 0, width: 100, height: 100 },
+              style: { fill: "#808080", opacity: 1 }, layout: {}, depth: -40 } as Node);
+        d.lights = [{ x: 1, y: 0, z: -1, color: "#ffffff", intensity: 1 }];
+        const model = buildRenderModel({ width: 800, height: 600 }, d,
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(d), viewport: { x: 0, y: 0, zoom: 1 } });
+        const roles = model.content.map(i => `${i.role}:${i.nodeId ?? "-"}`);
+        expect(roles).toEqual(["content:under", "shadow:-", "content:over"]);
+        const patch = model.content[1];
+        // UNPICKABLE and idless. A shadow is not a thing you can select; a click has to fall
+        // through to the receiver underneath it.
+        expect(patch.nodeId).toBeNull();
+        expect(patch.paint.pointerEvents).toBe(false);
+        // WORLD-space with no transform: the patch is the intersection of two shapes from
+        // different local spaces, so there is no local space left for it to be in.
+        expect(patch.world).toBeNull();
+        expect(patch.shape.kind).toBe("path");
+        expect(patch.paint.fill).toBe(SHADOW_ALPHA);
+        // An UNLIT document casts nothing, even with a shape RAISED right over another. A shadow
+        // needs a light to be cast BY, and the scene has to be asked before any of the quadratic
+        // work is done — this runs on every frame.
+        const unlit = doc(
+            { id: "under", type: "core.rectangle", parent: null, children: [],
+              geometry: { x: 50, y: 0, width: 100, height: 100 },
+              style: { fill: "#ffffff", opacity: 1 }, layout: {} } as Node,
+            { id: "over", type: "core.rectangle", parent: null, children: [],
+              geometry: { x: 0, y: 0, width: 100, height: 100 },
+              style: { fill: "#808080", opacity: 1 }, layout: {}, depth: -40 } as Node);
+        expect(buildRenderModel({ width: 800, height: 600 }, unlit,
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(unlit), viewport: { x: 0, y: 0, zoom: 1 } })
+            .content.every(i => i.role === "content")).toBe(true);
     });
 
     test("an EXPLICIT shadow still wins over the scene's light", () => {

@@ -218,7 +218,8 @@ function lightsError(lights: unknown): string | null;      // shared by the edit
 function ambientError(ambient: unknown): string | null;    // 0..1
 function normalize(v): {x,y,z} | null;                     // null when it has no length
 function lambert(normal, light): number;                   // CLAMPED at 0 — a light must never subtract
-function shadowOffset(light, depth): {x, y};               // the only shadow a depth-textureless renderer can honestly cast
+function heightAbovePage(depth: number): number;           // -depth, floored at 0 — `depth` counts AWAY from the viewer
+function shadowOffset(light, depth): {x, y};               // a RAISED shape (negative depth) throws; a sunk one throws nothing
 
 // Mesh.ts — a grid of control points that BENDS a shape (schema 41).
 const MESH_MAX_DIVISIONS: number;                         // 64 — the point count is the product
@@ -268,7 +269,28 @@ function applyParallax<T>(doc: T, vp: {x,y,zoom}): T;        // same reference w
 type FillRule = "nonzero" | "evenodd";                    // = document/Node's, not a second spelling
 function crossingCount(rings: readonly Ring[], x: number, y: number): number;   // the even-odd raw material
 function insideRule(rings: readonly Ring[], x: number, y: number, rule: FillRule): boolean;
-function resolveRings(rings: readonly Ring[], rule?: FillRule): Ring[];         // idempotent on simple input
+function resolveRings(rings: readonly Ring[], rule?: FillRule): Ring[];
+function resolveWith(rings, filled: (x, y) => boolean): Ring[];        // the general form: bound wherever `filled` says
+function resolveBoolean(a: Ring[], b: Ring[], op: BooleanOp): Ring[];  // THE boolean — robust at coincident edges
+function resolveBooleanPaths(a, b, op): PathCommand[];                 // the same, on commands
+// `resolveBoolean` replaces `PathBoolean.booleanRings` at every call site. The older one
+// classifies an edge piece by whether its MIDPOINT lies inside the other shape, which has no
+// answer when the shapes share an edge — the union AND intersection of two axis-aligned
+// rectangles at the same `y` came back EMPTY, as did two rectangles merely touching, as did a
+// shape unioned with itself. Asking where membership CHANGES across an edge removes the
+// question instead of answering it more carefully: the probe samples the two faces either
+// side, never the edge. Coincident survivors are de-duplicated, or a union with a shared edge
+// emits that edge twice.
+
+// CastShadow.ts — one shape darkening another, as GEOMETRY (no schema field; derived).
+const SHADOW_ALPHA: string; const CAST_SHADOW_MAX_PAIRS: number;   // #00000059; 400 — this is quadratic in RAISED shapes
+interface ShadowShape { id: string; rings: readonly Ring[]; depth: number }   // rings in WORLD space
+interface CastShadowPatch { receiverId: string; casterId: string; rings: Ring[] }
+function shadowPatch(caster, receiver, offset): Ring[];            // the caster's outline, moved, intersected with the receiver
+function castShadows(shapes, offsetOf, maxPairs?): CastShadowPatch[];   // [] when nothing is raised — the common case, per frame
+// A shape casts onto another only when STRICTLY nearer the viewer; equal depth is the same
+// plane and neither is above the other, which is also what stops a shape shadowing itself.
+// `offsetOf` is injected so this module needs to know nothing about lights.         // idempotent on simple input
 // IDEMPOTENT by design: callers resolve indiscriminately rather than detecting whether they need
 // to, because detecting self-intersection costs the same O(n^2) as fixing it. Returns [] when the
 // region is empty — two identical contours wound oppositely cancel exactly, and that is an answer.
@@ -829,7 +851,7 @@ interface Paint {
   strokeJoin?; strokeCap?; strokeMiterLimit?;   // schema 37 — OPTIONAL, absent = "what you already drew"
   fillRule?: FillRule;                          // schema 38 — absent = "nonzero", what all three already drew
 }
-type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview" | "marquee";
+type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview" | "marquee" | "guide" | "shadow";
 interface DrawItem {
   shape: Shape; paint: Paint;
   world: Mat2D | null;          // null → the backend emits no transform

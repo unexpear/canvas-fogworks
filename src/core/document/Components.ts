@@ -38,7 +38,7 @@ import { PathCommand } from "./Node";
 import { Mat2D, compose } from "../geometry/Matrix";
 import { flattenPath, hitShapeOf } from "../geometry/ShapeHit";
 import { shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
-import { booleanPaths } from "../geometry/PathBoolean";
+import { resolveBooleanPaths } from "../geometry/Resolve";
 import { normalizePathNode } from "../geometry/PathBuilder";
 import { applyFrame } from "./Timeline";
 import { isFlatMesh, isIdentityMesh, warpCommands } from "./Mesh";
@@ -832,7 +832,7 @@ export function resolveBooleans(doc: ReadonlyDocument): ReadonlyDocument {
 
         let result: PathCommand[] = operands.length > 0 ? operands[0] : [];
         for (let i = 1; i < operands.length; i++) {
-            result = booleanPaths(result, operands[i], node.booleanOp ?? "union");
+            result = resolveBooleanPaths(result, operands[i], node.booleanOp ?? "union");
         }
 
         for (const childId of node.children) bury(childId, gone, nodes);

@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1115 — `src/core/tests/document.test.ts` (1013) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (33).
+- **Tests:** 1119 — `src/core/tests/document.test.ts` (1017) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (33).
 
 ## Source map
 
@@ -61,7 +61,7 @@ src/
     geometry/   Matrix, GeometryEngine (M1),           (intent -> computed results)
                 LayoutEngine (M2 auto-layout),
                 PathBoolean, Resolve, StrokeOutline,
-                Tessellate, ConvexDecompose
+                Tessellate, ConvexDecompose, CastShadow
     ids/        UUID
     tests/      document.test.ts, apiSurface.ts (compile-time API pin —
                 a module that gains a documented export gains a line

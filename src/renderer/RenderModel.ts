@@ -28,6 +28,9 @@ import { FillRule, PathCommand, Shadow, StrokeCap, StrokeJoin, TextAlign } from 
 import { depthOf } from "../core/document/Depth";
 import { ReadonlyMesh, isFlatMesh } from "../core/document/Mesh";
 import { Light, shadowOffset } from "../core/document/Light";
+import { castShadows, ShadowShape, SHADOW_ALPHA } from "../core/geometry/CastShadow";
+import { Ring, commandsToRings, ringsToCommands } from "../core/geometry/PathBoolean";
+import { worldCommandsOf } from "../core/actions/booleanActions";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
@@ -177,7 +180,7 @@ export function effectFilterId(shadow: Shadow | null, blur: number | null): stri
     return id;
 }
 
-export type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview" | "marquee" | "guide";
+export type DrawRole = "grid-line" | "content" | "outline" | "handle" | "preview" | "marquee" | "guide" | "shadow";
 
 /** One resolved primitive: a shape, its paint, its world placement, and hit-test tags. */
 export interface DrawItem {
@@ -814,6 +817,66 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
 
 
 /** The opacity groups the visible content refers to, deduped, outermost-first per item. */
+/**
+ * The scene's shapes darkening one another — the gap the lighting notes have named since it
+ * existed, closed as GEOMETRY rather than as a shadow map. See `geometry/CastShadow`.
+ *
+ * Inserted here rather than inside `buildContent` because a cast shadow is not a node's drawing:
+ * it belongs to a PAIR, it has no id, and it must land between two items in paint order. Each
+ * patch is spliced in directly AFTER its receiver, which is the only position that is right —
+ * before it, the receiver would paint over its own shadow; after the caster, the shadow would
+ * darken the shape that threw it.
+ *
+ * Returns the list BY REFERENCE when nothing is raised, which is every document that has never
+ * touched depth. This runs per frame, so the common case has to cost one pass and no allocation.
+ */
+function withCastShadows(content: DrawItem[], computed: ComputedState, light: Light | undefined): DrawItem[] {
+    if (!light) return content;
+    const shapes: ShadowShape[] = [];
+    for (const item of content) {
+        // Only real, pickable nodes take part. A GHOST has `nodeId: null` — it is a picture of
+        // another moment, and a shadow cast by one would be a shadow from a frame nobody is on.
+        if (item.nodeId === null || item.paint.fill === null) continue;
+        const world = worldCommandsOf(computed, item.nodeId);
+        if (!world) continue;
+        shapes.push({ id: item.nodeId, rings: commandsToRings(world), depth: item.depth ?? 0 });
+    }
+    const patches = castShadows(shapes, d => shadowOffset(light, d));
+    if (patches.length === 0) return content;
+
+    const byReceiver = new Map<string, Ring[][]>();
+    for (const p of patches) {
+        const list = byReceiver.get(p.receiverId);
+        if (list) list.push(p.rings); else byReceiver.set(p.receiverId, [p.rings]);
+    }
+    const out: DrawItem[] = [];
+    for (const item of content) {
+        out.push(item);
+        const patch = item.nodeId !== null ? byReceiver.get(item.nodeId) : undefined;
+        if (!patch) continue;
+        for (const rings of patch) {
+            out.push({
+                shape: { kind: "path", commands: ringsToCommands(rings) },
+                // WORLD-space rings with no transform: the patch is the intersection of two shapes
+                // that live in different local spaces, so there is no local space for it to be in.
+                world: null,
+                // No `nodeId`, and unpickable. A shadow is not a thing you can select — clicking
+                // one has to fall through to whatever is underneath, which is the receiver.
+                nodeId: null,
+                role: "shadow",
+                ...(item.depth !== undefined ? { depth: item.depth } : {}),
+                ...(item.groups ? { groups: item.groups } : {}),
+                paint: {
+                    fill: SHADOW_ALPHA, opacity: null, stroke: null, strokeWidth: null,
+                    strokeDash: null, radius: null, cursor: null, pointerEvents: false,
+                    shadow: null, blur: null
+                }
+            });
+        }
+    }
+    return out;
+}
+
 function collectGroups(doc: ReadonlyDocument, content: DrawItem[]): OpacityGroup[] {
     const out: OpacityGroup[] = [];
     const seen = new Set<string>();
@@ -887,7 +950,9 @@ export function buildRenderModel(
             });
         }
     }
-    const content = [...ghosts, ...buildContent(effective, state.computed, z, visible, doc)];
+    const content = withCastShadows(
+        [...ghosts, ...buildContent(effective, state.computed, z, visible, doc)],
+        state.computed, doc.lights?.[0]);
     return {
         viewport: state.viewport,
         grid: buildGrid(size, state.viewport, z, prev),
