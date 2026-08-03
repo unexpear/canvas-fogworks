@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document/Document.ts, src/core/tests -->
 
-> **Frozen contracts · schema v41 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins).**
+> **Frozen contracts · schema v42 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins).**
 > These documents describe the *current, verified* implementation and lock the
 > contracts the rest of the engine builds on. See [`../MILESTONES.md`](../MILESTONES.md)
 > for the roadmap and where each layer fits.
@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1094 — `src/core/tests/document.test.ts` (992) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (33).
+- **Tests:** 1106 — `src/core/tests/document.test.ts` (1004) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (33).
 
 ## Source map
 

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v41 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v42 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -87,6 +87,21 @@ interface Node {
 
 interface Geometry { x: number; y: number; width: number; height: number; }
 // COORDINATE SPACE: x/y are PARENT-RELATIVE. See the rule below.
+
+// LIGHTING (schema 42). Document.lights?: Light[] (max 4) + Document.ambient?: 0..1.
+interface Light { x: number; y: number; z: number; color: string; intensity: number }
+// DIRECTIONAL only, and that is a decision: a design document has no scale — a 200-unit rectangle
+// may be a button or a building — so a light with a radius would need a distance the document
+// cannot supply. A direction needs no scale. Stored un-normalised; a ZERO direction is refused
+// rather than given an axis. AMBIENT is not a light but a FLOOR: without it an unlit face goes to
+// pure black. Absent lights = ambient 1 = every colour multiplied by one, so an unlit document
+// draws byte-identically to how it did before lighting existed.
+// Mesh control points gain `z` (absent = 0), which is what turns the grid into a SURFACE: a warp
+// alone is in-plane and tilts nothing. `warpPoint` still reads only x and y, so height changes how
+// a shape is LIT without changing what it covers.
+// NOT DONE, stated plainly: shapes do not cast shadows ON EACH OTHER — that needs a shadow map and
+// the texture path this renderer has never had. What exists is SELF-shading (Lambert per vertex on
+// the GPU) and a drop-shadow OFFSET derived from the light and the node's depth.
 
 // MESH (schema 41). Node.mesh?: { cols, rows, points } — a grid of control points that BENDS the
 // node's outline. Points are in LOCAL units, row-major, exactly (cols+1)*(rows+1) of them, and

@@ -98,6 +98,9 @@ export interface SerializedDocument {
         /** The document's clock and where it is on it (schema 39). Absent = not animated. */
         timeline?: { frames: number; fps: number };
         frame?: number;
+        /** The scene's lighting (schema 42). Absent = unlit. */
+        lights?: readonly import("./Light").Light[];
+        ambient?: number;
     };
 }
 
@@ -128,7 +131,9 @@ export function serializeDocument(doc: ReadonlyDocument): string {
             // Omitted when absent for the same reason: a document nobody animated must serialize
             // byte-for-byte as it did before the timeline existed.
             ...(doc.timeline !== undefined ? { timeline: doc.timeline } : {}),
-            ...(doc.frame !== undefined ? { frame: doc.frame } : {})
+            ...(doc.frame !== undefined ? { frame: doc.frame } : {}),
+            ...(doc.lights !== undefined ? { lights: doc.lights } : {}),
+            ...(doc.ambient !== undefined ? { ambient: doc.ambient } : {})
         }
     };
 
@@ -206,6 +211,13 @@ export function deserializeDocument(json: string): ProjectDocument {
     }
     if ("frame" in migrated.document) {
         doc.frame = migrated.document.frame as number;
+    }
+    // Copied through even when malformed, so `Integrity` stays the single judge.
+    if ("lights" in migrated.document) {
+        doc.lights = migrated.document.lights as ProjectDocument["lights"];
+    }
+    if ("ambient" in migrated.document) {
+        doc.ambient = migrated.document.ambient as number;
     }
 
     // Reconstruct the Map, validating each node's shape and key/id agreement.
@@ -312,6 +324,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "38") { raw = migrate_38_to_39(raw); version = "39"; }
     if (version === "39") { raw = migrate_39_to_40(raw); version = "40"; }
     if (version === "40") { raw = migrate_40_to_41(raw); version = "41"; }
+    if (version === "41") { raw = migrate_41_to_42(raw); version = "42"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -677,6 +690,17 @@ function migrate_21_to_22(raw: any): any {
  * The bump is the interpretation kind — an old build ignores the field and draws the UNBENT shape,
  * which is the same file showing a different picture.
  */
+/**
+ * 41 -> 42: LIGHTING — `Document.lights`, `Document.ambient`, and `z` on a mesh control point.
+ *
+ * Additive, and every absent value means unlit and flat, which every schema-41 document was — so
+ * it draws identically. The bump is the interpretation kind: an old build ignores the fields and
+ * shows a lit scene flat, which is the same file drawn differently.
+ */
+function migrate_41_to_42(raw: any): any {
+    return { ...raw, version: "42" };
+}
+
 function migrate_40_to_41(raw: any): any {
     return { ...raw, version: "41" };
 }

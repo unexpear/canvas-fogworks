@@ -44,6 +44,7 @@ import { onionFrames, Keyframe } from "../core/document/Timeline";
 import { applyParallax, DEPTH_MIN, DEPTH_MAX } from "../core/document/Depth";
 import { SetDepthAction } from "../core/actions/SetDepthAction";
 import { SetMeshAction } from "../core/actions/SetMeshAction";
+import { SetLightingAction } from "../core/actions/SetLightingAction";
 import { restMesh, MESH_MAX_DIVISIONS } from "../core/document/Mesh";
 import { SetTrackAction } from "../core/actions/SetTrackAction";
 import { SetTimelineAction } from "../core/actions/SetTimelineAction";
@@ -1229,6 +1230,22 @@ export function App() {
                              color: dispatcher.getDocument().timeline ? UI.accent : "#ccc",
                              border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
                 >⏱ Timeline</button>
+                {/* A document is unlit until somebody asks, and an unlit one draws byte-for-byte
+                    as it did before lighting existed — ambient 1, no lights, colours times one. */}
+                <button
+                    title="Light the scene from the top-left, or turn the lights off again. Raise a mesh control point's HEIGHT to give a shape something to shade."
+                    onClick={() => {
+                        const d = dispatcher.getDocument();
+                        const on = d.lights !== undefined;
+                        dispatcher.dispatchAction(new SetLightingAction(d,
+                            on ? undefined : [{ x: 0.6, y: 0.6, z: -0.5, color: "#ffffff", intensity: 1 }],
+                            on ? undefined : 0.35));
+                        refresh();
+                    }}
+                    style={{ fontSize: 11, padding: "3px 8px", marginLeft: 4, background: "transparent",
+                             color: dispatcher.getDocument().lights ? UI.accent : "#ccc",
+                             border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
+                >☀ Light</button>
                 {startedFromCorruptSave && (
                     <span
                         title={`The previous autosave could not be read and was kept at "${CORRUPT_BACKUP_KEY}". Saving now will replace it.`}
@@ -1523,6 +1540,25 @@ export function App() {
                                             <option value="3x3">3x3</option>
                                             <option value="4x4">4x4</option>
                                         </select></div>
+                                    <div><label style={INSPECTOR_LABEL}>Height</label>
+                                        <NumInput
+                                            value={node.mesh ? Math.max(...node.mesh.points.map(p => p.z ?? 0)) : 0}
+                                            onChange={v => {
+                                                const id = es.selectedNodeIds[0];
+                                                if (!id || !node.mesh) return;
+                                                // Raise the MIDDLE of the grid and leave the rim at zero, which is
+                                                // the shape a bevel has — a grid raised uniformly is still flat, and
+                                                // flat is exactly what a light cannot find.
+                                                const { cols, rows } = node.mesh;
+                                                const points = node.mesh.points.map((p, i) => {
+                                                    const col = i % (cols + 1), row = Math.floor(i / (cols + 1));
+                                                    const edge = col === 0 || row === 0 || col === cols || row === rows;
+                                                    return { x: p.x, y: p.y, z: edge ? 0 : v };
+                                                });
+                                                dispatcher.dispatchAction(new SetMeshAction(dispatcher.getDocument(), id, { cols, rows, points }));
+                                                refresh();
+                                            }}
+                                        /></div>
                                     <div><label style={INSPECTOR_LABEL}>Depth</label>
                                         <NumInput
                                             value={node.depth ?? 0}

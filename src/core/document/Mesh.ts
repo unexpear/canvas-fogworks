@@ -42,7 +42,7 @@ export const MESH_MAX_DIVISIONS = 64;
 export interface ReadonlyMesh {
     readonly cols: number;
     readonly rows: number;
-    readonly points: readonly { readonly x: number; readonly y: number }[];
+    readonly points: readonly { readonly x: number; readonly y: number; readonly z?: number }[];
 }
 
 export interface Mesh {
@@ -55,8 +55,14 @@ export interface Mesh {
      * They hold the DEFORMED positions. The undeformed ones are implied by the box, so a mesh
      * whose points sit on that grid is the identity and is detected as one rather than being
      * applied — an untouched mesh must cost nothing.
+     *
+     * `z` is HEIGHT, absent = 0, and it is what turns this grid into a SURFACE. A warp alone is
+     * in-plane, so it tilts nothing and every normal it could produce would point straight at the
+     * viewer — there would be nothing for a light to find. Raising a control point gives the mesh
+     * somewhere to face, and the outline is unaffected: `warpPoint` still reads only x and y, so
+     * a heightfield changes how a shape is LIT without changing what it covers.
      */
-    points: { x: number; y: number }[];
+    points: { x: number; y: number; z?: number }[];
 }
 
 export function meshError(mesh: unknown): string | null {
@@ -77,6 +83,7 @@ export function meshError(mesh: unknown): string | null {
         if (typeof p !== "object" || p === null || !Number.isFinite(p.x) || !Number.isFinite(p.y)) {
             return "mesh.points must all be finite {x, y} points";
         }
+        if (p.z !== undefined && !Number.isFinite(p.z)) return "mesh.points z must be finite when present";
     }
     return null;
 }
@@ -171,4 +178,72 @@ export function warpCommands(commands: readonly PathCommand[], box: { width: num
         if (sub.closed) out.push({ c: "Z" });
     }
     return out;
+}
+
+/** A control point's height. Absent = 0, the plane of the shape. */
+export function heightOf(p: { z?: number }): number {
+    return p.z ?? 0;
+}
+
+/**
+ * The surface NORMAL at a local-space point, from the mesh read as a heightfield.
+ *
+ * The grid gives a surface `P(u, v) = (x, y, z)`, and a normal is the cross product of its two
+ * tangents. Both tangents come from the same bilinear patch `warpPoint` uses, so the direction a
+ * light sees and the outline a click tests are two readings of ONE surface rather than two
+ * descriptions that could disagree.
+ *
+ * A FLAT mesh returns exactly (0, 0, 1) — straight at the viewer — which is what an unlit-looking
+ * shape needs, and it is exact rather than nearly so, because a lighting term multiplied by a
+ * normal that was almost normalised is how a flat fill acquires a faint gradient nobody asked for.
+ */
+export function normalAt(mesh: ReadonlyMesh, box: { width: number; height: number }, x: number, y: number): { x: number; y: number; z: number } {
+    // A step small enough to stay inside one cell of any grid this bounds allows, and large
+    // enough that the difference is not lost to rounding.
+    const du = Math.max(box.width, 1) / (mesh.cols * 512);
+    const dv = Math.max(box.height, 1) / (mesh.rows * 512);
+    const at = (px: number, py: number) => {
+        const p = warpPoint(mesh, box, px, py);
+        return { x: p.x, y: p.y, z: warpHeight(mesh, box, px, py) };
+    };
+    // CENTRED differences, with the samples clamped INSIDE the box. A one-sided step is wrong
+    // exactly where it matters most: at the box edge it lands outside, `warpPoint` clamps it back
+    // to the same place, and the tangent collapses to zero — so every CORNER of a shape reported
+    // itself flat, which is most of the vertices a rectangle has.
+    const x0 = Math.max(0, x - du), x1 = Math.min(box.width, x + du);
+    const y0 = Math.max(0, y - dv), y1 = Math.min(box.height, y + dv);
+    const ax = at(x1, y), bx = at(x0, y);
+    const ay = at(x, y1), by = at(x, y0);
+    const t1 = { x: ax.x - bx.x, y: ax.y - bx.y, z: ax.z - bx.z };
+    const t2 = { x: ay.x - by.x, y: ay.y - by.y, z: ay.z - by.z };
+    const n = {
+        x: t1.y * t2.z - t1.z * t2.y,
+        y: t1.z * t2.x - t1.x * t2.z,
+        z: t1.x * t2.y - t1.y * t2.x
+    };
+    const len = Math.hypot(n.x, n.y, n.z);
+    if (len === 0) return { x: 0, y: 0, z: 1 };
+    // Always toward the VIEWER. The cross product's sign follows the winding of the parameter
+    // grid, and a normal that flipped with it would light half the shapes from behind.
+    const s = n.z < 0 ? -1 / len : 1 / len;
+    return { x: n.x * s, y: n.y * s, z: n.z * s };
+}
+
+/** Height at a local-space point — the same bilinear blend `warpPoint` does, on z. */
+export function warpHeight(mesh: ReadonlyMesh, box: { width: number; height: number }, x: number, y: number): number {
+    const u = box.width === 0 ? 0 : Math.max(0, Math.min(1, x / box.width));
+    const v = box.height === 0 ? 0 : Math.max(0, Math.min(1, y / box.height));
+    const col = Math.min(mesh.cols - 1, Math.floor(u * mesh.cols));
+    const row = Math.min(mesh.rows - 1, Math.floor(v * mesh.rows));
+    const fu = u * mesh.cols - col;
+    const fv = v * mesh.rows - row;
+    const at = (c: number, r: number) => heightOf(mesh.points[r * (mesh.cols + 1) + c]);
+    const top = at(col, row) + (at(col + 1, row) - at(col, row)) * fu;
+    const bottom = at(col, row + 1) + (at(col + 1, row + 1) - at(col, row + 1)) * fu;
+    return top + (bottom - top) * fv;
+}
+
+/** Is every height still zero? Then the mesh is flat and lighting it would find nothing. */
+export function isFlatMesh(mesh: ReadonlyMesh): boolean {
+    return mesh.points.every(p => heightOf(p) === 0);
 }

@@ -49,6 +49,8 @@ import { SetTimelineAction } from "../actions/SetTimelineAction";
 import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyParallax, DEPTH_MIN, DEPTH_MAX } from "../document/Depth";
 import { Mesh, meshError, restMesh, warpPoint, isIdentityMesh, MESH_MAX_DIVISIONS } from "../document/Mesh";
 import { meshHandles, meshHandleAtPoint, meshIndexOf } from "../geometry/SelectionHandles";
+import { normalAt, warpHeight, isFlatMesh } from "../document/Mesh";
+import { Light, lightsError, ambientError, lambert, shadowOffset, LIGHTS_MAX } from "../document/Light";
 import { resolveMeshes } from "../document/Components";
 import { overrideValueError } from "../document/Components";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
@@ -4383,8 +4385,8 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 40→41 landed for meshes.)
-        expect(() => migrateIfNeeded(legacy, "42")).toThrow('Migration not implemented for document schema "41"');
+        // time a real migration is added — most recently when 41→42 landed for lighting.)
+        expect(() => migrateIfNeeded(legacy, "43")).toThrow('Migration not implemented for document schema "42"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -12660,6 +12662,206 @@ describe("The FILL RULE reaches every consumer (schema 38)", () => {
             return sum + s;
         }, 0)) / 2;
         expect(a).toBeCloseTo(truth, 6);
+    });
+});
+
+describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", () => {
+    const box = { width: 100, height: 100 };
+    const doc = (...nodes: Node[]): ProjectDocument => {
+        const d = createEmptyDocument();
+        for (const n of nodes) d.nodes.set(n.id, n);
+        d.rootNodeUuids = nodes.map(n => n.id);
+        return d;
+    };
+    const node = (id: string, mesh?: Mesh): Node =>
+        ({ id, type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 100, height: 100 },
+           style: { fill: "#808080", opacity: 1 }, layout: {}, ...(mesh ? { mesh } : {}) } as Node);
+    /** A rest grid with one corner RAISED — the smallest thing a light can find. */
+    const raised = (z: number): Mesh => {
+        const m = restMesh(1, 1, box);
+        m.points[3] = { ...m.points[3], z };
+        return m;
+    };
+    const light = (x: number, y: number, z: number, intensity = 1): Light =>
+        ({ x, y, z, color: "#ffffff", intensity });
+
+    test("a FLAT mesh faces the viewer exactly, so an unlit shape stays unlit-looking", () => {
+        // Exact, not nearly: a lighting term multiplied by an almost-normalised normal is how a
+        // flat fill acquires a faint gradient nobody asked for.
+        const flat = restMesh(2, 2, box);
+        expect(isFlatMesh(flat)).toBe(true);
+        expect(normalAt(flat, box, 50, 50)).toEqual({ x: 0, y: 0, z: 1 });
+        expect(normalAt(flat, box, 0, 0)).toEqual({ x: 0, y: 0, z: 1 });
+        // An in-plane WARP is still flat: bending a shape sideways tilts nothing.
+        const warped = restMesh(1, 1, box);
+        warped.points[3] = { x: 160, y: 100 };
+        expect(isFlatMesh(warped)).toBe(true);
+        expect(normalAt(warped, box, 50, 50)).toEqual({ x: 0, y: 0, z: 1 });
+    });
+
+    test("raising a control point TILTS the surface, and always toward the viewer", () => {
+        const m = raised(40);
+        const n = normalAt(m, box, 90, 90);
+        expect(n.z).toBeGreaterThan(0);              // never lit from behind
+        expect(Math.hypot(n.x, n.y, n.z)).toBeCloseTo(1, 9);
+        // The corner rises as x and y increase, so the surface leans back the other way.
+        expect(n.x).toBeLessThan(0);
+        expect(n.y).toBeLessThan(0);
+        // Raising it FURTHER tilts it further — the normal leans off the viewer axis.
+        expect(normalAt(raised(200), box, 90, 90).z).toBeLessThan(n.z);
+    });
+
+    test("a MIRRORED patch still faces the viewer", () => {
+        // The sign guard's only reachable case, and it is reachable: drag two control points past
+        // each other and the patch turns inside out, which flips the cross product. Without the
+        // guard those shapes would be lit from behind — dark where every neighbour is bright.
+        const m = restMesh(1, 1, box);
+        const [a, b, c, d] = m.points.map(p => ({ ...p }));
+        m.points[0] = { ...b }; m.points[1] = { ...a };     // swap the top row: the patch mirrors
+        m.points[2] = { ...d }; m.points[3] = { ...c };
+        m.points[3].z = 40;
+        expect(normalAt(m, box, 50, 50).z).toBeGreaterThan(0);
+    });
+
+    test("a COLLAPSED shape has no surface, and says so as flat", () => {
+        // Two tangents that are zero or parallel give no normal at all. A shape with no width is
+        // a legitimate mid-edit state — a drag that has not moved yet — so it reports facing the
+        // viewer rather than producing a direction from nothing.
+        const m = raised(40);
+        expect(normalAt(m, { width: 0, height: 0 }, 0, 0)).toEqual({ x: 0, y: 0, z: 1 });
+        expect(normalAt(m, { width: 0, height: 100 }, 0, 50)).toEqual({ x: 0, y: 0, z: 1 });
+    });
+
+    test("height blends between control points like the warp does", () => {
+        const m = raised(80);
+        expect(warpHeight(m, box, 0, 0)).toBe(0);
+        expect(warpHeight(m, box, 100, 100)).toBeCloseTo(80, 9);
+        // The centre takes the average of all four corners, as the position does.
+        expect(warpHeight(m, box, 50, 50)).toBeCloseTo(20, 9);
+    });
+
+    test("LAMBERT: a face lit head-on gets full light, one edge-on gets none, one behind gets none", () => {
+        const straightOn = { x: 0, y: 0, z: 1 };
+        // A light travelling INTO the screen arrives on a face pointing out of it.
+        expect(lambert(straightOn, light(0, 0, -1))).toBeCloseTo(1, 9);
+        expect(lambert(straightOn, light(1, 0, 0))).toBeCloseTo(0, 9);
+        // CLAMPED, not negative: a light from behind must not subtract. Unclamped, a second light
+        // could make a shape darker, which is the least explicable thing a lighting model can do.
+        expect(lambert(straightOn, light(0, 0, 1))).toBe(0);
+        // Intensity scales it; a longer direction vector does NOT, being normalised first.
+        expect(lambert(straightOn, light(0, 0, -1, 0.5))).toBeCloseTo(0.5, 9);
+        expect(lambert(straightOn, light(0, 0, -7))).toBeCloseTo(1, 9);
+        // A direction of zero is not a direction, so it lights nothing rather than picking an axis.
+        expect(lambert(straightOn, { x: 0, y: 0, z: 0, color: "#fff", intensity: 1 })).toBe(0);
+    });
+
+    test("the SHADOW a light casts is derived, not typed in", () => {
+        // The only shadow a renderer with no depth texture can honestly cast: a shape floating
+        // above the page throws its outline away from the light, further the higher it is.
+        expect(shadowOffset(light(1, 0, -1), 0)).toEqual({ x: 0, y: 0 });   // on the page: nothing to cast
+        // EXACTLY positive zero, from the short-circuit rather than the arithmetic: a NEGATIVE
+        // direction times a zero depth gives -0, which differs under `Object.is` and would make
+        // "has this shadow moved?" comparisons answer wrongly. The same trap parallax had.
+        const back = shadowOffset(light(-1, -1, 0), 0);
+        expect(Object.is(back.x, 0)).toBe(true);
+        expect(Object.is(back.y, 0)).toBe(true);
+        const near = shadowOffset(light(1, 0, 0), 10);
+        const far = shadowOffset(light(1, 0, 0), 40);
+        expect(near).toEqual({ x: 10, y: 0 });
+        expect(far.x).toBe(4 * near.x);
+        // It follows the light's DIRECTION, so moving the light moves every shadow together.
+        expect(shadowOffset(light(0, 1, 0), 10)).toEqual({ x: 0, y: 10 });
+        expect(shadowOffset({ x: 0, y: 0, z: 0, color: "#fff", intensity: 1 }, 10)).toEqual({ x: 0, y: 0 });
+    });
+
+    test("the GPU gets ONE NORMAL PER VERTEX, and flat ones when there is no surface", () => {
+        // Per vertex is the whole point: a mesh raised in the middle faces a different way there
+        // than at its edges, and one normal for the shape would light a dome like a flat card.
+        const [flat] = itemDraws({
+            shape: { kind: "rect", x: 0, y: 0, width: 100, height: 100 }, world: null, nodeId: null, role: "content",
+            paint: { fill: "#ffffff", opacity: null, stroke: null, strokeWidth: null, strokeDash: null,
+                     radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null }
+        } as never);
+        expect(flat.normals.length).toBe((flat.vertices.length / 2) * 3);
+        for (let i = 0; i < flat.normals.length; i += 3) {
+            expect([flat.normals[i], flat.normals[i + 1], flat.normals[i + 2]]).toEqual([0, 0, 1]);
+        }
+        // With a SURFACE, they are not all the same any more.
+        const [lit] = itemDraws({
+            shape: { kind: "rect", x: 0, y: 0, width: 100, height: 100 }, world: null, nodeId: null, role: "content",
+            surface: { mesh: raised(60), box },
+            paint: { fill: "#ffffff", opacity: null, stroke: null, strokeWidth: null, strokeDash: null,
+                     radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null }
+        } as never);
+        expect(lit.normals.length).toBe((lit.vertices.length / 2) * 3);
+        const zs = new Set<number>();
+        for (let i = 2; i < lit.normals.length; i += 3) zs.add(Math.round(lit.normals[i] * 1000));
+        expect(zs.size).toBeGreaterThan(1);
+        // …and every one of them is a UNIT vector, because the shader normalises nothing back.
+        for (let i = 0; i < lit.normals.length; i += 3) {
+            expect(Math.hypot(lit.normals[i], lit.normals[i + 1], lit.normals[i + 2])).toBeCloseTo(1, 6);
+        }
+    });
+
+    test("the model carries the surface only when a mesh has HEIGHT", () => {
+        // A purely in-plane warp faces the viewer everywhere, so shipping its normals would cost
+        // a buffer per frame to say "flat" three times per triangle.
+        const bent = restMesh(1, 1, box);
+        bent.points[3] = { x: 160, y: 100 };
+        const modelOf = (n: Node) => buildRenderModel({ width: 800, height: 600 }, doc(n),
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(doc(n)), viewport: { x: 0, y: 0, zoom: 1 } });
+        expect(modelOf(node("A", bent)).content[0].surface).toBeUndefined();
+        expect(modelOf(node("A", raised(30))).content[0].surface).toBeDefined();
+        expect(modelOf(node("A")).content[0].surface).toBeUndefined();
+    });
+
+    test("the scene's lights reach the display list, and an unlit document carries none", () => {
+        const d = doc(node("A"));
+        d.lights = [light(1, 0, -1)];
+        d.ambient = 0.2;
+        const model = buildRenderModel({ width: 800, height: 600 }, d,
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(d), viewport: { x: 0, y: 0, zoom: 1 } });
+        expect(model.lights).toEqual([light(1, 0, -1)]);
+        expect(model.ambient).toBe(0.2);
+        const plain = doc(node("B"));
+        const unlit = buildRenderModel({ width: 800, height: 600 }, plain,
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(plain), viewport: { x: 0, y: 0, zoom: 1 } });
+        expect(unlit.lights).toBeUndefined();
+        expect(unlit.ambient).toBeUndefined();
+    });
+
+    test("lights and ambient are validated on BOTH paths", () => {
+        expect(lightsError(undefined)).toBeNull();
+        expect(lightsError([light(1, 0, -1)])).toBeNull();
+        expect(lightsError("bright")).toMatch("array");
+        expect(lightsError(new Array(LIGHTS_MAX + 1).fill(light(1, 0, 0)))).toMatch("at most");
+        // A ZERO direction is a light nobody has aimed yet — refused rather than given an axis.
+        expect(lightsError([light(0, 0, 0)])).toMatch("must not be zero");
+        expect(lightsError([{ ...light(1, 0, 0), intensity: -1 }])).toMatch("intensity");
+        expect(lightsError([{ ...light(1, 0, 0), color: 5 as never }])).toMatch("color");
+        expect(ambientError(undefined)).toBeNull();
+        expect(ambientError(0.5)).toBeNull();
+        expect(ambientError(1.5)).toMatch("ambient");
+        expect(ambientError(-0.1)).toMatch("ambient");
+
+        const d = doc(node("A"));
+        d.lights = [light(1, 0, -1)];
+        d.ambient = 0.3;
+        const back = deserializeDocument(serializeDocument(d));
+        expect(back.lights).toEqual(d.lights);
+        expect(back.ambient).toBe(0.3);
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: [], variables: {}, nodes: {}, ambient: 4 } });
+        expect(() => deserializeDocument(bad)).toThrow("ambient");
+    });
+
+    test("a mesh point's HEIGHT survives a round trip, and a schema-41 file has none", () => {
+        const d = doc(node("A", raised(25)));
+        expect(deserializeDocument(serializeDocument(d)).nodes.get("A")!.mesh!.points[3].z).toBe(25);
+        expect(meshError({ cols: 1, rows: 1, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: 1, y: 1, z: NaN }] })).toMatch("z must be finite");
+        const v41 = { version: "41", document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: { n: { id: "n", type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } } } };
+        const loaded = deserializeDocument(JSON.stringify(v41));
+        expect(loaded.lights).toBeUndefined();
+        expect(JSON.parse(serializeDocument(loaded)).version).toBe(SCHEMA_VERSION);
     });
 });
 

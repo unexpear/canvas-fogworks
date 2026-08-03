@@ -132,6 +132,11 @@ export function applyMutationsToDocument(
                 return;
             }
 
+            case "lighting": {
+                doc.lights = delta.lights;
+                doc.ambient = delta.ambient;
+                return;
+            }
             case "timeline": {
                 doc.timeline = delta.timeline;
                 return;

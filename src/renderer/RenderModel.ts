@@ -26,6 +26,8 @@
 import { ReadonlyDocument } from "../core/document/Document";
 import { FillRule, PathCommand, Shadow, StrokeCap, StrokeJoin, TextAlign } from "../core/document/Node";
 import { depthOf } from "../core/document/Depth";
+import { ReadonlyMesh, isFlatMesh } from "../core/document/Mesh";
+import { Light } from "../core/document/Light";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
@@ -196,6 +198,15 @@ export interface DrawItem {
      */
     depth?: number;
     /**
+     * The LIGHTING surface this item's shape came from (schema 42), when it had one.
+     *
+     * Carried separately from the shape because by the time an item exists, `resolveMeshes` has
+     * turned a meshed node into a path and dropped its mesh — the bend is in the commands, and
+     * what a light needs is the surface that CAUSED the bend. Only the unresolved document still
+     * has it, so the model reads it from there and passes it along.
+     */
+    surface?: { mesh: ReadonlyMesh; box: { width: number; height: number } };
+    /**
      * OPACITY GROUPS this item is inside, outermost first (schema 32).
      *
      * A node with children and `opacity < 1` composites as a GROUP: everything inside it is
@@ -227,6 +238,15 @@ export interface DisplayList {
     grid: GridModel;
     content: DrawItem[];
     overlay: DrawItem[];
+    /**
+     * The scene's LIGHTING (schema 42), carried on the list rather than per item.
+     *
+     * A light belongs to the document, not to a shape: two shapes lit from different directions
+     * do not read as two shapes, they read as a mistake. Absent = unlit, which is what every
+     * document was, and what the shader multiplies by one.
+     */
+    lights?: readonly Light[];
+    ambient?: number;
     /** Deduped filter defs referenced by content items — emitSVG builds `<defs>` from these. */
     defs: FilterDef[];
     /** The opacity groups `content` items refer to, outermost first. */
@@ -356,7 +376,8 @@ function isOpacityGroup(node: { children: readonly string[]; style: { opacity: n
 
 
 
-function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number, visible: Box): DrawItem[] {
+function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number, visible: Box,
+                      original?: ReadonlyDocument): DrawItem[] {
     const items: DrawItem[] = [];
     // The enclosing opacity groups per node, memoized across the frame.
     const groupMemo = new Map<string, string[]>();
@@ -551,8 +572,15 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         // and one that cannot folds the alphas in itself — neither has to re-walk the tree.
         const groups = opacityGroupsFor(doc, id, groupMemo);
         const depth = depthOf(doc.nodes.get(id) ?? {});
+        // The node BEFORE resolution still has its mesh, and only a mesh with HEIGHT is a
+        // surface — a purely in-plane warp faces the viewer everywhere, so shipping its normals
+        // would cost a buffer per frame to say "flat" three times per triangle.
+        const source = original?.nodes.get(id);
+        const mesh = source?.mesh && !isFlatMesh(source.mesh) ? source.mesh : undefined;
         items.push({ shape, paint, world: c.world, nodeId: id, role: "content",
-            ...(depth !== 0 ? { depth } : {}), ...(groups.length ? { groups } : {}) });
+            ...(depth !== 0 ? { depth } : {}),
+            ...(mesh ? { surface: { mesh, box: { width: source!.geometry.width, height: source!.geometry.height } } } : {}),
+            ...(groups.length ? { groups } : {}) });
     });
 
     // FAR FIRST, with the tree's own order breaking ties. Sorting HERE rather than in a backend is
@@ -840,11 +868,13 @@ export function buildRenderModel(
             });
         }
     }
-    const content = [...ghosts, ...buildContent(effective, state.computed, z, visible)];
+    const content = [...ghosts, ...buildContent(effective, state.computed, z, visible, doc)];
     return {
         viewport: state.viewport,
         grid: buildGrid(size, state.viewport, z, prev),
         content,
+        ...(doc.lights !== undefined ? { lights: doc.lights } : {}),
+        ...(doc.ambient !== undefined ? { ambient: doc.ambient } : {}),
         overlay: buildOverlay(state, z, doc),
         defs: collectDefs(content),
         groups: collectGroups(doc, content)

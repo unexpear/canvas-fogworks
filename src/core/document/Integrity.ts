@@ -17,6 +17,7 @@ import { interactionsError } from "./Prototype";
 import { timelineError, trackError } from "./Timeline";
 import { depthError } from "./Depth";
 import { meshError } from "./Mesh";
+import { ambientError, lightsError } from "./Light";
 import { overrideValueError } from "./Components";
 import { componentError, overrideAgainstMasterError, overridesError, statesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
@@ -121,6 +122,11 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
     // The clock (schema 39). `frame` is NOT range-checked against it: a frame past the end is
     // clamped by the track lookup, which holds the last keyframe, and refusing to open a file
     // because its playhead was left beyond the end would be a cure worse than the disease.
+    // The scene's LIGHTING (schema 42), shared with the edit path so the two cannot drift.
+    const lightErr = lightsError(doc.lights);
+    if (lightErr) throw new Error(`Invalid document: ${lightErr}.`);
+    const ambErr = ambientError(doc.ambient);
+    if (ambErr) throw new Error(`Invalid document: ${ambErr}.`);
     const tlErr = timelineError(doc.timeline);
     if (tlErr) throw new Error(`Invalid document: ${tlErr}.`);
     if (doc.frame !== undefined && (!Number.isFinite(doc.frame) || doc.frame < 0)) {

@@ -9,6 +9,7 @@ import { InstanceOverride } from "../document/Components";
 import { Interaction } from "../document/Prototype";
 import { Keyframe } from "../document/Timeline";
 import { Mesh } from "../document/Mesh";
+import { Light } from "../document/Light";
 
 /**
  * The reserved `propertyDeltas` key a DOCUMENT-LEVEL delta (kind "variables") travels
@@ -101,7 +102,10 @@ export type NodeDelta =
     | { kind: "activeState"; activeState: string | undefined }
     /** The document's CLOCK (schema 39). Whole-value, like `activeState`, and travels under
      *  `DOCUMENT_DELTA_KEY`. `undefined` removes it, which is how a document stops being animated. */
-    | { kind: "timeline"; timeline: { frames: number; fps: number } | undefined };
+    | { kind: "timeline"; timeline: { frames: number; fps: number } | undefined }
+    /** The scene's LIGHTING (schema 42). Whole-value, and the two fields travel together
+     *  because they are one decision. Also under `DOCUMENT_DELTA_KEY`. */
+    | { kind: "lighting"; lights: Light[] | undefined; ambient: number | undefined };
 
 /** The result of an action execution. Communicates changes without coupling services. */
 export interface MutationResult {

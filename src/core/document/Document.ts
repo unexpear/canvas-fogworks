@@ -160,8 +160,9 @@ export const CURRENT_VERSION: string =
  *         silently misstating the document.
  */
 import type { TimelineSettings } from "./Timeline";
+import type { Light } from "./Light";
 
-export const SCHEMA_VERSION = "41";
+export const SCHEMA_VERSION = "42";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
@@ -217,7 +218,16 @@ export interface ProjectDocument {
      * returns it by reference — a document nobody animated must cost what it always did.
      */
     timeline?: TimelineSettings;
-    frame?: number;
+    frame?: number;
+    /**
+     * What the document is LIT by (schema 42). Absent = unlit, which every document was.
+     *
+     * Document-level rather than per-node, because a light is a property of the SCENE: two shapes
+     * lit from different directions do not read as two shapes, they read as a mistake.
+     */
+    lights?: Light[];
+    /** The floor below which nothing gets darker, 0..1. Absent = 1, i.e. no lighting at all. */
+    ambient?: number;
     /** The named STATE every node resolves against (Milestone 7, schema 30) — the same
      *  document-level-selection shape as `activeTheme`. Absent/empty = the base state. */
     activeState?: string;

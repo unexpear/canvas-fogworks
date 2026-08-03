@@ -44,16 +44,24 @@ import { triangulate } from "../core/geometry/Tessellate";
 import { strokeOutline } from "../core/geometry/StrokeOutline";
 import { resolveRings } from "../core/geometry/Resolve";
 import { depthToClipZ } from "../core/document/Depth";
+import { normalAt } from "../core/document/Mesh";
+import { Light, normalize } from "../core/document/Light";
 import { ellipseCommands, rectCommands, transformCommands } from "../core/geometry/ShapeToPath";
 import { PathCommand } from "../core/document/Node";
 import { FLATTEN_TOLERANCE, displayTolerance, localScaleOf } from "../core/geometry/ShapeHit";
 
 const VERTEX_SHADER = `
 attribute vec2 a_pos;
+attribute vec3 a_normal;
 uniform mat3 u_view;
 uniform float u_z;
+varying vec3 v_normal;
 void main() {
     vec3 p = u_view * vec3(a_pos, 1.0);
+    // The normal is passed through UNTRANSFORMED. It is a direction in the document's own axes,
+    // and the view matrix is a pan and a zoom — neither of which turns a surface, so transforming
+    // it would only make the lighting swim as you scrolled.
+    v_normal = a_normal;
     // z comes from the node's DEPTH, not from the draw order — that is what makes the depth
     // buffer do the deciding rather than the sequence of draw calls.
     gl_Position = vec4(p.xy, u_z, 1.0);
@@ -61,18 +69,45 @@ void main() {
 
 const FRAGMENT_SHADER = `
 precision mediump float;
+varying vec3 v_normal;
 uniform vec4 u_color;
-void main() { gl_FragColor = u_color; }`;
+uniform float u_ambient;
+uniform int u_lightCount;
+uniform vec3 u_lightDir[4];
+uniform vec3 u_lightColor[4];
+void main() {
+    vec3 n = normalize(v_normal);
+    // AMBIENT is a floor, not a light: it is what a surface shows when nothing reaches it, and
+    // without it an unlit face goes to pure black, which is never what a designer means.
+    vec3 lit = vec3(u_ambient);
+    for (int i = 0; i < 4; i++) {
+        if (i >= u_lightCount) break;
+        // LAMBERT, clamped at zero. A face pointing away receives no light rather than negative
+        // light — unclamped, a second light could make a shape DARKER, which is the least
+        // explicable thing a lighting model can do.
+        float d = max(dot(n, -u_lightDir[i]), 0.0);
+        lit += u_lightColor[i] * d;
+    }
+    // The colour is MODULATED, never replaced: a lit red shape is a darker or brighter red, and a
+    // model that added light instead would wash every hue toward the light's own.
+    gl_FragColor = vec4(u_color.rgb * lit, u_color.a);
+}`;
 
 /** Everything a frame needs, built once per canvas and cached on it. */
 interface GLState {
     gl: WebGLRenderingContext;
     program: WebGLProgram;
     buffer: WebGLBuffer;
+    normalBuffer: WebGLBuffer;
     posLoc: number;
     viewLoc: WebGLUniformLocation | null;
     colorLoc: WebGLUniformLocation | null;
     zLoc: WebGLUniformLocation | null;
+    normalLoc: number;
+    ambientLoc: WebGLUniformLocation | null;
+    lightCountLoc: WebGLUniformLocation | null;
+    lightDirLoc: WebGLUniformLocation | null;
+    lightColorLoc: WebGLUniformLocation | null;
 }
 
 function compile(gl: WebGLRenderingContext, type: number, source: string): WebGLShader | null {
@@ -93,17 +128,23 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
     const fs = compile(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
     const program = gl.createProgram();
     const buffer = gl.createBuffer();
-    if (!vs || !fs || !program || !buffer) return null;
+    const normalBuffer = gl.createBuffer();
+    if (!vs || !fs || !program || !buffer || !normalBuffer) return null;
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
     return {
-        gl, program, buffer,
+        gl, program, buffer, normalBuffer,
         posLoc: gl.getAttribLocation(program, "a_pos"),
         viewLoc: gl.getUniformLocation(program, "u_view"),
         colorLoc: gl.getUniformLocation(program, "u_color"),
-        zLoc: gl.getUniformLocation(program, "u_z")
+        zLoc: gl.getUniformLocation(program, "u_z"),
+        normalLoc: gl.getAttribLocation(program, "a_normal"),
+        ambientLoc: gl.getUniformLocation(program, "u_ambient"),
+        lightCountLoc: gl.getUniformLocation(program, "u_lightCount"),
+        lightDirLoc: gl.getUniformLocation(program, "u_lightDir"),
+        lightColorLoc: gl.getUniformLocation(program, "u_lightColor")
     };
 }
 
@@ -159,17 +200,44 @@ function transformRing(ring: Ring, m: Mat2D): Ring {
 /** One draw: the triangles and the colour they are filled with. */
 export interface Draw {
     vertices: number[];
+    /**
+     * One unit normal per VERTEX, three floats each — so `normals.length` is always
+     * `vertices.length / 2 * 3`.
+     *
+     * Per vertex rather than per draw because that is the whole point: a mesh whose middle is
+     * raised faces a different way there than at its edges, and a single normal for the shape
+     * would light a dome exactly like a flat card.
+     */
+    normals: number[];
     color: [number, number, number, number];
 }
 
-function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number | null): Draw | null {
+/** Straight at the viewer — what an unlit, unmeshed surface faces. */
+const FLAT_NORMAL = { x: 0, y: 0, z: 1 };
+
+function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number | null,
+              surface?: (x: number, y: number) => { x: number; y: number; z: number }): Draw | null {
     const color = parseColor(css);
     if (!color) return null;                      // not a colour it can parse: skip, never guess
-    const placed = world ? rings.map(r => transformRing(r, world)) : rings;
-    const vertices = triangulate(placed);
-    if (vertices.length === 0) return null;
+    // Tessellated in LOCAL space, then each vertex transformed — the reverse of what this used to
+    // do, and necessary rather than tidier: a normal is sampled from the mesh, the mesh is in
+    // local units, and a world-space triangle has no way back to the coordinate that produced it.
+    // The triangles are the same either way, the transform being affine.
+    const local = triangulate(rings);
+    if (local.length === 0) return null;
+    const vertices = new Array<number>(local.length);
+    // Presized, not bounded: JS arrays grow on assignment, so this is an allocation hint and
+    // nothing else — a wrong size here changes no output, which is why no test can kill it.
+    const normals = new Array<number>((local.length / 2) * 3);
+    for (let i = 0, n = 0; i < local.length; i += 2, n += 3) {
+        const lx = local[i], ly = local[i + 1];
+        const nrm = surface ? surface(lx, ly) : FLAT_NORMAL;
+        normals[n] = nrm.x; normals[n + 1] = nrm.y; normals[n + 2] = nrm.z;
+        vertices[i] = world ? world.a * lx + world.c * ly + world.e : lx;
+        vertices[i + 1] = world ? world.b * lx + world.d * ly + world.f : ly;
+    }
     if (opacity !== null) color[3] *= opacity;    // MULTIPLY — one blend, not two
-    return { vertices, color };
+    return { vertices, normals, color };
 }
 
 /**
@@ -201,6 +269,13 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
     const local = shapeToLocalCommands(item.shape, paint.radius);
     if (!local) return [];
     const out: Draw[] = [];
+    // The lighting SURFACE, when the item carries one. It is passed separately from the shape
+    // because `resolveMeshes` has already turned a meshed node into a path and dropped its mesh —
+    // the bend is in the commands by then, and the thing a light needs is the surface that caused
+    // it, which only the unresolved document still has.
+    const surface = item.surface
+        ? (x: number, y: number) => normalAt(item.surface!.mesh, item.surface!.box, x, y)
+        : undefined;
     if (paint.fill !== null) {
         // RESOLVED first, which does two jobs at once. It applies the document's fill rule — the
         // GPU has no `fill-rule` to hand to, unlike the other two backends, so the rule has to
@@ -208,7 +283,7 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
         // self-crossing path used to come out as overlapping triangles on this backend and as
         // the right shape on the other two.
         const fill = draw(resolveRings(commandsToRings(local, tolerance), paint.fillRule ?? "nonzero"),
-            item.world, paint.fill, paint.opacity);
+            item.world, paint.fill, paint.opacity, surface);
         if (fill) out.push(fill);
     }
     if (paint.stroke !== null && paint.strokeWidth !== null && paint.strokeWidth > 0) {
@@ -216,7 +291,7 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
             width: paint.strokeWidth,
             join: paint.strokeJoin, cap: paint.strokeCap, miterLimit: paint.strokeMiterLimit
         }, tolerance);
-        const stroke = draw(rings, item.world, paint.stroke, paint.opacity);
+        const stroke = draw(rings, item.world, paint.stroke, paint.opacity, surface);
         if (stroke) out.push(stroke);
     }
     return out;
@@ -259,6 +334,9 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.enableVertexAttribArray(posLoc);
     gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    // THE SCENE'S LIGHTING (schema 42), set once per frame — it is a property of the document, so
+    // it cannot change between two shapes in the same picture.
+    setLighting(gl, state, list.lights, list.ambient);
 
     // Grid, then content, then overlay — the same order the other backends paint in, because the
     // display list's order IS the z-order and a GPU has no depth buffer here to recover it from.
@@ -271,10 +349,50 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
     for (const item of [...list.grid.lines, ...list.content, ...list.overlay]) {
         for (const d of itemDraws(item, itemTolerance(item, viewScale))) {
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.vertices), gl.DYNAMIC_DRAW);
+            gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+            // Normals ride in their own buffer rather than interleaved: the position buffer is
+            // re-uploaded per draw already, and two small uploads are simpler to reason about
+            // than one strided one whose layout has to be kept in step by hand.
+            gl.bindBuffer(gl.ARRAY_BUFFER, state.normalBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.normals), gl.DYNAMIC_DRAW);
+            gl.enableVertexAttribArray(state.normalLoc);
+            gl.vertexAttribPointer(state.normalLoc, 3, gl.FLOAT, false, 0, 0);
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
             gl.uniform1f(zLoc, depthToClipZ(item.depth ?? 0));
             gl.uniform4fv(colorLoc, d.color);
             gl.drawArrays(gl.TRIANGLES, 0, d.vertices.length / 2);
         }
     }
     return true;
+}
+
+/**
+ * The scene's lighting, as the shader's uniforms.
+ *
+ * An UNLIT document sets ambient to 1 and no lights at all, which multiplies every colour by one
+ * — so a document that has never heard of lighting draws byte-identically to how it did before
+ * this existed. That is the property that lets the shader carry the lighting term unconditionally
+ * rather than compiling two programs.
+ *
+ * A light whose colour cannot be parsed is SKIPPED rather than defaulted to white: an unreadable
+ * colour is not a reason to add a light nobody asked for.
+ */
+export function setLighting(gl: WebGLRenderingContext, state: GLState,
+                            lights: readonly Light[] | undefined, ambient: number | undefined): void {
+    const dirs: number[] = [];
+    const colors: number[] = [];
+    for (const light of lights ?? []) {
+        const dir = normalize(light);
+        const rgb = parseColor(light.color);
+        if (!dir || !rgb) continue;
+        dirs.push(dir.x, dir.y, dir.z);
+        colors.push(rgb[0] * light.intensity, rgb[1] * light.intensity, rgb[2] * light.intensity);
+    }
+    const count = dirs.length / 3;
+    gl.uniform1f(state.ambientLoc, count === 0 ? 1 : (ambient ?? 0));
+    gl.uniform1i(state.lightCountLoc, count);
+    if (count > 0) {
+        gl.uniform3fv(state.lightDirLoc, new Float32Array(dirs));
+        gl.uniform3fv(state.lightColorLoc, new Float32Array(colors));
+    }
 }

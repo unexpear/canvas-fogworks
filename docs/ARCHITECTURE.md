@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v41 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v42 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -241,6 +241,38 @@ SVG or Canvas can draw — a document field for it would render three different 
 backends. So alignment is an argument to the outline COMMAND instead: what comes out is a
 `core.path`, and a fill draws identically everywhere. The same reasoning that put the boolean bake
 in the action layer rather than in a renderer.
+
+**LIGHTING, and where the tilt comes from (`document/Light`, `Mesh.normalAt`).** The obstacle is
+that a 2D warp is IN-PLANE: it bends a shape sideways and tilts nothing, so every normal it could
+produce points straight at the viewer and a light would find nothing to shade. So mesh control
+points gained a `z`. That one field turns the grid from a deformation into a SURFACE, and normals
+fall out of it as the cross product of the patch's two tangents — the same bilinear patch the warp
+already uses, so the direction a light sees and the outline a click tests are two readings of one
+surface rather than two descriptions that could disagree. `warpPoint` still reads only x and y, so
+height changes how a shape is LIT without changing what it covers.
+
+Lights are DIRECTIONAL and document-level. Directional because a design document has no scale — a
+200-unit rectangle may be a button or a building — so a light with a radius would need a distance
+the document cannot supply, and every scene would need retuning when somebody scaled it.
+Document-level because two shapes lit from different directions do not read as two shapes, they
+read as a mistake. AMBIENT is separate and is not a light but a floor, without which an unlit face
+goes to pure black.
+
+The GPU carries ONE NORMAL PER VERTEX, which is the whole point: a mesh raised in the middle faces
+a different way there than at its edges, and a single normal per shape would light a dome exactly
+like a flat card. Tessellation moved into LOCAL space to make that possible — a normal is sampled
+from the mesh, the mesh is in local units, and a world-space triangle has no way back to the
+coordinate that produced it. The triangles are unchanged, the transform being affine. An unlit
+document sets ambient to 1 and no lights, multiplying every colour by one, so it draws exactly as
+it did before any of this existed.
+
+WHAT IS NOT HERE: shapes do not cast shadows ON EACH OTHER. That needs a shadow map — a second
+pass from the light's point of view and a depth texture to sample — which is its own piece of work
+and needs the texture path this renderer has never had. What exists is SELF-shading, which is what
+makes a bevel look like a bevel, and a drop-shadow OFFSET derived from the light and the node's
+depth, which is what a 2D tool has always meant by a drop shadow — the difference being that it is
+now computed from the scene's own light rather than typed in per shape, so moving the light moves
+every shadow and they cannot disagree.
 
 **A shape can BEND, and it stays an ordinary path (`document/Mesh`).** Every shape here was rigid
 until now — the only things that could change one were its own numbers. A mesh is a grid laid over

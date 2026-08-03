@@ -115,6 +115,7 @@ export class TransactionAction extends Action {
         let variablesDelta: Extract<NodeDelta, { kind: "variables" }> | null = null;
         let activeStateDelta: Extract<NodeDelta, { kind: "activeState" }> | null = null;
         let timelineDelta: Extract<NodeDelta, { kind: "timeline" }> | null = null;
+        let lightingDelta: Extract<NodeDelta, { kind: "lighting" }> | null = null;
 
         for (const action of this.componentActions) {
             action.rebind(working);
@@ -145,6 +146,8 @@ export class TransactionAction extends Action {
                     activeStateDelta = delta;
                 } else if (delta.kind === "timeline") {
                     timelineDelta = delta;
+                } else if (delta.kind === "lighting") {
+                    lightingDelta = delta;
                 } else {
                     const prev = propertyEdits.get(nodeId) ?? { kind: "patch" as const };
                     propertyEdits.set(nodeId, mergePatch(prev, delta));
@@ -181,7 +184,7 @@ export class TransactionAction extends Action {
         // there would be invisible. Counted rather than compared pairwise: the pairwise test was
         // right for two claimants and would have quietly stopped covering them all the moment a
         // third arrived, which is what the timeline is.
-        const documentDeltas = [variablesDelta, activeStateDelta, timelineDelta].filter(d => d !== null);
+        const documentDeltas = [variablesDelta, activeStateDelta, timelineDelta, lightingDelta].filter(d => d !== null);
         if (documentDeltas.length > 1) return { updatedNodeIds: new Set(), propertyDeltas: new Map(), success: false };
         if (documentDeltas.length === 1) finalDeltas.set(DOCUMENT_DELTA_KEY, documentDeltas[0] as NodeDelta);
 
