@@ -100,8 +100,14 @@ void main() {
     gl_FragColor = vec4(u_color.rgb * lit, u_color.a);
 }`;
 
-/** Everything a frame needs, built once per canvas and cached on it. */
-interface GLState {
+/**
+ * Everything a frame needs, built once per canvas and cached on it.
+ *
+ * EXPORTED because two documented functions traffic in it — `initGL` returns it and `setLighting`
+ * takes it — and a documented signature whose type cannot be named is a contract nobody outside
+ * this file can hold. It was private until the API pin tried to state the contract and could not.
+ */
+export interface GLState {
     gl: WebGLRenderingContext;
     program: WebGLProgram;
     buffer: WebGLBuffer;

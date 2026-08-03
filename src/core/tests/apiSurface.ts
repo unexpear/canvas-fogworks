@@ -18,6 +18,19 @@
  *   ✓ a documented signature changing shape (params, return, readonly-ness)
  *   ✗ prose that describes behaviour which has since changed
  * Prose drift is still caught only by review.
+ *
+ * COVERAGE was itself the failure once. For six schemas — 37 stroke joins/caps, 38 fill rules, 39
+ * animation, 40 depth, 41 mesh, 42 lighting — API-CONTRACTS grew entries for `Mesh`, `Light`,
+ * `Depth`, `Timeline`, `emitWebGL` and the whole `geometry/` seam while this file imported none of
+ * them. Documented prose with nothing holding it to the code is the exact thing this file exists
+ * to prevent, so a pin that silently stops covering new work is worse than no pin: it reads as
+ * enforcement. When a module gains a documented export, it gains a line here in the same commit.
+ *
+ * The pin is verified the same way every guard in this codebase is — by breaking the code on
+ * purpose. Eight documented signatures were mutated (a rename, a dropped interface field, a
+ * changed return type, an un-exported type, a widened generic, three dropped parameters) and each
+ * one failed `tsc` with THIS FILE named in the error. A `tsc` failure that does not name
+ * `apiSurface.ts` is the mutation breaking its own module, which scores nothing.
  */
 
 import {
@@ -66,6 +79,28 @@ import { renderScene, RenderBackend } from "../../renderer/renderScene";
 import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
 import { emitCanvas, setImageReadyCallback } from "../../renderer/emitCanvas";
+import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState } from "../../renderer/emitWebGL";
+import { Keyframe, TimelineSettings, timelineError, trackError, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
+import { DEPTH_MIN, DEPTH_MAX, depthError, depthOf, parallaxRate, parallaxOffset, depthToClipZ, byDepth, applyParallax } from "../document/Depth";
+import { Mesh, ReadonlyMesh, MESH_MAX_DIVISIONS, meshError, restPoint, restMesh, isIdentityMesh, warpPoint, warpCommands, heightOf, warpHeight, surfaceNormal, normalAt, isFlatMesh } from "../document/Mesh";
+import { Light, LIGHTS_MAX, lightsError, ambientError, normalize, lambert, shadowOffset } from "../document/Light";
+import { resolveScene, resolveMeshes, resolveBooleans, applyActiveState, dropHidden } from "../document/Components";
+import { BooleanOp, Ring, Point, Piece, windingAt, insideRings, splitAgainst, chainPieces, booleanRings, ringsToCommands, commandsToRings, booleanPaths } from "../geometry/PathBoolean";
+import { FillRule, FILL_RULES, crossingCount, insideRule, resolveRings } from "../geometry/Resolve";
+import { StrokeStyle, StrokeAlign, STROKE_ALIGNS, strokeOutline } from "../geometry/StrokeOutline";
+import { signedArea2, triangulate, subdivideTriangles, TESSELLATE_MAX_VERTICES, SUBDIVIDE_MAX_DEPTH } from "../geometry/Tessellate";
+import { isConvexRing, convexPieces, convexOverlaps, piecesOverlap, rectRing, piecesArea, edgesOverlap, DECOMPOSE_MAX_PIECES } from "../geometry/ConvexDecompose";
+import { HitShape, Subpath, isPaintBearing, hitShapeOf, flattenPath, hitsShape, displayTolerance, localScaleOf, FLATTEN_TOLERANCE, FLATTEN_MAX_DEPTH, DISPLAY_DEVIATION_PX, DISPLAY_TOLERANCE_MAX, DISPLAY_TOLERANCE_MIN } from "../geometry/ShapeHit";
+import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
+import { Quad, axisLengths, boxQuad, quadCenter, cursorForDirection, localLinear, worldDeltaToLocal, resizeBox, Box } from "../geometry/OrientedBox";
+import { TrackListParse, parseTrackList, formatTrackList } from "../document/TrackList";
+import { worldCommandsOf, booleanAction, makeBooleanNodeAction } from "../actions/booleanActions";
+import { strokeWidthOf, outlineStrokeAction } from "../actions/outlineStrokeActions";
+import { SetTrackAction } from "../actions/SetTrackAction";
+import { SetTimelineAction } from "../actions/SetTimelineAction";
+import { SetDepthAction } from "../actions/SetDepthAction";
+import { SetMeshAction } from "../actions/SetMeshAction";
+import { SetLightingAction } from "../actions/SetLightingAction";
 
 /**
  * Assert an expression is ASSIGNABLE to the documented type.
@@ -325,4 +360,208 @@ export function __apiSurfacePin(): void {
     expectType<(c: HTMLElement, m: DisplayList) => void>(emitSVG);
     expectType<(ctx: CanvasRenderingContext2D, m: DisplayList, dpr?: number) => void>(emitCanvas);
     expectType<(cb: (() => void) | null) => void>(setImageReadyCallback);
+
+    // --- Geometry the display seam is built out of (schemas 33–38) -----------
+    // Everything below this line was documented in API-CONTRACTS with nothing holding it to the
+    // code. That is the exact failure this file exists to prevent, so the gap is closed rather
+    // than noted: a rename in any of these now fails `tsc` instead of a review.
+    const ring: Ring = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }];
+    const rings: Ring[] = [ring];
+    expectType<Point>(ring[0]);
+    expectType<BooleanOp>("union");
+    expectType<number>(windingAt(rings, 1, 1));
+    expectType<boolean>(insideRings(rings, 1, 1));
+    const pieces: Piece[] = splitAgainst(rings, rings);
+    expectType<Point>(pieces[0]?.from ?? ring[0]);
+    expectType<Ring[]>(chainPieces(pieces));
+    expectType<Ring[]>(booleanRings(rings, rings, "subtract"));
+    expectType<PathCommand[]>(ringsToCommands(rings));
+    expectType<Ring[]>(commandsToRings([pathCmd]));
+    expectType<Ring[]>(commandsToRings([pathCmd], 0.05));
+    expectType<PathCommand[]>(booleanPaths([pathCmd], [pathCmd], "exclude"));
+
+    // Fill-rule RESOLUTION (schema 38) — the GPU has no `fill-rule`, so the rule becomes geometry.
+    expectType<FillRule>("evenodd");
+    expectType<readonly FillRule[]>(FILL_RULES);
+    expectType<number>(crossingCount(rings, 1, 1));
+    expectType<boolean>(insideRule(rings, 1, 1, "evenodd"));
+    expectType<Ring[]>(resolveRings(rings));
+    expectType<Ring[]>(resolveRings(rings, "evenodd"));
+
+    // Stroke as GEOMETRY (schema 37) — joins and caps the document chose, not a rasterizer's.
+    const strokeStyle: StrokeStyle = { width: 2, join: "miter", cap: "round", miterLimit: 4, align: "center" };
+    expectType<StrokeStyle>(strokeStyle);
+    expectType<StrokeAlign>("outer");
+    expectType<readonly StrokeAlign[]>(STROKE_ALIGNS);
+    expectType<Ring[]>(strokeOutline([pathCmd], strokeStyle));
+    expectType<Ring[]>(strokeOutline([pathCmd], strokeStyle, 0.05));
+
+    // Tessellation + interior subdivision — the GPU's only input, and where shading gets vertices.
+    expectType<number>(signedArea2(ring));
+    const tris: number[] = triangulate(rings);
+    expectType<number[]>(subdivideTriangles(tris, 10));
+    expectType<number[]>(subdivideTriangles(tris, 10, 3));
+    expectType<number>(TESSELLATE_MAX_VERTICES);
+    expectType<number>(SUBDIVIDE_MAX_DEPTH);
+
+    // Convex decomposition — what makes marquee selection INK-accurate rather than box-accurate.
+    expectType<boolean>(isConvexRing(ring));
+    const convex: Ring[] = convexPieces(rings);
+    expectType<boolean>(convexOverlaps(ring, ring));
+    expectType<boolean>(piecesOverlap(convex, ring));
+    expectType<Ring>(rectRing(0, 0, 10, 10));
+    expectType<number>(piecesArea(convex));
+    // SUBPATHS, not rings: `closed` is a real distinction here — an open subpath that silently
+    // closed would gain an edge the author never drew, and a marquee near it would select a shape
+    // that is not there. Pinned with the subpath type so the parameter cannot quietly widen.
+    expectType<boolean>(edgesOverlap([{ points: ring, closed: false }], ring));
+    expectType<number>(DECOMPOSE_MAX_PIECES);
+
+    // Flattening + the ADAPTIVE display tolerance the GPU backend needs.
+    const hitShape: HitShape = hitShapeOf({ type: "core.path", path: [pathCmd], style: { fill: "#000" } }, 0);
+    expectType<HitShape>(hitShape);
+    expectType<boolean>(isPaintBearing("none"));
+    const subpaths: Subpath[] = flattenPath([pathCmd]);
+    expectType<Subpath[]>(flattenPath([pathCmd], 0.05));
+    expectType<boolean>(subpaths[0]?.closed ?? false);
+    expectType<boolean>(hitsShape(hitShape, 10, 10, 1, 1, 0.05));
+    expectType<number>(displayTolerance(2));
+    expectType<number>(localScaleOf(IDENTITY, 2));
+    expectType<number>(FLATTEN_TOLERANCE);
+    expectType<number>(FLATTEN_MAX_DEPTH);
+    expectType<number>(DISPLAY_DEVIATION_PX);
+    expectType<number>(DISPLAY_TOLERANCE_MAX);
+    expectType<number>(DISPLAY_TOLERANCE_MIN);
+
+    // Shape → path: the ONE conversion every consumer shares, so a fourth idea of "what shape is
+    // this" cannot drift into existence.
+    expectType<PathCommand[]>(ellipseCommands(10, 10));
+    expectType<PathCommand[]>(rectCommands(10, 10));
+    expectType<PathCommand[]>(rectCommands(10, 10, 2));
+    expectType<PathCommand[] | null>(shapeToCommands(hitShape, 10, 10));
+    expectType<PathCommand[]>(transformCommands(IDENTITY, [pathCmd]));
+
+    // Oriented box / handle math.
+    const quad: Quad = boxQuad(IDENTITY, 10, 10);
+    expectType<Quad>(boxQuad(IDENTITY, 10, 10, 2));
+    expectType<{ ux: number; uy: number }>(axisLengths(IDENTITY));
+    expectType<Point>(quadCenter(quad));
+    expectType<string>(cursorForDirection(1, 0));
+    expectType<Mat2D>(localLinear(IDENTITY, IDENTITY));
+    expectType<Point>(worldDeltaToLocal(IDENTITY, 1, 1));
+    const box: Box = { x: 0, y: 0, width: 10, height: 10 };
+    expectType<Box>(resizeBox("se", box, { x: 1, y: 1 }, IDENTITY));
+    expectType<Box>(resizeBox("se", box, { x: 1, y: 1 }, IDENTITY, { x: 0.5, y: 0.5 }, 1));
+
+    // Track-list parsing (the grid inspector's text field).
+    const parsed: TrackListParse = parseTrackList("1fr auto");
+    expectType<TrackListParse>(parsed);
+    expectType<string>(formatTrackList([]));
+
+    // --- The display SEAM, in the order it composes ---------------------------
+    expectType<ReadonlyDocument>(resolveScene(doc));
+    expectType<ReadonlyDocument>(dropHidden(doc));
+    expectType<ReadonlyDocument>(applyActiveState(doc));
+    expectType<ReadonlyDocument>(resolveBooleans(doc));
+    expectType<ReadonlyDocument>(resolveMeshes(doc));
+
+    // --- Animation (schema 39) -----------------------------------------------
+    const keyframe: Keyframe = { frame: 0, values: {} };
+    expectType<Keyframe>(keyframe);
+    expectType<number>(keyframe.frame);
+    const timeline: TimelineSettings = { frames: 60, fps: 24 };
+    expectType<TimelineSettings>(timeline);
+    expectType<string | null>(timelineError(timeline));
+    expectType<string | null>(trackError([keyframe], () => null));
+    expectType<{ from: Keyframe; to: Keyframe | null; t: number } | null>(keyframesAt([keyframe], 0));
+    expectType<ReadonlyDocument>(applyFrame(doc, 0));
+    expectType<ReadonlyDocument>(applyFrame(doc, undefined));
+    expectType<number[]>(onionFrames(5, 2, 2, 60));
+    expectType<number>(TIMELINE_MAX_FRAMES);
+    expectType<number>(TRACK_MAX_KEYFRAMES);
+    expectType<number>(FPS_MIN); expectType<number>(FPS_MAX);
+
+    // --- Depth: one number, three consumers (schema 40) ----------------------
+    expectType<string | null>(depthError(0));
+    expectType<number>(depthOf({}));
+    expectType<number>(parallaxRate(1));
+    expectType<{ x: number; y: number }>(parallaxOffset(1, es.viewport));
+    expectType<number>(depthToClipZ(1));
+    expectType<number>(byDepth({ depth: 0 }, { depth: 1 }));
+    // GENERIC and identity-preserving: `applyParallax` returns the SAME type it was given, which
+    // is what lets it sit in front of `computeGeometry` on a mutable document without a cast.
+    // Pinned by ANNOTATING the result rather than by `expectType<ReadonlyDocument>(…)`, on the
+    // same reasoning as `expectNotMutable` above: `expectType` is one-directional, so a return
+    // type widened to readonly would widen straight past it.
+    //
+    // What is actually VERIFIED, stated separately from the reasoning: widening the return type to
+    // the generic's own constraint fails this line. The narrower claim — that the `expectType`
+    // form would have let a widening to exactly `ReadonlyDocument` through — is NOT verified,
+    // because that mutation cannot be made to compile inside `Depth.ts` without rewriting the
+    // function body, and a mutation whose own file fails to compile scores nothing.
+    const parallaxed: ProjectDocument = applyParallax(doc, es.viewport);
+    expectType<ProjectDocument>(parallaxed);
+    expectType<number>(DEPTH_MIN); expectType<number>(DEPTH_MAX);
+
+    // --- Mesh: bending a shape, and the surface a light reads (schemas 41–42) -
+    const meshBox = { width: 100, height: 100 };
+    const mesh: Mesh = restMesh(1, 1, meshBox);
+    expectType<Mesh>(mesh);
+    expectNotMutable<ReadonlyMesh>(mesh as ReadonlyMesh);
+    expectType<string | null>(meshError(mesh));
+    expectType<{ x: number; y: number }>(restPoint(mesh, 0, 0, meshBox));
+    expectType<boolean>(isIdentityMesh(mesh, meshBox));
+    expectType<{ x: number; y: number }>(warpPoint(mesh, meshBox, 1, 1));
+    expectType<PathCommand[]>(warpCommands([pathCmd], meshBox, mesh, flattenPath));
+    expectType<number>(heightOf({}));
+    expectType<number>(warpHeight(mesh, meshBox, 1, 1));
+    expectType<boolean>(isFlatMesh(mesh));
+    expectType<number>(MESH_MAX_DIVISIONS);
+    // TWO normals, and the distinction is the contract: `surfaceNormal` is RAW (what the GPU gets,
+    // because only an un-normalised vector survives linear interpolation) and `normalAt` is its
+    // unit form. Collapsing them back into one function is exactly the regression to catch.
+    expectType<{ x: number; y: number; z: number }>(surfaceNormal(mesh, meshBox, 1, 1));
+    expectType<{ x: number; y: number; z: number }>(normalAt(mesh, meshBox, 1, 1));
+
+    // --- Lighting (schema 42) ------------------------------------------------
+    const light: Light = { x: 1, y: 0, z: -1, color: "#ffffff", intensity: 1 };
+    expectType<Light>(light);
+    expectType<string | null>(lightsError([light]));
+    expectType<string | null>(ambientError(0.2));
+    expectType<{ x: number; y: number; z: number } | null>(normalize(light));
+    expectType<number>(lambert({ x: 0, y: 0, z: 1 }, light));
+    expectType<{ x: number; y: number }>(shadowOffset(light, 4));
+    expectType<number>(LIGHTS_MAX);
+    expectType<readonly Light[] | undefined>(model.lights);
+    expectType<number | undefined>(model.ambient);
+    expectType<number | undefined>(model.content[0].depth);
+
+    // --- The GPU backend -----------------------------------------------------
+    expectType<(c: HTMLCanvasElement, m: DisplayList, vp: { x: number; y: number; zoom: number }, dpr?: number) => boolean>(emitWebGL);
+    expectType<(c: HTMLCanvasElement) => GLState | null>(initGL);
+    expectType<[number, number, number, number] | null>(parseColor("#fff"));
+    expectType<PathCommand[] | null>(shapeToLocalCommands(model.content[0].shape, null));
+    expectType<number[]>(viewMatrix(800, 600, 0, 0, 1));
+    expectType<number>(itemTolerance(model.content[0], 1));
+    const draws: Draw[] = itemDraws(model.content[0]);
+    expectType<Draw[]>(itemDraws(model.content[0], 0.05));
+    expectType<number[]>(draws[0]?.vertices ?? []);
+    // `normals` is part of the CONTRACT, not an implementation detail: a backend that dropped it
+    // would still compile against a `Draw` that never named it, and the shading would go quietly.
+    expectType<number[]>(draws[0]?.normals ?? []);
+    expectType<[number, number, number, number]>(draws[0]?.color ?? [0, 0, 0, 1]);
+    expectType<(gl: WebGLRenderingContext, s: GLState, l: readonly Light[] | undefined, a: number | undefined) => void>(setLighting);
+
+    // --- Actions that write the schema-37–42 fields --------------------------
+    expectType<Action | null>(booleanAction(doc, computed, [], "union", "new-id"));
+    expectType<Action | null>(makeBooleanNodeAction(doc, computed, [], "union", "new-id"));
+    expectType<PathCommand[] | null>(worldCommandsOf(computed, "id"));
+    expectType<number | null>(strokeWidthOf(doc, "id"));
+    expectType<Action | null>(outlineStrokeAction(doc, computed, [], ["new-id"]));
+    expectType<Action | null>(outlineStrokeAction(doc, computed, [], ["new-id"], "outer"));
+    expectType<Action>(new SetTrackAction(doc, "id", [keyframe]));
+    expectType<Action>(new SetTimelineAction(doc, timeline));
+    expectType<Action>(new SetDepthAction(doc, "id", 1));
+    expectType<Action>(new SetMeshAction(doc, "id", mesh));
+    expectType<Action>(new SetLightingAction(doc, [light], 0.2));
 }

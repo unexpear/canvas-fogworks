@@ -85,6 +85,29 @@ npm run check                              # typecheck + lint + test + build (th
 in [API-CONTRACTS.md](API-CONTRACTS.md) and asserts its shape, so `tsc` fails if a
 documented export is renamed, removed, or changes signature.
 
+**Its coverage was itself the failure once.** For six schemas — 37 stroke joins/caps,
+38 fill rules, 39 animation, 40 depth, 41 mesh, 42 lighting — API-CONTRACTS grew
+entries for `Mesh`, `Light`, `Depth`, `Timeline`, `emitWebGL`, `PathBoolean`,
+`Resolve`, `StrokeOutline`, `Tessellate`, `ConvexDecompose`, `ShapeHit`,
+`ShapeToPath`, `OrientedBox` and `TrackList` while this file imported none of them.
+A pin that quietly stops covering new work is worse than no pin, because it reads as
+enforcement. **When a module gains a documented export, it gains a line here in the
+same commit.** Closing the gap also surfaced a real defect: `GLState` — the return
+type of the documented `initGL` and a parameter of the documented `setLighting` —
+was not exported, so neither signature could be written down by anyone outside its
+own file.
+
+The pin is verified the way every guard here is: by breaking the code on purpose.
+Eight documented signatures were mutated — a rename (`surfaceNormal`), a dropped
+interface field (`Draw.normals`), a changed return type (`shadowOffset`), an
+un-exported type (`GLState`), a widened generic (`applyParallax`) and three dropped
+parameters (`resolveRings`, `subdivideTriangles`, `SetLightingAction`) — and each
+failed `tsc` **with `apiSurface.ts` named in the error**. That last clause is the
+scoring rule: a `tsc` failure that does not name this file is the mutation breaking
+its own module, which scores nothing. One mutation was written badly (`T extends
+never | {…}` collapses to `T extends {…}` — a no-op) and read as a survivor until
+the mutation itself was fixed; the same trap as `if (false)` failing to compile.
+
 It exists because API-CONTRACTS.md drifted in three places during one pass **while the
 freeze rule was in force**, and the drift was found by accident. Two mechanisms were
 measured against that drift before this one was kept:

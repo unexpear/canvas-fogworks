@@ -870,6 +870,7 @@ function renderSVG(container: HTMLElement, doc: ReadonlyDocument, state: Rendere
 function renderCanvas(container: HTMLElement, doc: ReadonlyDocument, state: RendererState, onAsyncReady?: () => void): void; // ∘ emitCanvas (sizes a <canvas> for the DPR; onAsyncReady repaints on image load)
 function clearRenderState(container: HTMLElement): void;             // drop the container's cached prev frame (call when its DOM is cleared)
 function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: {x: number; y: number; zoom: number}, dpr?: number): boolean; // GPU transcription; false = unavailable
+interface GLState { gl; program; buffer; normalBuffer; posLoc; normalLoc; viewLoc; colorLoc; zLoc; ambientLoc; lightCountLoc; lightDirLoc; lightColorLoc }
 function initGL(canvas: HTMLCanvasElement): GLState | null;                          // program + buffer, or null when WebGL is refused
 function parseColor(css: string): [number, number, number, number] | null;           // #rgb / #rrggbb / #rrggbbaa only; null = do not draw
 function shapeToLocalCommands(shape: Shape, radius: number | null): PathCommand[] | null;   // LOCAL, so a stroke offsets in the units its width means
