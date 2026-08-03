@@ -40,7 +40,7 @@
 import { DisplayList, DrawItem, Shape } from "./RenderModel";
 import { Mat2D, translation } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
-import { triangulate } from "../core/geometry/Tessellate";
+import { subdivideTriangles, triangulate } from "../core/geometry/Tessellate";
 import { strokeOutline } from "../core/geometry/StrokeOutline";
 import { resolveRings } from "../core/geometry/Resolve";
 import { depthToClipZ } from "../core/document/Depth";
@@ -223,14 +223,18 @@ export interface Draw {
 const FLAT_NORMAL = { x: 0, y: 0, z: 1 };
 
 function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number | null,
-              surface?: (x: number, y: number) => { x: number; y: number; z: number }): Draw | null {
+              surface?: { normal: (x: number, y: number) => { x: number; y: number; z: number }; cell: number }): Draw | null {
     const color = parseColor(css);
     if (!color) return null;                      // not a colour it can parse: skip, never guess
     // Tessellated in LOCAL space, then each vertex transformed — the reverse of what this used to
     // do, and necessary rather than tidier: a normal is sampled from the mesh, the mesh is in
     // local units, and a world-space triangle has no way back to the coordinate that produced it.
     // The triangles are the same either way, the transform being affine.
-    const local = triangulate(rings);
+    // SUBDIVIDED when there is a surface to shade. A value sampled per vertex can only vary where
+    // there are vertices, and ear clipping puts them only on the outline — which is why a dome
+    // came out flat: a rectangle's four vertices all sit on the rim, where its gradient is zero.
+    // One mesh cell is the right target, because that is the finest detail the surface can hold.
+    const local = surface ? subdivideTriangles(triangulate(rings), surface.cell) : triangulate(rings);
     if (local.length === 0) return null;
     const vertices = new Array<number>(local.length);
     // Presized, not bounded: JS arrays grow on assignment, so this is an allocation hint and
@@ -238,7 +242,7 @@ function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number |
     const normals = new Array<number>((local.length / 2) * 3);
     for (let i = 0, n = 0; i < local.length; i += 2, n += 3) {
         const lx = local[i], ly = local[i + 1];
-        const nrm = surface ? surface(lx, ly) : FLAT_NORMAL;
+        const nrm = surface ? surface.normal(lx, ly) : FLAT_NORMAL;
         normals[n] = nrm.x; normals[n + 1] = nrm.y; normals[n + 2] = nrm.z;
         vertices[i] = world ? world.a * lx + world.c * ly + world.e : lx;
         vertices[i + 1] = world ? world.b * lx + world.d * ly + world.f : ly;
@@ -281,7 +285,13 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
     // the bend is in the commands by then, and the thing a light needs is the surface that caused
     // it, which only the unresolved document still has.
     const surface = item.surface
-        ? (x: number, y: number) => normalAt(item.surface!.mesh, item.surface!.box, x, y)
+        ? {
+            normal: (x: number, y: number) => normalAt(item.surface!.mesh, item.surface!.box, x, y),
+            // One CELL of the grid, on its shorter axis: finer than that samples the same bilinear
+            // patch twice and buys nothing, coarser leaves the surface's own detail unreachable.
+            cell: Math.max(1e-6, Math.min(item.surface.box.width / item.surface.mesh.cols,
+                                          item.surface.box.height / item.surface.mesh.rows))
+        }
         : undefined;
     if (paint.fill !== null) {
         // RESOLVED first, which does two jobs at once. It applies the document's fill rule — the

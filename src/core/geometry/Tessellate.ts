@@ -260,3 +260,42 @@ function tessellateOne(outline: Ring, holes: readonly Ring[], area: number, out:
     }
     if (verts.length === 3) out.push(verts[0].x, verts[0].y, verts[1].x, verts[1].y, verts[2].x, verts[2].y);
 }
+
+/** How many times one triangle may be split. 4 is 256 pieces, which is a bound and not a target. */
+export const SUBDIVIDE_MAX_DEPTH = 4;
+
+/**
+ * A triangle list split until no edge is longer than `maxEdge` — vertices for a SURFACE to be
+ * sampled at.
+ *
+ * Ear clipping puts vertices only where the outline has them, which is the right answer for a
+ * FILL: a flat colour needs no interior detail and every extra triangle is waste. It is the wrong
+ * answer for SHADING, because a value sampled per vertex can only vary where there are vertices —
+ * a rectangle has four, all at its corners, and a dome raised in the middle came out uniformly
+ * flat because every one of them sat on the rim where the gradient is zero.
+ *
+ * The split is at the MIDPOINTS, four ways, which keeps every piece the same shape as its parent
+ * and needs no decisions: no long thin slivers appear, and the same triangle always splits the
+ * same way. It is bounded twice over — by the edge length asked for and by `SUBDIVIDE_MAX_DEPTH` —
+ * because `maxEdge` is derived from a mesh a document controls, and a grid of 64 on a large shape
+ * would otherwise ask for millions of triangles.
+ */
+export function subdivideTriangles(flat: readonly number[], maxEdge: number, maxDepth: number = SUBDIVIDE_MAX_DEPTH): number[] {
+    if (!(maxEdge > 0) || flat.length === 0) return [...flat];
+    const out: number[] = [];
+    const emit = (ax: number, ay: number, bx: number, by: number, cx: number, cy: number, depth: number): void => {
+        const longest = Math.max(Math.hypot(bx - ax, by - ay), Math.hypot(cx - bx, cy - by), Math.hypot(ax - cx, ay - cy));
+        if (depth >= maxDepth || longest <= maxEdge) { out.push(ax, ay, bx, by, cx, cy); return; }
+        const ab = [(ax + bx) / 2, (ay + by) / 2], bc = [(bx + cx) / 2, (by + cy) / 2], ca = [(cx + ax) / 2, (cy + ay) / 2];
+        emit(ax, ay, ab[0], ab[1], ca[0], ca[1], depth + 1);
+        emit(ab[0], ab[1], bx, by, bc[0], bc[1], depth + 1);
+        emit(ca[0], ca[1], bc[0], bc[1], cx, cy, depth + 1);
+        // The MIDDLE piece, which is what makes this a four-way split rather than a fan: without
+        // it the three corner pieces would leave a hole exactly the size of the triangle's middle.
+        emit(ab[0], ab[1], bc[0], bc[1], ca[0], ca[1], depth + 1);
+    };
+    for (let i = 0; i + 5 < flat.length; i += 6) {
+        emit(flat[i], flat[i + 1], flat[i + 2], flat[i + 3], flat[i + 4], flat[i + 5], 0);
+    }
+    return out;
+}

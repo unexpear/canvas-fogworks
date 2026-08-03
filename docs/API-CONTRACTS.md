@@ -308,6 +308,12 @@ function strokeOutline(commands: readonly PathCommand[], style: StrokeStyle, tol
 const TESSELLATE_MAX_VERTICES: number;   // 100_000 — the OOM guard, the twin of PATH_MAX_COMMANDS
 function signedArea2(ring: readonly {x: number; y: number}[]): number;   // sign = winding
 function triangulate(rings: readonly Ring[]): number[];   // flat [x0,y0, x1,y1, x2,y2, ...]
+const SUBDIVIDE_MAX_DEPTH: number;                        // 4 — a bound, not a target
+function subdivideTriangles(flat: readonly number[], maxEdge: number, maxDepth?: number): number[];
+// Ear clipping puts vertices only where the OUTLINE has them, which is right for a flat fill and
+// wrong for SHADING: a value sampled per vertex can only vary where there ARE vertices. Split at
+// the MIDPOINTS, four ways (the middle piece is what stops it leaving a hole), bounded by both the
+// edge length and the depth cap. Used only when an item carries a lighting surface.
 // Rings are classified by SIGNED AREA, not array order: the largest is the outline, opposite
 // winding is a hole, same winding is a separate island. That is the nonzero rule picking and both
 // other backends already obey. Degenerate input returns [] rather than throwing — a shape with no

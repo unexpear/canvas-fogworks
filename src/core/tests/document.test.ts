@@ -40,7 +40,7 @@ import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds,
 import { flattenPath, hitsShape, isPaintBearing, FLATTEN_TOLERANCE, FLATTEN_MAX_DEPTH, hitShapeOf, displayTolerance, localScaleOf, DISPLAY_DEVIATION_PX, DISPLAY_TOLERANCE_MIN, DISPLAY_TOLERANCE_MAX } from "../geometry/ShapeHit";
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
-import { triangulate, signedArea2, TESSELLATE_MAX_VERTICES } from "../geometry/Tessellate";
+import { triangulate, signedArea2, TESSELLATE_MAX_VERTICES, subdivideTriangles, SUBDIVIDE_MAX_DEPTH } from "../geometry/Tessellate";
 import { convexPieces, isConvexRing, convexOverlaps, piecesOverlap, piecesArea, rectRing, DECOMPOSE_MAX_PIECES } from "../geometry/ConvexDecompose";
 import { resolveRings, insideRule, crossingCount, FILL_RULES, FillRule } from "../geometry/Resolve";
 import { applyFrame, trackError, timelineError, onionFrames, keyframesAt, TIMELINE_MAX_FRAMES, FPS_MAX } from "../document/Timeline";
@@ -12813,6 +12813,59 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         expect(modelOf(node("A", bent)).content[0].surface).toBeUndefined();
         expect(modelOf(node("A", raised(30))).content[0].surface).toBeDefined();
         expect(modelOf(node("A")).content[0].surface).toBeUndefined();
+    });
+
+    test("SUBDIVISION splits until every edge fits, four ways, and stays bounded", () => {
+        // One big triangle, split until nothing is longer than 30.
+        const big = [0, 0, 240, 0, 0, 240];
+        const fine = subdivideTriangles(big, 30);
+        expect(fine.length / 6).toBeGreaterThan(1);
+        for (let i = 0; i + 5 < fine.length; i += 6) {
+            const e = Math.max(
+                Math.hypot(fine[i + 2] - fine[i], fine[i + 3] - fine[i + 1]),
+                Math.hypot(fine[i + 4] - fine[i + 2], fine[i + 5] - fine[i + 3]),
+                Math.hypot(fine[i] - fine[i + 4], fine[i + 1] - fine[i + 5]));
+            expect(e).toBeLessThanOrEqual(30 * 1.0001);
+        }
+        // FOUR ways, not three: the middle piece is what stops the split leaving a hole exactly
+        // the size of the triangle's own middle. Area is conserved, which is how that shows.
+        const area = (t: readonly number[]): number => {
+            let a = 0;
+            for (let i = 0; i + 5 < t.length; i += 6) {
+                a += Math.abs((t[i + 2] - t[i]) * (t[i + 5] - t[i + 1]) - (t[i + 4] - t[i]) * (t[i + 3] - t[i + 1])) / 2;
+            }
+            return a;
+        };
+        expect(area(fine)).toBeCloseTo(area(big), 6);
+        // BOUNDED twice: by the depth cap, since `maxEdge` comes from a mesh a document controls.
+        const absurd = subdivideTriangles(big, 1e-9);
+        expect(absurd.length / 6).toBeLessThanOrEqual(Math.pow(4, SUBDIVIDE_MAX_DEPTH));
+        expect(area(absurd)).toBeCloseTo(area(big), 6);
+        // A triangle already small enough is returned untouched, so a flat fill pays nothing.
+        expect(subdivideTriangles(big, 1000)).toEqual(big);
+        expect(subdivideTriangles(big, 0)).toEqual(big);
+        expect(subdivideTriangles([], 10)).toEqual([]);
+    });
+
+    test("subdivision happens ONLY where there is a surface to shade", () => {
+        // A flat fill needs no interior detail and every extra triangle is waste, so the cost is
+        // paid exactly where it buys something.
+        const box = { width: 280, height: 280 };
+        const flatItem = {
+            shape: { kind: "rect", x: 0, y: 0, width: 280, height: 280 }, world: null, nodeId: null, role: "content",
+            paint: { fill: "#ffffff", opacity: null, stroke: null, strokeWidth: null, strokeDash: null,
+                     radius: null, cursor: null, pointerEvents: true, shadow: null, blur: null }
+        } as never;
+        const [plain] = itemDraws(flatItem);
+        expect(plain.vertices.length / 2).toBe(6);           // two triangles, and no more
+        const dome = restMesh(4, 4, box);
+        dome.points = dome.points.map((p, i) => {
+            const col = i % 5, row = Math.floor(i / 5);
+            const edge = col === 0 || row === 0 || col === 4 || row === 4;
+            return { ...p, z: edge ? 0 : 150 };
+        });
+        const [lit] = itemDraws({ ...(flatItem as object), surface: { mesh: dome, box } } as never);
+        expect(lit.vertices.length / 2).toBeGreaterThan(plain.vertices.length / 2);
     });
 
     test("a raised shape reaches the GPU with normals that actually VARY", () => {
