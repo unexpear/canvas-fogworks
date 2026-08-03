@@ -106,6 +106,9 @@ interface Light { x: number; y: number; z: number; color: string; intensity: num
 // RAISED IS NEGATIVE DEPTH. `depth` counts AWAY from the viewer, so the shape that floats above
 // the page and throws a shadow is the one in FRONT of it; a shape sunk behind the page throws
 // nothing. `shadowOffset` had this backwards for two commits.
+// A shadow's LENGTH is the gap between the caster and what it lands on, not the caster's height:
+// a card 40 above the page throws 40 onto the page and 20 onto a card at 20. Also wrong for two
+// commits, and invisible until a document has TWO raised shapes.
 // ALSO HERE: SELF-shading, Lambert per FRAGMENT on the GPU — the vertex stage hands over an
 // un-normalised normal, which is what survives linear interpolation intact, and the fragment
 // shader normalises it.
