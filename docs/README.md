@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1141 — `src/core/tests/document.test.ts` (1038) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (34).
+- **Tests:** 1144 — `src/core/tests/document.test.ts` (1041) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (34).
 
 ## Source map
 
@@ -55,7 +55,8 @@ src/
   core/
     document/   ProjectDocument, Node, Serializer,     (the source of truth)
                 Integrity, SceneGraph, Components,
-                Timeline (39), Depth (40), Mesh (41), Light (42)
+                Timeline (39), Depth (40), Mesh (41), Light (42),
+                Bezier (44)
     actions/    Action + commands, Dispatcher,         (the only write path)
                 HistoryManager, applyMutations, types
     geometry/   Matrix, GeometryEngine (M1),           (intent -> computed results)
