@@ -304,6 +304,9 @@ function shadowPatch(caster, receiver, offset): Ring[];            // the caster
 function castShadows(shapes, offsetOf, maxPairs?): CastShadowPatch[];   // [] when nothing is raised — the common case, per frame
 // A shape casts onto another only when STRICTLY nearer the viewer; equal depth is the same
 // plane and neither is above the other, which is also what stops a shape shadowing itself.
+// Patches for one receiver are MERGED by the model before drawing (union, nonzero): occlusion is
+// binary, so two casters over one card must not paint the overlap twice. `castShadows` itself
+// returns them per PAIR, and TRUNCATES SILENTLY at `maxPairs`.
 // `offsetOf` is injected so this module needs to know nothing about lights, and takes BOTH
 // depths: a card 40 above the page throws 40 onto the page and only 20 onto a card at 20.         // idempotent on simple input
 // IDEMPOTENT by design: callers resolve indiscriminately rather than detecting whether they need

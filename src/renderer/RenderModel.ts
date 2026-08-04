@@ -30,6 +30,7 @@ import { ReadonlyMesh, isFlatMesh } from "../core/document/Mesh";
 import { Light, shadowOffset } from "../core/document/Light";
 import { castShadows, ShadowShape, SHADOW_ALPHA } from "../core/geometry/CastShadow";
 import { Ring, commandsToRings, ringsToCommands } from "../core/geometry/PathBoolean";
+import { resolveRings } from "../core/geometry/Resolve";
 import { worldCommandsOf } from "../core/actions/booleanActions";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { selectionRoots } from "../core/document/SceneGraph";
@@ -844,17 +845,34 @@ function withCastShadows(content: DrawItem[], computed: ComputedState, light: Li
     const patches = castShadows(shapes, (c, r) => shadowOffset(light, c, r));
     if (patches.length === 0) return content;
 
-    const byReceiver = new Map<string, Ring[][]>();
+    // MERGED per receiver, not stacked. Two raised shapes over one card each throw a patch onto
+    // it, and where those patches overlap a second translucent fill lands on the first — so the
+    // overlap comes out DARKER than either shadow. That contradicts the model `CastShadow` argues
+    // for in its own comment: a directional light is infinitely far away, every ray is parallel,
+    // and occlusion is total or nothing. There is no "twice occluded".
+    //
+    // The union is `resolveRings` under NONZERO, which is the same primitive the booleans use —
+    // the patches are already simple rings, so their union is exactly what it computes. EVEN-ODD
+    // would be the opposite mistake: it punches the overlap out as a hole, so the doubly-shadowed
+    // band comes out LIGHTER than the rest instead of darker.
+    //
+    // The single-patch skip is a COST short-circuit, not a correctness guard, and a mutation of it
+    // changed no output: one already-simple ring resolves to itself. It stays because resolving is
+    // O(n²) in edges and this runs per frame, and one caster is the common case.
+    const byReceiver = new Map<string, Ring[]>();
     for (const p of patches) {
         const list = byReceiver.get(p.receiverId);
-        if (list) list.push(p.rings); else byReceiver.set(p.receiverId, [p.rings]);
+        if (list) list.push(...p.rings); else byReceiver.set(p.receiverId, [...p.rings]);
+    }
+    const merged = new Map<string, Ring[]>();
+    for (const [id, rings] of byReceiver) {
+        merged.set(id, patches.filter(p => p.receiverId === id).length > 1 ? resolveRings(rings, "nonzero") : rings);
     }
     const out: DrawItem[] = [];
     for (const item of content) {
         out.push(item);
-        const patch = item.nodeId !== null ? byReceiver.get(item.nodeId) : undefined;
-        if (!patch) continue;
-        for (const rings of patch) {
+        const rings = item.nodeId !== null ? merged.get(item.nodeId) : undefined;
+        if (rings && rings.length > 0) {
             out.push({
                 shape: { kind: "path", commands: ringsToCommands(rings) },
                 // WORLD-space rings with no transform: the patch is the intersection of two shapes

@@ -314,6 +314,14 @@ texture's texels. A shape casts only on shapes STRICTLY further away, which is a
 shadowing itself; the patch is spliced directly after its receiver in paint order, unpickable and
 idless, because a shadow is not a thing you can select.
 
+Patches landing on the SAME receiver are merged into one before they are drawn. Two raised shapes
+over one card each throw a patch onto it, and where those overlap a second translucent fill lands
+on the first — so the overlap comes out darker than either. That contradicts the model this
+module argues for in its own comment: a directional light is infinitely far away, every ray is
+parallel, occlusion is total or nothing, and there is no "twice occluded". The union is
+`resolveRings` under NONZERO; even-odd would be the opposite mistake, punching the overlap out as
+a hole so the doubly-shadowed band came out LIGHTER.
+
 A shadow's length is the GAP the light crosses, not the caster's height above the page. That
 distinction is invisible until two things are raised — with one raised shape over a flat page the
 two formulas agree exactly — so it shipped wrong and the whole suite stayed green. A stack of

@@ -53,7 +53,12 @@ export const SHADOW_ALPHA = "#00000059";
  * The bound is on pairs rather than on shapes so it degrades by dropping the last few shadows
  * rather than by refusing to draw any, and it is generous relative to what a document reaches:
  * raised shapes are a handful in practice, because raising everything is the same as raising
- * nothing. `castShadows` reports what it dropped rather than truncating silently.
+ * nothing.
+ *
+ * It TRUNCATES SILENTLY, which this comment used to claim it did not. Reaching the cap needs
+ * twenty raised shapes all overlapping, and a caller that wants to know can compare the patch
+ * count against the bound. The claim was wrong for as long as it existed, and it was written in
+ * the same session as a rule about not capping coverage without saying so.
  */
 export const CAST_SHADOW_MAX_PAIRS = 400;
 

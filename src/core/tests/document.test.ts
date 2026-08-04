@@ -13659,6 +13659,48 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
             .content.every(i => i.role === "content")).toBe(true);
     });
 
+    test("two casters over one receiver make ONE shadow, not a darker overlap", () => {
+        // The model this module argues for in its own comment: a directional light is infinitely
+        // far away, every ray is parallel, occlusion is total or nothing. There is no "twice
+        // occluded" — so two patches landing on the same card must merge, or the overlap paints a
+        // second translucent fill over the first and comes out darker than either.
+        //
+        // Every test here had ONE caster, which is exactly why it went unnoticed: with one patch
+        // per receiver, merging and not merging are the same thing.
+        const rect = (id: string, x: number, depth: number): Node => ({
+            id, type: "core.rectangle", parent: null, children: [],
+            geometry: { x, y: 0, width: 100, height: 100 },
+            style: { fill: "#ffffff", opacity: 1 }, layout: {},
+            ...(depth ? { depth } : {}) } as Node);
+        const d = doc(rect("page", 0, 0), rect("high", 0, -40), rect("mid", 10, -30));
+        d.lights = [{ x: 1, y: 0, z: -1, color: "#ffffff", intensity: 1 }];
+        const model = buildRenderModel({ width: 800, height: 600 }, d,
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(d), viewport: { x: 0, y: 0, zoom: 1 } });
+        // Far to near: page, then mid, then high — and each receiver is followed by exactly ONE
+        // shadow item, though the page has TWO shapes above it both throwing onto it. "mid" gets
+        // its own from "high", which is a different receiver and rightly a separate patch.
+        expect(model.content.map(i => `${i.role}:${i.nodeId ?? "-"}`))
+            .toEqual(["content:page", "shadow:-", "content:mid", "shadow:-", "content:high"]);
+        // The page's is the UNION, asserted by AREA rather than by ring count. Counting rings
+        // cannot tell a union from an EVEN-ODD merge: with these two patches both produce a single
+        // ring, and even-odd would have punched the overlap out as a hole — the same band ending
+        // up LIGHTER instead of darker. The union spans from the nearer caster's edge to the
+        // receiver's, and both casters throw in +x, so it is one wide band.
+        const onPage = model.content[1].shape as { kind: "path"; commands: PathCommand[] };
+        const shadowArea = commandsToRings(onPage.commands)
+            .reduce((n, r) => n + Math.abs(signedArea2(r)) / 2, 0);
+        // `high` is 40 above the page and the light is at 45°, so it throws 40/sqrt(2) ~ 28.28 and
+        // covers x 28.28..100 of a 100-tall receiver. `mid` throws less and lands inside that.
+        expect(shadowArea).toBeCloseTo((100 - 40 / Math.SQRT2) * 100, 4);
+        // Non-vacuous: the two patches really do overlap, so an unmerged version would have had
+        // two rings here. `high` throws 40 and `mid` throws 30, onto a receiver spanning 0..100.
+        expect(castShadows(
+            [{ id: "page", rings: [[{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }]], depth: 0 },
+             { id: "high", rings: [[{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }]], depth: -40 },
+             { id: "mid", rings: [[{ x: 10, y: 0 }, { x: 110, y: 0 }, { x: 110, y: 100 }, { x: 10, y: 100 }]], depth: -30 }],
+            (c, r) => shadowOffset(d.lights![0], c, r)).filter(p => p.receiverId === "page").length).toBe(2);
+    });
+
     test("an EXPLICIT shadow still wins over the scene's light", () => {
         // Somebody who set a shadow meant it. A scene light silently overruling a per-shape
         // decision would be the tool arguing with its user.
