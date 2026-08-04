@@ -15,6 +15,21 @@
  * fixes by adding a row. Bilinear is exact AT the control points, which is the property a person
  * dragging one actually checks.
  *
+ * CONTROL POINTS ARE FRACTIONS OF THE BOX (schema 43), not local units. `{x: 0.5, y: 1}` is the
+ * middle of the bottom edge whatever size the node is. That is not a storage detail — it is what
+ * makes a mesh survive a RESIZE. Stored in absolute units, as they were, the points said where the
+ * grid sat when it was made while the rest positions were still implied by the CURRENT box, so the
+ * two disagreed the moment the box changed: an untouched mesh stopped being the identity and
+ * pinned the shape to its old size, and resizing a warped node did nothing to the drawing at all.
+ *
+ * Rescaling the points inside the resize action would not have fixed it, and that is worth saying
+ * because it is the obvious alternative. A node's size is COMPUTED in several paths that are not
+ * actions — auto-layout, hug sizing, constraints — so there is no single place to hook. A mesh
+ * defined relative to its box needs no hook.
+ *
+ * HEIGHT (`z`) stays ABSOLUTE, in the same units as `depth`: it is a distance above the page
+ * rather than a fraction of anything, and a page has no width to be a fraction of.
+ *
  * A warped shape becomes an ordinary `core.path`, resolved at the display seam like a boolean or
  * an instance. That is the whole reason this costs so little: picking, marquee selection,
  * snapping, tessellation, the decomposition and all three backends see a path and need to know
@@ -50,11 +65,12 @@ export interface Mesh {
     cols: number;
     rows: number;
     /**
-     * Control points in the node's LOCAL units, row-major, `(cols + 1) * (rows + 1)` of them.
+     * Control points as FRACTIONS OF THE BOX, row-major, `(cols + 1) * (rows + 1)` of them.
      *
-     * They hold the DEFORMED positions. The undeformed ones are implied by the box, so a mesh
-     * whose points sit on that grid is the identity and is detected as one rather than being
-     * applied — an untouched mesh must cost nothing.
+     * They hold the DEFORMED positions, and a point may sit outside `[0, 1]` — dragging a corner
+     * beyond the box is an ordinary thing to do. The undeformed grid is `col/cols, row/rows`
+     * whatever the box is, so an untouched mesh is the identity at EVERY size and is detected as
+     * one rather than applied. That is the property absolute units could not have.
      *
      * `z` is HEIGHT, absent = 0, and it is what turns this grid into a SURFACE. A warp alone is
      * in-plane, so it tilts nothing and every normal it could produce would point straight at the
@@ -89,18 +105,17 @@ export function meshError(mesh: unknown): string | null {
 }
 
 /** Where a control point sits when nothing has been dragged — the grid the box implies. */
-export function restPoint(mesh: { cols: number; rows: number }, col: number, row: number,
-                          box: { width: number; height: number }): { x: number; y: number } {
-    return { x: (col / mesh.cols) * box.width, y: (row / mesh.rows) * box.height };
+export function restPoint(mesh: { cols: number; rows: number }, col: number, row: number): { x: number; y: number } {
+    return { x: col / mesh.cols, y: row / mesh.rows };
 }
 
 /** Is every point still at rest? Then the mesh is the identity and applying it would be a no-op. */
-export function isIdentityMesh(mesh: ReadonlyMesh, box: { width: number; height: number }): boolean {
+export function isIdentityMesh(mesh: ReadonlyMesh): boolean {
     const EPS = 1e-9;
     for (let row = 0; row <= mesh.rows; row++) {
         for (let col = 0; col <= mesh.cols; col++) {
             const p = mesh.points[row * (mesh.cols + 1) + col];
-            const rest = restPoint(mesh, col, row, box);
+            const rest = restPoint(mesh, col, row);
             if (Math.abs(p.x - rest.x) > EPS || Math.abs(p.y - rest.y) > EPS) return false;
         }
     }
@@ -128,7 +143,10 @@ export function warpPoint(mesh: ReadonlyMesh, box: { width: number; height: numb
     const p00 = at(col, row), p10 = at(col + 1, row), p01 = at(col, row + 1), p11 = at(col + 1, row + 1);
     const top = { x: p00.x + (p10.x - p00.x) * fu, y: p00.y + (p10.y - p00.y) * fu };
     const bottom = { x: p01.x + (p11.x - p01.x) * fu, y: p01.y + (p11.y - p01.y) * fu };
-    return { x: top.x + (bottom.x - top.x) * fv, y: top.y + (bottom.y - top.y) * fv };
+    // Back into LOCAL units. The points are FRACTIONS of the box (schema 43), so the box enters
+    // here and only here — which is what makes a resize carry the warp with it.
+    return { x: (top.x + (bottom.x - top.x) * fv) * box.width,
+             y: (top.y + (bottom.y - top.y) * fv) * box.height };
 }
 
 /**
@@ -137,10 +155,10 @@ export function warpPoint(mesh: ReadonlyMesh, box: { width: number; height: numb
  * Exported because the editor needs to CREATE one, and a mesh built by hand somewhere else would
  * be a second definition of where the grid starts.
  */
-export function restMesh(cols: number, rows: number, box: { width: number; height: number }): Mesh {
+export function restMesh(cols: number, rows: number): Mesh {
     const points: { x: number; y: number }[] = [];
     for (let row = 0; row <= rows; row++) {
-        for (let col = 0; col <= cols; col++) points.push(restPoint({ cols, rows }, col, row, box));
+        for (let col = 0; col <= cols; col++) points.push(restPoint({ cols, rows }, col, row));
     }
     return { cols, rows, points };
 }

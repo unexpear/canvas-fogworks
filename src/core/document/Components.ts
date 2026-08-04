@@ -761,7 +761,7 @@ export function resolveMeshes(doc: ReadonlyDocument): ReadonlyDocument {
         // of a raised mesh the gradient is zero, so every one of them sampled a flat spot and the
         // shading had nowhere to live. Converting subdivides the outline at the grid's own
         // resolution, which is where the surface actually varies.
-        if (!mesh || (isIdentityMesh(mesh, box) && isFlatMesh(mesh))) { nodes.set(id, n as Node); return; }
+        if (!mesh || (isIdentityMesh(mesh) && isFlatMesh(mesh))) { nodes.set(id, n as Node); return; }
         // The node's OWN outline, by the same conversion picking and the booleans use — so a
         // warped rectangle bends the rectangle everything else agrees it is.
         const local = shapeToCommands(hitShapeOf(n as Node, radiusOfNode(n as Node)), box.width, box.height);

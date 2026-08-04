@@ -4392,8 +4392,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 41→42 landed for lighting.)
-        expect(() => migrateIfNeeded(legacy, "43")).toThrow('Migration not implemented for document schema "42"');
+        // time a real migration is added — most recently when 42→43 landed, turning mesh
+        // control points into fractions of the box so a warp survives a resize.)
+        expect(() => migrateIfNeeded(legacy, "44")).toThrow('Migration not implemented for document schema "43"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -12690,7 +12691,7 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
            style: { fill: "#808080", opacity: 1 }, layout: {}, ...(mesh ? { mesh } : {}) } as Node);
     /** A rest grid with one corner RAISED — the smallest thing a light can find. */
     const raised = (z: number): Mesh => {
-        const m = restMesh(1, 1, box);
+        const m = restMesh(1, 1);
         m.points[3] = { ...m.points[3], z };
         return m;
     };
@@ -12700,13 +12701,13 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
     test("a FLAT mesh faces the viewer exactly, so an unlit shape stays unlit-looking", () => {
         // Exact, not nearly: a lighting term multiplied by an almost-normalised normal is how a
         // flat fill acquires a faint gradient nobody asked for.
-        const flat = restMesh(2, 2, box);
+        const flat = restMesh(2, 2);
         expect(isFlatMesh(flat)).toBe(true);
         expect(normalAt(flat, box, 50, 50)).toEqual({ x: 0, y: 0, z: 1 });
         expect(normalAt(flat, box, 0, 0)).toEqual({ x: 0, y: 0, z: 1 });
         // An in-plane WARP is still flat: bending a shape sideways tilts nothing.
-        const warped = restMesh(1, 1, box);
-        warped.points[3] = { x: 160, y: 100 };
+        const warped = restMesh(1, 1);
+        warped.points[3] = { x: 1.6, y: 1 };            // FRACTIONS of the box (schema 43)
         expect(isFlatMesh(warped)).toBe(true);
         expect(normalAt(warped, box, 50, 50)).toEqual({ x: 0, y: 0, z: 1 });
     });
@@ -12727,7 +12728,7 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         // The sign guard's only reachable case, and it is reachable: drag two control points past
         // each other and the patch turns inside out, which flips the cross product. Without the
         // guard those shapes would be lit from behind — dark where every neighbour is bright.
-        const m = restMesh(1, 1, box);
+        const m = restMesh(1, 1);
         const [a, b, c, d] = m.points.map(p => ({ ...p }));
         m.points[0] = { ...b }; m.points[1] = { ...a };     // swap the top row: the patch mirrors
         m.points[2] = { ...d }; m.points[3] = { ...c };
@@ -12912,7 +12913,7 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         // width, so it has no tangents and genuinely no normal. `surfaceNormal` says so. The
         // shader normalises whatever it is handed, and normalising zero is NaN — which is not a
         // dark shape, it is a hole.
-        const collapsed = restMesh(2, 1, box);
+        const collapsed = restMesh(2, 1);
         collapsed.points[1] = { ...collapsed.points[0] };     // top-middle onto top-left
         collapsed.points[4] = { ...collapsed.points[3], z: 40 };
         collapsed.points[3] = { ...collapsed.points[3], z: 40 };
@@ -12934,7 +12935,7 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         // What replaced a per-vertex shadow term. The fragment stage marches for itself, so what
         // it needs is the heightfield and a position — not an answer computed at three corners.
         const ridge = (): Mesh => {
-            const m = restMesh(4, 1, box);
+            const m = restMesh(4, 1);
             m.points[1] = { ...m.points[1], z: 120 };
             m.points[6] = { ...m.points[6], z: 120 };
             return m;
@@ -12958,7 +12959,7 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         expect(lit.height!.min).toBe(0);
         // A FLAT mesh has no relief and no range to pack against, so there is no texture and the
         // shader is told to skip the march entirely.
-        expect(item(restMesh(2, 2, box)).height).toBeNull();
+        expect(item(restMesh(2, 2)).height).toBeNull();
         // …and a shape with no surface at all pays nothing.
         expect(item().height).toBeNull();
         expect(item().locals.length).toBe(item().vertices.length);
@@ -13246,7 +13247,7 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         // The fragment shader contains this decode and cannot be tested, so pinning the round trip
         // here is the only checked definition the packing has. An error is not a crash — it is a
         // surface subtly the wrong height, which looks like a lighting bug forever.
-        const m = restMesh(1, 1, box);
+        const m = restMesh(1, 1);
         m.points[3] = { ...m.points[3], z: 260 };
         const tex = heightTexture(m, box)!;
         expect(tex.min).toBe(0);
@@ -13268,7 +13269,7 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         expect(decodeHeight(0, 0, 0, 260)).toBe(0);
         expect(decodeHeight(255, 255, 0, 260)).toBe(260);
         // NEGATIVE relief packs against its own range, so all sixteen bits go on what exists.
-        const dip = restMesh(1, 1, box);
+        const dip = restMesh(1, 1);
         dip.points[0] = { ...dip.points[0], z: -40 };
         const dipTex = heightTexture(dip, box)!;
         expect([dipTex.min, dipTex.max]).toEqual([-40, 0]);
@@ -13280,15 +13281,15 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         expect(at(dipTex, 0, 0)).toBeCloseTo(warpHeight(dip, box, box.width / 128, box.height / 128), 1);
         expect(at(dipTex, 0, 0)).toBeLessThan(-38);
         expect(at(dipTex, 63, 63)).toBeCloseTo(0, 2);
-        expect(heightTexture(restMesh(2, 2, box), box)).toBeNull();
+        expect(heightTexture(restMesh(2, 2), box)).toBeNull();
     });
 
     test("heightRange reads the CONTROL POINTS, which bounds the ray exactly", () => {
         // Exact rather than sampled: a bilinear patch blends its four corners, so nothing inside a
         // cell is higher than the highest of them. That is what makes the grid a sound bound on
         // the march — and a bound that is too small silently shortens the ray.
-        expect(heightRange(restMesh(2, 2, box))).toEqual({ min: 0, max: 0 });
-        const m = restMesh(1, 1, box);
+        expect(heightRange(restMesh(2, 2))).toEqual({ min: 0, max: 0 });
+        const m = restMesh(1, 1);
         m.points[3] = { ...m.points[3], z: 55 };
         m.points[0] = { ...m.points[0], z: -20 };
         expect(heightRange(m)).toEqual({ min: -20, max: 55 });
@@ -13297,8 +13298,8 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
     test("the model carries the surface only when a mesh has HEIGHT", () => {
         // A purely in-plane warp faces the viewer everywhere, so shipping its normals would cost
         // a buffer per frame to say "flat" three times per triangle.
-        const bent = restMesh(1, 1, box);
-        bent.points[3] = { x: 160, y: 100 };
+        const bent = restMesh(1, 1);
+        bent.points[3] = { x: 1.6, y: 1 };              // FRACTIONS of the box (schema 43)
         const modelOf = (n: Node) => buildRenderModel({ width: 800, height: 600 }, doc(n),
             { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(doc(n)), viewport: { x: 0, y: 0, zoom: 1 } });
         expect(modelOf(node("A", bent)).content[0].surface).toBeUndefined();
@@ -13349,7 +13350,7 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         } as never;
         const [plain] = itemDraws(flatItem);
         expect(plain.vertices.length / 2).toBe(6);           // two triangles, and no more
-        const dome = restMesh(4, 4, box);
+        const dome = restMesh(4, 4);
         dome.points = dome.points.map((p, i) => {
             const col = i % 5, row = Math.floor(i / 5);
             const edge = col === 0 || row === 0 || col === 4 || row === 4;
@@ -13368,7 +13369,7 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         // 96 normal buffers uploaded and zero of them non-flat.
         //
         // The fix is that HEIGHT now subdivides the outline, so the shading has somewhere to live.
-        const raisedDome = restMesh(4, 4, { width: 280, height: 280 });
+        const raisedDome = restMesh(4, 4);
         raisedDome.points = raisedDome.points.map((p, i) => {
             const col = i % 5, row = Math.floor(i / 5);
             const edge = col === 0 || row === 0 || col === 4 || row === 4;
@@ -13777,9 +13778,11 @@ describe("Mesh — bending a shape (schema 41)", () => {
         ({ id, type: "core.rectangle", parent: null, children: [], geometry: { x: 0, y: 0, width: 100, height: 100 },
            style: { fill: "#000", opacity: 1 }, layout: {}, ...(mesh ? { mesh } : {}) } as Node);
     /** A rest mesh with one corner dragged, which is the smallest real warp. */
+    // A drag given in LOCAL units, converted to the fractions the mesh stores (schema 43). Written
+    // this way so the assertions below stay in the units a person dragging a handle thinks in.
     const pulled = (dx: number, dy: number): Mesh => {
-        const m = restMesh(1, 1, box);
-        m.points[3] = { x: m.points[3].x + dx, y: m.points[3].y + dy };   // bottom-right
+        const m = restMesh(1, 1);
+        m.points[3] = { x: m.points[3].x + dx / box.width, y: m.points[3].y + dy / box.height };
         return m;
     };
 
@@ -13806,15 +13809,78 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(warpPoint(m, box, 0, 0)).toEqual({ x: 0, y: 0 });
     });
 
+    test("RESIZING a meshed node moves the drawing with it (schema 43)", () => {
+        // The defect this schema exists to fix. Points used to be absolute local units while the
+        // rest grid was implied by the CURRENT box, so the two disagreed the instant the box
+        // changed: an untouched mesh stopped being the identity and pinned the shape to whatever
+        // size it was created at, and resizing a warped node did nothing to the drawing at all.
+        const m = restMesh(2, 2);
+        // Identity at EVERY size, which absolute units could not be — this is the whole property.
+        expect(isIdentityMesh(m)).toBe(true);
+        for (const b of [{ width: 100, height: 100 }, { width: 620, height: 40 }, { width: 7, height: 900 }]) {
+            expect(warpPoint(m, b, b.width, b.height)).toEqual({ x: b.width, y: b.height });
+            expect(warpPoint(m, b, b.width / 2, b.height / 2).x).toBeCloseTo(b.width / 2, 9);
+        }
+        // A real WARP scales with the box rather than staying at its authored coordinates: pull
+        // the bottom-right corner a quarter of the width out, and it stays a quarter out at any
+        // size. Before, it stayed at the absolute coordinate it was dragged to.
+        const w = restMesh(1, 1);
+        w.points[3] = { x: 1.25, y: 1 };
+        expect(warpPoint(w, { width: 100, height: 100 }, 100, 100)).toEqual({ x: 125, y: 100 });
+        expect(warpPoint(w, { width: 400, height: 200 }, 400, 200)).toEqual({ x: 500, y: 200 });
+        // …and through the SEAM: the same node at two sizes draws proportionally, so the ink
+        // follows the box rather than the box growing away from the ink.
+        const at = (width: number) => {
+            const d = doc({ id: "A", type: "core.rectangle", parent: null, children: [],
+                geometry: { x: 0, y: 0, width, height: width },
+                style: { fill: "#000", opacity: 1 }, layout: {}, mesh: w } as Node);
+            const out = resolveScene(d).nodes.get("A")!;
+            return Math.max(...out.path!.filter(c => c.c !== "Z").map(c => (c as { x: number }).x));
+        };
+        expect(at(100)).toBeCloseTo(125, 6);
+        expect(at(400)).toBeCloseTo(500, 6);
+    });
+
+    test("a schema-42 mesh MIGRATES to fractions and draws identically", () => {
+        // A content migration that has to read a sibling field — the node's own geometry — because
+        // that is what the old points were measured against. The proof it is right is that the
+        // shape is unchanged: same box, same ink, different numbers on disk.
+        const v42 = { version: "42", document: { metadata: {}, rootNodeUuids: ["n"], variables: {}, nodes: {
+            n: { id: "n", type: "core.rectangle", parent: null, children: [],
+                 geometry: { x: 0, y: 0, width: 200, height: 100 },
+                 style: { fill: "#000", opacity: 1 }, layout: {},
+                 // The OLD meaning: absolute local units, bottom-right dragged 50 to the right.
+                 mesh: { cols: 1, rows: 1, points: [
+                     { x: 0, y: 0 }, { x: 200, y: 0 }, { x: 0, y: 100 }, { x: 250, y: 100, z: 30 }] } } } } };
+        const loaded = deserializeDocument(JSON.stringify(v42));
+        const mesh = loaded.nodes.get("n")!.mesh!;
+        expect(mesh.points.map(p => [p.x, p.y])).toEqual([[0, 0], [1, 0], [0, 1], [1.25, 1]]);
+        // HEIGHT is untouched: it is a distance above the page, like `depth`, not a fraction of a
+        // width the page does not have.
+        expect(mesh.points[3].z).toBe(30);
+        // The corner still lands where the schema-42 file put it — 250, not 1.25.
+        expect(warpPoint(mesh, { width: 200, height: 100 }, 200, 100)).toEqual({ x: 250, y: 100 });
+        expect(JSON.parse(serializeDocument(loaded)).version).toBe(SCHEMA_VERSION);
+
+        // A ZERO-sized box has no fraction to divide into, so its mesh is DROPPED rather than
+        // written as Infinity — which the loader's own `meshError` would reject on the next open.
+        const degenerate = { version: "42", document: { metadata: {}, rootNodeUuids: ["z"], variables: {}, nodes: {
+            z: { id: "z", type: "core.line", parent: null, children: [],
+                 geometry: { x: 0, y: 0, width: 0, height: 100 },
+                 style: { fill: "#000", opacity: 1 }, layout: {},
+                 mesh: { cols: 1, rows: 1, points: [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 100 }, { x: 0, y: 100 }] } } } } };
+        expect(deserializeDocument(JSON.stringify(degenerate)).nodes.get("z")!.mesh).toBeUndefined();
+    });
+
     test("a rest mesh is the IDENTITY and is skipped, not applied", () => {
         // An untouched mesh must cost nothing: a user who turns the tool on and drags nothing
         // should have the same document they started with.
-        const m = restMesh(3, 2, box);
-        expect(isIdentityMesh(m, box)).toBe(true);
+        const m = restMesh(3, 2);
+        expect(isIdentityMesh(m)).toBe(true);
         expect(warpPoint(m, box, 37, 61).x).toBeCloseTo(37, 9);
         expect(warpPoint(m, box, 37, 61).y).toBeCloseTo(61, 9);
         m.points[4] = { x: m.points[4].x + 1, y: m.points[4].y };
-        expect(isIdentityMesh(m, box)).toBe(false);
+        expect(isIdentityMesh(m)).toBe(false);
     });
 
     test("points OUTSIDE the box are clamped, not extrapolated", () => {
@@ -13862,8 +13928,8 @@ describe("Mesh — bending a shape (schema 41)", () => {
     test("a STRAIGHT edge crossing a bend follows it rather than chording across", () => {
         // A warp bends the space BETWEEN two points, so a segment that kept only its ends would
         // cut the corner off every bend. Segments are subdivided at the grid's own resolution.
-        const m = restMesh(2, 1, box);
-        m.points[1] = { x: 50, y: -60 };                 // pull the TOP-MIDDLE control point up
+        const m = restMesh(2, 1);
+        m.points[1] = { x: 0.5, y: -0.6 };               // pull the TOP-MIDDLE control point up
         const d = doc(node("A", m));
         const out = resolveScene(d).nodes.get("A")!;
         const top = Math.min(...out.path!.filter(c => c.c !== "Z").map(c => (c as { y: number }).y));
@@ -13876,7 +13942,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const flat = doc(node("A"), node("B"));
         expect(resolveMeshes(flat)).toBe(flat);
         // …and a mesh still at rest changes nothing either.
-        const rested = doc(node("A", restMesh(2, 2, box)));
+        const rested = doc(node("A", restMesh(2, 2)));
         expect(resolveMeshes(rested).nodes.get("A")!.type).toBe("core.rectangle");
     });
 
@@ -13927,7 +13993,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
 
     test("a mesh is validated on BOTH paths, and its point count must match its grid", () => {
         expect(meshError(undefined)).toBeNull();
-        expect(meshError(restMesh(2, 3, box))).toBeNull();
+        expect(meshError(restMesh(2, 3))).toBeNull();
         expect(meshError({ cols: 0, rows: 1, points: [] })).toMatch("cols");
         expect(meshError({ cols: 1, rows: 1.5, points: [] })).toMatch("rows");
         expect(meshError({ cols: MESH_MAX_DIVISIONS + 1, rows: 1, points: [] })).toMatch("cols");

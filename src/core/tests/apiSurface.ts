@@ -549,12 +549,12 @@ export function __apiSurfacePin(): void {
 
     // --- Mesh: bending a shape, and the surface a light reads (schemas 41–42) -
     const meshBox = { width: 100, height: 100 };
-    const mesh: Mesh = restMesh(1, 1, meshBox);
+    const mesh: Mesh = restMesh(1, 1);
     expectType<Mesh>(mesh);
     expectNotMutable<ReadonlyMesh>(mesh as ReadonlyMesh);
     expectType<string | null>(meshError(mesh));
-    expectType<{ x: number; y: number }>(restPoint(mesh, 0, 0, meshBox));
-    expectType<boolean>(isIdentityMesh(mesh, meshBox));
+    expectType<{ x: number; y: number }>(restPoint(mesh, 0, 0));
+    expectType<boolean>(isIdentityMesh(mesh));
     expectType<{ x: number; y: number }>(warpPoint(mesh, meshBox, 1, 1));
     expectType<PathCommand[]>(warpCommands([pathCmd], meshBox, mesh, flattenPath));
     expectType<number>(heightOf({}));

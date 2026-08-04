@@ -307,7 +307,8 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "21") { raw = migrate_21_to_22(raw); version = "22"; }
     if (version === "22") { raw = migrate_22_to_23(raw); version = "23"; }
     if (version === "23") { raw = migrate_23_to_24(raw); version = "24"; }
-    if (version === "24") { raw = migrate_24_to_25(raw); version = "25"; }
+    if (version === "24") { raw = migrate_24_to_25(raw); version = "25"; }
+
     if (version === "25") { raw = migrate_25_to_26(raw); version = "26"; }
     if (version === "26") { raw = migrate_26_to_27(raw); version = "27"; }
     if (version === "27") { raw = migrate_27_to_28(raw); version = "28"; }
@@ -325,6 +326,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "39") { raw = migrate_39_to_40(raw); version = "40"; }
     if (version === "40") { raw = migrate_40_to_41(raw); version = "41"; }
     if (version === "41") { raw = migrate_41_to_42(raw); version = "42"; }
+    if (version === "42") { raw = migrate_42_to_43(raw); version = "43"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -697,6 +699,45 @@ function migrate_21_to_22(raw: any): any {
  * it draws identically. The bump is the interpretation kind: an old build ignores the fields and
  * shows a lit scene flat, which is the same file drawn differently.
  */
+/**
+ * 42 → 43: mesh control points become FRACTIONS of the node's box instead of local units.
+ *
+ * A CONTENT migration, and one of the few here that has to read a sibling field: each point is
+ * divided by the geometry the mesh was authored against, which is the node's own box. The shape
+ * therefore draws identically after the migration — that is the test — while gaining the property
+ * absolute units could not have, which is surviving a resize.
+ *
+ * The bump is the INTERPRETATION kind at its purest. Nothing about the file's shape changes; the
+ * same three numbers mean something different. An old build reading a schema-43 document would
+ * see every control point at a fraction of a unit and collapse the shape into its top-left corner
+ * — which is exactly why `SCHEMA_VERSION` gates loading rather than merely labelling.
+ *
+ * A ZERO-sized box has no fraction to divide into, so its mesh is DROPPED rather than turned into
+ * `Infinity` or `NaN`. That is a mesh on a shape with no area, which drew nothing before and draws
+ * nothing after; keeping it would produce a document the loader's own `meshError` rejects.
+ */
+function migrate_42_to_43(raw: any): any {
+    const nodes = raw?.document?.nodes;
+    if (!nodes || typeof nodes !== "object") return { ...raw, version: "43" };
+    const out: any = {};
+    for (const [id, n] of Object.entries<any>(nodes)) {
+        const mesh = n?.mesh;
+        const w = n?.geometry?.width, h = n?.geometry?.height;
+        if (!mesh || !Array.isArray(mesh.points)) { out[id] = n; continue; }
+        if (!Number.isFinite(w) || !Number.isFinite(h) || w === 0 || h === 0) {
+            const { mesh: _dropped, ...rest } = n;
+            out[id] = rest;
+            continue;
+        }
+        out[id] = { ...n, mesh: { ...mesh, points: mesh.points.map((p: any) => ({
+            ...p,
+            x: (Number(p?.x) || 0) / w,
+            y: (Number(p?.y) || 0) / h
+        })) } };
+    }
+    return { ...raw, version: "43", document: { ...raw.document, nodes: out } };
+}
+
 function migrate_41_to_42(raw: any): any {
     return { ...raw, version: "42" };
 }

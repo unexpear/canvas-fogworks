@@ -1542,7 +1542,7 @@ export function App() {
                                                 const src = dispatcher.getDocument().nodes.get(id);
                                                 const box = { width: src?.geometry.width ?? node.geometry.width, height: src?.geometry.height ?? node.geometry.height };
                                                 const mesh = v === "off" ? undefined
-                                                    : restMesh(parseInt(v, 10), parseInt(v.split("x")[1], 10), box);
+                                                    : restMesh(parseInt(v, 10), parseInt(v.split("x")[1], 10));
                                                 dispatcher.dispatchAction(new SetMeshAction(dispatcher.getDocument(), id, mesh));
                                                 refresh();
                                             }}

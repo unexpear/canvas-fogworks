@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v42 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v43 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -121,6 +121,18 @@ interface Light { x: number; y: number; z: number; color: string; intensity: num
 // STILL NOT DONE: a cast shadow lands on the receiver's OUTLINE as if the receiver were flat, so
 // it does not bend over a domed one.
 
+// MESH POINTS ARE FRACTIONS OF THE BOX (schema 43), not local units. `{x: 0.5, y: 1}` is the
+// middle of the bottom edge at any size, and a point may sit outside [0, 1] because dragging a
+// corner beyond the box is ordinary. This is an INTERPRETATION bump of the purest kind — the file's
+// shape is unchanged and the same three numbers mean something else — and it exists because
+// absolute points did not survive a RESIZE: the rest grid was implied by the CURRENT box while the
+// points recorded the OLD one, so an untouched mesh stopped being the identity and pinned the shape
+// to the size it was created at. Rescaling in the resize action would not have worked: a node's
+// size is COMPUTED by auto-layout, hug sizing and constraints, none of which is an action.
+// `migrate_42_to_43` divides each point by the node's own geometry, so the shape draws identically;
+// a ZERO-sized box has no fraction to divide into and its mesh is DROPPED rather than made
+// infinite. HEIGHT (`z`) stays ABSOLUTE — a distance above the page, like `depth`.
+//
 // MESH (schema 41). Node.mesh?: { cols, rows, points } — a grid of control points that BENDS the
 // node's outline. Points are in LOCAL units, row-major, exactly (cols+1)*(rows+1) of them, and
 // hold the DEFORMED positions; the rest positions are implied by the box, so a mesh sitting on

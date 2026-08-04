@@ -365,11 +365,19 @@ export class ToolController {
             const dy = w.y - this.meshStartY;
             this.meshStartX = w.x;
             this.meshStartY = w.y;
-            // The delta is world-space and the points are local, so this is correct exactly while
-            // the node is translation-only — the same limit the vertex drag states, and refused
-            // the same way rather than silently skewed.
+            // The delta is world-space and the points are FRACTIONS of the box (schema 43), so it
+            // is divided by the box as well as being local-only. Correct exactly while the node is
+            // translation-only — the same limit the vertex drag states, and refused the same way
+            // rather than silently skewed.
+            const bw = node.geometry.width, bh = node.geometry.height;
+            // A zero-sized box has no fraction to express a drag in. Refusing the drag leaves the
+            // mesh alone, which is better than dividing by zero and writing NaN into the document
+            // — `meshError` would then reject it on the next load.
+            if (bw === 0 || bh === 0) { this.refresh(); return; }
             const points = node.mesh.points.map((p, i) =>
-                i === this.meshIndex ? { x: p.x + dx, y: p.y + dy } : { x: p.x, y: p.y });
+                i === this.meshIndex
+                    ? { ...p, x: p.x + dx / bw, y: p.y + dy / bh }
+                    : { ...p });
             this.dispatcher.dispatchAction(
                 new SetMeshAction(doc, this.meshNodeId, { cols: node.mesh.cols, rows: node.mesh.rows, points }),
                 { coalesce: true });

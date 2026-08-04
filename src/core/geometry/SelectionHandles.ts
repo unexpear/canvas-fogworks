@@ -273,8 +273,13 @@ export function meshHandles(
         if (!node?.mesh) continue;
         const c = state.nodes.get(nodeId);
         if (!c) continue;
+        // The points are FRACTIONS of the box (schema 43), so they are scaled into local units
+        // before the world matrix places them. `c.local` rather than the stored geometry, because
+        // that is the size the shape is actually DRAWN at — under auto-layout the two differ, and
+        // a handle that used the stored one would sit away from the corner it controls.
+        const box = { width: c.local.width, height: c.local.height };
         node.mesh.points.forEach((p, index) => {
-            const w = applyToPoint(c.world, p.x, p.y);
+            const w = applyToPoint(c.world, p.x * box.width, p.y * box.height);
             if (!Number.isFinite(w.x) || !Number.isFinite(w.y)) return;
             handles.push({ nodeId, handle: `mesh:${index}`, cx: w.x, cy: w.y, cursor: "move" });
         });

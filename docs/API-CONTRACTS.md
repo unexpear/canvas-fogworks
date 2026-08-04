@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v42 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v43 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -225,9 +225,9 @@ function shadowOffset(light, depth, ontoDepth?): {x, y};   // the GAP between th
 const MESH_MAX_DIVISIONS: number;                         // 64 — the point count is the product
 interface Mesh { cols: number; rows: number; points: {x: number; y: number}[] }   // row-major, DEFORMED positions
 function meshError(mesh: unknown): string | null;         // shared by the edit and load paths
-function restPoint(mesh, col, row, box): {x, y};          // where a control point starts
-function restMesh(cols, rows, box): Mesh;                 // the grid a user starts from
-function isIdentityMesh(mesh, box): boolean;              // untouched = skipped entirely
+function restPoint(mesh, col, row): {x, y};               // col/cols, row/rows — FRACTIONS (schema 43)
+function restMesh(cols, rows): Mesh;                      // the grid a user starts from; identity at ANY size
+function isIdentityMesh(mesh): boolean;                   // untouched = skipped entirely, at every size
 function warpPoint(mesh, box, x, y): {x, y};              // BILINEAR; clamped outside the box
 function warpCommands(commands, box, mesh, flatten): PathCommand[];
 function heightOf(p): number;                              // a control point's z; absent = 0

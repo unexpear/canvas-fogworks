@@ -162,7 +162,7 @@ export const CURRENT_VERSION: string =
 import type { TimelineSettings } from "./Timeline";
 import type { Light } from "./Light";
 
-export const SCHEMA_VERSION = "42";
+export const SCHEMA_VERSION = "43";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
@@ -227,7 +227,8 @@ export interface ProjectDocument {
      */
     lights?: Light[];
     /** The floor below which nothing gets darker, 0..1. Absent = 1, i.e. no lighting at all. */
-    ambient?: number;
+    ambient?: number;
+
     /** The named STATE every node resolves against (Milestone 7, schema 30) — the same
      *  document-level-selection shape as `activeTheme`. Absent/empty = the base state. */
     activeState?: string;
