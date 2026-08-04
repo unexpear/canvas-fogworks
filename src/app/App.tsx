@@ -67,7 +67,8 @@ import { AlignEdge, DistributeAxis } from "../core/geometry/Alignment";
 import { IMAGE_SRC_MAX, srcError } from "../core/document/Node";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
 import { scanCapabilities, Capability } from "../core/scan/CapabilityScan";
-import { exportSVG } from "../core/export/ExportSVG";
+import { exportSVG, TextLines } from "../core/export/ExportSVG";
+import { textLinesFor } from "../renderer/TextRaster";
 import { ReadonlyDocument, ProjectDocument } from "../core/document/Document";
 import { AddNodeAction } from "../core/actions/AddNodeAction";
 
@@ -235,6 +236,17 @@ declare global {
 const initialLoad = Serializer.loadResult();
 const initialDocument = initialLoad.document;
 const startedFromCorruptSave = initialLoad.status === "corrupt";
+
+/**
+ * How the EXPORTER breaks text into lines.
+ *
+ * The exporter is pure and cannot measure; this runs in a browser and can. Handing it
+ * `TextRaster.textLinesFor` means an exported file wraps where the Canvas and GPU backends wrap,
+ * rather than running every paragraph off the side of its box — one typesetter for the editor and
+ * for the artefact you hand somebody. Falls back to hard breaks only where there is no DOM to
+ * measure with, which is the answer the exporter gave before this existed.
+ */
+const exportTextLines: TextLines = shape => textLinesFor(shape) ?? shape.text.split("\n");
 
 export function App() {
     const [toolName, setToolName] = useState<string>("select");
@@ -2247,7 +2259,7 @@ function FoldersDrawer({ onPlaceImage, getDocument }: {
                             setBusy(true);
                             try {
                                 // The SAME pure exporter the tests exercise; the main process only writes.
-                                const written = await api.writeIntoFolder(folder, "design.svg", exportSVG(getDocument()));
+                                const written = await api.writeIntoFolder(folder, "design.svg", exportSVG(getDocument(), exportTextLines));
                                 setExported(written);
                             } finally { setBusy(false); }
                         }}
@@ -2262,7 +2274,7 @@ function FoldersDrawer({ onPlaceImage, getDocument }: {
                             const folder = (e.target as HTMLInputElement).value.trim();
                             if (!folder) return;
                             setBusy(true);
-                            try { setExported(await api.writeIntoFolder(folder, "design.svg", exportSVG(getDocument()))); }
+                            try { setExported(await api.writeIntoFolder(folder, "design.svg", exportSVG(getDocument(), exportTextLines))); }
                             finally { setBusy(false); }
                         }}
                         style={{ width: "100%", boxSizing: "border-box", fontSize: 11, padding: "3px 5px", background: UI.raised, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3, marginBottom: 6 }}
@@ -2271,7 +2283,7 @@ function FoldersDrawer({ onPlaceImage, getDocument }: {
                     {/* PREVIEW: the same `exportSVG` output, without writing a file. Worth having
                         on its own — you can read what you are about to hand someone — and it is
                         the only way to see the export without a native dialog in the way. */}
-                    <button onClick={() => setPreview(exportSVG(getDocument()))} style={DRAWER_BUTTON}>
+                    <button onClick={() => setPreview(exportSVG(getDocument(), exportTextLines))} style={DRAWER_BUTTON}>
                         Preview the SVG
                     </button>
                     {preview !== null && (

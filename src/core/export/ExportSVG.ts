@@ -17,7 +17,7 @@ import { ReadonlyDocument } from "../document/Document";
 import { computeGeometry } from "../geometry/GeometryEngine";
 import { Rect } from "../geometry/Matrix";
 import { toMatrixString } from "../geometry/Matrix";
-import { buildRenderModel, commandsToPathData, textParagraphs, effectFilterId as effectId, DrawItem, FilterDef } from "../../renderer/RenderModel";
+import { buildRenderModel, commandsToPathData, textParagraphs, effectFilterId as effectId, DrawItem, FilterDef, Shape } from "../../renderer/RenderModel";
 import { RendererState } from "../../renderer/RendererState";
 
 /** Padding around the content, in world units, so strokes and shadows are not clipped. */
@@ -79,8 +79,12 @@ function filterIdOf(item: DrawItem): string | null {
     return effectId(shadow, blur);
 }
 
+/** How a text shape breaks into lines. The default honours explicit newlines and nothing else. */
+export type TextLines = (shape: Extract<Shape, { kind: "text" }>) => string[];
+const HARD_BREAKS_ONLY: TextLines = shape => textParagraphs(shape.text);
+
 /** One shape as SVG markup, placed by its world matrix. */
-function itemMarkup(item: DrawItem): string {
+function itemMarkup(item: DrawItem, linesOf: TextLines): string {
     const t = item.world ? ` transform="${toMatrixString(item.world)}"` : "";
     const paint = paintAttrs(item);
     const s = item.shape;
@@ -106,14 +110,16 @@ function itemMarkup(item: DrawItem): string {
             // font-size below the box top (matching the editor's top-aligned box), and each
             // further line steps by `fontSize × lineHeight`.
             //
-            // KNOWN GAP, stated rather than papered over: this does not WRAP. Wrapping needs text
-            // measurement, which a pure exporter has no access to — the canvas backend wraps
-            // because it has `measureText`. Explicit newlines are honoured; a long unbroken
-            // paragraph will run past the box in the exported file where the editor wrapped it.
+            // WRAPPING is INJECTED, because this module is pure and wrapping needs to measure.
+            // Without a measurer only the explicit newlines break — which is what this did for as
+            // long as it existed, and it meant a long paragraph ran past its box in the exported
+            // file while the editor wrapped it on screen. The app supplies `TextRaster.textLinesFor`,
+            // so the export breaks lines exactly where the Canvas and GPU backends do rather than
+            // having an opinion of its own.
             const anchor = s.textAlign === "center" ? "middle" : s.textAlign === "right" ? "end" : "start";
             const x = s.textAlign === "center" ? s.x + s.width / 2 : s.textAlign === "right" ? s.x + s.width : s.x;
             const step = s.fontSize * s.lineHeight;
-            const lines = textParagraphs(s.text);
+            const lines: string[] = linesOf(s);
             const tspans = lines.map((line, i) =>
                 `<tspan x="${num(x)}" y="${num(s.y + s.fontSize + i * step)}">${esc(line)}</tspan>`).join("");
             const font = ` font-size="${num(s.fontSize)}" font-family="${esc(s.fontFamily)}" font-weight="${num(s.fontWeight)}"`
@@ -142,7 +148,7 @@ function defMarkup(def: FilterDef): string {
  * The document as standalone SVG text. Returns an empty `<svg/>` for an empty document rather
  * than null, so a caller always has something valid to write.
  */
-export function exportSVG(doc: ReadonlyDocument): string {
+export function exportSVG(doc: ReadonlyDocument, linesOf: TextLines = HARD_BREAKS_ONLY): string {
     const bounds = contentBounds(doc);
     if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
         return `<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"></svg>`;
@@ -159,7 +165,7 @@ export function exportSVG(doc: ReadonlyDocument): string {
     const model = buildRenderModel({ width: bounds.width, height: bounds.height }, doc, state);
 
     const defs = model.defs.length > 0 ? `<defs>${model.defs.map(defMarkup).join("")}</defs>` : "";
-    const body = model.content.map(itemMarkup).filter(Boolean).join("\n  ");
+    const body = model.content.map(item => itemMarkup(item, linesOf)).filter(Boolean).join("\n  ");
     // The viewBox carries the content's own origin, so shapes keep their document coordinates
     // instead of being translated — a diff between two exports then shows real changes only.
     return [

@@ -507,7 +507,13 @@ function scanCapabilities(files: readonly SourceFile[]): Capability[];
 // SAME DisplayList the editor draws, so an export cannot drift from the canvas. Framed to the
 // content, not the viewport; grid and selection chrome excluded.
 const EXPORT_MARGIN: number;
-function exportSVG(doc: ReadonlyDocument): string;
+type TextLines = (shape: TextShape) => string[];                    // how text breaks into lines
+function exportSVG(doc: ReadonlyDocument, linesOf?: TextLines): string;
+// WRAPPING is injected because this module is pure and wrapping has to MEASURE. The default
+// honours explicit newlines and nothing else — which is all it ever did, and it meant a long
+// paragraph ran past its box in the exported file while the editor wrapped it on screen. The
+// app passes `TextRaster.textLinesFor`, so the artefact breaks lines where the Canvas and GPU
+// backends do rather than having an opinion of its own.
 // Built from the SAME DisplayList the editor draws, so shapes, booleans and effects come along
 // without a second description. TEXT carries the schema-34 typography (family, weight, anchor,
 // letter-spacing) and breaks explicit newlines into <tspan>s stepped by the line height, via the
@@ -915,6 +921,9 @@ function setImageReadyCallback(cb: (() => void) | null): void;       // fired wh
 // TextRaster.ts — laying text out ONCE, for every backend that can measure.
 type TextShape = Extract<Shape, { kind: "text" }>;
 function drawTextInto(ctx, shape: TextShape, paint: Paint): void;   // wraps + aligns + clips; leaves ctx clipped
+function wrapText(ctx, text, maxWidth): string[];                   // greedy, CSS-`normal`; first word of a line always fits
+function wrapTextWith(measure: (t) => number, text, maxWidth): string[];   // the same, against any measurer
+function textLinesFor(shape: TextShape): string[] | null;           // DOM-backed; null with no canvas to measure with
 function textRasterScale(viewScale: number): number;                // QUANTISED to powers of two, bounded [1, 8]
 function textRasterKey(shape, paint, scale): string;                // every field that changes the PIXELS; NUL-separated
 const TEXT_RASTER_MIN: number; const TEXT_RASTER_MAX: number;

@@ -407,6 +407,13 @@ So the wrapping moved out of `emitCanvas` UNCHANGED, and the GPU rasterises thro
 function into an offscreen 2D context and uploads the result. The GPU shows what Canvas shows
 because it IS Canvas. Verified side by side: identical line breaks, identical centring.
 
+The same extraction paid a second time, in the place it matters most. The SVG EXPORTER could not
+wrap: it is pure, wrapping has to measure, and a pure module has no canvas — so a long paragraph
+ran past its box in the exported file while the editor wrapped it on screen. That is content
+fidelity in the artefact you hand somebody, which is worse than any of the on-screen gaps. Wrapping
+is now INJECTED (`TextLines`), the exporter keeps its hard-breaks-only default for callers with no
+DOM, and the app passes the same `textLinesFor` the backends use. One typesetter, four outputs.
+
 What it costs, stated: a raster per text item rather than a shared atlas — more memory, and a
 re-raster when the text or the zoom changes materially. The scale is QUANTISED to powers of two
 for the same reason `displayTolerance` is, so a zoom crosses a rebuild boundary a handful of times

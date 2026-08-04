@@ -80,7 +80,8 @@ import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, comma
 import { emitSVG } from "../../renderer/emitSVG";
 import { emitCanvas, setImageReadyCallback } from "../../renderer/emitCanvas";
 import { resolveImage, imageGeneration } from "../../renderer/ImageCache";
-import { TextShape, drawTextInto, textRasterKey, textRasterScale, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
+import { exportSVG, EXPORT_MARGIN, TextLines } from "../export/ExportSVG";
+import { TextShape, drawTextInto, wrapText, wrapTextWith, textLinesFor, textRasterKey, textRasterScale, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
 import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { Keyframe, TimelineSettings, timelineError, trackError, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
 import { DEPTH_MIN, DEPTH_MAX, depthError, depthOf, parallaxRate, parallaxOffset, depthToClipZ, byDepth, applyParallax } from "../document/Depth";
@@ -375,6 +376,20 @@ export function __apiSurfacePin(): void {
         fontSize: 10, fontFamily: "sans-serif", fontWeight: 400, textAlign: "left", lineHeight: 1.2, letterSpacing: 0 };
     expectType<TextShape>(textShape);
     expectType<(ctx: CanvasRenderingContext2D, s: TextShape, p: Paint) => void>(drawTextInto);
+    // ONE wrapper, two ways to measure: a context for the backends, an injected function for the
+    // pure exporter. `textLinesFor` is the DOM-backed bridge, null where there is nothing to
+    // measure with — which is why the exporter's parameter has a hard-breaks-only default.
+    expectType<(ctx: CanvasRenderingContext2D, t: string, w: number) => string[]>(wrapText);
+    expectType<string[]>(wrapTextWith(t => t.length, "a b", 10));
+    expectType<string[] | null>(textLinesFor(textShape));
+
+    // --- The EXPORTER, the artefact the tool actually hands over ---------------
+    // Wrapping is INJECTED because this module is pure and wrapping has to measure; the default
+    // honours explicit newlines only, which is what it did before the app started passing one.
+    expectType<string>(exportSVG(doc));
+    expectType<string>(exportSVG(doc, shape => [shape.text]));
+    expectType<TextLines>((shape: TextShape) => [shape.text]);
+    expectType<number>(EXPORT_MARGIN);
     expectType<number>(textRasterScale(2));
     expectType<string>(textRasterKey(textShape, model.content[0].paint, 2));
     expectType<number>(TEXT_RASTER_MIN); expectType<number>(TEXT_RASTER_MAX);

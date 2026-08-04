@@ -56,6 +56,7 @@ import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry
 import { Ring } from "../geometry/PathBoolean";
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { dashSubpaths, parseDashArray } from "../geometry/DashPath";
+import { wrapTextWith } from "../../renderer/TextRaster";
 import { overrideValueError } from "../document/Components";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
@@ -89,7 +90,7 @@ import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from 
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
 import { alignBoxes, distributeBoxes, AlignEdge } from "../geometry/Alignment";
 import { scanCapabilities } from "../scan/CapabilityScan";
-import { exportSVG, EXPORT_MARGIN } from "../export/ExportSVG";
+import { exportSVG, EXPORT_MARGIN, TextLines } from "../export/ExportSVG";
 import { textParagraphs } from "../../renderer/RenderModel";
 import { resolveShortcut, isTypingTarget, NUDGE_STEP, NUDGE_STEP_LARGE } from "../../editor/shortcuts";
 import { DuplicateNodesAction, DUPLICATE_OFFSET } from "../actions/DuplicateNodesAction";
@@ -8510,7 +8511,12 @@ describe("exportSVG typography and line breaks", () => {
         expect(src).toMatch(/<textarea[\s\S]{0,200}value=\{node\.text \?\? ""\}/);
         // …and the export can be READ without a native dialog in the way, which is both a
         // usability win and the only way to verify the exporter end to end.
-        expect(src).toMatch(/setPreview\(exportSVG\(getDocument\(\)\)\)/);
+        // Every export site passes the MEASURER. The exporter is pure and falls back to hard
+        // breaks without one, so a site that forgot it would export text that does not wrap —
+        // silently, and only in the file somebody else opens.
+        expect(src).toMatch(/setPreview\(exportSVG\(getDocument\(\), exportTextLines\)\)/);
+        expect(src.match(/exportSVG\(getDocument\(\)/g)!.length)
+            .toBe(src.match(/exportSVG\(getDocument\(\), exportTextLines\)/g)!.length);
         expect(src).toMatch(/data-svg-preview="1"/);
     });
 
@@ -12990,6 +12996,51 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         // this file relies on.
         expect(resolveImage("gen-test-c.png")).toBeNull();
         expect(imageGeneration()).toBe(before + 2);
+    });
+
+    test("the EXPORTER wraps when it is given a way to measure, and says so when it is not", () => {
+        // The gap the exporter carried since it existed: it is pure and cannot measure, so a long
+        // paragraph ran off the side of its box in the exported file while the editor wrapped it
+        // on screen. Wrapping is now INJECTED — the app hands it the same measurer the Canvas and
+        // GPU backends use, so all three break lines in the same places.
+        const d = createEmptyDocument();
+        d.nodes.set("t", { id: "t", type: "core.text", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 80 },
+            style: { fill: "#000000", opacity: 1, fontSize: 10 }, layout: {},
+            text: "alpha beta gamma delta epsilon" } as Node);
+        d.rootNodeUuids = ["t"];
+
+        // DEFAULT: hard breaks only — one `<tspan>`, which is what it did before and still does
+        // wherever there is nothing to measure with.
+        const plain = exportSVG(d);
+        expect((plain.match(/<tspan/g) ?? []).length).toBe(1);
+        expect(plain).toContain("alpha beta gamma delta epsilon");
+
+        // INJECTED: a measurer calling every character eight units wide. A 100-unit box fits
+        // twelve characters, so "alpha beta" / "gamma delta" / "epsilon" — three lines.
+        const eightPerChar: TextLines = shape => wrapTextWith(t2 => t2.length * 8, shape.text, shape.width);
+        const wrapped = exportSVG(d, eightPerChar);
+        expect((wrapped.match(/<tspan/g) ?? []).length).toBe(3);
+        // Each line is a separate tspan at its own baseline, stepping by fontSize x lineHeight.
+        const ys = [...wrapped.matchAll(/<tspan x="[^"]*" y="([^"]*)"/g)].map(m => Number(m[1]));
+        expect(ys.length).toBe(3);
+        expect(ys[1] - ys[0]).toBeCloseTo(ys[2] - ys[1], 9);
+        expect(ys[1]).toBeGreaterThan(ys[0]);
+        // No word is lost or duplicated by the wrap — the exported text is the same text.
+        const words = [...wrapped.matchAll(/<tspan[^>]*>([^<]*)<\/tspan>/g)].map(m => m[1]).join(" ").split(/\s+/);
+        expect(words).toEqual(["alpha", "beta", "gamma", "delta", "epsilon"]);
+
+        // The SAME wrapper the backends use, so a narrower box breaks more — this is the shared
+        // algorithm answering, not a second one that happens to agree today.
+        expect(wrapTextWith(t2 => t2.length * 8, "alpha beta gamma delta epsilon", 40).length)
+            .toBeGreaterThan(3);
+        // A word WIDER than the box keeps its own line and overflows (the clip crops it); it must
+        // never be pushed onto a line of its own by first emitting an EMPTY one. That is the
+        // first-item-always-fits rule `breakFlexLines` uses, and the difference is a blank line
+        // above any long word — visible in the exported file and nowhere else.
+        expect(wrapTextWith(t2 => t2.length * 8, "supercalifragilistic word", 40))
+            .toEqual(["supercalifragilistic", "word"]);
+        expect(wrapTextWith(t2 => t2.length * 8, "supercalifragilistic", 40)).toEqual(["supercalifragilistic"]);
     });
 
     test("DASHES are cut into runs whose lengths are the pattern", () => {
