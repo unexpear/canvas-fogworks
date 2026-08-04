@@ -339,6 +339,13 @@ export function App() {
     const prevComputedRef = useRef<ComputedState | null>(null);
     const dirtyNodesRef = useRef<Set<string>>(new Set());
     const prevPendingRef = useRef<Set<string>>(new Set());
+    /**
+     * The playhead the last computed geometry was built at.
+     *
+     * A frame change is a DIFFERENT DOCUMENT, exactly as a prototype frame is, and the incremental
+     * path cannot see it — see the note where this is read.
+     */
+    const prevFrameRef = useRef<number | undefined>(undefined);
     const editorStateRef = useRef<EditorState | null>(null);
     if (!editorStateRef.current) editorStateRef.current = createEditorState();
     const es = editorStateRef.current;
@@ -743,10 +750,18 @@ export function App() {
             // the state applied, the clock ran, and the shape did not move. An under-broad dirty
             // set is the one failure this engine's `incremental === full` invariant exists to
             // forbid, and a derived document has no dirty set that could be broad enough.
-            const computed = !es.playing && prevComputedRef.current
+            //
+            // A TIMELINE FRAME CHANGE is the same hazard for the same reason, and the guard above
+            // named only `es.playing` — which is PROTOTYPE play, a different thing. Scrubbing the
+            // playhead dispatches no action, so the dirty set is empty, so the engine reused the
+            // previous frame's geometry and the shape did not move AT ALL while the playhead ran
+            // the length of the track. The fix was written once, for the case it was found in.
+            const frameChanged = es.frame !== prevFrameRef.current;
+            const computed = !es.playing && !frameChanged && prevComputedRef.current
                 ? computeGeometry(doc, es.pendingGeometry, prevComputedRef.current,
                     new Set([...dirtyNodesRef.current, ...pendingKeys, ...prevPendingRef.current]))
                 : computeGeometry(doc, es.pendingGeometry);
+            prevFrameRef.current = es.frame;
 
             // …and the reuse chain is BROKEN across play, so the first frame back in the editor
             // does not diff against a state's geometry.

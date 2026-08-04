@@ -11945,7 +11945,16 @@ describe("Prototype interactions and transitions", () => {
         // ACTION touched — so the incremental path must be skipped while playing, and the reuse
         // chain broken across it. Reusing it drew the animation with stale geometry: the state
         // applied, the clock ran, and the shape did not move.
-        expect(src).toMatch(/const computed = !es\.playing && prevComputedRef\.current/);
+        //
+        // A TIMELINE frame change is the SAME hazard, and this assertion used to name only
+        // `es.playing` — which is prototype play, a different thing. Scrubbing dispatches no
+        // action, so the dirty set is empty, so the engine reused the previous frame's geometry
+        // and a tweened shape did not move at all while the playhead ran the length of its track.
+        // Both conditions are pinned here because the guard is one expression and losing either
+        // half brings the bug back silently.
+        expect(src).toMatch(/const computed = !es\.playing && !frameChanged && prevComputedRef\.current/);
+        expect(src).toMatch(/const frameChanged = es\.frame !== prevFrameRef\.current;/);
+        expect(src).toMatch(/prevFrameRef\.current = es\.frame;/);
         expect(src).toMatch(/prevComputedRef\.current = es\.playing \? null : computed;/);
         // Stopping clears the run's state, so the document is exactly as it was.
         expect(src).toMatch(/es\.playing = !es\.playing;[\s\S]{0,120}es\.playState = null;[\s\S]{0,60}es\.transition = null;/);
