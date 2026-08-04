@@ -55,6 +55,7 @@ import { resolveMeshes } from "../document/Components";
 import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry/CastShadow";
 import { Ring } from "../geometry/PathBoolean";
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
+import { dashSubpaths, parseDashArray } from "../geometry/DashPath";
 import { overrideValueError } from "../document/Components";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
@@ -12989,6 +12990,126 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         // this file relies on.
         expect(resolveImage("gen-test-c.png")).toBeNull();
         expect(imageGeneration()).toBe(before + 2);
+    });
+
+    test("DASHES are cut into runs whose lengths are the pattern", () => {
+        // A 100-long line with a 10/10 pattern: five dashes of 10, starting at 0.
+        const line: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0 }];
+        const runs = dashSubpaths(line, [10, 10]);
+        expect(runs.length).toBe(5);
+        const lenOf = (r: PathCommand[]) => {
+            let n = 0;
+            for (let i = 1; i < r.length; i++) {
+                const a = r[i - 1] as { x: number; y: number }, b = r[i] as { x: number; y: number };
+                n += Math.hypot(b.x - a.x, b.y - a.y);
+            }
+            return n;
+        };
+        for (const r of runs) expect(lenOf(r)).toBeCloseTo(10, 9);
+        // They start where the pattern says: 0, 20, 40, 60, 80.
+        expect(runs.map(r => Math.round((r[0] as { x: number }).x))).toEqual([0, 20, 40, 60, 80]);
+        // Every run is an OPEN polyline — a dash has two ends, and they take the stroke's cap.
+        for (const r of runs) expect(r.some(c => c.c === "Z")).toBe(false);
+
+        // A path that does not end on a cycle boundary ends MID-DASH, and that partial dash draws
+        // rather than being dropped.
+        const short = dashSubpaths([{ c: "M", x: 0, y: 0 }, { c: "L", x: 25, y: 0 }], [10, 10]);
+        expect(short.length).toBe(2);
+        expect(lenOf(short[1])).toBeCloseTo(5, 9);
+
+        // The OFFSET shifts where in the pattern the path begins: half a dash in, the first run is
+        // half length. A huge offset behaves like the small one it is equivalent to.
+        expect(lenOf(dashSubpaths(line, [10, 10], 5)[0])).toBeCloseTo(5, 9);
+        expect(dashSubpaths(line, [10, 10], 5).length).toBe(dashSubpaths(line, [10, 10], 5 + 20 * 7).length);
+        // A NEGATIVE offset lands where the equivalent positive one does.
+        expect(lenOf(dashSubpaths(line, [10, 10], -15)[0])).toBeCloseTo(5, 9);
+    });
+
+    test("a DASHED overlay reaches the GPU as gaps, not quietly solid", () => {
+        // The rectangle tool's drag preview is the one thing in the app carrying a pattern today.
+        // It drew solid on this backend and dashed on the other two, because SVG and Canvas take
+        // the pattern as an instruction and a GPU has to be handed the pieces.
+        const marquee = (dash: string | null) => itemDraws({
+            shape: { kind: "rect", x: 0, y: 0, width: 100, height: 100 }, world: null, nodeId: null, role: "preview",
+            paint: { fill: null, opacity: null, stroke: "#4a90d9", strokeWidth: 2, strokeDash: dash,
+                     radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null }
+        } as never)[0];
+        // Triangle area is the measure that survives however the outliner chooses to wind things.
+        const area = (v: number[]) => {
+            let n = 0;
+            for (let i = 0; i + 5 < v.length; i += 6) {
+                n += Math.abs((v[i + 2] - v[i]) * (v[i + 5] - v[i + 1]) - (v[i + 4] - v[i]) * (v[i + 3] - v[i + 1])) / 2;
+            }
+            return n;
+        };
+        const solid = area(marquee(null).vertices);
+        const dashed = area(marquee("4 4").vertices);
+        expect(solid).toBeGreaterThan(0);
+        // Half the perimeter is gaps, so a little over half the ink — nowhere near all of it.
+        expect(dashed).toBeLessThan(solid * 0.7);
+        expect(dashed).toBeGreaterThan(solid * 0.3);
+        // A pattern that is not one draws SOLID rather than blank, all the way through the backend.
+        expect(area(marquee("nonsense").vertices)).toBeCloseTo(solid, 6);
+        expect(area(marquee("0 0").vertices)).toBeCloseTo(solid, 6);
+    });
+
+    test("a dash pattern that is not one comes back SOLID, never blank", () => {
+        // SVG's own rule, and the safe direction: refusing to draw because a dash spec was
+        // malformed hides the shape; drawing it solid shows the geometry with the wrong texture.
+        expect(parseDashArray("")).toBeNull();
+        expect(parseDashArray("   ")).toBeNull();
+        expect(parseDashArray("4 -2")).toBeNull();
+        expect(parseDashArray("0 0")).toBeNull();     // parses, is not negative, advances nothing
+        expect(parseDashArray("4 abc")).toBeNull();
+        // ODD patterns repeat to become even, or a cycle would end on a gap and start on a dash,
+        // and the pattern would swap meaning every lap.
+        expect(parseDashArray("4")).toEqual([4, 4]);
+        expect(parseDashArray("1 2 3")).toEqual([1, 2, 3, 1, 2, 3]);
+        expect(parseDashArray("4 4")).toEqual([4, 4]);
+        expect(parseDashArray("4,4")).toEqual([4, 4]);           // commas, as SVG allows
+        // A ZERO entry is legal and must not spin: `5 0` is a solid line drawn as abutting dashes,
+        // four of them over a 20-long line. And every run must be WELL FORMED — an `M` then `L`s.
+        // An earlier version stepped over the zero gap by flipping the on/off flag without opening
+        // a new run, so every dash after the first came out as an `L` with no `M`: a run the
+        // outliner would have started from wherever the previous one happened to end.
+        const line20: PathCommand[] = [{ c: "M", x: 0, y: 0 }, { c: "L", x: 20, y: 0 }];
+        const wellFormed = (runs: PathCommand[][]) =>
+            runs.every(r => r.length > 1 && r[0].c === "M" && r.slice(1).every(c => c.c === "L"));
+        const abutting = dashSubpaths(line20, [5, 0]);
+        expect(abutting.length).toBe(4);
+        expect(wellFormed(abutting)).toBe(true);
+        expect(wellFormed(dashSubpaths(line20, [7, 0]))).toBe(true);
+        expect(wellFormed(dashSubpaths(line20, [10, 10]))).toBe(true);
+        // Dashes of ZERO length draw nothing at all rather than emitting empty runs.
+        expect(dashSubpaths(line20, [0, 5])).toEqual([]);
+    });
+
+    test("a CLOSED contour dashes all the way round, and each contour restarts the pattern", () => {
+        // A 40-perimeter square with a 10/10 pattern gives two dashes, and the run that begins at
+        // the start point must continue THROUGH the corner rather than stopping at it.
+        const square: PathCommand[] = [
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 10, y: 0 }, { c: "L", x: 10, y: 10 },
+            { c: "L", x: 0, y: 10 }, { c: "Z" }];
+        // A pattern whose cycle does not divide the side length is what proves the contour was
+        // closed: 10-on/5-off over the full 40 perimeter gives THREE dashes, where stopping at the
+        // last corner (30) would give two. Getting this wrong leaves one side of every dashed
+        // rectangle undrawn, which reads as the shape being open.
+        const runs = dashSubpaths(square, [10, 5]);
+        expect(runs.length).toBe(3);
+        // The last dash runs THROUGH the start point and back up the left edge, so it ends where
+        // the contour began rather than stopping short of it.
+        const last = runs[2][runs[2].length - 1] as { x: number; y: number };
+        expect([Math.round(last.x), Math.round(last.y)]).toEqual([0, 0]);
+        // Every run is OPEN — a dash has two ends, and they take the stroke's cap.
+        expect(runs.every(r => !r.some(c => c.c === "Z"))).toBe(true);
+        // TWO contours: the second RESTARTS the pattern rather than inheriting the first's phase,
+        // so both begin with a dash at their own start point.
+        const two: PathCommand[] = [...square,
+            { c: "M", x: 100, y: 0 }, { c: "L", x: 110, y: 0 }, { c: "L", x: 110, y: 10 },
+            { c: "L", x: 100, y: 10 }, { c: "Z" }];
+        const both = dashSubpaths(two, [10, 5]);
+        expect(both.length).toBe(6);
+        expect((both[3][0] as { x: number }).x).toBeCloseTo(100, 9);
     });
 
     test("the text RASTER scale is quantised, and its key ignores position", () => {

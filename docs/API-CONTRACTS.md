@@ -348,6 +348,15 @@ function strokeOutline(commands: readonly PathCommand[], style: StrokeStyle, tol
 // inside border — and on an open subpath there is no inside, so align is treated as "center".
 // Width <= 0 or a path with no length returns [] rather than throwing.
 
+// DashPath.ts — a dashed line as GEOMETRY (the GPU is handed pieces, not a pattern).
+function parseDashArray(spec: string): number[] | null;   // null = SOLID (empty/negative/all-zero), as SVG does
+function dashSubpaths(commands, pattern, offset?, tolerance?): PathCommand[][];   // open `M`/`L` runs
+// SVG's semantics, because agreeing with the other two backends is the point: an ODD pattern
+// REPEATS to become even (or a cycle ends on a gap and the next starts on a dash); the offset is
+// taken modulo the cycle and made positive; the pattern runs continuously along a subpath and
+// RESTARTS at the next. Runs are OPEN even from a closed contour — a dash has two ends and they
+// take the stroke's CAP, where a closed ring would be joined back to itself.
+
 // Tessellate.ts — filled outlines as TRIANGLES, the only form a GPU accepts.
 // EAR CLIPPING over the same `Ring`s picking and booleans use, so the GPU fills exactly the
 // outline the other consumers test against. Holes are BRIDGED into the outline by a doubled edge.

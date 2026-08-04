@@ -74,7 +74,14 @@ function fillAndStroke(ctx: CanvasRenderingContext2D, paint: Paint): void {
         if (paint.strokeJoin !== undefined) ctx.lineJoin = paint.strokeJoin;
         if (paint.strokeCap !== undefined) ctx.lineCap = paint.strokeCap;
         if (paint.strokeMiterLimit !== undefined) ctx.miterLimit = paint.strokeMiterLimit;
-        if (paint.strokeDash !== null) ctx.setLineDash(paint.strokeDash.split(" ").map(Number));
+        // ALWAYS set, never only when there IS a dash. `setLineDash` is CONTEXT state and it is
+        // sticky: leaving it alone for an undashed item makes that item inherit whatever the last
+        // dashed one set, for the rest of the frame. The visible symptom is the box-select marquee
+        // coming out dashed because the rectangle tool's preview ran before it — two overlays that
+        // have nothing to do with each other, which is why it reads as a rendering glitch rather
+        // than as a bug in either. SVG never had it: there, a dash is an attribute on an element
+        // rather than a mode on a shared painter.
+        ctx.setLineDash(paint.strokeDash !== null ? paint.strokeDash.split(" ").map(Number) : []);
         ctx.stroke();
     }
 }

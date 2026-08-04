@@ -378,6 +378,23 @@ the blank bitmap from before the load finished. `WebGLRenderer` now registers th
 callback too, which it had never needed; without it, opening a document straight into the GPU
 backend left images missing until something else happened to repaint.
 
+**DASHES are cut as GEOMETRY (`geometry/DashPath`).** SVG and Canvas take a pattern as an
+instruction and do the cutting themselves; a GPU has to be handed the pieces. That the GPU is the
+only caller does not make it a GPU concern — the pieces are a property of the path and the
+pattern, computable without a screen, so they live in `geometry` where they can be checked by
+length. SVG's semantics are followed exactly, because agreeing with the other two backends is the
+whole point: an odd pattern repeats to become even, the offset is taken modulo the cycle, and each
+subpath restarts the phase. Runs come out OPEN even from a closed contour — a dash has two ends
+and they take the stroke's CAP.
+
+Chasing that turned up an unrelated defect in the CANVAS backend: `setLineDash` was called only
+when an item HAD a dash, and it is sticky context state, so every later stroked item in the frame
+inherited the last pattern. The box-select marquee came out dashed because the rectangle preview
+had run before it — two overlays with nothing to do with each other, which is why it reads as a
+rendering glitch rather than as a bug in either. SVG never had it, because there a dash is an
+attribute on an element rather than a mode on a shared painter. Found by measuring pixels in the
+live app while trying to verify something else.
+
 **TEXT is drawn too, and the reason there is no GLYPH ATLAS is the interesting part
 (`renderer/TextRaster`).** An atlas is the standard answer and it would have been the wrong one
 here: it means a second typesetter, with its own wrapping, its own kerning and its own idea of

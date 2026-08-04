@@ -27,14 +27,21 @@
  * take. See `displayTolerance` — the budget is a fifth of a device pixel, quantised to powers of
  * two so a zoom does not re-cut every curve on every frame and make silhouettes shimmer.
  *
- * DELIBERATE GAPS, stated rather than discovered later:
- *   - EFFECTS and dashes, below. TEXT and IMAGES used to be listed here and are now DRAWN: the
- *     heightfield gave this backend a texture path, and both are that same path with a bitmap in
- *     it instead of a surface. Text is rasterised through `TextRaster` — the function the Canvas
- *     backend also calls — rather than through a glyph atlas, so the two cannot break a line in
- *     different places. An atlas would be a second typesetter and a second set of answers.
- *   - EFFECTS (shadow, blur) and dashes are ignored; those are per-fragment work needing render
- *     targets.
+ * WHAT IT NOW DRAWS that it once could not, and how each stopped being a gap:
+ *   - IMAGES and TEXT. The heightfield gave this backend a texture path, and both are that same
+ *     path with a bitmap in it rather than a surface. Text is rasterised through `TextRaster` —
+ *     the function the Canvas backend also calls — rather than through a glyph atlas, so the two
+ *     cannot break a line in different places. An atlas would be a second typesetter.
+ *   - DASHES, cut as GEOMETRY by `geometry/DashPath` before the border is outlined, because a
+ *     dash is a piece of the path rather than a property of the ink. The rectangle tool's drag
+ *     PREVIEW is the one thing in the app that carries a pattern today, and it used to come out
+ *     solid here while the other two backends dashed it.
+ *
+ * THE REMAINING GAP, stated rather than discovered later: EFFECTS — `shadow` and `blur` — are
+ * ignored. Both are per-fragment work over a rendered image, which needs a render target this
+ * backend does not allocate. Drawing a HARD shadow instead would be worse than drawing none: it
+ * would differ visibly from the other two backends while looking deliberate.
+ *
  * The app offers this backend as a preview and says so, because a backend that quietly drops
  * content is worse than one that admits what it cannot do.
  */
@@ -44,6 +51,7 @@ import { Mat2D, translation } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
 import { subdivideTriangles, triangulate } from "../core/geometry/Tessellate";
 import { strokeOutline } from "../core/geometry/StrokeOutline";
+import { dashSubpaths, parseDashArray } from "../core/geometry/DashPath";
 import { resolveRings } from "../core/geometry/Resolve";
 import { depthToClipZ } from "../core/document/Depth";
 import { ReadonlyMesh, heightRange, surfaceNormal, warpHeight } from "../core/document/Mesh";
@@ -620,10 +628,18 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
         if (typeset) out.push(typeset);
     }
     if (paint.stroke !== null && paint.strokeWidth !== null && paint.strokeWidth > 0) {
-        const rings = strokeOutline(local, {
+        const style = {
             width: paint.strokeWidth,
             join: paint.strokeJoin, cap: paint.strokeCap, miterLimit: paint.strokeMiterLimit
-        }, tolerance);
+        };
+        // DASHES are cut before the border is outlined, because a dash is a piece of the path and
+        // not a property of the ink. SVG and Canvas take the pattern as an instruction and do the
+        // cutting themselves; a GPU has to be handed the pieces. Every run is outlined separately
+        // so each gets the stroke's own caps — which is what makes a dashed line look dashed
+        // rather than merely gappy.
+        const pattern = paint.strokeDash !== null ? parseDashArray(paint.strokeDash) : null;
+        const runs = pattern ? dashSubpaths(local, pattern, 0, tolerance) : [local];
+        const rings = runs.flatMap(run => strokeOutline(run, style, tolerance));
         const stroke = draw(rings, item.world, paint.stroke, paint.opacity, null, null, surface);
         if (stroke) out.push(stroke);
     }

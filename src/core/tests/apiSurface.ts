@@ -93,6 +93,7 @@ import { ShadowShape, CastShadowPatch, shadowPatch, castShadows, SHADOW_ALPHA, C
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { StrokeStyle, StrokeAlign, STROKE_ALIGNS, strokeOutline } from "../geometry/StrokeOutline";
 import { signedArea2, triangulate, subdivideTriangles, TESSELLATE_MAX_VERTICES, SUBDIVIDE_MAX_DEPTH } from "../geometry/Tessellate";
+import { dashSubpaths, parseDashArray } from "../geometry/DashPath";
 import { isConvexRing, convexPieces, convexOverlaps, piecesOverlap, rectRing, piecesArea, edgesOverlap, DECOMPOSE_MAX_PIECES } from "../geometry/ConvexDecompose";
 import { HitShape, Subpath, isPaintBearing, hitShapeOf, flattenPath, hitsShape, displayTolerance, localScaleOf, FLATTEN_TOLERANCE, FLATTEN_MAX_DEPTH, DISPLAY_DEVIATION_PX, DISPLAY_TOLERANCE_MAX, DISPLAY_TOLERANCE_MIN } from "../geometry/ShapeHit";
 import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
@@ -418,6 +419,11 @@ export function __apiSurfacePin(): void {
     expectType<readonly StrokeAlign[]>(STROKE_ALIGNS);
     expectType<Ring[]>(strokeOutline([pathCmd], strokeStyle));
     expectType<Ring[]>(strokeOutline([pathCmd], strokeStyle, 0.05));
+    // DASHES as geometry — the pieces, not a rendering flag. Null from the parser means SOLID,
+    // which is what SVG does with a malformed spec; it is not an empty pattern.
+    expectType<number[] | null>(parseDashArray("4 4"));
+    expectType<PathCommand[][]>(dashSubpaths([pathCmd], [4, 4]));
+    expectType<PathCommand[][]>(dashSubpaths([pathCmd], [4, 4], 2, 0.05));
 
     // Tessellation + interior subdivision — the GPU's only input, and where shading gets vertices.
     expectType<number>(signedArea2(ring));

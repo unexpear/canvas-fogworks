@@ -133,7 +133,7 @@ describe("emitCanvas — shapes", () => {
     test("rectangle (fill + stroke): translate, path, fill then stroke", () => {
         const doc = docWith({ type: "core.rectangle", style: { fill: "#f00", opacity: 0.5, stroke: "#000" } });
         const b = bracket(run(doc).calls, "rect", a => JSON.stringify(a) === "[0,0,200,100]");
-        expect(ops(b)).toEqual(["save", "translate", "beginPath", "rect", "set globalAlpha", "set fillStyle", "fill", "set strokeStyle", "set lineWidth", "stroke", "restore"]);
+        expect(ops(b)).toEqual(["save", "translate", "beginPath", "rect", "set globalAlpha", "set fillStyle", "fill", "set strokeStyle", "set lineWidth", "setLineDash", "stroke", "restore"]);
         expect(call(b, "translate")!.args).toEqual([5, 7]);       // world = translation(5,7)
         expect(call(b, "set fillStyle")!.args).toEqual(["#f00"]);
         expect(call(b, "set globalAlpha")!.args).toEqual([0.5]);
@@ -167,7 +167,7 @@ describe("emitCanvas — shapes", () => {
         const doc = docWith({ type: "core.line", style: { fill: "#00f", opacity: 1 } });
         // Anchor on lineTo(200,100) — a content-local coord no grid line emits (grid lineTo is (x,640)/(840,y)).
         const b = bracket(run(doc).calls, "lineTo", a => JSON.stringify(a) === "[200,100]");
-        expect(ops(b)).toEqual(["save", "translate", "beginPath", "moveTo", "lineTo", "set globalAlpha", "set strokeStyle", "set lineWidth", "stroke", "restore"]);
+        expect(ops(b)).toEqual(["save", "translate", "beginPath", "moveTo", "lineTo", "set globalAlpha", "set strokeStyle", "set lineWidth", "setLineDash", "stroke", "restore"]);
         expect(ops(b)).not.toContain("fill");
         expect(call(b, "lineTo")!.args).toEqual([200, 100]);
         expect(call(b, "set strokeStyle")!.args).toEqual(["#00f"]); // colour falls back to fill
@@ -367,6 +367,27 @@ describe("emitCanvas — paint, transform, grid", () => {
         const b = bracket(run(doc, { previewRect: { x: 1, y: 2, width: 50, height: 30 } }).calls, "rect", a => JSON.stringify(a) === "[1,2,50,30]");
         expect(ops(b)).toContain("setLineDash");
         expect(call(b, "setLineDash")!.args).toEqual([[4, 4]]); // "4 4" → [4,4]
+    });
+
+    test("a dash does NOT leak onto the next stroked item", () => {
+        // `setLineDash` is context state and it is sticky. Setting it only when an item HAS a dash
+        // leaves every later item wearing the last one's pattern for the rest of the frame — the
+        // box-select marquee came out dashed because the rectangle preview had run before it, two
+        // overlays with nothing to do with each other. Found by measuring pixels in the live app
+        // while trying to verify something else entirely.
+        const doc = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1 } });
+        const calls = run(doc, {
+            previewRect: { x: 1, y: 2, width: 50, height: 30 },
+            marqueeRect: { x: 200, y: 200, width: 40, height: 40 }
+        }).calls;
+        const dashes = calls.filter(c => c.op === "setLineDash").map(c => JSON.stringify(c.args));
+        // Both overlays reach `setLineDash`: the preview with its pattern, the marquee with the
+        // EMPTY array that clears it. Before the fix the marquee issued no call at all.
+        expect(dashes).toContain("[[4,4]]");
+        expect(dashes).toContain("[[]]");
+        // Every stroked item sets it, so no item can inherit another's.
+        const strokes = calls.filter(c => c.op === "stroke").length;
+        expect(calls.filter(c => c.op === "setLineDash").length).toBe(strokes);
     });
 });
 
