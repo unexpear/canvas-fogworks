@@ -27,7 +27,7 @@
  * whole animation system costs almost nothing below the display seam.
  */
 
-import { Easing, blendNode, easingAt, easingError } from "./Prototype";
+import { Easing, EaseFor, blendNode, easingAt, easingError } from "./Prototype";
 import { Node, StateDefinition } from "./Node";
 import { ReadonlyDocument, ProjectDocument } from "./Document";
 import { materializeNode } from "./Components";
@@ -52,6 +52,22 @@ export interface Keyframe {
     hold?: boolean;
     /** How the tween LEAVING this keyframe is shaped. Absent = linear. Ignored when held. */
     easing?: Easing;
+    /**
+     * PER-PROPERTY curves, keyed by path — `"geometry.x"`, `"transform.rotation"`,
+     * `"style.opacity"`. Anything not named uses `easing` (schema 45).
+     *
+     * The first exercise anybody animates cannot be authored without this. A bouncing ball crosses
+     * the floor at a CONSTANT horizontal speed while its vertical speed changes continuously; that
+     * difference IS the lesson about spacing. With one curve per keyframe the horizontal motion
+     * inherits gravity's easing and the ball decelerates sideways as it rises — measured at
+     * 16,10,8,6,4,4,2,2,1,1,1,0 pixels per frame before this existed.
+     *
+     * A MAP rather than splitting each property into its own track, which is the larger and
+     * eventually right answer: independent per-property TIMING lets rotation key on frames that
+     * position does not. This shares the keyframe times and varies only the curve, which is what
+     * the classical exercises need, and it does not stand in the way of channels later.
+     */
+    easings?: Record<string, Easing>;
     /** What differs at this frame — the same statement a state or an instance override makes. */
     values: StateDefinition;
 }
@@ -98,6 +114,19 @@ export function trackError(track: unknown, valuesError: (v: unknown) => string |
         if (k.hold !== undefined && typeof k.hold !== "boolean") return "keyframe.hold must be a boolean";
         const easingBad = easingError(k.easing);
         if (easingBad) return `keyframe ${easingBad}`;
+        if (k.easings !== undefined) {
+            if (typeof k.easings !== "object" || k.easings === null || Array.isArray(k.easings)) {
+                return "keyframe.easings must be an object keyed by property path";
+            }
+            for (const [path, e] of Object.entries(k.easings)) {
+                // The PATH is checked as well as the curve. An unknown one is not harmless: it
+                // silently eases nothing, so the animator sees the default curve and has no way to
+                // tell a typo from a property that does not tween.
+                if (!EASABLE_PATHS.has(path)) return `keyframe.easings has no such property "${path}"`;
+                const bad = easingError(e);
+                if (bad) return `keyframe.easings["${path}"] ${bad}`;
+            }
+        }
         const bad = valuesError(k.values);
         if (bad) return bad;
     }
@@ -112,18 +141,37 @@ export function trackError(track: unknown, valuesError: (v: unknown) => string |
  * the last, it has finished and stays. Extrapolating instead would send a shape flying off in both
  * directions from a two-keyframe track, which nobody has ever wanted.
  */
-export function keyframesAt(track: readonly Keyframe[], frame: number): { from: Keyframe; to: Keyframe | null; t: number } | null {
+/**
+ * Property paths a keyframe may name in `easings` — exactly the ones `blendNode` interpolates.
+ *
+ * Listed rather than inferred because the point is to REJECT a path that eases nothing. A
+ * misspelled key would otherwise be accepted and quietly do nothing, which is indistinguishable
+ * from the curve being wrong.
+ */
+export const EASABLE_PATHS: ReadonlySet<string> = new Set([
+    "geometry.x", "geometry.y", "geometry.width", "geometry.height",
+    "style.opacity", "style.fill", "style.stroke",
+    "style.radius", "style.strokeWidth", "style.fontSize", "style.letterSpacing",
+    "style.lineHeight", "style.fontWeight",
+    "transform.rotation", "transform.scaleX", "transform.scaleY"
+]);
+
+export function keyframesAt(track: readonly Keyframe[], frame: number): { from: Keyframe; to: Keyframe | null; t: number; raw: number } | null {
     if (track.length === 0) return null;
-    if (frame <= track[0].frame) return { from: track[0], to: null, t: 0 };
+    if (frame <= track[0].frame) return { from: track[0], to: null, t: 0, raw: 0 };
     const last = track[track.length - 1];
-    if (frame >= last.frame) return { from: last, to: null, t: 0 };
+    if (frame >= last.frame) return { from: last, to: null, t: 0, raw: 0 };
     for (let i = track.length - 1; i >= 0; i--) {
         if (track[i].frame > frame) continue;
         const from = track[i], to = track[i + 1];
         // A HELD keyframe never blends toward its successor: it simply stays until replaced.
-        if (from.hold) return { from, to: null, t: 0 };
+        if (from.hold) return { from, to: null, t: 0, raw: 0 };
         const span = to.frame - from.frame;
-        return { from, to, t: easingAt(from.easing, (frame - from.frame) / span) };
+        // RAW is returned alongside the eased value so a caller can re-shape individual properties
+        // from the same progress. `t` stays the keyframe's own curve, so every existing caller is
+        // unchanged and per-property easing is something a caller opts into.
+        const raw = (frame - from.frame) / span;
+        return { from, to, t: easingAt(from.easing, raw), raw };
     }
     return null;
 }
@@ -157,7 +205,15 @@ export function applyFrame(doc: ReadonlyDocument, frame: number | undefined): Re
             return built;
         };
         const from = value(at.from);
-        nodes.set(id, at.to ? withChildren(blendNode(from, value(at.to), at.t), n.children) : from);
+        // PER-PROPERTY curves (schema 45): a path named in `easings` is re-eased from the RAW
+        // progress; everything else takes the keyframe's own `t`. Built once per node rather than
+        // per property, and skipped entirely when no keyframe names one — which is every document
+        // authored before this existed.
+        const easings = at.from.easings;
+        const easeFor: EaseFor | undefined = easings
+            ? (path: string) => (easings[path] !== undefined ? easingAt(easings[path], at.raw) : at.t)
+            : undefined;
+        nodes.set(id, at.to ? withChildren(blendNode(from, value(at.to), at.t, easeFor), n.children) : from);
     });
 
     return {

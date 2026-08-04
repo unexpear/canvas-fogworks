@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v44 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v45 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -220,6 +220,16 @@ function normalize(v): {x,y,z} | null;                     // null when it has n
 function lambert(normal, light): number;                   // CLAMPED at 0 — a light must never subtract
 function heightAbovePage(depth: number): number;           // -depth, floored at 0 — `depth` counts AWAY from the viewer
 function shadowOffset(light, depth, ontoDepth?): {x, y};   // the GAP between them, not the caster's height; onto the page by default
+
+// Demos.ts — the classic animation exercises, as real documents.
+const DEMOS: readonly { name: string; build: () => ProjectDocument }[];
+function bouncingBall(): ProjectDocument;   // timing, spacing, arcs, squash+stretch
+function jumpingSquare(): ProjectDocument;  // anticipation, follow-through, weight
+function pendulum(): ProjectDocument;       // arcs and overlap, via ROTATION
+function celSequence(): ProjectDocument;    // frame-by-frame with HELD keyframes
+// BUILDERS rather than saved fixtures, so they migrate with the schema and the tests can assert
+// what the motion DOES. They exist to find holes: the bouncing ball is what proved a keyframe
+// needed per-property easing, because one curve made the ball decelerate sideways as it rose.
 
 // Bezier.ts — arbitrary easing as a cubic Bézier (schema 44).
 interface CubicBezier { x1; y1; x2; y2 }                    // (0,0) and (1,1) are fixed

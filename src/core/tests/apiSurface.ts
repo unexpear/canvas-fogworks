@@ -84,6 +84,9 @@ import { exportSVG, EXPORT_MARGIN, TextLines } from "../export/ExportSVG";
 import { TextShape, drawTextInto, wrapText, wrapTextWith, textLinesFor, textRasterKey, textRasterScale, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
 import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
+import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence } from "../document/Demos";
+import { EASABLE_PATHS } from "../document/Timeline";
+import { EaseFor } from "../document/Prototype";
 import { Keyframe, TimelineSettings, timelineError, trackError, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
 import { DEPTH_MIN, DEPTH_MAX, depthError, depthOf, parallaxRate, parallaxOffset, depthToClipZ, byDepth, applyParallax } from "../document/Depth";
 import { Mesh, ReadonlyMesh, MESH_MAX_DIVISIONS, meshError, restPoint, restMesh, isIdentityMesh, warpPoint, warpCommands, heightOf, warpHeight, heightRange, surfaceNormal, normalAt, isFlatMesh } from "../document/Mesh";
@@ -531,6 +534,15 @@ export function __apiSurfacePin(): void {
     expectType<number>(solveForX(curve, 0.5));
     expectType<string | null>(cubicBezierError(curve));
     expectType<readonly { name: string; curve: CubicBezier }[]>(BEZIER_PRESETS);
+    // The classic exercises, as REAL documents — they are how feature holes get found.
+    expectType<readonly { name: string; build: () => ProjectDocument }[]>(DEMOS);
+    expectType<ProjectDocument>(bouncingBall());
+    expectType<ProjectDocument>(jumpingSquare());
+    expectType<ProjectDocument>(pendulum());
+    expectType<ProjectDocument>(celSequence());
+    // PER-PROPERTY easing (schema 45), and the paths a keyframe may name.
+    expectType<ReadonlySet<string>>(EASABLE_PATHS);
+    expectType<EaseFor>((path: string) => path.length);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);
     expectType<number>(FPS_MIN); expectType<number>(FPS_MAX);

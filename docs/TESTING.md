@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v44 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1041) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (34) = 1144 tests.
+> 🔒 Frozen contract · schema v45 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1044) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (34) = 1147 tests.
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1144 tests
+npm test                                   # jest (ts-jest), 1147 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -42,7 +42,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1144 tests)
+## What is covered (1147 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -83,6 +83,7 @@ npm run check                              # typecheck + lint + test + build (th
 | **M2 grid explicit line placement** | a fully-pinned item takes its `[start,end)` lines and **auto items flow AROUND it**; lines span `end − start` tracks; single-axis placement **auto-flows** (deferred, and does not throw on the missing axis); a pin **grows a `hugHeight` grid to its row** (hug == cells); validation (`start<end`, integer, in-cap) + both-paths rejection |
 | **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow/shrink, WRAP (+alignContent/wrapReverse), GRID (per-row `rows`, `auto` tracks, hug, `colSpan`/`rowSpan`, `autoFlow` row/column/dense, explicit `gridColumn`/`gridRow` pins), constraints, margins (uniform AND per-side), absolute escapes, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains; resize drives grow/shrink by sign, constraints from both sources, and — now that wrap and grid enter the measure pass — a child's size feeds its line/`auto` track and the container's own hug size; spans exercise the placement in both passes) |
 | **Depth / mesh / lighting (schemas 40–42)** | `depth` drives display ORDER, the GPU's clip **z**, and PARALLAX (an unlayered doc returns BY REFERENCE, so a pan costs nothing); a warped node resolves to an ordinary `core.path` and is **clickable where it is drawn**; a rest mesh is the identity and is skipped; bilinear is **exact at the control points** and clamped outside the box; `lambert` is **clamped at 0** so a second light can never darken; a flat mesh faces the viewer *exactly*; a MIRRORED patch still faces the viewer; the shadow a light casts is **derived** and an explicit `style.shadow` still wins; every one validated on **both** paths + a migration from the previous schema |
+| **The classic exercises (schema 45)** | the demos are documents, so the tests assert what the MOTION does rather than that a fixture parsed. Bouncing ball: horizontal speed uniform to a rounding hair ACROSS beat boundaries — sampling one arc hides a demo that advances a fixed distance per bounce — while vertical speed varies more than tenfold, and squash conserves volume (wider by as much as it is shorter). Jumping square: down and wider BEFORE up, and it lands back on the ground line. Pendulum: rotation returns so it can loop, and is fastest through the middle — sampled OFF the midpoint, where a symmetric swing reads zero for any curve. Cel: a held drawing does not creep, and the next replaces it. Every demo round-trips and produces more than one distinct frame |
 | **Cubic-Bézier easing (schema 44)** | exact at BOTH ends whatever the control points (a tween that misses its keyframe leaves the next one starting from the wrong place); the inversion checked DIRECTLY — the parameter returned must put the curve's x where it was asked and stay inside [0,1] — rather than through the eased value that hides it; FLAT-ended curves, where Newton stalls and the bisection fallback carries it, asserted for ACCURACY and not merely finiteness (asserting the answer exists is what lets a stalled solver pass); OVERSHOOT above 1 and anticipation below 0 both reachable, while x outside [0,1] is refused on both paths because x is TIME; a keyframe curve round-trips and measurably shapes the tween against a linear one |
 | **The playhead actually moves things** | a source-level test pins BOTH halves of the incremental-geometry guard — `!es.playing` AND `!frameChanged` — because it is one expression and losing either half silently reuses the previous frame's geometry, which shows up as a tweened shape not moving at all while the playhead runs its whole track. The engine's dirty set only names nodes an ACTION touched, and scrubbing dispatches none, so nothing tells it a tween moved anything |
 | **Mesh points as fractions (schema 43)** | an untouched mesh is the IDENTITY at every size — the property absolute units could not have — and a real warp scales with the box instead of staying at the coordinate it was dragged to, checked through the display seam at two sizes; the 42→43 migration divides each point by the node's OWN geometry so the shape draws identically (a per-axis divide, so mixing them up dies), leaves HEIGHT alone because `z` is a distance above the page, and DROPS the mesh on a zero-sized box rather than writing infinities the loader would reject; mesh handles scale by the box or they sit away from the corner they control |

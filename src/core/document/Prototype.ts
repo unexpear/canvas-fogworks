@@ -166,35 +166,47 @@ export function blendColor(from: string, to: string, t: number): string {
  * the endpoints; the arithmetic in between is identical, and two copies of it would drift the
  * first time a field learned to interpolate. See `document/Timeline`.
  */
-export function blendNode(from: Node, to: Node, t: number): Node {
+/**
+ * How far along a PARTICULAR property is, given the blend's overall progress.
+ *
+ * A function rather than a number because one curve for a whole keyframe cannot express the first
+ * exercise anybody animates. A bouncing ball crosses the floor at a CONSTANT horizontal speed
+ * while its vertical speed changes continuously — that is the whole lesson about spacing, and with
+ * a single `t` the horizontal motion inherits gravity's curve and the ball decelerates sideways as
+ * it rises, which nothing in the world does.
+ */
+export type EaseFor = (path: string) => number;
+
+export function blendNode(from: Node, to: Node, t: number, easeFor?: EaseFor): Node {
+    const k = easeFor ?? (() => t);
     const out: Node = { ...to };
     out.geometry = {
-        x: lerp(from.geometry.x, to.geometry.x, t),
-        y: lerp(from.geometry.y, to.geometry.y, t),
-        width: lerp(from.geometry.width, to.geometry.width, t),
-        height: lerp(from.geometry.height, to.geometry.height, t)
+        x: lerp(from.geometry.x, to.geometry.x, k("geometry.x")),
+        y: lerp(from.geometry.y, to.geometry.y, k("geometry.y")),
+        width: lerp(from.geometry.width, to.geometry.width, k("geometry.width")),
+        height: lerp(from.geometry.height, to.geometry.height, k("geometry.height"))
     };
     out.style = {
         ...to.style,
-        opacity: lerp(from.style.opacity, to.style.opacity, t),
-        fill: blendColor(from.style.fill, to.style.fill, t)
+        opacity: lerp(from.style.opacity, to.style.opacity, k("style.opacity")),
+        fill: blendColor(from.style.fill, to.style.fill, k("style.fill"))
     };
     if (from.style.stroke !== undefined && to.style.stroke !== undefined) {
-        out.style.stroke = blendColor(from.style.stroke, to.style.stroke, t);
+        out.style.stroke = blendColor(from.style.stroke, to.style.stroke, k("style.stroke"));
     }
     // Numeric style slots interpolate only when BOTH ends are concrete: a token is a reference,
     // and averaging a reference with a number would produce neither.
     for (const key of ["radius", "strokeWidth", "fontSize", "letterSpacing", "lineHeight", "fontWeight"] as const) {
         const a = from.style[key], b = to.style[key];
-        if (typeof a === "number" && typeof b === "number") out.style[key] = lerp(a, b, t);
+        if (typeof a === "number" && typeof b === "number") out.style[key] = lerp(a, b, k(`style.${key}`));
     }
     if (from.transform || to.transform) {
         const f = from.transform ?? {}, g = to.transform ?? {};
         out.transform = {
             ...g,
-            rotation: lerp(f.rotation ?? 0, g.rotation ?? 0, t),
-            scaleX: lerp(f.scaleX ?? 1, g.scaleX ?? 1, t),
-            scaleY: lerp(f.scaleY ?? 1, g.scaleY ?? 1, t)
+            rotation: lerp(f.rotation ?? 0, g.rotation ?? 0, k("transform.rotation")),
+            scaleX: lerp(f.scaleX ?? 1, g.scaleX ?? 1, k("transform.scaleX")),
+            scaleY: lerp(f.scaleY ?? 1, g.scaleY ?? 1, k("transform.scaleY"))
         };
     }
     return out;

@@ -56,6 +56,7 @@ import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry
 import { Ring } from "../geometry/PathBoolean";
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
+import { bouncingBall, jumpingSquare, pendulum, celSequence, DEMOS } from "../document/Demos";
 import { easingError } from "../document/Prototype";
 import { dashSubpaths, parseDashArray } from "../geometry/DashPath";
 import { wrapTextWith } from "../../renderer/TextRaster";
@@ -4394,9 +4395,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 43→44 landed, letting easing be an
-        // arbitrary cubic Bézier rather than one of four names.)
-        expect(() => migrateIfNeeded(legacy, "45")).toThrow('Migration not implemented for document schema "44"');
+        // time a real migration is added — most recently when 44→45 landed, giving a keyframe
+        // PER-PROPERTY easing curves.)
+        expect(() => migrateIfNeeded(legacy, "46")).toThrow('Migration not implemented for document schema "45"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -13818,6 +13819,93 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(warpPoint(m, box, 50, 50).x).toBeCloseTo(60, 9);
         // The far corner is untouched, so a warp is LOCAL rather than a whole-shape transform.
         expect(warpPoint(m, box, 0, 0)).toEqual({ x: 0, y: 0 });
+    });
+
+    test("THE BOUNCING BALL: horizontal speed uniform, vertical speed not (schema 45)", () => {
+        // The first exercise anybody animates, and it is the one that found this hole. A ball
+        // crosses the floor at a CONSTANT horizontal speed while its vertical speed changes
+        // continuously — that difference IS the lesson about spacing. One curve per keyframe
+        // cannot say it: before per-property easing the horizontal motion inherited gravity's
+        // curve and measured 16,10,8,6,4,4,2,2,1,1,1,0 pixels per frame.
+        const ball = bouncingBall();
+        const xs: number[] = [], ys: number[] = [];
+        // ACROSS BEAT BOUNDARIES, not within one arc. Sampling 0..12 stays inside the first
+        // bounce, where a demo that advanced a fixed distance per BOUNCE still looks uniform —
+        // the error only appears when the arcs get shorter, which is the whole second half.
+        for (let f = 0; f <= 30; f++) {
+            const g = applyFrame(ball, f).nodes.get("ball")!.geometry;
+            xs.push(g.x); ys.push(g.y);
+        }
+        const dx = xs.slice(1).map((v, i) => v - xs[i]);
+        // UNIFORM to within a rounding hair — every step the same, which is what "constant speed"
+        // means and what a single shared curve made impossible.
+        for (const step of dx) expect(step).toBeCloseTo(dx[0], 6);
+        // …and the vertical is emphatically NOT uniform: the ball is fast off the ground and slow
+        // at the apex, so the first step is many times the last.
+        const dy = ys.slice(1).map((v, i) => Math.abs(v - ys[i]));
+        expect(Math.max(...dy)).toBeGreaterThan(Math.min(...dy) * 10);
+        // SQUASH conserves volume rather than merely flattening: at contact the ball is wider by
+        // as much as it is shorter, or it reads as deflating.
+        const contact = applyFrame(ball, 0).nodes.get("ball")!.geometry;
+        const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
+        expect(contact.width).toBeGreaterThan(air.width);
+        expect(contact.height).toBeLessThan(air.height);
+        expect(contact.width - air.width).toBeCloseTo(air.height - contact.height, 6);
+    });
+
+    test("the other exercises animate the things they are each meant to teach", () => {
+        // Each demo exists to stress a DIFFERENT capability, so each is checked for that one
+        // rather than for "it parsed".
+        //
+        // JUMPING SQUARE — anticipation: it must go DOWN and get WIDER before it goes up.
+        const jump = jumpingSquare();
+        const start = applyFrame(jump, 0).nodes.get("jumper")!.geometry;
+        const crouch = applyFrame(jump, 8).nodes.get("jumper")!.geometry;
+        const apex = applyFrame(jump, 20).nodes.get("jumper")!.geometry;
+        expect(crouch.y).toBeGreaterThan(start.y);          // down before up
+        expect(crouch.width).toBeGreaterThan(start.width);  // squat widens
+        expect(apex.y).toBeLessThan(start.y - 100);         // and then it really leaves
+        // …and it LANDS, rather than drifting off: the settle returns to the ground line.
+        expect(applyFrame(jump, 40).nodes.get("jumper")!.geometry.y).toBe(start.y);
+
+        // PENDULUM — rotation, easing at both ends and fastest through the middle. Sampled off the
+        // midpoint, because at the exact centre of a symmetric swing every easing reads zero and
+        // the assertion would pass against a curve that does nothing.
+        const p = pendulum();
+        const rot = (f: number) => (applyFrame(p, f).nodes.get("arm") as { transform?: { rotation: number } }).transform!.rotation;
+        expect(rot(0)).toBeCloseTo(-38, 6);
+        expect(rot(18)).toBeCloseTo(38, 6);
+        expect(rot(36)).toBeCloseTo(-38, 6);                 // returns, so it can loop
+        expect(rot(4)).toBeGreaterThan(-38);
+        expect(rot(4)).toBeLessThan(0);
+        // Fastest through the MIDDLE: the step around the centre beats the step near the end.
+        expect(Math.abs(rot(10) - rot(8))).toBeGreaterThan(Math.abs(rot(18) - rot(16)));
+
+        // CEL SEQUENCE — held drawings. Nothing moves BETWEEN them; the drawing changes.
+        const cel = celSequence();
+        const g = (f: number) => applyFrame(cel, f).nodes.get("cel")!;
+        expect(g(0).style.fill).toBe(g(1).style.fill);       // held across its own frame
+        expect(g(0).geometry.x).toBe(g(1).geometry.x);       // …and does not creep
+        expect(g(2).style.fill).not.toBe(g(0).style.fill);   // the next drawing replaces it
+    });
+
+    test("every demo round-trips through the loader and actually moves", () => {
+        // A demo that cannot survive a save is a fixture, not a document — and one that does not
+        // move is a still. Both are checked for all of them, so a new demo cannot be added broken.
+        for (const { name, build } of DEMOS) {
+            const doc = build();
+            const back = deserializeDocument(serializeDocument(doc));
+            expect(back.nodes.size).toBe(doc.nodes.size);
+            expect(back.timeline).toEqual(doc.timeline);
+            const id = [...doc.nodes.keys()][0];
+            const frames = doc.timeline!.frames;
+            // Something about the node must DIFFER across the run — position, size, colour or
+            // rotation. Asserting a specific one would not survive a demo that teaches another.
+            const snapshot = (f: number) => JSON.stringify(applyFrame(back, f).nodes.get(id));
+            const seen = new Set(Array.from({ length: frames }, (_, f) => snapshot(f)));
+            expect(`${name}: ${seen.size} distinct frames`).toBe(`${name}: ${seen.size} distinct frames`);
+            expect(seen.size).toBeGreaterThan(1);
+        }
     });
 
     test("a cubic-Bézier easing is EXACT at the ends and monotone between (schema 44)", () => {

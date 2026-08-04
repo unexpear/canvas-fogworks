@@ -41,6 +41,7 @@ import { alignAction, distributeAction } from "../core/actions/alignActions";
 import { booleanAction, makeBooleanNodeAction } from "../core/actions/booleanActions";
 import { outlineStrokeAction } from "../core/actions/outlineStrokeActions";
 import { onionFrames, Keyframe } from "../core/document/Timeline";
+import { DEMOS } from "../core/document/Demos";
 import { applyParallax, DEPTH_MIN, DEPTH_MAX } from "../core/document/Depth";
 import { SetDepthAction } from "../core/actions/SetDepthAction";
 import { SetMeshAction } from "../core/actions/SetMeshAction";
@@ -1324,6 +1325,26 @@ export function App() {
                              color: dispatcher.getDocument().timeline ? UI.accent : "#ccc",
                              border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
                 >⏱ Timeline</button>
+                <select
+                    value=""
+                    title="Load a classic animation exercise. These are the things animators learn on — each stresses a different capability, and building them is how the engine's holes get found."
+                    onChange={e => {
+                        const hit = DEMOS.find(d => d.name === e.target.value);
+                        if (!hit) return;
+                        // LOADED like any other document, through the same path a file takes, so a
+                        // demo cannot pass by being special-cased. If one of these will not load,
+                        // neither will somebody's work.
+                        dispatcher.loadDocument(hit.build());
+                        es.selectedNodeIds = [];
+                        es.frame = 0;
+                        refresh();
+                    }}
+                    style={{ fontSize: 11, padding: "3px 6px", marginLeft: 4, background: "transparent",
+                             color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
+                >
+                    <option value="">Exercises…</option>
+                    {DEMOS.map(d => <option key={d.name} value={d.name}>{d.name}</option>)}
+                </select>
                 {/* A document is unlit until somebody asks, and an unlit one draws byte-for-byte
                     as it did before lighting existed — ambient 1, no lights, colours times one. */}
                 <button

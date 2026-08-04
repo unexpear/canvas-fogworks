@@ -328,6 +328,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "41") { raw = migrate_41_to_42(raw); version = "42"; }
     if (version === "42") { raw = migrate_42_to_43(raw); version = "43"; }
     if (version === "43") { raw = migrate_43_to_44(raw); version = "44"; }
+    if (version === "44") { raw = migrate_44_to_45(raw); version = "45"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -725,6 +726,18 @@ function migrate_21_to_22(raw: any): any {
  * find an object where it expects a string, fail its own `includes` check and reject the document
  * — which is the loader working, and exactly what `SCHEMA_VERSION` gates for.
  */
+/**
+ * 44 → 45: a keyframe may carry PER-PROPERTY easing curves (`easings`).
+ *
+ * Additive — every schema-44 keyframe eased all its properties together, and absent `easings`
+ * still does. The bump is the interpretation kind in the usual direction: an old build reading a
+ * schema-45 file would ignore the map and tween the ball's horizontal motion on gravity's curve,
+ * which is the bug this field exists to remove.
+ */
+function migrate_44_to_45(raw: any): any {
+    return { ...raw, version: "45" };
+}
+
 function migrate_43_to_44(raw: any): any {
     return { ...raw, version: "44" };
 }
