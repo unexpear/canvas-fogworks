@@ -27,7 +27,7 @@
  * whole animation system costs almost nothing below the display seam.
  */
 
-import { Easing, blendNode, easingAt } from "./Prototype";
+import { Easing, blendNode, easingAt, easingError } from "./Prototype";
 import { Node, StateDefinition } from "./Node";
 import { ReadonlyDocument, ProjectDocument } from "./Document";
 import { materializeNode } from "./Components";
@@ -96,9 +96,8 @@ export function trackError(track: unknown, valuesError: (v: unknown) => string |
         if (k.frame <= previous) return "track keyframes must be in ascending frame order";
         previous = k.frame;
         if (k.hold !== undefined && typeof k.hold !== "boolean") return "keyframe.hold must be a boolean";
-        if (k.easing !== undefined && !["linear", "ease-in", "ease-out", "ease-in-out"].includes(k.easing)) {
-            return "keyframe.easing must be one of linear, ease-in, ease-out, ease-in-out";
-        }
+        const easingBad = easingError(k.easing);
+        if (easingBad) return `keyframe ${easingBad}`;
         const bad = valuesError(k.values);
         if (bad) return bad;
     }

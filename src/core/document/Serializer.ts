@@ -327,6 +327,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "40") { raw = migrate_40_to_41(raw); version = "41"; }
     if (version === "41") { raw = migrate_41_to_42(raw); version = "42"; }
     if (version === "42") { raw = migrate_42_to_43(raw); version = "43"; }
+    if (version === "43") { raw = migrate_43_to_44(raw); version = "44"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -716,6 +717,18 @@ function migrate_21_to_22(raw: any): any {
  * `Infinity` or `NaN`. That is a mesh on a shape with no area, which drew nothing before and draws
  * nothing after; keeping it would produce a document the loader's own `meshError` rejects.
  */
+/**
+ * 43 → 44: `easing` may be a CUBIC BÉZIER as well as one of the four names.
+ *
+ * Additive, and every schema-43 document used a name, so it draws identically. The bump is the
+ * INTERPRETATION kind for the direction that matters: an old build reading a schema-44 file would
+ * find an object where it expects a string, fail its own `includes` check and reject the document
+ * — which is the loader working, and exactly what `SCHEMA_VERSION` gates for.
+ */
+function migrate_43_to_44(raw: any): any {
+    return { ...raw, version: "44" };
+}
+
 function migrate_42_to_43(raw: any): any {
     const nodes = raw?.document?.nodes;
     if (!nodes || typeof nodes !== "object") return { ...raw, version: "43" };

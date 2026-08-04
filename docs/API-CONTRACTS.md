@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v43 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v44 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -220,6 +220,23 @@ function normalize(v): {x,y,z} | null;                     // null when it has n
 function lambert(normal, light): number;                   // CLAMPED at 0 — a light must never subtract
 function heightAbovePage(depth: number): number;           // -depth, floored at 0 — `depth` counts AWAY from the viewer
 function shadowOffset(light, depth, ontoDepth?): {x, y};   // the GAP between them, not the caster's height; onto the page by default
+
+// Bezier.ts — arbitrary easing as a cubic Bézier (schema 44).
+interface CubicBezier { x1; y1; x2; y2 }                    // (0,0) and (1,1) are fixed
+function cubicBezierError(v: unknown): string | null;       // x within [0,1]; y DELIBERATELY unbounded
+function solveForX(curve, x): number;                       // Newton + a bisection fallback
+function cubicBezierAt(curve, t): number;                   // exact at both ends; result NOT clamped
+const BEZIER_PRESETS: readonly { name; curve }[];
+// y as a function of x has NO closed form — both are cubics in a parameter s — so x is inverted
+// numerically and y evaluated there. Newton stalls where the derivative approaches zero, which is
+// a flat start or end: the most ordinary curve an animator draws, not a pathological input.
+// x is TIME and is bounded, or one moment maps to several progress values. y is FREE, because y
+// outside [0,1] is overshoot — anticipation and follow-through are made of it.
+// `Prototype.easingError` is the shared edit+load validator for `Easing = EasingName | CubicBezier`.
+//
+// NOT DOCUMENTED HERE, and therefore not pinned: `document/Timeline` and `document/Prototype`
+// themselves. Both are live and both predate this file's coverage sweep; the same rot that had
+// `Mesh`/`Light`/`Depth` missing for six schemas. Stated rather than left to be discovered.
 
 // Mesh.ts — a grid of control points that BENDS a shape (schema 41).
 const MESH_MAX_DIVISIONS: number;                         // 64 — the point count is the product

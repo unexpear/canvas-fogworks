@@ -83,6 +83,7 @@ import { resolveImage, imageGeneration } from "../../renderer/ImageCache";
 import { exportSVG, EXPORT_MARGIN, TextLines } from "../export/ExportSVG";
 import { TextShape, drawTextInto, wrapText, wrapTextWith, textLinesFor, textRasterKey, textRasterScale, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
 import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
+import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
 import { Keyframe, TimelineSettings, timelineError, trackError, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
 import { DEPTH_MIN, DEPTH_MAX, depthError, depthOf, parallaxRate, parallaxOffset, depthToClipZ, byDepth, applyParallax } from "../document/Depth";
 import { Mesh, ReadonlyMesh, MESH_MAX_DIVISIONS, meshError, restPoint, restMesh, isIdentityMesh, warpPoint, warpCommands, heightOf, warpHeight, heightRange, surfaceNormal, normalAt, isFlatMesh } from "../document/Mesh";
@@ -521,6 +522,15 @@ export function __apiSurfacePin(): void {
     expectType<ReadonlyDocument>(applyFrame(doc, 0));
     expectType<ReadonlyDocument>(applyFrame(doc, undefined));
     expectType<number[]>(onionFrames(5, 2, 2, 60));
+    // EASING as a CURVE (schema 44). x is TIME and is bounded; y is not, because overshoot is
+    // the point. `solveForX` is exported because a solver whose failure mode is "converged to
+    // the wrong root" deserves checking directly rather than through the value that hides it.
+    const curve: CubicBezier = { x1: 0.25, y1: 0.1, x2: 0.25, y2: 1 };
+    expectType<CubicBezier>(curve);
+    expectType<number>(cubicBezierAt(curve, 0.5));
+    expectType<number>(solveForX(curve, 0.5));
+    expectType<string | null>(cubicBezierError(curve));
+    expectType<readonly { name: string; curve: CubicBezier }[]>(BEZIER_PRESETS);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);
     expectType<number>(FPS_MIN); expectType<number>(FPS_MAX);

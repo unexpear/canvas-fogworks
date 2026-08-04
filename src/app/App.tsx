@@ -53,6 +53,7 @@ import { FILL_RULES, STROKE_CAPS, STROKE_JOINS } from "../core/document/Node";
 import { SetBooleanOpAction } from "../core/actions/SetBooleanOpAction";
 import { BooleanOp, TEXT_ALIGNS, FONT_FAMILY_MAX, StateDefinition } from "../core/document/Node";
 import { blendStates, easingAt, TRIGGERS, EASINGS, TRANSITION_MAX_MS, Interaction, Trigger, Easing } from "../core/document/Prototype";
+import { BEZIER_PRESETS, CubicBezier } from "../core/document/Bezier";
 import { lerpViewport } from "../editor/EditorState";
 import { SetInteractionsAction } from "../core/actions/SetInteractionsAction";
 import { compileScript, snapshotFor } from "../core/script/ScriptApi";
@@ -248,6 +249,47 @@ const startedFromCorruptSave = initialLoad.status === "corrupt";
  */
 const exportTextLines: TextLines = shape => textLinesFor(shape) ?? shape.text.split("\n");
 
+/**
+ * The easing choices offered anywhere easing is authored — the four NAMES plus the curve presets.
+ *
+ * One list rather than one per control, because an animator who learns "overshoot" on a keyframe
+ * should find the same word on an interaction. The value round-trips through a string key so a
+ * `<select>` can carry it; `easingFromKey` is the only place that mapping lives.
+ */
+const EASING_CHOICES: readonly string[] = [...EASINGS, ...BEZIER_PRESETS.map(p => p.name)];
+
+function easingKeyOf(easing: Easing | undefined): string {
+    if (easing === undefined) return "linear";
+    if (typeof easing === "string") return easing;
+    const hit = BEZIER_PRESETS.find(p =>
+        p.curve.x1 === easing.x1 && p.curve.y1 === easing.y1 && p.curve.x2 === easing.x2 && p.curve.y2 === easing.y2);
+    // A curve that is not a preset still has to display as something. "custom" is offered ONLY
+    // when one is already set, so the list never suggests a choice that does nothing.
+    return hit ? hit.name : "custom";
+}
+
+function easingFromKey(key: string, current: Easing | undefined): Easing | undefined {
+    if ((EASINGS as readonly string[]).includes(key)) return key as Easing;
+    const hit = BEZIER_PRESETS.find(p => p.name === key);
+    return hit ? { ...hit.curve } : current;
+}
+
+/** The easing `<select>`, shared by the interaction rows and the timeline's keyframe control. */
+function EasingSelect({ value, onPick, width }: { value: Easing | undefined; onPick: (e: Easing | undefined) => void; width: number }) {
+    const key = easingKeyOf(value);
+    return (
+        <select
+            value={key}
+            title="How the tween leaving this point is shaped. The named curves are CSS's; overshoot and anticipate go past the target and settle back."
+            onChange={e => onPick(easingFromKey(e.target.value, value))}
+            style={{ ...SELECT_STYLE, width }}
+        >
+            {key === "custom" ? <option value="custom">custom</option> : null}
+            {EASING_CHOICES.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+    );
+}
+
 export function App() {
     const [toolName, setToolName] = useState<string>("select");
     // The N-gon's side count. Held in a ref as well as state because ShapeTool is constructed
@@ -438,6 +480,31 @@ export function App() {
         const track: Keyframe[] = [...(node.track ?? [])].filter(k => k.frame !== frame);
         track.push({ frame, hold: hold || undefined, values } as Keyframe);
         track.sort((a, b) => a.frame - b.frame);
+        dispatcher.dispatchAction(new SetTrackAction(doc, id, track));
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    /**
+     * Re-shape the tween LEAVING the keyframe under the playhead.
+     *
+     * The `easing` field has been on `Keyframe` since the timeline landed and had no way to reach
+     * it — a schema field with no authoring surface, which is the same "feature without a
+     * consumer" this codebase refuses everywhere else. Schema 44 makes it worth reaching, since it
+     * can now hold a curve rather than one of four words.
+     */
+    const setKeyframeEasing = useCallback((easing: Easing | undefined) => {
+        const doc = dispatcher.getDocument();
+        const id = es.selectedNodeIds[0];
+        const node = id ? doc.nodes.get(id) : undefined;
+        if (!node?.track) return;
+        const frame = Math.round(es.frame ?? 0);
+        // Only the keyframe ON the playhead. Easing belongs to a specific keyframe, so "the
+        // nearest one" would silently re-shape a tween the user is not looking at.
+        if (!node.track.some(k => k.frame === frame)) return;
+        const track: Keyframe[] = node.track.map(k =>
+            k.frame === frame
+                ? (easing === undefined ? { ...k, easing: undefined } as Keyframe : { ...k, easing } as Keyframe)
+                : { ...k } as Keyframe);
         dispatcher.dispatchAction(new SetTrackAction(doc, id, track));
         refresh();
     }, [dispatcher, es, refresh]);
@@ -1739,11 +1806,11 @@ export function App() {
                                             onChange={e => { setInteraction(i, { duration: Math.max(0, Math.min(TRANSITION_MAX_MS, Number(e.target.value) || 0)) }); refresh(); }}
                                             style={{ ...SELECT_STYLE, width: 52 }}
                                         />
-                                        <select
-                                            value={it.easing ?? "linear"}
-                                            onChange={e => { setInteraction(i, { easing: e.target.value as Easing }); refresh(); }}
-                                            style={{ ...SELECT_STYLE, width: 84 }}
-                                        >{EASINGS.map(t => <option key={t} value={t}>{t}</option>)}</select>
+                                        <EasingSelect
+                                            value={it.easing}
+                                            width={92}
+                                            onPick={e => { setInteraction(i, { easing: e }); refresh(); }}
+                                        />
                                         <button title="Remove" onClick={() => { removeInteraction(i); refresh(); }} style={ALIGN_BUTTON_STYLE}>×</button>
                                     </div>
                                 ))}
@@ -2013,6 +2080,18 @@ export function App() {
                         title="Key the selected node here and HOLD it until the next keyframe — frame-by-frame animation">◼ Hold</button>
                     <button style={ALIGN_BUTTON_STYLE} onClick={removeKeyframe}
                         title="Remove the keyframe on this frame">✕</button>
+                    {(() => {
+                        // Shown only when the playhead is ON a keyframe, because easing describes
+                        // the tween leaving one — offering it anywhere else would be a control
+                        // that silently does nothing.
+                        const id = es.selectedNodeIds[0];
+                        const k = id ? dispatcher.getDocument().nodes.get(id)?.track
+                            ?.find(kf => kf.frame === Math.round(es.frame ?? 0)) : undefined;
+                        if (!k) return null;
+                        return k.hold
+                            ? <span style={{ color: "#666", fontSize: 11 }} title="A HELD keyframe does not tween, so it has no curve to shape.">held</span>
+                            : <EasingSelect value={k.easing} width={104} onPick={setKeyframeEasing} />;
+                    })()}
                     <button style={{ ...ALIGN_BUTTON_STYLE, color: es.onion ? UI.accent : "#ccc" }}
                         onClick={() => { es.onion = es.onion ? undefined : 2; refresh(); }}
                         title="ONION SKIN: draw the neighbouring frames faintly behind this one. Ghosts are not pickable — they are a picture of another moment.">

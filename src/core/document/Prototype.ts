@@ -19,14 +19,36 @@
 
 import { ProjectDocument, ReadonlyDocument } from "./Document";
 import { Node } from "./Node";
+import { CubicBezier, cubicBezierAt, cubicBezierError } from "./Bezier";
 
 /** What can start an interaction. */
 export const TRIGGERS = ["click", "hover", "press"] as const;
 export type Trigger = typeof TRIGGERS[number];
 
-/** How a transition's progress is shaped over its duration. */
+/** The NAMED easings — the cases nobody has an opinion about, kept as words rather than curves. */
 export const EASINGS = ["linear", "ease-in", "ease-out", "ease-in-out"] as const;
-export type Easing = typeof EASINGS[number];
+export type EasingName = typeof EASINGS[number];
+
+/**
+ * How a transition's progress is shaped over its duration: a name, or a CURVE (schema 44).
+ *
+ * A union rather than replacing the names with their equivalent curves, and that is a decision
+ * about the DOCUMENT rather than about the code. `"ease-in-out"` says what was meant; the four
+ * numbers that approximate it say only what it does. A file should carry the intent it was
+ * authored with, and a name also survives somebody later deciding the house `ease-in-out` should
+ * be slightly different.
+ */
+export type Easing = EasingName | CubicBezier;
+
+/** Is this a usable easing — either a known name or a well-formed curve? Shared edit+load. */
+export function easingError(easing: unknown): string | null {
+    if (easing === undefined) return null;
+    if (typeof easing === "string") {
+        return (EASINGS as readonly unknown[]).includes(easing)
+            ? null : `easing must be one of ${EASINGS.join(", ")}, or a cubic Bézier`;
+    }
+    return cubicBezierError(easing);
+}
 
 /** Longest a transition may declare (ms) — a hand-editable field, so bounded like every other. */
 export const TRANSITION_MAX_MS = 60_000;
@@ -77,7 +99,8 @@ export function interactionsError(interactions: unknown): string | null {
         if (!(typeof i.state === "string" || i.state === null)) return "interaction.state must be a string or null";
         if (i.duration !== undefined && (typeof i.duration !== "number" || !Number.isFinite(i.duration)
             || i.duration < 0 || i.duration > TRANSITION_MAX_MS)) return `interaction.duration must be within [0, ${TRANSITION_MAX_MS}]`;
-        if (i.easing !== undefined && !(EASINGS as readonly unknown[]).includes(i.easing)) return `interaction.easing must be one of ${EASINGS.join(", ")}`;
+        const easingBad = easingError(i.easing);
+        if (easingBad) return `interaction ${easingBad}`;
         // A DANGLING target is inert, like a dangling state name — only its shape is checked.
         if (i.target !== undefined && (typeof i.target !== "string" || i.target.length === 0)) return "interaction.target must be a non-empty string";
     }
@@ -94,6 +117,11 @@ export function interactionFor(node: { interactions?: readonly Interaction[] }, 
  * clock that overshoots its duration by a frame must land on the end state, not past it.
  */
 export function easingAt(easing: Easing | undefined, t: number): number {
+    // A CURVE (schema 44) is evaluated by `Bezier`, which inverts x numerically — see that module
+    // for why that is not a closed form. The named cases below stay exact expressions rather than
+    // being routed through their equivalent curves: they are the common path, and a bisection to
+    // rediscover `x * x` would be work spent losing precision.
+    if (typeof easing === "object" && easing !== null) return cubicBezierAt(easing, t);
     const x = t <= 0 ? 0 : t >= 1 ? 1 : t;
     switch (easing) {
         case "ease-in": return x * x;

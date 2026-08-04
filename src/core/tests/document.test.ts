@@ -55,6 +55,8 @@ import { resolveMeshes } from "../document/Components";
 import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry/CastShadow";
 import { Ring } from "../geometry/PathBoolean";
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
+import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
+import { easingError } from "../document/Prototype";
 import { dashSubpaths, parseDashArray } from "../geometry/DashPath";
 import { wrapTextWith } from "../../renderer/TextRaster";
 import { overrideValueError } from "../document/Components";
@@ -4392,9 +4394,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 42→43 landed, turning mesh
-        // control points into fractions of the box so a warp survives a resize.)
-        expect(() => migrateIfNeeded(legacy, "44")).toThrow('Migration not implemented for document schema "43"');
+        // time a real migration is added — most recently when 43→44 landed, letting easing be an
+        // arbitrary cubic Bézier rather than one of four names.)
+        expect(() => migrateIfNeeded(legacy, "45")).toThrow('Migration not implemented for document schema "44"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -13807,6 +13809,120 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(warpPoint(m, box, 50, 50).x).toBeCloseTo(60, 9);
         // The far corner is untouched, so a warp is LOCAL rather than a whole-shape transform.
         expect(warpPoint(m, box, 0, 0)).toEqual({ x: 0, y: 0 });
+    });
+
+    test("a cubic-Bézier easing is EXACT at the ends and monotone between (schema 44)", () => {
+        // Four named easings is a toy; a curve is a tool. The numerics are the risk: y as a
+        // function of x has no closed form, so x is inverted numerically and y evaluated there.
+        const ease: CubicBezier = { x1: 0.25, y1: 0.1, x2: 0.25, y2: 1 };
+        // EXACT at the ends whatever the control points. A tween that does not finish precisely on
+        // its keyframe leaves the value a hair off, and the next tween starts from there.
+        expect(cubicBezierAt(ease, 0)).toBe(0);
+        expect(cubicBezierAt(ease, 1)).toBe(1);
+        // Outside the tween the answer is the endpoint, not an extrapolation of the curve.
+        expect(cubicBezierAt(ease, -5)).toBe(0);
+        expect(cubicBezierAt(ease, 5)).toBe(1);
+        // The inversion is checked DIRECTLY rather than through the eased value that hides it:
+        // whatever s comes back must actually put the curve's x where it was asked for.
+        for (const x of [0.01, 0.13, 0.5, 0.77, 0.99]) {
+            const s = solveForX(ease, x);
+            const bx = 3 * (1 - s) ** 2 * s * ease.x1 + 3 * (1 - s) * s * s * ease.x2 + s ** 3;
+            expect(bx).toBeCloseTo(x, 6);
+        }
+        // A curve with x1 = y1 and x2 = y2 IS the identity, including the linear one.
+        expect(cubicBezierAt({ x1: 0.4, y1: 0.4, x2: 0.7, y2: 0.7 }, 0.33)).toBeCloseTo(0.33, 9);
+
+        // FLAT ends are where Newton stalls — and they are the most ordinary curve an animator
+        // draws, not a pathological input. The bisection fallback has to carry these.
+        for (const curve of [{ x1: 0, y1: 0, x2: 1, y2: 1 }, { x1: 1, y1: 0, x2: 0, y2: 1 },
+                             { x1: 0, y1: 1, x2: 1, y2: 0 }] as CubicBezier[]) {
+            for (let i = 0; i <= 20; i++) {
+                const x = i / 20;
+                const y = cubicBezierAt(curve, x);
+                expect(Number.isFinite(y)).toBe(true);
+                // ACCURACY, not just finiteness. Asserting the answer merely exists is what lets a
+                // stalled solver pass: the inverted parameter must actually put the curve's x
+                // where it was asked for, and must stay inside [0, 1] where the cubic IS the
+                // easing. Without this the bisection fallback can be deleted unnoticed.
+                const sv = solveForX(curve, x);
+                expect(sv).toBeGreaterThanOrEqual(0);
+                expect(sv).toBeLessThanOrEqual(1);
+                const bx = 3 * (1 - sv) ** 2 * sv * curve.x1 + 3 * (1 - sv) * sv * sv * curve.x2 + sv ** 3;
+                expect(bx).toBeCloseTo(x, 5);
+            }
+            expect(cubicBezierAt(curve, 1)).toBe(1);
+            expect(cubicBezierAt(curve, 0)).toBe(0);
+        }
+        // The classic "snap": nearly nothing happens, then it arrives. Measurably behind linear
+        // for most of its run, which is the whole reason somebody picks it.
+        const snap: CubicBezier = { x1: 0.9, y1: 0, x2: 1, y2: 0.3 };
+        expect(cubicBezierAt(snap, 0.5)).toBeLessThan(0.2);
+        expect(cubicBezierAt(snap, 0.95)).toBeLessThan(0.95);
+    });
+
+    test("OVERSHOOT is allowed, and folding TIME is not", () => {
+        // The asymmetry that makes the model expressive. y outside [0,1] is a value going past its
+        // target and settling back — anticipation and follow-through are made of it, and a model
+        // that clamped y would silently flatten every curve worth drawing.
+        const overshoot = BEZIER_PRESETS.find(p => p.name === "overshoot")!.curve;
+        const peak = Math.max(...Array.from({ length: 40 }, (_, i) => cubicBezierAt(overshoot, i / 39)));
+        expect(peak).toBeGreaterThan(1);
+        const anticipate = BEZIER_PRESETS.find(p => p.name === "anticipate")!.curve;
+        const dip = Math.min(...Array.from({ length: 40 }, (_, i) => cubicBezierAt(anticipate, i / 39)));
+        expect(dip).toBeLessThan(0);
+        // …and both still land exactly on their endpoints.
+        for (const c of [overshoot, anticipate]) {
+            expect(cubicBezierAt(c, 0)).toBe(0);
+            expect(cubicBezierAt(c, 1)).toBe(1);
+        }
+        // X is TIME and must not fold: one moment cannot map to several progress values. Refused
+        // on BOTH paths, like every other document constraint.
+        expect(cubicBezierError({ x1: 0.5, y1: -2, x2: 0.5, y2: 3 })).toBeNull();   // y is free
+        expect(cubicBezierError({ x1: -0.1, y1: 0, x2: 0.5, y2: 1 })).toMatch("x1");
+        expect(cubicBezierError({ x1: 0.5, y1: 0, x2: 1.5, y2: 1 })).toMatch("x2");
+        expect(cubicBezierError({ x1: 0.5, y1: NaN, x2: 0.5, y2: 1 })).toMatch("y1");
+        expect(cubicBezierError("ease")).toMatch("object");
+        expect(easingError("ease-in-out")).toBeNull();
+        expect(easingError("bouncy")).toMatch("must be one of");
+        expect(easingError({ x1: 0.5, y1: 0, x2: 0.5, y2: 1 })).toBeNull();
+        expect(easingError(undefined)).toBeNull();
+        // The SHARED validator forwards a curve to `cubicBezierError` rather than waving objects
+        // through — the same edit-and-load closure every other field here has.
+        expect(easingError({ x1: 9, y1: 0, x2: 0.5, y2: 1 })).toMatch("x1");
+        expect(easingError({ x1: 0.5, y1: 0 })).toMatch("x2");
+    });
+
+    test("a keyframe can carry a CURVE, and it round-trips (schema 44)", () => {
+        // The field existed since the timeline landed with no way to author it; schema 44 makes it
+        // worth reaching, and the loader has to accept what the editor can now write.
+        const curve = { x1: 0.175, y1: 0.885, x2: 0.32, y2: 1.275 };
+        const d = createEmptyDocument();
+        d.timeline = { frames: 30, fps: 24 };
+        d.nodes.set("a", { id: "a", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {},
+            track: [{ frame: 0, easing: curve, values: { geometry: { x: 0 } } },
+                    { frame: 10, values: { geometry: { x: 100 } } }] } as Node);
+        d.rootNodeUuids = ["a"];
+        const back = deserializeDocument(serializeDocument(d));
+        expect(back.nodes.get("a")!.track![0].easing).toEqual(curve);
+        // And it SHAPES the tween: at the midpoint an overshoot curve is already past halfway.
+        const mid = applyFrame(d, 5).nodes.get("a")!.geometry.x;
+        expect(mid).toBeGreaterThan(50);
+        const linear = applyFrame((() => {
+            const e = createEmptyDocument();
+            e.timeline = { frames: 30, fps: 24 };
+            e.nodes.set("a", { ...(d.nodes.get("a") as Node),
+                track: [{ frame: 0, values: { geometry: { x: 0 } } }, { frame: 10, values: { geometry: { x: 100 } } }] } as Node);
+            e.rootNodeUuids = ["a"];
+            return e;
+        })(), 5).nodes.get("a")!.geometry.x;
+        expect(linear).toBeCloseTo(50, 6);
+        // A malformed curve is refused on the LOAD path too, not just by the editor.
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: ["a"], variables: {}, nodes: {
+            a: { id: "a", type: "core.rectangle", parent: null, children: [],
+                 geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {},
+                 track: [{ frame: 0, easing: { x1: 9, y1: 0, x2: 0.5, y2: 1 }, values: {} }] } } } });
+        expect(() => deserializeDocument(bad)).toThrow("x1");
     });
 
     test("RESIZING a meshed node moves the drawing with it (schema 43)", () => {
