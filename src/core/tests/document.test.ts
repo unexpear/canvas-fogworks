@@ -57,6 +57,8 @@ import { Ring } from "../geometry/PathBoolean";
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
 import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, DEMOS } from "../document/Demos";
+import { traceMotion, traceVelocity, traceTiming, traceDigest } from "../diagnostics/MotionTrace";
+import { recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
 import { easingError } from "../document/Prototype";
 import { dashSubpaths, parseDashArray } from "../geometry/DashPath";
 import { wrapTextWith } from "../../renderer/TextRaster";
@@ -13853,6 +13855,147 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
         expect(contact.width).toBe(air.width);
         expect(contact.height).toBe(air.height);
+    });
+
+    test("the motion TRACE measures the computed world, not the stored document", () => {
+        // ARCHITECTURE 4b's central claim, and the reason the instrument is worth having: stored
+        // geometry is an intent, and the ink lands wherever layout, the parent chain and the
+        // transform put it. A trace of stored values would agree with the document and disagree
+        // with the screen.
+        const ball = bouncingBall();
+        const samples = traceMotion(ball, { from: 0, to: 20, nodeIds: ["ball"] });
+        expect(samples.length).toBe(21);
+        expect(samples.every(s => s.nodeId === "ball")).toBe(true);
+        // The ball's stored box NEVER changes size — squash is a transform — so a trace reading
+        // stored geometry would report a constant 80x80 for all 21 frames. The computed world
+        // reports the squash, which is the whole distinction.
+        const stored = ball.nodes.get("ball")!.geometry;
+        expect(new Set(samples.map(s => Math.round(s.width))).size).toBeGreaterThan(1);
+        expect(samples.find(s => s.frame === 0)!.width).toBeGreaterThan(stored.width);
+        expect(samples.find(s => s.frame === 12)!.width).toBeCloseTo(stored.width, 6);
+
+        // DETERMINISTIC: same document, same frames, same trace — which is what makes two runs
+        // comparable, and what a wall-clock timestamp in here would destroy.
+        const again = traceMotion(ball, { from: 0, to: 20, nodeIds: ["ball"] });
+        expect(again).toEqual(samples);
+        expect(traceDigest(again)).toBe(traceDigest(samples));
+        // …and a digest that does not notice a change is worse than none at all. The change has to
+        // be one that REACHES the motion: nudging the stored `geometry.x` does nothing here,
+        // because the track overrides x at every frame — which this test asserted first and had to
+        // be corrected on, and is exactly the confusion a trace of stored values would cause.
+        const rekeyed = bouncingBall();
+        rekeyed.nodes.get("ball")!.track![2].values.geometry!.x! += 1;
+        expect(traceDigest(traceMotion(rekeyed, { from: 0, to: 20, nodeIds: ["ball"] })))
+            .not.toBe(traceDigest(samples));
+        const resized = bouncingBall();
+        resized.nodes.get("ball")!.geometry.width += 1;
+        expect(traceDigest(traceMotion(resized, { from: 0, to: 20, nodeIds: ["ball"] })))
+            .not.toBe(traceDigest(samples));
+
+        // NARROWED by node, or tracing everything to ask about one shape makes it too slow to
+        // reach for — the limb document has two nodes, and asking for one must carry one.
+        expect(new Set(traceMotion(wavingLimb(), { from: 0, to: 3 }).map(s => s.nodeId)).size).toBe(2);
+        expect(new Set(traceMotion(wavingLimb(), { from: 0, to: 3, nodeIds: ["fore"] }).map(s => s.nodeId)).size).toBe(1);
+        // A document with NO timeline is not an error: it has one frame, which is the honest answer.
+        const still = createEmptyDocument();
+        still.nodes.set("a", { id: "a", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } as Node);
+        still.rootNodeUuids = ["a"];
+        expect(traceMotion(still).length).toBe(1);
+        // A backwards range is empty rather than a loop that never ends.
+        expect(traceMotion(ball, { from: 10, to: 2 })).toEqual([]);
+    });
+
+    test("VELOCITY is derived from the samples, so it cannot disagree with them", () => {
+        // Two records of the same thing drift apart; one derived from the other cannot. The
+        // bouncing ball is the case that matters, since its whole lesson is that horizontal and
+        // vertical speed differ.
+        // 0..20 spans a whole bounce — up from one contact and down to the next — so the anchor
+        // can be checked against BOTH contacts rather than only the one it started on.
+        const samples = traceMotion(bouncingBall(), { from: 0, to: 20, nodeIds: ["ball"] });
+        const v = traceVelocity(samples);
+        // ONE FEWER than the samples: the first has nothing before it to have moved from, and an
+        // invented zero there would read as "it was still" rather than "it had not started".
+        expect(v.length).toBe(samples.length - 1);
+        // Every entry matches the difference of the samples it came from — the claim itself.
+        for (const step of v) {
+            const cur = samples.find(s => s.frame === step.frame)!;
+            const prev = samples.find(s => s.frame === step.frame - 1)!;
+            expect(step.dx).toBeCloseTo(cur.anchorX - prev.anchorX, 9);
+            expect(step.speed).toBeCloseTo(Math.hypot(cur.anchorX - prev.anchorX, cur.anchorY - prev.anchorY), 9);
+        }
+        // The ANCHOR is not the box, and the ball is the case that proves it matters: at the
+        // contact frames it is squashed, so its bounding box is wider than at the apex while the
+        // ball itself has travelled a steady distance. Differencing the box counts that widening
+        // as sideways motion — which is how this test failed before the anchor existed.
+        const contact = samples.find(s => s.frame === 0)!;
+        const apexS = samples.find(s => s.frame === 12)!;
+        expect(contact.width).toBeGreaterThan(apexS.width);
+        // The ball's origin is its FEET — centre horizontally, bottom vertically — so the anchor
+        // sits at the box's middle and at its base, never at the corner the bounds report.
+        expect(contact.anchorX).toBeCloseTo(contact.x + contact.width / 2, 6);
+        expect(contact.anchorY).toBeCloseTo(contact.y + contact.height, 6);
+        // And it is PLANTED: the feet are at the same height at both contacts however hard the
+        // ball squashes, which the bounding box's top edge is not.
+        const contact20 = samples.find(s => s.frame === 20)!;
+        expect(contact20.anchorY).toBeCloseTo(contact.anchorY, 6);
+        expect(contact20.y).toBeCloseTo(contact.y, 6);
+        // And it reports what the exercise teaches: horizontal steps uniform, vertical not.
+        const dxs = v.map(s => s.dx);
+        for (const d of dxs) expect(d).toBeCloseTo(dxs[0], 6);
+        const dys = v.map(s => Math.abs(s.dy));
+        expect(Math.max(...dys)).toBeGreaterThan(Math.min(...dys) * 5);
+        // ROTATION is differenced too, which is how a swing's speed is read.
+        const limb = traceVelocity(traceMotion(wavingLimb(), { from: 0, to: 12, nodeIds: ["upper"] }));
+        expect(limb.some(s => Math.abs(s.dRotation) > 0)).toBe(true);
+    });
+
+    test("TIMING is in frames, converted by the document's own rate", () => {
+        // A duration is what an audience experiences, and it changes the moment somebody edits the
+        // fps — so asserting seconds says something a frame count cannot.
+        const ball = bouncingBall();
+        expect(traceTiming(ball, 0, 11)).toEqual({ frames: 12, fps: 24, seconds: 0.5 });
+        // INCLUSIVE of both ends: frames 0..11 at 24fps is twelve frames SHOWN, half a second. An
+        // exclusive range would report eleven twelfths and contradict the timeline strip.
+        expect(traceTiming(ball, 5, 5).frames).toBe(1);
+        expect(traceTiming(ball, 9, 2).frames).toBe(0);
+        // A document with NO timeline has no rate, so the answer is zero rather than a guess.
+        expect(traceTiming(createEmptyDocument())).toEqual({ frames: 0, fps: 0, seconds: 0 });
+    });
+
+    test("the action JOURNAL is bounded, ordered, and admits what it dropped", () => {
+        // The other half: what was DISPATCHED, with wall-clock times, kept apart from the trace so
+        // the trace stays comparable between runs.
+        clearJournal();
+        expect(journal()).toEqual([]);
+        recordAction({ at: 1000, type: "MoveNode", nodeIds: ["a"] });
+        recordAction({ at: 1200, type: "ResizeNode", nodeIds: ["a", "b"], ok: false });
+        expect(journal().map(e => e.type)).toEqual(["MoveNode", "ResizeNode"]);
+        expect(journal()[0].seq).toBe(1);
+        expect(journal()[1].ok).toBe(false);
+        // TIMESTAMPS are injected rather than read from a clock inside, which is what lets this be
+        // asserted at all without mocking a global.
+        expect(journal()[1].at - journal()[0].at).toBe(200);
+
+        // BOUNDED, and it says how many fell off rather than quietly pretending to be complete.
+        clearJournal();
+        for (let i = 0; i < JOURNAL_MAX + 25; i++) recordAction({ at: i, type: `A${i}` });
+        expect(journal().length).toBe(JOURNAL_MAX);
+        expect(journalDropped()).toBe(25);
+        // ORDER survives the drop, because `seq` is monotonic across the session rather than an
+        // index into a window that keeps sliding.
+        expect(journal()[0].type).toBe("A25");
+        expect(journal()[0].seq).toBe(26);
+        // The LAST sequence number is what distinguishes a session counter from an index into the
+        // sliding window — both give 26 at the front, but only a monotonic counter reaches
+        // JOURNAL_MAX + 25 at the back. Asserting the front alone let a window index pass.
+        expect(journal()[journal().length - 1].seq).toBe(JOURNAL_MAX + 25);
+        // …and no gaps: consecutive entries differ by exactly one, so nothing was lost inside the
+        // window as opposed to falling off the front of it.
+        const seqs = journal().map(e => e.seq);
+        expect(seqs.every((n, i) => i === 0 || n === seqs[i - 1] + 1)).toBe(true);
+        clearJournal();
+        expect(journalDropped()).toBe(0);
     });
 
     test("SQUASH is a transform about the FEET, and the feet do not move", () => {

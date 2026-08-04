@@ -733,6 +733,58 @@ Still outstanding for the computed layer: **resolved style** (M5 tokens) belongs
 tracks, single-axis explicit placement, a separate cross-gap — is deferred (see MILESTONES.md).
 Layout output today is expressed *as* geometry (computed local rects), not as a distinct channel.
 
+## 4b. The motion trace — measuring what actually happened
+
+**`core/diagnostics/MotionTrace` records where every node ACTUALLY is, at every frame.** It exists
+because for a whole session the only way to answer "did it move, and by how much" was to drive the
+running app over a debugger and read bounding boxes off the DOM by hand. That found real bugs — a
+tweened shape that never moved, a ball that sped up sideways as it slowed vertically, a squash that
+drifted its own centre — and every one of them was found by measuring positions frame by frame.
+Making that a first-class, tested instrument is worth more than the next feature.
+
+**It samples the COMPUTED world, not the stored document.** The stored `geometry` is an intent; a
+node's ink lands where `computeGeometry` says after layout, constraints, instance expansion,
+parallax, the parent chain and the transform have all had their say. A trace of stored values would
+agree with the document and disagree with the screen, which is the opposite of an accuracy
+instrument. So each sample runs the real pipeline — `applyFrame` then `computeGeometry` — and
+records the resulting world matrix and bounds.
+
+**It is PURE and DETERMINISTIC.** Same document, same frames, same trace, byte for byte. That is
+what makes it diffable: two traces of the same animation before and after a change is a regression
+test that needs no screenshots and no eyes. Wall-clock timing is deliberately NOT part of it —
+elapsed milliseconds are a property of the machine, not of the animation, and mixing them in would
+make every trace differ from every other.
+
+**Timing is expressed in FRAMES, and the timeline's own fps converts to seconds.** An animation
+authored at 12 fps and played on a machine managing 60 redraws a second is the same animation; the
+trace records the former. `traceTiming` reports the seconds a frame range occupies so an animator
+can ask "how long is this beat" without doing arithmetic against a fps they have to remember.
+
+**Movement is DERIVED from position rather than recorded separately**, because two records of the
+same thing drift. `traceVelocity` differences consecutive samples, so speed and direction cannot
+disagree with the positions they came from.
+
+**It is differenced at the node's ANCHOR, not at its bounding box.** A sample carries both: the
+world bounds (where the ink is) and the world position of the node's transform origin (where the
+node *is*). They are different measurements and only one of them is a position. A squashing ball
+widens about its feet, so its bounding box's left edge moves outward while the ball itself travels
+at a perfectly steady speed — difference the box and you get a velocity that reports the squash as
+sideways motion. This was found by asserting the bouncing ball's horizontal speed was uniform and
+watching it fail against a ball that was, in fact, moving uniformly. Spacing is a property of where
+a thing is; the box is a property of how big it has become.
+
+**The ACTION journal is the other half, and it is deliberately separate.** What a person did — the
+actions dispatched, in order, with the revision each produced — is a history of the EDIT, while the
+motion trace is a measurement of the RESULT. They answer different questions ("what did I change"
+versus "where did it end up") and they have different determinism: the journal carries wall-clock
+timestamps because when something was done is exactly what it is for. Keeping them apart is what
+lets the trace stay diffable.
+
+Both are BOUNDED. A trace over a long timeline with many nodes is quadratic in a way that a design
+document is not, so the frame range and the node set are explicit parameters rather than defaults
+that quietly walk the whole document; the journal keeps a fixed number of the most recent entries
+and says how many it dropped.
+
 ## 5. Module map
 
 | Layer | Files | Responsibility |

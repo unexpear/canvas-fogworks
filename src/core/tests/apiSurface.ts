@@ -85,6 +85,8 @@ import { TextShape, drawTextInto, wrapText, wrapTextWith, textLinesFor, textRast
 import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
+import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
+import { JournalEntry, recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
 import { EASABLE_PATHS } from "../document/Timeline";
 import { EaseFor } from "../document/Prototype";
 import { Keyframe, TimelineSettings, timelineError, trackError, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
@@ -541,6 +543,22 @@ export function __apiSurfacePin(): void {
     expectType<ProjectDocument>(pendulum());
     expectType<ProjectDocument>(celSequence());
     expectType<ProjectDocument>(wavingLimb());
+
+    // --- The accuracy instruments -------------------------------------------
+    // A trace samples the COMPUTED world and is deterministic, so two runs are comparable; the
+    // journal carries wall-clock times and is deliberately NOT, which is why they are separate.
+    const trace: Sample[] = traceMotion(bouncingBall(), { from: 0, to: 4, nodeIds: ["ball"] });
+    expectType<Sample[]>(trace);
+    expectType<number>(trace[0]?.anchorX ?? 0);
+    expectType<Velocity[]>(traceVelocity(trace));
+    expectType<Timing>(traceTiming(bouncingBall(), 0, 11));
+    expectType<string>(traceDigest(trace));
+    expectType<number>(TRACE_MAX_SAMPLES);
+    recordAction({ at: 0, type: "probe", nodeIds: [], ok: true });
+    expectType<readonly JournalEntry[]>(journal());
+    expectType<number>(journalDropped());
+    expectType<number>(JOURNAL_MAX);
+    clearJournal();
     // PER-PROPERTY easing (schema 45), and the paths a keyframe may name.
     expectType<ReadonlySet<string>>(EASABLE_PATHS);
     expectType<EaseFor>((path: string) => path.length);

@@ -221,6 +221,41 @@ function lambert(normal, light): number;                   // CLAMPED at 0 — a
 function heightAbovePage(depth: number): number;           // -depth, floored at 0 — `depth` counts AWAY from the viewer
 function shadowOffset(light, depth, ontoDepth?): {x, y};   // the GAP between them, not the caster's height; onto the page by default
 
+// MotionTrace.ts — where everything ACTUALLY is, at every frame (diagnostics, not document data).
+interface Sample {                          // one node at one frame, from the COMPUTED world
+  frame: number; nodeId: string;
+  x; y; width; height;                      // world-space BOUNDS — where the ink lands
+  anchorX; anchorY;                         // world position of the transform ORIGIN — where the node IS
+  rotation; scaleX; scaleY;                 // the deformation that produced them
+  opacity;
+}
+interface Velocity { nodeId; frame; dx; dy; speed; dRotation }
+interface Timing { frames: number; fps: number; seconds: number }
+const TRACE_MAX_SAMPLES: number;            // bound: frames x nodes is quadratic in a way a document is not
+function traceMotion(doc, opts?: { from?; to?; nodeIds? }): Sample[];
+function traceVelocity(samples: readonly Sample[]): Velocity[];
+function traceTiming(doc, from?, to?): Timing;
+function traceDigest(samples: readonly Sample[]): string;    // stable, for diffing two runs
+// PURE and DETERMINISTIC — same document, same frames, same trace, so two traces of an animation
+// before and after a change are a regression test needing no screenshots. Samples the COMPUTED
+// world (`applyFrame` then `computeGeometry`), never the stored geometry: a node's ink lands where
+// layout, instance expansion, the parent chain and the transform put it, and a trace of stored
+// values would agree with the document while disagreeing with the screen.
+// NO wall-clock: elapsed milliseconds are a property of the machine, not of the animation. Timing
+// is in FRAMES, converted to seconds by the timeline's own fps.
+// Velocity is DERIVED from the samples rather than recorded alongside them, so speed and position
+// cannot drift apart — and it differences the ANCHOR, not the bounds. A squashing ball widens
+// about its feet, so its box's left edge moves while the ball travels at a steady speed;
+// differencing the box reports the squash as sideways motion.
+
+// ActionJournal.ts — what was DISPATCHED, in order (the other half; see ARCHITECTURE 4b).
+interface JournalEntry { seq: number; at: number; type: string; nodeIds: readonly string[]; ok: boolean }
+const JOURNAL_MAX: number;
+function recordAction(entry): void; function journal(): readonly JournalEntry[];
+function journalDropped(): number; function clearJournal(): void;
+// Carries wall-clock timestamps ON PURPOSE — when something was done is what an edit history is
+// for — which is exactly why it is kept apart from the trace, whose value is being diffable.
+
 // Demos.ts — the classic animation exercises, as real documents.
 const DEMOS: readonly { name: string; build: () => ProjectDocument }[];
 function bouncingBall(): ProjectDocument;   // timing, spacing, arcs, squash+stretch
