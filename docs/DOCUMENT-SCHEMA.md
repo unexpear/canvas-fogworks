@@ -316,6 +316,28 @@ interface Transform {
 }
 ```
 
+**`origin` IS THE ANIMATION ANCHOR, and it is how squash-and-stretch and joints are
+authored.** This is written down because it was already true in the code and stated
+nowhere, and the absence cost a wrong entry in the project's own notes: a demo
+squashed a shape by animating `geometry.width`/`height`, watched it grow out of its
+left edge, and concluded the engine had no pivot. It has one.
+
+The distinction is the whole of it:
+
+- Animating **`geometry.width`/`height`** moves the BOX. The box's origin is its
+  top-left `x,y`, so a widening shape grows rightward and downward and the animator
+  must hand-compensate `x` and `y` on every keyframe to keep it centred or planted.
+- Animating **`transform.scaleX`/`scaleY`** scales about `origin`. With the default
+  centre a squash grows symmetrically; with `{x: 0.5, y: 1}` the shape's FEET stay
+  planted while it flattens, which is what squash-and-stretch means and what a
+  character standing on the ground requires. Verified: a 100-tall box at y 100..200
+  under `scaleY: 0.6` about `{0.5, 1}` occupies y 140..200 — the bottom does not move.
+- Rotation about a non-centre origin is a JOINT. `{x: 0.5, y: 0}` swings a limb from
+  its top end, which is the primitive skeletal rigging will be built on.
+
+So: **animate `transform` for deformation, `geometry` for placement.** A demo or a rig
+that animates width to squash is doing arithmetic the anchor already does.
+
 It is a separate field rather than a widening of `Geometry`, which stays a pure
 axis-aligned box so Milestone 2 layout can compute it. `origin` is normalized so the
 pivot survives a resize, and is settable via `UpdateNodeTransformAction`

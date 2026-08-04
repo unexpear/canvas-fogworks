@@ -227,6 +227,7 @@ function bouncingBall(): ProjectDocument;   // timing, spacing, arcs, squash+str
 function jumpingSquare(): ProjectDocument;  // anticipation, follow-through, weight
 function pendulum(): ProjectDocument;       // arcs and overlap, via ROTATION
 function celSequence(): ProjectDocument;    // frame-by-frame with HELD keyframes
+function wavingLimb(): ProjectDocument;     // rotation about a JOINT, with an overlapping forearm
 // BUILDERS rather than saved fixtures, so they migrate with the schema and the tests can assert
 // what the motion DOES. They exist to find holes: the bouncing ball is what proved a keyframe
 // needed per-property easing, because one curve made the ball decelerate sideways as it rose.

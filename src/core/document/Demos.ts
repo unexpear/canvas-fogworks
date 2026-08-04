@@ -34,6 +34,17 @@ import { CubicBezier } from "./Bezier";
 /** Frames a demo runs for, and the rate it is authored at. 24 is the film convention. */
 const FPS = 24;
 
+/**
+ * The anchor a standing thing deforms about: centred horizontally, on the GROUND vertically.
+ *
+ * Squash and stretch is a scale about the feet. Anything else lifts a character off the floor as
+ * it compresses, which reads as a hop rather than as weight.
+ */
+const FEET = { x: 0.5, y: 1 };
+
+/** The anchor a limb swings about — the top end, where the joint is. */
+const JOINT = { x: 0.5, y: 0 };
+
 /** Gravity's shape: fast at the bottom of a fall, slow at the top of a rise. */
 const FALL: CubicBezier = { x1: 0.55, y1: 0, x2: 0.85, y2: 0.35 };      // accelerating
 const RISE: CubicBezier = { x1: 0.15, y1: 0.65, x2: 0.45, y2: 1 };      // decelerating
@@ -71,7 +82,9 @@ function rect(id: string, x: number, y: number, w: number, h: number, fill: stri
  * flattening it: a ball that squashes without widening reads as deflating.
  */
 export function bouncingBall(): ProjectDocument {
-    const floor = 420, size = 80, squash = 26;
+    const floor = 420, size = 80;
+    // A FRACTION of the ball's size, because it is a scale rather than a distance now.
+    const squash = 0.32;
     // Contact frames, chosen so each arc is shorter than the last — the ball is losing energy.
     const beats = [0, 12, 20, 28, 34, 40, 44];
     const apexes = [200, 300, 370];
@@ -93,11 +106,20 @@ export function bouncingBall(): ProjectDocument {
             // and before `easings` existed this ball decelerated sideways as it rose.
             easings: { "geometry.x": "linear" },
             values: {
-                geometry: onGround
-                    // SQUASHED at contact, and WIDER by as much as it is shorter, so the ball
-                    // keeps its volume. Squashing alone looks like a punctured ball.
-                    ? { x, y: floor + squash, width: size + squash, height: size - squash }
-                    : { x, y, width: size, height: size }
+                geometry: { x, y },
+                // SQUASH is a TRANSFORM about the ball's FEET, not a resize of its box. Scaling
+                // about `origin: {0.5, 1}` keeps the contact point planted while the ball
+                // flattens; resizing the box instead grows it out of its top-left corner and
+                // every keyframe has to hand-compensate x and y to hide that. Wider by as much
+                // as it is shorter, so the ball keeps its volume — squashing alone reads as a
+                // puncture rather than an impact.
+                transform: onGround
+                    // VOLUME-CONSERVING, so the widening is the RECIPROCAL of the flattening
+                    // rather than the same number added back. `1 + s` paired with `1 - s` loses
+                    // area — at s = 0.32 the ball ends up a tenth smaller at every impact, which
+                    // reads as it deflating a little each bounce.
+                    ? { scaleX: 1 / (1 - squash), scaleY: 1 - squash, origin: FEET }
+                    : { scaleX: 1, scaleY: 1, origin: FEET }
             }
         });
     }
@@ -114,18 +136,23 @@ export function bouncingBall(): ProjectDocument {
  */
 export function jumpingSquare(): ProjectDocument {
     const ground = 400, w = 90, h = 90;
+    // Deformation is TRANSFORM about the feet; placement is GEOMETRY. Authoring the crouch as a
+    // width change instead would grow the square out of its left edge, and every keyframe would
+    // carry arithmetic to hide it.
+    const pose = (x: number, y: number, sx: number, sy: number) =>
+        ({ geometry: { x, y }, transform: { scaleX: sx, scaleY: sy, origin: FEET } });
     const track: Keyframe[] = [
-        { frame: 0, values: { geometry: { x: 120, y: ground, width: w, height: h } } },
-        // ANTICIPATION: squat down and widen. The pause before a movement is what tells the eye
-        // the movement is coming, and removing it makes the jump read as a teleport.
-        { frame: 8, easing: "ease-out", values: { geometry: { x: 120, y: ground + 22, width: w + 22, height: h - 22 } } },
+        { frame: 0, values: pose(120, ground, 1, 1) },
+        // ANTICIPATION: squat and widen. The pause before a movement is what tells the eye it is
+        // coming; without it the jump reads as a teleport.
+        { frame: 8, easing: "ease-out", values: pose(120, ground, 1.25, 0.75) },
         // LAUNCH: stretch along the direction of travel.
-        { frame: 12, easing: RISE, values: { geometry: { x: 150, y: ground - 40, width: w - 18, height: h + 30 } } },
-        { frame: 20, easing: FALL, values: { geometry: { x: 230, y: 180, width: w, height: h } } },
-        { frame: 28, easing: "ease-out", values: { geometry: { x: 310, y: ground, width: w - 12, height: h + 18 } } },
-        // LANDING squash, then the settle back — follow-through.
-        { frame: 31, easing: "ease-out", values: { geometry: { x: 316, y: ground + 26, width: w + 26, height: h - 26 } } },
-        { frame: 40, values: { geometry: { x: 320, y: ground, width: w, height: h } } }
+        { frame: 12, easing: RISE, easings: { "geometry.x": "linear" }, values: pose(150, ground - 40, 0.82, 1.3) },
+        { frame: 20, easing: FALL, easings: { "geometry.x": "linear" }, values: pose(230, 180, 1, 1) },
+        { frame: 28, easing: "ease-out", easings: { "geometry.x": "linear" }, values: pose(310, ground, 0.88, 1.18) },
+        // LANDING squash, then the settle — follow-through.
+        { frame: 31, easing: "ease-out", values: pose(310, ground, 1.3, 0.7) },
+        { frame: 40, values: pose(310, ground, 1, 1) }
     ];
     return demo("Jumping square", 48, [rect("jumper", 120, ground, w, h, "#4a90d9", track)]);
 }
@@ -164,10 +191,38 @@ export function celSequence(): ProjectDocument {
     return demo("Cel sequence", 8, [rect("cel", 200, 220, 120, 120, colours[0], track)]);
 }
 
+/**
+ * A WAVING LIMB — rotation about a JOINT rather than about a shape's middle.
+ *
+ * The smallest thing that is recognisably character animation, and the primitive skeletal rigging
+ * will be built out of: an arm swings from its shoulder, so the anchor is the top END of the box
+ * and not its centre. Rotating about the middle makes a limb pivot in the air like a propeller,
+ * which is the tell that a rig has no joints.
+ *
+ * It also overlaps: the forearm lags the upper arm by a few frames, which is what makes a wave
+ * read as flesh rather than as a hinge — the same overlapping-action lesson the pendulum teaches,
+ * applied to a chain.
+ */
+export function wavingLimb(): ProjectDocument {
+    const swing = (deg: number, frame: number): Keyframe =>
+        ({ frame, easing: "ease-in-out", values: { transform: { rotation: (deg * Math.PI) / 180, origin: JOINT } } });
+    const upper: Node = { id: "upper", type: "core.rectangle", parent: null, children: [], name: "upper arm",
+        geometry: { x: 400, y: 160, width: 26, height: 130 },
+        style: { fill: "#c86a4a", opacity: 1 }, layout: {},
+        track: [swing(-24, 0), swing(24, 12), swing(-24, 24)] } as Node;
+    // LAGGING by three frames — the follow-through that makes a chain read as connected.
+    const fore: Node = { id: "fore", type: "core.rectangle", parent: null, children: [], name: "forearm",
+        geometry: { x: 400, y: 290, width: 22, height: 110 },
+        style: { fill: "#e08a63", opacity: 1 }, layout: {},
+        track: [swing(-34, 3), swing(34, 15), swing(-34, 27)] } as Node;
+    return demo("Waving limb", 28, [upper, fore]);
+}
+
 /** Every demo, for a menu and for the tests that check each one actually animates. */
 export const DEMOS: readonly { name: string; build: () => ProjectDocument }[] = [
     { name: "Bouncing ball", build: bouncingBall },
     { name: "Jumping square", build: jumpingSquare },
     { name: "Pendulum", build: pendulum },
-    { name: "Cel sequence", build: celSequence }
+    { name: "Cel sequence", build: celSequence },
+    { name: "Waving limb", build: wavingLimb }
 ];

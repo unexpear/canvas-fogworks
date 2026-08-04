@@ -84,7 +84,7 @@ import { exportSVG, EXPORT_MARGIN, TextLines } from "../export/ExportSVG";
 import { TextShape, drawTextInto, wrapText, wrapTextWith, textLinesFor, textRasterKey, textRasterScale, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
 import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
-import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence } from "../document/Demos";
+import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
 import { EASABLE_PATHS } from "../document/Timeline";
 import { EaseFor } from "../document/Prototype";
 import { Keyframe, TimelineSettings, timelineError, trackError, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
@@ -540,6 +540,7 @@ export function __apiSurfacePin(): void {
     expectType<ProjectDocument>(jumpingSquare());
     expectType<ProjectDocument>(pendulum());
     expectType<ProjectDocument>(celSequence());
+    expectType<ProjectDocument>(wavingLimb());
     // PER-PROPERTY easing (schema 45), and the paths a keyframe may name.
     expectType<ReadonlySet<string>>(EASABLE_PATHS);
     expectType<EaseFor>((path: string) => path.length);

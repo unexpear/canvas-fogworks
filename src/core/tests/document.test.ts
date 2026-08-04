@@ -56,7 +56,7 @@ import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry
 import { Ring } from "../geometry/PathBoolean";
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
-import { bouncingBall, jumpingSquare, pendulum, celSequence, DEMOS } from "../document/Demos";
+import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, DEMOS } from "../document/Demos";
 import { easingError } from "../document/Prototype";
 import { dashSubpaths, parseDashArray } from "../geometry/DashPath";
 import { wrapTextWith } from "../../renderer/TextRaster";
@@ -13844,13 +13844,79 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // at the apex, so the first step is many times the last.
         const dy = ys.slice(1).map((v, i) => Math.abs(v - ys[i]));
         expect(Math.max(...dy)).toBeGreaterThan(Math.min(...dy) * 10);
-        // SQUASH conserves volume rather than merely flattening: at contact the ball is wider by
-        // as much as it is shorter, or it reads as deflating.
+        // The ball's BOX never changes size — squash is a transform about its feet, and the
+        // assertions for that live in "SQUASH is a transform about the FEET". Pinned here as well
+        // because it is the property that makes the two tests independent: if squash ever moved
+        // back into geometry, this test would keep passing while that one broke, and the pair
+        // would disagree about what the demo does.
         const contact = applyFrame(ball, 0).nodes.get("ball")!.geometry;
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
-        expect(contact.width).toBeGreaterThan(air.width);
-        expect(contact.height).toBeLessThan(air.height);
-        expect(contact.width - air.width).toBeCloseTo(air.height - contact.height, 6);
+        expect(contact.width).toBe(air.width);
+        expect(contact.height).toBe(air.height);
+    });
+
+    test("SQUASH is a transform about the FEET, and the feet do not move", () => {
+        // The rule DOCUMENT-SCHEMA now states: animate `transform` for deformation, `geometry` for
+        // placement. Squashing by resizing the box instead grows it out of the top-left corner, so
+        // every keyframe has to hand-compensate x and y — which is what these demos used to do,
+        // and what led to the project's own notes recording "no transform anchor" when there is
+        // one. These assertions are the doc's claims, pinned.
+        const boundsOf = (doc: ProjectDocument, f: number, id: string) => {
+            const b = computeGeometry(applyFrame(doc, f) as ProjectDocument).nodes.get(id)!.bounds;
+            return { top: b.y, bottom: b.y + b.height, left: b.x, right: b.x + b.width,
+                     mid: b.x + b.width / 2, area: b.width * b.height };
+        };
+        // THE BALL: planted at both contacts, however hard it squashes.
+        const ball = bouncingBall();
+        const c0 = boundsOf(ball, 0, "ball"), c20 = boundsOf(ball, 20, "ball");
+        const apex = boundsOf(ball, 12, "ball");
+        expect(c0.bottom).toBeCloseTo(c20.bottom, 6);          // the floor is the floor
+        expect(c0.bottom - c0.top).toBeLessThan(apex.bottom - apex.top);   // flatter at impact
+        expect(c0.right - c0.left).toBeGreaterThan(apex.right - apex.left); // and wider
+        // VOLUME conserved: the widening is the reciprocal of the flattening, not the same amount
+        // added back — otherwise the ball loses a tenth of itself at every impact.
+        expect(c0.area).toBeCloseTo(apex.area, 6);
+
+        // THE JUMPER: the crouch keeps its feet AND its centre. The centre is the one that caught
+        // the old bug — it drifted 165 to 176 while widening, because the box grew rightward.
+        const jump = jumpingSquare();
+        const stand = boundsOf(jump, 0, "jumper"), crouch = boundsOf(jump, 8, "jumper");
+        expect(crouch.bottom).toBeCloseTo(stand.bottom, 6);
+        expect(crouch.mid).toBeCloseTo(stand.mid, 6);
+        expect(crouch.right - crouch.left).toBeGreaterThan(stand.right - stand.left);
+        expect(crouch.bottom - crouch.top).toBeLessThan(stand.bottom - stand.top);
+    });
+
+    test("a LIMB swings from its joint, not from its middle", () => {
+        // The primitive skeletal rigging is built out of, and the smallest thing that is
+        // recognisably character animation. Rotating about the middle makes a limb pivot in the
+        // air like a propeller, which is the tell that a rig has no joints.
+        const limb = wavingLimb();
+        const armAt = (f: number) => {
+            const n = applyFrame(limb, f).nodes.get("upper")!;
+            const c = computeGeometry(applyFrame(limb, f) as ProjectDocument).nodes.get("upper")!;
+            return { rot: (n as { transform?: { rotation: number } }).transform!.rotation, world: c.world };
+        };
+        // The JOINT is the top-centre of the box, and applying the node's own matrix to that local
+        // point must land on the same world position at every frame — that is what a pivot IS.
+        const joint = (f: number) => {
+            const { world } = armAt(f);
+            const lx = 26 / 2, ly = 0;
+            return { x: world.a * lx + world.c * ly + world.e, y: world.b * lx + world.d * ly + world.f };
+        };
+        const j0 = joint(0), j6 = joint(6), j12 = joint(12);
+        expect(j6.x).toBeCloseTo(j0.x, 6);
+        expect(j6.y).toBeCloseTo(j0.y, 6);
+        expect(j12.x).toBeCloseTo(j0.x, 6);
+        expect(j12.y).toBeCloseTo(j0.y, 6);
+        // …and it genuinely swings, or the assertion above would hold for a limb doing nothing.
+        expect(armAt(0).rot).toBeLessThan(0);
+        expect(armAt(12).rot).toBeGreaterThan(0);
+        // The FOREARM lags, which is the overlap that makes a chain read as connected rather than
+        // as one rigid piece: at the upper arm's extreme the forearm has not arrived yet.
+        const fore = (f: number) => (applyFrame(limb, f).nodes.get("fore") as { transform?: { rotation: number } }).transform!.rotation;
+        expect(Math.abs(fore(12))).toBeLessThan(Math.abs(armAt(12).rot) * 1.5);
+        expect(fore(12)).toBeLessThan(fore(15));
     });
 
     test("the other exercises animate the things they are each meant to teach", () => {
@@ -13860,10 +13926,12 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // JUMPING SQUARE — anticipation: it must go DOWN and get WIDER before it goes up.
         const jump = jumpingSquare();
         const start = applyFrame(jump, 0).nodes.get("jumper")!.geometry;
-        const crouch = applyFrame(jump, 8).nodes.get("jumper")!.geometry;
         const apex = applyFrame(jump, 20).nodes.get("jumper")!.geometry;
-        expect(crouch.y).toBeGreaterThan(start.y);          // down before up
-        expect(crouch.width).toBeGreaterThan(start.width);  // squat widens
+        // The CROUCH is a scale about the feet, so it is read off the transform rather than the
+        // box — the box does not move during it, which is the point of anchoring the deformation.
+        const squat = (applyFrame(jump, 8).nodes.get("jumper") as { transform?: { scaleX: number; scaleY: number } }).transform!;
+        expect(squat.scaleY).toBeLessThan(1);               // down before up
+        expect(squat.scaleX).toBeGreaterThan(1);            // and wider as it compresses
         expect(apex.y).toBeLessThan(start.y - 100);         // and then it really leaves
         // …and it LANDS, rather than drifting off: the settle returns to the ground line.
         expect(applyFrame(jump, 40).nodes.get("jumper")!.geometry.y).toBe(start.y);
