@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v46 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v47 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -316,9 +316,10 @@ const BEZIER_PRESETS: readonly { name; curve }[];
 // outside [0,1] is overshoot — anticipation and follow-through are made of it.
 // `Prototype.easingError` is the shared edit+load validator for `Easing = EasingName | CubicBezier`.
 //
-// NOT DOCUMENTED HERE, and therefore not pinned: `document/Timeline` and `document/Prototype`
-// themselves. Both are live and both predate this file's coverage sweep; the same rot that had
-// `Mesh`/`Light`/`Depth` missing for six schemas. Stated rather than left to be discovered.
+// `document/Timeline` now has its own section below. It was the INVERSE of the usual rot: the
+// compile-time pin had imported it for schemas, while this file never described it — so the pin
+// was holding a shape no document claimed, and a reader had nothing to check the code against.
+// `document/Prototype` is still undescribed here. Stated rather than left to be discovered.
 
 // Mesh.ts — a grid of control points that BENDS a shape (schema 41).
 const MESH_MAX_DIVISIONS: number;                         // 64 — the point count is the product
@@ -749,6 +750,43 @@ The parser builds a candidate track and hands it to `trackError`, so a field can
 track the document would refuse. Structured storage is kept for the same reason `core.path`
 stores commands rather than a `d` string (one validator, no backend re-parses); the text form
 exists because a row-per-track widget is a poor way to author six columns.
+
+### `document/Timeline` — animation over frames (schema 39; CHANNELS schema 47)
+
+```ts
+interface Keyframe {
+    frame: number;                        // whole, >= 0; a track is in ASCENDING order
+    hold?: boolean;                       // stay put until the next keyframe — frame-by-frame
+    easing?: Easing;                      // shapes the tween LEAVING this keyframe; ignored when held
+    easings?: Record<string, Easing>;     // PER-PROPERTY curves (schema 45), keyed by path
+    values: StateDefinition;              // the same statement a state and an override make
+}
+interface TimelineSettings { frames: number; fps: number }
+
+const TIMELINE_MAX_FRAMES: number;        // 100_000
+const TRACK_MAX_KEYFRAMES: number;        // 10_000
+const FPS_MIN: number, FPS_MAX: number;   // 1, 240
+const CHANNELS_MAX: number;               // channels one node may carry
+const EASABLE_PATHS: ReadonlySet<string>; // the paths `easings` and `channels` may name
+
+function timelineError(t: unknown): string | null;
+function trackError(track: unknown, valuesError: (v: unknown) => string | null): string | null;
+function channelsError(channels: unknown, valuesError: (v: unknown) => string | null): string | null;
+function keyframesAt(track: readonly Keyframe[], frame: number):
+    { from: Keyframe; to: Keyframe | null; t: number; raw: number } | null;   // null outside/empty; `raw` is the un-eased progress
+function applyFrame(doc: ReadonlyDocument, frame: number | undefined): ReadonlyDocument;
+function onionFrames(frame: number, before: number, after: number, frames: number): number[];
+```
+
+- `applyFrame` returns an ORDINARY document and is run inside `resolveScene`, so nothing below the
+  display seam knows time exists. A document with no animated node is returned BY REFERENCE.
+- The derived document's own `frame` is cleared. Naming it would re-apply the track to a document
+  already placed in time — the trap `blendStates` fell into with `activeState`.
+- Outside a track's range the nearest keyframe is HELD, never extrapolated.
+- A CHANNEL IS A TRACK for one property path (schema 47) — same `Keyframe`, same rules, same
+  validators. The one added rule: its keyframes may name only its own path. Channels are applied
+  AFTER the track, so a property named by both takes the channel's value, and a document with no
+  channels behaves exactly as it did before they existed.
 
 ## Actions (`core/actions/`)
 

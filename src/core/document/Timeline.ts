@@ -134,6 +134,62 @@ export function trackError(track: unknown, valuesError: (v: unknown) => string |
 }
 
 /**
+ * Channels one node may carry. The map is keyed by property path and the paths are a fixed set, so
+ * this is generous rather than tight — it exists for the same reason every other map here is
+ * bounded, not because anybody will approach it.
+ */
+export const CHANNELS_MAX = 64;
+
+/**
+ * Validity of a node's CHANNELS (schema 47), shared by the edit path and the load path.
+ *
+ * A channel is a TRACK, so this delegates to `trackError` rather than restating the timing rules —
+ * ascending frames, the keyframe count, `hold`, the easing curves and the per-property ones are all
+ * already governed there, and a second copy is the drift this codebase keeps designing out.
+ *
+ * ONLY TWO RULES ARE NEW. The PATH must be one the engine actually interpolates, for the same
+ * reason `easings` checks it: a channel on a path that tweens nothing animates nothing, and that
+ * is indistinguishable from a curve being wrong. And a channel's keyframes may name ONLY its own
+ * path — a channel called `transform.rotation` that also sets `geometry.x` is a statement with two
+ * meanings, and refusing it is better than picking one.
+ */
+export function channelsError(channels: unknown, valuesError: (v: unknown) => string | null): string | null {
+    if (channels === undefined) return null;
+    if (typeof channels !== "object" || channels === null || Array.isArray(channels)) {
+        return "channels must be an object keyed by property path";
+    }
+    const entries = Object.entries(channels as Record<string, unknown>);
+    if (entries.length > CHANNELS_MAX) return `channels must hold at most ${CHANNELS_MAX} paths`;
+    for (const [path, track] of entries) {
+        if (!EASABLE_PATHS.has(path)) return `channels has no such property "${path}"`;
+        if (!Array.isArray(track)) return `channels["${path}"] track must be an array`;
+        const bad = trackError(track, valuesError);
+        if (bad) return `channels["${path}"] ${bad}`;
+        for (const k of track as Keyframe[]) {
+            const named = pathsNamedBy(k.values);
+            // An EMPTY keyframe is refused too. "This channel says nothing at this frame" is not a
+            // drawing anybody means, and silently holding the previous value would make a typo in
+            // the group name look like an intentional hold.
+            if (named.length !== 1 || named[0] !== path) {
+                return `channels["${path}"] keyframe must set exactly that property, not ${JSON.stringify(named)}`;
+            }
+        }
+    }
+    return null;
+}
+
+/** The `group.field` paths a keyframe's values actually name — the check `channelsError` makes. */
+function pathsNamedBy(values: unknown): string[] {
+    if (typeof values !== "object" || values === null) return [];
+    const out: string[] = [];
+    for (const [group, fields] of Object.entries(values as Record<string, unknown>)) {
+        if (typeof fields !== "object" || fields === null) continue;
+        for (const field of Object.keys(fields as Record<string, unknown>)) out.push(`${group}.${field}`);
+    }
+    return out;
+}
+
+/**
  * The pair of keyframes a frame falls between, and how far between them it is.
  *
  * Outside the track's own range the nearest keyframe is HELD rather than extrapolated. Before the
@@ -188,14 +244,17 @@ export function applyFrame(doc: ReadonlyDocument, frame: number | undefined): Re
     const f = Math.round(frame as number);
 
     let any = false;
-    doc.nodes.forEach(n => { if (n.track && n.track.length > 0) any = true; });
+    doc.nodes.forEach(n => {
+        if (n.track && n.track.length > 0) any = true;
+        if (n.channels && Object.keys(n.channels).length > 0) any = true;
+    });
     if (!any) return doc;
 
     const nodes = new Map<string, Node>();
     doc.nodes.forEach((n, id) => {
         const track = n.track;
         const at = track && track.length > 0 ? keyframesAt(track, f) : null;
-        if (!at) { nodes.set(id, n as Node); return; }
+        if (!at) { nodes.set(id, applyChannels(n as Node, n as Node, id, f)); return; }
         // `materializeNode` is the ONE place a node and a statement of differences are combined,
         // so a keyframe lands exactly as a state and an override do — same field rules, same
         // layout exclusivity. `isRoot: false`: the node keeps its own position and constraints.
@@ -213,7 +272,11 @@ export function applyFrame(doc: ReadonlyDocument, frame: number | undefined): Re
         const easeFor: EaseFor | undefined = easings
             ? (path: string) => (easings[path] !== undefined ? easingAt(easings[path], at.raw) : at.t)
             : undefined;
-        nodes.set(id, at.to ? withChildren(blendNode(from, value(at.to), at.t, easeFor), n.children) : from);
+        const posed = at.to ? withChildren(blendNode(from, value(at.to), at.t, easeFor), n.children) : from;
+        // CHANNELS LAST (schema 47): the more specific statement wins. A property named by both the
+        // track and a channel takes the channel's, which is the order that makes a channel worth
+        // adding — and it is why a document with none behaves exactly as it did before they existed.
+        nodes.set(id, applyChannels(posed, n as Node, id, f));
     });
 
     return {
@@ -231,6 +294,59 @@ export function applyFrame(doc: ReadonlyDocument, frame: number | undefined): Re
         // with `activeState`, where a 2-second transition landed on its end state in one frame.
         frame: undefined
     } as ProjectDocument;
+}
+
+/**
+ * Each channel's own value at this frame, written over whatever the track produced.
+ *
+ * THE BLENDING IS NOT RE-IMPLEMENTED. A channel's two keyframes are materialized onto the ORIGINAL
+ * node and run through the same `blendNode` the track uses, and only the one path the channel owns
+ * is taken from the result. Interpolation rules for numbers, angles and colours therefore live in
+ * exactly one place, and a channel cannot come to disagree with a track about what halfway means.
+ *
+ * Materialized onto the ORIGINAL rather than onto the posed node because a channel states what its
+ * property is at a frame, absolutely, not relative to whatever the track had already done to it.
+ * Being precise about the strength of that claim: with the validator guaranteeing each keyframe
+ * names exactly its own path, the two are EQUIVALENT today — the blended value of that path
+ * depends only on the two keyframes, so the base cannot change it, and a mutation swapping them
+ * survives the suite. It is written this way because it is the clearer statement of intent, not
+ * because a defect follows from the other.
+ */
+function applyChannels(posed: Node, original: Node, id: string, frame: number): Node {
+    const channels = original.channels;
+    if (!channels) return posed;
+    let out = posed;
+    for (const [path, track] of Object.entries(channels) as [string, Keyframe[]][]) {
+        if (!track || track.length === 0) continue;
+        const at = keyframesAt(track, frame);
+        if (!at) continue;
+        const build = (k: Keyframe): Node => materializeNode(original, k.values, false, id, original.parent ?? null);
+        const from = build(at.from);
+        const easings = at.from.easings;
+        const easeFor: EaseFor | undefined = easings
+            ? (p: string) => (easings[p] !== undefined ? easingAt(easings[p], at.raw) : at.t)
+            : undefined;
+        const solved = at.to ? blendNode(from, build(at.to), at.t, easeFor) : from;
+        // COPIED ON WRITE, and only on the first channel that changes something: an untouched node
+        // must stay the same object, because `computeGeometry` reuses by reference and a fresh
+        // object every frame would defeat the dirty tracking the whole engine leans on.
+        if (out === posed) out = { ...posed } as Node;
+        copyPath(out, solved, path);
+    }
+    return out;
+}
+
+/** Move one `group.field` from a solved node onto the node being built. */
+function copyPath(target: Node, source: Node, path: string): void {
+    const dot = path.indexOf(".");
+    const group = path.slice(0, dot), field = path.slice(dot + 1);
+    const src = (source as unknown as Record<string, Record<string, unknown> | undefined>)[group];
+    if (!src || src[field] === undefined) return;
+    const t = target as unknown as Record<string, Record<string, unknown> | undefined>;
+    // The GROUP is cloned before it is written into. `posed` was shallow-copied above, so its
+    // `geometry` and `transform` are still the very objects the stored node holds — writing
+    // straight into one would edit the document from a function that only derives from it.
+    t[group] = { ...(t[group] ?? {}), [field]: src[field] };
 }
 
 /** `blendNode` builds from the TO side, which has no children of its own here. */

@@ -91,7 +91,7 @@ import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, trac
 import { JournalEntry, recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
 import { EASABLE_PATHS } from "../document/Timeline";
 import { EaseFor } from "../document/Prototype";
-import { Keyframe, TimelineSettings, timelineError, trackError, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
+import { Keyframe, TimelineSettings, timelineError, trackError, channelsError, CHANNELS_MAX, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
 import { DEPTH_MIN, DEPTH_MAX, depthError, depthOf, parallaxRate, parallaxOffset, depthToClipZ, byDepth, applyParallax } from "../document/Depth";
 import { Mesh, ReadonlyMesh, MESH_MAX_DIVISIONS, meshError, restPoint, restMesh, isIdentityMesh, warpPoint, warpCommands, heightOf, warpHeight, heightRange, surfaceNormal, normalAt, isFlatMesh } from "../document/Mesh";
 import { Light, LIGHTS_MAX, lightsError, ambientError, normalize, lambert, shadowOffset, heightAbovePage } from "../document/Light";
@@ -585,6 +585,12 @@ export function __apiSurfacePin(): void {
     // The EXPORT TARGET: an offset plus a background that may be null. `emitCanvas` sets the
     // CTM absolutely, so this is the only way a caller places the output anywhere but 0,0.
     expectType<CanvasTarget>({ x: 0, y: 0, background: null });
+
+    // CHANNELS (schema 47): a track per property path, validated by the SAME value validator the
+    // track path passes in. The rest of `Timeline` was already pinned here — it was API-CONTRACTS
+    // that had never described it, so the pin was holding a shape no document claimed.
+    expectType<number>(CHANNELS_MAX);
+    expectType<string | null>(channelsError({ "geometry.x": [] }, () => null));
     expectType<(ctx: CanvasRenderingContext2D, d: ReadonlyDocument, p: SheetPlan) => void>(drawSheet);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);

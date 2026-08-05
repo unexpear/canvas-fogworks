@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v46 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v47 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -161,6 +161,31 @@ interface Keyframe {
   easing?: Easing;          // shapes the tween LEAVING this keyframe; ignored when held
   values: StateDefinition;  // the same statement a state and an instance override make
 }
+
+// CHANNELS (schema 47). Independent per-property TIMING — rotation keyed on frames position has none.
+// Node.channels?: Record<string, Keyframe[]>   — keyed by property path; absent = the track is all
+//
+// A KEYFRAME HOLDS A WHOLE STATE, and that is the limitation this lifts. Until now a node had one
+// track, so every property it animated had to key on the same frames: a ball that travels at a
+// steady speed while bouncing seven times needed seven horizontal keyframes it did not want, and
+// an arm that keeps swinging after the body stops could not be said at all. Overlapping action —
+// the single most-taught principle after squash and stretch — is exactly the case where one
+// property's timing must outlive another's.
+//
+// A CHANNEL IS A TRACK, not a new idea. Same `Keyframe`, same ascending-frame rule, same `hold`,
+// same easing, validated by the same `trackError` and the same `overrideValueError`. The only
+// added rule is that a channel's keyframes may name ONLY its own path — a channel called
+// `transform.rotation` whose keyframe sets `geometry.x` is a statement with two meanings, and the
+// loader refuses it rather than picking one.
+//
+// THE TRACK STILL WINS NOTHING AND LOSES NOTHING: channels are applied AFTER the track, so a
+// property named by both takes the channel's value. That order is the useful one — a channel is
+// the more specific statement, added deliberately to override the general one — and it makes an
+// existing document's behaviour reachable by not writing a channel at all.
+//
+// PATHS ARE THE SAME SET `easings` accepts (`EASABLE_PATHS`), for the same reason: a path that
+// interpolates nothing would silently animate nothing, which is indistinguishable from a curve
+// that is wrong. `CHANNELS_MAX` bounds the map for the reason every other map here is bounded.
 
 // CLIPS (schema 46). Named frame ranges over the one timeline — `idle`, `walk`, `jump`.
 interface Clip { name: string; from: number; to: number; loop?: boolean }   // both ends INCLUSIVE

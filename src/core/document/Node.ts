@@ -246,6 +246,17 @@ export interface Node {
      */
     track?: Keyframe[];
     /**
+     * Per-property TRACKS (schema 47), keyed by property path — `"transform.rotation"`,
+     * `"geometry.x"`. Absent = the node's `track` says everything.
+     *
+     * A keyframe holds a whole state, which is what made animation cheap and is also what forces
+     * every animated property onto the same frames. A channel lifts exactly that: rotation can key
+     * where position has no keyframe at all, which is what overlapping action — a body that stops
+     * while its arm keeps going — is made of. Applied AFTER `track`, so the more specific statement
+     * wins. See `document/Timeline`.
+     */
+    channels?: Record<string, Keyframe[]>;
+    /**
      * How far BACK this node sits (schema 40). Absent = 0, the plane of the page.
      *
      * Three things read it and nothing else does: display ORDER (far draws first, ahead of the

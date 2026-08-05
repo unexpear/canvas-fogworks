@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v46 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v47 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -784,6 +784,31 @@ Both are BOUNDED. A trace over a long timeline with many nodes is quadratic in a
 document is not, so the frame range and the node set are explicit parameters rather than defaults
 that quietly walk the whole document; the journal keeps a fixed number of the most recent entries
 and says how many it dropped.
+
+### Channels — when one property's timing must outlive another's
+
+**A keyframe holds a whole state, and that is a limitation as well as an economy.** It is what let
+animation cost almost nothing — a keyframe is an instance override with a frame number, so it
+inherited the field rules and the blending already written. But it also means every property a node
+animates must key on the SAME frames. A ball travelling at a steady speed across seven bounces needs
+seven horizontal keyframes it never wanted; an arm that keeps swinging after the body stops cannot
+be said at all. Overlapping action is the most-taught principle after squash and stretch, and it is
+precisely the case where one property's timing has to outlive another's.
+
+**A channel is a track for one property path — not a second animation model.** Same `Keyframe`,
+same ascending-frame rule, same `hold`, same easing, the same `trackError` and the same
+`overrideValueError`. The single added rule is that a channel's keyframes may name only its own
+path, because a channel called `transform.rotation` that also sets `geometry.x` is a statement with
+two meanings and the loader should refuse it rather than pick one.
+
+**Channels are applied AFTER the track**, so a property named by both takes the channel's value.
+That is the useful order — a channel is the more specific statement — and it means a document
+written before channels existed behaves identically by not having any.
+
+**The blending is not re-implemented.** A channel's value at a frame is computed by materializing
+its two keyframes and running the same `blendNode` the track uses, then taking the one path it
+owns. Interpolation rules for colours, angles and numbers live in exactly one place, so a channel
+cannot drift from a track about what "halfway" means.
 
 ## 4c. Sprite sheets — a character leaving the editor
 

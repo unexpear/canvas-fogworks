@@ -218,11 +218,64 @@ export function wavingLimb(): ProjectDocument {
     return demo("Waving limb", 28, [upper, fore]);
 }
 
+/**
+ * OVERLAPPING ACTION — the cart stops, the flag does not.
+ *
+ * The exercise that cannot be authored with one track per node, which is why it is here. A keyframe
+ * holds a whole state, so before channels every property a node animated had to key on the SAME
+ * frames — and overlapping action is precisely the case where one property's timing must outlive
+ * another's. The body arrives and stops at frame 14; the flag keeps swinging through 20, 26 and 32,
+ * settling after the thing carrying it has already come to rest. That is what makes weight read.
+ *
+ * Written the only way it can be: POSITION on the node's track, ROTATION on a channel with its own
+ * keyframes. Saying it with one track would need position keys at 20, 26 and 32 that restate a
+ * value that is not changing — which is not the same animation, it is a workaround that an editor
+ * then shows as six keyframes the animator never authored.
+ */
+export function overlappingAction(): ProjectDocument {
+    const deg = (d: number) => (d * Math.PI) / 180;
+    // THE BODY: accelerates away, arrives, stops. Nothing after frame 14.
+    const body: Keyframe[] = [
+        { frame: 0, easing: "ease-in", values: { geometry: { x: 120, y: 300 } } },
+        { frame: 14, easing: "ease-out", values: { geometry: { x: 460, y: 300 } } }
+    ];
+    // THE FLAG: keyed where the body has no keyframe at all. It lags into the move, overshoots
+    // when the body stops, and oscillates down to rest — decreasing amplitude, which is what
+    // separates follow-through from a wobble.
+    // The ANCHOR is not in the keyframes. A channel says what ONE property is at a frame, and the
+    // pivot a flag swings about is a fact about the flag rather than about any moment in it —
+    // `materializeNode` merges the group, so a static `origin` survives every keyframe that sets
+    // only a rotation. The channel validator refused the first version of this for exactly that
+    // reason, which is the rule doing its job rather than getting in the way.
+    const flag: Keyframe[] = [
+        { frame: 0, easing: "ease-in-out", values: { transform: { rotation: deg(0) } } },
+        { frame: 8, easing: "ease-in-out", values: { transform: { rotation: deg(-28) } } },
+        { frame: 20, easing: "ease-in-out", values: { transform: { rotation: deg(22) } } },
+        { frame: 26, easing: "ease-in-out", values: { transform: { rotation: deg(-11) } } },
+        { frame: 32, easing: "ease-in-out", values: { transform: { rotation: deg(0) } } }
+    ];
+    const cart: Node = { id: "cart", type: "core.rectangle", parent: null, children: [], name: "cart",
+        geometry: { x: 120, y: 300, width: 96, height: 60 },
+        style: { fill: "#4a90d9", opacity: 1 }, layout: {}, track: body } as Node;
+    const pole: Node = { id: "pole", type: "core.rectangle", parent: "cart", children: [], name: "flag",
+        geometry: { x: 40, y: -90, width: 12, height: 92 },
+        style: { fill: "#e8a33d", opacity: 1 }, layout: {},
+        transform: { rotation: 0, scaleX: 1, scaleY: 1, origin: JOINT },
+        // POSITION from the parent's track (the flag is a child, so it is carried), ROTATION from
+        // its own channel on frames the parent never mentions. That is the whole feature.
+        channels: { "transform.rotation": flag } } as Node;
+    cart.children = ["pole"];
+    const d = demo("Overlapping action", 36, [cart, pole]);
+    d.rootNodeUuids = ["cart"];
+    return d;
+}
+
 /** Every demo, for a menu and for the tests that check each one actually animates. */
 export const DEMOS: readonly { name: string; build: () => ProjectDocument }[] = [
     { name: "Bouncing ball", build: bouncingBall },
     { name: "Jumping square", build: jumpingSquare },
     { name: "Pendulum", build: pendulum },
     { name: "Cel sequence", build: celSequence },
-    { name: "Waving limb", build: wavingLimb }
+    { name: "Waving limb", build: wavingLimb },
+    { name: "Overlapping action", build: overlappingAction }
 ];

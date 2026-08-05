@@ -56,9 +56,10 @@ import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry
 import { Ring } from "../geometry/PathBoolean";
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
-import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, DEMOS } from "../document/Demos";
+import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlappingAction, DEMOS } from "../document/Demos";
 import { traceMotion, traceVelocity, traceTiming, traceDigest } from "../diagnostics/MotionTrace";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
+import { channelsError, CHANNELS_MAX } from "../document/Timeline";
 import { planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
 import { easingError } from "../document/Prototype";
@@ -4399,9 +4400,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 45→46 landed, giving a document
-        // NAMED CLIPS over its one timeline.)
-        expect(() => migrateIfNeeded(legacy, "47")).toThrow('Migration not implemented for document schema "46"');
+        // time a real migration is added — most recently when 46→47 landed, giving a node
+        // per-property CHANNELS so rotation can key where position has no keyframe.)
+        expect(() => migrateIfNeeded(legacy, "48")).toThrow('Migration not implemented for document schema "47"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -13857,6 +13858,106 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
         expect(contact.width).toBe(air.width);
         expect(contact.height).toBe(air.height);
+    });
+
+    test("CHANNELS give a property its own TIMING, keyed where the track has nothing", () => {
+        const doc = overlappingAction();
+        // The claim, stated as frames: the cart's track ends at 14, the flag's channel runs to 32.
+        const cart = doc.nodes.get("cart")!, pole = doc.nodes.get("pole")!;
+        expect(cart.track!.map(k => k.frame)).toEqual([0, 14]);
+        expect(pole.channels!["transform.rotation"].map(k => k.frame)).toEqual([0, 8, 20, 26, 32]);
+        expect(pole.track).toBeUndefined();
+
+        // MEASURED, not asserted from the document. After the body has stopped, the flag must still
+        // be moving — which is the whole point and is exactly what one track per node cannot say.
+        const after = traceMotion(doc, { from: 15, to: 32 });
+        const body = after.filter(s => s.nodeId === "cart");
+        expect(new Set(body.map(s => Math.round(s.anchorX))).size).toBe(1);      // stopped
+        const flag = after.filter(s => s.nodeId === "pole");
+        expect(new Set(flag.map(s => s.rotation.toFixed(4))).size).toBeGreaterThan(10);  // still going
+
+        // And it SETTLES rather than wobbling on: the last swing is smaller than the first.
+        const swing = (a: number, b: number) => Math.abs(
+            flag.find(s => s.frame === b)!.rotation - flag.find(s => s.frame === a)!.rotation);
+        expect(swing(26, 32)).toBeLessThan(swing(15, 20));
+    });
+
+    test("a CHANNEL beats the track on the property it owns, and leaves the rest alone", () => {
+        const doc = createEmptyDocument();
+        doc.timeline = { frames: 20, fps: 24 };
+        doc.nodes.set("n", { id: "n", type: "core.rectangle", parent: null, children: [], name: "n",
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#fff", opacity: 1 }, layout: {},
+            // The track moves BOTH x and y; the channel restates only x.
+            track: [{ frame: 0, values: { geometry: { x: 0, y: 0 } } },
+                    { frame: 10, values: { geometry: { x: 100, y: 100 } } }],
+            channels: { "geometry.x": [{ frame: 0, values: { geometry: { x: 0 } } },
+                                       { frame: 10, values: { geometry: { x: 400 } } }] }
+        } as Node);
+        doc.rootNodeUuids = ["n"];
+
+        const at5 = traceMotion(doc, { from: 5, to: 5 })[0];
+        expect(Math.round(at5.x)).toBe(200);   // the CHANNEL's x, not the track's 50
+        expect(Math.round(at5.y)).toBe(50);    // the track's y, untouched
+
+        // The stored document is not edited by deriving from it — the group is cloned before it is
+        // written into, so the very object the document holds cannot be reached through the copy.
+        expect(doc.nodes.get("n")!.geometry.x).toBe(0);
+    });
+
+    test("a node with ONLY channels animates, and its stored values are never written into", () => {
+        const doc = createEmptyDocument();
+        doc.timeline = { frames: 20, fps: 24 };
+        // NO track anywhere in the document. `applyFrame` returns the document BY REFERENCE when
+        // nothing is animated, so a node whose animation lives entirely in channels has to be
+        // counted as animated — otherwise it is silently returned unmoved.
+        doc.nodes.set("n", { id: "n", type: "core.rectangle", parent: null, children: [], name: "n",
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#fff", opacity: 1 }, layout: {},
+            transform: { rotation: 0, scaleX: 1, scaleY: 1, origin: { x: 0.5, y: 0.5 } },
+            channels: { "geometry.x": [{ frame: 0, values: { geometry: { x: 0 } } },
+                                       { frame: 10, values: { geometry: { x: 200 } } }] }
+        } as Node);
+        doc.rootNodeUuids = ["n"];
+
+        expect(Math.round(traceMotion(doc, { from: 5, to: 5 })[0].x)).toBe(100);
+
+        // AND the stored node is untouched. This node has no track, so the object a channel writes
+        // into starts life as a shallow copy of the STORED node — its `geometry` is the very
+        // object the document holds until the group is cloned. Writing a field in place here edits
+        // the document from a function that only derives from it, and the damage is permanent.
+        const stored = doc.nodes.get("n")!;
+        expect(stored.geometry.x).toBe(0);
+        expect(traceMotion(doc, { from: 5, to: 5 })[0].x).toBe(100);   // and again, from a clean doc
+    });
+
+    test("channelsError refuses a path that eases nothing, a keyframe that strays, and too many", () => {
+        const ok = (v: unknown) => null;
+        expect(channelsError(undefined, ok)).toBeNull();
+        expect(channelsError({ "geometry.x": [{ frame: 0, values: { geometry: { x: 1 } } }] }, ok)).toBeNull();
+
+        // A path nothing interpolates: silently animating nothing is indistinguishable from a
+        // curve being wrong, which is why it is refused rather than ignored.
+        expect(channelsError({ "geometry.nope": [] }, ok)).toMatch(/no such property/);
+        // A channel that names a SECOND property is a statement with two meanings.
+        expect(channelsError({ "geometry.x": [{ frame: 0, values: { geometry: { x: 1, y: 2 } } }] }, ok))
+            .toMatch(/must set exactly that property/);
+        // An EMPTY keyframe says nothing, which is not a hold.
+        expect(channelsError({ "geometry.x": [{ frame: 0, values: {} }] }, ok))
+            .toMatch(/must set exactly that property/);
+        // The timing rules are NOT restated here — they are `trackError`'s, and this proves the
+        // delegation is real rather than a second copy that happens to agree today.
+        expect(channelsError({ "geometry.x": [{ frame: 5, values: { geometry: { x: 1 } } },
+                                              { frame: 5, values: { geometry: { x: 2 } } }] }, ok))
+            .toMatch(/ascending frame order/);
+        expect(channelsError({ "geometry.x": "no" }, ok)).toMatch(/must be an array/);
+        expect(channelsError([], ok)).toMatch(/keyed by property path/);
+
+        const many: Record<string, unknown> = {};
+        for (let i = 0; i <= CHANNELS_MAX; i++) many[`p${i}`] = [];
+        expect(channelsError(many, ok)).toMatch(/at most/);
+
+        // The VALUES validator is the caller's, the same one the track path passes in.
+        expect(channelsError({ "geometry.x": [{ frame: 0, values: { geometry: { x: 1 } } }] },
+            () => "values are bad")).toBe('channels["geometry.x"] values are bad');
     });
 
     test("a SPRITE SHEET is laid out from the clips, in clip order", () => {

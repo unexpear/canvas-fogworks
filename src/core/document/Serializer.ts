@@ -337,6 +337,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "43") { raw = migrate_43_to_44(raw); version = "44"; }
     if (version === "44") { raw = migrate_44_to_45(raw); version = "45"; }
     if (version === "45") { raw = migrate_45_to_46(raw); version = "46"; }
+    if (version === "46") { raw = migrate_46_to_47(raw); version = "47"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -750,6 +751,19 @@ function migrate_21_to_22(raw: any): any {
  * schema-46 file would ignore the clip list and play the whole strip as one animation — a
  * character running its idle, walk and death back to back.
  */
+/**
+ * 46 -> 47: per-property CHANNELS.
+ *
+ * Additive. A schema-46 node says everything through its one `track`, and a node with no channels
+ * behaves identically under the new code, so nothing has to be rewritten. The bump is the usual
+ * interpretation direction: an old build reading a schema-47 file would drop the channels and play
+ * an animation missing every property whose timing was independent — an arm that stops with the
+ * body instead of swinging past it.
+ */
+function migrate_46_to_47(raw: any): any {
+    return { ...raw, version: "47" };
+}
+
 function migrate_45_to_46(raw: any): any {
     return { ...raw, version: "46" };
 }

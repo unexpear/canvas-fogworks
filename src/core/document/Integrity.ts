@@ -14,7 +14,7 @@ import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
 import { transformError, layoutError, dimensionError, pathError, booleanOpError, srcError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError } from "./Node";
 import { interactionsError } from "./Prototype";
-import { timelineError, trackError } from "./Timeline";
+import { timelineError, trackError, channelsError } from "./Timeline";
 import { clipsError } from "./Clips";
 import { depthError } from "./Depth";
 import { meshError } from "./Mesh";
@@ -75,6 +75,10 @@ function checkNodeRanges(node: ReadonlyNode): void {
     if (depthErr) throw new Error(`Invalid document: node "${node.id}" ${depthErr}.`);
     const trackErr = trackError(node.track, v => overrideValueError("keyframe", v));
     if (trackErr) throw new Error(`Invalid document: node "${node.id}" ${trackErr}.`);
+    // CHANNELS go through the SAME value validator as the track (schema 47) — a channel is a
+    // track, so a keyframe it holds must satisfy exactly what a keyframe always did.
+    const channelErr = channelsError(node.channels, v => overrideValueError("keyframe", v));
+    if (channelErr) throw new Error(`Invalid document: node "${node.id}" ${channelErr}.`);
     const srcErr = srcError(node.type, node.src);
     if (srcErr) throw new Error(`Invalid document: node "${node.id}" ${srcErr}.`);
     // `componentId` (M6): only an instance may carry one; a DANGLING reference is deliberately
