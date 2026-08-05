@@ -115,17 +115,20 @@ export function contentActionFor(doc: ReadonlyDocument, nodeId: string, patch: C
         return doc.nodes.has(nodeId) ? new UpdateNodeContentAction(doc, nodeId, patch) : null;
     }
     if (patch.name !== undefined) return null;     // no override slot for a name
-    // NOR for an image REGION or its filter (schema 51). `InstanceOverride` has no slot for
-    // either, so a copy cannot show a different tile from its master yet — and refusing is the
-    // same call `name` makes, rather than writing the edit somewhere it cannot live. Stated here
-    // because "the inspector silently did nothing on a copy" is otherwise a mystery to debug.
-    if (patch.sourceRect !== undefined || patch.pixelated !== undefined) return null;
+    // A REGION now has an override slot (schema 52), so a copy CAN show a different tile from its
+    // master — which is what a tilemap built from instances of one tile node needs. `pixelated`
+    // still has none: it is a rendering hint rather than content, and refusing is the same call
+    // `name` makes rather than writing the edit somewhere it cannot live.
+    if (patch.pixelated !== undefined) return null;
     const target = overrideTargetFor(doc, nodeId);
     if (!target) return null;
     const override: InstanceOverride = {};
     if (patch.text !== undefined) override.text = patch.text;
     if (patch.src !== undefined) override.src = patch.src;
-    if (override.text === undefined && override.src === undefined) return null;
+    // `null` is the CLEAR on a stored node and there is no way to express "no override" as an
+    // override, so clearing a copy's region is refused rather than silently doing nothing else.
+    if (patch.sourceRect !== undefined && patch.sourceRect !== null) override.sourceRect = patch.sourceRect;
+    if (override.text === undefined && override.src === undefined && override.sourceRect === undefined) return null;
     return new SetInstanceOverrideAction(doc, target.instanceId, target.masterNodeId, override);
 }
 

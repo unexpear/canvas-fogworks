@@ -35,7 +35,7 @@ import { applyIk } from "./Rig";
 import { ProjectDocument, ReadonlyDocument } from "./Document";
 import { dimensionError, Geometry, Layout, layoutError, mergeLayout, Node, slotContentError, STATES_MAX, Style, styleError, srcValueError, Transform, transformError, variantNameError } from "./Node";
 import { ReadonlyNode } from "./SceneGraph";
-import { PathCommand } from "./Node";
+import { PathCommand, SourceRect, sourceRectError } from "./Node";
 import { Mat2D, compose } from "../geometry/Matrix";
 import { flattenPath, hitShapeOf } from "../geometry/ShapeHit";
 import { shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
@@ -253,6 +253,15 @@ export interface InstanceOverride {
     style?: Partial<Style>;
     text?: string;
     src?: string;
+    /**
+     * The image's SOURCE REGION (schema 52).
+     *
+     * Here rather than only on the node because `StateDefinition` IS this interface — so one
+     * addition makes a region keyframable, state-able and instance-overridable at once. That is
+     * what makes SPRITE-SHEET PLAYBACK possible: a walk cycle is one image and a keyframe per
+     * cell, which is exactly how every 2D engine plays one.
+     */
+    sourceRect?: SourceRect;
     layout?: Partial<Layout>;
     transform?: Partial<Transform>;
     /** What this instance puts in the copy's slots (schema 29). Overriding it on a NESTED
@@ -263,7 +272,7 @@ export interface InstanceOverride {
 /** Overrides one instance may carry — an OOM guard on a hand-editable map, like `VARIABLES_MAX`. */
 export const INSTANCE_MAX_OVERRIDES = 10_000;
 
-const OVERRIDE_FIELDS = new Set(["geometry", "style", "text", "src", "layout", "transform", "slotContent"]);
+const OVERRIDE_FIELDS = new Set(["geometry", "style", "text", "src", "sourceRect", "layout", "transform", "slotContent"]);
 const GEOMETRY_FIELDS = new Set(["x", "y", "width", "height"]);
 
 function isPlain(v: unknown): v is Record<string, unknown> {
@@ -314,6 +323,13 @@ export function overrideValueError(label: string, value: unknown): string | null
     // Every remaining field goes through the SAME validator its stored counterpart uses, so
     // this can never hold a value the node itself could not — the rule that keeps a detach
     // (which bakes overrides into stored nodes) loadable.
+    // THE SAME shared validator the stored field uses, so a keyframe cannot hold a region the
+    // node itself could not — the rule that keeps a detach (which bakes overrides into stored
+    // nodes) loadable.
+    if (o.sourceRect !== undefined) {
+        const bad = sourceRectError(o.sourceRect);
+        if (bad) return `${label} ${bad}`;
+    }
     if (o.style !== undefined) {
         if (!isPlain(o.style)) return `${label} style must be an object`;
         const e = styleError(o.style);
@@ -500,6 +516,7 @@ export function materializeNode(
         if (override.style) copy.style = { ...master.style, ...override.style };
         if (override.text !== undefined) copy.text = override.text;
         if (override.src !== undefined) copy.src = override.src;
+        if (override.sourceRect !== undefined) copy.sourceRect = override.sourceRect;
         // `mergeLayout`, not a spread: a master with `container` and an override with `grid`
         // would otherwise produce a node carrying both, which no loader accepts.
         if (override.layout) copy.layout = mergeLayout(master.layout, override.layout);

@@ -342,6 +342,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "48") { raw = migrate_48_to_49(raw); version = "49"; }
     if (version === "49") { raw = migrate_49_to_50(raw); version = "50"; }
     if (version === "50") { raw = migrate_50_to_51(raw); version = "51"; }
+    if (version === "51") { raw = migrate_51_to_52(raw); version = "52"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -795,6 +796,19 @@ function migrate_21_to_22(raw: any): any {
  * smoothed. The bump is the usual direction: an old build reading a schema-51 file would drop both,
  * so a document showing one 24px tile from a tileset would show the entire 360x168 sheet, blurred.
  */
+/**
+ * 51 -> 52: a source region becomes a KEYFRAMABLE value.
+ *
+ * Additive. `sourceRect` joins the fields a `StateDefinition` may carry, which makes it animatable,
+ * state-able and instance-overridable at once — and none of that changes a schema-51 document,
+ * where the field only ever sat on the node. The bump is the usual direction: an old build reading
+ * a schema-52 file would drop the region from every keyframe and play a sprite sheet stuck on
+ * whichever cell the node itself named.
+ */
+function migrate_51_to_52(raw: any): any {
+    return { ...raw, version: "52" };
+}
+
 function migrate_50_to_51(raw: any): any {
     return { ...raw, version: "51" };
 }

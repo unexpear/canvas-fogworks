@@ -56,7 +56,7 @@ import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry
 import { Ring } from "../geometry/PathBoolean";
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
-import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlappingAction, arcToss, plantedFoot, curlingTail, tileSheet, DEMOS } from "../document/Demos";
+import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlappingAction, arcToss, plantedFoot, curlingTail, tileSheet, spriteWalk, DEMOS } from "../document/Demos";
 import { traceMotion, traceVelocity, traceTiming, traceDigest } from "../diagnostics/MotionTrace";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { channelsError, CHANNELS_MAX } from "../document/Timeline";
@@ -4405,9 +4405,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 50→51 landed, giving an image a
-        // SOURCE RECT and a pixel-art filter.)
-        expect(() => migrateIfNeeded(legacy, "52")).toThrow('Migration not implemented for document schema "51"');
+        // time a real migration is added — most recently when 51→52 landed, making a source
+        // REGION a keyframable value so a sprite sheet can play.)
+        expect(() => migrateIfNeeded(legacy, "53")).toThrow('Migration not implemented for document schema "52"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -13863,6 +13863,80 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
         expect(contact.width).toBe(air.width);
         expect(contact.height).toBe(air.height);
+    });
+
+    test("a keyframed REGION steps, and never slides across the sheet", () => {
+        const doc = spriteWalk();
+        const regionAt = (f: number) => applyFrame(doc, f).nodes.get("sprite")!.sourceRect!;
+
+        // ON the keyframes, the authored cells in order.
+        expect(regionAt(0)).toMatchObject({ x: 0, y: 0 });
+        expect(regionAt(4)).toMatchObject({ x: 8, y: 0 });
+        expect(regionAt(8)).toMatchObject({ x: 8, y: 8 });
+        expect(regionAt(12)).toMatchObject({ x: 0, y: 8 });
+        expect(regionAt(16)).toMatchObject({ x: 0, y: 0 });
+
+        // BETWEEN them, the value HOLDS. This is the assertion the feature turns on: an
+        // interpolated rect would read x=4 halfway from cell 0 to cell 1 — a window straddling two
+        // cells, whose numbers blend perfectly and whose picture is a smear of both.
+        for (const f of [1, 2, 3]) expect(regionAt(f)).toMatchObject({ x: 0, y: 0 });
+        for (const f of [5, 6, 7]) expect(regionAt(f)).toMatchObject({ x: 8, y: 0 });
+        for (const f of [9, 10, 11]) expect(regionAt(f)).toMatchObject({ x: 8, y: 8 });
+
+        // And never the ARRIVING keyframe's cell early — the trap `{ ...to }` sets, which would
+        // show every frame one keyframe ahead of its time and be hidden entirely by a `hold`.
+        expect(regionAt(3)).not.toMatchObject({ x: 8, y: 0 });
+        // The keyframes are deliberately NOT held, so this rule is genuinely under test rather
+        // than satisfied by never blending at all.
+        expect(doc.nodes.get("sprite")!.track!.every(k => !k.hold)).toBe(true);
+
+        // The extent never changes: only WHICH cell is shown, never how much of the sheet.
+        for (const f of [0, 3, 5, 9, 14, 16]) expect(regionAt(f)).toMatchObject({ width: 8, height: 8 });
+
+        // NOTHING ELSE MOVES. A sprite sheet plays by changing the picture, not the shape — and a
+        // demo whose box drifted would pass every assertion above while proving something else.
+        const boxes = new Set([0, 4, 8, 12, 16].map(f => {
+            const s2 = traceMotion(doc, { from: f, to: f })[0];
+            return `${Math.round(s2.x)},${Math.round(s2.y)},${Math.round(s2.width)},${Math.round(s2.height)}`;
+        }));
+        expect(boxes.size).toBe(1);
+
+        // FIVE distinct cells across the run, measured rather than assumed from the track.
+        const seen = new Set(Array.from({ length: 17 }, (_, f) => JSON.stringify(regionAt(f))));
+        expect(seen.size).toBe(4);   // four cells; the last keyframe returns to the first
+    });
+
+    test("a region that has not started yet does not arrive early", () => {
+        // The other half of stepping, and the one the sprite demo cannot reach because every one
+        // of its keyframes names a cell. Here the FIRST does not: the image is whole until frame
+        // 5 and a single cell after it. `blendNode` builds from `{ ...to }`, so without an explicit
+        // clear the cell would appear at frame 0 — the whole sheet never shown at all.
+        const doc = createEmptyDocument();
+        doc.timeline = { frames: 10, fps: 24 };
+        doc.nodes.set("s", { id: "s", type: "core.image", parent: null, children: [], name: "s",
+            geometry: { x: 0, y: 0, width: 64, height: 64 },
+            style: { fill: "#fff", opacity: 1 }, layout: {}, src: "sheet.png",
+            track: [{ frame: 0, values: {} },
+                    { frame: 5, values: { sourceRect: { x: 8, y: 0, width: 8, height: 8 } } }]
+        } as Node);
+        doc.rootNodeUuids = ["s"];
+
+        const regionAt = (f: number) => applyFrame(doc, f).nodes.get("s")!.sourceRect;
+        for (const f of [0, 1, 2, 3, 4]) expect(regionAt(f)).toBeUndefined();
+        expect(regionAt(5)).toMatchObject({ x: 8, y: 0 });
+        expect(regionAt(9)).toMatchObject({ x: 8, y: 0 });
+    });
+
+    test("a region is a STATE value too, so a copy can show its own tile", () => {
+        // `StateDefinition` IS `InstanceOverride`, so one addition made a region keyframable,
+        // state-able and instance-overridable at once. This pins the override half — the thing a
+        // tilemap built from instances of one tile node needs.
+        expect(overrideValueError("o", { sourceRect: { x: 8, y: 0, width: 8, height: 8 } })).toBeNull();
+        // Validated by the SAME shared rule the stored field uses, so an override cannot hold a
+        // region the node itself could not — the rule that keeps a detach loadable.
+        expect(overrideValueError("o", { sourceRect: { x: 0, y: 0, width: 0, height: 8 } })).toMatch(/must be positive/);
+        expect(overrideValueError("o", { sourceRect: { x: NaN, y: 0, width: 8, height: 8 } })).toMatch(/finite/);
+        expect(overrideValueError("o", { sourceRect: "no" })).toMatch(/must be an object/);
     });
 
     test("the TILE SHEET demo addresses one file five ways, and survives a save", () => {

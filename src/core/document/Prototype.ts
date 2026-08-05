@@ -200,6 +200,16 @@ export function blendNode(from: Node, to: Node, t: number, easeFor?: EaseFor): N
         const a = from.style[key], b = to.style[key];
         if (typeof a === "number" && typeof b === "number") out.style[key] = lerp(a, b, k(`style.${key}`));
     }
+    // A SOURCE REGION STEPS. Interpolating it would slide a window across the sheet and show a
+    // smear of two cells — the numbers would blend perfectly and the picture would be garbage. So
+    // it takes the FROM keyframe's value for the whole interval and changes when the next one
+    // arrives, which is what a sprite frame is. Note this is the opposite of the `{ ...to }` the
+    // rest of the node starts from: with `to`'s region the cell would change the instant the
+    // interval began, showing every frame one keyframe early, and only a `hold` would hide it.
+    if (from.sourceRect !== undefined || to.sourceRect !== undefined) {
+        if (from.sourceRect === undefined) delete out.sourceRect;
+        else out.sourceRect = from.sourceRect;
+    }
     if (from.transform || to.transform) {
         const f = from.transform ?? {}, g = to.transform ?? {};
         out.transform = {

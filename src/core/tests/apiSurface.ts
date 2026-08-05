@@ -630,6 +630,10 @@ export function __apiSurfacePin(): void {
     expectType<number>(SOURCE_RECT_MAX);
     expectType<{ x: number; y: number; width: number; height: number }>(normalisedUV(region, 360, 168));
     expectType<{ width: number; height: number } | null>(naturalSize("a.png"));
+    // SPRITE-SHEET PLAYBACK (schema 52): a region is a StateDefinition value, so it is keyframable,
+    // state-able and instance-overridable — one addition, three capabilities.
+    expectType<InstanceOverride>({ sourceRect: region });
+    expectType<Keyframe>({ frame: 0, values: { sourceRect: region } });
     expectType<(ctx: CanvasRenderingContext2D, d: ReadonlyDocument, p: SheetPlan) => void>(drawSheet);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);

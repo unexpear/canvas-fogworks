@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v51 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v52 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -188,6 +188,22 @@ interface Keyframe {
 // PIXELATED IS PER NODE, not per document. One scene legitimately mixes a 24px tileset that must
 // stay crisp with a photographic background that must not, and a document-wide switch would force
 // the author to choose which one looks wrong. Absent = smooth, so nothing already drawn changes.
+
+// SPRITE-SHEET PLAYBACK (schema 52). `sourceRect` joins the fields a StateDefinition may carry.
+// InstanceOverride.sourceRect?: SourceRect     — and so, therefore, may a keyframe and a state
+//
+// ONE ADDITION, THREE CAPABILITIES, because `StateDefinition` IS `InstanceOverride`: a region
+// becomes keyframable, state-able and instance-overridable at once. Keyframable is the one that
+// matters — a walk cycle is one image and a keyframe per cell, which is how every 2D engine plays
+// a sheet. Instance-overridable is the one that makes a TILEMAP cheap: one tile node, an instance
+// per cell, each naming its own region.
+//
+// A REGION STEPS, IT NEVER TWEENS, and this is the rule that makes the feature work rather than
+// merely typecheck. Interpolating a rect slides a window across the sheet and shows a smear of two
+// cells: the numbers blend perfectly and the picture is garbage. So `blendNode` takes the FROM
+// keyframe's region for the whole interval — deliberately the opposite of the `{ ...to }` the rest
+// of the node starts from, which would change the cell the instant an interval began and show
+// every frame one keyframe early.
 
 // INVERSE KINEMATICS (schema 49). Pose a limb by its HAND; the shoulder and elbow are derived.
 // Node.ik?: IkConstraint             — carried by the END EFFECTOR, the node being placed

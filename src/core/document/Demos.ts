@@ -465,6 +465,36 @@ export function tileSheet(): ProjectDocument {
     return demo("Tile sheet", 1, nodes);
 }
 
+/**
+ * A SHEET PLAYING — the point of addressing a grid in the first place.
+ *
+ * Regions made a tileset usable; keyframing one makes a sprite sheet an ANIMATION, which is how
+ * every 2D engine plays a walk cycle: one image, one keyframe per cell. Nothing here mentions a
+ * position or an angle — the shape never moves. Only the region changes, and the picture changes
+ * with it, which is the whole of frame-by-frame sprite animation.
+ *
+ * THE KEYFRAMES ARE NOT HELD, deliberately. A held keyframe would step correctly by never blending
+ * at all, and would therefore prove nothing about the rule that matters: a region STEPS even
+ * through an ordinary tween, because interpolating one would slide a window across the sheet and
+ * smear two cells together. Leaving `hold` off is what puts that rule under test.
+ */
+export function spriteWalk(): ProjectDocument {
+    const SHEET = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAASklEQVR4nGOo1lP6jw9r+pfjxQwgRQ+CbbFimAFeE25ixaMGUNMAiqLRKMLqPz7cEKWEF4MNiFqQhRXDDHix2BYrHjWAmgZQEo0Aht5Dkx5mCysAAAAASUVORK5CYII=";
+    const TILE = 8;
+    // The four cells in reading order, one every four frames, then back to the first.
+    const cells = [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]];
+    const track: Keyframe[] = cells.map(([col, row], i) => ({
+        frame: i * 4,
+        values: { sourceRect: { x: col * TILE, y: row * TILE, width: TILE, height: TILE } }
+    }));
+    const sprite: Node = { id: "sprite", type: "core.image", parent: null, children: [], name: "sprite",
+        geometry: { x: 200, y: 140, width: 200, height: 200 },
+        style: { fill: "#ffffff", opacity: 1 }, layout: {},
+        src: SHEET, pixelated: true,
+        sourceRect: { x: 0, y: 0, width: TILE, height: TILE }, track } as Node;
+    return demo("Sprite walk", 17, [sprite]);
+}
+
 /** Every demo, for a menu and for the tests that check each one actually animates. */
 export const DEMOS: readonly { name: string; build: () => ProjectDocument }[] = [
     { name: "Bouncing ball", build: bouncingBall },
@@ -476,5 +506,6 @@ export const DEMOS: readonly { name: string; build: () => ProjectDocument }[] = 
     { name: "Arc toss", build: arcToss },
     { name: "Planted foot", build: plantedFoot },
     { name: "Curling tail", build: curlingTail },
-    { name: "Tile sheet", build: tileSheet }
+    { name: "Tile sheet", build: tileSheet },
+    { name: "Sprite walk", build: spriteWalk }
 ];
