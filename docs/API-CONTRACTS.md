@@ -267,6 +267,28 @@ function wavingLimb(): ProjectDocument;     // rotation about a JOINT, with an o
 // what the motion DOES. They exist to find holes: the bouncing ball is what proved a keyframe
 // needed per-property easing, because one curve made the ball decelerate sideways as it rose.
 
+// SpriteSheet.ts — a character's clips as a strip of cells, plus the descriptor an engine reads.
+interface Cell { frame: number; clip: string | null; col: number; row: number; x; y; width; height }
+interface SheetPlan { columns: number; rows: number; cellWidth; cellHeight; width; height; cells: Cell[] }
+interface SheetAtlas { image: string; fps: number; cellWidth; cellHeight;
+                       clips: { name; from; to; loop; frames: number[] }[]; frames: Cell[] }
+const SHEET_MAX_PIXELS: number;
+function planSheet(doc, opts?: { clips?; columns?; cellWidth?; cellHeight?; padding? }): SheetPlan;
+function sheetAtlas(doc, plan, imageName): SheetAtlas;
+function drawSheet(ctx, doc, plan): void;      // impure: needs a 2D context, like TextRaster
+// The PLAN is pure and is where every decision lives: how many columns, which frames, where each
+// cell sits. The RASTERISER is a separate function that takes a context, the same split
+// `TextRaster` uses — a layout can be asserted, pixels can only be looked at.
+// FRAMES COME FROM CLIPS, in clip order, so a sheet is laid out the way a character is authored
+// rather than as an undifferentiated run of the timeline; a document with no clips exports its
+// whole timeline as one unnamed run. Every clip's frame list is asserted against `clipLength`, so
+// the sheet and the timeline cannot disagree about what a range means.
+// The CELL is sized from the union of every frame's ink, not from a node's box: a squashing or
+// travelling character leaves its box, and a cell cut to the box clips exactly the extremes an
+// animator cares about. Padding is added around it, not inside it.
+// SHEET_MAX_PIXELS bounds the output — a long clip at a large cell size is how an export becomes
+// a request for a texture no GPU will take.
+
 // Clips.ts — named frame ranges over the one timeline (schema 46).
 interface Clip { name: string; from: number; to: number; loop?: boolean }   // both ends INCLUSIVE
 const CLIPS_MAX: number; const CLIP_NAME_MAX: number;
@@ -996,7 +1018,11 @@ function buildRenderModel(
   doc: ReadonlyDocument, state: RendererState, prev?: DisplayList | null
 ): DisplayList;                                          // pure, deterministic
 function emitSVG(container: HTMLElement, model: DisplayList): void;   // SVG DOM transcription
-function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dpr?: number): void; // Canvas 2D transcription
+function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dpr?: number, into?: CanvasTarget): void; // Canvas 2D transcription
+interface CanvasTarget {          // where, and on what, to transcribe — omitted = the whole canvas on the editor background
+    x: number; y: number;         // destination offset in DEVICE px; `emitCanvas` sets the CTM absolutely, so a caller's own ctx.translate cannot survive it
+    background: string | null;    // null = leave the destination TRANSPARENT (a sprite needs alpha; the editor backdrop does not belong in a texture)
+}
 function setImageReadyCallback(cb: (() => void) | null): void;       // fired when a lazily-loaded image decodes (→ repaint)
 // TextRaster.ts — laying text out ONCE, for every backend that can measure.
 type TextShape = Extract<Shape, { kind: "text" }>;

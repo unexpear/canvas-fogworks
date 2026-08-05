@@ -14,6 +14,8 @@ import { createEmptyDocument, ProjectDocument } from "../core/document/Document"
 import { Node } from "../core/document/Node";
 import { computeGeometry } from "../core/geometry/GeometryEngine";
 import { compose } from "../core/geometry/Matrix";
+import { bouncingBall } from "../core/document/Demos";
+import { planSheet, drawSheet } from "../core/export/SpriteSheet";
 
 const SIZE = { width: 800, height: 600 };
 
@@ -496,5 +498,117 @@ describe("emitCanvas — image", () => {
         // G draws inside its own group (1 x 0.5) and A inside it too (0.5 x 0.5).
         expect(alphas).toContain(0.5);
         expect(alphas.some(a => Math.abs(a - 0.25) < 1e-9)).toBe(true);
+    });
+});
+
+// ─── Sprite sheet: the DRAWING half ──────────────────────────────────────────
+//
+// The plan is arithmetic and asserted in `document.test.ts`. This is the other half — the one that
+// only exists as a sequence of ctx calls — and it is here because the live sheet got it wrong in a
+// way no plan assertion could see: 48 cells drew their backdrop and exactly ONE drew a ball.
+describe("SPRITE SHEET drawing", () => {
+    it("draws EVERY cell's own frame, not the same frame 48 times", () => {
+        const doc = bouncingBall();
+        const plan = planSheet(doc, { columns: 4 });
+        const ctx = new MockCtx();
+        ctx.canvas = { width: plan.width, height: plan.height };
+        drawSheet(ctx as unknown as CanvasRenderingContext2D, doc, plan);
+
+        // The ball is the only ellipse in the document, so every `ellipse` call is one cell's ball.
+        // Its ARGUMENTS carry the position and the squash — which is exactly what has to differ
+        // frame to frame, and exactly what was identical on the live sheet.
+        const balls = ctx.calls.filter(c => c.op === "ellipse");
+        expect(balls.length).toBe(plan.cells.length);
+
+        // Distinct POSITIONS, counted rather than compared pairwise: a bouncing ball revisits the
+        // floor, so "all 48 differ" is false while "the ball moves" is true. A single drawn frame
+        // repeated 48 times collapses this to 1, which is the failure being pinned.
+        // The ball's PLACE is in the transform, not in the ellipse arguments — `emitCanvas`
+        // draws every ellipse at its own local origin and carries position in the CTM. Asserting
+        // the ellipse args instead would pass on a sheet with forty-eight identical frames.
+        const places = new Set(balls.map(b => {
+            const t = ctx.calls.slice(0, ctx.calls.indexOf(b)).reverse().find(c => c.op === "transform" || c.op === "setTransform");
+            const a = (t?.args ?? []) as number[];
+            return `${t?.op}:${Math.round(a[4])},${Math.round(a[5])}`;
+        }));
+        expect(places.size).toBeGreaterThan(20);
+
+        // And every cell's base CTM must differ, which is the part that was broken: the offset
+        // reaches `emitCanvas` as a target rather than as a `ctx.translate` it would discard.
+        const bases = new Set(ctx.calls.filter(c => c.op === "setTransform" && (c.args as number[])[0] === 1 && (c.args as number[])[4] !== 0)
+            .map(c => (c.args as number[]).slice(4).join(",")));
+        expect(bases.size).toBe(plan.cells.length)
+    });
+
+    it("leaves the sheet TRANSPARENT and free of editor furniture", () => {
+        const doc = bouncingBall();
+        const plan = planSheet(doc, { columns: 4 });
+        const ctx = new MockCtx();
+        ctx.canvas = { width: plan.width, height: plan.height };
+        drawSheet(ctx as unknown as CanvasRenderingContext2D, doc, plan);
+
+        // NO full-canvas fill. The editor's backdrop baked into a texture makes every sprite a
+        // solid rectangle, which is the difference between a sheet a game can use and one it
+        // cannot — and it is invisible in any assertion about where the frames sit.
+        const backdrops = ctx.calls.filter(c => c.op === "fillRect"
+            && (c.args as number[])[2] === plan.width && (c.args as number[])[3] === plan.height);
+        expect(backdrops).toHaveLength(0);
+
+        // NO GRID. Non-vacuous first: the same document drawn the editor's way DOES stroke grid
+        // lines, so the absence below is the blanking working rather than a document with no grid.
+        const editor = new MockCtx();
+        const model = buildRenderModel({ width: plan.cellWidth, height: plan.cellHeight }, doc, {
+            selectedNodeIds: [], hoveredNodeId: null, previewRect: null,
+            computed: computeGeometry(doc), viewport: { x: plan.frame.x, y: plan.frame.y, zoom: 1 }
+        });
+        expect(model.grid.lines.length).toBeGreaterThan(0);
+        emitCanvas(editor as unknown as CanvasRenderingContext2D, model);
+        expect(editor.calls.filter(c => c.op === "stroke").length).toBeGreaterThan(0);
+        expect(ctx.calls.filter(c => c.op === "stroke")).toHaveLength(0);
+    });
+
+    it("gives emitCanvas's target both an offset and a background it can switch off", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("r", { id: "r", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 10, y: 10, width: 20, height: 20 }, style: { fill: "#fff", opacity: 1 }, layout: {} } as Node);
+        doc.rootNodeUuids = ["r"];
+        const model = buildRenderModel(SIZE, doc, {
+            selectedNodeIds: [], hoveredNodeId: null, previewRect: null,
+            computed: computeGeometry(doc), viewport: { x: 0, y: 0, zoom: 1 }
+        });
+
+        // A target's OFFSET must reach the base CTM. It cannot arrive as a caller's `ctx.translate`
+        // because `setTransform` is absolute and would discard it — the whole reason this parameter
+        // exists rather than the caller simply translating first.
+        const moved = new MockCtx();
+        emitCanvas(moved as unknown as CanvasRenderingContext2D, model, 1, { x: 70, y: 40, background: null });
+        const base = moved.calls.find(c => c.op === "setTransform" && (c.args as number[])[0] === 1
+            && ((c.args as number[])[4] !== 0 || (c.args as number[])[5] !== 0));
+        expect((base?.args as number[]).slice(4)).toEqual([70, 40]);
+        expect(moved.calls.filter(c => c.op === "fillRect" && (c.args as number[])[2] === 800)).toHaveLength(0);
+
+        // A target with a COLOUR still paints one, and no target at all keeps the editor's own.
+        const painted = new MockCtx();
+        emitCanvas(painted as unknown as CanvasRenderingContext2D, model, 1, { x: 0, y: 0, background: "#123456" });
+        expect(painted.calls.some(c => c.op === "set fillStyle" && c.args[0] === "#123456")).toBe(true);
+        const plain = new MockCtx();
+        emitCanvas(plain as unknown as CanvasRenderingContext2D, model);
+        expect(plain.calls.some(c => c.op === "set fillStyle" && c.args[0] === "#1a1a2e")).toBe(true);
+    });
+
+    it("puts each cell's ink INSIDE its own cell", () => {
+        const doc = bouncingBall();
+        const plan = planSheet(doc, { columns: 4 });
+        const ctx = new MockCtx();
+        ctx.canvas = { width: plan.width, height: plan.height };
+        drawSheet(ctx as unknown as CanvasRenderingContext2D, doc, plan);
+
+        // Every cell is clipped to its OWN rect before anything is drawn into it. Without this a
+        // frame whose ink exceeds the measured union corrupts its neighbour rather than itself.
+        const clips = ctx.calls.filter(c => c.op === "rect").map(c => c.args.slice(0, 2).join(","));
+        for (const cell of plan.cells) expect(clips).toContain(`${cell.x},${cell.y}`);
+        // The rect ALONE is not a clip — it is a path nobody used. One `clip` per cell, or a
+        // frame that overflows its measured union corrupts its neighbour instead of itself.
+        expect(ctx.calls.filter(c => c.op === "clip")).toHaveLength(plan.cells.length);
     });
 });

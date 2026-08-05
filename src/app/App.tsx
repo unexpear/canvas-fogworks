@@ -70,6 +70,7 @@ import { IMAGE_SRC_MAX, srcError } from "../core/document/Node";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
 import { scanCapabilities, Capability } from "../core/scan/CapabilityScan";
 import { exportSVG, TextLines } from "../core/export/ExportSVG";
+import { planSheet, sheetAtlas, sheetTooLarge, drawSheet, SheetPlan } from "../core/export/SpriteSheet";
 import { textLinesFor } from "../renderer/TextRaster";
 import { ReadonlyDocument, ProjectDocument } from "../core/document/Document";
 import { AddNodeAction } from "../core/actions/AddNodeAction";
@@ -229,6 +230,7 @@ declare global {
             readAssetFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
             readImageDataUrl: (filePath: string) => Promise<string>;
             writeIntoFolder: (folder: string, filename: string, content: string) => Promise<string>;
+            writePngIntoFolder: (folder: string, filename: string, dataUrl: string) => Promise<string>;
         };
     }
 }
@@ -249,6 +251,32 @@ const startedFromCorruptSave = initialLoad.status === "corrupt";
  * measure with, which is the answer the exporter gave before this existed.
  */
 const exportTextLines: TextLines = shape => textLinesFor(shape) ?? shape.text.split("\n");
+
+/**
+ * Draw a planned sheet and write both halves of it.
+ *
+ * The DOM half of the sprite-sheet export, which is why it lives here rather than in `core`: a
+ * plan is arithmetic and belongs in a module a test can reach, but turning it into pixels needs a
+ * canvas. `drawSheet` is handed a context and knows nothing about files.
+ *
+ * TWO FILES, because an engine needs both — the texture, and the description of which rectangle is
+ * which frame of which clip. The PNG is written FIRST: the atlas's `image` field names a file, and
+ * an atlas pointing at a name nobody wrote is worse than no atlas, because it fails in the engine
+ * rather than here.
+ */
+async function writeSheet(doc: ReadonlyDocument, plan: SheetPlan, folder: string): Promise<string> {
+    const api = window.electronAPI;
+    if (!api) throw new Error("No file bridge — the sprite sheet has nowhere to go.");
+    const canvas = document.createElement("canvas");
+    canvas.width = plan.width;
+    canvas.height = plan.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("No 2D context for the sprite sheet.");
+    drawSheet(ctx, doc, plan);
+    const png = await api.writePngIntoFolder(folder, "sheet.png", canvas.toDataURL("image/png"));
+    await api.writeIntoFolder(folder, "sheet.json", JSON.stringify(sheetAtlas(doc, plan, "sheet.png"), null, 2));
+    return png;
+}
 
 /**
  * The easing choices offered anywhere easing is authored — the four NAMES plus the curve presets.
@@ -2313,11 +2341,27 @@ function FoldersDrawer({ onPlaceImage, getDocument }: {
     const [tab, setTab] = useState<"source" | "assets" | "export">("source");
     const [exported, setExported] = useState<string | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
+    /** The sheet the preview canvas is showing, or null for none. */
+    const [sheet, setSheet] = useState<SheetPlan | null>(null);
+    const sheetCanvas = useRef<HTMLCanvasElement | null>(null);
     const [sourceFolder, setSourceFolder] = useState<string | null>(null);
     const [assetFolder, setAssetFolder] = useState<string | null>(null);
     const [findings, setFindings] = useState<Capability[] | null>(null);
     const [assets, setAssets] = useState<{ path: string; name: string; relative: string }[]>([]);
     const [busy, setBusy] = useState(false);
+
+    // Drawn in an effect rather than in the click handler because the canvas does not exist yet
+    // when the plan is computed — React mounts it on the render that follows. Drawing straight
+    // from the handler would silently paint nothing on the first click and work on the second,
+    // which is the kind of bug that gets blamed on the exporter.
+    useEffect(() => {
+        const canvas = sheetCanvas.current;
+        if (!sheet || !canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawSheet(ctx, getDocument(), sheet);
+    }, [sheet, getDocument]);
     const api = window.electronAPI;
 
     /** Scan a folder. `folder` may come from the native picker OR from the typed path field —
@@ -2401,6 +2445,52 @@ function FoldersDrawer({ onPlaceImage, getDocument }: {
                     <button onClick={() => setPreview(exportSVG(getDocument(), exportTextLines))} style={DRAWER_BUTTON}>
                         Preview the SVG
                     </button>
+                    {/* SPRITE SHEET — the game-facing export. Two files, because an engine needs
+                        both: the texture, and the description of which rectangle is which frame of
+                        which clip. The PLAN is computed here and shown before anything is written,
+                        so an oversize sheet is a sentence rather than a failed encode. */}
+                    <button
+                        onClick={async () => {
+                            const plan = planSheet(getDocument());
+                            if (sheetTooLarge(plan)) {
+                                setPreview(`Sheet would be ${plan.width}x${plan.height}px — too large to export.`);
+                                return;
+                            }
+                            const folder = await api.pickFolder();
+                            if (!folder) return;
+                            setBusy(true);
+                            try {
+                                setExported(await writeSheet(getDocument(), plan, folder));
+                            } finally { setBusy(false); }
+                        }}
+                        disabled={busy}
+                        style={DRAWER_BUTTON}
+                    >{busy ? "Writing…" : "Export sprite sheet to a folder…"}</button>
+                    {/* The ATLAS without writing anything — the half that can be read and checked. */}
+                    <button
+                        data-sheet-preview-btn="1"
+                        onClick={() => {
+                            const plan = planSheet(getDocument());
+                            setPreview(JSON.stringify(sheetAtlas(getDocument(), plan, "sheet.png"), null, 2));
+                            setSheet(plan);
+                        }}
+                        style={DRAWER_BUTTON}
+                    >
+                        Preview the sprite-sheet atlas
+                    </button>
+                    {/* THE SHEET ITSELF, drawn through the same `drawSheet` the export uses, before
+                        any folder is chosen. Worth having for the same reason the SVG preview is:
+                        you can see what you are about to hand an engine. It also means the drawing
+                        half is reachable without a native dialog standing in front of it. */}
+                    {sheet && (
+                        <canvas
+                            ref={sheetCanvas}
+                            data-sheet-canvas="1"
+                            width={sheet.width}
+                            height={sheet.height}
+                            style={{ width: "100%", marginTop: 6, border: `1px solid ${UI.line}`, imageRendering: "pixelated" }}
+                        />
+                    )}
                     {preview !== null && (
                         <textarea
                             readOnly

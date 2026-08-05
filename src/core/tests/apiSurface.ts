@@ -78,13 +78,14 @@ import { renderCanvas } from "../../renderer/CanvasRenderer";
 import { renderScene, RenderBackend } from "../../renderer/renderScene";
 import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
-import { emitCanvas, setImageReadyCallback } from "../../renderer/emitCanvas";
+import { emitCanvas, setImageReadyCallback, CanvasTarget } from "../../renderer/emitCanvas";
 import { resolveImage, imageGeneration } from "../../renderer/ImageCache";
 import { exportSVG, EXPORT_MARGIN, TextLines } from "../export/ExportSVG";
 import { TextShape, drawTextInto, wrapText, wrapTextWith, textLinesFor, textRasterKey, textRasterScale, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
 import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
+import { Cell, SheetPlan, SheetAtlas, planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, drawSheet, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
 import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
 import { JournalEntry, recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
@@ -572,6 +573,19 @@ export function __apiSurfacePin(): void {
     expectType<number>(clipLength(clip));
     expectType<number>(clipFrameAt(clip, 3));
     expectType<number>(CLIPS_MAX); expectType<number>(CLIP_NAME_MAX);
+    // SPRITE SHEETS — the plan is pure and holds every decision; `drawSheet` takes a context,
+    // the same split `TextRaster` uses, so the decisions are the half a test can reach.
+    const plan: SheetPlan = planSheet(doc, { columns: 4, padding: 2 });
+    expectType<SheetPlan>(plan);
+    expectType<Cell[]>(plan.cells);
+    expectType<SheetAtlas>(sheetAtlas(doc, plan, "hero.png"));
+    expectType<number>(sheetClipFrames(plan, "walk"));
+    expectType<boolean>(sheetTooLarge(plan));
+    expectType<number>(SHEET_MAX_PIXELS);
+    // The EXPORT TARGET: an offset plus a background that may be null. `emitCanvas` sets the
+    // CTM absolutely, so this is the only way a caller places the output anywhere but 0,0.
+    expectType<CanvasTarget>({ x: 0, y: 0, background: null });
+    expectType<(ctx: CanvasRenderingContext2D, d: ReadonlyDocument, p: SheetPlan) => void>(drawSheet);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);
     expectType<number>(FPS_MIN); expectType<number>(FPS_MAX);

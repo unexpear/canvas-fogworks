@@ -59,6 +59,7 @@ import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS
 import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, DEMOS } from "../document/Demos";
 import { traceMotion, traceVelocity, traceTiming, traceDigest } from "../diagnostics/MotionTrace";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
+import { planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
 import { easingError } from "../document/Prototype";
 import { dashSubpaths, parseDashArray } from "../geometry/DashPath";
@@ -13856,6 +13857,119 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
         expect(contact.width).toBe(air.width);
         expect(contact.height).toBe(air.height);
+    });
+
+    test("a SPRITE SHEET is laid out from the clips, in clip order", () => {
+        // What a 2D engine wants from an animation tool: a texture, and a description of which
+        // rectangles are which frames of which animation. Every one of those facts is already in
+        // the document, so the export is a rearrangement rather than a new idea.
+        const doc = bouncingBall();
+        doc.clips = [
+            { name: "bounce", from: 0, to: 11 },
+            { name: "settle", from: 40, to: 43, loop: false }
+        ];
+        const plan = planSheet(doc, { columns: 4 });
+        // FRAMES COME FROM CLIPS, in clip order — not as an undifferentiated run of the timeline,
+        // which would throw away the structure the author put in.
+        expect(plan.cells.map(c => c.frame)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 40, 41, 42, 43]);
+        expect(plan.cells.slice(0, 12).every(c => c.clip === "bounce")).toBe(true);
+        expect(plan.cells.slice(12).every(c => c.clip === "settle")).toBe(true);
+        // The sheet and the TIMELINE cannot disagree about what a range means — the count of cells
+        // a clip contributes is exactly its length, asserted rather than assumed.
+        for (const clip of doc.clips) {
+            expect(sheetClipFrames(plan, clip.name)).toBe(clipLength(clip));
+        }
+        // GRID: 16 frames at 4 columns is 4 rows, and the sheet is sized from that.
+        expect(plan.columns).toBe(4);
+        expect(plan.rows).toBe(4);
+        expect(plan.width).toBe(4 * plan.cellWidth);
+        expect(plan.height).toBe(4 * plan.cellHeight);
+        // Cells tile without gaps or overlaps when there is no padding.
+        expect(plan.cells[0]).toMatchObject({ col: 0, row: 0, x: 0, y: 0 });
+        expect(plan.cells[4]).toMatchObject({ col: 0, row: 1, x: 0, y: plan.cellHeight });
+        expect(plan.cells[5]).toMatchObject({ col: 1, row: 1, x: plan.cellWidth });
+
+        // PADDING sits BETWEEN cells, never inside them: a cell's rect must be exactly the area an
+        // engine samples, or every sprite shows a sliver of its neighbour.
+        const padded = planSheet(doc, { columns: 4, padding: 2 });
+        expect(padded.cellWidth).toBe(plan.cellWidth);
+        // Each CELL's own rect — the numbers an engine samples — is the full cell, unshrunk. The
+        // plan's `cellWidth` staying put is not the same claim: padding taken out of the cells
+        // would leave that field correct while every sampled region was two pixels short.
+        for (const c of padded.cells) {
+            expect(c.width).toBe(padded.cellWidth);
+            expect(c.height).toBe(padded.cellHeight);
+        }
+        expect(padded.cells[0]).toMatchObject({ x: 2, y: 2 });
+        expect(padded.cells[1].x).toBe(2 + plan.cellWidth + 2);
+        expect(padded.width).toBe(2 + 4 * (plan.cellWidth + 2));
+    });
+
+    test("the cell is framed on the union of every pose, not on a node box", () => {
+        // A character squashes and travels, so it leaves its own box constantly. A cell cut to the
+        // box clips exactly the extremes an animator spent the effort on — the impact frame, the
+        // full stretch.
+        const doc = bouncingBall();
+        const plan = planSheet(doc);
+        const stored = doc.nodes.get("ball")!.geometry;
+        // The ball is 80 wide and travels hundreds of pixels while squashing wider than its box,
+        // so the framing must exceed the node in both axes.
+        expect(plan.frame.width).toBeGreaterThan(stored.width);
+        expect(plan.frame.height).toBeGreaterThan(stored.height);
+        // And it must CONTAIN every sampled pose, which is the property the union is for.
+        for (const sample of traceMotion(doc, { from: 0, to: 43 })) {
+            expect(sample.x).toBeGreaterThanOrEqual(plan.frame.x - 1e-6);
+            expect(sample.y).toBeGreaterThanOrEqual(plan.frame.y - 1e-6);
+            expect(sample.x + sample.width).toBeLessThanOrEqual(plan.frame.x + plan.frame.width + 1e-6);
+            expect(sample.y + sample.height).toBeLessThanOrEqual(plan.frame.y + plan.frame.height + 1e-6);
+        }
+        // An EMPTY document has no ink and therefore no extent — one pixel rather than an infinite
+        // or negative rect, because everything downstream divides by these.
+        const empty = createEmptyDocument();
+        expect(planSheet(empty).frame).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+        expect(planSheet(empty).cells.length).toBe(1);
+    });
+
+    test("the ATLAS describes the sheet an engine will read", () => {
+        const doc = bouncingBall();
+        doc.clips = [{ name: "bounce", from: 0, to: 5 }, { name: "die", from: 6, to: 9, loop: false }];
+        const plan = planSheet(doc, { columns: 5 });
+        const atlas = sheetAtlas(doc, plan, "hero.png");
+        expect(atlas.image).toBe("hero.png");
+        expect(atlas.fps).toBe(doc.timeline!.fps);
+        expect(atlas.cellWidth).toBe(plan.cellWidth);
+        // Clip ranges carried through AS AUTHORED, with `loop` resolved to its default so a reader
+        // never has to know what absent means.
+        expect(atlas.clips.map(c => [c.name, c.from, c.to, c.loop]))
+            .toEqual([["bounce", 0, 5, true], ["die", 6, 9, false]]);
+        // A reader can walk the RANGE or use the frame LIST, and the two must agree — otherwise a
+        // sheet plays different animations depending on which field an engine happens to read.
+        for (const c of atlas.clips) {
+            expect(c.frames.length).toBe(c.to - c.from + 1);
+            expect(c.frames).toEqual(Array.from({ length: c.frames.length }, (_, i) => c.from + i));
+        }
+        expect(atlas.frames).toBe(plan.cells);
+
+        // A document with NO clips exports its whole timeline as one unnamed run — the honest
+        // reading of "one animation", not an empty sheet.
+        const unclipped = bouncingBall();
+        const p2 = planSheet(unclipped);
+        expect(p2.cells.length).toBe(unclipped.timeline!.frames);
+        expect(p2.cells.every(c => c.clip === null)).toBe(true);
+        expect(sheetAtlas(unclipped, p2, "x.png").clips).toEqual([]);
+    });
+
+    test("an unreasonable sheet is REFUSED at plan time, not at upload", () => {
+        // A long clip at a large cell size is how an export becomes a request for a texture no GPU
+        // will take. Being told while planning is much better than finding out on the hardware.
+        const doc = bouncingBall();
+        expect(sheetTooLarge(planSheet(doc))).toBe(false);
+        expect(sheetTooLarge(planSheet(doc, { cellWidth: 4000, cellHeight: 4000, columns: 8 }))).toBe(true);
+        // The bound is on AREA, so a sheet may be very wide as long as it is short.
+        const wide = planSheet(doc, { cellWidth: 2000, cellHeight: 4, columns: 48 });
+        expect(wide.width).toBeGreaterThan(90000);
+        expect(sheetTooLarge(wide)).toBe(false);
+        expect(SHEET_MAX_PIXELS).toBeGreaterThan(0);
     });
 
     test("CLIPS name ranges over the one timeline (schema 46)", () => {

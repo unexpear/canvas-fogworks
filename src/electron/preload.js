@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     onFileOpened: (callback) => subscribe("file-opened", callback, (payload) => payload),
     onRequestSave: (callback) => subscribe("request-save", callback, (filePath) => filePath),
     saveFile: (filePath, content) => ipcRenderer.invoke("save-file", filePath, content),
+    writePngIntoFolder: (folder, filename, dataUrl) =>
+        ipcRenderer.invoke("write-png-into-folder", folder, filename, dataUrl),
     requestSaveAs: () => ipcRenderer.invoke("request-save-as"),
     // Folder workflows. Every one starts from a folder the USER picked in a native dialog;
     // the renderer never names a path of its own, and all of these are read-only.

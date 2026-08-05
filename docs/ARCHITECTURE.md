@@ -785,6 +785,48 @@ document is not, so the frame range and the node set are explicit parameters rat
 that quietly walk the whole document; the journal keeps a fixed number of the most recent entries
 and says how many it dropped.
 
+## 4c. Sprite sheets — a character leaving the editor
+
+**`core/export/SpriteSheet` turns clips into a strip of cells and the descriptor an engine reads.**
+It is the first piece aimed squarely at the game direction, and it is deliberately core-shaped
+rather than engine-shaped: a plan and a JSON atlas, not a packaging pipeline.
+
+**The PLAN is pure and holds every decision** — how many columns, which frames, where each cell
+sits, how big the sheet ends up. The RASTERISER is a separate function that takes a 2D context,
+which is the same split `TextRaster` uses and for the same reason: a layout can be asserted in the
+`node` environment, while pixels can only be looked at. Everything worth getting wrong is in the
+half that can be tested.
+
+**Frames come from CLIPS, in clip order.** A sheet laid out as an undifferentiated run of the
+timeline would throw away the structure the author put in — an engine reading it back has to know
+that frames 12 to 27 are the walk, and that is exactly what a clip already says. Each clip's frame
+list is asserted against `clipLength` over the same range, so the sheet and the timeline cannot
+drift about what a frame range means. A document with no clips exports its whole timeline as one
+unnamed run, which is the honest reading of "one animation".
+
+**The cell is sized from the union of every frame's INK, not from a node's box.** A character
+squashes and travels, so it leaves its own box constantly; a cell cut to the box would clip exactly
+the extremes — the impact frame, the full stretch — that an animator spent the effort on. The union
+is computed from the same motion trace that measures everything else, so the sheet is framed by
+measurement rather than by a guess with padding bolted on.
+
+**It is bounded.** A long clip at a large cell size is how an export becomes a request for a
+texture no GPU will accept, and discovering that at upload time is much worse than being told.
+
+**Getting the two files out is a THREE-part seam, and the split is the security boundary.** The
+renderer plans (pure), draws into an offscreen canvas (needs a DOM), and hands the main process
+finished bytes; the main process only writes. Neither half chooses a path on its own: every folder
+workflow starts from a folder the user picked in a native dialog, and the writer reduces whatever
+filename it is handed to a BASENAME, sanitises it, and re-checks that the resolved target is still
+inside that folder before touching the disk. A renderer that asked for `../../.ssh/authorized_keys`
+gets a file called `.._.._.ssh_authorized_keys` in the folder the user picked.
+
+The PNG writer is a separate channel from the text one rather than the same channel with a flag,
+and it accepts ONLY a `data:image/png;base64,` payload — decoding arbitrary renderer-supplied
+strings into bytes on disk is a wider door than this feature needs, and the narrow one costs a line.
+It is bounded by the same reasoning as the plan: a sheet is refused before it is drawn, not after
+the encoder has already been asked for a gigabyte.
+
 ## 5. Module map
 
 | Layer | Files | Responsibility |

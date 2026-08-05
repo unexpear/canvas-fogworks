@@ -251,10 +251,14 @@ ipcMain.handle("read-image-data-url", async (event, filePath) => {
  * re-checked to be inside that folder, so a name like "../../etc/passwd" cannot escape the
  * directory the user actually approved.
  */
-ipcMain.handle("write-into-folder", async (event, folder, filename, content) => {
+// The one place a renderer-supplied filename becomes a path. It is reduced to a BASENAME,
+// sanitised, and the resolved target is re-checked against the folder the user picked in a native
+// dialog — a renderer asking for `../../.ssh/authorized_keys` gets a file with a mangled name
+// inside that folder and nothing else. Shared by both writers so the two cannot drift apart; a
+// second copy of this check is exactly how one of them ends up missing a clause.
+function resolveInsideFolder(folder, filename) {
     if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
     if (!filename || typeof filename !== "string") throw new Error("Invalid filename.");
-    if (typeof content !== "string") throw new Error("Invalid content: expected a string.");
     const safe = path.basename(filename).replace(/[^\w.\- ]+/g, "_");
     if (safe.length === 0 || safe === "." || safe === "..") throw new Error("Invalid filename.");
     const target = path.resolve(folder, safe);
@@ -262,7 +266,33 @@ ipcMain.handle("write-into-folder", async (event, folder, filename, content) => 
     if (target !== root && !target.startsWith(root + path.sep)) {
         throw new Error("Refusing to write outside the chosen folder.");
     }
+    return target;
+}
+
+ipcMain.handle("write-into-folder", async (event, folder, filename, content) => {
+    if (typeof content !== "string") throw new Error("Invalid content: expected a string.");
+    const target = resolveInsideFolder(folder, filename);
     fs.writeFileSync(target, content, "utf8");
+    return target;
+});
+
+/** Largest PNG this will write. A sheet is refused at plan time; this is the backstop. */
+const MAX_PNG_BYTES = 256 * 1024 * 1024;
+
+// A SEPARATE channel from the text writer rather than the same one with a flag, and it accepts
+// only a PNG data URL. Decoding arbitrary renderer-supplied strings into bytes on disk is a wider
+// door than a sprite-sheet export needs, and the narrow one costs a line.
+ipcMain.handle("write-png-into-folder", async (event, folder, filename, dataUrl) => {
+    if (typeof dataUrl !== "string") throw new Error("Invalid image: expected a data URL.");
+    const PREFIX = "data:image/png;base64,";
+    if (!dataUrl.startsWith(PREFIX)) throw new Error("Refusing to write anything but a PNG data URL.");
+    const body = dataUrl.slice(PREFIX.length);
+    // Rejected BEFORE decoding: allocating the buffer is the expensive part, so a size check that
+    // happens after it has already been built protects nothing.
+    if (body.length > MAX_PNG_BYTES) throw new Error("Refusing to write a PNG that large.");
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(body)) throw new Error("Invalid image: not base64.");
+    const target = resolveInsideFolder(folder, filename);
+    fs.writeFileSync(target, Buffer.from(body, "base64"));
     return target;
 });
 

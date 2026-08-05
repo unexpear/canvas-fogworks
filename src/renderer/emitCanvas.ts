@@ -46,6 +46,19 @@ import { drawTextInto } from "./TextRaster";
 /** Matches the SVG background (`svg.style.background`) so the two backends look alike. */
 const BACKGROUND = "#1a1a2e";
 
+/**
+ * Where, and on what, to transcribe — omit it and the model fills the canvas on the editor's own
+ * backdrop, which is what the editor wants and what an exported texture never does.
+ */
+export interface CanvasTarget {
+    /** Destination offset in DEVICE pixels. */
+    x: number;
+    y: number;
+    /** `null` leaves the destination transparent. A sprite needs alpha; a backdrop baked into a
+     *  texture turns every frame into a solid rectangle. */
+    background: string | null;
+}
+
 // Image loading lives in `ImageCache`, shared with the GPU backend — one decode serves both, so
 // switching backends from the toolbar does not re-download the document. `setImageReadyCallback`
 // is re-exported here because that is where callers have always imported it from.
@@ -178,17 +191,33 @@ function drawItem(ctx: CanvasRenderingContext2D, item: DrawItem, scale: number):
  * folded into the base CTM; the caller sizes the backing store (`canvas.width = cssW·dpr`)
  * and builds the model from CSS-pixel dimensions (DPR never enters the model).
  */
-export function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dpr: number = 1): void {
+export function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dpr: number = 1, into?: CanvasTarget): void {
     const z = Math.max(0.01, model.viewport.zoom);
+    const offX = into ? into.x : 0, offY = into ? into.y : 0;
+    // `undefined` and `null` mean different things here, so the check is for the TARGET rather
+    // than for a falsy colour: no target at all is the editor drawing itself and wants the
+    // backdrop; a target that asked for `null` wants transparency and must not get a default.
+    const background = into ? into.background : BACKGROUND;
 
-    // Clear + opaque background in device space (SVG sets svg.style.background).
+    // Clear + background in device space (SVG sets svg.style.background). A caller drawing into
+    // part of a larger canvas clips first, so clearing the whole thing only clears its own region.
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    ctx.fillStyle = BACKGROUND;
-    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    if (background !== null) {
+        ctx.fillStyle = background;
+        ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    }
 
     // Base CTM = viewport, DPR folded in (setTransform resets, so DPR can't be a separate scale).
-    ctx.setTransform(z * dpr, 0, 0, z * dpr, -model.viewport.x * dpr, -model.viewport.y * dpr);
+    // THE OFFSET GOES HERE and nowhere else. `setTransform` is absolute, so a caller that wrapped
+    // this in `ctx.translate` would have it silently discarded — which is exactly what stacked
+    // every cell of a sprite sheet on top of the first one until the sheet was looked at. Shifting
+    // the VIEWPORT instead is not the same fix: the viewport is what content is culled against, so
+    // moving it by a cell's offset culls that cell's contents away.
+    // Written as `-(v - off)` rather than `-v + off` only to keep the SIGN of zero: with no
+    // target this is bit-identical to what it always emitted, so the offset cannot be blamed
+    // for a diff in the editor's own draw path.
+    ctx.setTransform(z * dpr, 0, 0, z * dpr, -(model.viewport.x - offX) * dpr, -(model.viewport.y - offY) * dpr);
 
     // shadow*/filter are device-space (untouched by the CTM), so effect values are replayed × scale.
     const scale = z * dpr;
