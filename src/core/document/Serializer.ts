@@ -340,6 +340,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "46") { raw = migrate_46_to_47(raw); version = "47"; }
     if (version === "47") { raw = migrate_47_to_48(raw); version = "48"; }
     if (version === "48") { raw = migrate_48_to_49(raw); version = "49"; }
+    if (version === "49") { raw = migrate_49_to_50(raw); version = "50"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -778,6 +779,18 @@ function migrate_21_to_22(raw: any): any {
  * would drop every constraint and leave each limb in its rest pose — a character standing with its
  * feet wherever they were drawn instead of on the ground it was posed onto.
  */
+/**
+ * 49 -> 50: LONGER IK CHAINS.
+ *
+ * Additive, and additive in the strongest sense: `chain` defaults to 2, which is exactly the
+ * two-bone limb a schema-49 constraint always meant, so no existing pose reinterprets by a hair.
+ * The bump is the usual direction — an old build reading a schema-50 file would drive only the two
+ * bones nearest the effector and leave the rest of a tail hanging straight.
+ */
+function migrate_49_to_50(raw: any): any {
+    return { ...raw, version: "50" };
+}
+
 function migrate_48_to_49(raw: any): any {
     return { ...raw, version: "49" };
 }

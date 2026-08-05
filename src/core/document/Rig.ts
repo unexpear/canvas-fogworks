@@ -31,10 +31,19 @@
 
 import { ReadonlyDocument, ProjectDocument } from "./Document";
 import { Node } from "./Node";
-import { solveTwoBone, rotationDelta, IkBend } from "../geometry/Ik";
+import { solveTwoBone, solveFabrik, rotationDelta, IkBend, IkPoint } from "../geometry/Ik";
 
 /** How far a target may sit from the origin. Bounded for the reason every hand-editable number is. */
 export const IK_TARGET_MAX = 1_000_000;
+
+/**
+ * Bones one constraint may drive.
+ *
+ * Generous rather than tight — a tail with thirty segments is a real thing to draw — but bounded,
+ * because the chain walk is a loop over a hand-editable number and an unbounded one is a document
+ * that can ask the engine to walk forever.
+ */
+export const IK_CHAIN_MAX = 32;
 
 /**
  * Where a node is asked to be, and which way its chain folds.
@@ -45,8 +54,23 @@ export const IK_TARGET_MAX = 1_000_000;
 export interface IkConstraint {
     x: number;
     y: number;
-    /** Anatomy, so it is stated. Absent = +1. See `geometry/Ik` for why it is never inferred. */
+    /**
+     * Anatomy, so it is stated. Absent = +1. See `geometry/Ik` for why it is never inferred.
+     *
+     * Meaningful only for a TWO-BONE chain: a triangle has exactly two solutions and this names
+     * one. A longer chain has a continuum of poses and there is nothing for +1 or -1 to select, so
+     * carrying both is refused rather than silently ignored.
+     */
     bend?: IkBend;
+    /**
+     * How many BONES this constraint drives, counted up from the effector. Absent = 2.
+     *
+     * Two is the limb and the case that existed before longer chains did, so an older document
+     * reinterprets to exactly what it always meant. Three or more is a spine, a tail, a tentacle —
+     * and is solved by FABRIK rather than the closed form, because past two bones the pose is not
+     * unique.
+     */
+    chain?: number;
 }
 
 /** Validity of an IK constraint, SHARED by the edit path and the load path. */
@@ -62,6 +86,15 @@ export function ikError(ik: unknown): string | null {
         if (Math.abs(v as number) > IK_TARGET_MAX) return `ik.${axis} must be within ±${IK_TARGET_MAX}`;
     }
     if (c.bend !== undefined && c.bend !== 1 && c.bend !== -1) return "ik.bend must be 1 or -1";
+    if (c.chain !== undefined) {
+        if (!Number.isInteger(c.chain) || c.chain < 2 || c.chain > IK_CHAIN_MAX) {
+            return `ik.chain must be a whole number within [2, ${IK_CHAIN_MAX}]`;
+        }
+        // A STATEMENT THE ENGINE CANNOT HONOUR. `bend` names one of a triangle's two solutions;
+        // a longer chain has a continuum and there is nothing for it to select. Refusing beats
+        // ignoring the field, which would leave an author believing it did something.
+        if (c.bend !== undefined && c.chain > 2) return "ik.bend applies to a two-bone chain only";
+    }
     return null;
 }
 
@@ -89,6 +122,80 @@ function boneTo(child: Node, parentJoint: { x: number; y: number }): { x: number
 }
 
 /**
+ * The nodes and bones a constraint drives, root first — or null if the graph cannot supply them.
+ *
+ * THE CHAIN IS THE SCENE GRAPH: walking `bones` ancestors up from the effector is the whole of it,
+ * which is why there is no bone type. A chain that runs out of ancestors is not the chain the
+ * author described, and posing whatever happens to be there would be a guess — so it is left alone.
+ */
+function walkChain(doc: ReadonlyDocument, effector: Node, bones: number): Chain | null {
+    const nodes: Node[] = [];
+    let node: Node | undefined = effector;
+    // `bones` bones need `bones` + 1 joints, so the walk collects the effector and that many
+    // ancestors. Collected effector-first and reversed, because the graph only points upward.
+    for (let i = 0; i <= bones; i++) {
+        if (!node) return null;
+        nodes.push(node);
+        const parent: string | null | undefined = node.parent;
+        node = parent ? (doc.nodes.get(parent) as Node | undefined) : undefined;
+    }
+    nodes.reverse();
+
+    const root = nodes[0];
+    const rootJoint = jointOffset(root);
+    // The chain starts at the root's JOINT, in its parent's space — the same space the target is
+    // given in, so an author places a foot on the same ruler everything else is placed on.
+    const from = { x: root.geometry.x + rootJoint.x, y: root.geometry.y + rootJoint.y };
+
+    const boneVectors: IkPoint[] = [];
+    const joints: IkPoint[] = [from];
+    let parentJoint = rootJoint;
+    for (let i = 1; i < nodes.length; i++) {
+        const bone = boneTo(nodes[i], parentJoint);
+        boneVectors.push(bone);
+        joints.push({ x: joints[i - 1].x + bone.x, y: joints[i - 1].y + bone.y });
+        parentJoint = jointOffset(nodes[i]);
+    }
+    // The DRIVEN nodes are every one but the effector: a bone is turned by the node at its start,
+    // and the effector starts no bone. Dropping it here is CLARITY rather than correctness — the
+    // rotation walk runs over the BONES, so an effector left in the list is simply never indexed,
+    // and a mutation keeping it survives. It goes because a list called `nodes` that drives
+    // rotations should not contain a node that drives none.
+    return { nodes: nodes.slice(0, nodes.length - 1), bones: boneVectors, joints };
+}
+
+/** A resolved chain: the nodes that turn, the bones they turn, and where the joints rest. */
+interface Chain {
+    nodes: Node[];
+    bones: IkPoint[];
+    joints: IkPoint[];
+}
+
+/** The closed form, as absolute bone directions. */
+function twoBoneAngles(chain: Chain, target: IkPoint, bend: IkBend): number[] {
+    const l1 = Math.hypot(chain.bones[0].x, chain.bones[0].y);
+    const l2 = Math.hypot(chain.bones[1].x, chain.bones[1].y);
+    const s = solveTwoBone(chain.joints[0], target, l1, l2, bend);
+    return [s.angle1, s.angle2];
+}
+
+/**
+ * FABRIK's solved joint positions, turned into absolute bone directions.
+ *
+ * The conversion is here rather than in the solver because it is what the DOCUMENT needs, and
+ * keeping it beside the two-bone conversion is what lets both feed the same rotation walk. A second
+ * copy of that walk is how the two solvers would come to disagree about composing a parent's turn.
+ */
+function fabrikAngles(chain: Chain, target: IkPoint): number[] {
+    const solved = solveFabrik(chain.joints, target).joints;
+    const out: number[] = [];
+    for (let i = 1; i < solved.length; i++) {
+        out.push(Math.atan2(solved[i].y - solved[i - 1].y, solved[i].x - solved[i - 1].x));
+    }
+    return out;
+}
+
+/**
  * Every IK constraint in the document, solved — an ordinary document out.
  *
  * A document with no constraint is returned BY REFERENCE, the same bargain `applyFrame` makes: this
@@ -103,35 +210,33 @@ export function applyIk(doc: ReadonlyDocument): ReadonlyDocument {
     const nodes = new Map<string, Node>();
     doc.nodes.forEach((n, id) => nodes.set(id, n as Node));
 
-    doc.nodes.forEach((effector, id) => {
+    doc.nodes.forEach(effector => {
         const ik = effector.ik;
         if (!ik) return;
-        // THE CHAIN IS THE SCENE GRAPH: the effector's parent is the second bone's node and its
-        // grandparent is the first bone's. A chain that does not have both is not a two-bone limb,
-        // and posing whatever is there instead would be a guess about what the author meant.
-        const mid = effector.parent ? doc.nodes.get(effector.parent) : undefined;
-        const root = mid?.parent ? doc.nodes.get(mid.parent) : undefined;
-        if (!mid || !root) return;
+        const chain = walkChain(doc, effector as Node, ik.chain ?? 2);
+        if (!chain) return;
 
-        const rootJoint = jointOffset(root as Node), midJoint = jointOffset(mid as Node);
-        const bone1 = boneTo(mid as Node, rootJoint), bone2 = boneTo(effector as Node, midJoint);
-        const l1 = Math.hypot(bone1.x, bone1.y), l2 = Math.hypot(bone2.x, bone2.y);
-        // The chain starts at the root's JOINT, in its parent's space — the same space the target
-        // is given in, so an author places a foot on the same ruler everything else is placed on.
-        const from = { x: root.geometry.x + rootJoint.x, y: root.geometry.y + rootJoint.y };
-        const solution = solveTwoBone(from, { x: ik.x, y: ik.y }, l1, l2, ik.bend ?? 1);
+        const target = { x: ik.x, y: ik.y };
+        // TWO BONES KEEP THE CLOSED FORM. An iterative approximation where an exact answer exists
+        // would be slower, less exact, and would make the commonest rig in animation depend on a
+        // convergence argument. One comparison buys the right solver.
+        const angles = chain.bones.length === 2
+            ? twoBoneAngles(chain, target, ik.bend ?? 1)
+            : fabrikAngles(chain, target);
 
-        // REST DIRECTIONS come from the authored offsets, so the deltas compose with the drawing
-        // rather than assuming a limb points down any particular axis. The second bone's rest is
-        // its own offset direction PLUS whatever the first bone already contributes, because a
-        // child's rotation is relative to its parent — leaving that out double-counts the shoulder.
-        const rest1 = Math.atan2(bone1.y, bone1.x);
-        const rest2 = Math.atan2(bone2.y, bone2.x);
-        const turn1 = rotationDelta(rest1, solution.angle1);
-        const turn2 = rotationDelta(rest2 + turn1, solution.angle2);
-
-        nodes.set(root.id, turned(nodes.get(root.id) as Node, turn1));
-        nodes.set(mid.id, turned(nodes.get(mid.id) as Node, turn2));
+        // REST DIRECTIONS come from the authored joint-to-joint vectors, so the deltas compose with
+        // the drawing rather than assuming a limb points down any particular axis. Each bone's rest
+        // is its own direction PLUS every turn its ancestors in the chain have already contributed,
+        // because a child's rotation is relative to its parent — leaving that out double-counts the
+        // shoulder, and does so once more per extra bone.
+        let carried = 0;
+        for (let i = 0; i < chain.bones.length; i++) {
+            const rest = Math.atan2(chain.bones[i].y, chain.bones[i].x);
+            const turn = rotationDelta(rest + carried, angles[i]);
+            carried += turn;
+            const node = chain.nodes[i];
+            nodes.set(node.id, turned(nodes.get(node.id) as Node, turn));
+        }
     });
 
     return {

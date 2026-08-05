@@ -56,13 +56,13 @@ import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry
 import { Ring } from "../geometry/PathBoolean";
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
-import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlappingAction, arcToss, plantedFoot, DEMOS } from "../document/Demos";
+import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlappingAction, arcToss, plantedFoot, curlingTail, DEMOS } from "../document/Demos";
 import { traceMotion, traceVelocity, traceTiming, traceDigest } from "../diagnostics/MotionTrace";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { channelsError, CHANNELS_MAX } from "../document/Timeline";
 import { MotionPath, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
-import { solveTwoBone, rotationDelta } from "../geometry/Ik";
-import { ikError, applyIk, IK_TARGET_MAX } from "../document/Rig";
+import { solveTwoBone, solveFabrik, rotationDelta, FABRIK_PASSES, FABRIK_TOLERANCE } from "../geometry/Ik";
+import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
 import { planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
 import { easingError } from "../document/Prototype";
@@ -4403,9 +4403,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 48→49 landed, giving an end effector
-        // an IK CONSTRAINT so a limb can be posed by its hand rather than by its shoulder.)
-        expect(() => migrateIfNeeded(legacy, "50")).toThrow('Migration not implemented for document schema "49"');
+        // time a real migration is added — most recently when 49→50 landed, letting an IK
+        // constraint drive a CHAIN longer than the two-bone limb.)
+        expect(() => migrateIfNeeded(legacy, "51")).toThrow('Migration not implemented for document schema "50"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -13863,6 +13863,132 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(contact.height).toBe(air.height);
     });
 
+    test("FABRIK reaches a target and KEEPS every bone's length", () => {
+        // Unequal segments on purpose: equal ones make a chain that hides which link absorbed the
+        // bend, the same degenerate-fixture trap an isosceles triangle sets for the two-bone case.
+        const rest = [{ x: 0, y: 0 }, { x: 0, y: 60 }, { x: 0, y: 110 }, { x: 0, y: 150 }, { x: 0, y: 180 }];
+        const lengthsOf = (js: { x: number; y: number }[]) =>
+            js.slice(1).map((q, i) => Math.hypot(q.x - js[i].x, q.y - js[i].y));
+        const before = lengthsOf(rest as { x: number; y: number }[]);
+
+        for (const target of [{ x: 90, y: 90 }, { x: -120, y: 40 }, { x: 30, y: -70 }, { x: 0, y: 175 }]) {
+            const out = solveFabrik(rest, target);
+            expect(out.reached).toBe(true);
+            const end = out.joints[out.joints.length - 1];
+            expect(Math.hypot(end.x - target.x, end.y - target.y)).toBeLessThanOrEqual(FABRIK_TOLERANCE);
+
+            // THE DEFINING PROPERTY. Every step is a projection onto a segment, so the bones keep
+            // their lengths however many passes run — which is what makes a partly-converged chain
+            // still a tail rather than a stretched one. A solver that merely reached the target
+            // while quietly changing the lengths would pass the assertion above.
+            for (const [i, d] of lengthsOf(out.joints).entries()) expect(d).toBeCloseTo(before[i], 6);
+            // The ROOT does not move — it is the anchor, not a joint to be solved.
+            expect(out.joints[0]).toEqual({ x: 0, y: 0 });
+        }
+    });
+
+    test("FABRIK straightens when it cannot reach, and is DETERMINISTIC", () => {
+        const rest = [{ x: 0, y: 0 }, { x: 0, y: 40 }, { x: 0, y: 80 }, { x: 0, y: 120 }];
+        const far = solveFabrik(rest, { x: 900, y: 0 });
+        expect(far.reached).toBe(false);
+        // Straight along the line to the target, and still the right lengths.
+        for (const j of far.joints) expect(j.y).toBeCloseTo(0, 6);
+        expect(far.joints[3].x).toBeCloseTo(120, 6);
+
+        // DETERMINISM is a correctness property here, not a performance one: a trace that differed
+        // run to run would stop being comparable with another trace, and every regression check
+        // built on the diagnostics layer rests on that.
+        const a = solveFabrik(rest, { x: 55, y: 44 }), b = solveFabrik(rest, { x: 55, y: 44 });
+        expect(a.joints).toEqual(b.joints);
+        expect(FABRIK_PASSES).toBeGreaterThan(1);
+
+        // COINCIDENT POINTS, which is where the projection has no direction to work along. A
+        // zero-length bone does NOT produce them — the joints separate on the first step, before
+        // any projection sees them. What does is a target sitting exactly on an interior joint:
+        // the backward pass drops the end onto it and then asks for a direction between a point
+        // and itself. Reaching that took constructing the case rather than guessing at one.
+        // It must also be NON-COLLINEAR, which took a probe to establish: on a straight chain the
+        // seed above nudges the joints off-axis before any projection sees them, so the coincident
+        // case is unreachable there. A bent chain has no seed and the two points meet exactly.
+        const bent = [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 40 }, { x: 80, y: 40 }];
+        const onJoint = solveFabrik(bent, { x: 40, y: 40 });
+        for (const j of onJoint.joints) {
+            expect(Number.isFinite(j.x)).toBe(true);
+            expect(Number.isFinite(j.y)).toBe(true);
+        }
+        // And a zero-length bone stays a valid authoring state either way.
+        const pinched = solveFabrik([{ x: 0, y: 0 }, { x: 0, y: 40 }, { x: 0, y: 40 }, { x: 0, y: 90 }], { x: 60, y: 30 });
+        for (const j of pinched.joints) expect(Number.isFinite(j.x)).toBe(true);
+
+        // A TARGET IT CANNOT CONVERGE ON, which is what makes the reported `reached` mean anything.
+        // One bone longer than the rest put together cannot fold down to nothing, so a target near
+        // the root is out of reach from the INSIDE — and unlike the far case it is not short-
+        // circuited, so this is the path where the loop runs out of passes.
+        const lopsided = [{ x: 0, y: 0 }, { x: 0, y: 100 }, { x: 0, y: 110 }, { x: 0, y: 120 }];
+        const impossible = solveFabrik(lopsided, { x: 2, y: 1 });
+        expect(impossible.reached).toBe(false);
+        for (const j of impossible.joints) expect(Number.isFinite(j.x)).toBe(true);
+
+        // A chain too short to have an interior joint has nothing to iterate on and comes back
+        // untouched — the two-bone case belongs to the closed form, not here.
+        const short = solveFabrik([{ x: 0, y: 0 }, { x: 0, y: 40 }], { x: 100, y: 0 });
+        expect(short.joints).toEqual([{ x: 0, y: 0 }, { x: 0, y: 40 }]);
+        expect(short.reached).toBe(false);
+    });
+
+    test("the CURLING TAIL pins its tip while its base travels, redistributing six bones", () => {
+        const doc = curlingTail();
+        const at = (f: number) => traceMotion(doc, { from: f, to: f });
+        const frames = [0, 8, 15, 22, 30].map(at);
+
+        // THE BASE MOVES — otherwise a solver that did nothing would pass everything below.
+        const bases = frames.map(s => s.find(v => v.nodeId === "tail0")!);
+        const spanX = Math.max(...bases.map(b => b.anchorX)) - Math.min(...bases.map(b => b.anchorX));
+        expect(spanX).toBeGreaterThan(100);
+
+        // THE TIP DOES NOT. Six bones, one stated position, and it holds on every frame.
+        // WITHIN THE SOLVER'S OWN TOLERANCE, which is the honest claim for an iterative method —
+        // FABRIK converges to a distance, it does not land exactly, and asserting exactness here
+        // would be asserting something the algorithm never promised. The two-bone closed form IS
+        // exact, and that difference is pinned separately.
+        for (const s of frames) {
+            const tip = s.find(v => v.nodeId === "tail6")!;
+            expect(Math.hypot(tip.anchorX - 150, tip.anchorY - 120)).toBeLessThanOrEqual(FABRIK_TOLERANCE);
+        }
+
+        // AND ALL SIX REDISTRIBUTE. A chain where only the two bones nearest the effector moved
+        // would still pin the tip — that is exactly what an old build ignoring `chain` would do —
+        // so every driven bone has to be shown changing.
+        for (const id of ["tail0", "tail1", "tail2", "tail3", "tail4", "tail5"]) {
+            const seen = new Set(frames.map(s => s.find(v => v.nodeId === id)!.rotation.toFixed(3)));
+            expect(seen.size).toBeGreaterThan(1);
+        }
+    });
+
+    test("two bones keep the CLOSED FORM, which is exact where FABRIK only converges", () => {
+        // The planted foot lands far inside FABRIK's tolerance. An iterative solver quietly taking
+        // over the two-bone case would still pin the foot — to about a hundredth of a pixel — so
+        // precision is the thing that can tell the two apart.
+        const doc = plantedFoot();
+        for (const f of [0, 6, 12]) {
+            const foot = traceMotion(doc, { from: f, to: f, nodeIds: ["foot"] })[0];
+            expect(Math.abs(foot.anchorX - 250)).toBeLessThan(FABRIK_TOLERANCE / 100);
+            expect(Math.abs(foot.anchorY - 400)).toBeLessThan(FABRIK_TOLERANCE / 100);
+        }
+    });
+
+    test("ikError bounds the chain and refuses a bend that cannot mean anything", () => {
+        expect(ikError({ x: 0, y: 0, chain: 2 })).toBeNull();
+        expect(ikError({ x: 0, y: 0, chain: 6 })).toBeNull();
+        expect(ikError({ x: 0, y: 0, chain: 1 })).toMatch(/within \[2, /);
+        expect(ikError({ x: 0, y: 0, chain: 2.5 })).toMatch(/whole number/);
+        expect(ikError({ x: 0, y: 0, chain: IK_CHAIN_MAX + 1 })).toMatch(/within \[2, /);
+        // BEND names one of a triangle's two solutions. A longer chain has a continuum and there is
+        // nothing for it to select, so the pair is refused rather than the field being ignored.
+        expect(ikError({ x: 0, y: 0, chain: 5, bend: 1 })).toMatch(/two-bone chain only/);
+        expect(ikError({ x: 0, y: 0, chain: 2, bend: 1 })).toBeNull();
+    });
+
     test("a two-bone chain lands its END exactly on a reachable target", () => {
         const root = { x: 100, y: 100 };
         const reach = (target: { x: number; y: number }, l1: number, l2: number, bend: 1 | -1) => {
@@ -13995,7 +14121,11 @@ describe("Mesh — bending a shape (schema 41)", () => {
             ik: { x: 200, y: 200 } } as Node);
         shallow.rootNodeUuids = ["a"];
         const posed = applyIk(shallow);
-        expect(posed.nodes.get("a")!.transform?.rotation ?? 0).toBe(0);
+        // NOT POSED AT ALL — not merely posed to zero. A walk that stopped short and drove whatever
+        // ancestors it found would give this node a transform it never had, and a rotation of zero
+        // is indistinguishable from having none if only the angle is asserted.
+        expect(posed.nodes.get("a")!.transform).toBeUndefined();
+        expect(posed.nodes.get("a")).toBe(shallow.nodes.get("a"));
         // The STORED document is never written into, the same rule channels had to be built around.
         expect(shallow.nodes.get("a")!.transform).toBeUndefined();
 

@@ -13,9 +13,22 @@
  * TWO BONES, SOLVED ANALYTICALLY. A two-bone chain is the limb — arm, leg, wing — and the triangle
  * with sides `l1`, `l2` and the root-to-target distance has a closed form by the law of cosines. No
  * iteration, no convergence to reason about, exactly one answer per bend direction, and the same
- * answer every run. Longer chains need FABRIK or CCD and are deliberately not here: a general
- * solver whose two-bone case is worse than the closed form is a poor trade for the case that
- * matters most.
+ * answer every run.
+ *
+ * LONGER CHAINS USE FABRIK, AND THE CLOSED FORM STAYS. Past two bones there is no unique answer at
+ * all: the same hand position is reachable by infinitely many poses, so the solver's job stops
+ * being "find the answer" and becomes "find a natural one". FABRIK does that by alternately
+ * dragging the chain back from the target and forward from the root; every step is a projection
+ * onto a segment, so the bones keep their lengths no matter how many times it runs. The two-bone
+ * case is NOT routed through it — an iterative approximation where a closed form exists would be
+ * slower, less exact, and would make the commonest rig in animation depend on a convergence
+ * argument. Choosing by chain length costs one comparison.
+ *
+ * THE ITERATION IS BOUNDED AND THE TOLERANCE IS FIXED, which is not a performance choice. The
+ * diagnostics layer rests on the same document always producing the same motion — a trace that
+ * differed run to run would stop being comparable with another trace, and every regression check
+ * built on it would evaporate. So the loop runs a fixed maximum and stops on a fixed distance,
+ * never on elapsed time or an adaptive budget.
  *
  * BEND IS AUTHORED, NOT INFERRED. The triangle has two solutions mirrored about the root-to-target
  * line, elbow up and elbow down, and both are correct. Which one a limb uses is anatomy. Inferring
@@ -122,4 +135,119 @@ export function rotationDelta(rest: number, solved: number): number {
     if (d > Math.PI) d -= TAU;
     if (d <= -Math.PI) d += TAU;
     return d;
+}
+
+/**
+ * Passes FABRIK may take before it stops, and how close counts as arrived.
+ *
+ * FIXED, both of them, and for correctness rather than for speed: the same document must always
+ * produce the same pose or a motion trace stops being comparable with another trace. Ten passes
+ * puts a well-conditioned chain inside a hundredth of a pixel, and a chain that has not converged
+ * by then is one being dragged at its own reach limit, where the remaining error is the target
+ * being unreachable rather than the loop needing more turns.
+ */
+export const FABRIK_PASSES = 48;
+export const FABRIK_TOLERANCE = 0.01;
+
+/**
+ * How far off its own axis a perfectly straight chain is nudged before iterating.
+ *
+ * A chain drawn straight — which is how a tail or a spine is drawn — aimed at a target lying on
+ * that same line is FABRIK's singular case: the backward pass produces a mirror image and the
+ * forward pass undoes it exactly, so the chain oscillates between two poses forever and never
+ * moves. It is not rare in this engine, because rest poses here ARE straight. A deterministic
+ * perpendicular seed breaks the symmetry; the first pass re-projects every joint, so the nudge
+ * costs nothing in bone length. A FRACTION of the chain rather than a fixed distance, so it means
+ * the same thing to a 40px finger and a 4000px tail.
+ */
+export const FABRIK_SEED = 1e-3;
+
+/**
+ * A chain of three or more joints, posed so its last joint reaches `target`.
+ *
+ * `joints` are the joint POSITIONS in rest, root first; the segment lengths are taken from them, so
+ * a caller cannot pass lengths that disagree with the chain it drew. The root does not move.
+ *
+ * Returns new positions rather than angles, because that is what the algorithm is expressed in and
+ * converting to angles is the document layer's job — which also lets the same conversion serve both
+ * solvers instead of each growing its own.
+ */
+export function solveFabrik(joints: readonly IkPoint[], target: IkPoint): { joints: IkPoint[]; reached: boolean } {
+    const n = joints.length;
+    // A CHAIN THIS SHORT has no interior joint to move, so there is nothing to iterate on. Handing
+    // it back untouched is the honest answer; the two-bone case belongs to `solveTwoBone`.
+    if (n < 3) return { joints: joints.map(p => ({ x: p.x, y: p.y })), reached: false };
+
+    const lengths: number[] = [];
+    let total = 0;
+    for (let i = 1; i < n; i++) {
+        const d = Math.hypot(joints[i].x - joints[i - 1].x, joints[i].y - joints[i - 1].y);
+        lengths.push(d);
+        total += d;
+    }
+    const root = { x: joints[0].x, y: joints[0].y };
+    const out = joints.map(p => ({ x: p.x, y: p.y }));
+
+    const reach = Math.hypot(target.x - root.x, target.y - root.y);
+    if (!(total > 0)) return { joints: out, reached: false };
+    if (reach > total) {
+        // OUT OF REACH is not iterated toward. Be precise about why: this is COST, not correctness,
+        // and a mutation removing it survives — the loop converges to the very same straight chain,
+        // because straightening at the target is exactly what FABRIK does when it cannot arrive.
+        // Skipping 48 passes to reach a pose that is already known is worth one comparison, and
+        // saying so in one line beats making the next reader derive it from the iteration.
+        const ux = (target.x - root.x) / reach, uy = (target.y - root.y) / reach;
+        for (let i = 1; i < n; i++) {
+            out[i] = { x: out[i - 1].x + ux * lengths[i - 1], y: out[i - 1].y + uy * lengths[i - 1] };
+        }
+        return { joints: out, reached: false };
+    }
+
+    // Move a point to sit exactly `length` away from `from`, along the line toward where it already
+    // is. This projection IS the algorithm — because every joint is placed this way, the bones keep
+    // their lengths however many passes run, which is what makes a partly-converged chain still a
+    // valid pose rather than a stretched one.
+    const pull = (from: IkPoint, toward: IkPoint, length: number): IkPoint => {
+        const d = Math.hypot(toward.x - from.x, toward.y - from.y);
+        // COINCIDENT points have no direction to project along. Pushing along +x is arbitrary but
+        // finite and stable; dividing by zero here would put NaN into every joint after it.
+        if (!(d > 0)) return { x: from.x + length, y: from.y };
+        return { x: from.x + (toward.x - from.x) * (length / d), y: from.y + (toward.y - from.y) * (length / d) };
+    };
+
+    // THE SINGULAR CASE, broken before the loop rather than detected inside it. When every joint
+    // already lies on the line to the target there is no side for the chain to bend toward, and
+    // the two passes are exact inverses of one another — the chain sits still and reports failure
+    // for a target it could reach easily. Nudging the interior joints perpendicular gives the
+    // iteration a side to commit to, and doing it up front keeps the loop free of special cases.
+    const ux = (target.x - root.x) / (reach > 0 ? reach : 1);
+    const uy = (target.y - root.y) / (reach > 0 ? reach : 1);
+    let collinear = true;
+    for (let i = 1; i < n && collinear; i++) {
+        const cross = (out[i].x - root.x) * uy - (out[i].y - root.y) * ux;
+        if (Math.abs(cross) > 1e-9) collinear = false;
+    }
+    if (collinear) {
+        const seed = total * FABRIK_SEED;
+        for (let i = 1; i < n - 1; i++) out[i] = { x: out[i].x - uy * seed, y: out[i].y + ux * seed };
+    }
+
+    const arrived = () => Math.hypot(out[n - 1].x - target.x, out[n - 1].y - target.y) <= FABRIK_TOLERANCE;
+    for (let pass = 0; pass < FABRIK_PASSES; pass++) {
+        // ONE exit and ONE definition of having arrived. Written first as an early return plus a
+        // second copy of the same expression after the loop, which left the after-the-loop copy
+        // reachable only by a chain that never converges — so a mutation hard-coding it to `true`
+        // survived every test. Two statements of one fact, and only one of them exercised.
+        if (arrived()) break;
+        // BACKWARD: the end goes to the target and the chain is dragged after it. This is the pass
+        // that satisfies the goal, and it is the one that moves the root off where it belongs.
+        out[n - 1] = { x: target.x, y: target.y };
+        for (let i = n - 2; i >= 0; i--) out[i] = pull(out[i + 1], out[i], lengths[i]);
+        // FORWARD: the root is put back and the chain dragged after IT. This is the pass that
+        // restores the anchor, at the cost of the end drifting off the target again — which is why
+        // the two alternate rather than either being enough.
+        out[0] = { x: root.x, y: root.y };
+        for (let i = 1; i < n; i++) out[i] = pull(out[i - 1], out[i], lengths[i - 1]);
+    }
+    return { joints: out, reached: arrived() };
 }

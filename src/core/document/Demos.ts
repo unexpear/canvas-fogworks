@@ -366,6 +366,60 @@ export function plantedFoot(): ProjectDocument {
     return d;
 }
 
+/**
+ * A CURLING TAIL — six bones reaching for a point that moves.
+ *
+ * The case a triangle cannot express. Two bones have exactly two poses that reach a target and
+ * `bend` picks one; six have infinitely many, so the solver's job stops being "find the answer" and
+ * becomes "find a natural one". FABRIK does that by dragging the chain back from the target and
+ * forward from the root in turn, and because every step places a joint at exactly its bone's length
+ * from the previous one, a half-converged chain is still a tail rather than a stretched one.
+ *
+ * THE TARGET IS ANIMATED, which is the point: a tail is not posed once, it follows something. The
+ * tip is keyed around an arc while the base stays put, and every segment between them redistributes
+ * on its own — six rotations nobody authored, from two keyframes that mention only a position.
+ *
+ * Drawn as segments that TAPER, because a tail whose links are all the same size reads as a chain
+ * rather than as part of an animal, and because unequal bones are also the honest test: equal ones
+ * make a chain that hides which segment absorbed the bend.
+ */
+export function curlingTail(): ProjectDocument {
+    const BASE = { x: 180, y: 260 };
+    const SEGMENTS = 6;
+    const nodes: Node[] = [];
+    for (let i = 0; i <= SEGMENTS; i++) {
+        const length = 62 - i * 6;                       // tapering: 62, 56, 50, 44, 38, 32, 26
+        const width = 26 - i * 3;
+        const first = i === 0;
+        nodes.push({
+            id: `tail${i}`,
+            type: "core.rectangle",
+            parent: first ? null : `tail${i - 1}`,
+            children: i < SEGMENTS ? [`tail${i + 1}`] : [],
+            name: `tail${i}`,
+            // Each segment hangs off the end of the one before it, so the offsets ARE the bones.
+            geometry: first ? { x: BASE.x, y: BASE.y, width, height: length }
+                            : { x: 0, y: 62 - (i - 1) * 6, width, height: length },
+            style: { fill: i % 2 === 0 ? "#5aa06a" : "#6cb87c", opacity: 1 }, layout: {},
+            transform: { rotation: 0, scaleX: 1, scaleY: 1, origin: JOINT }
+        } as Node);
+    }
+    // THE BASE MOVES and the TIP is pinned — the six-bone analogue of the planted foot, and the
+    // only authored motion in the document. Every rotation in between is derived.
+    nodes[0].track = [
+        { frame: 0, easing: "ease-in-out", values: { geometry: { x: BASE.x, y: BASE.y } } },
+        { frame: 15, easing: "ease-in-out", values: { geometry: { x: BASE.x + 130, y: BASE.y + 40 } } },
+        { frame: 30, easing: "ease-in-out", values: { geometry: { x: BASE.x, y: BASE.y } } }
+    ];
+    // The TIP is the effector and it drives all six bones. Nothing here mentions an angle.
+    nodes[SEGMENTS].ik = { x: 150, y: 120, chain: SEGMENTS };
+    const d = demo("Curling tail", 32, nodes);
+    // ONE root. The helper treats every node it is handed as a root, which is right for demos made
+    // of siblings and wrong for a chain — each segment here is a child of the one before it.
+    d.rootNodeUuids = ["tail0"];
+    return d;
+}
+
 /** Every demo, for a menu and for the tests that check each one actually animates. */
 export const DEMOS: readonly { name: string; build: () => ProjectDocument }[] = [
     { name: "Bouncing ball", build: bouncingBall },
@@ -375,5 +429,6 @@ export const DEMOS: readonly { name: string; build: () => ProjectDocument }[] = 
     { name: "Waving limb", build: wavingLimb },
     { name: "Overlapping action", build: overlappingAction },
     { name: "Arc toss", build: arcToss },
-    { name: "Planted foot", build: plantedFoot }
+    { name: "Planted foot", build: plantedFoot },
+    { name: "Curling tail", build: curlingTail }
 ];

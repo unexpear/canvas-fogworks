@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v49 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v50 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -164,7 +164,7 @@ interface Keyframe {
 
 // INVERSE KINEMATICS (schema 49). Pose a limb by its HAND; the shoulder and elbow are derived.
 // Node.ik?: IkConstraint             — carried by the END EFFECTOR, the node being placed
-interface IkConstraint { x: number; y: number; bend?: 1 | -1 }   // target in the ROOT's parent space
+interface IkConstraint { x: number; y: number; bend?: 1 | -1; chain?: number }   // target in the ROOT's parent space
 //
 // The rig is the SCENE GRAPH — a parent's matrix already composes into its children, so a two-bone
 // chain needs no bone type. What was missing is stating where the hand goes and having the angles
@@ -181,6 +181,16 @@ interface IkConstraint { x: number; y: number; bend?: 1 | -1 }   // target in th
 // BEND is anatomy and is authored (+1 or -1). The triangle has two mirrored solutions and both are
 // correct; inferring one from the current pose lets a knee flip inside out whenever the chain
 // passes through straight.
+//
+// CHAIN is how many BONES the constraint drives, counted up from the effector. Absent = 2, which
+// is the limb and the case that existed before longer chains did, so nothing reinterprets. Two
+// bones are solved by the closed form; three or more by FABRIK, because past two there is no
+// unique pose at all — the same hand position is reachable by infinitely many, and the solver's
+// job becomes finding a natural one rather than finding the one.
+//
+// BEND AND A LONG CHAIN ARE REFUSED TOGETHER. A triangle has exactly two solutions and `bend`
+// names one; a longer chain has a continuum and there is nothing for +1 or -1 to select. Carrying
+// both is a statement the engine cannot honour, so it is refused rather than half-applied.
 //
 // A TARGET OUT OF REACH straightens the chain toward it rather than failing — the distance is
 // clamped into [|l1 - l2|, l1 + l2] before the cosines, so the straightened pose IS the ordinary

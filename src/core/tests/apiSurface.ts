@@ -86,8 +86,8 @@ import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDr
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { MotionPath, Point as MotionPoint, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
-import { IkPoint, IkBend, IkSolution, solveTwoBone, rotationDelta } from "../geometry/Ik";
-import { IkConstraint, ikError, applyIk, IK_TARGET_MAX } from "../document/Rig";
+import { IkPoint, IkBend, IkSolution, solveTwoBone, solveFabrik, rotationDelta, FABRIK_PASSES, FABRIK_TOLERANCE, FABRIK_SEED } from "../geometry/Ik";
+import { IkConstraint, ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
 import { Cell, SheetPlan, SheetAtlas, planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, drawSheet, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
 import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
@@ -616,6 +616,11 @@ export function __apiSurfacePin(): void {
     expectType<string | null>(ikError({ x: 0, y: 0 }));
     expectType<ReadonlyDocument>(applyIk(doc));
     expectType<number>(IK_TARGET_MAX);
+    // LONGER CHAINS (schema 50): FABRIK past two bones, the closed form at exactly two.
+    expectType<{ joints: IkPoint[]; reached: boolean }>(solveFabrik([{ x: 0, y: 0 }, { x: 0, y: 1 }, { x: 0, y: 2 }], { x: 1, y: 1 }));
+    expectType<number>(FABRIK_PASSES); expectType<number>(FABRIK_TOLERANCE); expectType<number>(FABRIK_SEED);
+    expectType<number>(IK_CHAIN_MAX);
+    expectType<IkConstraint>({ x: 0, y: 0, chain: 6 });
     expectType<(ctx: CanvasRenderingContext2D, d: ReadonlyDocument, p: SheetPlan) => void>(drawSheet);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);

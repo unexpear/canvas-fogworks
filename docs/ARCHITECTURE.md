@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v49 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v50 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -802,9 +802,28 @@ survives its own character being re-proportioned.
 **TWO BONES, SOLVED ANALYTICALLY.** A two-bone chain is the limb — arm, leg, wing — and it has a
 closed-form answer: the triangle with sides `l1`, `l2` and the root-to-target distance, by the law
 of cosines. No iteration, no convergence to reason about, exactly one answer per bend direction, and
-the same result every run. Longer chains (a spine, a tail) need FABRIK or CCD and are deliberately
-not here yet; a general solver whose two-bone case is worse than the closed form would be a poor
-trade for the case that matters most.
+the same result every run.
+
+**LONGER CHAINS USE FABRIK, and the closed form STAYS.** A spine, a tail or a tentacle has more
+joints than a triangle has corners, and past two bones there is no unique answer at all — the same
+hand position is reachable by infinitely many poses, so the solver's job stops being "find the
+answer" and becomes "find a natural one". FABRIK does that by alternately dragging the chain back
+from the target and forward from the root, which converges quickly and, because every step is a
+projection onto a segment, always produces a chain whose bones are still the right lengths. The
+two-bone case is NOT routed through it: an iterative approximation where a closed form exists would
+be slower, less exact, and would make the commonest rig in animation depend on a convergence
+argument. Picking the solver by chain length costs one comparison.
+
+**ITERATION IS BOUNDED AND THE TOLERANCE IS FIXED**, which is not a performance choice. The whole
+diagnostics layer rests on the same document always producing the same motion — a trace that
+differed run to run would stop being comparable with another trace, and every regression check
+built on it would evaporate. So the loop runs a fixed maximum and stops on a fixed distance, never
+on elapsed time or an adaptive budget.
+
+**BEND DOES NOT APPLY PAST TWO BONES.** A triangle has exactly two solutions and `bend` names one;
+a longer chain has a continuum, and there is nothing for +1 or -1 to select. A document carrying
+both is refused rather than quietly ignoring the field — the same call the motion path makes about
+a keyframe that eases coordinates the route already owns.
 
 **BEND DIRECTION IS AUTHORED, NOT GUESSED.** The triangle has two solutions mirrored about the
 root-to-target line — elbow up or elbow down — and they are both correct. Which one a limb uses is
