@@ -89,6 +89,7 @@ import { MotionPath, Point as MotionPoint, motionPathError, motionPointAt, motio
 import { IkPoint, IkBend, IkSolution, solveTwoBone, solveFabrik, rotationDelta, FABRIK_PASSES, FABRIK_TOLERANCE, FABRIK_SEED } from "../geometry/Ik";
 import { IkConstraint, ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
 import { Cell, SheetPlan, SheetAtlas, planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, drawSheet, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
+import { SliceGrid, SliceOptions, sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
 import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
 import { JournalEntry, recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
@@ -634,6 +635,16 @@ export function __apiSurfacePin(): void {
     // state-able and instance-overridable — one addition, three capabilities.
     expectType<InstanceOverride>({ sourceRect: region });
     expectType<Keyframe>({ frame: 0, values: { sourceRect: region } });
+
+    // SHEET SLICING: the grid, never the ink. Pure, and it yields plain rects rather than a
+    // document — turning them into keyframes is a separate decision.
+    const sliceOpts: SliceOptions = { cellWidth: 24, cellHeight: 24, margin: 0, spacing: 0 };
+    expectType<SliceGrid | null>(sliceGrid(360, 168, sliceOpts));
+    const sheetGrid: SliceGrid = { columns: 15, rows: 7, cellWidth: 24, cellHeight: 24, count: 105 };
+    expectType<SourceRect[]>(sliceCells(sheetGrid));
+    expectType<Keyframe[]>(sliceTrack(sliceCells(sheetGrid), { start: 0, step: 2 }));
+    expectType<number[]>(blankCells(sliceCells(sheetGrid), () => true));
+    expectType<number>(SLICE_MAX_CELLS);
     expectType<(ctx: CanvasRenderingContext2D, d: ReadonlyDocument, p: SheetPlan) => void>(drawSheet);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);

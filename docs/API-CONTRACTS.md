@@ -751,6 +751,25 @@ track the document would refuse. Structured storage is kept for the same reason 
 stores commands rather than a `d` string (one validator, no backend re-parses); the text form
 exists because a row-per-track widget is a poor way to author six columns.
 
+### `core/import/SheetSlice` — reading a sheet nobody wrote an atlas for
+
+```ts
+interface SliceGrid { columns: number; rows: number; cellWidth: number; cellHeight: number; count: number }
+interface SliceOptions { cellWidth: number; cellHeight: number; margin?: number; spacing?: number; limit?: number }
+const SLICE_MAX_CELLS: number;                       // bound on a hand-editable grid
+
+function sliceGrid(imageWidth: number, imageHeight: number, opts: SliceOptions): SliceGrid | null;   // null = does not divide
+function sliceCells(grid: SliceGrid, opts?: SliceOptions): SourceRect[];                             // reading order
+function sliceTrack(cells: readonly SourceRect[], opts?: { start?: number; step?: number }): Keyframe[];
+```
+
+- THE GRID, NEVER THE INK. Measured on real packs: ink runs are ragged and adjacent frames' ink
+  merges, so boundary detection finds 19 frames in a sheet holding 80. See ARCHITECTURE.
+- `margin` is the border around the whole sheet, `spacing` the gutter BETWEEN cells — the two
+  numbers every tileset editor uses, and they are different: a sheet can have one without the other.
+- Slicing yields plain rects; `sliceTrack` turns them into keyframes as a SEPARATE step, because
+  which rectangles and how fast are different decisions.
+
 ### `document/Timeline` — animation over frames (schema 39; CHANNELS schema 47)
 
 ```ts

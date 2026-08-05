@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1192 — `src/core/tests/document.test.ts` (1083) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (40).
+- **Tests:** 1196 — `src/core/tests/document.test.ts` (1087) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (40).
 
 ## Source map
 
@@ -66,6 +66,7 @@ src/
                 DashPath
     diagnostics/ MotionTrace (where the ink IS, per frame),
                 ActionJournal (what was dispatched, when)
+    import/     SheetSlice (recovering a sheet's grid)
     ids/        UUID
     tests/      document.test.ts, apiSurface.ts (compile-time API pin —
                 a module that gains a documented export gains a line

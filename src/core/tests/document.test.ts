@@ -63,6 +63,7 @@ import { channelsError, CHANNELS_MAX } from "../document/Timeline";
 import { MotionPath, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
 import { solveTwoBone, solveFabrik, rotationDelta, FABRIK_PASSES, FABRIK_TOLERANCE } from "../geometry/Ik";
 import { sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
+import { sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
 import { planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
@@ -13863,6 +13864,103 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
         expect(contact.width).toBe(air.width);
         expect(contact.height).toBe(air.height);
+    });
+
+    test("slicing recovers the grid of the REAL sheets it was measured against", () => {
+        // These are the packs' actual dimensions, and the expected grids are the ones derived
+        // independently by counting inked cells in the pixels — so this checks the slicer against
+        // a measurement rather than against itself.
+        const cases: [string, number, number, number, number, string][] = [
+            ["dungeon tileset", 360, 168, 24, 24, "15x7"],
+            ["island tileset", 216, 192, 24, 24, "9x8"],
+            ["creature strip", 640, 128, 32, 32, "20x4"],
+            ["sword set", 384, 80, 16, 80, "24x1"]
+        ];
+        for (const [name, w, h, cw, ch, expected] of cases) {
+            const g = sliceGrid(w, h, { cellWidth: cw, cellHeight: ch })!;
+            expect(`${name} ${g.columns}x${g.rows}`).toBe(`${name} ${expected}`);
+            expect(g.count).toBe(g.columns * g.rows);
+        }
+
+        // A CELL SIZE THAT DOES NOT DIVIDE is refused, never rounded. Rounding down would hand
+        // back a plausible grid whose every cell sits further off than the last, and nothing
+        // downstream could notice — the dungeon sheet at 32px is exactly that mistake.
+        expect(sliceGrid(360, 168, { cellWidth: 32, cellHeight: 32 })).toBeNull();
+        // ONE AXIS AT A TIME. The case above misses on BOTH, so either check alone would still
+        // refuse it and neither is actually pinned by it — the symmetric-fixture trap. These two
+        // divide exactly on one axis and not the other, so each check is the only thing standing.
+        expect(sliceGrid(100, 64, { cellWidth: 32, cellHeight: 32 })).toBeNull();   // width only
+        expect(sliceGrid(64, 100, { cellWidth: 32, cellHeight: 32 })).toBeNull();   // height only
+        expect(sliceGrid(64, 64, { cellWidth: 32, cellHeight: 32 })!.count).toBe(4);
+        expect(sliceGrid(360, 168, { cellWidth: 0, cellHeight: 24 })).toBeNull();
+        expect(sliceGrid(360, 168, { cellWidth: 24, cellHeight: -4 })).toBeNull();
+        expect(sliceGrid(10, 10, { cellWidth: 24, cellHeight: 24 })).toBeNull();
+        expect(sliceGrid(Infinity, 168, { cellWidth: 24, cellHeight: 24 })).toBeNull();
+
+        // BOUNDED, because cell size is a number a person types and a small typo asks for millions.
+        expect(sliceGrid(40000, 40000, { cellWidth: 1, cellHeight: 1 })).toBeNull();
+        expect(SLICE_MAX_CELLS).toBeGreaterThan(1000);
+    });
+
+    test("margin and spacing are DIFFERENT numbers, and the gutter arithmetic proves it", () => {
+        // N cells take N widths and N-1 gutters. A slicer that divided by (cell + spacing) without
+        // adding the gutter back would lose the last column on every spaced sheet.
+        const g = sliceGrid(50, 50, { cellWidth: 16, cellHeight: 16, spacing: 1 })!;
+        expect(`${g.columns}x${g.rows}`).toBe("3x3");        // 3*16 + 2*1 = 50
+        const cells = sliceCells(g, { spacing: 1 });
+        expect(cells[0]).toEqual({ x: 0, y: 0, width: 16, height: 16 });
+        expect(cells[1]).toEqual({ x: 17, y: 0, width: 16, height: 16 });
+        expect(cells[8]).toEqual({ x: 34, y: 34, width: 16, height: 16 });
+
+        // MARGIN is the border around the whole sheet and is taken off BOTH sides — a sheet with
+        // one and not the other is ordinary, which is why they cannot be one number.
+        const m = sliceGrid(54, 54, { cellWidth: 16, cellHeight: 16, spacing: 1, margin: 2 })!;
+        expect(`${m.columns}x${m.rows}`).toBe("3x3");        // 2 + 3*16 + 2*1 + 2 = 54
+        expect(sliceCells(m, { spacing: 1, margin: 2 })[0]).toEqual({ x: 2, y: 2, width: 16, height: 16 });
+        // The same sheet read WITHOUT its margin does not divide, so a forgotten margin is a
+        // refusal rather than a silently misaligned grid.
+        expect(sliceGrid(54, 54, { cellWidth: 16, cellHeight: 16, spacing: 1 })).toBeNull();
+    });
+
+    test("cells come back in READING ORDER, and a track spaces them", () => {
+        const g = sliceGrid(64, 32, { cellWidth: 16, cellHeight: 16 })!;
+        const cells = sliceCells(g);
+        expect(cells).toHaveLength(8);
+        // Left to right, THEN top to bottom — the order sheets are authored in and atlases number
+        // them. Column-major would disagree with every tool an artist already uses, and would look
+        // identical in a count.
+        expect(cells.slice(0, 4).map(c => c.x)).toEqual([0, 16, 32, 48]);
+        expect(cells.slice(0, 4).map(c => c.y)).toEqual([0, 0, 0, 0]);
+        expect(cells[4]).toEqual({ x: 0, y: 16, width: 16, height: 16 });
+
+        // A TRACK is a separate step: re-timing must not mean re-reading the sheet.
+        const track = sliceTrack(cells, { step: 3, start: 6 });
+        expect(track.map(k => k.frame)).toEqual([6, 9, 12, 15, 18, 21, 24, 27]);
+        expect(track[0].values.sourceRect).toEqual(cells[0]);
+        expect(track[7].values.sourceRect).toEqual(cells[7]);
+        // NOT held — a region steps through an ordinary tween (schema 52), and marking these held
+        // would work while hiding any regression in that rule.
+        expect(track.every(k => !k.hold)).toBe(true);
+        // A zero step would stack every cell on one frame, where only the last could be seen.
+        expect(sliceTrack(cells, { step: 0 }).map(k => k.frame)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+        expect(sliceTrack([])).toEqual([]);
+    });
+
+    test("blank cells are REPORTED, never dropped", () => {
+        const cells = sliceCells(sliceGrid(96, 32, { cellWidth: 32, cellHeight: 32 })!);
+        expect(cells).toHaveLength(3);
+        // The emptiness test is injected because deciding it needs pixels and this module is pure —
+        // the same split `SpriteSheet` makes between planning a sheet and drawing one.
+        // The predicate answers HAS INK, so only the middle cell is drawn on and the outer two
+        // are the holes.
+        const blank = blankCells(cells, rect => rect.x === 32);
+        expect(blank).toEqual([0, 2]);
+        // INDICES, not a filtered list. A tileset legitimately has holes — the measured dungeon
+        // sheet fills 87 of its 105 — and removing them would renumber every cell after the first
+        // hole, so an atlas written against the file would stop agreeing with the file.
+        expect(cells).toHaveLength(3);
+        expect(blankCells(cells, () => true)).toEqual([]);
+        expect(blankCells(cells, () => false)).toEqual([0, 1, 2]);
     });
 
     test("a keyframed REGION steps, and never slides across the sheet", () => {

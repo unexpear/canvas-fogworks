@@ -928,6 +928,34 @@ That needs the image's natural size, which comes from the shared `ImageCache` th
 already use — so an undecoded image draws nothing here exactly as it draws nothing on Canvas, rather
 than each backend inventing its own answer for "not ready yet".
 
+### Slicing a sheet — why the grid, and not the ink
+
+**Reading a sheet is not the inverse of writing one.** `SpriteSheet` exports a texture plus an
+atlas that says which rectangle is which frame; a sheet that arrives from an artist has no atlas at
+all, just pixels. So the importer's whole job is recovering the grid that the file no longer
+states.
+
+**AND IT MUST BE THE GRID, NOT THE INK.** The tempting approach — find the transparent gutters
+between frames and cut there — was measured against the real packs and is wrong. On the creature
+strip the ink runs come out ragged (widths 17, 22, 29, 21…; start pitch 24, 34, 35, 31…) because
+each drawing fills its cell differently, and adjacent frames' ink MERGES where two drawings touch.
+Ink-boundary detection finds 19 "frames" in a sheet that really holds 80. A grid recovers the
+truth; nothing else does.
+
+**The grid is stated, or inferred from a cell size.** An author knows their sheet is 32×32 or
+24×24 — it is usually in the filename — so the honest API takes the cell size and derives the
+counts, rather than guessing a number that must be exactly right and has no safe default.
+
+**Slicing is PURE and produces plain data**, not a document: cells in reading order, each a
+`SourceRect`. Building keyframes from them is a separate step, because "which rectangles" and "how
+fast, in what order, looping or not" are different decisions and an importer that fused them would
+force a re-slice every time the timing changed.
+
+**Empty cells are reported, never silently dropped.** A tileset legitimately has holes — the
+measured dungeon sheet fills 87 of its 105 cells — and which indices are blank is exactly what a
+tilemap author needs. Dropping them would renumber every cell after the first hole, so an atlas
+written against the file would no longer agree with it.
+
 ## 4c. Sprite sheets — a character leaving the editor
 
 **`core/export/SpriteSheet` turns clips into a strip of cells and the descriptor an engine reads.**
