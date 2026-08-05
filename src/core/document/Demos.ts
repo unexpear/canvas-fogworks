@@ -30,6 +30,7 @@ import { ProjectDocument, createEmptyDocument } from "./Document";
 import { Node } from "./Node";
 import { Keyframe } from "./Timeline";
 import { CubicBezier } from "./Bezier";
+import { MotionPath } from "./MotionPath";
 
 /** Frames a demo runs for, and the rate it is authored at. 24 is the film convention. */
 const FPS = 24;
@@ -270,6 +271,40 @@ export function overlappingAction(): ProjectDocument {
     return d;
 }
 
+/**
+ * THE ARC — a thrown ball, in TWO keyframes.
+ *
+ * The exercise that shows what a motion path is for. A ball thrown across the screen travels on an
+ * arc, and until now saying so meant putting keyframes along the curve: a polyline the author
+ * re-fits by hand whenever either end moves, and one an editor shows as six keyframes nobody
+ * authored. Here the whole flight is a throw and a landing, and the route between them is one
+ * curve.
+ *
+ * SET AGAINST ITS OWN CONTROL. The pale ball has the same two keyframes, the same easing and no
+ * path, so it slides along the chord while the other arcs over it — the difference is the feature,
+ * visible in one glance rather than argued for.
+ *
+ * The handles reach UP from both ends, which is what makes a throw: steep departure, steep arrival,
+ * and the apex in between. `easing` is untouched by any of this — the path decides the route and
+ * the curve decides the spacing, which is the separation that lets a ball hang at the top.
+ */
+export function arcToss(): ProjectDocument {
+    const start = { x: 90, y: 380 }, end = { x: 560, y: 380 };
+    // OFFSETS from their own ends, so moving either keyframe carries the curve with it. Negative y
+    // is up: both handles reach for the apex.
+    const arc: MotionPath = { c1: { x: 60, y: -300 }, c2: { x: -60, y: -300 } };
+    const flight = (motion?: MotionPath): Keyframe[] => [
+        { frame: 0, easing: "linear", motion, values: { geometry: { x: start.x, y: start.y } } },
+        { frame: 30, values: { geometry: { x: end.x, y: end.y } } }
+    ];
+    // LINEAR easing on purpose. Any ease would muddle the demonstration — a viewer could not tell
+    // the arc from the timing — and it is also the honest test of arc-length progress: with even
+    // spacing in time, even spacing along the ROUTE is what proves the parameter was reparameterised.
+    const chord = ellipse("chord", start.x, start.y, 44, "#3a4a63", flight());
+    const ball = ellipse("ball", start.x, start.y, 44, "#e0533d", flight(arc));
+    return demo("Arc toss", 32, [chord, ball]);
+}
+
 /** Every demo, for a menu and for the tests that check each one actually animates. */
 export const DEMOS: readonly { name: string; build: () => ProjectDocument }[] = [
     { name: "Bouncing ball", build: bouncingBall },
@@ -277,5 +312,6 @@ export const DEMOS: readonly { name: string; build: () => ProjectDocument }[] = 
     { name: "Pendulum", build: pendulum },
     { name: "Cel sequence", build: celSequence },
     { name: "Waving limb", build: wavingLimb },
-    { name: "Overlapping action", build: overlappingAction }
+    { name: "Overlapping action", build: overlappingAction },
+    { name: "Arc toss", build: arcToss }
 ];

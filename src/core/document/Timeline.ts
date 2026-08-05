@@ -31,6 +31,7 @@ import { Easing, EaseFor, blendNode, easingAt, easingError } from "./Prototype";
 import { Node, StateDefinition } from "./Node";
 import { ReadonlyDocument, ProjectDocument } from "./Document";
 import { materializeNode } from "./Components";
+import { MotionPath, motionPathError, motionPointAt } from "./MotionPath";
 
 /** Longest timeline a document may declare — an OOM guard on a hand-editable number. */
 export const TIMELINE_MAX_FRAMES = 100_000;
@@ -68,6 +69,15 @@ export interface Keyframe {
      * the classical exercises need, and it does not stand in the way of channels later.
      */
     easings?: Record<string, Easing>;
+    /**
+     * The ROUTE this keyframe's position tween takes (schema 48). Absent = a straight line.
+     *
+     * Two control points, stored as OFFSETS from the segment's own ends — the endpoints are the
+     * two keyframes' own positions, so a path cannot disagree with the keyframes it joins. See
+     * `document/MotionPath`, which also explains why progress along it is arc length and not the
+     * cubic's parameter.
+     */
+    motion?: MotionPath;
     /** What differs at this frame — the same statement a state or an instance override makes. */
     values: StateDefinition;
 }
@@ -125,6 +135,19 @@ export function trackError(track: unknown, valuesError: (v: unknown) => string |
                 if (!EASABLE_PATHS.has(path)) return `keyframe.easings has no such property "${path}"`;
                 const bad = easingError(e);
                 if (bad) return `keyframe.easings["${path}"] ${bad}`;
+            }
+        }
+        const motionBad = motionPathError(k.motion);
+        if (motionBad) return `keyframe ${motionBad}`;
+        // A KEYFRAME MAY NOT SAY IT TWICE. A route carries ONE progress along itself; separately
+        // easing the coordinates it is made of is a different animation, and accepting both would
+        // mean picking one silently. Refusing is the same call `channelsError` makes about a
+        // keyframe that names a second property.
+        if (k.motion && k.easings) {
+            for (const axis of ["geometry.x", "geometry.y"]) {
+                if (k.easings[axis] !== undefined) {
+                    return `keyframe with a motion path must not also ease "${axis}"`;
+                }
             }
         }
         const bad = valuesError(k.values);
@@ -272,7 +295,19 @@ export function applyFrame(doc: ReadonlyDocument, frame: number | undefined): Re
         const easeFor: EaseFor | undefined = easings
             ? (path: string) => (easings[path] !== undefined ? easingAt(easings[path], at.raw) : at.t)
             : undefined;
-        const posed = at.to ? withChildren(blendNode(from, value(at.to), at.t, easeFor), n.children) : from;
+        let posed = at.to ? withChildren(blendNode(from, value(at.to), at.t, easeFor), n.children) : from;
+        // THE ROUTE (schema 48). The straight line `blendNode` produced is replaced by a point on
+        // the curve — at the SAME progress, so the easing still decides the spacing and the path
+        // decides only where the shape goes. Endpoints come from the two keyframes' own blended
+        // positions rather than from the path, which is why a path cannot drift from its keyframes.
+        if (at.to && at.from.motion) {
+            const to = value(at.to);
+            const point = motionPointAt(
+                { x: from.geometry.x, y: from.geometry.y },
+                { x: to.geometry.x, y: to.geometry.y },
+                at.from.motion, at.t);
+            posed = { ...posed, geometry: { ...posed.geometry, x: point.x, y: point.y } };
+        }
         // CHANNELS LAST (schema 47): the more specific statement wins. A property named by both the
         // track and a channel takes the channel's, which is the order that makes a channel worth
         // adding — and it is why a document with none behaves exactly as it did before they existed.

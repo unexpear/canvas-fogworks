@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v47 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v48 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -161,6 +161,34 @@ interface Keyframe {
   easing?: Easing;          // shapes the tween LEAVING this keyframe; ignored when held
   values: StateDefinition;  // the same statement a state and an instance override make
 }
+
+// MOTION PATHS (schema 48). A position tween that is a CURVE rather than a straight line.
+// Keyframe.motion?: MotionPath      — shapes the position tween LEAVING this keyframe
+interface MotionPath { c1: {x: number; y: number}; c2: {x: number; y: number} }   // OFFSETS, see below
+//
+// Everything moved in straight lines. A thrown ball travels on an ARC, and the only way to say so
+// was to add keyframes along the curve — which is not the same animation: it is a polyline the
+// author has to re-fit every time either end moves, and an editor then shows six keyframes nobody
+// authored. One curve says it once.
+//
+// THE ENDPOINTS ARE NOT STORED. A segment's ends are the two keyframes' own positions, so only the
+// two control points are kept and a path cannot come to disagree with the keyframes it joins.
+// They are OFFSETS from their nearest endpoint — `c1` from the leaving keyframe, `c2` from the
+// arriving one — for the same reason mesh points became fractions in schema 43: move a keyframe
+// and the curve follows it, instead of snapping back to coordinates authored against an old
+// position.
+//
+// PROGRESS IS ARC LENGTH, not the Bezier parameter. Equal steps in a cubic's parameter are NOT
+// equal steps in distance — a curve with long handles crawls at its ends and races through its
+// middle, which reads as an ease nobody asked for and would silently fight the easing curve that
+// IS authored. Spacing is the whole subject of the exercises this engine is for, so `t` is
+// resolved against a sampled length table: `easing` shapes the spacing and the path shapes only
+// the route. See `document/MotionPath`.
+//
+// A KEYFRAME MAY NOT SAY IT TWICE. `easings` naming `geometry.x` or `geometry.y` on a keyframe
+// that also carries a `motion` is refused: a route with one progress and its own coordinates
+// separately eased are two different animations, and picking one would be a guess. A CHANNEL on
+// either coordinate is refused for the same reason when the track segment under it has a path.
 
 // CHANNELS (schema 47). Independent per-property TIMING — rotation keyed on frames position has none.
 // Node.channels?: Record<string, Keyframe[]>   — keyed by property path; absent = the track is all

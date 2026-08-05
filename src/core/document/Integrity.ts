@@ -79,6 +79,12 @@ function checkNodeRanges(node: ReadonlyNode): void {
     // track, so a keyframe it holds must satisfy exactly what a keyframe always did.
     const channelErr = channelsError(node.channels, v => overrideValueError("keyframe", v));
     if (channelErr) throw new Error(`Invalid document: node "${node.id}" ${channelErr}.`);
+    // A ROUTE AND A SEPARATE COORDINATE are two animations (schema 48). A channel is applied after
+    // the track, so a channel on one axis would half-override a path — the shape following the
+    // curve in y and the channel in x, which is neither of the things the document says. Checked
+    // HERE rather than in either validator because it is the only place that sees both.
+    const motionErr = motionConflictError(node);
+    if (motionErr) throw new Error(`Invalid document: node "${node.id}" ${motionErr}.`);
     const srcErr = srcError(node.type, node.src);
     if (srcErr) throw new Error(`Invalid document: node "${node.id}" ${srcErr}.`);
     // `componentId` (M6): only an instance may carry one; a DANGLING reference is deliberately
@@ -245,4 +251,22 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
             cursor = doc.nodes.get(cursor)?.parent ?? null;
         }
     });
+}
+
+/**
+ * A node that states its position twice — a motion path on the track and a channel on a coordinate.
+ *
+ * Both are legal on their own and neither validator can see the other, so the check lives where the
+ * whole node does. Refused rather than resolved: a precedence rule would make one of the two things
+ * the author wrote silently do nothing.
+ */
+function motionConflictError(node: { readonly track?: readonly { readonly motion?: unknown }[]; readonly channels?: Readonly<Record<string, unknown>> }): string | null {
+    if (!node.track || !node.channels) return null;
+    if (!node.track.some(k => k && k.motion)) return null;
+    for (const axis of ["geometry.x", "geometry.y"]) {
+        if (node.channels[axis] !== undefined) {
+            return `has a motion path and a "${axis}" channel, which state its position twice`;
+        }
+    }
+    return null;
 }

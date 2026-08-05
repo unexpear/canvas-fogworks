@@ -56,10 +56,11 @@ import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry
 import { Ring } from "../geometry/PathBoolean";
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
-import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlappingAction, DEMOS } from "../document/Demos";
+import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlappingAction, arcToss, DEMOS } from "../document/Demos";
 import { traceMotion, traceVelocity, traceTiming, traceDigest } from "../diagnostics/MotionTrace";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { channelsError, CHANNELS_MAX } from "../document/Timeline";
+import { MotionPath, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
 import { planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
 import { easingError } from "../document/Prototype";
@@ -4400,9 +4401,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 46→47 landed, giving a node
-        // per-property CHANNELS so rotation can key where position has no keyframe.)
-        expect(() => migrateIfNeeded(legacy, "48")).toThrow('Migration not implemented for document schema "47"');
+        // time a real migration is added — most recently when 47→48 landed, giving a keyframe a
+        // MOTION PATH so a position tween can be an arc rather than a straight line.)
+        expect(() => migrateIfNeeded(legacy, "49")).toThrow('Migration not implemented for document schema "48"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -13858,6 +13859,131 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
         expect(contact.width).toBe(air.width);
         expect(contact.height).toBe(air.height);
+    });
+
+    test("a MOTION PATH spaces by ARC LENGTH, not by the cubic's parameter", () => {
+        const from = { x: 0, y: 0 }, to = { x: 400, y: 0 };
+        // Long handles are what makes the two parameterisations disagree: this curve crawls at its
+        // ends and races through its middle when it is walked by parameter.
+        const path: MotionPath = { c1: { x: 300, y: -300 }, c2: { x: -300, y: -300 } };
+
+        const steps = (points: { x: number; y: number }[]) =>
+            points.slice(1).map((q, i) => Math.hypot(q.x - points[i].x, q.y - points[i].y));
+        const spread = (d: number[]) => Math.max(...d) / Math.min(...d);
+
+        // BY PARAMETER — the control, and the reason this is not evaluated naively. `motionPolyline`
+        // samples by parameter by design, so its steps are visibly uneven. Without this the claim
+        // below would be satisfied by a straight line and prove nothing.
+        expect(spread(steps(motionPolyline(from, to, path, 20)))).toBeGreaterThan(2);
+
+        // BY DISTANCE — equal progress must be equal travel. This is the claim.
+        expect(spread(steps(Array.from({ length: 21 }, (_, i) => motionPointAt(from, to, path, i / 20)))))
+            .toBeLessThan(1.1);
+
+        // The ENDPOINTS are the keyframes' own positions, exactly. A path that missed its ends by a
+        // sampling error would make a shape jump at every keyframe.
+        expect(motionPointAt(from, to, path, 0)).toEqual(from);
+        expect(motionPointAt(from, to, path, 1)).toEqual(to);
+        // Outside [0,1] is clamped rather than extrapolated, as everything else in the timeline is.
+        expect(motionPointAt(from, to, path, -5)).toEqual(from);
+        expect(motionPointAt(from, to, path, 9)).toEqual(to);
+
+        // And it is a CURVE: halfway along it is nowhere near the chord.
+        expect(motionPointAt(from, to, path, 0.5).y).toBeLessThan(-100);
+    });
+
+    test("control points are OFFSETS, so moving a keyframe carries the curve", () => {
+        const path: MotionPath = { c1: { x: 50, y: -100 }, c2: { x: -50, y: -100 } };
+        const a = motionPointAt({ x: 0, y: 0 }, { x: 200, y: 0 }, path, 0.5);
+        // The SAME segment, translated. Absolute control points would leave the curve behind and
+        // swing the shape toward coordinates authored against a position that has moved.
+        const b = motionPointAt({ x: 1000, y: 500 }, { x: 1200, y: 500 }, path, 0.5);
+        expect(b.x - 1000).toBeCloseTo(a.x, 6);
+        expect(b.y - 500).toBeCloseTo(a.y, 6);
+
+        // A ZERO-LENGTH path is an authoring state, not an error: both keyframes on one spot with
+        // no handles. Every ratio inside would be 0/0, so it answers with the point itself.
+        const flat = motionPointAt({ x: 7, y: 9 }, { x: 7, y: 9 }, { c1: { x: 0, y: 0 }, c2: { x: 0, y: 0 } }, 0.5);
+        expect(flat).toEqual({ x: 7, y: 9 });
+    });
+
+    test("the ARC TOSS demo arcs over the straight line it is shown against", () => {
+        const doc = arcToss();
+        const mid = traceMotion(doc, { from: 15, to: 15 });
+        const ball = mid.find(v => v.nodeId === "ball")!;
+        const chord = mid.find(v => v.nodeId === "chord")!;
+        // Same keyframes, same easing, one path — so any vertical difference IS the path.
+        expect(ball.y).toBeLessThan(chord.y - 150);
+        // The chord joins two points at the same height, so it never leaves that height.
+        expect(chord.y).toBeCloseTo(380, 6);
+
+        // AND IT TRAVELS. Height alone does not pin the route: a segment whose two ends were read
+        // from the SAME keyframe still arcs upward and back, and every vertical assertion above
+        // passes on it while the ball never leaves the throwing hand. The horizontal progression is
+        // what says the path runs from one keyframe to the other.
+        expect(ball.x).toBeGreaterThan(200);
+        expect(ball.x).toBeLessThan(450);
+        const last = traceMotion(doc, { from: 30, to: 30, nodeIds: ["ball"] })[0];
+        expect(last.x).toBeCloseTo(560, 3);
+        expect(last.y).toBeCloseTo(380, 3);
+
+        // ARC LENGTH through the REAL pipeline, not just the module: with linear easing the ball's
+        // measured speed is near-constant, which a parametric evaluation would not give.
+        const speeds = traceVelocity(traceMotion(doc, { from: 1, to: 29, nodeIds: ["ball"] })).map(v => v.speed);
+        expect(Math.max(...speeds) / Math.min(...speeds)).toBeLessThan(1.25);
+    });
+
+    test("motionPathError refuses what would vanish a shape, and a keyframe that says it twice", () => {
+        expect(motionPathError(undefined)).toBeNull();
+        expect(motionPathError({ c1: { x: 1, y: 2 }, c2: { x: -1, y: -2 } })).toBeNull();
+        expect(motionPathError("no")).toMatch(/must be an object/);
+        expect(motionPathError({ c1: { x: 0, y: 0 } })).toMatch(/c2 must be a point/);
+        // NON-FINITE is the one that matters: a NaN offset makes every sampled length NaN and the
+        // shape simply disappears, frames away from the cause.
+        expect(motionPathError({ c1: { x: NaN, y: 0 }, c2: { x: 0, y: 0 } })).toMatch(/c1\.x must be a finite/);
+        expect(motionPathError({ c1: { x: 0, y: Infinity }, c2: { x: 0, y: 0 } })).toMatch(/c1\.y must be a finite/);
+        expect(motionPathError({ c1: { x: 0, y: 0 }, c2: { x: MOTION_OFFSET_MAX + 1, y: 0 } })).toMatch(/within/);
+        expect(ARC_SAMPLES).toBeGreaterThan(8);
+
+        // A ROUTE AND A SEPARATELY EASED COORDINATE are two animations, so the track refuses both.
+        const both = [{ frame: 0, motion: { c1: { x: 1, y: 1 }, c2: { x: 1, y: 1 } },
+                        easings: { "geometry.x": "linear" }, values: {} }, { frame: 5, values: {} }];
+        expect(trackError(both, () => null)).toMatch(/must not also ease "geometry\.x"/);
+        // Easing something the route does not decide is fine — a path owns position, not opacity.
+        const fine = [{ frame: 0, motion: { c1: { x: 1, y: 1 }, c2: { x: 1, y: 1 } },
+                        easings: { "style.opacity": "linear" }, values: {} }, { frame: 5, values: {} }];
+        expect(trackError(fine, () => null)).toBeNull();
+    });
+
+    test("a node may not state its position with BOTH a path and a channel", () => {
+        const make = (over: Record<string, unknown>) => {
+            const d = createEmptyDocument();
+            d.timeline = { frames: 10, fps: 24 };
+            d.nodes.set("n", { id: "n", type: "core.rectangle", parent: null, children: [], name: "n",
+                geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#fff", opacity: 1 }, layout: {},
+                track: [{ frame: 0, motion: { c1: { x: 10, y: -10 }, c2: { x: -10, y: -10 } },
+                          values: { geometry: { x: 0, y: 0 } } },
+                        { frame: 5, values: { geometry: { x: 100, y: 0 } } }],
+                ...over } as Node);
+            d.rootNodeUuids = ["n"];
+            return d;
+        };
+        // Applied AFTER the track, so this would half-override the route — the shape following the
+        // curve in y and the channel in x, which is neither thing the document says.
+        // Through the REAL load path: `deserializeDocument` calls the integrity check, so this
+        // pins the wiring as well as the rule.
+        const load = (d: ProjectDocument) => deserializeDocument(serializeDocument(d));
+        expect(() => load(make({
+            channels: { "geometry.x": [{ frame: 0, values: { geometry: { x: 0 } } },
+                                       { frame: 5, values: { geometry: { x: 900 } } }] }
+        }))).toThrow(/state its position twice/);
+
+        // Neither half is refused alone — the conflict IS the pair, checked in the one place that
+        // can see both. And a channel on another property is not a conflict at all.
+        expect(() => load(make({}))).not.toThrow();
+        expect(() => load(make({
+            channels: { "style.opacity": [{ frame: 0, values: { style: { opacity: 1 } } }] }
+        }))).not.toThrow();
     });
 
     test("CHANNELS give a property its own TIMING, keyed where the track has nothing", () => {

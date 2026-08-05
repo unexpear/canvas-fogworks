@@ -338,6 +338,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "44") { raw = migrate_44_to_45(raw); version = "45"; }
     if (version === "45") { raw = migrate_45_to_46(raw); version = "46"; }
     if (version === "46") { raw = migrate_46_to_47(raw); version = "47"; }
+    if (version === "47") { raw = migrate_47_to_48(raw); version = "48"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -760,6 +761,18 @@ function migrate_21_to_22(raw: any): any {
  * an animation missing every property whose timing was independent — an arm that stops with the
  * body instead of swinging past it.
  */
+/**
+ * 47 -> 48: MOTION PATHS.
+ *
+ * Additive. A schema-47 keyframe has no route, and a segment without one is a straight line under
+ * the new code exactly as it was under the old, so nothing is rewritten. The bump is the usual
+ * interpretation direction: an old build reading a schema-48 file would drop every path and play
+ * an arc as the chord across it — a thrown ball sliding through the ground instead of over it.
+ */
+function migrate_47_to_48(raw: any): any {
+    return { ...raw, version: "48" };
+}
+
 function migrate_46_to_47(raw: any): any {
     return { ...raw, version: "47" };
 }

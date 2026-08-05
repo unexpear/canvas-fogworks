@@ -85,6 +85,7 @@ import { TextShape, drawTextInto, wrapText, wrapTextWith, textLinesFor, textRast
 import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
+import { MotionPath, Point as MotionPoint, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
 import { Cell, SheetPlan, SheetAtlas, planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, drawSheet, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
 import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
@@ -591,6 +592,16 @@ export function __apiSurfacePin(): void {
     // that had never described it, so the pin was holding a shape no document claimed.
     expectType<number>(CHANNELS_MAX);
     expectType<string | null>(channelsError({ "geometry.x": [] }, () => null));
+
+    // MOTION PATHS (schema 48): two control points as OFFSETS from the segment's own ends, and a
+    // progress that is arc length rather than the cubic's parameter.
+    const route: MotionPath = { c1: { x: 0, y: -1 }, c2: { x: 0, y: -1 } };
+    expectType<MotionPath>(route);
+    expectType<MotionPoint>(route.c1);
+    expectType<string | null>(motionPathError(route));
+    expectType<MotionPoint>(motionPointAt({ x: 0, y: 0 }, { x: 1, y: 1 }, route, 0.5));
+    expectType<MotionPoint[]>(motionPolyline({ x: 0, y: 0 }, { x: 1, y: 1 }, route));
+    expectType<number>(ARC_SAMPLES); expectType<number>(MOTION_OFFSET_MAX);
     expectType<(ctx: CanvasRenderingContext2D, d: ReadonlyDocument, p: SheetPlan) => void>(drawSheet);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);

@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v47 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v48 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -784,6 +784,30 @@ Both are BOUNDED. A trace over a long timeline with many nodes is quadratic in a
 document is not, so the frame range and the node set are explicit parameters rather than defaults
 that quietly walk the whole document; the journal keeps a fixed number of the most recent entries
 and says how many it dropped.
+
+### Motion paths — the route, kept apart from the spacing
+
+**Everything moved in straight lines.** A thrown ball travels on an arc, and the only way to say so
+was to put keyframes along the curve — a polyline the author re-fits by hand every time either end
+moves, which an editor then shows as six keyframes nobody authored. One curve says it once.
+
+**The endpoints are not stored.** A segment's ends are the two keyframes' own positions; only the
+two control points are kept, so a path cannot come to disagree with the keyframes it joins. They
+are OFFSETS from their nearest endpoint, for the same reason mesh points became fractions in schema
+43 — move a keyframe and the curve follows instead of snapping back to coordinates authored against
+a position that no longer exists.
+
+**Progress is ARC LENGTH, and that is the part worth getting right.** Equal steps in a cubic's
+parameter are not equal steps in distance: a curve with long handles crawls at its ends and races
+through its middle. Evaluated naively, a motion path would add an ease nobody authored and silently
+fight the easing curve that IS authored — and spacing is the entire subject of the exercises this
+engine exists to serve. So `t` is resolved against a sampled cumulative-length table by binary
+search plus one linear step inside the bracketing sample. The easing shapes the spacing; the path
+shapes only the route. The two stay separable, which is what makes either of them meaningful.
+
+**The sampling is the approximation, and it is bounded rather than adaptive.** A cubic's length has
+no closed form, so the table is the honest way to do this; the count is fixed so that the same
+document always produces the same motion, which is what makes a trace diffable.
 
 ### Channels — when one property's timing must outlive another's
 
