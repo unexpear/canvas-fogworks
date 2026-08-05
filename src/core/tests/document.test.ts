@@ -56,11 +56,13 @@ import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry
 import { Ring } from "../geometry/PathBoolean";
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
-import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlappingAction, arcToss, DEMOS } from "../document/Demos";
+import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlappingAction, arcToss, plantedFoot, DEMOS } from "../document/Demos";
 import { traceMotion, traceVelocity, traceTiming, traceDigest } from "../diagnostics/MotionTrace";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { channelsError, CHANNELS_MAX } from "../document/Timeline";
 import { MotionPath, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
+import { solveTwoBone, rotationDelta } from "../geometry/Ik";
+import { ikError, applyIk, IK_TARGET_MAX } from "../document/Rig";
 import { planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
 import { easingError } from "../document/Prototype";
@@ -4401,9 +4403,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 47→48 landed, giving a keyframe a
-        // MOTION PATH so a position tween can be an arc rather than a straight line.)
-        expect(() => migrateIfNeeded(legacy, "49")).toThrow('Migration not implemented for document schema "48"');
+        // time a real migration is added — most recently when 48→49 landed, giving an end effector
+        // an IK CONSTRAINT so a limb can be posed by its hand rather than by its shoulder.)
+        expect(() => migrateIfNeeded(legacy, "50")).toThrow('Migration not implemented for document schema "49"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -13859,6 +13861,175 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
         expect(contact.width).toBe(air.width);
         expect(contact.height).toBe(air.height);
+    });
+
+    test("a two-bone chain lands its END exactly on a reachable target", () => {
+        const root = { x: 100, y: 100 };
+        const reach = (target: { x: number; y: number }, l1: number, l2: number, bend: 1 | -1) => {
+            const s = solveTwoBone(root, target, l1, l2, bend);
+            // Walk the chain the way the rig does — root, along bone 1, along bone 2 — and see
+            // where it ends. Asserting the ANGLES would only prove the arithmetic matches itself;
+            // walking them proves they put the hand where it was asked to be.
+            const joint = { x: root.x + l1 * Math.cos(s.angle1), y: root.y + l1 * Math.sin(s.angle1) };
+            const end = { x: joint.x + l2 * Math.cos(s.angle2), y: joint.y + l2 * Math.sin(s.angle2) };
+            return { s, joint, end };
+        };
+
+        for (const target of [{ x: 200, y: 100 }, { x: 140, y: 180 }, { x: 40, y: 30 }, { x: 100, y: 220 }]) {
+            for (const bend of [1, -1] as const) {
+                const { s, joint, end } = reach(target, 80, 80, bend);
+                expect(end.x).toBeCloseTo(target.x, 6);
+                expect(end.y).toBeCloseTo(target.y, 6);
+                expect(s.reached).toBe(true);
+                // The returned joint is the one the walk produces — a rig DRAWS it, and a second
+                // derivation of the same point is a second thing that can drift.
+                expect(s.joint.x).toBeCloseTo(joint.x, 6);
+                expect(s.joint.y).toBeCloseTo(joint.y, 6);
+            }
+        }
+
+        // BEND mirrors the joint about the root-to-target line, and both are correct triangles.
+        const up = reach({ x: 200, y: 100 }, 80, 80, 1), down = reach({ x: 200, y: 100 }, 80, 80, -1);
+        expect(up.joint.y).not.toBeCloseTo(down.joint.y, 3);
+        expect(up.joint.y - 100).toBeCloseTo(100 - down.joint.y, 6);
+        expect(up.joint.x).toBeCloseTo(down.joint.x, 6);
+
+        // UNEQUAL bones, because equal ones make an isosceles triangle that hides which side is
+        // which — the same degenerate-fixture trap a symmetric shape sets for a guard.
+        const uneven = reach({ x: 190, y: 140 }, 120, 50, 1);
+        expect(uneven.end.x).toBeCloseTo(190, 6);
+        expect(uneven.end.y).toBeCloseTo(140, 6);
+    });
+
+    test("out of reach STRAIGHTENS toward the target rather than failing", () => {
+        const root = { x: 0, y: 0 };
+        const far = solveTwoBone(root, { x: 500, y: 0 }, 80, 80, 1);
+        expect(far.reached).toBe(false);
+        // Both bones point AT the target: the chain is straight, which is the answer every rig
+        // gives and is produced by the clamp rather than by a second code path.
+        expect(far.angle1).toBeCloseTo(0, 6);
+        expect(far.angle2).toBeCloseTo(0, 6);
+        expect(far.joint.x).toBeCloseTo(80, 6);
+        // Bend does not flip a straight chain — there is only one line to lie on.
+        expect(solveTwoBone(root, { x: 500, y: 0 }, 80, 80, -1).joint.y).toBeCloseTo(0, 6);
+
+        // TOO CLOSE is the other end of the same band: a chain cannot fold through itself, so a
+        // target inside |l1 - l2| is unreachable too, and the fold is as tight as it goes.
+        const near = solveTwoBone(root, { x: 5, y: 0 }, 120, 40, 1);
+        expect(near.reached).toBe(false);
+        expect(Math.hypot(near.joint.x, near.joint.y)).toBeCloseTo(120, 6);
+        // Nothing is NaN — `acos` outside [-1,1] is how this silently poisons a whole limb.
+        for (const v of [near.angle1, near.angle2, near.joint.x, near.joint.y]) expect(Number.isFinite(v)).toBe(true);
+
+        // A DEGENERATE chain answers finitely rather than with NaN, for the same reason.
+        const dead = solveTwoBone(root, root, 0, 80, 1);
+        for (const v of [dead.angle1, dead.angle2, dead.joint.x, dead.joint.y]) expect(Number.isFinite(v)).toBe(true);
+        expect(dead.reached).toBe(false);
+    });
+
+    test("rotationDelta takes the SHORT way round", () => {
+        const TAU = Math.PI * 2;
+        expect(rotationDelta(0, Math.PI / 2)).toBeCloseTo(Math.PI / 2, 9);
+        // The same pose expressed the long way: +350 degrees is -10, and the difference only shows
+        // when something TWEENS through it — as a full backwards spin.
+        expect(rotationDelta(0, (350 * Math.PI) / 180)).toBeCloseTo((-10 * Math.PI) / 180, 9);
+        expect(rotationDelta(0, -(350 * Math.PI) / 180)).toBeCloseTo((10 * Math.PI) / 180, 9);
+        // Many turns collapse to the same answer, so a rig cannot accumulate spins over a long clip.
+        expect(rotationDelta(0, Math.PI / 4 + 5 * TAU)).toBeCloseTo(Math.PI / 4, 9);
+        // Exactly opposite resolves to +pi rather than -pi, so the wrap has one answer, not two.
+        expect(rotationDelta(0, Math.PI)).toBeCloseTo(Math.PI, 9);
+    });
+
+    test("the PLANTED FOOT stays planted while its hip moves, and its twin does not", () => {
+        const doc = plantedFoot();
+        const at = (f: number) => {
+            const s = traceMotion(doc, { from: f, to: f });
+            return {
+                hip: s.find(v => v.nodeId === "hip")!,
+                foot: s.find(v => v.nodeId === "foot")!,
+                control: s.find(v => v.nodeId === "footX")!
+            };
+        };
+        const frames = [0, 4, 8, 12, 16, 20, 24].map(at);
+
+        // THE HIP MOVES — otherwise the whole demo is vacuous and a solver that did nothing would
+        // pass everything below it.
+        const hips = frames.map(f => Math.round(f.hip.anchorY));
+        expect(Math.max(...hips) - Math.min(...hips)).toBeGreaterThan(60);
+
+        // THE FOOT DOES NOT. It is where it was asked to be, on every frame, to the pixel.
+        for (const f of frames) {
+            expect(f.foot.anchorX).toBeCloseTo(250, 3);
+            expect(f.foot.anchorY).toBeCloseTo(400, 3);
+        }
+
+        // THE CONTROL DOES — same three nodes, same hip animation, no constraint. Without this the
+        // assertion above would also pass on a document whose foot simply never moved.
+        const controls = frames.map(f => Math.round(f.control.anchorY));
+        expect(Math.max(...controls) - Math.min(...controls)).toBeGreaterThan(60);
+
+        // THE KNEE IS ON THE AUTHORED SIDE. Both bend directions reach the target, so every
+        // assertion above passes just as happily on a knee folded backwards — `bend` is the one
+        // thing about this pose that only anatomy decides, and only its SIDE can show it.
+        for (const f of [0, 6, 12, 18, 24]) {
+            expect(traceMotion(doc, { from: f, to: f, nodeIds: ["knee"] })[0].anchorX).toBeLessThan(240);
+        }
+
+        // And the KNEE actually bends — a chain held straight would keep the foot planted too, by
+        // not being a solve at all.
+        const knees = frames.map(f => traceMotion(doc, { from: f.hip.frame, to: f.hip.frame, nodeIds: ["knee"] })[0].rotation);
+        expect(Math.max(...knees) - Math.min(...knees)).toBeGreaterThan(0.3);
+    });
+
+    test("applyIk leaves an unrigged document ALONE, by reference", () => {
+        const plain = bouncingBall();
+        expect(applyIk(plain)).toBe(plain);
+
+        // A chain that is not two bones deep is not posed — the effector's parent and grandparent
+        // are the bones, and posing whatever is there would be a guess about what was meant.
+        const shallow = createEmptyDocument();
+        shallow.nodes.set("a", { id: "a", type: "core.rectangle", parent: null, children: ["b"], name: "a",
+            geometry: { x: 0, y: 0, width: 10, height: 40 }, style: { fill: "#fff", opacity: 1 }, layout: {} } as Node);
+        shallow.nodes.set("b", { id: "b", type: "core.rectangle", parent: "a", children: [], name: "b",
+            geometry: { x: 0, y: 40, width: 10, height: 40 }, style: { fill: "#fff", opacity: 1 }, layout: {},
+            ik: { x: 200, y: 200 } } as Node);
+        shallow.rootNodeUuids = ["a"];
+        const posed = applyIk(shallow);
+        expect(posed.nodes.get("a")!.transform?.rotation ?? 0).toBe(0);
+        // The STORED document is never written into, the same rule channels had to be built around.
+        expect(shallow.nodes.get("a")!.transform).toBeUndefined();
+
+        // And a node that ALREADY HAS a transform keeps it: the group is replaced rather than
+        // written into. A node without one gets a fresh object either way, so it cannot show this —
+        // which is exactly why a mutation assigning in place survived the first version of this.
+        const rigged = plantedFoot();
+        const storedHip = rigged.nodes.get("hip")!.transform;
+        const before = storedHip!.rotation;
+        applyIk(rigged);
+        expect(rigged.nodes.get("hip")!.transform!.rotation).toBe(before);
+        expect(rigged.nodes.get("hip")!.transform).toBe(storedHip);
+    });
+
+    test("ikError refuses what would put a limb nowhere at all", () => {
+        expect(ikError(undefined)).toBeNull();
+        expect(ikError({ x: 1, y: 2 })).toBeNull();
+        expect(ikError({ x: 1, y: 2, bend: -1 })).toBeNull();
+        expect(ikError([])).toMatch(/must be an object/);
+        // NON-FINITE makes every angle NaN and puts the whole limb nowhere, frames from the cause.
+        expect(ikError({ x: NaN, y: 0 })).toMatch(/ik\.x must be a finite/);
+        expect(ikError({ x: 0, y: Infinity })).toMatch(/ik\.y must be a finite/);
+        expect(ikError({ x: IK_TARGET_MAX + 1, y: 0 })).toMatch(/within/);
+        // BEND is anatomy and has exactly two values — 0 is not "either way", it is a typo.
+        expect(ikError({ x: 0, y: 0, bend: 0 })).toMatch(/must be 1 or -1/);
+        expect(ikError({ x: 0, y: 0, bend: 2 })).toMatch(/must be 1 or -1/);
+
+        // And the LOAD path refuses it too, through the shared validator.
+        const d = createEmptyDocument();
+        d.nodes.set("n", { id: "n", type: "core.rectangle", parent: null, children: [], name: "n",
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#fff", opacity: 1 }, layout: {},
+            ik: { x: 0, y: 0, bend: 3 } } as unknown as Node);
+        d.rootNodeUuids = ["n"];
+        expect(() => deserializeDocument(serializeDocument(d))).toThrow(/bend must be 1 or -1/);
     });
 
     test("a MOTION PATH spaces by ARC LENGTH, not by the cubic's parameter", () => {

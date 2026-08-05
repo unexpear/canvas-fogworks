@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v48 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v49 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -161,6 +161,32 @@ interface Keyframe {
   easing?: Easing;          // shapes the tween LEAVING this keyframe; ignored when held
   values: StateDefinition;  // the same statement a state and an instance override make
 }
+
+// INVERSE KINEMATICS (schema 49). Pose a limb by its HAND; the shoulder and elbow are derived.
+// Node.ik?: IkConstraint             — carried by the END EFFECTOR, the node being placed
+interface IkConstraint { x: number; y: number; bend?: 1 | -1 }   // target in the ROOT's parent space
+//
+// The rig is the SCENE GRAPH — a parent's matrix already composes into its children, so a two-bone
+// chain needs no bone type. What was missing is stating where the hand goes and having the angles
+// follow. The constraint sits on the effector because that is the node whose position is being
+// stated; the two bones it drives are its parent and grandparent.
+//
+// BONE LENGTHS ARE NOT STORED. A bone runs JOINT TO JOINT — parent's transform origin to child's —
+// and its length is the magnitude of that vector, which the document already holds. The same
+// "derive it, never duplicate it" the motion path makes about its endpoints. Measuring between node
+// POSITIONS rather than joints is the subtle version of getting this wrong: the effector lands
+// several pixels off and WANDERS as the middle joint turns, because the vector a rotation actually
+// swings starts at the pivot, not at the corner.
+//
+// BEND is anatomy and is authored (+1 or -1). The triangle has two mirrored solutions and both are
+// correct; inferring one from the current pose lets a knee flip inside out whenever the chain
+// passes through straight.
+//
+// A TARGET OUT OF REACH straightens the chain toward it rather than failing — the distance is
+// clamped into [|l1 - l2|, l1 + l2] before the cosines, so the straightened pose IS the ordinary
+// answer at the boundary and not a second code path.
+//
+// Applied at the DISPLAY SEAM beside `applyFrame`, so a solved rig is an ordinary document.
 
 // MOTION PATHS (schema 48). A position tween that is a CURVE rather than a straight line.
 // Keyframe.motion?: MotionPath      — shapes the position tween LEAVING this keyframe

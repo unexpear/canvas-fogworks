@@ -86,6 +86,8 @@ import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDr
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { MotionPath, Point as MotionPoint, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
+import { IkPoint, IkBend, IkSolution, solveTwoBone, rotationDelta } from "../geometry/Ik";
+import { IkConstraint, ikError, applyIk, IK_TARGET_MAX } from "../document/Rig";
 import { Cell, SheetPlan, SheetAtlas, planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, drawSheet, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
 import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
@@ -602,6 +604,18 @@ export function __apiSurfacePin(): void {
     expectType<MotionPoint>(motionPointAt({ x: 0, y: 0 }, { x: 1, y: 1 }, route, 0.5));
     expectType<MotionPoint[]>(motionPolyline({ x: 0, y: 0 }, { x: 1, y: 1 }, route));
     expectType<number>(ARC_SAMPLES); expectType<number>(MOTION_OFFSET_MAX);
+
+    // INVERSE KINEMATICS (schema 49): the solver is pure points and lengths; the document layer
+    // turns a node into those and the angles back into transforms.
+    const bend: IkBend = -1;
+    expectType<IkSolution>(solveTwoBone({ x: 0, y: 0 }, { x: 1, y: 1 }, 1, 1, bend));
+    expectType<IkPoint>(solveTwoBone({ x: 0, y: 0 }, { x: 1, y: 1 }, 1, 1).joint);
+    expectType<boolean>(solveTwoBone({ x: 0, y: 0 }, { x: 1, y: 1 }, 1, 1).reached);
+    expectType<number>(rotationDelta(0, 1));
+    expectType<IkConstraint>({ x: 0, y: 0, bend });
+    expectType<string | null>(ikError({ x: 0, y: 0 }));
+    expectType<ReadonlyDocument>(applyIk(doc));
+    expectType<number>(IK_TARGET_MAX);
     expectType<(ctx: CanvasRenderingContext2D, d: ReadonlyDocument, p: SheetPlan) => void>(drawSheet);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);

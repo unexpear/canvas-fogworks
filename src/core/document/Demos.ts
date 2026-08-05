@@ -31,6 +31,7 @@ import { Node } from "./Node";
 import { Keyframe } from "./Timeline";
 import { CubicBezier } from "./Bezier";
 import { MotionPath } from "./MotionPath";
+import { IkConstraint } from "./Rig";
 
 /** Frames a demo runs for, and the rate it is authored at. 24 is the film convention. */
 const FPS = 24;
@@ -305,6 +306,66 @@ export function arcToss(): ProjectDocument {
     return demo("Arc toss", 32, [chord, ball]);
 }
 
+/**
+ * A PLANTED FOOT — the exercise inverse kinematics exists for.
+ *
+ * The hip rises and falls; the foot stays exactly where it was put. With forward kinematics that
+ * means hand-tuning two angles on every frame and re-tuning both whenever the hip moves at all,
+ * because the foot's position is a CONSEQUENCE of the angles rather than something that can be
+ * stated. Here the foot's position IS the statement and the knee works itself out — which is the
+ * whole reason a walk cycle is authored this way, and why one survives its character being
+ * re-proportioned.
+ *
+ * SET AGAINST ITS OWN CONTROL, like the arc toss: the pale leg is the same three nodes with the
+ * same hip animation and NO constraint, so it swings its foot through the floor while the solved
+ * one keeps its heel planted. The difference is the feature, visible in a glance.
+ *
+ * THE BEND IS STATED. A knee folds one way, and this is the demo that would show a guessed bend
+ * flipping: the chain passes close to straight at the top of the rise, which is exactly where an
+ * inferred direction loses its mind.
+ */
+export function plantedFoot(): ProjectDocument {
+    const FOOT = { x: 250, y: 400 };
+    // The HIP rises and falls. Nothing here mentions an angle: this is the only authored motion.
+    // The range is chosen to stay INSIDE the leg's reach at both ends. Thigh and shin are 110 each,
+    // so a hip above y = 180 could not touch a foot at 400 however it folded — and the chain would
+    // straighten and hang short, which is the correct answer to an impossible request but a poor
+    // demonstration of a planted foot. A crouch to 260 and a rise to 185 spans nearly the whole
+    // fold without ever asking for the impossible.
+    const hipTrack: Keyframe[] = [
+        { frame: 0, easing: "ease-in-out", values: { geometry: { x: 250, y: 260 } } },
+        { frame: 12, easing: "ease-in-out", values: { geometry: { x: 250, y: 185 } } },
+        { frame: 24, easing: "ease-in-out", values: { geometry: { x: 250, y: 260 } } }
+    ];
+    // A leg as three nodes: hip (the chain root), knee, foot. Offsets ARE the bone lengths, which
+    // is why none are stored — thigh 110 long, shin 110, both drawn straight down in rest.
+    const leg = (suffix: string, ink: string, ik?: IkConstraint): Node[] => {
+        const hip: Node = { id: `hip${suffix}`, type: "core.rectangle", parent: null, children: [`knee${suffix}`],
+            name: `hip${suffix}`, geometry: { x: 250, y: 260, width: 22, height: 110 },
+            style: { fill: ink, opacity: 1 }, layout: {},
+            transform: { rotation: 0, scaleX: 1, scaleY: 1, origin: JOINT }, track: hipTrack } as Node;
+        const knee: Node = { id: `knee${suffix}`, type: "core.rectangle", parent: `hip${suffix}`, children: [`foot${suffix}`],
+            name: `knee${suffix}`, geometry: { x: 0, y: 110, width: 20, height: 110 },
+            style: { fill: ink, opacity: 1 }, layout: {},
+            transform: { rotation: 0, scaleX: 1, scaleY: 1, origin: JOINT } } as Node;
+        const foot: Node = { id: `foot${suffix}`, type: "core.rectangle", parent: `knee${suffix}`, children: [],
+            name: `foot${suffix}`, geometry: { x: 0, y: 110, width: 46, height: 16 },
+            style: { fill: ink, opacity: 1 }, layout: {},
+            // The pivot is the ANKLE — the node's own corner — not the middle of the foot. The
+            // chain ends at a JOINT, and a box hung off that joint has its centre somewhere that
+            // swings as the knee turns. Measuring the centre made a perfectly planted foot look
+            // like it drifted 11px, which is the offset rotating rather than the solve being loose.
+            transform: { rotation: 0, scaleX: 1, scaleY: 1, origin: { x: 0, y: 0 } }, ik } as Node;
+        return [hip, knee, foot];
+    };
+    // BEND -1 puts the knee forward, which is the one a leg has.
+    const solved = leg("", "#4a90d9", { x: FOOT.x, y: FOOT.y, bend: -1 });
+    const control = leg("X", "#3a4a63");
+    const d = demo("Planted foot", 26, [...control, ...solved]);
+    d.rootNodeUuids = ["hipX", "hip"];
+    return d;
+}
+
 /** Every demo, for a menu and for the tests that check each one actually animates. */
 export const DEMOS: readonly { name: string; build: () => ProjectDocument }[] = [
     { name: "Bouncing ball", build: bouncingBall },
@@ -313,5 +374,6 @@ export const DEMOS: readonly { name: string; build: () => ProjectDocument }[] = 
     { name: "Cel sequence", build: celSequence },
     { name: "Waving limb", build: wavingLimb },
     { name: "Overlapping action", build: overlappingAction },
-    { name: "Arc toss", build: arcToss }
+    { name: "Arc toss", build: arcToss },
+    { name: "Planted foot", build: plantedFoot }
 ];

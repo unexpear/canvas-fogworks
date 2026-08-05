@@ -57,6 +57,14 @@ export interface Sample {
      */
     anchorX: number;
     anchorY: number;
+    /**
+     * The node's WORLD rotation and scale, read off the matrix the renderer uses.
+     *
+     * Not the stored `transform` values: a node posed by inverse kinematics carries a stored
+     * rotation of zero while its ink is turned, and so does any node inside a rotated parent. The
+     * question this instrument answers is how the ink ended up where it is, and only the composed
+     * matrix knows that.
+     */
     rotation: number;
     scaleX: number;
     scaleY: number;
@@ -140,9 +148,16 @@ export function traceMotion(
                 height: c.bounds.height,
                 anchorX: c.world.a * ox + c.world.c * oy + c.world.e,
                 anchorY: c.world.b * ox + c.world.d * oy + c.world.f,
-                rotation: t?.rotation ?? 0,
-                scaleX: t?.scaleX ?? 1,
-                scaleY: t?.scaleY ?? 1,
+                // DERIVED FROM THE WORLD MATRIX, not read off the stored transform — this module
+                // opens by saying it samples the computed world rather than the document, and for
+                // these three fields it did not. A node posed by IK carries a stored rotation of
+                // zero while its ink is turned 40 degrees; so does a node inside a rotated parent.
+                // Reading the matrix answers the question actually being asked, which is how the
+                // ink ended up where it is. Found when a solved knee reported a rotation of 0 while
+                // visibly bending.
+                rotation: Math.atan2(c.world.b, c.world.a),
+                scaleX: Math.hypot(c.world.a, c.world.b),
+                scaleY: Math.hypot(c.world.c, c.world.d),
                 opacity: node?.style.opacity ?? 1
             });
         });

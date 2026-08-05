@@ -6,6 +6,7 @@
 
 import { isTokenRef } from "./Variables";
 import { Interaction } from "./Prototype";
+import { IkConstraint } from "./Rig";
 
 /** A `"$token"` reference in a NUMBER slot (radius/fontSize, schema 20). Same syntax as color
  *  tokens; the resolved value's range is checked at render time (broken → visible fallback). */
@@ -256,6 +257,15 @@ export interface Node {
      * wins. See `document/Timeline`.
      */
     channels?: Record<string, Keyframe[]>;
+    /**
+     * Where this node is asked to BE, with its parent and grandparent derived to put it there
+     * (schema 49). Absent = the node is placed the ordinary way.
+     *
+     * Carried by the END EFFECTOR because that is the node whose position is being stated — a hand
+     * says where it is and the forearm and upper arm follow. The rig itself is the scene graph;
+     * this adds the solve, not a bone type. See `document/Rig`.
+     */
+    ik?: IkConstraint;
     /**
      * How far BACK this node sits (schema 40). Absent = 0, the plane of the page.
      *

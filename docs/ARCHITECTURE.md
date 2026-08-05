@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v48 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v49 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -784,6 +784,52 @@ Both are BOUNDED. A trace over a long timeline with many nodes is quadratic in a
 document is not, so the frame range and the node set are explicit parameters rather than defaults
 that quietly walk the whole document; the journal keeps a fixed number of the most recent entries
 and says how many it dropped.
+
+### Inverse kinematics — posing a limb by its hand instead of its shoulder
+
+**The rig already exists.** The scene graph composes a parent's matrix into its children, so
+animating an upper arm already carries the forearm and the hand with it; `wavingLimb` is a two-bone
+chain and needed nothing but `transform.origin` at the joint. What was missing is not a bone type —
+it is the ability to say where the HAND goes and have the shoulder and elbow work themselves out.
+
+**That is the whole difference between forward and inverse kinematics, and it is the difference
+between a rig being usable and not.** Planting a foot on the ground with forward kinematics means
+hand-tuning two angles per frame and re-tuning both whenever the hip moves, because the foot's
+position is a consequence of the angles rather than a thing you can state. With IK the foot is the
+thing you state and the angles are derived — which is also why a walk cycle authored this way
+survives its own character being re-proportioned.
+
+**TWO BONES, SOLVED ANALYTICALLY.** A two-bone chain is the limb — arm, leg, wing — and it has a
+closed-form answer: the triangle with sides `l1`, `l2` and the root-to-target distance, by the law
+of cosines. No iteration, no convergence to reason about, exactly one answer per bend direction, and
+the same result every run. Longer chains (a spine, a tail) need FABRIK or CCD and are deliberately
+not here yet; a general solver whose two-bone case is worse than the closed form would be a poor
+trade for the case that matters most.
+
+**BEND DIRECTION IS AUTHORED, NOT GUESSED.** The triangle has two solutions mirrored about the
+root-to-target line — elbow up or elbow down — and they are both correct. Which one a limb uses is
+anatomy, so it is a stored `bend` of +1 or -1 rather than something inferred from the current pose,
+which would let a knee flip inside out mid-animation whenever the chain passed through straight.
+
+**OUT OF REACH IS NOT AN ERROR.** A target further away than `l1 + l2` has no triangle, and the
+honest answer is the one every rig gives: the chain STRAIGHTENS and points at it. Solved by clamping
+the distance into `[|l1 - l2|, l1 + l2]` before the cosines rather than by a special case, so the
+straightened pose is the ordinary answer at the boundary instead of a second code path that can
+disagree with the first.
+
+**IT IS SOLVED IN THE ROOT'S PARENT SPACE, which is what keeps it out of the geometry engine.**
+A bone runs JOINT TO JOINT — parent's transform origin to child's — and its length is the magnitude
+of that vector, invariant under rotation, so the whole solve needs the document and nothing else.
+Measuring between node positions instead is the subtle way to get this wrong: the effector lands
+several pixels off its target and WANDERS as the middle joint turns, because the vector a rotation
+swings starts at the pivot rather than at the corner. A planted foot drifting 11px is what that
+looks like, and measuring it is how it was found. `applyIk` therefore slots in
+beside `applyFrame` — a document with a solved rig is an ORDINARY document, and layout, picking,
+snapping and all three backends learn nothing about skeletons.
+
+**THE SOLVED ANGLE IS A DELTA FROM THE REST POSE.** A bone's rest direction is the direction of its
+child's authored offset, so a rig posed by IK composes with however the character was drawn instead
+of assuming every limb was authored pointing down the y axis.
 
 ### Motion paths — the route, kept apart from the spacing
 

@@ -31,6 +31,7 @@
  * its parent's `children`, so no dangling reference is ever produced.
  */
 
+import { applyIk } from "./Rig";
 import { ProjectDocument, ReadonlyDocument } from "./Document";
 import { dimensionError, Geometry, Layout, layoutError, mergeLayout, Node, slotContentError, STATES_MAX, Style, styleError, srcValueError, Transform, transformError, variantNameError } from "./Node";
 import { ReadonlyNode } from "./SceneGraph";
@@ -702,7 +703,11 @@ export function resolveScene(doc: ReadonlyDocument): ReadonlyDocument {
     // way round. Everything after this point sees an ordinary, un-animated document, which is why
     // layout, picking, snapping, culling, all three backends and the exporter needed no changes
     // when time was added.
-    return resolveMeshes(resolveBooleans(expandInstances(applyActiveState(applyFrame(dropHidden(doc), doc.frame)))));
+    // IK AFTER TIME, because a target is a thing a keyframe may animate — a foot planted on the
+    // ground for part of a walk and lifted for the rest is the ordinary case, and solving before
+    // the frame was applied would pose every limb to its rest target. Before states and expansion
+    // for the same reason time is: everything downstream sees an ordinary, un-rigged document.
+    return resolveMeshes(resolveBooleans(expandInstances(applyActiveState(applyIk(applyFrame(dropHidden(doc), doc.frame))))));
 }
 
 /** Local matrix for a node from its geometry + transform — the engine's own composition rule. */

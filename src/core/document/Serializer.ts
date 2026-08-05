@@ -339,6 +339,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "45") { raw = migrate_45_to_46(raw); version = "46"; }
     if (version === "46") { raw = migrate_46_to_47(raw); version = "47"; }
     if (version === "47") { raw = migrate_47_to_48(raw); version = "48"; }
+    if (version === "48") { raw = migrate_48_to_49(raw); version = "49"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -769,6 +770,18 @@ function migrate_21_to_22(raw: any): any {
  * interpretation direction: an old build reading a schema-48 file would drop every path and play
  * an arc as the chord across it — a thrown ball sliding through the ground instead of over it.
  */
+/**
+ * 48 -> 49: INVERSE KINEMATICS.
+ *
+ * Additive. A schema-48 node carries no constraint and poses exactly as it did, so nothing is
+ * rewritten. The bump is the usual interpretation direction: an old build reading a schema-49 file
+ * would drop every constraint and leave each limb in its rest pose — a character standing with its
+ * feet wherever they were drawn instead of on the ground it was posed onto.
+ */
+function migrate_48_to_49(raw: any): any {
+    return { ...raw, version: "49" };
+}
+
 function migrate_47_to_48(raw: any): any {
     return { ...raw, version: "48" };
 }

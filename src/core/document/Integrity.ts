@@ -16,6 +16,7 @@ import { transformError, layoutError, dimensionError, pathError, booleanOpError,
 import { interactionsError } from "./Prototype";
 import { timelineError, trackError, channelsError } from "./Timeline";
 import { clipsError } from "./Clips";
+import { ikError } from "./Rig";
 import { depthError } from "./Depth";
 import { meshError } from "./Mesh";
 import { ambientError, lightsError } from "./Light";
@@ -83,6 +84,8 @@ function checkNodeRanges(node: ReadonlyNode): void {
     // the track, so a channel on one axis would half-override a path — the shape following the
     // curve in y and the channel in x, which is neither of the things the document says. Checked
     // HERE rather than in either validator because it is the only place that sees both.
+    const ikErr = ikError(node.ik);
+    if (ikErr) throw new Error(`Invalid document: node "${node.id}" ${ikErr}.`);
     const motionErr = motionConflictError(node);
     if (motionErr) throw new Error(`Invalid document: node "${node.id}" ${motionErr}.`);
     const srcErr = srcError(node.type, node.src);
