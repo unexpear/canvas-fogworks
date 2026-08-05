@@ -106,6 +106,10 @@ uniform float u_hMax;
 uniform float u_hasHeight;
 uniform sampler2D u_image;
 uniform vec4 u_imgRect;
+// The SOURCE sub-rectangle, already normalised into texture coordinates: xy is its origin and zw
+// its size. Whole-image draws pass 0,0,1,1, so the arithmetic below is one multiply-add that
+// changes nothing for them rather than a branch that has to be kept in step with the other case.
+uniform vec4 u_imgUV;
 uniform float u_hasImage;
 
 // The heightfield at a point in LOCAL units. The texture holds 16 bits packed across two
@@ -165,7 +169,8 @@ void main() {
     // second attribute because the local position is already interpolated for the heightfield.
     vec4 base = u_color;
     if (u_hasImage > 0.5) {
-        base = texture2D(u_image, (v_local - u_imgRect.xy) / u_imgRect.zw);
+        vec2 uv01 = (v_local - u_imgRect.xy) / u_imgRect.zw;
+        base = texture2D(u_image, u_imgUV.xy + uv01 * u_imgUV.zw);
         // The image's own alpha, times the item's opacity — which is what u_color.a carries for an
         // image item, since an image has no fill colour of its own.
         base.a *= u_color.a;
@@ -190,6 +195,7 @@ export interface GLState {
     localBuffer: WebGLBuffer;
     heightTex: WebGLTexture;
     imageTex: WebGLTexture;
+    imgUVLoc: WebGLUniformLocation | null;
     /** What currently lives in `imageTex` — an image's href+generation, or a text raster's key. */
     imageKey: string | null;
     posLoc: number;
@@ -259,6 +265,7 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
         hasHeightLoc: gl.getUniformLocation(program, "u_hasHeight"),
         imageLoc: gl.getUniformLocation(program, "u_image"),
         imgRectLoc: gl.getUniformLocation(program, "u_imgRect"),
+        imgUVLoc: gl.getUniformLocation(program, "u_imgUV"),
         hasImageLoc: gl.getUniformLocation(program, "u_hasImage")
     };
 }
@@ -362,7 +369,12 @@ export interface Draw {
      * The href rather than a bitmap, because this is the PURE half: resolving an href to decoded
      * pixels is asynchronous and stateful, and belongs with the draw calls.
      */
-    image: { href: string; x: number; y: number; width: number; height: number } | null;
+    image: {
+        href: string; x: number; y: number; width: number; height: number;
+        /** The SOURCE sub-rectangle in the image's own pixels, or null for the whole image. */
+        source: { x: number; y: number; width: number; height: number } | null;
+        pixelated: boolean;
+    } | null;
     /**
      * The text to RASTERISE into this draw's triangles, or null.
      *
@@ -509,7 +521,7 @@ function vertexNormal(n: { x: number; y: number; z: number }): { x: number; y: n
 }
 
 function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number | null,
-              image?: { href: string; x: number; y: number; width: number; height: number } | null,
+              image?: Draw["image"],
               text?: TextShape | null,
               surface?: {
                   normal: (x: number, y: number) => { x: number; y: number; z: number };
@@ -615,7 +627,8 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
         const rect = item.shape;
         const picture = draw(resolveRings(commandsToRings(local, tolerance), "nonzero"),
             item.world, "#ffffff", paint.opacity,
-            { href: rect.href!, x: rect.x, y: rect.y, width: rect.width, height: rect.height }, null, surface);
+            { href: rect.href!, x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+              source: rect.source, pixelated: rect.pixelated }, null, surface);
         if (picture) out.push(picture);
     }
     // TEXT is its box, with the typeset result painted over it. The geometry is a rectangle
@@ -768,18 +781,31 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
                 gl.bindTexture(gl.TEXTURE_2D, state.imageTex);
                 if (state.imageKey !== texKey) {
                     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-                    // NPOT-safe: linear filtering with clamped wrapping needs no mipmaps, which a
-                    // non-power-of-two texture cannot have in WebGL 1. No Y flip — texel row 0 is
-                    // the source's top row, and `v_local` counts down from the rect's top too, so
-                    // the two already agree.
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                    // NPOT-safe: clamped wrapping needs no mipmaps, which a non-power-of-two
+                    // texture cannot have in WebGL 1. No Y flip — texel row 0 is the source's top
+                    // row, and `v_local` counts down from the rect's top too, so the two agree.
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
                     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
                     state.imageKey = texKey;
                 }
+                // THE FILTER IS SET PER DRAW, OUTSIDE the upload check, and that is the whole
+                // difference between this working and not. One texture OBJECT is shared by every
+                // raster in the frame, so a parameter set only when the pixels change belongs to
+                // whichever item last uploaded — fine while the filter was a constant, wrong the
+                // moment one item wants nearest and the next wants linear. The wrap modes stay
+                // inside because they genuinely never vary.
+                const filter = d.image?.pixelated ? gl.NEAREST : gl.LINEAR;
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
                 gl.uniform1i(state.imageLoc, 1);
                 gl.uniform4f(state.imgRectLoc, rect.x, rect.y, rect.width, rect.height);
+                // THE SOURCE REGION, normalised here because this is the only place that knows the
+                // texture's real pixel size — the document stores source pixels and cannot know it.
+                // Text and whole images pass the identity, so they take the same path.
+                const uv = d.image?.source && source instanceof HTMLImageElement
+                    ? normalisedUV(d.image.source, source.naturalWidth, source.naturalHeight)
+                    : { x: 0, y: 0, width: 1, height: 1 };
+                gl.uniform4f(state.imgUVLoc, uv.x, uv.y, uv.width, uv.height);
                 gl.uniform1f(state.hasImageLoc, 1);
             } else {
                 gl.uniform1f(state.hasImageLoc, 0);
@@ -791,6 +817,31 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
         }
     }
     return true;
+}
+
+/**
+ * A source rectangle in image pixels, as texture coordinates.
+ *
+ * Pure and exported for the reason every decision in this file is pulled out of the draw loop: the
+ * loop needs a GPU and this does not, so the arithmetic that can be wrong lives where a test can
+ * reach it. A rect reaching outside the image is NOT clamped — clamped wrapping already makes the
+ * sampler read the edge, and silently resizing an author's region would hide the mistake rather
+ * than show it.
+ */
+export function normalisedUV(
+    source: { x: number; y: number; width: number; height: number },
+    textureWidth: number,
+    textureHeight: number
+): { x: number; y: number; width: number; height: number } {
+    // A texture with no size is not something to divide by. It cannot happen for a decoded bitmap,
+    // and a NaN here would put the whole picture nowhere rather than in the wrong place.
+    if (!(textureWidth > 0) || !(textureHeight > 0)) return { x: 0, y: 0, width: 1, height: 1 };
+    return {
+        x: source.x / textureWidth,
+        y: source.y / textureHeight,
+        width: source.width / textureWidth,
+        height: source.height / textureHeight
+    };
 }
 
 /**

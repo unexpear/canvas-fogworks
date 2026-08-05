@@ -16,6 +16,7 @@
 
 import { toMatrixString, isTranslationOnly } from "../core/geometry/Matrix";
 import { DisplayList, DrawItem, Paint, FilterDef, commandsToPathData, effectFilterId } from "./RenderModel";
+import { naturalSize } from "./ImageCache";
 
 const svgNS = "http://www.w3.org/2000/svg";
 
@@ -188,6 +189,37 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         if (shape.href) el.setAttribute("href", shape.href);
         if (paint.opacity !== null) el.setAttribute("opacity", String(paint.opacity));
         el.setAttribute("preserveAspectRatio", "none");
+        // PIXEL ART, said the way SVG says it. Set on every image for the same reason the Canvas
+        // backend sets its flag on every image — a per-element attribute cannot leak, but writing
+        // it only sometimes would leave the two backends disagreeing about the default.
+        el.setAttribute("image-rendering", shape.pixelated ? "pixelated" : "auto");
+        // A SOURCE RECT, which SVG's `<image>` has no attribute for. A nested `<svg>` carrying a
+        // `viewBox` does exactly the job: the viewBox maps the source rectangle onto the
+        // destination box and the nested element clips whatever falls outside. The inner image is
+        // placed at its NATURAL size, which is what makes the viewBox's units source pixels.
+        const src = shape.source;
+        const natural = shape.href ? naturalSize(shape.href) : null;
+        if (src && natural) {
+            const nested = document.createElementNS(svgNS, "svg");
+            nested.setAttribute("x", String(shape.x));
+            nested.setAttribute("y", String(shape.y));
+            nested.setAttribute("width", String(shape.width));
+            nested.setAttribute("height", String(shape.height));
+            nested.setAttribute("viewBox", `${src.x} ${src.y} ${src.width} ${src.height}`);
+            nested.setAttribute("preserveAspectRatio", "none");
+            el.setAttribute("x", "0");
+            el.setAttribute("y", "0");
+            el.setAttribute("width", String(natural.width));
+            el.setAttribute("height", String(natural.height));
+            nested.appendChild(el);
+            applyTail(nested, item);
+            group.appendChild(nested);
+            return;
+        }
+        // A rect on an image that has NOT decoded draws nothing, exactly as Canvas draws nothing
+        // for an href that is not ready — rather than briefly drawing the whole sheet, which is
+        // the wrong picture rather than a missing one.
+        if (src && !natural) return;
         applyTail(el, item);
         group.appendChild(el);
     }

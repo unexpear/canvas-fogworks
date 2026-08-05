@@ -129,6 +129,14 @@ export function applyMutationsToDocument(
                 if (delta.text !== undefined) node.text = delta.text;
                 if (delta.src !== undefined) node.src = delta.src;
                 if (delta.name !== undefined) node.name = delta.name;
+                // NULL means REMOVE, which is why this cannot use the same `!== undefined` shape as
+                // its neighbours: "the whole image" is a real state and has to be reachable from a
+                // node that currently names a region.
+                if (delta.sourceRect !== undefined) {
+                    if (delta.sourceRect === null) delete node.sourceRect;
+                    else node.sourceRect = delta.sourceRect;
+                }
+                if (delta.pixelated !== undefined) node.pixelated = delta.pixelated;
                 return;
             }
 

@@ -28,10 +28,13 @@ export function renderScene(
         container.innerHTML = "";
         container.dataset.vdeBackend = backend;
     }
-    // `onAsyncReady` repaints when a lazily-loaded resource (a Canvas image) finishes decoding.
+    // `onAsyncReady` repaints when a lazily-loaded resource finishes decoding. ALL THREE want it
+    // now: the SVG backend used to hand a whole image straight to the browser and never care
+    // when it landed, but an image REGION is drawn through a viewBox in the image's own pixels,
+    // so it cannot be placed until the natural size is known.
     if (backend === "canvas") renderCanvas(container, doc, state, onAsyncReady);
     // WEBGL draws fills as triangles; it falls back to Canvas by itself when no context is
     // available, so this dispatch never has to know whether a GPU is there.
     else if (backend === "webgl") renderWebGL(container, doc, state, onAsyncReady);
-    else renderSVG(container, doc, state);
+    else renderSVG(container, doc, state, onAsyncReady);
 }

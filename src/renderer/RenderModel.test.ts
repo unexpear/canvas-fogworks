@@ -100,7 +100,11 @@ describe("buildRenderModel — content", () => {
     test("image → image shape with href from src; missing src → null href", () => {
         const withSrc = docWith({ type: "core.image", src: "data:image/png;base64,AAA", style: { fill: "#000", opacity: 1 } });
         const a = buildRenderModel(SIZE, withSrc, stateFor(withSrc)).content[0];
-        expect(a.shape).toEqual({ kind: "image", x: 0, y: 0, width: 200, height: 100, href: "data:image/png;base64,AAA" });
+        // BOTH new fields are on every image shape, not only when set — a backend reading an
+        // absent flag would have to invent a default, and the Canvas one must set its filter
+        // for every image regardless, because the smoothing flag is sticky context state.
+        expect(a.shape).toEqual({ kind: "image", x: 0, y: 0, width: 200, height: 100,
+            href: "data:image/png;base64,AAA", source: null, pixelated: false });
         expect(a.paint.opacity).toBe(1);
 
         const noSrc = docWith({ type: "core.image", style: { fill: "#000", opacity: 1 } });

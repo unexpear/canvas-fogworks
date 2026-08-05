@@ -21,14 +21,20 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { srcError } from "../document/Node";
-import { MutationResult, ActionPayload } from "./types";
+import { srcError, sourceRectError, SourceRect } from "../document/Node";
+import { MutationResult, ActionPayload, NodeDelta } from "./types";
+
+type PatchDelta = Extract<NodeDelta, { kind: "patch" }>;
 
 /** `undefined` = leave unchanged; `null` = clear the field; a string = set it. */
 export interface ContentPatch {
     text?: string;
     src?: string;
     name?: string;
+    /** An image's SOURCE REGION (schema 51). `null` clears it back to the whole image. */
+    sourceRect?: SourceRect | null;
+    /** Whether the image scales by nearest neighbour (schema 51). */
+    pixelated?: boolean;
 }
 
 /** Longest display name a node may carry — an OOM guard on a hand-editable field. */
@@ -55,6 +61,11 @@ export class UpdateNodeContentAction extends Action {
         // `src` obeys the SAME shared rule the loader and `AddNodeAction` apply, so the
         // inspector cannot author an image source the document could not reopen.
         if (this.patch.src !== undefined && srcError(node.type, this.patch.src) !== null) return false;
+        // The SAME shared rule the loader applies, so an inspector cannot author a region the
+        // document could not reopen. `null` is the clear and is not a rect to check.
+        if (this.patch.sourceRect !== undefined && this.patch.sourceRect !== null
+            && sourceRectError(this.patch.sourceRect) !== null) return false;
+        if (this.patch.pixelated !== undefined && typeof this.patch.pixelated !== "boolean") return false;
         return true;
     }
 
@@ -67,10 +78,14 @@ export class UpdateNodeContentAction extends Action {
         // `??`, so an explicit `text: undefined` would fall through in both places anyway.
         // Building the delta from what was actually asked for still reads better than relying
         // on two downstream layers to ignore a key that should not be there.
-        const delta: { kind: "patch"; text?: string; src?: string; name?: string } = { kind: "patch" };
+        const delta: PatchDelta = { kind: "patch" };
         if (this.patch.text !== undefined) delta.text = this.patch.text;
         if (this.patch.src !== undefined) delta.src = this.patch.src;
         if (this.patch.name !== undefined) delta.name = this.patch.name;
+        // `null` SURVIVES here on purpose — it is the clear, and dropping it the way an omitted
+        // field is dropped would make a region impossible to remove once set.
+        if (this.patch.sourceRect !== undefined) delta.sourceRect = this.patch.sourceRect;
+        if (this.patch.pixelated !== undefined) delta.pixelated = this.patch.pixelated;
 
         return {
             updatedNodeIds: new Set([this.nodeId]),

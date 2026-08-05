@@ -341,6 +341,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "47") { raw = migrate_47_to_48(raw); version = "48"; }
     if (version === "48") { raw = migrate_48_to_49(raw); version = "49"; }
     if (version === "49") { raw = migrate_49_to_50(raw); version = "50"; }
+    if (version === "50") { raw = migrate_50_to_51(raw); version = "51"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -787,6 +788,17 @@ function migrate_21_to_22(raw: any): any {
  * The bump is the usual direction — an old build reading a schema-50 file would drive only the two
  * bones nearest the effector and leave the rest of a tail hanging straight.
  */
+/**
+ * 50 -> 51: image SOURCE RECTS and pixel-art filtering.
+ *
+ * Additive. A schema-50 image node has neither field and draws exactly as it did — whole, and
+ * smoothed. The bump is the usual direction: an old build reading a schema-51 file would drop both,
+ * so a document showing one 24px tile from a tileset would show the entire 360x168 sheet, blurred.
+ */
+function migrate_50_to_51(raw: any): any {
+    return { ...raw, version: "51" };
+}
+
 function migrate_49_to_50(raw: any): any {
     return { ...raw, version: "50" };
 }

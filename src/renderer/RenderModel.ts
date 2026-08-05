@@ -23,6 +23,7 @@
  * resolve to the visible fallback magenta; presence checks stay on the raw style values.
  */
 
+import { SourceRect } from "../core/document/Node";
 import { ReadonlyDocument } from "../core/document/Document";
 import { FillRule, PathCommand, Shadow, StrokeCap, StrokeJoin, TextAlign } from "../core/document/Node";
 import { depthOf } from "../core/document/Depth";
@@ -67,7 +68,13 @@ export type Shape =
         fontSize: number; fontFamily: string; fontWeight: number; textAlign: TextAlign;
         lineHeight: number; letterSpacing: number
     }
-    | { kind: "image"; x: number; y: number; width: number; height: number; href: string | null };
+    | {
+        kind: "image"; x: number; y: number; width: number; height: number; href: string | null;
+        /** The SOURCE sub-rectangle in the image's own pixels, or null for the whole image. */
+        source: SourceRect | null;
+        /** Scale by nearest neighbour. Carried for EVERY image, never only when true — see below. */
+        pixelated: boolean;
+    };
 
 /** Compile error if a `PathCommand` variant is ever added without a `commandsToPathData` case. */
 function assertNever(x: never): never {
@@ -553,7 +560,15 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
             };
         } else if (node.type === "core.image") {
-            shape = { kind: "image", x, y, width, height, href: node.src ?? null };
+            // BOTH CARRIED ALWAYS, `pixelated` as a plain boolean rather than an optional. A
+            // backend reading an absent flag has to invent a default, and the Canvas one has to set
+            // its filter for every image whether or not this is true — because the smoothing flag is
+            // sticky context state that leaks to the next item otherwise. An always-present value is
+            // what makes that impossible to forget.
+            shape = {
+                kind: "image", x, y, width, height, href: node.src ?? null,
+                source: node.sourceRect ?? null, pixelated: node.pixelated === true
+            };
             paint = {
                 fill: null, opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
                 strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur

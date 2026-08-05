@@ -11,6 +11,7 @@
  * so `App.tsx` and the API-surface pin are unchanged.
  */
 
+import { setImageReadyCallback } from "./ImageCache";
 import { ReadonlyDocument } from "../core/document/Document";
 import { buildRenderModel, DisplayList } from "./RenderModel";
 import { emitSVG } from "./emitSVG";
@@ -25,8 +26,16 @@ const prevByContainer = new WeakMap<HTMLElement, DisplayList>();
 export function renderSVG(
     container: HTMLElement,
     doc: ReadonlyDocument,
-    state: RendererState
+    state: RendererState,
+    onAsyncReady?: () => void
 ): void {
+    // THIS BACKEND NOW WAITS FOR A DECODE TOO, which it never used to. A whole image is just an
+    // `<image href>` the browser fetches and paints by itself, so nothing here cared when it
+    // landed. A SOURCE REGION cannot work that way: it is drawn through a nested `<svg>` whose
+    // viewBox is in the image's own pixels, so the natural size has to be known before anything
+    // can be placed — and until the decode finishes the tile draws nothing at all. Found live,
+    // where a tile-sheet demo showed its whole-sheet control and none of its four tiles.
+    setImageReadyCallback(onAsyncReady ?? null);
     const size = { width: container.clientWidth, height: container.clientHeight };
     const prev = prevByContainer.get(container) ?? null;
     const model = buildRenderModel(size, doc, state, prev);

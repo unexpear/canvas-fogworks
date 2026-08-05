@@ -57,3 +57,21 @@ export function resolveImage(href: string): HTMLImageElement | null {
     }
     return entry.loaded ? entry.img : null;
 }
+
+/**
+ * A decoded image's own pixel dimensions, or null while it is not ready.
+ *
+ * Exists because a SOURCE RECT is expressed in source pixels, and SVG can only honour that through
+ * a `viewBox` over an image placed at its natural size. Reading it from the SAME cache the Canvas
+ * and GPU backends draw from is what keeps the three agreeing about when an image is ready — a
+ * second notion of "loaded" is a second thing that can be wrong.
+ */
+export function naturalSize(href: string): { width: number; height: number } | null {
+    const img = resolveImage(href);
+    if (!img) return null;
+    const width = img.naturalWidth, height = img.naturalHeight;
+    // A decoded image with no dimensions is not something to divide by. It is possible for an SVG
+    // href with no intrinsic size, and every consumer here builds a ratio out of these.
+    if (!(width > 0) || !(height > 0)) return null;
+    return { width, height };
+}

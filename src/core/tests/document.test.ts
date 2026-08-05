@@ -56,12 +56,14 @@ import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry
 import { Ring } from "../geometry/PathBoolean";
 import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
-import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlappingAction, arcToss, plantedFoot, curlingTail, DEMOS } from "../document/Demos";
+import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlappingAction, arcToss, plantedFoot, curlingTail, tileSheet, DEMOS } from "../document/Demos";
 import { traceMotion, traceVelocity, traceTiming, traceDigest } from "../diagnostics/MotionTrace";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { channelsError, CHANNELS_MAX } from "../document/Timeline";
 import { MotionPath, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
 import { solveTwoBone, solveFabrik, rotationDelta, FABRIK_PASSES, FABRIK_TOLERANCE } from "../geometry/Ik";
+import { sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
+import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
 import { planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
@@ -4403,9 +4405,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 49→50 landed, letting an IK
-        // constraint drive a CHAIN longer than the two-bone limb.)
-        expect(() => migrateIfNeeded(legacy, "51")).toThrow('Migration not implemented for document schema "50"');
+        // time a real migration is added — most recently when 50→51 landed, giving an image a
+        // SOURCE RECT and a pixel-art filter.)
+        expect(() => migrateIfNeeded(legacy, "52")).toThrow('Migration not implemented for document schema "51"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -13246,7 +13248,7 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         expect(picture.image).toEqual({ href: "cat.png", x: 10, y: 20, width: 80, height: 40 });
         // The rect it reports is the one the shader turns into texture coordinates, so it has to
         // be the shape's OWN rect — not the box at the origin the triangles happen to start from.
-        expect(shapeToLocalCommands({ kind: "image", x: 10, y: 20, width: 80, height: 40, href: "c" }, null))
+        expect(shapeToLocalCommands({ kind: "image", x: 10, y: 20, width: 80, height: 40, href: "c", source: null, pixelated: false }, null))
             .not.toBeNull();
         // The item's OPACITY rides in the colour's alpha, because an image has no fill of its own
         // and the shader multiplies the sampled alpha by it.
@@ -13861,6 +13863,89 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
         expect(contact.width).toBe(air.width);
         expect(contact.height).toBe(air.height);
+    });
+
+    test("the TILE SHEET demo addresses one file five ways, and survives a save", () => {
+        const doc = tileSheet();
+        const back = deserializeDocument(serializeDocument(doc));
+
+        // ONE FILE. Five nodes, one src between them — which is the whole claim: a sheet is not
+        // five images, it is one image addressed five ways.
+        const nodes = [...back.nodes.values()];
+        expect(nodes).toHaveLength(5);
+        expect(new Set(nodes.map(n => n.src)).size).toBe(1);
+
+        // THE CONTROL draws the whole sheet, smoothed — what every backend could do before.
+        const whole = back.nodes.get("whole")!;
+        expect(whole.sourceRect).toBeUndefined();
+        expect(whole.pixelated).toBe(false);
+
+        // THE FOUR TILES each name a DISTINCT 8px region of the 2x2 grid, and are pixelated. A
+        // demo that pointed every tile at the same region would look like four copies and pass
+        // any assertion that only counted them.
+        const tiles = [0, 1, 2, 3].map(i => back.nodes.get(`tile${i}`)!);
+        for (const t of tiles) {
+            expect(t.pixelated).toBe(true);
+            expect(t.sourceRect).toMatchObject({ width: 8, height: 8 });
+        }
+        expect(new Set(tiles.map(t => `${t.sourceRect!.x},${t.sourceRect!.y}`)))
+            .toEqual(new Set(["0,0", "8,0", "0,8", "8,8"]));
+
+        // AND BOTH FIELDS SURVIVED THE ROUND TRIP, which is the part a serializer can silently
+        // eat — this codebase's recurring defect is a hand-written field list dropping a new one.
+        expect(back.nodes.get("tile3")!.sourceRect).toEqual(doc.nodes.get("tile3")!.sourceRect);
+        expect(back.nodes.get("tile3")!.pixelated).toBe(true);
+    });
+
+    test("sourceRectError refuses what cannot be sampled, and accepts what it cannot check", () => {
+        expect(sourceRectError(undefined)).toBeNull();
+        // A REAL TILE from the dungeon tileset measured for this: 15x7 grid of 24px, so column 3
+        // row 2 is exactly this rect. The validator has no idea the image is 360x168 and says so.
+        expect(sourceRectError({ x: 72, y: 48, width: 24, height: 24 })).toBeNull();
+        // OUTSIDE the image is ACCEPTED, deliberately: the document holds a URL, not a bitmap, and
+        // whether a rect fits is unknowable until the file decodes and unknowable forever if it
+        // never does. A validator that pretended otherwise would reject valid documents whose
+        // images simply had not loaded.
+        expect(sourceRectError({ x: 99999, y: 99999, width: 24, height: 24 })).toBeNull();
+
+        expect(sourceRectError([])).toMatch(/must be an object/);
+        expect(sourceRectError({ x: NaN, y: 0, width: 1, height: 1 })).toMatch(/sourceRect\.x must be a finite/);
+        expect(sourceRectError({ x: 0, y: Infinity, width: 1, height: 1 })).toMatch(/sourceRect\.y must be a finite/);
+        expect(sourceRectError({ x: 0, y: 0, width: SOURCE_RECT_MAX + 1, height: 1 })).toMatch(/within/);
+        // A ZERO or NEGATIVE extent is not a small region, it is one nothing can sample — every
+        // backend divides by it to build texture coordinates.
+        expect(sourceRectError({ x: 0, y: 0, width: 0, height: 24 })).toMatch(/must be positive/);
+        expect(sourceRectError({ x: 0, y: 0, width: 24, height: -5 })).toMatch(/must be positive/);
+
+        // And the LOAD path refuses it too, through the shared validator.
+        const d = createEmptyDocument();
+        d.nodes.set("i", { id: "i", type: "core.image", parent: null, children: [], name: "i",
+            geometry: { x: 0, y: 0, width: 24, height: 24 }, style: { fill: "#fff", opacity: 1 }, layout: {},
+            src: "a.png", sourceRect: { x: 0, y: 0, width: 0, height: 24 } } as unknown as Node);
+        d.rootNodeUuids = ["i"];
+        expect(() => deserializeDocument(serializeDocument(d))).toThrow(/must be positive/);
+    });
+
+    test("normalisedUV turns SOURCE PIXELS into texture coordinates", () => {
+        // The real tileset again: one 24px tile out of 360x168, at column 3 row 2.
+        const uv = normalisedUV({ x: 72, y: 48, width: 24, height: 24 }, 360, 168);
+        expect(uv.x).toBeCloseTo(72 / 360, 12);
+        expect(uv.y).toBeCloseTo(48 / 168, 12);
+        expect(uv.width).toBeCloseTo(24 / 360, 12);
+        expect(uv.height).toBeCloseTo(24 / 168, 12);
+        // Each axis is normalised by its OWN dimension — a non-square sheet is the ordinary case
+        // and dividing both by the width would slide every row down the sheet.
+        expect(uv.y).not.toBeCloseTo(48 / 360, 6);
+
+        // NOT CLAMPED. Clamped wrapping already makes the sampler read the edge, and quietly
+        // resizing an author's region would hide the mistake instead of showing it.
+        const over = normalisedUV({ x: 350, y: 0, width: 100, height: 10 }, 360, 168);
+        expect(over.width).toBeCloseTo(100 / 360, 12);
+
+        // A texture with no size is not something to divide by: the identity, never a NaN, which
+        // would put the whole picture nowhere rather than in the wrong place.
+        expect(normalisedUV({ x: 1, y: 1, width: 1, height: 1 }, 0, 10)).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+        expect(normalisedUV({ x: 1, y: 1, width: 1, height: 1 }, 10, 0)).toEqual({ x: 0, y: 0, width: 1, height: 1 });
     });
 
     test("FABRIK reaches a target and KEEPS every bone's length", () => {
@@ -14837,6 +14922,17 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(g(2).style.fill).not.toBe(g(0).style.fill);   // the next drawing replaces it
     });
 
+    /**
+     * Demos that teach a RENDERING capability rather than a motion one, and so are stills by
+     * design. Named individually rather than inferred from `timeline.frames === 1`, because the
+     * cheap inference would let a demo that was MEANT to animate quietly stop and still pass.
+     *
+     * `Tile sheet` is here for a reason worth stating: a source region cannot be keyframed yet —
+     * `sourceRect` is not among the values a keyframe carries — so sprite-sheet PLAYBACK is not
+     * reachable even now that regions are. That is the next gap, not an oversight in the demo.
+     */
+    const STILL_DEMOS = new Set(["Tile sheet"]);
+
     test("every demo round-trips through the loader and actually moves", () => {
         // A demo that cannot survive a save is a fixture, not a document — and one that does not
         // move is a still. Both are checked for all of them, so a new demo cannot be added broken.
@@ -14852,6 +14948,14 @@ describe("Mesh — bending a shape (schema 41)", () => {
             const snapshot = (f: number) => JSON.stringify(applyFrame(back, f).nodes.get(id));
             const seen = new Set(Array.from({ length: frames }, (_, f) => snapshot(f)));
             expect(`${name}: ${seen.size} distinct frames`).toBe(`${name}: ${seen.size} distinct frames`);
+            if (STILL_DEMOS.has(name)) {
+                // A still still has to LOAD — the round-trip above is the whole point for these,
+                // since a region or a filter that the serializer dropped would be invisible here.
+                expect(seen.size).toBe(1);
+                const first = [...back.nodes.values()][0];
+                expect(first.src).toBeTruthy();
+                continue;
+            }
             expect(seen.size).toBeGreaterThan(1);
         }
     });

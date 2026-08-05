@@ -420,6 +420,51 @@ export function curlingTail(): ProjectDocument {
     return d;
 }
 
+/**
+ * A TILE SHEET, taken apart — the exercise for image regions and pixel-art filtering.
+ *
+ * Real game art ships as grids inside single files: the packs measured for schema 51 were a
+ * creature strip of 20x4 cells at 32x32, an RPG tileset of 15x7 at 24x24, a weapon set of 24
+ * columns. Until a node could name a sub-rectangle, none of it could be used at all — every
+ * backend drew whole images, so a tileset was one picture.
+ *
+ * THE SHEET IS PROCEDURAL, sixteen pixels square, four flat tiles with darker borders, embedded as
+ * a 131-byte PNG. Deliberately not one of the measured packs: a demo that shipped somebody else's
+ * art would tie this repository to their licence, and the feature is about addressing a grid rather
+ * than about which grid.
+ *
+ * IT DRAWS THE SAME FILE FIVE TIMES. Once WHOLE at the top, which is all the engine could ever do
+ * before, and then each of the four tiles on its own — so the difference between "a region" and "a
+ * scaled-down sheet" is visible rather than argued. The whole-sheet copy is also the control for
+ * the filter: it is drawn SMOOTH while the tiles are drawn PIXELATED, and at this magnification a
+ * 16px sheet interpolated is unmistakably mush beside the same pixels sampled nearest.
+ */
+export function tileSheet(): ProjectDocument {
+    // A 2x2 grid of 8x8 tiles. Region coordinates are in the SOURCE image's own pixels, which is
+    // the unit the art is authored in — "the tile at column 1, row 0" is x=8, y=0, w=8, h=8.
+    const SHEET = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAASklEQVR4nGOo1lP6jw9r+pfjxQwgRQ+CbbFimAFeE25ixaMGUNMAiqLRKMLqPz7cEKWEF4MNiFqQhRXDDHix2BYrHjWAmgZQEo0Aht5Dkx5mCysAAAAASUVORK5CYII=";
+    const TILE = 8;
+    const image = (id: string, x: number, y: number, size: number,
+                   sourceRect: { x: number; y: number; width: number; height: number } | undefined,
+                   pixelated: boolean): Node =>
+        ({ id, type: "core.image", parent: null, children: [], name: id,
+            geometry: { x, y, width: size, height: size },
+            style: { fill: "#ffffff", opacity: 1 }, layout: {},
+            src: SHEET, sourceRect, pixelated } as Node);
+
+    const nodes: Node[] = [
+        // THE CONTROL: the whole sheet, smoothed, exactly what every backend used to do.
+        image("whole", 60, 60, 160, undefined, false)
+    ];
+    // The four tiles, each addressed by its own region and drawn with nearest-neighbour.
+    const corners = [[0, 0], [1, 0], [0, 1], [1, 1]];
+    corners.forEach(([col, row], i) => {
+        nodes.push(image(`tile${i}`, 260 + col * 170, 60 + row * 170, 160,
+            { x: col * TILE, y: row * TILE, width: TILE, height: TILE }, true));
+    });
+    return demo("Tile sheet", 1, nodes);
+}
+
 /** Every demo, for a menu and for the tests that check each one actually animates. */
 export const DEMOS: readonly { name: string; build: () => ProjectDocument }[] = [
     { name: "Bouncing ball", build: bouncingBall },
@@ -430,5 +475,6 @@ export const DEMOS: readonly { name: string; build: () => ProjectDocument }[] = 
     { name: "Overlapping action", build: overlappingAction },
     { name: "Arc toss", build: arcToss },
     { name: "Planted foot", build: plantedFoot },
-    { name: "Curling tail", build: curlingTail }
+    { name: "Curling tail", build: curlingTail },
+    { name: "Tile sheet", build: tileSheet }
 ];

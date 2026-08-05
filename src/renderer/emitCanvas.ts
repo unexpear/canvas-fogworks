@@ -144,7 +144,22 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): v
             const img = resolveImage(shape.href);
             if (img) {
                 if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
-                ctx.drawImage(img, shape.x, shape.y, shape.width, shape.height);
+                // SET FOR EVERY IMAGE, both ways, never only when `pixelated` is true.
+                // `imageSmoothingEnabled` is sticky context state — precisely like `setLineDash`,
+                // which this backend already shipped as a bug once, leaking a dash from the item
+                // that set it onto every item after. Written the same careless way, one pixel-art
+                // tile would make every later photograph in the frame crunchy.
+                ctx.imageSmoothingEnabled = !shape.pixelated;
+                const src = shape.source;
+                if (src) {
+                    // The NINE-argument form, which is the whole feature: a tileset or a sprite
+                    // strip is a grid inside one file, and until now only the five-argument form
+                    // existed, so the grid could only be drawn entire.
+                    ctx.drawImage(img, src.x, src.y, src.width, src.height,
+                        shape.x, shape.y, shape.width, shape.height);
+                } else {
+                    ctx.drawImage(img, shape.x, shape.y, shape.width, shape.height);
+                }
             }
             return;
         }

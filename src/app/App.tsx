@@ -12,6 +12,7 @@ import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY 
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor } from "../core/actions/nodeEdit";
+import { ContentPatch } from "../core/actions/UpdateNodeContentAction";
 import { resolveScene, isVirtualId } from "../core/document/Components";
 import { SetActiveThemeAction, SetVariableAction, DeleteVariableAction } from "../core/actions/VariableActions";
 import { Variable, VariableStore, variableKeyError, tokenRefFor, tokenKeyOf } from "../core/document/Variables";
@@ -66,7 +67,7 @@ import { TransactionAction } from "../core/actions/TransactionAction";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveShortcut, isTypingTarget, Shortcut } from "../editor/shortcuts";
 import { AlignEdge, DistributeAxis } from "../core/geometry/Alignment";
-import { IMAGE_SRC_MAX, srcError } from "../core/document/Node";
+import { IMAGE_SRC_MAX, srcError, sourceRectError } from "../core/document/Node";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
 import { scanCapabilities, Capability } from "../core/scan/CapabilityScan";
 import { exportSVG, TextLines } from "../core/export/ExportSVG";
@@ -944,7 +945,7 @@ export function App() {
     const setInteraction = (i: number, patch: Partial<Interaction>) =>
         writeInteractions(currentInteractions().map((it, k) => (k === i ? { ...it, ...patch } : it)));
 
-    const editContent = (patch: { text?: string; src?: string; name?: string }) => {
+    const editContent = (patch: ContentPatch) => {
         if (!selectedNodeId) return;
         const action = contentActionFor(dispatcher.getDocument(), selectedNodeId, patch);
         if (action) dispatcher.dispatchAction(action, { coalesce: true });
@@ -1898,6 +1899,52 @@ export function App() {
                                             refresh();
                                         }}
                                     />
+                                    {/* THE REGION (schema 51). A tileset or a sprite strip is a grid
+                                        inside one file, and without this the whole file is the only
+                                        thing that can be drawn. Four numbers in the SOURCE image's
+                                        own pixels — the unit the art is authored in, so a 24px grid
+                                        is 0/24/48/72 rather than a fraction of a size the document
+                                        cannot see. Blank clears it back to the whole image. */}
+                                    <label style={INSPECTOR_LABEL}>Region (source pixels)</label>
+                                    <div style={{ display: "flex", gap: 4 }}>
+                                        {(["x", "y", "width", "height"] as const).map(key => (
+                                            <input
+                                                key={key}
+                                                type="number"
+                                                data-region={key}
+                                                placeholder={key}
+                                                value={node.sourceRect ? String(node.sourceRect[key]) : ""}
+                                                onChange={e => {
+                                                    const raw = e.target.value;
+                                                    // CLEARED as a whole when a field is emptied: a
+                                                    // region missing one number is not a smaller
+                                                    // region, it is not a region.
+                                                    if (raw === "") { editContent({ sourceRect: null }); refresh(); return; }
+                                                    const base = node.sourceRect ?? { x: 0, y: 0, width: 1, height: 1 };
+                                                    const next = { ...base, [key]: Number(raw) };
+                                                    // The SAME shared validator the loader uses, so
+                                                    // a field cannot author a rect the document
+                                                    // would refuse — a zero extent above all.
+                                                    if (sourceRectError(next) !== null) return;
+                                                    editContent({ sourceRect: next });
+                                                    refresh();
+                                                }}
+                                                style={{ width: "25%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
+                                                    background: UI.raised, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3 }}
+                                            />
+                                        ))}
+                                    </div>
+                                    {/* PIXEL ART. Per node, because one scene mixes a tileset that
+                                        must stay crisp with a photograph that must not. */}
+                                    <label style={{ ...INSPECTOR_LABEL, display: "flex", alignItems: "center", gap: 6 }}>
+                                        <input
+                                            type="checkbox"
+                                            data-pixelated="1"
+                                            checked={node.pixelated === true}
+                                            onChange={e => { editContent({ pixelated: e.target.checked || undefined }); refresh(); }}
+                                        />
+                                        Pixel art (no smoothing)
+                                    </label>
                                 </InspectorSection>
                             )}
 

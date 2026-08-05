@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v50 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v51 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -161,6 +161,33 @@ interface Keyframe {
   easing?: Easing;          // shapes the tween LEAVING this keyframe; ignored when held
   values: StateDefinition;  // the same statement a state and an instance override make
 }
+
+// IMAGE REGIONS AND PIXEL ART (schema 51). The two things real game art needs and could not say.
+// Node.sourceRect?: { x, y, width, height }   — a sub-rectangle of the SOURCE image, in its pixels
+// Node.pixelated?: boolean                    — scale by NEAREST NEIGHBOUR; absent = smooth, as before
+//
+// EVERY BACKEND DREW WHOLE IMAGES. `emitCanvas` used the 5-argument `drawImage`, `emitSVG` wrote a
+// plain `<image href>`, `emitWebGL` mapped the texture across the destination rect. So a tileset or
+// a sprite strip could only ever be drawn entire — and that is how game art actually ships. Four of
+// five real packs measured were grids inside single files: a creature strip is 20x4 cells of 32x32,
+// an RPG tileset 15x7 of 24x24, a weapon set 24 columns of 16px.
+//
+// THE RECT IS IN SOURCE PIXELS, not fractions — the opposite of the call schema 43 made for mesh
+// points, and for a reason that does not apply here. A mesh's box is IN the document, so a fraction
+// stays meaningful when the box resizes. An image's pixel size is NOT in the document: it belongs to
+// a file that may not have decoded yet, or at all. Pixels are also the unit the art is authored in —
+// "the tile at column 3, row 2" is x=72, y=48, w=24, h=24 — and a fraction would force every author
+// to divide by a number the document cannot see.
+//
+// IT CANNOT BE VALIDATED AGAINST THE IMAGE, and saying so is more useful than pretending otherwise.
+// The loader checks that the rect is finite, positive and bounded; whether it lies inside the actual
+// pixels is unknowable until the file decodes, and unknowable forever if it never does. A rect
+// outside the image draws NOTHING, which is the same thing every one of these backends already does
+// with an href that will not load.
+//
+// PIXELATED IS PER NODE, not per document. One scene legitimately mixes a 24px tileset that must
+// stay crisp with a photographic background that must not, and a document-wide switch would force
+// the author to choose which one looks wrong. Absent = smooth, so nothing already drawn changes.
 
 // INVERSE KINEMATICS (schema 49). Pose a limb by its HAND; the shoulder and elbow are derived.
 // Node.ik?: IkConstraint             — carried by the END EFFECTOR, the node being placed

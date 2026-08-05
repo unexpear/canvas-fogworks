@@ -181,6 +181,46 @@ const SRC_ALLOWED = ["http", "https", "blob"];
  * only a `core.image` may carry one; a present one must be a non-empty, bounded string whose
  * scheme is something a renderer could actually load.
  */
+/** Largest a source rectangle's coordinates may be — a bound on a hand-editable number. */
+export const SOURCE_RECT_MAX = 1_000_000;
+
+/** A sub-rectangle of an image, in the SOURCE image's own pixels. */
+export interface SourceRect {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+/**
+ * Validity of an image's source rectangle, SHARED by the edit path and the load path.
+ *
+ * IT CANNOT BE CHECKED AGAINST THE IMAGE, and being explicit about that is worth more than a
+ * validator that pretends otherwise. Whether the rect lies inside the real pixels is unknowable
+ * until the file decodes and unknowable forever if it never does — the document holds a URL, not a
+ * bitmap. So this checks what a document CAN be wrong about on its own: finite numbers, a positive
+ * extent, and a bound. A rect outside the image draws nothing, which is what these backends already
+ * do with an href that will not load.
+ *
+ * PIXELS, NOT FRACTIONS — the opposite of the call schema 43 made for mesh points, for a reason that
+ * does not carry over. A mesh's box is in the document, so a fraction stays meaningful when it
+ * resizes; an image's pixel size is not. Pixels are also the unit the art is authored in.
+ */
+export function sourceRectError(rect: unknown): string | null {
+    if (rect === undefined) return null;
+    if (typeof rect !== "object" || rect === null || Array.isArray(rect)) return "sourceRect must be an object";
+    const r = rect as Partial<SourceRect>;
+    for (const key of ["x", "y", "width", "height"] as const) {
+        const v = r[key];
+        if (!Number.isFinite(v)) return `sourceRect.${key} must be a finite number`;
+        if (Math.abs(v as number) > SOURCE_RECT_MAX) return `sourceRect.${key} must be within ±${SOURCE_RECT_MAX}`;
+    }
+    // A ZERO OR NEGATIVE extent is not a degenerate region to draw carefully, it is a region that
+    // cannot be sampled at all — every backend would divide by it to build its texture coordinates.
+    if ((r.width as number) <= 0 || (r.height as number) <= 0) return "sourceRect.width and .height must be positive";
+    return null;
+}
+
 export function srcError(type: NodeType, src: unknown): string | null {
     if (src === undefined) return null;
     if (type !== "core.image") return "only a core.image node may carry a src";
@@ -285,6 +325,22 @@ export interface Node {
     mesh?: Mesh;
     text?: string;
     src?: string;
+    /**
+     * A sub-rectangle of the SOURCE image, in that image's own pixels (schema 51). Absent = whole.
+     *
+     * What a tileset and a sprite strip are made of, and what every backend was unable to say: they
+     * all drew whole images, so a 15x7 grid of 24px tiles in one file could only ever be drawn as
+     * one 360x168 picture. See `sourceRectError` for why the unit is pixels rather than fractions.
+     */
+    sourceRect?: SourceRect;
+    /**
+     * Scale by NEAREST NEIGHBOUR rather than interpolating (schema 51). Absent = smooth, as before.
+     *
+     * Pixel art must not be interpolated — the packs measured for this have hard alpha edges and
+     * palettes of a dozen colours, and every backend blurred them unconditionally. Per NODE because
+     * one scene mixes a tileset that must stay crisp with a photograph that must not.
+     */
+    pixelated?: boolean;
     /** `core.path` drawing commands (absolute, local-space). Absent = an empty path. See `PathCommand`. */
     path?: PathCommand[];
     /**

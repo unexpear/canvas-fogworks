@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v50 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v51 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -898,6 +898,35 @@ written before channels existed behaves identically by not having any.
 its two keyframes and running the same `blendNode` the track uses, then taking the one path it
 owns. Interpolation rules for colours, angles and numbers live in exactly one place, so a channel
 cannot drift from a track about what "halfway" means.
+
+## 4b-bis. Image regions and pixel art — what real game art needed
+
+**Every backend drew whole images, and that is not how game art ships.** `emitCanvas` called the
+five-argument `drawImage`, `emitSVG` wrote a plain `<image href>`, and `emitWebGL` mapped its texture
+across the destination rect. Measuring five real asset packs settled it: four of them are grids
+inside single files — a creature strip that is 20x4 cells of 32x32, an RPG tileset 15x7 of 24x24, a
+weapon set of 24 columns. Without a source rectangle, none of that content can be used at all.
+
+**And nothing set the filter.** Nothing in `src/` touched `imageSmoothingEnabled`, `emitWebGL`
+hardcoded `gl.LINEAR`, `emitSVG` set no `image-rendering`. Every pixel-art pack measured a soft-edge
+fraction of **0.0000** — hard alpha, palettes of 13 to 31 colours — which is art that must not be
+interpolated, and all three backends interpolated it unconditionally.
+
+**Both live on the NODE and travel through the display list**, so the three backends read one
+decision rather than each inventing it. That is the same split every other rendering choice here
+makes, and it is why the pixel-art flag could not be a canvas-level setting: one scene mixes a
+tileset that must stay crisp with a photograph that must not.
+
+**The Canvas backend must set the filter for EVERY image, not only for pixelated ones.**
+`imageSmoothingEnabled` is sticky context state, exactly like `setLineDash` — and this codebase has
+already shipped that bug once, when a dash set for one item leaked onto the next. Written the same
+careless way, one pixel-art tile would make every later photograph in the frame crunchy.
+
+**SVG has no source rectangle**, so a region is drawn as a nested `<svg>` carrying a `viewBox`: the
+viewBox maps the source rect onto the destination box and the nested element clips the overflow.
+That needs the image's natural size, which comes from the shared `ImageCache` the other two backends
+already use — so an undecoded image draws nothing here exactly as it draws nothing on Canvas, rather
+than each backend inventing its own answer for "not ready yet".
 
 ## 4c. Sprite sheets — a character leaving the editor
 

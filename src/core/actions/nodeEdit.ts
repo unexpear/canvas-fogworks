@@ -115,6 +115,11 @@ export function contentActionFor(doc: ReadonlyDocument, nodeId: string, patch: C
         return doc.nodes.has(nodeId) ? new UpdateNodeContentAction(doc, nodeId, patch) : null;
     }
     if (patch.name !== undefined) return null;     // no override slot for a name
+    // NOR for an image REGION or its filter (schema 51). `InstanceOverride` has no slot for
+    // either, so a copy cannot show a different tile from its master yet — and refusing is the
+    // same call `name` makes, rather than writing the edit somewhere it cannot live. Stated here
+    // because "the inspector silently did nothing on a copy" is otherwise a mystery to debug.
+    if (patch.sourceRect !== undefined || patch.pixelated !== undefined) return null;
     const target = overrideTargetFor(doc, nodeId);
     if (!target) return null;
     const override: InstanceOverride = {};

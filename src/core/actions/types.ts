@@ -3,6 +3,7 @@
  * @description Shared types used across all Actions and History tracking.
  */
 
+import { SourceRect } from "../document/Node";
 import { Node, Geometry, Style, Layout, Transform, VariantKey, StateDefinition, PathCommand, BooleanOp, RESERVED_NODE_ID } from "../document/Node";
 import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
 import { InstanceOverride } from "../document/Components";
@@ -52,6 +53,14 @@ export type NodeDelta =
         style?: Partial<Style>;
         layout?: Partial<Layout>;
         text?: string;
+        /**
+         * An image's SOURCE REGION (schema 51). `null` REMOVES it — the one field here that can be
+         * cleared, because "no region" is a real state meaning the whole image, and an omitted key
+         * already means "leave it alone" everywhere in this protocol.
+         */
+        sourceRect?: SourceRect | null;
+        /** Whether the image scales by nearest neighbour (schema 51). */
+        pixelated?: boolean;
         src?: string;
         name?: string;
         /** Whole-map replace of a `core.instance`'s per-instance overrides (M6 slice 2). Whole-map

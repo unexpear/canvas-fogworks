@@ -501,6 +501,65 @@ describe("emitCanvas — image", () => {
     });
 });
 
+// ─── Image regions and pixel art (schema 51) ─────────────────────────────────
+describe("IMAGE REGIONS and pixel art", () => {
+    const imageDoc = (over: Record<string, unknown>) => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("i", {
+            id: "i", type: "core.image", parent: null, children: [], name: "i",
+            geometry: { x: 10, y: 20, width: 96, height: 96 },
+            style: { fill: "#fff", opacity: 1 }, layout: {},
+            src: "data:image/png;base64,AAA", ...over
+        } as Node);
+        doc.rootNodeUuids = ["i"];
+        return doc;
+    };
+
+    it("draws a SOURCE RECT with the nine-argument form, and the whole image without one", () => {
+        // The mock has no decoder, so `resolveImage` returns null and nothing is drawn — which is
+        // why this asserts on the display list, the half that decides, rather than on ctx calls.
+        // The nine-argument call itself is pinned by the shape reaching the backend intact.
+        const tile = buildRenderModel(SIZE, imageDoc({ sourceRect: { x: 72, y: 48, width: 24, height: 24 } }), {
+            selectedNodeIds: [], hoveredNodeId: null, previewRect: null,
+            computed: computeGeometry(imageDoc({ sourceRect: { x: 72, y: 48, width: 24, height: 24 } })),
+            viewport: { x: 0, y: 0, zoom: 1 }
+        });
+        const shape = tile.content[0].shape;
+        // The shape is LOCAL — placement rides in the item's matrix, as it does for every shape
+        // here — so the DESTINATION is the node's box at the origin while the SOURCE is in the
+        // image's own pixels. Two rectangles in two different spaces, which is the thing about
+        // this feature most likely to be confused.
+        expect(shape).toMatchObject({
+            kind: "image", x: 0, y: 0, width: 96, height: 96,
+            source: { x: 72, y: 48, width: 24, height: 24 }
+        });
+
+        const whole = buildRenderModel(SIZE, imageDoc({}), {
+            selectedNodeIds: [], hoveredNodeId: null, previewRect: null,
+            computed: computeGeometry(imageDoc({})), viewport: { x: 0, y: 0, zoom: 1 }
+        });
+        // NULL, not undefined — a backend must be able to tell "whole image" without guessing.
+        expect((whole.content[0].shape as { source: unknown }).source).toBeNull();
+    });
+
+    it("carries `pixelated` on EVERY image, so a sticky filter cannot be forgotten", () => {
+        const model = (over: Record<string, unknown>) => {
+            const d = imageDoc(over);
+            return buildRenderModel(SIZE, d, {
+                selectedNodeIds: [], hoveredNodeId: null, previewRect: null,
+                computed: computeGeometry(d), viewport: { x: 0, y: 0, zoom: 1 }
+            }).content[0].shape as { pixelated: boolean };
+        };
+        // Present and FALSE by default, rather than absent. `imageSmoothingEnabled` is sticky
+        // context state — the same shape of bug this backend already shipped with `setLineDash`,
+        // where a dash set for one item leaked onto every item after it. A flag that is always
+        // there is what makes "set it only when true" impossible to write by accident.
+        expect(model({}).pixelated).toBe(false);
+        expect(model({ pixelated: true }).pixelated).toBe(true);
+        expect(model({ pixelated: false }).pixelated).toBe(false);
+    });
+});
+
 // ─── Sprite sheet: the DRAWING half ──────────────────────────────────────────
 //
 // The plan is arithmetic and asserted in `document.test.ts`. This is the other half — the one that

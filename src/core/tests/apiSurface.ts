@@ -38,7 +38,7 @@ import {
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
 import { Variable, VariableStore, VariableType, VariableValue, ThemeMode, THEME_MODES, VARIABLES_MAX, VARIABLE_KEY_MAX, VARIABLE_FALLBACK_COLOR, isTokenRef, variableError, variableKeyError, variableStoreError, resolveVariable, resolveColor, resolveNumber } from "../document/Variables";
-import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, Shadow, Layout, RESERVED_NODE_ID, RESERVED_ID_SUBSTRING, nodeIdError } from "../document/Node";
+import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, Shadow, Layout, RESERVED_NODE_ID, RESERVED_ID_SUBSTRING, nodeIdError, SourceRect, sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
@@ -79,10 +79,10 @@ import { renderScene, RenderBackend } from "../../renderer/renderScene";
 import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
 import { emitCanvas, setImageReadyCallback, CanvasTarget } from "../../renderer/emitCanvas";
-import { resolveImage, imageGeneration } from "../../renderer/ImageCache";
+import { resolveImage, imageGeneration, naturalSize } from "../../renderer/ImageCache";
 import { exportSVG, EXPORT_MARGIN, TextLines } from "../export/ExportSVG";
 import { TextShape, drawTextInto, wrapText, wrapTextWith, textLinesFor, textRasterKey, textRasterScale, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
-import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
+import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, normalisedUV, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { MotionPath, Point as MotionPoint, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
@@ -621,6 +621,15 @@ export function __apiSurfacePin(): void {
     expectType<number>(FABRIK_PASSES); expectType<number>(FABRIK_TOLERANCE); expectType<number>(FABRIK_SEED);
     expectType<number>(IK_CHAIN_MAX);
     expectType<IkConstraint>({ x: 0, y: 0, chain: 6 });
+
+    // IMAGE REGIONS AND PIXEL ART (schema 51). The rect is in the SOURCE image's own pixels; the
+    // normalisation into texture coordinates is the GPU's, because only it knows the real size.
+    const region: SourceRect = { x: 72, y: 48, width: 24, height: 24 };
+    expectType<SourceRect>(region);
+    expectType<string | null>(sourceRectError(region));
+    expectType<number>(SOURCE_RECT_MAX);
+    expectType<{ x: number; y: number; width: number; height: number }>(normalisedUV(region, 360, 168));
+    expectType<{ width: number; height: number } | null>(naturalSize("a.png"));
     expectType<(ctx: CanvasRenderingContext2D, d: ReadonlyDocument, p: SheetPlan) => void>(drawSheet);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);
