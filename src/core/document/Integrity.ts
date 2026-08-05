@@ -15,6 +15,7 @@ import { ReadonlyNode } from "./SceneGraph";
 import { transformError, layoutError, dimensionError, pathError, booleanOpError, srcError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError } from "./Node";
 import { interactionsError } from "./Prototype";
 import { timelineError, trackError } from "./Timeline";
+import { clipsError } from "./Clips";
 import { depthError } from "./Depth";
 import { meshError } from "./Mesh";
 import { ambientError, lightsError } from "./Light";
@@ -129,6 +130,10 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
     if (ambErr) throw new Error(`Invalid document: ${ambErr}.`);
     const tlErr = timelineError(doc.timeline);
     if (tlErr) throw new Error(`Invalid document: ${tlErr}.`);
+    // CLIPS are checked against the timeline they name frames in, so a range over a clock that
+    // does not exist is refused here rather than by whoever tries to play it.
+    const clipErr = clipsError(doc.clips, doc.timeline);
+    if (clipErr) throw new Error(`Invalid document: ${clipErr}.`);
     if (doc.frame !== undefined && (!Number.isFinite(doc.frame) || doc.frame < 0)) {
         throw new Error(`Invalid document: frame must be a finite number >= 0.`);
     }

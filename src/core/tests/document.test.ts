@@ -58,6 +58,7 @@ import { marchOccluded, RAY_STEPS } from "../geometry/RayMarch";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
 import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, DEMOS } from "../document/Demos";
 import { traceMotion, traceVelocity, traceTiming, traceDigest } from "../diagnostics/MotionTrace";
+import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
 import { easingError } from "../document/Prototype";
 import { dashSubpaths, parseDashArray } from "../geometry/DashPath";
@@ -4397,9 +4398,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 44→45 landed, giving a keyframe
-        // PER-PROPERTY easing curves.)
-        expect(() => migrateIfNeeded(legacy, "46")).toThrow('Migration not implemented for document schema "45"');
+        // time a real migration is added — most recently when 45→46 landed, giving a document
+        // NAMED CLIPS over its one timeline.)
+        expect(() => migrateIfNeeded(legacy, "47")).toThrow('Migration not implemented for document schema "46"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -13855,6 +13856,100 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
         expect(contact.width).toBe(air.width);
         expect(contact.height).toBe(air.height);
+    });
+
+    test("CLIPS name ranges over the one timeline (schema 46)", () => {
+        // A character is a dozen animations, not one. Until clips existed a document held exactly
+        // one timeline, so idle, walk and jump could not live in the same file — which is the
+        // wrong unit, because the thing somebody makes and ships is the character.
+        const tl = { frames: 40, fps: 24 };
+        const clips: Clip[] = [
+            { name: "idle", from: 0, to: 11 },
+            { name: "walk", from: 12, to: 27 },
+            { name: "die", from: 28, to: 39, loop: false }
+        ];
+        expect(clipsError(clips, tl)).toBeNull();
+        expect(findClip(clips, "walk")).toEqual({ name: "walk", from: 12, to: 27 });
+        expect(findClip(clips, "fly")).toBeNull();
+        // INCLUSIVE of both ends, matching `traceTiming` and the timeline strip: 0..11 is twelve
+        // drawings, not eleven. An exclusive end is the off-by-one nobody sees until a loop
+        // stutters at the seam.
+        expect(clipLength(clips[0])).toBe(12);
+        expect(clipLength({ name: "one", from: 5, to: 5 })).toBe(1);
+
+        // A LOOPING clip wraps, in its OWN frame numbers — a caller plays "walk" without needing
+        // to know where in the strip it happens to live.
+        const walk = clips[1];
+        expect(clipFrameAt(walk, 0)).toBe(12);
+        expect(clipFrameAt(walk, 15)).toBe(27);
+        expect(clipFrameAt(walk, 16)).toBe(12);          // round again
+        expect(clipFrameAt(walk, 33)).toBe(12 + 1);
+        // A ONE-SHOT holds its last frame rather than wrapping or stopping somewhere else: a
+        // character that has died stays dead until something else is played.
+        const die = clips[2];
+        expect(clipFrameAt(die, 0)).toBe(28);
+        expect(clipFrameAt(die, 11)).toBe(39);
+        expect(clipFrameAt(die, 500)).toBe(39);
+        // `loop` DEFAULTS to true, because idle/walk/run all cycle and the one-shots are the ones
+        // an author is already thinking about.
+        expect(clipFrameAt({ name: "d", from: 0, to: 3 }, 4)).toBe(0);
+    });
+
+    test("a clip that cannot be played is REFUSED, on both paths", () => {
+        const tl = { frames: 20, fps: 12 };
+        expect(clipsError(undefined, tl)).toBeNull();
+        expect(clipsError([], undefined)).toBeNull();      // nothing to check against nothing
+        // A range over a clock that does not exist cannot be played — refused here rather than
+        // pushed onto whoever tries.
+        expect(clipsError([{ name: "a", from: 0, to: 1 }], undefined)).toMatch("need a timeline");
+        // INSIDE the timeline: a clip reaching past the last frame plays silence at the end, which
+        // reads as the animation being broken rather than as the range being wrong.
+        expect(clipsError([{ name: "a", from: 0, to: 20 }], tl)).toMatch("past the timeline");
+        expect(clipsError([{ name: "a", from: -1, to: 5 }], tl)).toMatch("negative");
+        expect(clipsError([{ name: "a", from: 9, to: 2 }], tl)).toMatch("before it begins");
+        expect(clipsError([{ name: "a", from: 0.5, to: 5 }], tl)).toMatch("whole frames");
+        // UNIQUE names, because the name IS the identity: two clips called `walk` make "play walk"
+        // ambiguous, and silently picking one is an answer nobody can debug.
+        expect(clipsError([{ name: "w", from: 0, to: 1 }, { name: "w", from: 2, to: 3 }], tl)).toMatch("used twice");
+        expect(clipsError([{ name: "", from: 0, to: 1 }], tl)).toMatch("non-empty");
+        expect(clipsError([{ name: "x".repeat(CLIP_NAME_MAX + 1), from: 0, to: 1 }], tl)).toMatch("at most");
+        expect(clipsError("walk", tl)).toMatch("must be an array");
+        expect(clipsError([{ name: "a", from: 0, to: 1, loop: 1 }], tl)).toMatch("loop");
+        expect(clipsError(new Array(CLIPS_MAX + 1).fill({ name: "a", from: 0, to: 1 }), tl)).toMatch("at most");
+
+        // ROUND TRIP, and the LOAD path refuses exactly what the edit path does.
+        const d = createEmptyDocument();
+        d.timeline = { frames: 20, fps: 12 };
+        d.clips = [{ name: "idle", from: 0, to: 9 }, { name: "hit", from: 10, to: 19, loop: false }];
+        const back = deserializeDocument(serializeDocument(d));
+        expect(back.clips).toEqual(d.clips);
+        expect(back.timeline).toEqual(d.timeline);
+        const bad = JSON.stringify({ version: SCHEMA_VERSION, document: { metadata: {}, rootNodeUuids: [], variables: {},
+            nodes: {}, timeline: { frames: 20, fps: 12 }, clips: [{ name: "a", from: 0, to: 99 }] } });
+        expect(() => deserializeDocument(bad)).toThrow("past the timeline");
+        // A schema-45 document has no clips, which is exactly "one animation" — it must migrate
+        // and play identically rather than acquiring an empty list that means something else.
+        const v45 = JSON.stringify({ version: "45", document: { metadata: {}, rootNodeUuids: [], variables: {},
+            nodes: {}, timeline: { frames: 8, fps: 12 } } });
+        const migrated = deserializeDocument(v45);
+        expect(migrated.clips).toBeUndefined();
+        expect(JSON.parse(serializeDocument(migrated)).version).toBe(SCHEMA_VERSION);
+    });
+
+    test("a clip and the motion trace agree about which frames are which", () => {
+        // The two features have to mean the same thing by "frame range", or a clip's duration and
+        // the trace of it would disagree — the sort of mismatch that only shows up as an export
+        // being one frame short.
+        const ball = bouncingBall();
+        const clip: Clip = { name: "firstBounce", from: 0, to: 11 };
+        expect(clipLength(clip)).toBe(traceTiming(ball, clip.from, clip.to).frames);
+        expect(traceTiming(ball, clip.from, clip.to).seconds).toBeCloseTo(0.5, 9);
+        const samples = traceMotion(ball, { from: clip.from, to: clip.to, nodeIds: ["ball"] });
+        expect(samples.length).toBe(clipLength(clip));
+        // Playing the clip visits exactly the frames the trace sampled, in order, and then wraps.
+        const visited = Array.from({ length: clipLength(clip) }, (_, e) => clipFrameAt(clip, e));
+        expect(visited).toEqual(samples.map(s => s.frame));
+        expect(clipFrameAt(clip, clipLength(clip))).toBe(samples[0].frame);
     });
 
     test("the motion TRACE measures the computed world, not the stored document", () => {

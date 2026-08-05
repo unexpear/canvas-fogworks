@@ -4,6 +4,7 @@
  */
 
 import { Node } from "./Node";
+import { Clip } from "./Clips";
 import { VariableStore, ThemeMode } from "./Variables";
 
 // The variables layer (types + validation + resolution) lives in Variables.ts; the document
@@ -162,7 +163,7 @@ export const CURRENT_VERSION: string =
 import type { TimelineSettings } from "./Timeline";
 import type { Light } from "./Light";
 
-export const SCHEMA_VERSION = "45";
+export const SCHEMA_VERSION = "46";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
@@ -219,6 +220,13 @@ export interface ProjectDocument {
      */
     timeline?: TimelineSettings;
     frame?: number;
+    /**
+     * Named frame ranges over the timeline — `idle`, `walk`, `jump` (schema 46).
+     *
+     * A character is a dozen animations, not one. ORDERED because that is the order somebody
+     * arranged them in; absent means the whole timeline is the only animation there is.
+     */
+    clips?: Clip[];
     /**
      * What the document is LIT by (schema 42). Absent = unlit, which every document was.
      *

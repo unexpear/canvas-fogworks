@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v45 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v46 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -161,6 +161,34 @@ interface Keyframe {
   easing?: Easing;          // shapes the tween LEAVING this keyframe; ignored when held
   values: StateDefinition;  // the same statement a state and an instance override make
 }
+
+// CLIPS (schema 46). Named frame ranges over the one timeline — `idle`, `walk`, `jump`.
+interface Clip { name: string; from: number; to: number; loop?: boolean }   // both ends INCLUSIVE
+// Document.clips?: Clip[]                — absent = the whole timeline is the only animation
+//
+// A game character is not one animation, it is a dozen, and until now a document held exactly one
+// timeline — so idle, walk and jump could not live in the same file. A clip is a NAMED RANGE
+// rather than a separate timeline per animation, which is how sprite sheets and every 2D engine
+// express the same thing: one strip of frames, cut into runs. Keeping one clock means a keyframe
+// is still just a keyframe, the trace still measures frames, and nothing below this had to learn
+// a new idea.
+//
+// BOTH ENDS INCLUSIVE, matching `traceTiming` and the timeline strip: a clip from 0 to 11 at 12fps
+// is one second and twelve drawings, not eleven twelfths of one. An exclusive end would make every
+// clip a frame short in a way nobody notices until the loop stutters.
+//
+// `loop` defaults to TRUE, because the overwhelming majority of character clips cycle — idle,
+// walk, run — and the ones that do not (a death, a one-shot attack) are the ones an author will
+// think about. Defaults should be the common case, not the safe-sounding one.
+//
+// NAMES ARE UNIQUE and are the identity: a clip is selected by name, and two clips called `walk`
+// would make "play walk" ambiguous. The list is ORDERED because that is the order a person
+// arranged them in, and an editor showing them in map order would reshuffle somebody's work.
+//
+// Every clip must lie INSIDE the timeline, and a document with clips must have a timeline at all —
+// a range over a clock that does not exist cannot be played, and accepting one would push the
+// failure to whoever tried.
+
 // A keyframe is a StateDefinition at a time, so it inherits `overrideValueError` and
 // `materializeNode`; a TWEEN is `blendNode`, written for state transitions. Animation added a
 // field, not a second definition of what a node may say about itself. Outside a track's range the

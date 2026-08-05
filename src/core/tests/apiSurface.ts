@@ -84,6 +84,7 @@ import { exportSVG, EXPORT_MARGIN, TextLines } from "../export/ExportSVG";
 import { TextShape, drawTextInto, wrapText, wrapTextWith, textLinesFor, textRasterKey, textRasterScale, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
 import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
+import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
 import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
 import { JournalEntry, recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
@@ -562,6 +563,15 @@ export function __apiSurfacePin(): void {
     // PER-PROPERTY easing (schema 45), and the paths a keyframe may name.
     expectType<ReadonlySet<string>>(EASABLE_PATHS);
     expectType<EaseFor>((path: string) => path.length);
+    // NAMED CLIPS over the one timeline (schema 46) — a character is a dozen animations.
+    const clip: Clip = { name: "walk", from: 0, to: 11, loop: true };
+    expectType<Clip>(clip);
+    expectType<Clip[] | undefined>(doc.clips);
+    expectType<string | null>(clipsError([clip], timeline));
+    expectType<Clip | null>(findClip([clip], "walk"));
+    expectType<number>(clipLength(clip));
+    expectType<number>(clipFrameAt(clip, 3));
+    expectType<number>(CLIPS_MAX); expectType<number>(CLIP_NAME_MAX);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);
     expectType<number>(FPS_MIN); expectType<number>(FPS_MAX);

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document/Document.ts, src/core/tests -->
 
-> **Frozen contracts · schema v45 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins).**
+> **Frozen contracts · schema v46 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins).**
 > These documents describe the *current, verified* implementation and lock the
 > contracts the rest of the engine builds on. See [`../MILESTONES.md`](../MILESTONES.md)
 > for the roadmap and where each layer fits.
@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1153 — `src/core/tests/document.test.ts` (1050) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (34).
+- **Tests:** 1156 — `src/core/tests/document.test.ts` (1053) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (34).
 
 ## Source map
 
@@ -56,7 +56,7 @@ src/
     document/   ProjectDocument, Node, Serializer,     (the source of truth)
                 Integrity, SceneGraph, Components,
                 Timeline (39), Depth (40), Mesh (41), Light (42),
-                Bezier (44), Demos (the classic exercises)
+                Bezier (44), Clips (46), Demos (the classic exercises)
     actions/    Action + commands, Dispatcher,         (the only write path)
                 HistoryManager, applyMutations, types
     geometry/   Matrix, GeometryEngine (M1),           (intent -> computed results)

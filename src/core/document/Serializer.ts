@@ -8,6 +8,7 @@
 
 import { statesError } from "./Components";
 import { ProjectDocument, ReadonlyDocument, ThemeMode, createEmptyDocument, SCHEMA_VERSION, SerializedMetadata } from "./Document";
+import { Clip } from "./Clips";
 import { Node, isNodeType, srcError, srcValueError } from "./Node";
 import { variableError, variableKeyError, VARIABLES_MAX } from "./Variables";
 import { validateDocumentIntegrity } from "./Integrity";
@@ -97,6 +98,7 @@ export interface SerializedDocument {
         activeState?: string;
         /** The document's clock and where it is on it (schema 39). Absent = not animated. */
         timeline?: { frames: number; fps: number };
+        clips?: readonly Clip[];
         frame?: number;
         /** The scene's lighting (schema 42). Absent = unlit. */
         lights?: readonly import("./Light").Light[];
@@ -131,6 +133,7 @@ export function serializeDocument(doc: ReadonlyDocument): string {
             // Omitted when absent for the same reason: a document nobody animated must serialize
             // byte-for-byte as it did before the timeline existed.
             ...(doc.timeline !== undefined ? { timeline: doc.timeline } : {}),
+            ...(doc.clips !== undefined ? { clips: doc.clips } : {}),
             ...(doc.frame !== undefined ? { frame: doc.frame } : {}),
             ...(doc.lights !== undefined ? { lights: doc.lights } : {}),
             ...(doc.ambient !== undefined ? { ambient: doc.ambient } : {})
@@ -211,6 +214,10 @@ export function deserializeDocument(json: string): ProjectDocument {
     }
     if ("frame" in migrated.document) {
         doc.frame = migrated.document.frame as number;
+    }
+    // Clips ride through the same way — malformed included, so `Integrity` stays the single judge.
+    if ("clips" in migrated.document) {
+        doc.clips = migrated.document.clips as Clip[];
     }
     // Copied through even when malformed, so `Integrity` stays the single judge.
     if ("lights" in migrated.document) {
@@ -329,6 +336,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "42") { raw = migrate_42_to_43(raw); version = "43"; }
     if (version === "43") { raw = migrate_43_to_44(raw); version = "44"; }
     if (version === "44") { raw = migrate_44_to_45(raw); version = "45"; }
+    if (version === "45") { raw = migrate_45_to_46(raw); version = "46"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -734,6 +742,18 @@ function migrate_21_to_22(raw: any): any {
  * schema-45 file would ignore the map and tween the ball's horizontal motion on gravity's curve,
  * which is the bug this field exists to remove.
  */
+/**
+ * 45 -> 46: `Document.clips` — named frame ranges over the timeline.
+ *
+ * Additive. A schema-45 document has one animation, which is exactly what "no clips" means, so it
+ * plays identically. The bump is the usual interpretation direction: an old build reading a
+ * schema-46 file would ignore the clip list and play the whole strip as one animation — a
+ * character running its idle, walk and death back to back.
+ */
+function migrate_45_to_46(raw: any): any {
+    return { ...raw, version: "46" };
+}
+
 function migrate_44_to_45(raw: any): any {
     return { ...raw, version: "45" };
 }

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v45 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v46 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -266,6 +266,20 @@ function wavingLimb(): ProjectDocument;     // rotation about a JOINT, with an o
 // BUILDERS rather than saved fixtures, so they migrate with the schema and the tests can assert
 // what the motion DOES. They exist to find holes: the bouncing ball is what proved a keyframe
 // needed per-property easing, because one curve made the ball decelerate sideways as it rose.
+
+// Clips.ts — named frame ranges over the one timeline (schema 46).
+interface Clip { name: string; from: number; to: number; loop?: boolean }   // both ends INCLUSIVE
+const CLIPS_MAX: number; const CLIP_NAME_MAX: number;
+function clipsError(clips: unknown, timeline): string | null;   // shared edit+load
+function findClip(doc, name): Clip | null;
+function clipFrameAt(clip, elapsedFrames): number;              // where the playhead sits, honouring `loop`
+// A character is a dozen animations, not one. A clip is a NAMED RANGE rather than a timeline of its
+// own — one clock, cut into runs, which is how sprite sheets and every 2D engine express it, and
+// which is why nothing below this had to learn a new idea. `loop` defaults TRUE because most
+// character clips cycle; the one-shots are what an author thinks about. Names are UNIQUE (a clip is
+// selected by name) and the list is ORDERED (that is the order somebody arranged them in). Every
+// range must lie inside the timeline, and clips without a timeline are refused rather than passed
+// on to whoever tries to play them.
 
 // Bezier.ts — arbitrary easing as a cubic Bézier (schema 44).
 interface CubicBezier { x1; y1; x2; y2 }                    // (0,0) and (1,1) are fixed
