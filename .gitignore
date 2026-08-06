@@ -10,6 +10,13 @@ dist/
 # true for older readers. Keep a copy outside the repo if that evidence matters.
 exe/
 
+# Third-party art packs used as REFERENCE MATERIAL, not as source (1.16 GB, 88,815 files:
+# Kenney All-in-1 3.4.0 plus several itch packs). They are what the importers were measured
+# against — the grid sizes, ink bounds and atlas packing quoted in docs/TESTING.md and in the
+# import modules' headers all came from here — so the numbers are recorded in those files and
+# the bytes deliberately are not. Each pack carries its own licence; keep them out of the repo.
+freeassets/
+
 # Editor / OS noise
 .DS_Store
 Thumbs.db
