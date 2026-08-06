@@ -23,9 +23,24 @@
  * the structure still parses and cels keep their compressed bytes — enough for clips, timing and
  * layout, and testable with no decompressor present.
  *
- * WHAT IS REFUSED IS REFUSED LOUDLY. Indexed and greyscale depths, tilemap cels and tileset chunks
- * are named in the error rather than half-read: a partly-understood file that loads looking almost
- * right is worse than one that says which feature it met and did not know.
+ * ALL THREE COLOUR DEPTHS ARE READ, and `pixels` means SAMPLES rather than RGBA. Aseprite stores
+ * 32-bit as RGBA, 16-bit as value-plus-alpha and 8-bit as palette indices — three different things
+ * under one field name — so the field holds what the file holds and `celRgba` converts. Calling it
+ * `pixels` while quietly converting would make a caller believe it had the file's own bytes.
+ *
+ * INDEXED IS NOT A NICHE CASE: it is how most pixel art is authored, the palette being the artist's
+ * working vocabulary rather than a compression trick. A reader that handled only RGBA would refuse
+ * the majority of this format's real use. The transparent INDEX comes from the header, because an
+ * indexed file has no alpha channel to read one from.
+ *
+ * WHAT IS STILL REFUSED IS REFUSED LOUDLY. Tilemap cels and tileset chunks are named in the error
+ * rather than half-read — they reference a tileset by index, and reading one as an image produces a
+ * picture of the wrong shape. A partly-understood file that loads looking almost right is worse than
+ * one that says which feature it met and did not know.
+ *
+ * HONEST ABOUT THE EVIDENCE: the 32-bit path is verified against a real 210KB file from the measured
+ * pack. No indexed or greyscale `.aseprite` was available, so those paths rest on the published spec
+ * and on fixtures built from it, which is weaker — said here rather than left to be assumed.
  */
 
 /** Bounds on a hand-editable file. A corrupt header should fail, not allocate. */
@@ -65,8 +80,9 @@ export interface AseCel {
     height: number;
     opacity: number;
     /**
-     * RGBA pixels, present only when an inflate function was supplied and the cel carries its own
-     * image. A LINKED cel has none of its own — see `linkedFrom`.
+     * The cel's SAMPLES in the file's own colour depth — not necessarily RGBA. Present only when an
+     * inflate function was supplied and the cel carries its own image; a LINKED cel has none of its
+     * own, see `linkedFrom`. Use `celRgba` to convert.
      */
     pixels: Uint8Array | null;
     /** The compressed bytes, kept when nothing inflated them so a caller can do it later. */
@@ -88,8 +104,15 @@ export interface AseTag {
 export interface AseFile {
     width: number;
     height: number;
-    /** 32 = RGBA. Others are refused; see the module note. */
+    /** Bits per pixel: 32 RGBA, 16 greyscale (value + alpha), 8 palette index. */
     colorDepth: number;
+    /**
+     * Which palette entry counts as nothing, for an INDEXED file.
+     *
+     * From the header rather than from the pixels, because an indexed image has no alpha channel —
+     * transparency is one reserved index, chosen by the author.
+     */
+    transparentIndex: number;
     frames: { duration: number }[];
     layers: AseLayer[];
     cels: AseCel[];
@@ -108,10 +131,11 @@ export function asepriteError(bytes: Uint8Array): string | null {
     const width = view.getUint16(8, true), height = view.getUint16(10, true);
     if (width * height > ASE_MAX_CANVAS) return `canvas ${width}x${height} is larger than this will read`;
     const depth = view.getUint16(12, true);
-    // NAMED IN THE ERROR. An indexed file needs its palette applied to every pixel and a greyscale
-    // one has a different sample layout; reading either as RGBA produces a picture that is wrong
-    // rather than absent, which is the worst way to fail.
-    if (depth !== 32) return `colour depth ${depth} is not supported yet (only 32-bit RGBA)`;
+    // NAMED IN THE ERROR. A depth outside these three is not a picture this can read at all, and
+    // guessing at one produces something wrong rather than absent — the worst way to fail.
+    if (depth !== 32 && depth !== 16 && depth !== 8) {
+        return `colour depth ${depth} is not one this reads (expected 32, 16 or 8)`;
+    }
     return null;
 }
 
@@ -132,6 +156,9 @@ export function parseAseprite(bytes: Uint8Array, opts?: { inflate?: (data: Uint8
         width: view.getUint16(8, true),
         height: view.getUint16(10, true),
         colorDepth: view.getUint16(12, true),
+        // Byte 28 per the spec, and the fields around it read as sane values on a real file — a
+        // 32-colour palette and square pixels — which they would not if this were misaligned.
+        transparentIndex: view.getUint8(28),
         frames: [], layers: [], cels: [], tags: [], palette: []
     };
 
@@ -237,6 +264,55 @@ function readChunk(
     // Every other chunk — colour profile, user data, slices, external files — is SKIPPED rather
     // than refused. They add information this importer does not use yet; none of them changes the
     // meaning of what it does read, so ignoring one cannot make a frame wrong.
+}
+
+/** Bytes per pixel at a given colour depth — the number every size check here is made of. */
+export function aseBytesPerPixel(colorDepth: number): number {
+    return colorDepth === 32 ? 4 : colorDepth === 16 ? 2 : 1;
+}
+
+/**
+ * A cel's samples as RGBA, whatever depth the file stores them in.
+ *
+ * Separate from the parse because the parse should hand back what the file HOLDS: naming a field
+ * `pixels` while silently converting would leave a caller believing it had the original bytes, and
+ * an indexed cel's bytes are indices — a fact worth being able to see.
+ *
+ * Returns null when there is nothing to convert, rather than an empty array, so "no image" and "an
+ * image of no pixels" stay different answers. A cel whose sample count disagrees with its own
+ * dimensions is refused the same way: that is a corrupt or wrongly-inflated cel, and padding it out
+ * would turn a detectable fault into a subtly wrong picture.
+ */
+export function celRgba(file: AseFile, cel: AseCel): Uint8Array | null {
+    const src = cel.pixels;
+    if (!src || cel.width <= 0 || cel.height <= 0) return null;
+    const count = cel.width * cel.height;
+    if (src.length !== count * aseBytesPerPixel(file.colorDepth)) return null;
+    if (file.colorDepth === 32) return src;
+
+    const out = new Uint8Array(count * 4);
+    if (file.colorDepth === 16) {
+        // GREYSCALE is value + alpha, so the value is written to all three channels. Copying it to
+        // red alone would tint the whole image, which is the mistake this layout invites.
+        for (let i = 0; i < count; i++) {
+            const v = src[i * 2];
+            out[i * 4] = v; out[i * 4 + 1] = v; out[i * 4 + 2] = v; out[i * 4 + 3] = src[i * 2 + 1];
+        }
+        return out;
+    }
+    for (let i = 0; i < count; i++) {
+        const index = src[i];
+        // THE TRANSPARENT INDEX wins over whatever the palette says at that slot. An indexed file
+        // has no alpha channel, so this is the only place transparency can come from.
+        if (index === file.transparentIndex) continue;
+        const entry = file.palette[index];
+        // An index with no palette entry is a broken file. It becomes transparent rather than
+        // failing the whole import — one bad index should not cost an entire animation — and
+        // rather than a guessed colour, which would look deliberate.
+        if (!entry) continue;
+        out[i * 4] = entry.r; out[i * 4 + 1] = entry.g; out[i * 4 + 2] = entry.b; out[i * 4 + 3] = entry.a;
+    }
+    return out;
 }
 
 /**

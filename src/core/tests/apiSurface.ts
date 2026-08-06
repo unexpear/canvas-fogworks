@@ -93,7 +93,7 @@ import { SliceGrid, SliceOptions, sliceGrid, sliceCells, sliceTrack, blankCells,
 import { Sequence, SequenceFrame, parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
 import { Trim, TrimBox, trimmedPlacement, inkUnion } from "../import/Trim";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
-    ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
+    aseBytesPerPixel, celRgba, ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
 import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
 import { JournalEntry, recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
@@ -671,7 +671,8 @@ export function __apiSurfacePin(): void {
     // that a PNG export throws away. Parsing is pure; INFLATING is injected.
     const aseBytes = new Uint8Array(128);
     expectType<string | null>(asepriteError(aseBytes));
-    const ase: AseFile = { width: 0, height: 0, colorDepth: 32, frames: [], layers: [], cels: [], tags: [], palette: [] };
+    const ase: AseFile = { width: 0, height: 0, colorDepth: 32, transparentIndex: 0,
+        frames: [], layers: [], cels: [], tags: [], palette: [] };
     expectType<AseFile>(ase);
     expectType<AseLayer[]>(ase.layers);
     expectType<AseCel[]>(ase.cels);
@@ -682,6 +683,11 @@ export function __apiSurfacePin(): void {
     expectType<{ frames: number; fps: number }>(asepriteTimeline(ase));
     expectType<number>(ASE_MAX_FRAMES); expectType<number>(ASE_MAX_LAYERS);
     expectType<number>(ASE_MAX_CELS); expectType<number>(ASE_MAX_CANVAS);
+    // `pixels` holds the file's own SAMPLES, whatever depth that is; converting is a separate step,
+    // because naming a field `pixels` while quietly converting hides what the file actually said.
+    expectType<number>(aseBytesPerPixel(8));
+    expectType<Uint8Array | null>(celRgba(ase, { frame: 0, layer: 0, x: 0, y: 0, width: 0, height: 0,
+        opacity: 255, pixels: null, compressed: null, linkedFrom: null }));
 
     // WHICH END A NON-INTERPOLATABLE VALUE TAKES is the CALLER's question (schema 54). A timeline
     // steps so a drawing appears on its own keyframe; a state transition switches so a hover means

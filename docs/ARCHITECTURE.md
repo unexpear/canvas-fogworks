@@ -951,9 +951,25 @@ inflate function, exactly as `blankCells` takes an ink test and `drawSheet` take
 it the structure still parses and cels carry their compressed bytes, which is enough for clips,
 timing and layout and is testable with no decompressor at all.
 
-**What is refused is refused LOUDLY.** Indexed and greyscale colour depths, tilemap cels and
-tileset chunks are named in the error rather than half-read — a partly-understood file that loads
-looking almost right is worse than one that says which feature it met and did not know.
+**All three colour depths are read, and `pixels` means SAMPLES rather than RGBA.** Aseprite stores
+32-bit as RGBA, 16-bit as value-plus-alpha, and 8-bit as palette indices — three different things
+under one field name, so the field says what the file says and `celRgba` does the conversion. Naming
+it `pixels` while silently converting would make a caller believe it had the file's own bytes.
+
+**Indexed is not a niche case.** It is how most pixel art is authored — the palette is the artist's
+working vocabulary, not a compression trick — so a reader that handled only RGBA would refuse the
+majority of the format's real use. The transparent INDEX comes from the header rather than from an
+alpha channel, because an indexed file has no alpha to read.
+
+**What is still refused is refused LOUDLY.** Tilemap cels and tileset chunks are named in the error
+rather than half-read: they reference a tileset by index and reading one as an image produces a
+picture of the wrong shape. A partly-understood file that loads looking almost right is worse than
+one that says which feature it met and did not know.
+
+**Honest about the verification.** The 32-bit path is checked against a real 210KB file from the
+measured pack. No indexed or greyscale `.aseprite` was available to test against, so those paths
+rest on the published spec and on fixtures built from it — which is weaker evidence, and is said
+here rather than left for someone to assume otherwise.
 
 ### Trimming — and why the offset is the whole feature
 

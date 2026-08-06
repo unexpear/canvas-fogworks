@@ -67,7 +67,7 @@ import { sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
 import { sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
 import { parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
 import { trimmedPlacement, inkUnion } from "../import/Trim";
-import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, ASE_MAX_FRAMES } from "../import/Aseprite";
+import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
 import { planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
@@ -14084,15 +14084,86 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(withPixels.cels[0].compressed).toBeNull();
     });
 
+    test("INDEXED and GREYSCALE cels convert to RGBA; `pixels` keeps the file's own samples", () => {
+        // Neither depth had a real file to test against — the measured pack's is 32-bit — so these
+        // are built from the spec and that limitation is stated rather than left to be assumed.
+        const asePalette = (entries: [number, number, number, number][]) => {
+            const body = new Uint8Array(20 + entries.length * 6);
+            const v = new DataView(body.buffer);
+            v.setUint32(0, entries.length, true);
+            v.setUint32(4, 0, true);
+            v.setUint32(8, entries.length - 1, true);
+            entries.forEach(([r, g, b, a], i) => {
+                const at = 20 + i * 6;
+                body[at + 2] = r; body[at + 3] = g; body[at + 4] = b; body[at + 5] = a;
+            });
+            return aseChunk(0x2019, body);
+        };
+        const rawCel = (layer: number, w: number, h: number, samples: number[]) => {
+            const body = new Uint8Array(20 + samples.length);
+            const v = new DataView(body.buffer);
+            v.setUint16(0, layer, true);
+            body[6] = 255;
+            v.setUint16(7, 0, true);
+            v.setUint16(16, w, true);
+            v.setUint16(18, h, true);
+            body.set(samples, 20);
+            return aseChunk(0x2005, body);
+        };
+
+        // INDEXED: one byte per pixel. The transparent index is deliberately NOT zero — a
+        // zero-filled header reads the same at every nearby byte, so a fixture using 0 cannot tell
+        // whether the field was read from the right offset at all. Index 2 must come out with zero
+        // alpha WHATEVER the palette says there; an indexed file has no alpha channel, and this is
+        // the only place transparency can come from.
+        const idxHeader = aseHeader(1, 2, 2, 8);
+        idxHeader[28] = 2;
+        const indexed = parseAseprite(aseFile(idxHeader, [aseFrame(100, [
+            asePalette([[9, 9, 9, 255], [255, 0, 0, 255], [0, 255, 0, 128]]),
+            aseLayer("L"),
+            rawCel(0, 2, 2, [0, 1, 2, 9])
+        ])]));
+        expect(indexed.colorDepth).toBe(8);
+        expect(indexed.transparentIndex).toBe(2);
+        // `pixels` holds INDICES, not colour — the field says what the file says.
+        expect(Array.from(indexed.cels[0].pixels!)).toEqual([0, 1, 2, 9]);
+        expect(Array.from(celRgba(indexed, indexed.cels[0])!)).toEqual([
+            9, 9, 9, 255,        // index 0 PAINTS: it is an ordinary entry here, not the hole
+            255, 0, 0, 255,      // index 1
+            0, 0, 0, 0,          // index 2 = transparent, though the palette has 0,255,0 there
+            0, 0, 0, 0           // index 9 has no entry: transparent, not a guessed colour
+        ]);
+
+        // GREYSCALE: value + alpha. The value goes to all three channels — writing it to red alone
+        // would tint the picture, which is exactly the mistake this layout invites.
+        const grey = parseAseprite(aseFile(aseHeader(1, 2, 1, 16), [aseFrame(100, [
+            aseLayer("L"), rawCel(0, 2, 1, [200, 255, 50, 128])
+        ])]));
+        expect(Array.from(celRgba(grey, grey.cels[0])!)).toEqual([200, 200, 200, 255, 50, 50, 50, 128]);
+
+        // 32-BIT passes through untouched, so nothing is copied for the common case.
+        const rgba = parseAseprite(aseFile(aseHeader(1, 1, 1, 32), [aseFrame(100, [
+            aseLayer("L"), rawCel(0, 1, 1, [1, 2, 3, 4])
+        ])]));
+        expect(celRgba(rgba, rgba.cels[0])).toBe(rgba.cels[0].pixels);
+
+        expect([aseBytesPerPixel(32), aseBytesPerPixel(16), aseBytesPerPixel(8)]).toEqual([4, 2, 1]);
+        // A cel whose sample count disagrees with its own size is a corrupt or wrongly-inflated
+        // one. Refused rather than padded, which would turn a detectable fault into a wrong picture.
+        expect(celRgba(indexed, { ...indexed.cels[0], width: 3 })).toBeNull();
+        expect(celRgba(indexed, { ...indexed.cels[0], pixels: null })).toBeNull();
+    });
+
     test("what is refused is NAMED, not half-read", () => {
         expect(asepriteError(new Uint8Array(8))).toMatch(/shorter than its header/);
         const wrongMagic = aseHeader(1);
         new DataView(wrongMagic.buffer).setUint16(4, 0x1234, true);
         expect(asepriteError(wrongMagic)).toMatch(/bad magic/);
-        // A colour depth this cannot read is named. Reading an indexed file as RGBA would produce a
-        // picture that is WRONG rather than absent, which is the worst way to fail.
-        expect(asepriteError(aseHeader(1, 8, 8, 8))).toMatch(/colour depth 8 is not supported/);
-        expect(asepriteError(aseHeader(1, 8, 8, 16))).toMatch(/colour depth 16 is not supported/);
+        // ALL THREE real depths are read now; a depth outside them is named rather than guessed at.
+        expect(asepriteError(aseHeader(1, 8, 8, 8))).toBeNull();
+        expect(asepriteError(aseHeader(1, 8, 8, 16))).toBeNull();
+        expect(asepriteError(aseHeader(1, 8, 8, 24))).toMatch(/colour depth 24 is not one this reads/);
+        expect(asepriteError(aseHeader(1, 8, 8, 0))).toMatch(/colour depth 0 is not one this reads/);
         expect(asepriteError(aseHeader(0))).toMatch(/frame count 0 is outside/);
         expect(asepriteError(aseHeader(ASE_MAX_FRAMES + 1))).toMatch(/outside/);
         // BOTH SIDES of the bound, because a fixture sitting exactly ON it proves nothing about
@@ -14103,7 +14174,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
 
         // `parseAseprite` throws on anything the checker refuses, so a caller that skipped the
         // check cannot get half an answer.
-        expect(() => parseAseprite(aseHeader(1, 8, 8, 8))).toThrow(/colour depth 8/);
+        expect(() => parseAseprite(aseHeader(1, 8, 8, 24))).toThrow(/colour depth 24/);
         // A TILEMAP cel is named rather than read as an image of the wrong shape.
         const tile = new Uint8Array(20);
         new DataView(tile.buffer).setUint16(7, 3, true);
