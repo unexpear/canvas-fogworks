@@ -998,6 +998,33 @@ edges — the pixel-art sets are hard-alpha (0.0000 soft-edge fraction) while th
 antialiased (0.0686) — so a fixed cutoff would either keep a halo of near-invisible pixels or eat
 the antialiasing off a character's outline.
 
+### The import panel — making the readers reachable
+
+**Three importers existed that no user could invoke.** `SheetSlice`, `TextureAtlas` and `Sequence`
+were pure, tested and mutation-checked, and reachable only from a test file. That is the same gap
+the sprite-sheet exporter had before it grew a button: a feature nobody can run is not shipped, and
+its being correct is beside the point.
+
+**It operates on the SELECTED IMAGE NODE**, not on a file picker of its own. The node already
+carries the `src`, the document already knows where it sits, and `sourceRect` is already a field on
+it — so importing is a matter of filling in numbers the node has room for, rather than of inventing
+a parallel place to put an image. It also means the result is visible the moment it is applied,
+because the node is on the canvas being looked at.
+
+**Two ways in, because sheets arrive two ways.** A GRID is stated by the author (a cell size, and a
+margin and gutter if the packer used them) and recovered by division. An ATLAS is pasted in and
+read, which is the only route for the 57% of real sheets that are packed irregularly. They produce
+the same thing — regions — so the panel offers them side by side rather than as separate features.
+
+**Slicing produces an ANIMATION, not a pile of nodes.** The cells of a sheet are almost always the
+frames of something, and a region is keyframable (schema 52), so the natural result is one node
+whose track steps through the cells. Placing forty nodes would be the same information arranged so
+that nothing can play it.
+
+**The natural size comes from the decoded image**, so the panel refuses to slice an image that has
+not loaded rather than guessing at its dimensions — the same rule `emitSVG` follows for a region,
+and for the same reason: a grid computed against the wrong size is wrong everywhere at once.
+
 ### Reading an atlas — when there is no grid to recover
 
 **Most real sheets are not grids.** Surveying 421 atlases shipped with 88,815 files of game art:

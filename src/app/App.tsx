@@ -72,6 +72,11 @@ import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES
 import { scanCapabilities, Capability } from "../core/scan/CapabilityScan";
 import { exportSVG, TextLines } from "../core/export/ExportSVG";
 import { planSheet, sheetAtlas, sheetTooLarge, drawSheet, SheetPlan } from "../core/export/SpriteSheet";
+import { sliceGrid, sliceCells, sliceTrack, blankCells } from "../core/import/SheetSlice";
+import { parseTextureAtlas, atlasError, AtlasEntry } from "../core/import/TextureAtlas";
+import { naturalSize } from "../../src/renderer/ImageCache";
+import { SourceRect } from "../core/document/Node";
+import { Action } from "../core/actions/Action";
 import { textLinesFor } from "../renderer/TextRaster";
 import { ReadonlyDocument, ProjectDocument } from "../core/document/Document";
 import { AddNodeAction } from "../core/actions/AddNodeAction";
@@ -951,6 +956,28 @@ export function App() {
         if (action) dispatcher.dispatchAction(action, { coalesce: true });
     };
 
+    /**
+     * Apply an imported track, and give the document a clock long enough to play it.
+     *
+     * ONE TRANSACTION, because a track without a timeline is a document that says a node animates
+     * over frames it does not have — a half-applied import that an undo would have to unpick in two
+     * steps. The timeline is only widened, never shrunk: importing a short animation into a document
+     * that already holds a longer one must not truncate the longer one.
+     */
+    const importTrack = useCallback((track: Keyframe[]) => {
+        if (!selectedNodeId || track.length === 0) return;
+        const doc = dispatcher.getDocument();
+        const needed = track[track.length - 1].frame + 1;
+        const current = doc.timeline;
+        const timeline = { frames: Math.max(needed, current?.frames ?? 0), fps: current?.fps ?? 24 };
+        const actions: Action[] = [new SetTrackAction(doc, selectedNodeId, track)];
+        if (!current || current.frames < needed) actions.push(new SetTimelineAction(doc, timeline));
+        dispatcher.dispatchAction(actions.length === 1
+            ? actions[0]
+            : new TransactionAction(doc, "Import sheet as animation", actions));
+        refresh();
+    }, [selectedNodeId, dispatcher, refresh]);
+
     /** Transform edits — routed, so a copy gets a transform override (schema 26). */
     const editTransform = (patch: { rotation?: number; scaleX?: number; scaleY?: number }) => {
         if (!selectedNodeId) return;
@@ -1565,7 +1592,16 @@ export function App() {
                 {showFolders && (
                     <div style={{ width: 240, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
                         <div style={PANEL_HEADING}>Folders</div>
-                        <FoldersDrawer onPlaceImage={placeAsset} getDocument={() => dispatcher.getDocument()} />
+                        <FoldersDrawer
+                            onPlaceImage={placeAsset}
+                            getDocument={() => dispatcher.getDocument()}
+                            /* An import acts on the selected node only when it IS an image with a
+                               source — there is nothing to slice into a shape that has no pixels. */
+                            selectedImage={node && node.type === "core.image" && node.src
+                                ? { id: node.id, src: node.src } : null}
+                            onImportTrack={importTrack}
+                            onSetRegion={rect => { editContent({ sourceRect: rect }); refresh(); }}
+                        />
                     </div>
                 )}
                 <div style={{ width: 220, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
@@ -2381,11 +2417,24 @@ const LAYER_ICONS: Record<string, string> = {
  * Both are inert without Electron (the browser build has no `electronAPI`), so the drawer says
  * so rather than showing controls that do nothing.
  */
-function FoldersDrawer({ onPlaceImage, getDocument }: {
+function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion }: {
     onPlaceImage: (dataUrl: string, name: string) => void;
     getDocument: () => ReadonlyDocument;
+    /** The selected node when it is an image with a source — what an import acts ON. */
+    selectedImage: { id: string; src: string } | null;
+    onImportTrack: (track: Keyframe[]) => void;
+    onSetRegion: (rect: SourceRect) => void;
 }) {
-    const [tab, setTab] = useState<"source" | "assets" | "export">("source");
+    const [tab, setTab] = useState<"source" | "assets" | "export" | "import">("source");
+    /** Grid inputs. Strings, because a half-typed number is a state a number input has to hold. */
+    const [cellW, setCellW] = useState("32");
+    const [cellH, setCellH] = useState("32");
+    const [margin, setMargin] = useState("0");
+    const [spacing, setSpacing] = useState("0");
+    const [step, setStep] = useState("2");
+    const [atlasText, setAtlasText] = useState("");
+    const [atlasEntries, setAtlasEntries] = useState<AtlasEntry[] | null>(null);
+    const [importNote, setImportNote] = useState<string | null>(null);
     const [exported, setExported] = useState<string | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
     /** The sheet the preview canvas is showing, or null for none. */
@@ -2443,7 +2492,7 @@ function FoldersDrawer({ onPlaceImage, getDocument }: {
     return (
         <div style={{ fontSize: 11 }}>
             <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
-                {(["source", "assets", "export"] as const).map(t => (
+                {(["source", "assets", "import", "export"] as const).map(t => (
                     <button
                         key={t}
                         onClick={() => setTab(t)}
@@ -2452,11 +2501,121 @@ function FoldersDrawer({ onPlaceImage, getDocument }: {
                             background: tab === t ? UI.accentSoft : "transparent",
                             color: tab === t ? UI.text : "#999", border: `1px solid ${UI.line}`
                         }}
-                    >{t === "source" ? "Code" : t === "assets" ? "Assets" : "Export"}</button>
+                    >{t === "source" ? "Code" : t === "assets" ? "Assets" : t === "import" ? "Import" : "Export"}</button>
                 ))}
             </div>
 
-            {tab === "export" ? (
+            {tab === "import" ? (
+                <>
+                    {/* IT ACTS ON THE SELECTED IMAGE NODE rather than opening a picker of its own:
+                        the node already carries the `src`, already has a `sourceRect` field to fill
+                        in, and is already on the canvas — so the result is visible where it lands. */}
+                    {!selectedImage ? (
+                        <div style={{ color: "#999", padding: "6px 2px" }}>
+                            Select an image node to import into it.
+                        </div>
+                    ) : (
+                        <>
+                            <label style={INSPECTOR_LABEL}>Slice a grid into an animation</label>
+                            <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+                                {([["cell w", cellW, setCellW], ["cell h", cellH, setCellH],
+                                   ["margin", margin, setMargin], ["gutter", spacing, setSpacing]] as const).map(([label, value, set]) => (
+                                    <input
+                                        key={label}
+                                        type="number"
+                                        data-slice={label}
+                                        placeholder={label}
+                                        value={value}
+                                        onChange={e => set(e.target.value)}
+                                        style={{ width: "25%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
+                                            background: UI.raised, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3 }}
+                                    />
+                                ))}
+                            </div>
+                            <button
+                                data-slice-btn="1"
+                                onClick={() => {
+                                    // THE NATURAL SIZE COMES FROM THE DECODED IMAGE. Slicing against a
+                                    // guessed size is wrong everywhere at once, so an image that has not
+                                    // loaded is refused rather than divided.
+                                    const size = naturalSize(selectedImage.src);
+                                    if (!size) { setImportNote("That image has not decoded yet."); return; }
+                                    const opts = { cellWidth: Number(cellW), cellHeight: Number(cellH),
+                                        margin: Number(margin), spacing: Number(spacing) };
+                                    const grid = sliceGrid(size.width, size.height, opts);
+                                    // `sliceGrid` returns null when the cell size does not divide the
+                                    // sheet — reported as the mismatch it is, rather than rounded away.
+                                    if (!grid) {
+                                        setImportNote(`${size.width}x${size.height} does not divide into ${opts.cellWidth}x${opts.cellHeight} cells.`);
+                                        return;
+                                    }
+                                    const cells = sliceCells(grid, opts);
+                                    onImportTrack(sliceTrack(cells, { step: Number(step) || 1 }));
+                                    setImportNote(`${grid.columns}x${grid.rows} = ${cells.length} cells, ${Number(step) || 1} frames apart.`);
+                                }}
+                                style={DRAWER_BUTTON}
+                            >Slice into an animation</button>
+                            <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 6 }}>
+                                <span style={{ color: "#999" }}>frames per cell</span>
+                                <input
+                                    type="number"
+                                    data-slice="step"
+                                    value={step}
+                                    onChange={e => setStep(e.target.value)}
+                                    style={{ width: 50, fontSize: 11, padding: "2px 4px",
+                                        background: UI.raised, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3 }}
+                                />
+                            </div>
+
+                            {/* AN ATLAS is the only route for a sheet that is packed irregularly —
+                                57% of real ones — because no division recovers a grid that is not there. */}
+                            <label style={INSPECTOR_LABEL}>…or paste a TextureAtlas XML</label>
+                            <textarea
+                                data-atlas-input="1"
+                                value={atlasText}
+                                onChange={e => setAtlasText(e.target.value)}
+                                placeholder="<TextureAtlas imagePath=…"
+                                spellCheck={false}
+                                style={{ width: "100%", boxSizing: "border-box", height: 60, fontSize: 10,
+                                    fontFamily: "monospace", background: UI.raised, color: UI.text,
+                                    border: `1px solid ${UI.line}`, borderRadius: 3, marginBottom: 4 }}
+                            />
+                            <button
+                                data-atlas-btn="1"
+                                onClick={() => {
+                                    // The SHARED validator, so the panel cannot accept a descriptor the
+                                    // reader would refuse — and says which part it refused.
+                                    const bad = atlasError(atlasText);
+                                    if (bad) { setImportNote(bad); setAtlasEntries(null); return; }
+                                    const atlas = parseTextureAtlas(atlasText);
+                                    setAtlasEntries(atlas.entries);
+                                    const turned = atlas.entries.filter(e => e.rotated).length;
+                                    setImportNote(`${atlas.entries.length} sprites in ${atlas.image || "(unnamed image)"}`
+                                        + (turned ? `, ${turned} stored turned` : ""));
+                                }}
+                                style={DRAWER_BUTTON}
+                            >Read the atlas</button>
+                            {atlasEntries && (
+                                <select
+                                    data-atlas-pick="1"
+                                    onChange={e => {
+                                        const entry = atlasEntries[Number(e.target.value)];
+                                        if (entry) { onSetRegion(entry.source); setImportNote(`${entry.name} → ${entry.source.width}x${entry.source.height}`); }
+                                    }}
+                                    style={{ width: "100%", fontSize: 11, marginBottom: 6, background: UI.raised,
+                                        color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3 }}
+                                >
+                                    <option value="">Pick a sprite…</option>
+                                    {atlasEntries.slice(0, 2000).map((e, i) => (
+                                        <option key={e.name + i} value={i}>{e.name || `sprite ${i}`}</option>
+                                    ))}
+                                </select>
+                            )}
+                        </>
+                    )}
+                    {importNote && <div style={{ color: "#6a9", wordBreak: "break-all" }}>{importNote}</div>}
+                </>
+            ) : tab === "export" ? (
                 <>
                     <button
                         onClick={async () => {
