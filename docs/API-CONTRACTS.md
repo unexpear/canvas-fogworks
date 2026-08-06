@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v52 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v53 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -769,6 +769,26 @@ function sliceTrack(cells: readonly SourceRect[], opts?: { start?: number; step?
   numbers every tileset editor uses, and they are different: a sheet can have one without the other.
 - Slicing yields plain rects; `sliceTrack` turns them into keyframes as a SEPARATE step, because
   which rectangles and how fast are different decisions.
+
+### `core/import/Sequence` — a folder of numbered images
+
+```ts
+interface SequenceFrame { file: string; index: number }
+interface Sequence { name: string; frames: SequenceFrame[] }
+const SEQUENCE_MAX: number;
+
+function parseFrameName(file: string): { stem: string; index: number } | null;   // null = carries no number
+function groupSequences(files: readonly string[]): Sequence[];                   // first-seen order; frames sorted by NUMBER
+function sequenceTrack(seq: Sequence, opts?: { start?: number; step?: number; hrefFor?: (f: string) => string }): Keyframe[];
+```
+
+- The number is the LAST digit run before the extension, separator OPTIONAL — the measured pack
+  contains `fighter_wallslide0084.png` beside 83 files that use an underscore.
+- Numbering does NOT restart per animation (`fighter_run` begins at 0017), so an index is
+  meaningful only within its stem; case is kept, since `fighter_Idle` and `fighter_run` coexist.
+- Sorted by NUMBER, never by name: one unpadded file makes a lexicographic sort play 10 before 9.
+- The emitted keyframes are UNHELD, which is only safe because a keyframed `src` STEPS (schema 53).
+  `hold` would freeze the whole node, so a running character could not both cycle and move.
 
 ### `document/Timeline` — animation over frames (schema 39; CHANNELS schema 47)
 

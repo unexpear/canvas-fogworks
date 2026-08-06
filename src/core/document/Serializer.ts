@@ -343,6 +343,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "49") { raw = migrate_49_to_50(raw); version = "50"; }
     if (version === "50") { raw = migrate_50_to_51(raw); version = "51"; }
     if (version === "51") { raw = migrate_51_to_52(raw); version = "52"; }
+    if (version === "52") { raw = migrate_52_to_53(raw); version = "53"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -805,6 +806,19 @@ function migrate_21_to_22(raw: any): any {
  * a schema-52 file would drop the region from every keyframe and play a sprite sheet stuck on
  * whichever cell the node itself named.
  */
+/**
+ * 52 -> 53: a keyframed image SOURCE steps instead of arriving early.
+ *
+ * No field changes shape, and that is exactly why the bump is required: this alters how an existing
+ * one is INTERPRETED. A schema-52 document whose track keyframes an image `src` showed each drawing
+ * from the start of the interval leading to it — one keyframe early — and now shows it from its own
+ * keyframe. The trigger is compatibility, not shape: the same file plays differently, so it needs a
+ * version that says which reading it was authored for.
+ */
+function migrate_52_to_53(raw: any): any {
+    return { ...raw, version: "53" };
+}
+
 function migrate_51_to_52(raw: any): any {
     return { ...raw, version: "52" };
 }

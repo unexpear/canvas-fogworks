@@ -200,6 +200,20 @@ export function blendNode(from: Node, to: Node, t: number, easeFor?: EaseFor): N
         const a = from.style[key], b = to.style[key];
         if (typeof a === "number" && typeof b === "number") out.style[key] = lerp(a, b, k(`style.${key}`));
     }
+    // AN IMAGE SOURCE STEPS, for the same reason and with the same consequence (schema 53). A
+    // frame-by-frame sequence is one PNG per drawing, and taking `to`'s href at the start of an
+    // interval shows every drawing one keyframe early. Holding the keyframes would fix that and
+    // cost more than it saved: `hold` freezes the WHOLE node until the next keyframe, so a
+    // character running across the screen could not both cycle its drawings and move.
+    //
+    // `text` is deliberately NOT changed here. It is equally discrete and has the same flaw, but a
+    // state transition legitimately wants the target's text immediately while the box animates —
+    // and nothing in this codebase animates text frame by frame yet, so changing it would be a
+    // guess dressed as consistency. Stated rather than left as an asymmetry to puzzle over.
+    if (from.src !== undefined || to.src !== undefined) {
+        if (from.src === undefined) delete out.src;
+        else out.src = from.src;
+    }
     // A SOURCE REGION STEPS. Interpolating it would slide a window across the sheet and show a
     // smear of two cells — the numbers would blend perfectly and the picture would be garbage. So
     // it takes the FROM keyframe's value for the whole interval and changes when the next one

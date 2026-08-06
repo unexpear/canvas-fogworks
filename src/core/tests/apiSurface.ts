@@ -90,6 +90,7 @@ import { IkPoint, IkBend, IkSolution, solveTwoBone, solveFabrik, rotationDelta, 
 import { IkConstraint, ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
 import { Cell, SheetPlan, SheetAtlas, planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, drawSheet, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { SliceGrid, SliceOptions, sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
+import { Sequence, SequenceFrame, parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
 import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
 import { JournalEntry, recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
@@ -645,6 +646,15 @@ export function __apiSurfacePin(): void {
     expectType<Keyframe[]>(sliceTrack(sliceCells(sheetGrid), { start: 0, step: 2 }));
     expectType<number[]>(blankCells(sliceCells(sheetGrid), () => true));
     expectType<number>(SLICE_MAX_CELLS);
+
+    // SEQUENCE IMPORT: a folder of numbered names, grouped into the animations it holds. Takes
+    // NAMES rather than reading a disk — every decision is in the names.
+    expectType<{ stem: string; index: number } | null>(parseFrameName("fighter_climb_0039.png"));
+    const sequences: Sequence[] = groupSequences(["run_1.png"]);
+    expectType<Sequence[]>(sequences);
+    expectType<SequenceFrame[]>(sequences[0].frames);
+    expectType<Keyframe[]>(sequenceTrack(sequences[0], { start: 0, step: 2, hrefFor: f => f }));
+    expectType<number>(SEQUENCE_MAX);
     expectType<(ctx: CanvasRenderingContext2D, d: ReadonlyDocument, p: SheetPlan) => void>(drawSheet);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);

@@ -64,6 +64,7 @@ import { MotionPath, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES
 import { solveTwoBone, solveFabrik, rotationDelta, FABRIK_PASSES, FABRIK_TOLERANCE } from "../geometry/Ik";
 import { sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
 import { sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
+import { parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
 import { planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
@@ -4406,9 +4407,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 51→52 landed, making a source
-        // REGION a keyframable value so a sprite sheet can play.)
-        expect(() => migrateIfNeeded(legacy, "53")).toThrow('Migration not implemented for document schema "52"');
+        // time a real migration is added — most recently when 52→53 landed, making a keyframed
+        // image SOURCE step rather than arrive one keyframe early.)
+        expect(() => migrateIfNeeded(legacy, "54")).toThrow('Migration not implemented for document schema "53"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -13864,6 +13865,105 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
         expect(contact.width).toBe(air.width);
         expect(contact.height).toBe(air.height);
+    });
+
+    test("frame names are parsed the way the REAL pack spells them", () => {
+        // The ordinary spelling.
+        expect(parseFrameName("fighter_climb_0039.png")).toEqual({ stem: "fighter_climb", index: 39 });
+        // NO SEPARATOR. This file is real and sits beside 83 that do use one; a `_(\d+)` pattern
+        // drops it silently, and one missing frame in one animation is invisible until it plays.
+        expect(parseFrameName("fighter_wallslide0084.png")).toEqual({ stem: "fighter_wallslide", index: 84 });
+        // CASE IS KEPT, because `fighter_Idle` and `fighter_run` are both real and folding case
+        // would merge animations an artist deliberately named apart.
+        expect(parseFrameName("fighter_Idle_0001.png")).toEqual({ stem: "fighter_Idle", index: 1 });
+        // Other separators, and a stem that ends in one, group with their own kind.
+        expect(parseFrameName("run-12.png")).toEqual({ stem: "run", index: 12 });
+        expect(parseFrameName("run.7.png")).toEqual({ stem: "run", index: 7 });
+
+        // The EXTENSION is stripped first, so a number inside it can never be read as an index.
+        expect(parseFrameName("walk_03.png2")).toEqual({ stem: "walk", index: 3 });
+        // A file with NO number is not a frame of anything.
+        expect(parseFrameName("readme.txt")).toBeNull();
+        expect(parseFrameName("preview.png")).toBeNull();
+    });
+
+    test("a folder of numbered PNGs groups into the animations it holds", () => {
+        // The real pack's shape: twelve stems in one folder, numbering that does NOT restart per
+        // animation — `fighter_run` genuinely begins at 0017 because the artist numbered the whole
+        // character straight through.
+        const files = [
+            "fighter_Idle_0001.png", "fighter_Idle_0002.png", "fighter_Idle_0003.png",
+            "fighter_run_0017.png", "fighter_run_0018.png", "fighter_run_0019.png",
+            "fighter_wallslide0084.png",
+            "License.txt", "preview.png"
+        ];
+        const groups = groupSequences(files);
+        expect(groups.map(g => g.name)).toEqual(["fighter_Idle", "fighter_run", "fighter_wallslide"]);
+        // Numbering per stem is preserved as authored, not renumbered from zero.
+        expect(groups[1].frames.map(f => f.index)).toEqual([17, 18, 19]);
+        // The separator-less file is its own animation, not a lost frame.
+        expect(groups[2].frames).toEqual([{ file: "fighter_wallslide0084.png", index: 84 }]);
+        // Non-frames are skipped rather than becoming one-frame animations.
+        expect(groups.some(g => g.name === "License" || g.name === "preview")).toBe(false);
+
+        // ORDERED BY NUMBER, never by name. Padding is a convention: one unpadded file and a
+        // lexicographic sort plays frame 10 before frame 9, which looks like a stutter and is
+        // invisible in any assertion that only counts frames.
+        const ragged = groupSequences(["f_10.png", "f_9.png", "f_1.png"]);
+        expect(ragged[0].frames.map(f => f.index)).toEqual([1, 9, 10]);
+        expect(ragged[0].frames.map(f => f.file)).toEqual(["f_1.png", "f_9.png", "f_10.png"]);
+        // Groups keep the order their first file appeared, so a listing's own order survives.
+        expect(groupSequences(["z_1.png", "a_1.png"]).map(g => g.name)).toEqual(["z", "a"]);
+        expect(SEQUENCE_MAX).toBeGreaterThan(100);
+    });
+
+    test("a sequence becomes an UNHELD track whose src steps", () => {
+        const seq = groupSequences(["run_1.png", "run_2.png", "run_3.png"])[0];
+        const track = sequenceTrack(seq, { start: 4, step: 2, hrefFor: f => `assets/${f}` });
+        expect(track.map(k => k.frame)).toEqual([4, 6, 8]);
+        expect(track.map(k => k.values.src)).toEqual(["assets/run_1.png", "assets/run_2.png", "assets/run_3.png"]);
+        // NOT HELD, and this is the design decision rather than an omission: `hold` freezes the
+        // WHOLE node until the next keyframe, so a character running across the screen could not
+        // both cycle its drawings and move — the position tween would stop dead at every frame.
+        expect(track.every(k => !k.hold)).toBe(true);
+        expect(sequenceTrack(seq, { step: 0 }).map(k => k.frame)).toEqual([0, 1, 2]);
+
+        // WHICH IS ONLY SAFE BECAUSE `src` STEPS (schema 53). Measured through the real pipeline:
+        // between two keyframes the earlier drawing holds, and the later one does not arrive until
+        // its own frame.
+        const doc = createEmptyDocument();
+        doc.timeline = { frames: 12, fps: 24 };
+        doc.nodes.set("s", { id: "s", type: "core.image", parent: null, children: [], name: "s",
+            geometry: { x: 0, y: 0, width: 64, height: 64 },
+            style: { fill: "#fff", opacity: 1 }, layout: {}, src: "run_1.png",
+            track: [{ frame: 0, values: { src: "a.png", geometry: { x: 0, y: 0 } } },
+                    { frame: 8, values: { src: "b.png", geometry: { x: 80, y: 0 } } }]
+        } as Node);
+        doc.rootNodeUuids = ["s"];
+        const at = (f: number) => applyFrame(doc, f).nodes.get("s")!;
+        for (const f of [0, 1, 4, 7]) expect(at(f).src).toBe("a.png");
+        expect(at(8).src).toBe("b.png");
+        // AND THE POSITION STILL TWEENS THROUGH IT, which is the whole point of not holding.
+        expect(at(4).geometry.x).toBeCloseTo(40, 6);
+    });
+
+    test("a src that has not started yet does not arrive early", () => {
+        // The clearing half, which the sequence tests cannot reach because every one of their
+        // keyframes names a drawing. Here the first does not: the node's own image shows until
+        // frame 5. `blendNode` builds from `{ ...to }`, so without the explicit clear the second
+        // drawing would appear at frame 0 and the first would never be seen.
+        const doc = createEmptyDocument();
+        doc.timeline = { frames: 10, fps: 24 };
+        doc.nodes.set("s", { id: "s", type: "core.image", parent: null, children: [], name: "s",
+            geometry: { x: 0, y: 0, width: 64, height: 64 },
+            style: { fill: "#fff", opacity: 1 }, layout: {},
+            track: [{ frame: 0, values: {} }, { frame: 5, values: { src: "b.png" } }]
+        } as Node);
+        doc.rootNodeUuids = ["s"];
+        const at = (f: number) => applyFrame(doc, f).nodes.get("s")!.src;
+        for (const f of [0, 1, 4]) expect(at(f)).toBeUndefined();
+        expect(at(5)).toBe("b.png");
+        expect(at(9)).toBe("b.png");
     });
 
     test("slicing recovers the grid of the REAL sheets it was measured against", () => {
