@@ -1025,6 +1025,33 @@ that nothing can play it.
 not loaded rather than guessing at its dimensions — the same rule `emitSVG` follows for a region,
 and for the same reason: a grid computed against the wrong size is wrong everywhere at once.
 
+### SVG documents — flattened, because the transform model does not reach
+
+**A `<g transform>` cannot become a node transform.** VDE's `Transform` is rotation, scale and an
+origin; SVG's is an arbitrary affine matrix, and `matrix()` accounts for 23,276 of the 24,861
+transforms in the measured art. Decomposing one into rotate-and-scale works only when it contains
+no skew, and silently produces the wrong shape when it does.
+
+**So the transform is BAKED INTO THE COORDINATES instead**, and that is exact rather than a
+compromise. A Bézier curve is affine-invariant: transforming its control points transforms the
+curve itself, with no error at all. Paths are absolute command lists, so composing the group stack
+down to each `<path>` and multiplying through every coordinate loses nothing — it loses the group
+STRUCTURE, which is a different and much smaller loss than losing the shape.
+
+**`<use>` is expanded, because it is not a corner case here.** 19,194 elements reference a defined
+symbol, and a reader that skipped them would silently drop most of the drawing in the files that use
+them. It is expanded with a depth bound, since a symbol that references its own ancestor is a loop
+rather than a picture.
+
+**Gradients flatten to their first stop, and SAY SO.** VDE has no gradient, and 2,491 fills are
+one — about three percent. Refusing those files would cost the other ninety-seven percent of their
+shapes; silently dropping the fill would produce an invisible shape. Taking the first stop keeps the
+drawing recognisable, and every approximation is reported in a `notes` list rather than left for
+someone to notice.
+
+**It reads the shapes this format defines, not XML in general** — the same promise `TextureAtlas`
+makes, and for the same reason: core is pure and has no DOM, and a regex that claims to parse XML
+is a liability. What it cannot make sense of it names.
 ### SVG path data — the one format that has to be converted, not just read
 
 **Vector art is the largest remaining import gap: 5,279 files holding 95,160 `<path>` elements.**

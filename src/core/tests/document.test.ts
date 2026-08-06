@@ -69,6 +69,7 @@ import { parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../
 import { trimmedPlacement, inkUnion } from "../import/Trim";
 import { parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_ENTRIES } from "../import/TextureAtlas";
 import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/SvgPath";
+import { parseSvgDocument, svgDocumentError, parseSvgTransform, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -14198,6 +14199,169 @@ describe("Mesh — bending a shape (schema 41)", () => {
         `<?xml version="1.0" encoding="UTF-8"?>\n<TextureAtlas imagePath="${image}">\n${subs.join("\n")}\n</TextureAtlas>`;
     const sub = (attrs: Record<string, string | number>) =>
         "\t<SubTexture " + Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join("\t") + "/>";
+
+    test("a group's transform is BAKED into the coordinates, exactly", () => {
+        // This engine's `Transform` is rotation, scale and an origin; SVG's is an arbitrary affine
+        // matrix, and `matrix()` is 23,276 of the 24,861 transforms measured. Decomposing one works
+        // only without skew, so the matrix is multiplied through the points instead — exact,
+        // because a Bézier is affine-invariant.
+        const doc = parseSvgDocument(
+            '<svg width="100" height="100">' +
+            '<g transform="translate(10,20)"><path d="M0 0 L5 0" fill="#ff0000"/></g></svg>');
+        expect(doc.shapes).toHaveLength(1);
+        expect(doc.shapes[0].commands).toEqual([{ c: "M", x: 10, y: 20 }, { c: "L", x: 15, y: 20 }]);
+        expect(doc.shapes[0].fill).toBe("#ff0000");
+        expect(doc.width).toBe(100);
+
+        // NESTED groups compose, outermost first.
+        const nested = parseSvgDocument(
+            '<svg><g transform="translate(10,0)"><g transform="scale(2)">' +
+            '<path d="M1 1"/></g></g></svg>');
+        // scale then translate: the inner scale applies to the point, the outer translate to the
+        // result — 1*2 + 10 = 12, not (1+10)*2 = 22.
+        expect(nested.shapes[0].commands[0]).toEqual({ c: "M", x: 12, y: 2 });
+
+        // ORDER WITHIN one attribute is left to right, which is the other way round to compose.
+        const both = parseSvgTransform("translate(10,0) scale(2)");
+        expect(applyToPoint(both, 1, 1)).toEqual({ x: 12, y: 2 });
+        const reversed = parseSvgTransform("scale(2) translate(10,0)");
+        expect(applyToPoint(reversed, 1, 1)).toEqual({ x: 22, y: 2 });
+
+        // EVERY control point moves, not just the endpoints — otherwise a curve would deform.
+        // Pushed through the SAME `transformCommands` the shape layer uses; writing a second copy
+        // here was the first attempt, and the compiler caught it when both names met.
+        const curved = transformCommands(parseSvgTransform("translate(100,200)"),
+            [{ c: "M", x: 0, y: 0 }, { c: "C", x1: 1, y1: 1, x2: 2, y2: 2, x: 3, y: 3 }, { c: "Q", x1: 4, y1: 4, x: 5, y: 5 }, { c: "Z" }]);
+        expect(curved[1]).toEqual({ c: "C", x1: 101, y1: 201, x2: 102, y2: 202, x: 103, y: 203 });
+        expect(curved[2]).toEqual({ c: "Q", x1: 104, y1: 204, x: 105, y: 205 });
+        expect(curved[3]).toEqual({ c: "Z" });
+    });
+
+    test("rotate takes an optional centre, and skew is representable because it is baked", () => {
+        // A quarter turn about the origin sends (1,0) to (0,1).
+        const spun = applyToPoint(parseSvgTransform("rotate(90)"), 1, 0);
+        expect(spun.x).toBeCloseTo(0, 9);
+        expect(spun.y).toBeCloseTo(1, 9);
+        // ABOUT A POINT is three steps — move the centre to the origin, turn, move it back — and
+        // writing it as one is the usual way to get it subtly wrong. Turning about (5,5) leaves
+        // (5,5) alone, which is the property that proves the centre was honoured.
+        const about = applyToPoint(parseSvgTransform("rotate(90,5,5)"), 5, 5);
+        expect(about.x).toBeCloseTo(5, 9);
+        expect(about.y).toBeCloseTo(5, 9);
+        const moved = applyToPoint(parseSvgTransform("rotate(90,5,5)"), 6, 5);
+        expect(moved.x).toBeCloseTo(5, 9);
+        expect(moved.y).toBeCloseTo(6, 9);
+
+        // SKEW cannot be a node transform at all, and is exact here — which is the argument for
+        // baking rather than decomposing.
+        const skewed = applyToPoint(parseSvgTransform("skewX(45)"), 0, 1);
+        expect(skewed.x).toBeCloseTo(1, 9);
+        expect(skewed.y).toBeCloseTo(1, 9);
+        // A matrix is taken as written — with b and c DIFFERENT, because a matrix whose off-diagonal
+        // members are both zero is its own transpose and cannot tell the two apart. x = a·x + c·y + e
+        // = 1 + 3 + 5 = 9; y = b·x + d·y + f = 2 + 4 + 6 = 12, derived by hand from the rule.
+        expect(applyToPoint(parseSvgTransform("matrix(1 2 3 4 5 6)"), 1, 1)).toEqual({ x: 9, y: 12 });
+        expect(applyToPoint(parseSvgTransform("matrix(2 0 0 3 4 5)"), 1, 1)).toEqual({ x: 6, y: 8 });
+        // Nonsense is ignored rather than throwing — one bad transform should not cost the file.
+        expect(parseSvgTransform("wobble(3)")).toEqual({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+    });
+
+    test("<use> expands its target, and <defs> alone draws nothing", () => {
+        // The structure the measured art actually uses: paths defined once inside <defs> and drawn
+        // through 19,194 <use> elements. A reader that skipped them would produce empty files —
+        // which is exactly what this one did until a scanner bug was found.
+        const xml = '<svg width="10" height="10">' +
+            '<defs><g id="sym"><path d="M0 0 L1 0" fill="#00ff00"/></g></defs>' +
+            '<g transform="translate(100,0)"><use xlink:href="#sym"/></g>' +
+            '<use href="#sym" x="5" y="7"/></svg>';
+        const doc = parseSvgDocument(xml);
+        // TWO shapes from ONE definition, and the definition itself is not drawn a third time.
+        expect(doc.shapes).toHaveLength(2);
+        expect(doc.shapes[0].commands[0]).toEqual({ c: "M", x: 100, y: 0 });
+        // `x`/`y` on a use translate whatever it references.
+        expect(doc.shapes[1].commands[0]).toEqual({ c: "M", x: 5, y: 7 });
+        // The fill comes from the definition, through the expansion.
+        expect(doc.shapes[0].fill).toBe("#00ff00");
+
+        // A <defs> WITH NO USE draws nothing at all.
+        expect(parseSvgDocument('<svg><defs><path d="M0 0 L1 1"/></defs></svg>').shapes).toHaveLength(0);
+        // A dangling reference is NOTED rather than thrown, and costs only itself.
+        const dangling = parseSvgDocument('<svg><use href="#missing"/><path d="M0 0"/></svg>');
+        expect(dangling.shapes).toHaveLength(1);
+        expect(dangling.notes.join(" ")).toMatch(/not defined/);
+        expect(SVG_MAX_USE_DEPTH).toBeGreaterThan(1);
+
+        // A CYCLE — two symbols referencing each other — is a loop rather than a picture, and the
+        // depth bound is the only thing between it and a stack overflow. Nothing in the measured
+        // tree does this, which is exactly why it needs a written test rather than a corpus run.
+        const cyclic = parseSvgDocument(
+            '<svg><defs>' +
+            '<g id="a"><use href="#b"/></g>' +
+            '<g id="b"><path d="M0 0"/><use href="#a"/></g>' +
+            '</defs><use href="#a"/></svg>');
+        expect(cyclic.notes.join(" ")).toMatch(/deeper than/);
+        // It still terminates with a bounded number of shapes rather than hanging.
+        expect(cyclic.shapes.length).toBeLessThanOrEqual(SVG_MAX_USE_DEPTH);
+    });
+
+    test("a self-closing tag ends where it says — the bug that emptied 5,264 files", () => {
+        // The scanner's attribute run matches `[^>"']`, which swallows a trailing slash, so the
+        // obvious `(\/?)>` capture is always empty and NOTHING read as self-closing. `<defs>` then
+        // appeared to close at `</svg>`, every drawing looked like a definition, and 5,264 of
+        // 5,279 real files parsed to zero shapes. This is the shape of file that proves it.
+        const doc = parseSvgDocument(
+            '<svg><defs><path id="a" d="M0 0 L1 1"/></defs><path d="M9 9 L8 8" fill="#123456"/></svg>');
+        expect(doc.shapes).toHaveLength(1);
+        expect(doc.shapes[0].commands[0]).toEqual({ c: "M", x: 9, y: 9 });
+        expect(doc.shapes[0].fill).toBe("#123456");
+
+        // And a self-closing GROUP closes itself, so what follows is a sibling rather than a child.
+        const siblings = parseSvgDocument(
+            '<svg><g transform="translate(50,0)"/><path d="M1 1"/></svg>');
+        expect(siblings.shapes[0].commands[0]).toEqual({ c: "M", x: 1, y: 1 });
+    });
+
+    test("style inherits down the tree, and a gradient flattens with a note", () => {
+        const doc = parseSvgDocument(
+            '<svg><g fill="#aabbcc" opacity="0.5" stroke="#000000" stroke-width="3">' +
+            '<path d="M0 0"/><path d="M1 1" fill="#ffffff" opacity="0.5"/></g></svg>');
+        // INHERITED from the group.
+        expect(doc.shapes[0]).toMatchObject({ fill: "#aabbcc", stroke: "#000000", strokeWidth: 3, opacity: 0.5 });
+        // OVERRIDDEN on the child — and opacity MULTIPLIES rather than replacing, which is what
+        // makes a half-transparent thing inside a half-transparent group a quarter.
+        expect(doc.shapes[1].fill).toBe("#ffffff");
+        expect(doc.shapes[1].opacity).toBeCloseTo(0.25, 9);
+
+        // `none` is a real answer, distinct from "not stated".
+        expect(parseSvgDocument('<svg><path d="M0 0" fill="none"/></svg>').shapes[0].fill).toBeNull();
+
+        // A GRADIENT flattens to its first stop and SAYS SO. This engine has no gradient and 2,491
+        // fills in the measured art are one; refusing them would cost the other 97% of those files.
+        const grad = parseSvgDocument(
+            '<svg><defs><linearGradient id="g"><stop stop-color="#ff0000"/><stop stop-color="#0000ff"/>' +
+            '</linearGradient></defs><path d="M0 0" fill="url(#g)"/></svg>');
+        expect(grad.shapes[0].fill).toBe("#ff0000");
+        expect(grad.notes.join(" ")).toMatch(/flattened/);
+        // An unresolvable one leaves the shape UNFILLED rather than painting a guess.
+        const missing = parseSvgDocument('<svg><path d="M0 0" fill="url(#nope)"/></svg>');
+        expect(missing.shapes[0].fill).toBeNull();
+        expect(missing.notes.join(" ")).toMatch(/could not be resolved/);
+    });
+
+    test("an SVG document names what it cannot read", () => {
+        expect(svgDocumentError('<svg><path d="M0 0"/></svg>')).toBeNull();
+        expect(svgDocumentError(7)).toMatch(/must be a string/);
+        expect(svgDocumentError("<html></html>")).toMatch(/no <svg> element/);
+        expect(() => parseSvgDocument("<html></html>")).toThrow(/no <svg> element/);
+        // ONE bad path is skipped and noted; the others still arrive.
+        const patchy = parseSvgDocument('<svg><path d="L1 1"/><path d="M2 2"/></svg>');
+        expect(patchy.shapes).toHaveLength(1);
+        expect(patchy.notes.join(" ")).toMatch(/skipped/);
+        // A size comes from the attributes, or the viewBox when they are absent.
+        expect(parseSvgDocument('<svg viewBox="0 0 30 40"><path d="M0 0"/></svg>')).toMatchObject({ width: 30, height: 40 });
+        expect(parseSvgDocument('<svg width="7px" height="8px"><path d="M0 0"/></svg>')).toMatchObject({ width: 7, height: 8 });
+        expect(parseSvgDocument('<svg><path d="M0 0"/></svg>')).toMatchObject({ width: null, height: null });
+    });
 
     test("every SVG command letter normalises into this engine's five", () => {
         // The document models M/L/C/Q/Z and absolute only, so H, V, S, T, A and every lowercase

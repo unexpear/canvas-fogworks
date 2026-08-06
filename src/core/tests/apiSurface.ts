@@ -94,6 +94,8 @@ import { Sequence, SequenceFrame, parseFrameName, groupSequences, sequenceTrack,
 import { Trim, TrimBox, trimmedPlacement, inkUnion } from "../import/Trim";
 import { Atlas, AtlasEntry, parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_ENTRIES } from "../import/TextureAtlas";
 import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/SvgPath";
+import { SvgShape, SvgDocumentResult, parseSvgDocument, svgDocumentError, parseSvgTransform,
+    SVG_MAX_SHAPES, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
     aseBytesPerPixel, celRgba, ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
@@ -685,6 +687,16 @@ export function __apiSurfacePin(): void {
     expectType<string | null>(svgPathError("M0 0"));
     expectType<PathCommand[]>(parseSvgPath("M0 0 L1 1 Z"));
     expectType<number>(SVG_PATH_MAX_COMMANDS);
+    // A WHOLE FILE: the group tree walked, transforms BAKED into the coordinates (this engine's
+    // `Transform` has no skew and no general matrix), `<use>` expanded, gradients flattened with a
+    // note. Reuses `ShapeToPath.transformCommands` rather than carrying a second copy.
+    expectType<string | null>(svgDocumentError("<svg/>"));
+    const svgDoc: SvgDocumentResult = parseSvgDocument('<svg><path d="M0 0"/></svg>');
+    expectType<SvgDocumentResult>(svgDoc);
+    expectType<SvgShape[]>(svgDoc.shapes);
+    expectType<string[]>(svgDoc.notes);
+    expectType<Mat2D>(parseSvgTransform("translate(1,2)"));
+    expectType<number>(SVG_MAX_SHAPES); expectType<number>(SVG_MAX_USE_DEPTH);
     expectType<{ x: number; y: number; width: number; height: number } | null>(imageInkBounds("a.png", region, 0));
 
     // ASEPRITE: the file a sheet was exported FROM, which states the grid, the trim and the clips

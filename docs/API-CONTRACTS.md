@@ -794,6 +794,28 @@ function asepriteTimeline(file: AseFile): { frames: number; fps: number };
   number of ticks, where an average rounds the quick ones away.
 - Indexed/greyscale depths, tilemap cels and truncation are NAMED in the error, never half-read.
 
+### `core/import/SvgDocument` — a whole SVG file as flat, transformed shapes
+
+```ts
+interface SvgShape { commands: PathCommand[]; fill: string | null; stroke: string | null;
+                     strokeWidth: number | null; opacity: number }
+interface SvgDocumentResult { width: number | null; height: number | null; shapes: SvgShape[]; notes: string[] }
+const SVG_MAX_SHAPES: number; const SVG_MAX_USE_DEPTH: number;
+
+function svgDocumentError(xml: unknown): string | null;
+function parseSvgDocument(xml: string): SvgDocumentResult;
+function parseSvgTransform(text: string): Mat2D;        // matrix/translate/scale/rotate/skew
+```
+
+- A `<g transform>` CANNOT be a node transform — `Transform` is rotation, scale and an origin, while
+  `matrix()` is 23,276 of the 24,861 transforms measured. It is BAKED into the coordinates instead,
+  which is exact: a Bézier is affine-invariant. The group structure is lost; the shape is not.
+- Coordinates go through `ShapeToPath.transformCommands`, the function the shape layer already uses.
+- `<use>` is EXPANDED (19,194 elements in the measured art) with a depth bound, since a symbol
+  referencing its own ancestor is a loop.
+- Gradients flatten to their first stop and every approximation lands in `notes`.
+- Verified against all 5,279 real files: 109,036 shapes, none empty, none rejected by `pathError`.
+
 ### `core/import/SvgPath` — SVG path data into this engine's commands
 
 ```ts
