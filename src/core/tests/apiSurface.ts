@@ -99,7 +99,7 @@ import { SvgShape, SvgDocumentResult, parseSvgDocument, svgDocumentError, parseS
 import { SvgNodeSpec, svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { FontInfo, FontFlavour, parseFontFile, fontFileError, FONT_MAX_TABLES, FONT_MAX_NAMES } from "../import/FontFile";
 import { TiledMapResult, TiledTileset, TiledTileImage, TiledLayer, TiledCell, parseTiledMap, parseTiledTileset,
-    tiledMapError, decodeGid, tilesetFor, tileSourceRect, tilePosition, tileTransform, tileImageFor,
+    tiledMapError, decodeGid, tilesetFor, tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow,
     TILED_MAX_CELLS, TILED_MAX_LAYERS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
 import { registerFont, registeredFonts, clearFonts } from "../../renderer/FontCache";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
@@ -759,6 +759,10 @@ export function __apiSurfacePin(): void {
     const tileImage: TiledTileImage | undefined = tset.tiles[0];
     expectType<TiledTileImage | undefined>(tileImage);
     expectType<TiledTileImage | null>(tileImageFor(tset, 1));
+    // A WARNING, not a refusal: a set may over-declare and leave the tail unused. What it must not
+    // do is go unmentioned — one real set claimed 348 tiles in a picture holding 1 and every field
+    // it returned looked plausible.
+    expectType<string | null>(tilesetOverflow(tset));
     // The draw offset lets a tall tile hang ABOVE its own cell; zero when the file omits it.
     expectType<number>(tset.offsetX); expectType<number>(tset.offsetY);
     expectType<number>(TILED_MAX_CELLS); expectType<number>(TILED_MAX_LAYERS);

@@ -304,6 +304,13 @@ export function parseTiledMap(xml: string, opts?: { inflate?: (d: Uint8Array) =>
         });
     }
 
+    // Reported for the sets this map could measure. An EXTERNAL one has no image until a caller
+    // resolves it, so that caller checks it then — `tilesetOverflow` is exported for exactly that.
+    for (const set of tilesets) {
+        const over = tilesetOverflow(set);
+        if (over) notes.push(over);
+    }
+
     return {
         width: num(mapAttrs.width, 0),
         height: num(mapAttrs.height, 0),
@@ -398,6 +405,33 @@ export function tileTransform(cell: TiledCell): { rotation: number; scaleX: numb
         // mirroring x is a clockwise quarter, while transposing alone is an anticlockwise one.
         : (cell.flipH ? 1 : 3);
     return { rotation: (quarter * Math.PI) / 2, scaleX, scaleY: 1 };
+}
+
+/**
+ * Whether a set claims more tiles than its own sheet can hold — a warning, not a refusal.
+ *
+ * THIS EXISTS BECAUSE "IT PARSED" IS NOT A CHECK. Before collection sets were understood, one real
+ * `.tsx` had its first tile's image taken as the whole sheet: the set then declared 348 tiles in a
+ * 256x352 picture and placed its last one at y=122,144. Every function returned a plausible value,
+ * every field was populated, and the file sailed through a sweep whose only question was whether
+ * parsing threw. Asking something that CAN fail is the difference.
+ *
+ * It is a note rather than an error because a set may legitimately over-declare and simply leave
+ * the tail unused; what it must not do is go unmentioned.
+ */
+export function tilesetOverflow(set: TiledTileset): string | null {
+    // A collection has no grid to overflow, and an unresolved external set has no image to measure
+    // against — neither is a mismatch, so neither is reported.
+    if (set.tiles.length > 0) return null;
+    if (!set.image || set.imageWidth === null || set.imageHeight === null) return null;
+    if (set.tileCount <= 0) return null;
+    const last = tileSourceRect(set, set.firstGid + set.tileCount - 1);
+    if (!last) return `tileset "${set.name}" declares ${set.tileCount} tiles its grid cannot index`;
+    if (last.x + last.width > set.imageWidth || last.y + last.height > set.imageHeight) {
+        return `tileset "${set.name}" declares ${set.tileCount} tiles but its `
+            + `${set.imageWidth}x${set.imageHeight} image ends before tile ${set.tileCount - 1}`;
+    }
+    return null;
 }
 
 /**

@@ -78,7 +78,7 @@ import { parseSvgDocument, svgDocumentError } from "../core/import/SvgDocument";
 import { svgNodeSpecs, SvgNodeSpec } from "../core/import/SvgNodes";
 import { parseFontFile, fontFileError, FontInfo } from "../core/import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, tilesetFor, tileSourceRect,
-    tilePosition, tileTransform, tileImageFor, TiledTileset } from "../core/import/TiledMap";
+    tilePosition, tileTransform, tileImageFor, tilesetOverflow, TiledTileset } from "../core/import/TiledMap";
 import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
@@ -2873,6 +2873,13 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                             } catch (err) { problems.push(`${stub.source}: ${String(err)}`); }
                                         }
                                         sets.push(set);
+                                        // Reported once RESOLVED, which is the only point an
+                                        // external set has an image to be measured against. The
+                                        // map already noted the embedded ones for itself.
+                                        if (stub.source) {
+                                            const over = tilesetOverflow(set);
+                                            if (over) problems.push(over);
+                                        }
                                         // A sheet-backed set has ONE image; a collection has one
                                         // per tile. Both are cached by path, so a tile referenced
                                         // a thousand times is still decoded once.

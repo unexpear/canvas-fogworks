@@ -1060,8 +1060,13 @@ reference `../Spritesheet/sheet.png` one level up from themselves and still well
 **Coverage is measured, not assumed.** Running every reader over the whole measured tree —
 88,815 files — reads 62,444 of them (70.3%) with nothing refused and nothing failing. The rest has
 no reader at all rather than a broken one: 24,051 3D files, 1,342 audio, and the remainder project
-files, archives and readmes. That sweep is what found the three Tiled forms above; a pass rate
-counted per FORMAT would have said 100% while 8.8% of the cells in the tree were being dropped.
+files, archives and readmes. That sweep is what pointed at the three Tiled forms above — but only
+partly, and the shortfall is the lesson. It failed on two files, and it failed on them for their
+QUOTING rather than for being collections; the third collection set used ordinary double quotes,
+took its first tile's image as the whole sheet, and PASSED, because the sweep's only question was
+whether parsing threw. "Did it parse" is the same complacency as per-format testing, one level up.
+The sweep now asks something that can fail — `tilesetOverflow` — and the old reader is the proof
+it discriminates: run against it, that check puts the last tile of a 352-pixel image at y=122,144.
 
 **`inflateSync` is the one synchronous channel in the app.** Both `parseTiledMap` and
 `parseAseprite` call their injected `inflate` DURING the parse, which is what keeps them pure; an

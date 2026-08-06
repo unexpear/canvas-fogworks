@@ -874,6 +874,7 @@ function tilePosition(map: { orientation: string; tileWidth: number; tileHeight:
                       col: number, row: number): { x: number; y: number };
 function tileTransform(cell: TiledCell): { rotation: number; scaleX: number; scaleY: number };
 function tileImageFor(set: TiledTileset, gid: number): TiledTileImage | null;
+function tilesetOverflow(set: TiledTileset): string | null;
 ```
 
 **`tileTransform` is DERIVED, not tabulated.** The three bits are three reflections — transpose,
@@ -924,6 +925,16 @@ order rather than as a lost attribute.
 **Either quote.** Two files write `<tile id='0'><image source='../Tiles/x.png'/>`, and a reader
 that knew only double quotes saw a tag with NO attributes rather than an error. The quote is
 back-referenced, so an apostrophe inside a double-quoted value does not end it early.
+
+**`tilesetOverflow` exists because "it parsed" is not a check.** Before collection sets were
+understood, one real `.tsx` had its first TILE's image taken as the whole sheet: the set then
+declared 348 tiles in a 256x352 picture and placed its last one at y=122,144. Every function
+returned a plausible value and every field was populated, so a sweep whose only question was
+whether parsing threw passed it. This asks something that CAN fail — does the last tile a set
+claims still land inside its own image. A note rather than an error, since a set may legitimately
+over-declare and leave the tail unused; what it must not do is go unmentioned. `parseTiledMap`
+reports it for embedded sets; an external one has no image until a caller resolves it, so the
+caller checks it then.
 
 **Not read:** infinite maps (chunked storage), object and image layers.
 

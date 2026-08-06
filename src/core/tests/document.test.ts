@@ -73,7 +73,7 @@ import { parseSvgDocument, svgDocumentError, parseSvgTransform, SVG_MAX_USE_DEPT
 import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
-    tileSourceRect, tilePosition, tileTransform, tileImageFor,
+    tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow,
     TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
@@ -14778,6 +14778,114 @@ describe("Mesh — bending a shape (schema 41)", () => {
             '<tileset firstgid="1" name="Kenney\'s set" tilewidth="16" tileheight="16" columns="4" '
             + 'tilecount="16"><image source="t.png" width="64" height="64"/></tileset>' }));
         expect(apostrophe.tilesets[0].name).toBe("Kenney's set");
+    });
+
+    test("a tileset that claims more tiles than its sheet holds says so", () => {
+        // THE EXACT SHAPE OF A REAL SILENT FAILURE. Before collection sets were understood, one
+        // `.tsx` in the tree had its first TILE's image taken as the whole sheet: the set then
+        // declared 348 tiles in a 256x352 picture and placed its last one at y=122,144. Every
+        // function returned a plausible value and every field was populated, so a check that only
+        // asked whether parsing threw saw nothing at all.
+        const overflowing = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="Example" tilewidth="256" tileheight="352" tilecount="348" '
+            + 'columns="1"><image source="../Tiles/bridge_N.png" width="256" height="352"/></tileset>' }));
+        expect(tilesetOverflow(overflowing.tilesets[0])).toMatch(/348 tiles but its 256x352 image/);
+        // A map REPORTS it for the sets it can measure, rather than waiting to be asked.
+        expect(overflowing.notes.join(" ")).toMatch(/image ends before tile 347/);
+
+        // A set that fits says nothing — 4 columns of 4 rows in a 64x64 sheet is exactly 16.
+        const fits = parseTiledMap(tmxMap());
+        expect(tilesetOverflow(fits.tilesets[0])).toBeNull();
+        expect(fits.notes).toEqual([]);
+        // EXACTLY full is not an overflow. The boundary is where an off-by-one lives, so it is
+        // asserted from both sides rather than only from the failing one.
+        const oneMore = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="4" tilecount="17">'
+            + '<image source="t.png" width="64" height="64"/></tileset>' }));
+        expect(tilesetOverflow(oneMore.tilesets[0])).not.toBeNull();
+
+        // WIDTH is checked as well as height. Every natural overflow runs off the BOTTOM, because
+        // rows are what a tile count adds, so a check that only looked down would pass everything
+        // here -- 8 columns of 16px need 128 pixels in a 64-pixel-wide sheet, and every row fits.
+        const tooWide = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="8" tilecount="8">'
+            + '<image source="t.png" width="64" height="64"/></tileset>' }));
+        expect(tileSourceRect(tooWide.tilesets[0], 8)).toMatchObject({ x: 112, y: 0 });
+        expect(tilesetOverflow(tooWide.tilesets[0])).not.toBeNull();
+
+        // SPACING counts: 4 columns of 16 with a 1px gutter need 67 pixels, not 64, so a sheet that
+        // fits without gutters overflows with them.
+        const gutter = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="4" tilecount="16" '
+            + 'spacing="1"><image source="t.png" width="64" height="64"/></tileset>' }));
+        expect(tilesetOverflow(gutter.tilesets[0])).not.toBeNull();
+
+        // A COLLECTION has no grid to overflow, so it is never reported — otherwise the very files
+        // that motivated this check would be flagged by it.
+        const collection = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="c" tilewidth="232" tileheight="110" tilecount="348" columns="0">'
+            + '<tile id="0"><image width="256" height="352" source="a.png"/></tile></tileset>' }));
+        expect(tilesetOverflow(collection.tilesets[0])).toBeNull();
+        expect(collection.notes).toEqual([]);
+
+        // A set carrying BOTH a sheet and per-tile images is answered by its TILES, so measuring
+        // its grid would report a mismatch about a grid nothing reads.
+        const both = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="b" tilewidth="16" tileheight="16" columns="4" tilecount="999">'
+            + '<image source="sheet.png" width="64" height="64"/>'
+            + '<tile id="0"><image width="8" height="8" source="own.png"/></tile></tileset>' }));
+        expect(both.tilesets[0].tiles).toHaveLength(1);
+        expect(tileImageFor(both.tilesets[0], 1)).toMatchObject({ image: "own.png" });
+        expect(tilesetOverflow(both.tilesets[0])).toBeNull();
+
+        // A TILE BIGGER THAN ITS SHEET leaves the grid unindexable rather than overflowing it --
+        // no column fits, so there is no last rect to compare and the count is reported as one the
+        // grid cannot reach at all.
+        const oversize = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="big" tilewidth="100" tileheight="100" tilecount="10" '
+            + 'columns="0"><image source="t.png" width="64" height="64"/></tileset>' }));
+        expect(oversize.tilesets[0].columns).toBe(0);
+        expect(tilesetOverflow(oversize.tilesets[0])).toMatch(/cannot index/);
+
+        // A set with a COUNT BUT NO IMAGE is not measurable, and saying nothing is the only honest
+        // answer -- it is the state every external reference is in before a caller resolves it.
+        const countNoImage = parseTiledTileset(
+            '<tileset name="s" tilewidth="16" tileheight="16" columns="2" tilecount="99"/>',
+            parseTiledMap(tmxMap({ tileset: '<tileset firstgid="1" source="s.tsx"/>' })).tilesets[0]);
+        expect(countNoImage.tileCount).toBe(99);
+        expect(countNoImage.image).toBeNull();
+        expect(tilesetOverflow(countNoImage)).toBeNull();
+
+        // A DIMENSIONED IMAGE WITH NO SOURCE is not a sheet. `<image width="64" height="64"/>`
+        // gives a measurable size and nothing to draw, and measuring against it would report a
+        // mismatch about a picture that does not exist.
+        const sizedNoSource = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="w" tilewidth="16" tileheight="16" columns="2" tilecount="99">'
+            + '<image width="64" height="64"/></tileset>' }));
+        expect(sizedNoSource.tilesets[0].image).toBeNull();
+        expect(sizedNoSource.tilesets[0].imageWidth).toBe(64);
+        expect(tilesetOverflow(sizedNoSource.tilesets[0])).toBeNull();
+
+        // A set with an IMAGE BUT NO COUNT is likewise not a mismatch: there is no claim to check.
+        // A degenerate tile size is what stops the derivation filling the count in.
+        const noCount = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="n" tilewidth="0" tileheight="0">'
+            + '<image source="t.png" width="64" height="64"/></tileset>' }));
+        expect(noCount.tilesets[0].tileCount).toBe(0);
+        expect(noCount.tilesets[0].image).toBe("t.png");
+        expect(tilesetOverflow(noCount.tilesets[0])).toBeNull();
+        expect(noCount.notes).toEqual([]);
+
+        // An UNRESOLVED external set has no image to measure against, so it is not a mismatch —
+        // reporting one would fire on all 18 external references in the tree before they resolve.
+        const stub = parseTiledMap(tmxMap({ tileset: '<tileset firstgid="1" source="s.tsx"/>' }));
+        expect(tilesetOverflow(stub.tilesets[0])).toBeNull();
+        expect(stub.notes).toEqual([]);
+        // Once RESOLVED it is measurable, which is where a caller checks it.
+        expect(tilesetOverflow(parseTiledTileset(
+            '<tileset name="s" tilewidth="16" tileheight="16" columns="1" tilecount="99">'
+            + '<image source="s.png" width="16" height="16"/></tileset>', stub.tilesets[0])))
+            .toMatch(/99 tiles/);
     });
 
     test("a Tiled map names what it cannot read", () => {
