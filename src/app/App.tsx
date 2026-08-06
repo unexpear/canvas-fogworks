@@ -12,7 +12,7 @@ import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY 
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor } from "../core/actions/nodeEdit";
-import { ContentPatch } from "../core/actions/UpdateNodeContentAction";
+import { ContentPatch, UpdateNodeContentAction } from "../core/actions/UpdateNodeContentAction";
 import { resolveScene, isVirtualId } from "../core/document/Components";
 import { SetActiveThemeAction, SetVariableAction, DeleteVariableAction } from "../core/actions/VariableActions";
 import { Variable, VariableStore, variableKeyError, tokenRefFor, tokenKeyOf } from "../core/document/Variables";
@@ -77,6 +77,8 @@ import { parseTextureAtlas, atlasError, AtlasEntry } from "../core/import/Textur
 import { parseSvgDocument, svgDocumentError } from "../core/import/SvgDocument";
 import { svgNodeSpecs, SvgNodeSpec } from "../core/import/SvgNodes";
 import { parseFontFile, fontFileError, FontInfo } from "../core/import/FontFile";
+import { parseTiledMap, parseTiledTileset, tiledMapError, tilesetFor, tileSourceRect,
+    tilePosition, tileTransform, TiledTileset } from "../core/import/TiledMap";
 import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
@@ -117,6 +119,15 @@ const UI = {
  * is worse than a sentence saying it was too large.
  */
 const SVG_PLACE_MAX = 2000;
+/**
+ * How many tiles one map may place.
+ *
+ * The largest map measured is 10,618 non-empty cells across five layers, and the whole tree is
+ * 22,808. This clears the largest by a wide margin and still refuses a map that would lock the
+ * editor up — and it REPORTS rather than truncating, because half a map placed silently looks like
+ * a broken importer rather than a refused one.
+ */
+const TILE_PLACE_MAX = 20000;
 
 const DRAWER_BUTTON: React.CSSProperties = {
     width: "100%", boxSizing: "border-box", fontSize: 11, padding: "4px 6px", cursor: "pointer",
@@ -254,6 +265,12 @@ declare global {
             writePngIntoFolder: (folder: string, filename: string, dataUrl: string) => Promise<string>;
             readFontFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
             readFontBytes: (filePath: string) => Promise<string>;
+            readTiledFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
+            readTiledMap: (folder: string, mapPath: string) => Promise<string>;
+            readTiledTileset: (folder: string, mapPath: string, relative: string) => Promise<string>;
+            readTiledImage: (folder: string, mapPath: string, relative: string) => Promise<string>;
+            /** The one SYNCHRONOUS channel — see the preload. Returns base64, or an error to show. */
+            inflateSync: (base64: string) => { ok: boolean; data?: string; error?: string };
         };
     }
 }
@@ -1020,6 +1037,41 @@ export function App() {
         refresh();
     }, [dispatcher, es, refresh]);
 
+    /**
+     * Tiles as image nodes, one per non-empty cell.
+     *
+     * Every tile is the SAME sheet with a different `sourceRect` — the region field schema 51
+     * added — so a whole map costs one decoded image no matter how many cells reference it. The
+     * flips arrive as a rotation and a scale, applied only to the cells that carry one.
+     */
+    const importTiles = useCallback((tiles: {
+        x: number; y: number; width: number; height: number; src: string;
+        sourceRect: SourceRect; name: string;
+        transform: { rotation: number; scaleX: number; scaleY: number } | null;
+    }[]) => {
+        if (tiles.length === 0) return;
+        const doc = dispatcher.getDocument();
+        const actions: Action[] = [];
+        const ids: string[] = [];
+        for (const t of tiles) {
+            // Minted HERE so both halves can name it, the same reason the pen tool and the SVG
+            // importer do — the node does not exist yet to be looked up.
+            const id = generateUUID();
+            ids.push(id);
+            actions.push(new AddNodeAction(doc, "core.image", t.x, t.y, t.width, t.height, "none", id,
+                null, { src: t.src }));
+            // The REGION and the pixel-art hint are content PATCHES rather than creation fields, so
+            // they go through the same door the region inputs use. `pixelated` is what stops a 16px
+            // tile being smoothed into its neighbours when the map is zoomed.
+            actions.push(new UpdateNodeContentAction(doc, id,
+                { sourceRect: t.sourceRect, pixelated: true, name: t.name }));
+            if (t.transform) actions.push(new UpdateNodeTransformAction(doc, id, t.transform));
+        }
+        dispatcher.dispatchAction(new TransactionAction(doc, "import-tiles", actions));
+        es.selectedNodeIds = ids.slice(0, 1);
+        refresh();
+    }, [dispatcher, es, refresh]);
+
     /** Transform edits — routed, so a copy gets a transform override (schema 26). */
     const editTransform = (patch: { rotation?: number; scaleX?: number; scaleY?: number }) => {
         if (!selectedNodeId) return;
@@ -1644,6 +1696,7 @@ export function App() {
                             onImportTrack={importTrack}
                             onImportSvg={importSvg}
                             editContentFont={family => { editSelected({ style: { fontFamily: family } }); refresh(); }}
+                            onImportTiles={importTiles}
                             onSetRegion={rect => { editContent({ sourceRect: rect }); refresh(); }}
                         />
                     </div>
@@ -2461,7 +2514,7 @@ const LAYER_ICONS: Record<string, string> = {
  * Both are inert without Electron (the browser build has no `electronAPI`), so the drawer says
  * so rather than showing controls that do nothing.
  */
-function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion, onImportSvg, editContentFont }: {
+function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion, onImportSvg, editContentFont, onImportTiles }: {
     onPlaceImage: (dataUrl: string, name: string) => void;
     getDocument: () => ReadonlyDocument;
     /** The selected node when it is an image with a source — what a SHEET import acts ON. */
@@ -2471,6 +2524,11 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     onImportSvg: (specs: SvgNodeSpec[]) => void;
     /** Apply a registered family to the selected node — the point of loading one. */
     editContentFont: (family: string) => void;
+    onImportTiles: (tiles: {
+        x: number; y: number; width: number; height: number; src: string;
+        sourceRect: SourceRect; name: string;
+        transform: { rotation: number; scaleX: number; scaleY: number } | null;
+    }[]) => void;
 }) {
     const [tab, setTab] = useState<"source" | "assets" | "export" | "import">("source");
     /** Grid inputs. Strings, because a half-typed number is a state a number input has to hold. */
@@ -2483,6 +2541,8 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     const [atlasEntries, setAtlasEntries] = useState<AtlasEntry[] | null>(null);
     const [svgText, setSvgText] = useState("");
     const [fonts, setFonts] = useState<FontInfo[]>(registeredFonts());
+    const [tiledFolder, setTiledFolder] = useState<string | null>(null);
+    const [tiledMaps, setTiledMaps] = useState<{ path: string; name: string; relative: string }[]>([]);
     const [importNote, setImportNote] = useState<string | null>(null);
     const [exported, setExported] = useState<string | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
@@ -2750,6 +2810,126 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                             ))}
                         </select>
                     )}
+                    {/* TILED MAPS. A tile is a `sourceRect` and a tileset is a grid this already
+                        slices, so the import is mostly resolving what the file NAMES: an external
+                        `.tsx`, a sheet, and a compressed layer. Each of those crosses the bridge
+                        through its own narrow door, and every path is confined to the folder the
+                        user picked — a `.tmx` is a plain text file anyone can write, and
+                        `<image source="../../../.ssh/id_rsa"/>` is a well-formed one. */}
+                    <label style={INSPECTOR_LABEL}>Import a Tiled map</label>
+                    <button
+                        data-tiled-btn="1"
+                        disabled={busy}
+                        onClick={async () => {
+                            const folder = await api.pickFolder();
+                            if (!folder) return;
+                            setBusy(true);
+                            try {
+                                const maps = await api.readTiledFolder(folder);
+                                setTiledFolder(folder);
+                                setTiledMaps(maps);
+                                setImportNote(maps.length === 0
+                                    ? "No .tmx files in that folder."
+                                    : `${maps.length} map${maps.length === 1 ? "" : "s"} found`);
+                            } finally { setBusy(false); }
+                        }}
+                        style={DRAWER_BUTTON}
+                    >{busy ? "Reading…" : "Find maps…"}</button>
+                    {tiledMaps.length > 0 && tiledFolder && (
+                        <select
+                            data-tiled-list="1"
+                            defaultValue=""
+                            onChange={async e => {
+                                const mapPath = e.target.value;
+                                if (!mapPath) return;
+                                setBusy(true);
+                                try {
+                                    const xml = await api.readTiledMap(tiledFolder, mapPath);
+                                    // The SHARED validator, so the panel refuses exactly what the
+                                    // reader would and says the same thing about why.
+                                    const bad = tiledMapError(xml);
+                                    if (bad) { setImportNote(`Cannot read that map: ${bad}.`); return; }
+                                    const map = parseTiledMap(xml, {
+                                        inflate: (d: Uint8Array) => {
+                                            let bin = "";
+                                            for (const b of d) bin += String.fromCharCode(b);
+                                            const r = api.inflateSync(btoa(bin));
+                                            if (!r.ok || !r.data) throw new Error(r.error ?? "inflate failed");
+                                            return Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
+                                        }
+                                    });
+
+                                    // EXTERNAL tilesets are resolved here rather than in the parser,
+                                    // which has no filesystem and is the reason it stays testable.
+                                    const sets: TiledTileset[] = [];
+                                    const sheets = new Map<string, string>();
+                                    const problems = [...map.notes];
+                                    for (const stub of map.tilesets) {
+                                        let set = stub;
+                                        if (stub.source) {
+                                            try {
+                                                set = parseTiledTileset(
+                                                    await api.readTiledTileset(tiledFolder, mapPath, stub.source), stub);
+                                            } catch (err) { problems.push(`${stub.source}: ${String(err)}`); }
+                                        }
+                                        sets.push(set);
+                                        if (set.image && !sheets.has(set.image)) {
+                                            try {
+                                                sheets.set(set.image,
+                                                    await api.readTiledImage(tiledFolder, mapPath, set.image));
+                                            } catch (err) { problems.push(`${set.image}: ${String(err)}`); }
+                                        }
+                                    }
+
+                                    const tiles = [];
+                                    let unresolved = 0;
+                                    for (const layer of map.layers) {
+                                        for (let i = 0; i < layer.cells.length; i++) {
+                                            const cell = layer.cells[i];
+                                            if (cell.gid === 0) continue;   // EMPTY is most of a map
+                                            const set = tilesetFor(sets, cell.gid);
+                                            const rect = set ? tileSourceRect(set, cell.gid) : null;
+                                            const src = set && set.image ? sheets.get(set.image) : undefined;
+                                            if (!set || !rect || !src) { unresolved++; continue; }
+                                            const at = tilePosition(map, i % layer.width, Math.floor(i / layer.width));
+                                            const t = tileTransform(cell);
+                                            tiles.push({
+                                                x: at.x, y: at.y,
+                                                // The TILE's size, not the map's: a tileset may hold
+                                                // tiles taller than the grid, which is how a tree
+                                                // stands above the cell it is rooted in.
+                                                width: set.tileWidth, height: set.tileHeight,
+                                                src, sourceRect: rect,
+                                                name: `${layer.name} ${cell.gid}`,
+                                                // Only the 820-in-124,692 that need one, so an
+                                                // unflipped tile carries no transform at all.
+                                                transform: t.rotation === 0 && t.scaleX === 1 ? null : t
+                                            });
+                                        }
+                                    }
+
+                                    if (tiles.length > TILE_PLACE_MAX) {
+                                        setImportNote(`${tiles.length} tiles is more than the `
+                                            + `${TILE_PLACE_MAX} this will place at once.`);
+                                        return;
+                                    }
+                                    onImportTiles(tiles);
+                                    setImportNote(`${tiles.length} tiles from ${map.layers.length} layer`
+                                        + `${map.layers.length === 1 ? "" : "s"} · ${map.orientation}`
+                                        + (unresolved > 0 ? ` · ${unresolved} unresolved` : "")
+                                        + (problems.length > 0 ? ` · ${problems[0]}` : ""));
+                                } catch (err) {
+                                    setImportNote(`Cannot read that map: ${String(err)}`);
+                                } finally { setBusy(false); }
+                            }}
+                            style={{ width: "100%", fontSize: 11, marginBottom: 6, background: UI.raised,
+                                color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3 }}
+                        >
+                            <option value="">Place a map…</option>
+                            {tiledMaps.map(m => <option key={m.path} value={m.path}>{m.relative}</option>)}
+                        </select>
+                    )}
+
                     {importNote && <div style={{ color: "#6a9", wordBreak: "break-all" }}>{importNote}</div>}
                 </>
             ) : tab === "export" ? (

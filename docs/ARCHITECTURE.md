@@ -1048,6 +1048,18 @@ parser that reached for a file would need a filesystem and stop being pure.
 **Orientation changes placement, not parsing.** Four maps are isometric, where a cell's screen
 position is a diamond rather than a grid, so the placement formula is part of the reader and the
 orientation is reported rather than assumed.
+
+**Placing a map costs one decoded image.** Every tile is the same sheet at a different `sourceRect`,
+so a 10,618-tile map holds one `data:` URL and ten thousand rects — which is the whole reason the
+region field went in before this did.
+
+**A `.tmx` names paths, and a `.tmx` is plain text anyone can write.** The bridge that resolves them
+confines every one to the folder the USER picked rather than to the map's own directory: real maps
+reference `../Spritesheet/sheet.png` one level up from themselves and still well inside the pack.
+
+**`inflateSync` is the one synchronous channel in the app.** Both `parseTiledMap` and
+`parseAseprite` call their injected `inflate` DURING the parse, which is what keeps them pure; an
+async bridge cannot satisfy that. Both shipped with the injection point and nothing to inject.
 ### Fonts — a family name is not a font
 
 **`style.fontFamily` has always been a STRING and nothing else.** A document could ask for "Kenney

@@ -99,7 +99,7 @@ import { SvgShape, SvgDocumentResult, parseSvgDocument, svgDocumentError, parseS
 import { SvgNodeSpec, svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { FontInfo, FontFlavour, parseFontFile, fontFileError, FONT_MAX_TABLES, FONT_MAX_NAMES } from "../import/FontFile";
 import { TiledMapResult, TiledTileset, TiledLayer, TiledCell, parseTiledMap, parseTiledTileset,
-    tiledMapError, decodeGid, tilesetFor, tileSourceRect, tilePosition,
+    tiledMapError, decodeGid, tilesetFor, tileSourceRect, tilePosition, tileTransform,
     TILED_MAX_CELLS, TILED_MAX_LAYERS } from "../import/TiledMap";
 import { registerFont, registeredFonts, clearFonts } from "../../renderer/FontCache";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
@@ -750,6 +750,9 @@ export function __apiSurfacePin(): void {
     expectType<boolean>(tcell.flipH); expectType<boolean>(tcell.flipV); expectType<boolean>(tcell.flipD);
     expectType<SourceRect | null>(tileSourceRect(tset, 1));
     expectType<{ x: number; y: number }>(tilePosition(tmap, 0, 0));
+    // The flips as something the DOCUMENT can hold — a quarter turn and one axis flip, which is
+    // exactly the eight symmetries of a square and no more than one way to say each.
+    expectType<{ rotation: number; scaleX: number; scaleY: number }>(tileTransform(tcell));
     expectType<number>(TILED_MAX_CELLS); expectType<number>(TILED_MAX_LAYERS);
     expectType<{ x: number; y: number; width: number; height: number } | null>(imageInkBounds("a.png", region, 0));
 

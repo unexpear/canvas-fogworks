@@ -9,6 +9,7 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const zlib = require("zlib");
 const pkg = require("../../package.json");
 
 let mainWindow;
@@ -182,6 +183,15 @@ const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
 // image reader hardcodes a `data:image/…` mime, and a font arriving under it would be a URL no
 // `FontFace` accepts. Two narrow doors beat one that lies about what came through it.
 const FONT_EXT = /\.(ttf|otf)$/i;
+const TILED_EXT = /\.tmx$/i;
+/**
+ * What an inflated blob may expand to.
+ *
+ * A `.tmx` layer and an `.aseprite` cel are both zlib streams read out of a file, and a hostile
+ * one can be a few hundred bytes that expand to gigabytes. `zlib` will stop at this rather than
+ * allocate until the process dies.
+ */
+const INFLATE_MAX_BYTES = 64 * 1024 * 1024;
 
 /** Walk a directory, collecting entries that pass `match`, bounded by count. */
 function walkDir(root, match, limit) {
@@ -256,6 +266,87 @@ ipcMain.handle("read-font-bytes", async (event, filePath) => {
     if (!filePath || typeof filePath !== "string") throw new Error("Invalid file path.");
     if (!FONT_EXT.test(filePath)) throw new Error("Not a font file.");
     return fs.readFileSync(filePath).toString("base64");
+});
+
+/** The `.tmx` files under a folder, for the map importer. */
+ipcMain.handle("read-tiled-folder", async (event, folder) => {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    return walkDir(folder, name => TILED_EXT.test(name), SCAN_MAX_FILES).map(full => ({
+        path: full,
+        name: path.basename(full),
+        relative: path.relative(folder, full).replace(/\\/g, "/")
+    }));
+});
+
+/**
+ * A path a MAP FILE named, resolved and confined to the folder the user picked.
+ *
+ * This is the one place a path arrives from FILE CONTENT rather than from a dialog or from the
+ * renderer's own state, and a `.tmx` is a plain text file anyone can write. `<image
+ * source="../../../../.ssh/id_rsa"/>` is a perfectly well-formed Tiled document.
+ *
+ * The containment is against the folder the USER PICKED, not the map's own directory — the real
+ * maps legitimately reference `../Spritesheet/sheet.png`, one level up from themselves and still
+ * well inside the pack. A check against the map's directory would refuse every real file; a check
+ * against nothing would hand back whatever the file asked for.
+ */
+function resolveTiledAsset(folder, mapPath, relative) {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    if (!mapPath || typeof mapPath !== "string") throw new Error("Invalid map path.");
+    if (!relative || typeof relative !== "string") throw new Error("Invalid asset path.");
+    const root = path.resolve(folder);
+    const map = path.resolve(mapPath);
+    if (map !== root && !map.startsWith(root + path.sep)) {
+        throw new Error("Refusing to read a map outside the chosen folder.");
+    }
+    const target = path.resolve(path.dirname(map), relative);
+    if (target !== root && !target.startsWith(root + path.sep)) {
+        throw new Error("Refusing to read outside the chosen folder.");
+    }
+    return target;
+}
+
+/** One map, as text. The renderer parses it — the parser is pure and stays that way. */
+ipcMain.handle("read-tiled-map", async (event, folder, mapPath) => {
+    const target = resolveTiledAsset(folder, mapPath, path.basename(mapPath));
+    if (!TILED_EXT.test(target)) throw new Error("Not a Tiled map.");
+    return fs.readFileSync(target, "utf8");
+});
+
+/** A `.tsx` the map named, as text. */
+ipcMain.handle("read-tiled-tileset", async (event, folder, mapPath, relative) => {
+    const target = resolveTiledAsset(folder, mapPath, relative);
+    if (!/\.tsx$/i.test(target)) throw new Error("Not a Tiled tileset.");
+    return fs.readFileSync(target, "utf8");
+});
+
+/** A sheet the map or one of its tilesets named, as a data URL so it travels with the document. */
+ipcMain.handle("read-tiled-image", async (event, folder, mapPath, relative) => {
+    const target = resolveTiledAsset(folder, mapPath, relative);
+    if (!IMAGE_EXT.test(target)) throw new Error("Not an image.");
+    const ext = path.extname(target).slice(1).toLowerCase();
+    const mime = ext === "svg" ? "svg+xml" : ext === "jpg" ? "jpeg" : ext;
+    return `data:image/${mime};base64,${fs.readFileSync(target).toString("base64")}`;
+});
+
+/**
+ * SYNCHRONOUS inflate, because both parsers that need one want it synchronously.
+ *
+ * `parseTiledMap` and `parseAseprite` take an `inflate` they call DURING the parse, which is what
+ * keeps them pure and testable with no decompressor present. An async bridge cannot satisfy that
+ * signature, so this is the one channel that blocks — a one-off during an import, which is exactly
+ * what `sendSync` is for. Both readers went in with the injection point and neither had anything to
+ * inject; this is it.
+ */
+ipcMain.on("inflate-sync", (event, base64) => {
+    try {
+        if (typeof base64 !== "string") throw new Error("Invalid data.");
+        const out = zlib.inflateSync(Buffer.from(base64, "base64"), { maxOutputLength: INFLATE_MAX_BYTES });
+        event.returnValue = { ok: true, data: out.toString("base64") };
+    } catch (err) {
+        // RETURNED, not thrown: a throw inside a sendSync handler leaves the renderer blocked.
+        event.returnValue = { ok: false, error: String(err && err.message ? err.message : err) };
+    }
 });
 
 ipcMain.handle("read-image-data-url", async (event, filePath) => {

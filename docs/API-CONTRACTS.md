@@ -816,6 +816,31 @@ function parseSvgTransform(text: string): Mat2D;        // matrix/translate/scal
 - Gradients flatten to their first stop and every approximation lands in `notes`.
 - Verified against all 5,279 real files: 109,036 shapes, none empty, none rejected by `pathError`.
 
+### The Electron bridge — reading what a MAP FILE names
+
+```ts
+readTiledFolder(folder): Promise<{ path, name, relative }[]>
+readTiledMap(folder, mapPath): Promise<string>
+readTiledTileset(folder, mapPath, relative): Promise<string>
+readTiledImage(folder, mapPath, relative): Promise<string>   // data: URL
+inflateSync(base64): { ok: boolean; data?: string; error?: string }
+```
+
+**This is the one place a path arrives from FILE CONTENT** rather than from a dialog or the
+renderer's own state, and a `.tmx` is plain text anyone can write —
+`<image source="../../../../.ssh/id_rsa"/>` is a well-formed Tiled document. Every one of these is
+confined to the folder the USER PICKED, not to the map's own directory: the real maps legitimately
+reference `../Spritesheet/sheet.png`, one level up from themselves and still well inside the pack,
+so a check against the map's directory would refuse every real file while a check against nothing
+would hand back whatever the file asked for.
+
+**`inflateSync` is the ONE synchronous channel.** `parseTiledMap` and `parseAseprite` both call
+their injected `inflate` DURING the parse — which is what keeps them pure and testable with no
+decompressor present — and an async bridge cannot satisfy that signature. Both readers shipped with
+the injection point and neither had anything to inject; this is it. Output is bounded, since a
+hostile stream is a few hundred bytes that expand to gigabytes, and a failure is RETURNED rather
+than thrown, because a throw inside a `sendSync` handler leaves the renderer blocked forever.
+
 ### `core/import/TiledMap` — a `.tmx` as tiles this engine can already draw
 
 A Tiled map is a grid of references into a sheet, which is exactly what a `sourceRect` is. Resolving
@@ -844,7 +869,15 @@ function tilesetFor(tilesets: readonly TiledTileset[], gid: number): TiledTilese
 function tileSourceRect(set: TiledTileset, gid: number): SourceRect | null;
 function tilePosition(map: { orientation: string; tileWidth: number; tileHeight: number },
                       col: number, row: number): { x: number; y: number };
+function tileTransform(cell: TiledCell): { rotation: number; scaleX: number; scaleY: number };
 ```
+
+**`tileTransform` is DERIVED, not tabulated.** The three bits are three reflections — transpose,
+then negate x, then negate y — which together generate all eight symmetries of a square, exactly
+what a quarter turn plus one axis flip also generates. `Matrix.compose` builds the linear part as
+`R(t)·S(sx,sy)`; fixing `scaleY` at 1 and matching entries gives `sx = det(M)`, `cos t = M11`,
+`sin t = -M01`. Rotation is in RADIANS, the unit `transform.rotation` is defined in. An unflipped
+cell returns the exact identity, so the 123,872 unflipped cells in the tree carry no transform.
 
 **THE TOP THREE BITS OF A GID ARE FLIP FLAGS.** A raw id of 2,684,354,697 in the measured tree is
 tile 137 turned twice, and a reader taking it at face value indexes a billion tiles past the end of

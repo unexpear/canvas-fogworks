@@ -299,6 +299,34 @@ export function tileSourceRect(set: TiledTileset, gid: number): SourceRect | nul
 }
 
 /**
+ * A cell's flips as a rotation and a scale this document can hold.
+ *
+ * The three bits are three REFLECTIONS: `flipD` transposes the tile (x and y swap), then `flipH`
+ * negates x, then `flipV` negates y, in that order. Together they generate all eight symmetries of
+ * a square, which is exactly what a rotation plus one axis flip also generates — so every cell has
+ * an exact answer here and none has to be approximated.
+ *
+ * The mapping is DERIVED rather than tabulated by eye. `Matrix.compose` builds the linear part as
+ * `R(t)·S(sx,sy)`, whose entries are `[[cos·sx, -sin·sy], [sin·sx, cos·sy]]`. Fixing `scaleY` at 1
+ * leaves eight combinations of `sx` and a quarter turn, and matching entries against the reflection
+ * product gives `sx = det(M)`, `cos t = M11`, `sin t = -M01`. Rotation is in RADIANS clockwise,
+ * which is the unit `transform.rotation` is defined in.
+ */
+export function tileTransform(cell: TiledCell): { rotation: number; scaleX: number; scaleY: number } {
+    // An odd number of reflections is a mirror image, which is what the sign of the determinant is.
+    const mirrored = (cell.flipD ? 1 : 0) + (cell.flipH ? 1 : 0) + (cell.flipV ? 1 : 0);
+    const scaleX = mirrored % 2 === 1 ? -1 : 1;
+    // Without the transpose the tile stays axis-aligned, so the only turn is the half one `flipV`
+    // forces: negating y alone is a 180-degree turn composed with the x flip that `scaleX` carries.
+    const quarter = !cell.flipD
+        ? (cell.flipV ? 2 : 0)
+        // WITH it, the tile turns a quarter. Which way depends on `flipH`: transposing and then
+        // mirroring x is a clockwise quarter, while transposing alone is an anticlockwise one.
+        : (cell.flipH ? 1 : 3);
+    return { rotation: (quarter * Math.PI) / 2, scaleX, scaleY: 1 };
+}
+
+/**
  * Where a cell sits on screen.
  *
  * ORTHOGONAL is a plain grid. ISOMETRIC is a diamond — four of the measured maps — where moving one

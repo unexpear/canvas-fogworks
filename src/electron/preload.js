@@ -35,5 +35,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     readFontFolder: (folder) => ipcRenderer.invoke("read-font-folder", folder),
     readFontBytes: (filePath) => ipcRenderer.invoke("read-font-bytes", filePath),
     readImageDataUrl: (filePath) => ipcRenderer.invoke("read-image-data-url", filePath),
+    readTiledFolder: (folder) => ipcRenderer.invoke("read-tiled-folder", folder),
+    readTiledMap: (folder, mapPath) => ipcRenderer.invoke("read-tiled-map", folder, mapPath),
+    readTiledTileset: (folder, mapPath, relative) =>
+        ipcRenderer.invoke("read-tiled-tileset", folder, mapPath, relative),
+    readTiledImage: (folder, mapPath, relative) =>
+        ipcRenderer.invoke("read-tiled-image", folder, mapPath, relative),
+    // The ONE synchronous channel. Both `parseTiledMap` and `parseAseprite` call their `inflate`
+    // during the parse, which is what keeps them pure; an async bridge cannot satisfy that.
+    inflateSync: (base64) => ipcRenderer.sendSync("inflate-sync", base64),
     writeIntoFolder: (folder, filename, content) => ipcRenderer.invoke("write-into-folder", folder, filename, content)
 });

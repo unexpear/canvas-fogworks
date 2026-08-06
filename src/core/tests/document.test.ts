@@ -73,7 +73,7 @@ import { parseSvgDocument, svgDocumentError, parseSvgTransform, SVG_MAX_USE_DEPT
 import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
-    tileSourceRect, tilePosition, TILED_MAX_CELLS } from "../import/TiledMap";
+    tileSourceRect, tilePosition, tileTransform, TILED_MAX_CELLS } from "../import/TiledMap";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -403,6 +403,42 @@ describe("TransactionAction", () => {
         expect(node.geometry.y).toBe(60);
 
         // One undo removes the whole thing (single revision).
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.has(id)).toBe(false);
+    });
+
+    test("a tile is created, given its region and turned in ONE transaction", () => {
+        // This is the sequence the Tiled importer emits per cell, and every action after the first
+        // names a node that does not exist when the action is CONSTRUCTED -- they are all built
+        // against the pre-transaction document, because the id is minted before any of them run.
+        // A map places thousands of these, so if the ordering were wrong it would be wrong
+        // thousands of times over and look like a broken parser rather than a broken transaction.
+        const doc = createDocWithRectangle();
+        const dispatcher = new ActionDispatcher(doc);
+        const id = "tile-0";
+        const src = "data:image/png;base64,iVBORw0KGgo=";
+        const region = { x: 128, y: 128, width: 16, height: 16 };
+        const tx = new TransactionAction(doc, "import-tiles", [
+            new AddNodeAction(doc, "core.image", 48, 32, 16, 16, "none", id, null, { src }),
+            new UpdateNodeContentAction(doc, id, { sourceRect: region, pixelated: true, name: "Tile Layer 1 137" }),
+            // A quarter turn: what `tileTransform` returns for the flagged GID in the tree.
+            new UpdateNodeTransformAction(doc, id, { rotation: Math.PI / 2, scaleX: 1, scaleY: 1 })
+        ]);
+        expect(dispatcher.dispatchAction(tx).success).toBe(true);
+
+        const node = dispatcher.getDocument().nodes.get(id)!;
+        expect(node.type).toBe("core.image");
+        expect(node.src).toBe(src);
+        // The REGION is what makes a whole map cost one decoded image: every tile is the same
+        // sheet at a different rect, which is the field schema 51 added.
+        expect(node.sourceRect).toEqual(region);
+        expect(node.pixelated).toBe(true);
+        expect(node.name).toBe("Tile Layer 1 137");
+        expect(node.transform?.rotation).toBeCloseTo(Math.PI / 2);
+        expect(node.geometry).toMatchObject({ x: 48, y: 32, width: 16, height: 16 });
+
+        // ONE revision for the whole cell, so undoing an import is one step rather than three per
+        // tile -- with 10,618 tiles in the largest measured map, the difference is the feature.
         dispatcher.undo();
         expect(dispatcher.getDocument().nodes.has(id)).toBe(false);
     });
@@ -14530,6 +14566,52 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(parseTiledTileset('<tileset name="x" tilewidth="16" tileheight="16" spacing="1">'
             + '<image source="s.png" width="968" height="526"/></tileset>',
             m.tilesets[0]).columns).toBe(57);
+    });
+
+    test("a cell's flips become a rotation and a scale, checked by composition", () => {
+        // GROUND TRUTH, not a restatement of the table: the three bits are three REFLECTIONS
+        // applied in the format's own order -- transpose, then negate x, then negate y -- so the
+        // expected matrix is built from those directly. A test that listed the same eight answers
+        // the implementation lists would agree with a wrong implementation.
+        const mul = (a: number[][], b: number[][]) => [
+            [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1]],
+            [a[1][0] * b[0][0] + a[1][1] * b[1][0], a[1][0] * b[0][1] + a[1][1] * b[1][1]]
+        ];
+        const I = [[1, 0], [0, 1]], T = [[0, 1], [1, 0]];
+        const H = [[-1, 0], [0, 1]], V = [[1, 0], [0, -1]];
+
+        for (const flipD of [false, true]) for (const flipH of [false, true]) for (const flipV of [false, true]) {
+            const cell = { gid: 1, flipH, flipV, flipD };
+            // Leftmost is applied LAST, so this reads right to left: transpose, then H, then V.
+            const want = mul(flipV ? V : I, mul(flipH ? H : I, flipD ? T : I));
+
+            // `Matrix.compose` builds the linear part as R(t)*S(sx,sy), which is this exactly.
+            const { rotation, scaleX, scaleY } = tileTransform(cell);
+            const cos = Math.round(Math.cos(rotation)), sin = Math.round(Math.sin(rotation));
+            const got = [[cos * scaleX, -sin * scaleY], [sin * scaleX, cos * scaleY]];
+            // NEGATIVE ZERO is normalised on both sides. A matrix product and a trig product each
+            // produce it in different cells, and `toEqual` reports -0 and 0 as a difference — which
+            // is a fact about the assertion, not about the transform: they move every point alike.
+            const flat = (m: number[][]) => m.flat().map(v => v + 0);
+            expect(flat(got)).toEqual(flat(want));
+
+            // Every answer must be one the DOCUMENT accepts, or the tile could not be placed.
+            expect(transformError({ rotation, scaleX, scaleY })).toBeNull();
+            // The eight symmetries of a square need exactly a quarter turn and one axis flip;
+            // scaling the other axis too would be a second way to say the same thing and would
+            // let two different answers describe one cell.
+            expect(scaleY).toBe(1);
+            expect(Math.abs(scaleX)).toBe(1);
+            expect([0, 1, 2, 3]).toContain(Math.round((rotation * 2) / Math.PI));
+        }
+
+        // An UNFLIPPED cell must be the identity, not merely a matrix that composes to it -- every
+        // one of the 123,872 unflipped cells in the tree would otherwise carry a transform.
+        expect(tileTransform({ gid: 1, flipH: false, flipV: false, flipD: false }))
+            .toEqual({ rotation: 0, scaleX: 1, scaleY: 1 });
+        // And the value the tree actually holds: tile 137 with H and D set is a quarter turn.
+        expect(tileTransform(decodeGid(2684354697)))
+            .toEqual({ rotation: Math.PI / 2, scaleX: 1, scaleY: 1 });
     });
 
     test("orientation changes where a cell sits, not how it is read", () => {
