@@ -816,6 +816,63 @@ function parseSvgTransform(text: string): Mat2D;        // matrix/translate/scal
 - Gradients flatten to their first stop and every approximation lands in `notes`.
 - Verified against all 5,279 real files: 109,036 shapes, none empty, none rejected by `pathError`.
 
+### `core/import/TiledMap` — a `.tmx` as tiles this engine can already draw
+
+A Tiled map is a grid of references into a sheet, which is exactly what a `sourceRect` is. Resolving
+a GID to a tileset and a cell is the whole job; the drawing is machinery that already exists.
+
+```ts
+const FLIP_H = 0x80000000, FLIP_V = 0x40000000, FLIP_D = 0x20000000, GID_MASK = 0x1fffffff;
+interface TiledCell { gid: number; flipH: boolean; flipV: boolean; flipD: boolean }
+interface TiledTileset {
+    firstGid: number; source: string | null; name: string;
+    tileWidth: number; tileHeight: number; columns: number; tileCount: number;
+    spacing: number; margin: number;
+    image: string | null; imageWidth: number | null; imageHeight: number | null;
+}
+interface TiledLayer { name: string; width: number; height: number; cells: TiledCell[] }
+interface TiledMapResult {
+    width: number; height: number; tileWidth: number; tileHeight: number;
+    orientation: string; tilesets: TiledTileset[]; layers: TiledLayer[]; notes: string[];
+}
+
+function tiledMapError(xml: unknown): string | null;
+function parseTiledMap(xml: string, opts?: { inflate?: (d: Uint8Array) => Uint8Array }): TiledMapResult;
+function parseTiledTileset(xml: string, into: TiledTileset): TiledTileset;
+function decodeGid(raw: number): TiledCell;
+function tilesetFor(tilesets: readonly TiledTileset[], gid: number): TiledTileset | null;
+function tileSourceRect(set: TiledTileset, gid: number): SourceRect | null;
+function tilePosition(map: { orientation: string; tileWidth: number; tileHeight: number },
+                      col: number, row: number): { x: number; y: number };
+```
+
+**THE TOP THREE BITS OF A GID ARE FLIP FLAGS.** A raw id of 2,684,354,697 in the measured tree is
+tile 137 turned twice, and a reader taking it at face value indexes a billion tiles past the end of
+every set it meets. 820 of the 124,692 measured cells carry a flag; each is a wrong picture rather
+than a missing one if it is dropped.
+
+**GID 0 IS EMPTY** — reserved by the format, not merely below a `firstGid` of 1 — so it stays empty
+even for a malformed set that starts at 0.
+
+**Layer data arrives three ways**: CSV, base64, and zlib-compressed base64. **Inflating is INJECTED**
+exactly as `Aseprite` injects it. With no inflater a compressed layer is skipped with a NOTE rather
+than failing the map, so its tilesets and other layers still arrive.
+
+**An external `.tsx` is resolved by the CALLER.** `source` names it and `image` stays null; a parser
+that reached for a file would need a filesystem and stop being pure. `parseTiledTileset` merges the
+file onto the stub and **carries the map's `firstGid` over**, because that number belongs to the
+reference rather than to the set and is not in the external file at all.
+
+**`columns` is DERIVED when the file omits it.** An older Tiled wrote neither `columns` nor
+`tilecount`; two measured maps are affected, which is 10,954 cells — 8.8% of the tree — that a
+reader trusting `columns="0"` drops silently as empty. The arithmetic is the gutter arithmetic
+inverted, and it comes out at exactly 57x31 for both.
+
+**Orientation changes placement, not parsing.** `tilePosition` lays orthogonal on a grid and
+isometric on a diamond; the cells read identically either way.
+
+**Not read:** infinite maps (chunked storage), object and image layers.
+
 ### `core/import/FontFile` — the facts needed to register a face
 
 ```ts

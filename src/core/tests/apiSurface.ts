@@ -98,6 +98,9 @@ import { SvgShape, SvgDocumentResult, parseSvgDocument, svgDocumentError, parseS
     SVG_MAX_SHAPES, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
 import { SvgNodeSpec, svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { FontInfo, FontFlavour, parseFontFile, fontFileError, FONT_MAX_TABLES, FONT_MAX_NAMES } from "../import/FontFile";
+import { TiledMapResult, TiledTileset, TiledLayer, TiledCell, parseTiledMap, parseTiledTileset,
+    tiledMapError, decodeGid, tilesetFor, tileSourceRect, tilePosition,
+    TILED_MAX_CELLS, TILED_MAX_LAYERS } from "../import/TiledMap";
 import { registerFont, registeredFonts, clearFonts } from "../../renderer/FontCache";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
     aseBytesPerPixel, celRgba, ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
@@ -717,6 +720,37 @@ export function __apiSurfacePin(): void {
     expectType<FontInfo[]>(registeredFonts());
     expectType<() => void>(clearFonts);
     expectType<number>(FONT_MAX_TABLES); expectType<number>(FONT_MAX_NAMES);
+
+    // TILED: a grid of references into a sheet, which is what a `sourceRect` already is. INFLATING
+    // is injected as it is for Aseprite, and an EXTERNAL tileset is resolved by the caller — a
+    // parser that reached for a file would need a filesystem and stop being pure.
+    expectType<string | null>(tiledMapError("<map/>"));
+    const tmap: TiledMapResult = parseTiledMap('<map width="1" height="1" tilewidth="16" tileheight="16"/>');
+    expectType<TiledMapResult>(parseTiledMap("<map/>", { inflate: (d: Uint8Array) => d }));
+    expectType<number>(tmap.width); expectType<number>(tmap.height);
+    expectType<number>(tmap.tileWidth); expectType<number>(tmap.tileHeight);
+    expectType<string>(tmap.orientation);
+    expectType<string[]>(tmap.notes);
+    const tset: TiledTileset = tmap.tilesets[0] ?? { firstGid: 1, source: null, name: "", tileWidth: 16,
+        tileHeight: 16, columns: 0, tileCount: 0, spacing: 0, margin: 0, image: null,
+        imageWidth: null, imageHeight: null };
+    // `source` is the CONTRACT for an unresolved external set — a caller with no way to tell an
+    // embedded set from a named one would silently draw nothing for 18 of the measured maps.
+    expectType<string | null>(tset.source);
+    expectType<string | null>(tset.image);
+    expectType<number | null>(tset.imageWidth); expectType<number | null>(tset.imageHeight);
+    expectType<TiledTileset>(parseTiledTileset("<tileset/>", tset));
+    expectType<TiledTileset | null>(tilesetFor(tmap.tilesets, 1));
+    const tlayer: TiledLayer = tmap.layers[0] ?? { name: "", width: 0, height: 0, cells: [] };
+    expectType<TiledCell[]>(tlayer.cells);
+    const tcell: TiledCell = decodeGid(0);
+    expectType<number>(tcell.gid);
+    // The three flips are part of the CONTRACT: a tile drawn unflipped is a wrong picture, not a
+    // missing one, and 820 of the measured cells carry at least one flag.
+    expectType<boolean>(tcell.flipH); expectType<boolean>(tcell.flipV); expectType<boolean>(tcell.flipD);
+    expectType<SourceRect | null>(tileSourceRect(tset, 1));
+    expectType<{ x: number; y: number }>(tilePosition(tmap, 0, 0));
+    expectType<number>(TILED_MAX_CELLS); expectType<number>(TILED_MAX_LAYERS);
     expectType<{ x: number; y: number; width: number; height: number } | null>(imageInkBounds("a.png", region, 0));
 
     // ASEPRITE: the file a sheet was exported FROM, which states the grid, the trim and the clips

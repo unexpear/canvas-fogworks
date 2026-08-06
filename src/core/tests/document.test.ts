@@ -72,6 +72,8 @@ import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/Svg
 import { parseSvgDocument, svgDocumentError, parseSvgTransform, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
 import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
+import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
+    tileSourceRect, tilePosition, TILED_MAX_CELLS } from "../import/TiledMap";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -14318,6 +14320,260 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const noOs2 = parseFontFile(fontFile({ omitOs2: true }));
         expect(noOs2.weight).toBe(400);
         expect(noOs2.family).toBe("Kenney Blocks");
+    });
+
+    // -- Tiled fixtures -------------------------------------------------------
+    //
+    // Written to the spec rather than copied out of the tree, and checked against it separately: all
+    // 20 real maps parse, all 124,692 cells resolve to a rect inside its sheet, and 820 carry a flip
+    // flag. The two files that forced the grid derivation are named in the test that covers it.
+    const tmxMap = (opts?: { orientation?: string; data?: string; encoding?: string;
+        compression?: string; tileset?: string; layers?: string; infinite?: string; size?: string }) => {
+        const tileset = opts?.tileset ?? '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" '
+            + 'columns="4" tilecount="16" spacing="0"><image source="t.png" width="64" height="64"/></tileset>';
+        const enc = opts?.encoding === undefined ? ' encoding="csv"' : ` encoding="${opts.encoding}"`;
+        const comp = opts?.compression ? ` compression="${opts.compression}"` : "";
+        const layers = opts?.layers ?? `<layer id="1" name="L" width="2" height="2">`
+            + `<data${enc}${comp}>${opts?.data ?? "1,2,5,6"}</data></layer>`;
+        return `<?xml version="1.0"?><map version="1.2" orientation="${opts?.orientation ?? "orthogonal"}" `
+            + `renderorder="right-down" width="${opts?.size ?? "2"}" height="${opts?.size ?? "2"}" `
+            + `tilewidth="16" tileheight="16" infinite="${opts?.infinite ?? "0"}">${tileset}${layers}</map>`;
+    };
+    /** Little-endian uint32s, which is the one place this format is not text. */
+    const gidBytes = (gids: number[]) => {
+        const out = new Uint8Array(gids.length * 4);
+        const view = new DataView(out.buffer);
+        gids.forEach((g, i) => view.setUint32(i * 4, g >>> 0, true));
+        return out;
+    };
+    const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
+
+    test("a Tiled map's cells resolve to rects in a sheet", () => {
+        const m = parseTiledMap(tmxMap());
+        expect(m).toMatchObject({ width: 2, height: 2, tileWidth: 16, tileHeight: 16,
+            orientation: "orthogonal", notes: [] });
+        expect(m.layers).toHaveLength(1);
+        expect(m.layers[0].cells).toHaveLength(4);
+        expect(m.layers[0].cells.map(c => c.gid)).toEqual([1, 2, 5, 6]);
+
+        // The GRID ARITHMETIC is the one `SheetSlice` performs, applied to a single index: gid 1 is
+        // the set's first tile and so sits at the origin, and gid 6 is row 1 column 1.
+        const set = tilesetFor(m.tilesets, 1);
+        expect(set).not.toBeNull();
+        expect(tileSourceRect(set!, 1)).toEqual({ x: 0, y: 0, width: 16, height: 16 });
+        expect(tileSourceRect(set!, 4)).toEqual({ x: 48, y: 0, width: 16, height: 16 });
+        expect(tileSourceRect(set!, 5)).toEqual({ x: 0, y: 16, width: 16, height: 16 });
+        expect(tileSourceRect(set!, 6)).toEqual({ x: 16, y: 16, width: 16, height: 16 });
+        // GID 0 IS EMPTY and is a real, common value -- half a map is usually nothing. It is empty
+        // because the format reserves it, NOT because it happens to fall below a firstGid of 1: a
+        // malformed set starting at 0 must still read 0 as nothing rather than as its first tile.
+        expect(tileSourceRect(set!, 0)).toBeNull();
+        const fromZero = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="0" name="t" tilewidth="16" tileheight="16" columns="4" tilecount="16">'
+            + '<image source="t.png" width="64" height="64"/></tileset>' }));
+        expect(fromZero.tilesets[0].firstGid).toBe(0);
+        expect(tileSourceRect(fromZero.tilesets[0], 0)).toBeNull();
+        expect(tileSourceRect(fromZero.tilesets[0], 1)).toEqual({ x: 16, y: 0, width: 16, height: 16 });
+        // Past the end of the set is nothing rather than a rect off the edge of the image.
+        expect(tileSourceRect(set!, 17)).toBeNull();
+
+        // SPACING is the gutter: N cells take N widths and N-1 gutters, so cell 1 starts one
+        // spacing further along than its width alone. A reader that added the gutter before the
+        // first cell instead would be off by one pixel everywhere, which reads as a blurry sheet.
+        const spaced = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="4" tilecount="16" '
+            + 'spacing="1" margin="2"><image source="t.png" width="70" height="70"/></tileset>' }));
+        expect(tileSourceRect(spaced.tilesets[0], 1)).toEqual({ x: 2, y: 2, width: 16, height: 16 });
+        expect(tileSourceRect(spaced.tilesets[0], 2)).toEqual({ x: 19, y: 2, width: 16, height: 16 });
+        expect(tileSourceRect(spaced.tilesets[0], 5)).toEqual({ x: 2, y: 19, width: 16, height: 16 });
+
+        // A SECOND tileset: a cell finds its set by the largest firstGid at or below it, so gid 17
+        // is the second set's first tile and not the first set's seventeenth.
+        const two = parseTiledMap(tmxMap({ data: "1,17,0,0", tileset:
+            '<tileset firstgid="1" name="a" tilewidth="16" tileheight="16" columns="4" tilecount="16">'
+            + '<image source="a.png" width="64" height="64"/></tileset>'
+            + '<tileset firstgid="17" name="b" tilewidth="8" tileheight="8" columns="2" tilecount="4">'
+            + '<image source="b.png" width="16" height="16"/></tileset>' }));
+        expect(tilesetFor(two.tilesets, 1)!.name).toBe("a");
+        expect(tilesetFor(two.tilesets, 16)!.name).toBe("a");
+        expect(tilesetFor(two.tilesets, 17)!.name).toBe("b");
+        expect(tileSourceRect(tilesetFor(two.tilesets, 17)!, 17)).toEqual({ x: 0, y: 0, width: 8, height: 8 });
+        expect(tilesetFor(two.tilesets, 0)).toBeNull();
+    });
+
+    test("the top three bits of a GID are flip flags, not part of the tile", () => {
+        // 2,684,354,697 appears in the measured tree. Taken at face value it would index a billion
+        // tiles past the end of every set; it is tile 137 turned twice.
+        expect(decodeGid(2684354697)).toEqual({ gid: 137, flipH: true, flipV: false, flipD: true });
+        expect(decodeGid(0x80000001)).toEqual({ gid: 1, flipH: true, flipV: false, flipD: false });
+        expect(decodeGid(0x40000001)).toEqual({ gid: 1, flipH: false, flipV: true, flipD: false });
+        expect(decodeGid(0x20000001)).toEqual({ gid: 1, flipH: false, flipV: false, flipD: true });
+        expect(decodeGid(0xe0000089)).toEqual({ gid: 137, flipH: true, flipV: true, flipD: true });
+        expect(decodeGid(137)).toEqual({ gid: 137, flipH: false, flipV: false, flipD: false });
+
+        // A flagged GID read through the map lands as a DRAWABLE tile rather than nothing, which is
+        // the whole point: 820 cells in the tree carry a flag and every one has a picture.
+        const m = parseTiledMap(tmxMap({ data: "2684354697,1,0,0", tileset:
+            '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="16" tilecount="256">'
+            + '<image source="t.png" width="256" height="256"/></tileset>' }));
+        expect(m.layers[0].cells[0]).toEqual({ gid: 137, flipH: true, flipV: false, flipD: true });
+        expect(tileSourceRect(m.tilesets[0], m.layers[0].cells[0].gid))
+            .toEqual({ x: 128, y: 128, width: 16, height: 16 });
+    });
+
+    test("layer data arrives as CSV, as base64, and as compressed base64", () => {
+        const gids = [1, 2, 5, 6];
+        expect(parseTiledMap(tmxMap({ data: gids.join(",") })).layers[0].cells.map(c => c.gid)).toEqual(gids);
+        // Whitespace and newlines are how Tiled actually writes CSV.
+        expect(parseTiledMap(tmxMap({ data: "\n 1, 2,\n 5, 6\n" })).layers[0].cells.map(c => c.gid)).toEqual(gids);
+
+        // BASE64 is the same numbers little-endian, so both encodings must agree exactly -- reading
+        // them big-endian yields plausible-looking garbage rather than an error.
+        const raw = gidBytes(gids);
+        expect(parseTiledMap(tmxMap({ encoding: "base64", data: b64(raw) }))
+            .layers[0].cells.map(c => c.gid)).toEqual(gids);
+
+        // COMPRESSED base64 needs an inflater, which is INJECTED -- so the parser is testable with a
+        // stand-in and stays pure with no decompressor present.
+        const fake = tmxMap({ encoding: "base64", compression: "zlib", data: b64(Uint8Array.from([9, 9])) });
+        expect(parseTiledMap(fake, { inflate: () => raw }).layers[0].cells.map(c => c.gid)).toEqual(gids);
+
+        // WITHOUT one, the layer is skipped WITH A NOTE rather than failing the map: the tilesets
+        // and every other layer still arrive, and the caller is told what it did not get.
+        const none = parseTiledMap(fake);
+        expect(none.layers).toHaveLength(0);
+        expect(none.tilesets).toHaveLength(1);
+        expect(none.notes.join(" ")).toMatch(/zlib-compressed/);
+
+        // An encoding this does not read is named rather than guessed at.
+        const odd = parseTiledMap(tmxMap({ encoding: "xml", data: "" }));
+        expect(odd.notes.join(" ")).toMatch(/"xml"/);
+        expect(odd.layers).toHaveLength(0);
+
+        // A flagged GID SURVIVES the binary path too -- the top bit makes the uint32 exceed what a
+        // signed read holds, so a reader missing the unsigned shift gets a negative number.
+        const flagged = parseTiledMap(tmxMap({ encoding: "base64", data: b64(gidBytes([0xa0000089])) }));
+        expect(flagged.layers[0].cells[0]).toEqual({ gid: 137, flipH: true, flipV: false, flipD: true });
+    });
+
+    test("a tileset's grid is derived when the file omits it", () => {
+        // TWO of the measured maps -- sample_map.tmx and sample_indoor.tmx -- carry an embedded set
+        // with a tile size, a spacing and an image and nothing else, because an older Tiled wrote
+        // no `columns`. That is 10,954 cells, 8.8% of the tree, which a reader trusting columns="0"
+        // drops silently as empty rather than failing on.
+        const m = parseTiledMap(tmxMap({ data: "1,2,58,59", tileset:
+            '<tileset firstgid="1" name="Roguelike" tilewidth="16" tileheight="16" spacing="1">'
+            + '<image source="../Spritesheet/roguelikeSheet_transparent.png" width="968" height="526"/>'
+            + '</tileset>' }));
+        // The gutter arithmetic inverted: adding one spacing makes the division exact, and it comes
+        // out at exactly 57x31 -- which is the check that this is the right formula rather than one
+        // that merely rounds plausibly.
+        expect(m.tilesets[0].columns).toBe(57);
+        expect(m.tilesets[0].tileCount).toBe(57 * 31);
+        expect(tileSourceRect(m.tilesets[0], 58)).toEqual({ x: 0, y: 17, width: 16, height: 16 });
+        expect(tileSourceRect(m.tilesets[0], 57)).toEqual({ x: 56 * 17, y: 0, width: 16, height: 16 });
+
+        // NON-SQUARE tiles are what tells the two axes apart: the same 968x526 sheet cut into
+        // 16x32 tiles is 57 columns of 15 rows, not 57 of 31, and a derivation that measured rows
+        // with the tile WIDTH would report twice as many tiles as the sheet holds.
+        const tall = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="t" tilewidth="16" tileheight="32" spacing="1">'
+            + '<image source="s.png" width="968" height="526"/></tileset>' }));
+        expect(tall.tilesets[0].columns).toBe(57);
+        expect(tall.tilesets[0].tileCount).toBe(57 * 15);
+
+        // A DECLARED `columns` is never overwritten by the derivation.
+        expect(parseTiledMap(tmxMap()).tilesets[0].columns).toBe(4);
+        // With no image there is nothing to derive from, and it stays honestly zero.
+        const blind = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16"/>' }));
+        expect(blind.tilesets[0].columns).toBe(0);
+        expect(tileSourceRect(blind.tilesets[0], 1)).toBeNull();
+    });
+
+    test("an external tileset is resolved by the caller, keeping the map's firstGid", () => {
+        // 18 of the measured maps name a `.tsx` instead of embedding one. The parser does NOT read
+        // it -- that would need a filesystem and stop this being pure -- so it reports the name.
+        const m = parseTiledMap(tmxMap({ tileset: '<tileset firstgid="9" source="tileset_colored.tsx"/>' }));
+        expect(m.tilesets[0].source).toBe("tileset_colored.tsx");
+        expect(m.tilesets[0].image).toBeNull();
+
+        // AND IT MUST NOT ADOPT THE NEXT SET'S IMAGE. A map that names an external tileset and then
+        // embeds a second one puts an `<image>` a few bytes after the external reference, so a
+        // reader that took the next image it saw would hand the caller a resolved-looking stub
+        // pointing at the wrong sheet -- a wrong picture rather than a missing one.
+        const mixed = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" source="outside.tsx"/>'
+            + '<tileset firstgid="99" name="inside" tilewidth="8" tileheight="8" columns="2" '
+            + 'tilecount="4"><image source="inside.png" width="16" height="16"/></tileset>' }));
+        expect(mixed.tilesets[0].source).toBe("outside.tsx");
+        expect(mixed.tilesets[0].image).toBeNull();
+        expect(mixed.tilesets[0].imageWidth).toBeNull();
+        expect(mixed.tilesets[1].image).toBe("inside.png");
+        expect(mixed.tilesets[1].imageWidth).toBe(16);
+
+        const merged = parseTiledTileset(
+            '<?xml version="1.0"?><tileset version="1.2" name="colored" tilewidth="16" tileheight="16" '
+            + 'spacing="1" tilecount="1024" columns="32"><image source="tileset_legacy.png" '
+            + 'width="543" height="543"/></tileset>', m.tilesets[0]);
+        expect(merged).toMatchObject({ name: "colored", tileWidth: 16, tileHeight: 16, spacing: 1,
+            columns: 32, tileCount: 1024, image: "tileset_legacy.png", imageWidth: 543 });
+        // THE firstGid IS NOT IN THE EXTERNAL FILE -- it belongs to the reference, not to the set --
+        // so it is carried over. A merge that lost it would silently start every set at 1 and draw
+        // the wrong tile for every map with more than one tileset.
+        expect(merged.firstGid).toBe(9);
+        expect(merged.source).toBe("tileset_colored.tsx");
+        expect(tileSourceRect(merged, 9)).toEqual({ x: 0, y: 0, width: 16, height: 16 });
+        expect(tileSourceRect(merged, 10)).toEqual({ x: 17, y: 0, width: 16, height: 16 });
+        // An external file with no `columns` derives its grid AFTER the image is merged, which is
+        // the only point at which there is anything to divide.
+        expect(parseTiledTileset('<tileset name="x" tilewidth="16" tileheight="16" spacing="1">'
+            + '<image source="s.png" width="968" height="526"/></tileset>',
+            m.tilesets[0]).columns).toBe(57);
+    });
+
+    test("orientation changes where a cell sits, not how it is read", () => {
+        const iso = parseTiledMap(tmxMap({ orientation: "isometric" }));
+        expect(iso.orientation).toBe("isometric");
+        // The cells read identically -- orientation is a PLACEMENT fact.
+        expect(iso.layers[0].cells.map(c => c.gid)).toEqual([1, 2, 5, 6]);
+
+        // ORTHOGONAL is a plain grid.
+        const grid = { orientation: "orthogonal", tileWidth: 16, tileHeight: 16 };
+        expect(tilePosition(grid, 0, 0)).toEqual({ x: 0, y: 0 });
+        expect(tilePosition(grid, 1, 0)).toEqual({ x: 16, y: 0 });
+        expect(tilePosition(grid, 0, 1)).toEqual({ x: 0, y: 16 });
+
+        // ISOMETRIC is a diamond -- three of the measured maps. A column goes half right and half
+        // DOWN; a row goes half LEFT and half down. Treating it as a grid gives a rectangle of
+        // tiles that overlap nothing, which reads as a broken tileset rather than a misread map.
+        const dia = { orientation: "isometric", tileWidth: 16, tileHeight: 16 };
+        expect(tilePosition(dia, 0, 0)).toEqual({ x: 0, y: 0 });
+        expect(tilePosition(dia, 1, 0)).toEqual({ x: 8, y: 8 });
+        expect(tilePosition(dia, 0, 1)).toEqual({ x: -8, y: 8 });
+        expect(tilePosition(dia, 1, 1)).toEqual({ x: 0, y: 16 });
+        // NON-SQUARE tiles are the usual isometric case, and are what tells a swapped axis apart
+        // from a correct one: 64x32 halves to 32 across and 16 down.
+        expect(tilePosition({ orientation: "isometric", tileWidth: 64, tileHeight: 32 }, 1, 0))
+            .toEqual({ x: 32, y: 16 });
+    });
+
+    test("a Tiled map names what it cannot read", () => {
+        expect(tiledMapError(tmxMap())).toBeNull();
+        expect(tiledMapError(42)).toMatch(/must be a string/);
+        expect(tiledMapError("<html></html>")).toMatch(/no <map> element/);
+        // `<mapping>` is not `<map>`: a substring test would accept it and then read nothing.
+        expect(tiledMapError("<mapping/>")).toMatch(/no <map> element/);
+        // AN INFINITE MAP stores its cells in chunks rather than one grid, so it is refused by name
+        // rather than read as an empty map of size zero.
+        expect(tiledMapError(tmxMap({ infinite: "1" }))).toMatch(/infinite/);
+        expect(() => parseTiledMap(tmxMap({ infinite: "1" }))).toThrow(/infinite/);
+        expect(tiledMapError(tmxMap({ size: "99999" }))).toMatch(/larger than this reads/);
+        expect(TILED_MAX_CELLS).toBeGreaterThan(10_000);
+        // A layer with no data is noted, not thrown on -- the rest of the map is still usable.
+        const noData = parseTiledMap(tmxMap({ layers: '<layer id="1" name="L" width="2" height="2"></layer>' }));
+        expect(noData.notes.join(" ")).toMatch(/no data/);
+        expect(noData.tilesets).toHaveLength(1);
     });
 
     test("read shapes become nodes the document accepts", () => {

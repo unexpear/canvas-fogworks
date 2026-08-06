@@ -1025,6 +1025,29 @@ that nothing can play it.
 not loaded rather than guessing at its dimensions — the same rule `emitSVG` follows for a region,
 and for the same reason: a grid computed against the wrong size is wrong everywhere at once.
 
+### Tiled maps — the last 2D format, and the one that already fits
+
+**A `.tmx` is a grid of references into a sheet, which is exactly what this engine now models.** A
+tile is a `sourceRect` (schema 51), a tileset is a grid `SheetSlice` already recovers, and the
+spacing Tiled writes is the gutter that slicer already takes. So the reader's job is to resolve a
+GID to a tileset and a cell, and everything downstream is machinery that exists.
+
+**THE TOP THREE BITS OF A GID ARE FLIP FLAGS.** A raw id of 2,684,354,697 in the measured maps is
+tile 137 with two flips set, and a reader that took the number at face value would index past the
+end of every tileset it met. Masking them off is not optional and neither is reporting them: a
+flipped tile drawn unflipped is a wrong picture, not a missing one.
+
+**Layer data arrives three ways** — CSV in 18 of the files, base64 in 2, and zlib-compressed base64
+in those same 2. Inflating is injected exactly as `Aseprite` injects it, so the parser stays pure
+and testable with no decompressor present.
+
+**Tilesets arrive two ways too**: embedded in the map, or as an external `.tsx` the map names. Both
+appear (11 and 18), so both are read — and an external one is RESOLVED BY THE CALLER, because a
+parser that reached for a file would need a filesystem and stop being pure.
+
+**Orientation changes placement, not parsing.** Four maps are isometric, where a cell's screen
+position is a diamond rather than a grid, so the placement formula is part of the reader and the
+orientation is reported rather than assumed.
 ### Fonts — a family name is not a font
 
 **`style.fontFamily` has always been a STRING and nothing else.** A document could ask for "Kenney
