@@ -770,6 +770,30 @@ function sliceTrack(cells: readonly SourceRect[], opts?: { start?: number; step?
 - Slicing yields plain rects; `sliceTrack` turns them into keyframes as a SEPARATE step, because
   which rectangles and how fast are different decisions.
 
+### `core/import/Aseprite` — the file the sheet was exported from
+
+```ts
+interface AseLayer { name: string; childLevel: number; type: number; visible: boolean; opacity: number; blendMode: number }
+interface AseCel { frame: number; layer: number; x: number; y: number; width: number; height: number;
+                   opacity: number; pixels: Uint8Array | null; compressed: Uint8Array | null; linkedFrom: number | null }
+interface AseTag { name: string; from: number; to: number; direction: number }
+interface AseFile { width: number; height: number; colorDepth: number; frames: { duration: number }[];
+                    layers: AseLayer[]; cels: AseCel[]; tags: AseTag[]; palette: {r,g,b,a}[] }
+
+function asepriteError(bytes: Uint8Array): string | null;
+function parseAseprite(bytes: Uint8Array, opts?: { inflate?: (d: Uint8Array) => Uint8Array }): AseFile;
+function asepriteClips(file: AseFile): { name: string; from: number; to: number; loop: boolean }[];
+function asepriteTimeline(file: AseFile): { frames: number; fps: number };
+```
+
+- THE TAGS ARE CLIPS. `{ name, from, to }` is `Clip` field for field (schema 46), so the import is a
+  rename. A cel's `x`/`y`/size is the TRIM — the padding never existed in the file.
+- PARSING IS PURE, INFLATING IS INJECTED: without a decompressor the structure still parses and cels
+  keep their compressed bytes, which is enough for clips, timing and layout.
+- The SHORTEST frame duration sets the rate — the only choice that expresses every frame as a whole
+  number of ticks, where an average rounds the quick ones away.
+- Indexed/greyscale depths, tilemap cels and truncation are NAMED in the error, never half-read.
+
 ### `core/import/Trim` — cutting padding without moving the picture
 
 ```ts

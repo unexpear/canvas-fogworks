@@ -928,6 +928,33 @@ That needs the image's natural size, which comes from the shared `ImageCache` th
 already use — so an undecoded image draws nothing here exactly as it draws nothing on Canvas, rather
 than each backend inventing its own answer for "not ready yet".
 
+### Reading `.aseprite` — the source of truth, not the export
+
+**The sheet importers reconstruct by measurement what this file simply states.** Slicing recovers a
+grid by dividing an image; `imageInkBounds` recovers a trim by scanning pixels; `sequenceTrack`
+invents a frame duration because a folder of PNGs has none. Open the `.aseprite` that shipped in the
+same pack as one of those sheets and it declares all three outright — 27 frames at 100 ms, 6 layers,
+53 cels each carrying its own position and size, and five animation tags with exact frame ranges.
+
+**The tags ARE clips.** `{ name, from, to }` is `Clip` field for field (schema 46), so importing them
+is a rename rather than a translation — `Idle fast [0..3]`, `Attack animation [4..7]`. That
+correspondence is the strongest argument for reading this format at all: the thing a PNG export
+throws away is the thing this engine already models.
+
+**And a cel's position IS the trim.** Aseprite stores each cel as a rectangle placed on the canvas,
+so the padding was never in the file — it appears only when the sheet is exported. Reading the
+source means the pixel scan `Trim` performs is unnecessary, not merely faster.
+
+**PARSING IS PURE; INFLATING IS INJECTED.** Cel pixels are zlib-compressed, and this codebase has no
+business choosing between `node:zlib` and `DecompressionStream`. The parser takes an optional
+inflate function, exactly as `blankCells` takes an ink test and `drawSheet` takes a context: without
+it the structure still parses and cels carry their compressed bytes, which is enough for clips,
+timing and layout and is testable with no decompressor at all.
+
+**What is refused is refused LOUDLY.** Indexed and greyscale colour depths, tilemap cels and
+tileset chunks are named in the error rather than half-read — a partly-understood file that loads
+looking almost right is worse than one that says which feature it met and did not know.
+
 ### Trimming — and why the offset is the whole feature
 
 **The padding is not small.** The measured stick-figure frames are 512x512 PNGs whose ink covers

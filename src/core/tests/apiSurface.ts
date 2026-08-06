@@ -92,6 +92,8 @@ import { Cell, SheetPlan, SheetAtlas, planSheet, sheetAtlas, sheetClipFrames, sh
 import { SliceGrid, SliceOptions, sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
 import { Sequence, SequenceFrame, parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
 import { Trim, TrimBox, trimmedPlacement, inkUnion } from "../import/Trim";
+import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
+    ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
 import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
 import { JournalEntry, recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
@@ -664,6 +666,22 @@ export function __apiSurfacePin(): void {
     expectType<Trim | null>(trimmedPlacement(trimBox, region, region));
     expectType<SourceRect | null>(inkUnion([region]));
     expectType<{ x: number; y: number; width: number; height: number } | null>(imageInkBounds("a.png", region, 0));
+
+    // ASEPRITE: the file a sheet was exported FROM, which states the grid, the trim and the clips
+    // that a PNG export throws away. Parsing is pure; INFLATING is injected.
+    const aseBytes = new Uint8Array(128);
+    expectType<string | null>(asepriteError(aseBytes));
+    const ase: AseFile = { width: 0, height: 0, colorDepth: 32, frames: [], layers: [], cels: [], tags: [], palette: [] };
+    expectType<AseFile>(ase);
+    expectType<AseLayer[]>(ase.layers);
+    expectType<AseCel[]>(ase.cels);
+    expectType<AseTag[]>(ase.tags);
+    expectType<(b: Uint8Array, o?: { inflate?: (d: Uint8Array) => Uint8Array }) => AseFile>(parseAseprite);
+    // The tags ARE clips — a rename, not a translation.
+    expectType<{ name: string; from: number; to: number; loop: boolean }[]>(asepriteClips(ase));
+    expectType<{ frames: number; fps: number }>(asepriteTimeline(ase));
+    expectType<number>(ASE_MAX_FRAMES); expectType<number>(ASE_MAX_LAYERS);
+    expectType<number>(ASE_MAX_CELS); expectType<number>(ASE_MAX_CANVAS);
 
     // WHICH END A NON-INTERPOLATABLE VALUE TAKES is the CALLER's question (schema 54). A timeline
     // steps so a drawing appears on its own keyframe; a state transition switches so a hover means

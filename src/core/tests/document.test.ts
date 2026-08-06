@@ -67,6 +67,7 @@ import { sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
 import { sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
 import { parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
 import { trimmedPlacement, inkUnion } from "../import/Trim";
+import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
 import { planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
@@ -13867,6 +13868,250 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
         expect(contact.width).toBe(air.width);
         expect(contact.height).toBe(air.height);
+    });
+
+    // ── Aseprite fixtures ────────────────────────────────────────────────────
+    //
+    // Bytes assembled from the PUBLISHED SPEC, field by field, rather than from the parser — an
+    // encoder written by reading the decoder would only prove the two agree with each other. The
+    // independent check that these offsets are the real ones is that the same parser reads a real
+    // 210KB `.aseprite` from the measured pack and recovers exactly what an unrelated script found
+    // in it: 640x32, 27 frames, 6 layers, 53 cels, 5 tags, every decoded cel holding w*h*4 bytes.
+    const aseHeader = (frames: number, w = 8, h = 8, depth = 32) => {
+        const b = new Uint8Array(128);
+        const v = new DataView(b.buffer);
+        v.setUint32(0, 128, true);          // file size (patched by the caller if it matters)
+        v.setUint16(4, 0xa5e0, true);       // magic
+        v.setUint16(6, frames, true);
+        v.setUint16(8, w, true);
+        v.setUint16(10, h, true);
+        v.setUint16(12, depth, true);
+        return b;
+    };
+    const aseString = (text: string) => {
+        const utf = new TextEncoder().encode(text);
+        const out = new Uint8Array(2 + utf.length);
+        new DataView(out.buffer).setUint16(0, utf.length, true);
+        out.set(utf, 2);
+        return out;
+    };
+    const aseChunk = (type: number, body: Uint8Array) => {
+        const out = new Uint8Array(6 + body.length);
+        const v = new DataView(out.buffer);
+        v.setUint32(0, out.length, true);
+        v.setUint16(4, type, true);
+        out.set(body, 6);
+        return out;
+    };
+    const aseFrame = (duration: number, chunks: Uint8Array[], useOldCount = false) => {
+        const body = chunks.reduce((n, c) => n + c.length, 0);
+        const out = new Uint8Array(16 + body);
+        const v = new DataView(out.buffer);
+        v.setUint32(0, out.length, true);
+        v.setUint16(4, 0xf1fa, true);
+        v.setUint16(6, chunks.length, true);            // OLD count
+        v.setUint16(8, duration, true);
+        // Zero in the NEW field means the old one is authoritative — the file saying it predates
+        // the change, not that it holds no chunks.
+        v.setUint32(12, useOldCount ? 0 : chunks.length, true);
+        let at = 16;
+        for (const c of chunks) { out.set(c, at); at += c.length; }
+        return out;
+    };
+    const aseLayer = (name: string, opts?: { visible?: boolean; level?: number; opacity?: number }) => {
+        const nameBytes = aseString(name);
+        const body = new Uint8Array(16 + nameBytes.length);
+        const v = new DataView(body.buffer);
+        v.setUint16(0, opts?.visible === false ? 0 : 1, true);   // flags: bit 0 = visible
+        v.setUint16(2, 0, true);                                  // type: image
+        v.setUint16(4, opts?.level ?? 0, true);
+        v.setUint16(10, 0, true);                                 // blend mode
+        body[12] = opts?.opacity ?? 255;
+        body.set(nameBytes, 16);
+        return aseChunk(0x2004, body);
+    };
+    const aseCel = (layer: number, x: number, y: number, w: number, h: number, pixels: Uint8Array) => {
+        const body = new Uint8Array(20 + pixels.length);
+        const v = new DataView(body.buffer);
+        v.setUint16(0, layer, true);
+        v.setInt16(2, x, true);
+        v.setInt16(4, y, true);
+        body[6] = 255;
+        v.setUint16(7, 0, true);          // cel type 0 = raw
+        v.setUint16(16, w, true);
+        v.setUint16(18, h, true);
+        body.set(pixels, 20);
+        return aseChunk(0x2005, body);
+    };
+    const aseLinkedCel = (layer: number, linkTo: number) => {
+        const body = new Uint8Array(18);
+        const v = new DataView(body.buffer);
+        v.setUint16(0, layer, true);
+        body[6] = 255;
+        v.setUint16(7, 1, true);          // cel type 1 = linked
+        v.setUint16(16, linkTo, true);
+        return aseChunk(0x2005, body);
+    };
+    const aseTags = (tags: { name: string; from: number; to: number; direction?: number }[]) => {
+        const parts: Uint8Array[] = [];
+        const head = new Uint8Array(10);
+        new DataView(head.buffer).setUint16(0, tags.length, true);
+        parts.push(head);
+        for (const t of tags) {
+            const nameBytes = aseString(t.name);
+            const one = new Uint8Array(17 + nameBytes.length);
+            const v = new DataView(one.buffer);
+            v.setUint16(0, t.from, true);
+            v.setUint16(2, t.to, true);
+            one[4] = t.direction ?? 0;
+            one.set(nameBytes, 17);
+            parts.push(one);
+        }
+        const total = parts.reduce((n, x) => n + x.length, 0);
+        const body = new Uint8Array(total);
+        let at = 0;
+        for (const x of parts) { body.set(x, at); at += x.length; }
+        return aseChunk(0x2018, body);
+    };
+    const aseFile = (header: Uint8Array, frames: Uint8Array[]) => {
+        const total = header.length + frames.reduce((n, f) => n + f.length, 0);
+        const out = new Uint8Array(total);
+        out.set(header, 0);
+        let at = header.length;
+        for (const f of frames) { out.set(f, at); at += f.length; }
+        new DataView(out.buffer).setUint32(0, total, true);
+        return out;
+    };
+
+    test("an Aseprite file's TAGS are clips, field for field", () => {
+        // The five tags in the measured creature file, with its real ranges.
+        const file = aseFile(aseHeader(27), [
+            aseFrame(100, [aseTags([
+                { name: "Idle fast", from: 0, to: 3 },
+                { name: "Attack animation", from: 4, to: 7 },
+                { name: "Hurt animation", from: 8, to: 11 },
+                { name: "Appear animation", from: 12, to: 18 },
+                { name: "Disappear animation", from: 19, to: 26 }
+            ])]),
+            ...Array.from({ length: 26 }, () => aseFrame(100, []))
+        ]);
+        const parsed = parseAseprite(file);
+        expect(parsed.tags.map(t => `${t.name} ${t.from}..${t.to}`)).toEqual([
+            "Idle fast 0..3", "Attack animation 4..7", "Hurt animation 8..11",
+            "Appear animation 12..18", "Disappear animation 19..26"
+        ]);
+        // A RENAME, not a translation — which is the whole argument for reading this format.
+        expect(asepriteClips(parsed)).toEqual([
+            { name: "Idle fast", from: 0, to: 3, loop: true },
+            { name: "Attack animation", from: 4, to: 7, loop: true },
+            { name: "Hurt animation", from: 8, to: 11, loop: true },
+            { name: "Appear animation", from: 12, to: 18, loop: true },
+            { name: "Disappear animation", from: 19, to: 26, loop: true }
+        ]);
+        // And the clips it produces are ones this engine ACCEPTS — checked against the real
+        // validator with the timeline the same file implies, not merely shaped like clips.
+        const timeline = asepriteTimeline(parsed);
+        expect(timeline).toEqual({ frames: 27, fps: 10 });
+        expect(clipsError(asepriteClips(parsed), timeline)).toBeNull();
+    });
+
+    test("the SHORTEST frame duration sets the rate", () => {
+        // Aseprite times each frame individually; this engine has one rate. The shortest is the
+        // only choice that can express every frame as a whole number of ticks — an average would
+        // round the quick ones away.
+        const varied = parseAseprite(aseFile(aseHeader(3), [aseFrame(100, []), aseFrame(50, []), aseFrame(200, [])]));
+        expect(asepriteTimeline(varied)).toEqual({ frames: 3, fps: 20 });     // 1000/50
+        const steady = parseAseprite(aseFile(aseHeader(2), [aseFrame(100, []), aseFrame(100, [])]));
+        expect(asepriteTimeline(steady)).toEqual({ frames: 2, fps: 10 });
+        // No stated durations gets the editor's default rather than a division by zero.
+        const silent = parseAseprite(aseFile(aseHeader(1), [aseFrame(0, [])]));
+        expect(asepriteTimeline(silent)).toEqual({ frames: 1, fps: 10 });
+    });
+
+    test("layers and cels come back with the positions that make padding unnecessary", () => {
+        const px = (n: number) => new Uint8Array(n * 4).fill(200);
+        const file = aseFile(aseHeader(2, 64, 64), [
+            aseFrame(100, [
+                aseLayer("BG", { visible: false }),
+                aseLayer("Body", { level: 1, opacity: 128 }),
+                aseCel(0, 0, 0, 2, 2, px(4)),
+                aseCel(1, 9, 5, 3, 3, px(9))
+            ]),
+            aseFrame(100, [aseLinkedCel(0, 0)])
+        ]);
+        const parsed = parseAseprite(file);
+        expect(parsed.layers.map(l => `${l.name}:${l.visible}:${l.childLevel}:${l.opacity}`))
+            .toEqual(["BG:false:0:255", "Body:true:1:128"]);
+        // A CEL'S POSITION IS THE TRIM — the padding never existed in the file, so nothing has to
+        // scan pixels to find out where the drawing sits.
+        expect(parsed.cels[1]).toMatchObject({ frame: 0, layer: 1, x: 9, y: 5, width: 3, height: 3 });
+        expect(parsed.cels[1].pixels).toHaveLength(3 * 3 * 4);
+        // A LINKED cel has no image of its own and says which frame supplies it.
+        expect(parsed.cels[2]).toMatchObject({ frame: 1, layer: 0, linkedFrom: 0, pixels: null });
+
+        // The OLD chunk count is honoured when the new one is zero — a file saying it predates the
+        // format change, rather than one holding no chunks.
+        const oldStyle = aseFile(aseHeader(1, 64, 64), [aseFrame(100, [aseLayer("Only")], true)]);
+        expect(parseAseprite(oldStyle).layers.map(l => l.name)).toEqual(["Only"]);
+    });
+
+    test("inflate is INJECTED: without it the structure still parses", () => {
+        // Cel type 2 carries zlib bytes. The parser has no business choosing a decompressor, so
+        // without one it keeps the compressed bytes and everything else still reads — which is
+        // what makes clips, timing and layout testable with no zlib present at all.
+        const body = new Uint8Array(24);
+        const v = new DataView(body.buffer);
+        v.setUint16(0, 0, true);
+        v.setInt16(2, 4, true);
+        v.setInt16(4, 6, true);
+        body[6] = 255;
+        v.setUint16(7, 2, true);          // cel type 2 = compressed
+        v.setUint16(16, 2, true);
+        v.setUint16(18, 2, true);
+        body.set([1, 2, 3, 4], 20);       // stand-in for the deflate stream
+        const file = aseFile(aseHeader(1), [aseFrame(100, [aseLayer("L"), aseChunk(0x2005, body)])]);
+
+        const bare = parseAseprite(file);
+        expect(bare.cels[0]).toMatchObject({ x: 4, y: 6, width: 2, height: 2, pixels: null });
+        expect(Array.from(bare.cels[0].compressed!)).toEqual([1, 2, 3, 4]);
+
+        // WITH an inflate function the same bytes become pixels, and the function is handed exactly
+        // what the file held rather than the chunk around it.
+        let handed: number[] = [];
+        const withPixels = parseAseprite(file, { inflate: d => { handed = Array.from(d); return new Uint8Array(16); } });
+        expect(handed).toEqual([1, 2, 3, 4]);
+        expect(withPixels.cels[0].pixels).toHaveLength(16);
+        expect(withPixels.cels[0].compressed).toBeNull();
+    });
+
+    test("what is refused is NAMED, not half-read", () => {
+        expect(asepriteError(new Uint8Array(8))).toMatch(/shorter than its header/);
+        const wrongMagic = aseHeader(1);
+        new DataView(wrongMagic.buffer).setUint16(4, 0x1234, true);
+        expect(asepriteError(wrongMagic)).toMatch(/bad magic/);
+        // A colour depth this cannot read is named. Reading an indexed file as RGBA would produce a
+        // picture that is WRONG rather than absent, which is the worst way to fail.
+        expect(asepriteError(aseHeader(1, 8, 8, 8))).toMatch(/colour depth 8 is not supported/);
+        expect(asepriteError(aseHeader(1, 8, 8, 16))).toMatch(/colour depth 16 is not supported/);
+        expect(asepriteError(aseHeader(0))).toMatch(/frame count 0 is outside/);
+        expect(asepriteError(aseHeader(ASE_MAX_FRAMES + 1))).toMatch(/outside/);
+        // BOTH SIDES of the bound, because a fixture sitting exactly ON it proves nothing about
+        // the comparison — 16384 squared IS the maximum and must be accepted.
+        expect(asepriteError(aseHeader(1, 20000, 20000))).toMatch(/larger than this will read/);
+        expect(asepriteError(aseHeader(1, 16384, 16384))).toBeNull();
+        expect(asepriteError(aseHeader(1))).toBeNull();
+
+        // `parseAseprite` throws on anything the checker refuses, so a caller that skipped the
+        // check cannot get half an answer.
+        expect(() => parseAseprite(aseHeader(1, 8, 8, 8))).toThrow(/colour depth 8/);
+        // A TILEMAP cel is named rather than read as an image of the wrong shape.
+        const tile = new Uint8Array(20);
+        new DataView(tile.buffer).setUint16(7, 3, true);
+        expect(() => parseAseprite(aseFile(aseHeader(1), [aseFrame(100, [aseChunk(0x2005, tile)])])))
+            .toThrow(/tilemap cels are not supported/);
+        // A truncated frame is a refusal, not a silent short read.
+        const truncated = aseFile(aseHeader(2), [aseFrame(100, [])]);
+        expect(() => parseAseprite(truncated)).toThrow(/truncated frame header/);
     });
 
     test("a trim moves the destination by exactly what it took off the source", () => {
