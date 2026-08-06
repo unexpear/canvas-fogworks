@@ -60,6 +60,7 @@ import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlap
 import { traceMotion, traceVelocity, traceTiming, traceDigest } from "../diagnostics/MotionTrace";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { channelsError, CHANNELS_MAX } from "../document/Timeline";
+import { DiscreteMode, blendNode } from "../document/Prototype";
 import { MotionPath, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
 import { solveTwoBone, solveFabrik, rotationDelta, FABRIK_PASSES, FABRIK_TOLERANCE } from "../geometry/Ik";
 import { sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
@@ -4407,9 +4408,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 52→53 landed, making a keyframed
-        // image SOURCE step rather than arrive one keyframe early.)
-        expect(() => migrateIfNeeded(legacy, "54")).toThrow('Migration not implemented for document schema "53"');
+        // time a real migration is added — most recently when 53→54 landed, making EVERY
+        // non-interpolatable keyframed value step rather than only `src`.)
+        expect(() => migrateIfNeeded(legacy, "55")).toThrow('Migration not implemented for document schema "54"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -13945,6 +13946,79 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(at(8).src).toBe("b.png");
         // AND THE POSITION STILL TWEENS THROUGH IT, which is the whole point of not holding.
         expect(at(4).geometry.x).toBeCloseTo(40, 6);
+    });
+
+    test("a timeline STEPS every discrete value; a state transition SWITCHES", () => {
+        // The rule stated once, replacing a per-property list that had grown a clause for `src`
+        // and then another for `sourceRect`. `text` is the field that proves it generalised: it
+        // was never special-cased and now behaves correctly because the RULE covers it.
+        const doc = createEmptyDocument();
+        doc.timeline = { frames: 12, fps: 24 };
+        doc.nodes.set("t", { id: "t", type: "core.text", parent: null, children: [], name: "t",
+            geometry: { x: 0, y: 0, width: 100, height: 20 },
+            style: { fill: "#fff", opacity: 1 }, layout: {}, text: "one",
+            track: [{ frame: 0, values: { text: "one", geometry: { x: 0, y: 0 } } },
+                    { frame: 8, values: { text: "two", geometry: { x: 80, y: 0 } } }]
+        } as Node);
+        doc.rootNodeUuids = ["t"];
+        const at = (f: number) => applyFrame(doc, f).nodes.get("t")!;
+
+        // ON ITS OWN KEYFRAME, not at the start of the interval leading to it.
+        for (const f of [0, 1, 4, 7]) expect(at(f).text).toBe("one");
+        expect(at(8).text).toBe("two");
+        // AND THE POSITION STILL TWEENS THROUGH IT — which is the whole reason this could not be
+        // expressed with `hold`, since holding freezes the entire node.
+        expect(at(4).geometry.x).toBeCloseTo(40, 6);
+
+        // THE TWO MODES GENUINELY DIFFER. Without this the assertions above would also pass on a
+        // `blendNode` that ignored the parameter and stepped everything — and stepping a state
+        // transition would be wrong, because a hover that changes a label means it now.
+        const a = { ...doc.nodes.get("t")!, text: "one" } as Node;
+        const b = { ...doc.nodes.get("t")!, text: "two" } as Node;
+        expect(blendNode(a, b, 0.5, undefined, "step").text).toBe("one");
+        expect(blendNode(a, b, 0.5, undefined, "switch").text).toBe("two");
+        // SWITCH is the default, so a caller that has not thought about it keeps the behaviour
+        // state transitions were written against.
+        expect(blendNode(a, b, 0.5).text).toBe("two");
+        const mode: DiscreteMode = "step";
+        expect(blendNode(a, b, 0.5, undefined, mode).text).toBe("one");
+    });
+
+    test("a STYLE slot that cannot interpolate steps on a timeline and switches in a transition", () => {
+        // The style half of the same rule, and it needs its own case because `text` is a node field
+        // — a mutation that ignored the mode for `style` alone left every text assertion passing.
+        // A numeric slot with a TOKEN on one end cannot be averaged (a reference is not a number),
+        // so it falls through to whichever end the mode chose. That is the same fixture the state
+        // transition test uses, which is what makes the two behaviours directly comparable.
+        const doc = createEmptyDocument();
+        doc.timeline = { frames: 12, fps: 24 };
+        doc.nodes.set("r", { id: "r", type: "core.rectangle", parent: null, children: [], name: "r",
+            geometry: { x: 0, y: 0, width: 40, height: 40 },
+            style: { fill: "#fff", opacity: 1, strokeWidth: 2 }, layout: {},
+            track: [{ frame: 0, values: { style: { strokeWidth: 2 } } },
+                    { frame: 8, values: { style: { strokeWidth: "$size/hair" } } }]
+        } as unknown as Node);
+        doc.rootNodeUuids = ["r"];
+        const at = (f: number) => applyFrame(doc, f).nodes.get("r")!.style.strokeWidth;
+        for (const f of [0, 1, 4, 7]) expect(at(f)).toBe(2);
+        expect(at(8)).toBe("$size/hair");
+
+        // AND THROUGH A CHANNEL, which blends separately and had its own call to keep in step. A
+        // channel's path is always one the engine interpolates — but `strokeWidth` only
+        // interpolates when BOTH ends are numbers, so a token end falls through here too.
+        const chan = createEmptyDocument();
+        chan.timeline = { frames: 12, fps: 24 };
+        chan.nodes.set("c", { id: "c", type: "core.rectangle", parent: null, children: [], name: "c",
+            geometry: { x: 0, y: 0, width: 40, height: 40 },
+            style: { fill: "#fff", opacity: 1, strokeWidth: 2 }, layout: {},
+            channels: { "style.strokeWidth": [
+                { frame: 0, values: { style: { strokeWidth: 2 } } },
+                { frame: 8, values: { style: { strokeWidth: "$size/hair" } } }] }
+        } as unknown as Node);
+        chan.rootNodeUuids = ["c"];
+        const chanAt = (f: number) => applyFrame(chan, f).nodes.get("c")!.style.strokeWidth;
+        for (const f of [0, 4, 7]) expect(chanAt(f)).toBe(2);
+        expect(chanAt(8)).toBe("$size/hair");
     });
 
     test("a src that has not started yet does not arrive early", () => {

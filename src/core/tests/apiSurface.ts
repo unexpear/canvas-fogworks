@@ -95,7 +95,7 @@ import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb }
 import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
 import { JournalEntry, recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
 import { EASABLE_PATHS } from "../document/Timeline";
-import { EaseFor } from "../document/Prototype";
+import { EaseFor, DiscreteMode, blendNode } from "../document/Prototype";
 import { Keyframe, TimelineSettings, timelineError, trackError, channelsError, CHANNELS_MAX, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
 import { DEPTH_MIN, DEPTH_MAX, depthError, depthOf, parallaxRate, parallaxOffset, depthToClipZ, byDepth, applyParallax } from "../document/Depth";
 import { Mesh, ReadonlyMesh, MESH_MAX_DIVISIONS, meshError, restPoint, restMesh, isIdentityMesh, warpPoint, warpCommands, heightOf, warpHeight, heightRange, surfaceNormal, normalAt, isFlatMesh } from "../document/Mesh";
@@ -655,6 +655,15 @@ export function __apiSurfacePin(): void {
     expectType<SequenceFrame[]>(sequences[0].frames);
     expectType<Keyframe[]>(sequenceTrack(sequences[0], { start: 0, step: 2, hrefFor: f => f }));
     expectType<number>(SEQUENCE_MAX);
+
+    // WHICH END A NON-INTERPOLATABLE VALUE TAKES is the CALLER's question (schema 54). A timeline
+    // steps so a drawing appears on its own keyframe; a state transition switches so a hover means
+    // it now. Stated once rather than as a per-property list that grows a clause at a time.
+    const discreteMode: DiscreteMode = "step";
+    expectType<DiscreteMode>(discreteMode);
+    const blendable = { ...doc.nodes.values().next().value } as Node;
+    expectType<Node>(blendNode(blendable, blendable, 0.5, undefined, discreteMode));
+    expectType<Node>(blendNode(blendable, blendable, 0.5));
     expectType<(ctx: CanvasRenderingContext2D, d: ReadonlyDocument, p: SheetPlan) => void>(drawSheet);
     expectType<number>(TIMELINE_MAX_FRAMES);
     expectType<number>(TRACK_MAX_KEYFRAMES);

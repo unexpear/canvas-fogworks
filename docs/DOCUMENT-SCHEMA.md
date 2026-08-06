@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v53 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v54 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 

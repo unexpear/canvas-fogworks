@@ -295,7 +295,9 @@ export function applyFrame(doc: ReadonlyDocument, frame: number | undefined): Re
         const easeFor: EaseFor | undefined = easings
             ? (path: string) => (easings[path] !== undefined ? easingAt(easings[path], at.raw) : at.t)
             : undefined;
-        let posed = at.to ? withChildren(blendNode(from, value(at.to), at.t, easeFor), n.children) : from;
+        // "step": a keyframed drawing, region or label appears on ITS OWN frame rather than at
+        // the start of the interval leading to it. See `DiscreteMode`.
+        let posed = at.to ? withChildren(blendNode(from, value(at.to), at.t, easeFor, "step"), n.children) : from;
         // THE ROUTE (schema 48). The straight line `blendNode` produced is replaced by a point on
         // the curve — at the SAME progress, so the easing still decides the spacing and the path
         // decides only where the shape goes. Endpoints come from the two keyframes' own blended
@@ -361,7 +363,7 @@ function applyChannels(posed: Node, original: Node, id: string, frame: number): 
         const easeFor: EaseFor | undefined = easings
             ? (p: string) => (easings[p] !== undefined ? easingAt(easings[p], at.raw) : at.t)
             : undefined;
-        const solved = at.to ? blendNode(from, build(at.to), at.t, easeFor) : from;
+        const solved = at.to ? blendNode(from, build(at.to), at.t, easeFor, "step") : from;
         // COPIED ON WRITE, and only on the first channel that changes something: an untouched node
         // must stay the same object, because `computeGeometry` reuses by reference and a fresh
         // object every frame would defeat the dirty tracking the whole engine leans on.

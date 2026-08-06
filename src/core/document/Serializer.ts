@@ -344,6 +344,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "50") { raw = migrate_50_to_51(raw); version = "51"; }
     if (version === "51") { raw = migrate_51_to_52(raw); version = "52"; }
     if (version === "52") { raw = migrate_52_to_53(raw); version = "53"; }
+    if (version === "53") { raw = migrate_53_to_54(raw); version = "54"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -815,6 +816,22 @@ function migrate_21_to_22(raw: any): any {
  * keyframe. The trigger is compatibility, not shape: the same file plays differently, so it needs a
  * version that says which reading it was authored for.
  */
+/**
+ * 53 -> 54: EVERY non-interpolatable keyframed value steps, not just `src`.
+ *
+ * Schema 53 fixed one field the narrow way. This states the rule instead: a timeline blend takes the
+ * SOURCE end for anything it cannot interpolate — text, a font family, a style slot with a token on
+ * one end — so each appears on its own keyframe rather than at the start of the interval before it.
+ * A state transition is unchanged and still switches to the target immediately, which is what a
+ * hover means.
+ *
+ * No field changes shape, and again that is why the version must move: a schema-53 document with a
+ * keyframed `text` showed the next label an interval early and now does not.
+ */
+function migrate_53_to_54(raw: any): any {
+    return { ...raw, version: "54" };
+}
+
 function migrate_52_to_53(raw: any): any {
     return { ...raw, version: "53" };
 }

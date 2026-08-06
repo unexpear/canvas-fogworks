@@ -177,9 +177,31 @@ export function blendColor(from: string, to: string, t: number): string {
  */
 export type EaseFor = (path: string) => number;
 
-export function blendNode(from: Node, to: Node, t: number, easeFor?: EaseFor): Node {
+/**
+ * Which end a NON-INTERPOLATABLE value takes while a blend is in progress.
+ *
+ * `switch` — the target's, immediately. What a STATE TRANSITION means: a hover that changes a label
+ * shows the new label at once while the box animates under it, and a style slot that cannot
+ * interpolate (a token on one end) switches rather than blending.
+ *
+ * `step` — the source's, until the arrival. What a TIMELINE means: a drawing appears on its own
+ * keyframe, not at the start of the interval leading to it. Frame-by-frame animation is exactly
+ * this, and it cannot be expressed with `hold` because holding freezes the WHOLE node — a character
+ * could not cycle its drawings and run across the screen at the same time.
+ */
+export type DiscreteMode = "switch" | "step";
+
+export function blendNode(from: Node, to: Node, t: number, easeFor?: EaseFor, discrete: DiscreteMode = "switch"): Node {
     const k = easeFor ?? (() => t);
-    const out: Node = { ...to };
+    // WHICH END A NON-INTERPOLATABLE VALUE TAKES is the caller's question, not this function's, and
+    // that is the whole reason for the parameter. Both answers are right for somebody: a hover
+    // transition changing a label wants the new text at once while the box animates under it, and a
+    // timeline keyframe wants each drawing to appear at ITS OWN frame and not one interval early.
+    // Deciding here would make one of the two wrong, and deciding per PROPERTY — which is how this
+    // started, with `src` and then `sourceRect` each growing their own clause — is the hand-written
+    // field list this codebase has been bitten by four times. The next discrete field added gets the
+    // right behaviour for free instead of needing to be remembered.
+    const out: Node = discrete === "step" ? { ...from } : { ...to };
     out.geometry = {
         x: lerp(from.geometry.x, to.geometry.x, k("geometry.x")),
         y: lerp(from.geometry.y, to.geometry.y, k("geometry.y")),
@@ -187,7 +209,7 @@ export function blendNode(from: Node, to: Node, t: number, easeFor?: EaseFor): N
         height: lerp(from.geometry.height, to.geometry.height, k("geometry.height"))
     };
     out.style = {
-        ...to.style,
+        ...(discrete === "step" ? from.style : to.style),
         opacity: lerp(from.style.opacity, to.style.opacity, k("style.opacity")),
         fill: blendColor(from.style.fill, to.style.fill, k("style.fill"))
     };
@@ -199,30 +221,6 @@ export function blendNode(from: Node, to: Node, t: number, easeFor?: EaseFor): N
     for (const key of ["radius", "strokeWidth", "fontSize", "letterSpacing", "lineHeight", "fontWeight"] as const) {
         const a = from.style[key], b = to.style[key];
         if (typeof a === "number" && typeof b === "number") out.style[key] = lerp(a, b, k(`style.${key}`));
-    }
-    // AN IMAGE SOURCE STEPS, for the same reason and with the same consequence (schema 53). A
-    // frame-by-frame sequence is one PNG per drawing, and taking `to`'s href at the start of an
-    // interval shows every drawing one keyframe early. Holding the keyframes would fix that and
-    // cost more than it saved: `hold` freezes the WHOLE node until the next keyframe, so a
-    // character running across the screen could not both cycle its drawings and move.
-    //
-    // `text` is deliberately NOT changed here. It is equally discrete and has the same flaw, but a
-    // state transition legitimately wants the target's text immediately while the box animates —
-    // and nothing in this codebase animates text frame by frame yet, so changing it would be a
-    // guess dressed as consistency. Stated rather than left as an asymmetry to puzzle over.
-    if (from.src !== undefined || to.src !== undefined) {
-        if (from.src === undefined) delete out.src;
-        else out.src = from.src;
-    }
-    // A SOURCE REGION STEPS. Interpolating it would slide a window across the sheet and show a
-    // smear of two cells — the numbers would blend perfectly and the picture would be garbage. So
-    // it takes the FROM keyframe's value for the whole interval and changes when the next one
-    // arrives, which is what a sprite frame is. Note this is the opposite of the `{ ...to }` the
-    // rest of the node starts from: with `to`'s region the cell would change the instant the
-    // interval began, showing every frame one keyframe early, and only a `hold` would hide it.
-    if (from.sourceRect !== undefined || to.sourceRect !== undefined) {
-        if (from.sourceRect === undefined) delete out.sourceRect;
-        else out.sourceRect = from.sourceRect;
     }
     if (from.transform || to.transform) {
         const f = from.transform ?? {}, g = to.transform ?? {};
