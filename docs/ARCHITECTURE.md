@@ -1025,6 +1025,35 @@ that nothing can play it.
 not loaded rather than guessing at its dimensions — the same rule `emitSVG` follows for a region,
 and for the same reason: a grid computed against the wrong size is wrong everywhere at once.
 
+### SVG path data — the one format that has to be converted, not just read
+
+**Vector art is the largest remaining import gap: 5,279 files holding 95,160 `<path>` elements.**
+Unlike a sheet or an atlas, this cannot be read across — VDE's `PathCommand` is `M`/`L`/`C`/`Q`/`Z`
+and absolute, while SVG's `d` grammar has twenty letters, relative forms, implicit repetition and
+elliptical arcs. Every one of those appears in the measured tree, so the conversion is the feature.
+
+**WHAT TO BUILD WAS MEASURED, NOT ASSUMED.** Counting command letters across all 95,160 paths:
+`L` 478,757 · `Q` 377,390 · `M` 227,024 · `Z` 40,263 · `l` 35,475 · `c` 28,273 · `a` 16,205 ·
+`h` 7,371 · `v` 5,547 · `z` 5,205 · `C` 4,183 · `A` 2,788 · `V` 2,589 · `H` 1,884 · `s` 1,400 ·
+`S` 444 · `m` 366 · `q` 311. Arcs alone number about nineteen thousand — the piece it would have
+been most tempting to skip, and the one that would have silently dropped a fifth of the shapes.
+
+**Arcs become CUBICS, split at quarter turns.** An ellipse arc has no exact cubic form, so the
+sweep is divided into segments of at most 90° and each approximated with the standard
+`4/3·tan(Δ/4)` control-point distance — the error of which is under a thousandth of the radius at
+that step size, far below anything a canvas resolves. Splitting matters more than the constant: one
+cubic across a half-turn is visibly not a circle.
+
+**Everything else is normalisation.** `H`/`V` become `L`, relative letters are resolved against the
+current point, `S` and `T` reflect the previous control point (and degrade to the current point when
+the previous command was not the matching curve, as the spec requires), and a coordinate pair
+following an `M` is an implicit `L` — the rule that makes `M 0 0 10 10` two commands rather than a
+syntax error.
+
+**The subpath origin is tracked, because `Z` returns to it** — not to the document origin, and not
+to the last `M` if several subpaths have been drawn since. Getting that wrong closes every shape to
+the wrong corner, which looks like a rendering bug rather than a parsing one.
+
 ### Reading an atlas — when there is no grid to recover
 
 **Most real sheets are not grids.** Surveying 421 atlases shipped with 88,815 files of game art:

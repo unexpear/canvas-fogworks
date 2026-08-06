@@ -794,6 +794,22 @@ function asepriteTimeline(file: AseFile): { frames: number; fps: number };
   number of ticks, where an average rounds the quick ones away.
 - Indexed/greyscale depths, tilemap cels and truncation are NAMED in the error, never half-read.
 
+### `core/import/SvgPath` — SVG path data into this engine's commands
+
+```ts
+const SVG_PATH_MAX_COMMANDS: number;
+function svgPathError(d: unknown): string | null;      // null = readable
+function parseSvgPath(d: string): PathCommand[];        // absolute M/L/C/Q/Z only; throws on refusal
+```
+
+- A CONVERSION, not a reading: `H`/`V` become `L`, relative letters resolve against the current
+  point, `S`/`T` reflect the previous control point (and degrade to it when the previous command was
+  not the matching curve type), and elliptical arcs become cubics split at quarter turns.
+- Verified against 95,160 real `<path>` elements: all parse, producing 2,658,530 commands, none
+  rejected by `pathError` and no non-finite number among them.
+- An arc's two FLAGS are single digits, so the scanner is driven by the parser rather than run ahead
+  of it — `a10 10 0 015 5` is seven arguments, not five.
+
 ### `core/import/Trim` — cutting padding without moving the picture
 
 ```ts

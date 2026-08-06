@@ -68,6 +68,7 @@ import { sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "
 import { parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
 import { trimmedPlacement, inkUnion } from "../import/Trim";
 import { parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_ENTRIES } from "../import/TextureAtlas";
+import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/SvgPath";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -14197,6 +14198,179 @@ describe("Mesh — bending a shape (schema 41)", () => {
         `<?xml version="1.0" encoding="UTF-8"?>\n<TextureAtlas imagePath="${image}">\n${subs.join("\n")}\n</TextureAtlas>`;
     const sub = (attrs: Record<string, string | number>) =>
         "\t<SubTexture " + Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join("\t") + "/>";
+
+    test("every SVG command letter normalises into this engine's five", () => {
+        // The document models M/L/C/Q/Z and absolute only, so H, V, S, T, A and every lowercase
+        // form has to be converted. All of them appear in the measured art, which is why all of
+        // them are here rather than the handful that felt likely.
+        const cmds = (d: string) => parseSvgPath(d).map(c => c.c).join("");
+
+        expect(parseSvgPath("M 10 20")).toEqual([{ c: "M", x: 10, y: 20 }]);
+        // RELATIVE resolves against the current point.
+        expect(parseSvgPath("M10 10 l5 5")).toEqual([{ c: "M", x: 10, y: 10 }, { c: "L", x: 15, y: 15 }]);
+        // H and V become L, keeping the axis they do not name.
+        expect(parseSvgPath("M10 20 H30")).toEqual([{ c: "M", x: 10, y: 20 }, { c: "L", x: 30, y: 20 }]);
+        expect(parseSvgPath("M10 20 V30")).toEqual([{ c: "M", x: 10, y: 20 }, { c: "L", x: 10, y: 30 }]);
+        expect(parseSvgPath("M10 20 h5")).toEqual([{ c: "M", x: 10, y: 20 }, { c: "L", x: 15, y: 20 }]);
+        expect(parseSvgPath("M10 20 v5")).toEqual([{ c: "M", x: 10, y: 20 }, { c: "L", x: 10, y: 25 }]);
+        expect(cmds("M0 0 C1 1 2 2 3 3")).toBe("MC");
+        expect(cmds("M0 0 Q1 1 2 2")).toBe("MQ");
+        expect(cmds("M0 0 L1 1 Z")).toBe("MLZ");
+
+        // THE IMPLICIT REPEAT AFTER A MOVETO IS A LINETO — the most surprising rule in the grammar,
+        // and the one that turns a polygon into a scatter of movetos if it is missed.
+        expect(cmds("M0 0 10 10 20 20")).toBe("MLL");
+        expect(parseSvgPath("M0 0 10 10")[1]).toEqual({ c: "L", x: 10, y: 10 });
+        expect(parseSvgPath("m0 0 10 10")[1]).toEqual({ c: "L", x: 10, y: 10 });   // relative too
+        // Other letters repeat as themselves.
+        expect(cmds("M0 0 L1 1 2 2 3 3")).toBe("MLLL");
+        expect(cmds("M0 0 C1 1 2 2 3 3 4 4 5 5 6 6")).toBe("MCC");
+    });
+
+    test("Z returns to the SUBPATH origin, not to the last moveto or the page", () => {
+        // Two subpaths, each closed. The second `Z` must return to the SECOND `M`, and the point
+        // after it is what the next relative command builds on — so getting this wrong bends every
+        // shape after the first closed one.
+        const out = parseSvgPath("M10 10 L20 10 Z M50 50 L60 50 Z l1 1");
+        expect(out.map(c => c.c).join("")).toBe("MLZMLZL");
+        // The final relative lineto starts from (50,50) — the second subpath's origin — not from
+        // (60,50) where the pen was, and not from (10,10) where the first subpath began.
+        expect(out[6]).toEqual({ c: "L", x: 51, y: 51 });
+
+        // A `Z` before any drawing is harmless and still returns to the moveto.
+        expect(parseSvgPath("M5 5 Z l2 0")[2]).toEqual({ c: "L", x: 7, y: 5 });
+    });
+
+    test("S and T reflect the previous control point, and degrade when there is none", () => {
+        // After a cubic, S mirrors its second control point about the current point: the C ends at
+        // (3,3) with control (2,2), so the reflection is (4,4).
+        const s = parseSvgPath("M0 0 C1 1 2 2 3 3 S5 5 6 6");
+        expect(s[2]).toEqual({ c: "C", x1: 4, y1: 4, x2: 5, y2: 5, x: 6, y: 6 });
+        // After anything that is NOT a cubic, the spec says the first control point IS the current
+        // point — a straight start into the curve rather than a mirrored one.
+        const lone = parseSvgPath("M0 0 L3 3 S5 5 6 6");
+        expect(lone[2]).toEqual({ c: "C", x1: 3, y1: 3, x2: 5, y2: 5, x: 6, y: 6 });
+
+        // T does the same for quadratics: Q control (1,1) ending (2,2) reflects to (3,3).
+        const t = parseSvgPath("M0 0 Q1 1 2 2 T4 4");
+        expect(t[2]).toEqual({ c: "Q", x1: 3, y1: 3, x: 4, y: 4 });
+        expect(parseSvgPath("M0 0 L2 2 T4 4")[2]).toEqual({ c: "Q", x1: 2, y1: 2, x: 4, y: 4 });
+        // A RUN of smooth curves keeps reflecting off the one it just produced.
+        const run = parseSvgPath("M0 0 Q1 1 2 2 T4 4 T6 6");
+        expect(run[3]).toEqual({ c: "Q", x1: 5, y1: 5, x: 6, y: 6 });
+
+        // THE MIXED CASES, which are the only ones that prove the curve TYPE is checked rather
+        // than merely whether some control point exists. After a QUADRATIC an S must not reflect —
+        // the previous control point is there, it is just the wrong kind — and after a CUBIC a T
+        // must not either. Both mutations survived until these existed.
+        expect(parseSvgPath("M0 0 Q1 1 2 2 S5 5 6 6")[2])
+            .toEqual({ c: "C", x1: 2, y1: 2, x2: 5, y2: 5, x: 6, y: 6 });
+        expect(parseSvgPath("M0 0 C1 1 2 2 3 3 T5 5")[2])
+            .toEqual({ c: "Q", x1: 3, y1: 3, x: 5, y: 5 });
+    });
+
+    test("an arc becomes cubics that actually lie on the ellipse", () => {
+        // A half circle of radius 10, left to right over the top. Asserting the control points
+        // would be asserting the approximation's internals; asserting that the CURVE passes through
+        // the circle is asserting the thing an arc is for.
+        const half = parseSvgPath("M0 0 A10 10 0 0 1 20 0");
+        expect(half[0]).toEqual({ c: "M", x: 0, y: 0 });
+        // SPLIT AT QUARTER TURNS: a half turn is two cubics, never one. A single cubic across 180
+        // degrees is visibly not a circle, and a count is the cheapest way to pin the splitting.
+        expect(half.slice(1).every(c => c.c === "C")).toBe(true);
+        expect(half.length - 1).toBe(2);
+
+        // Sample the cubics and check every point sits on the circle of radius 10 centred (10,0).
+        const at = (a: { x: number; y: number }, c: Extract<PathCommand, { c: "C" }>, t: number) => {
+            const u = 1 - t;
+            return {
+                x: u * u * u * a.x + 3 * u * u * t * c.x1 + 3 * u * t * t * c.x2 + t * t * t * c.x,
+                y: u * u * u * a.y + 3 * u * u * t * c.y1 + 3 * u * t * t * c.y2 + t * t * t * c.y
+            };
+        };
+        let cursor = { x: 0, y: 0 };
+        for (const c of half.slice(1) as Extract<PathCommand, { c: "C" }>[]) {
+            for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+                const p = at(cursor, c, t);
+                expect(Math.hypot(p.x - 10, p.y - 0)).toBeCloseTo(10, 2);
+            }
+            cursor = { x: c.x, y: c.y };
+        }
+        // AND IT ENDS EXACTLY where the path said, not merely near it: a subpath finishing a hair
+        // off its own close leaves a hairline gap when filled.
+        const last = half[half.length - 1] as Extract<PathCommand, { c: "C" }>;
+        expect(last.x).toBe(20);
+        expect(last.y).toBe(0);
+
+        // THE SWEEP FLAG picks the other way round the same two points — mirrored, not identical.
+        const other = parseSvgPath("M0 0 A10 10 0 0 0 20 0");
+        const mid = (cmds: PathCommand[]) => (cmds[1] as Extract<PathCommand, { c: "C" }>).y1;
+        expect(Math.sign(mid(half))).toBe(-Math.sign(mid(other)));
+        // THE LARGE-ARC FLAG picks the long way round, so it needs more quarter turns — but only
+        // where the two arcs genuinely differ. Endpoints exactly a DIAMETER apart make both arcs a
+        // half circle, so that fixture proves nothing about the flag; a shorter chord separates them.
+        const minor = parseSvgPath("M0 0 A10 10 0 0 1 10 10");
+        const major = parseSvgPath("M0 0 A10 10 0 1 1 10 10");
+        expect(major.length).toBeGreaterThan(minor.length);
+    });
+
+    test("arc edge cases stay finite instead of vanishing the shape", () => {
+        // A ZERO RADIUS is a straight line by the spec, not an error — and dividing by it would put
+        // NaN into every point after it.
+        expect(parseSvgPath("M0 0 A0 10 0 0 1 20 0")).toEqual([{ c: "M", x: 0, y: 0 }, { c: "L", x: 20, y: 0 }]);
+        expect(parseSvgPath("M0 0 A10 0 0 0 1 20 0")[1]).toEqual({ c: "L", x: 20, y: 0 });
+        // An arc that ENDS WHERE IT STARTS draws nothing, which the spec also states.
+        expect(parseSvgPath("M5 5 A10 10 0 1 1 5 5")).toEqual([{ c: "M", x: 5, y: 5 }, { c: "L", x: 5, y: 5 }]);
+        // RADII TOO SMALL to span the endpoints are scaled up until they just reach. Without that
+        // the square root goes negative and the shape disappears.
+        const stretched = parseSvgPath("M0 0 A1 1 0 0 1 20 0");
+        for (const c of stretched.slice(1) as Extract<PathCommand, { c: "C" }>[]) {
+            for (const v of [c.x1, c.y1, c.x2, c.y2, c.x, c.y]) expect(Number.isFinite(v)).toBe(true);
+        }
+        expect((stretched[stretched.length - 1] as Extract<PathCommand, { c: "C" }>).x).toBe(20);
+        // AND IT ACTUALLY BULGES. Finiteness alone does not prove the scaling happened — a
+        // downstream clamp keeps the arithmetic finite either way, and an unscaled arc collapses
+        // onto its own chord. Scaled up, radii of 1 become 10 and the curve stands 10 off the line.
+        const bulge = Math.max(...stretched.slice(1)
+            .map(c => Math.abs((c as Extract<PathCommand, { c: "C" }>).y1)));
+        expect(bulge).toBeGreaterThan(5);
+        // A ROTATED ellipse still lands on its stated endpoint.
+        const tilted = parseSvgPath("M0 0 A20 10 45 0 1 20 20");
+        const end = tilted[tilted.length - 1] as Extract<PathCommand, { c: "C" }>;
+        expect(end.x).toBeCloseTo(20, 9);
+        expect(end.y).toBeCloseTo(20, 9);
+    });
+
+    test("the number scanner reads what SVG actually writes", () => {
+        // `1-2` is TWO numbers: the minus starts the second rather than being an operator. A split
+        // on whitespace and commas gets this wrong, and gets it wrong silently.
+        expect(parseSvgPath("M0 0L1-2")).toEqual([{ c: "M", x: 0, y: 0 }, { c: "L", x: 1, y: -2 }]);
+        // `.5.5` is two numbers as well — the second point ends the first.
+        expect(parseSvgPath("M0 0L.5.5")).toEqual([{ c: "M", x: 0, y: 0 }, { c: "L", x: 0.5, y: 0.5 }]);
+        // Exponents carry their own signs.
+        expect(parseSvgPath("M0 0L1e2 2e-1")).toEqual([{ c: "M", x: 0, y: 0 }, { c: "L", x: 100, y: 0.2 }]);
+        // Commas, extra spaces and newlines are all just separators.
+        expect(parseSvgPath("M 0,0\n  L\t3 , 4")).toEqual([{ c: "M", x: 0, y: 0 }, { c: "L", x: 3, y: 4 }]);
+        // The ARC FLAGS are bare digits and anything non-zero is true — which is how they arrive
+        // compressed, with no separator at all.
+        expect(parseSvgPath("M0 0a10 10 0 015 5").length).toBeGreaterThan(1);
+    });
+
+    test("what it cannot read it NAMES, rather than parsing half a shape", () => {
+        expect(svgPathError("M0 0 L1 1")).toBeNull();
+        expect(svgPathError(42)).toMatch(/must be a string/);
+        expect(svgPathError("   ")).toMatch(/is empty/);
+        // A path that does not open with a moveto has no start for its first draw — and the
+        // document's own `pathError` would refuse the result anyway, so it is refused here where
+        // the cause is visible.
+        expect(svgPathError("L1 1")).toMatch(/must begin with a moveto/);
+        expect(svgPathError("10 10")).toMatch(/must begin with a command/);
+        expect(svgPathError("M0 0 X5 5")).toMatch(/neither a command nor a number/);
+        expect(() => parseSvgPath("L1 1")).toThrow(/must begin with a moveto/);
+        // A command starved of its numbers is an error, not a silently shortened shape.
+        expect(() => parseSvgPath("M0 0 C1 1 2 2")).toThrow(/wants 6 numbers/);
+        expect(SVG_PATH_MAX_COMMANDS).toBeGreaterThan(1000);
+    });
 
     test("an atlas gives every sprite a source rect, where no grid could", () => {
         // Coordinates from the real `Abstract Platformer` sheet: 359 sprites in 135 distinct sizes,

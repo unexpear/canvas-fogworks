@@ -93,6 +93,7 @@ import { SliceGrid, SliceOptions, sliceGrid, sliceCells, sliceTrack, blankCells,
 import { Sequence, SequenceFrame, parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
 import { Trim, TrimBox, trimmedPlacement, inkUnion } from "../import/Trim";
 import { Atlas, AtlasEntry, parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_ENTRIES } from "../import/TextureAtlas";
+import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/SvgPath";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
     aseBytesPerPixel, celRgba, ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
@@ -678,6 +679,12 @@ export function __apiSurfacePin(): void {
     expectType<AtlasEntry | null>(atlasEntry(atlas, "a.png"));
     expectType<Trim>(atlasPlacement(entry, trimBox));
     expectType<number>(ATLAS_MAX_ENTRIES);
+
+    // SVG PATH DATA: the one import that CONVERTS rather than reads — twenty letters, relative
+    // forms and elliptical arcs down to this engine's five absolute commands.
+    expectType<string | null>(svgPathError("M0 0"));
+    expectType<PathCommand[]>(parseSvgPath("M0 0 L1 1 Z"));
+    expectType<number>(SVG_PATH_MAX_COMMANDS);
     expectType<{ x: number; y: number; width: number; height: number } | null>(imageInkBounds("a.png", region, 0));
 
     // ASEPRITE: the file a sheet was exported FROM, which states the grid, the trim and the clips
