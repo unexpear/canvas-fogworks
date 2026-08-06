@@ -1071,6 +1071,34 @@ it discriminates: run against it, that check puts the last tile of a 352-pixel i
 **`inflateSync` is the one synchronous channel in the app.** Both `parseTiledMap` and
 `parseAseprite` call their injected `inflate` DURING the parse, which is what keeps them pure; an
 async bridge cannot satisfy that. Both shipped with the injection point and nothing to inject.
+### glTF — geometry this engine cannot draw yet, read correctly anyway
+
+**3D starts as a READER, not a renderer.** 5,286 glTF files sit in the measured tree and nothing can
+open one. Reading them is a self-contained problem with a right answer; drawing them is a schema, a
+node type and a pipeline. Doing the first well is what makes the second small — the same order every
+2D format went in.
+
+**THE VERTEX DATA IS INTERLEAVED.** 9,596 bufferViews in the tree declare a `byteStride`, meaning a
+primitive's positions, normals and UVs are woven together rather than stored one array after
+another. A reader that walks an accessor tightly-packed produces coordinates from whatever happened
+to sit at that offset — a mesh, drawable, made of nonsense. This is glTF's flip-flag: it is the
+common case, not the exotic one, and there is no error to notice.
+
+**AN ACCESSOR IS TWO OFFSETS, NOT ONE.** It carries its own `byteOffset` INTO a bufferView that
+carries another into the buffer. Adding one and not the other is off by a fixed amount that looks
+like a model built slightly wrong rather than a model read wrongly.
+
+**Indices arrive in three widths** — unsigned byte, short and int all appear — so the index reader
+is driven by the declared component type rather than by a guess that holds for most files.
+
+**A REQUIRED extension is refused by name.** 246 files list `KHR_materials_unlit` in
+`extensionsRequired`, which is the file stating that ignoring it changes the picture. Reading such a
+file silently is choosing to be wrong; naming it lets a caller decide.
+
+**The buffer is supplied, not fetched.** A `.glb` carries its BIN chunk inside it, but the 254
+`.gltf` files name an external `.bin`, and 3,941 images are sidecar files. The reader resolves
+neither — the same rule the Tiled reader follows, and for the same reason: a parser that reached for
+a file would need a filesystem and stop being testable.
 ### Fonts — a family name is not a font
 
 **`style.fontFamily` has always been a STRING and nothing else.** A document could ask for "Kenney

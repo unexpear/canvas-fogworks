@@ -816,6 +816,62 @@ function parseSvgTransform(text: string): Mat2D;        // matrix/translate/scal
 - Gradients flatten to their first stop and every approximation lands in `notes`.
 - Verified against all 5,279 real files: 109,036 shapes, none empty, none rejected by `pathError`.
 
+### `core/import/Gltf` — a `.glb` as triangles
+
+3D arrives as a READER first. Nothing draws these yet — that needs a schema, a node type and a
+pipeline — but reading them correctly is a self-contained problem with a right answer, and doing it
+first is what makes the rest small. Every 2D format went in this order.
+
+```ts
+interface GlbContainer { json: GltfJson; bin: Uint8Array | null }
+interface GltfPrimitive {
+    positions: Float32Array;          // always present
+    normals: Float32Array | null;     // null when the file states none
+    uvs: Float32Array | null;
+    indices: Uint32Array;             // a non-indexed primitive gets the implied 0..n-1
+    material: number | null;          // reported, not resolved
+}
+interface GltfMeshInstance { name: string; matrix: number[]; primitive: GltfPrimitive }
+interface GltfResult { generator: string; instances: GltfMeshInstance[]; extensions: string[]; notes: string[] }
+
+function glbError(bytes: unknown): string | null;
+function parseGlb(bytes: Uint8Array): GlbContainer;
+function gltfError(json: unknown): string | null;
+function parseGltf(json: GltfJson, buffer: Uint8Array): GltfResult;
+function readAccessor(json: GltfJson, index: number, buffer: Uint8Array): Float64Array | null;
+function nodeMatrix(node: GltfNode): number[];
+function multiplyMat4(a: readonly number[], b: readonly number[]): number[];
+const GLTF_IGNORABLE_REQUIRED: string[];
+```
+
+**THE VERTEX DATA IS INTERLEAVED.** 9,596 bufferViews in the tree declare a `byteStride`, so a
+primitive's positions, normals and UVs are woven together rather than stored one array after
+another. A reader that walks an accessor tightly-packed returns the first position, then its
+NORMAL, then its UV — all finite, all well-formed, all wrong. This is glTF's flip-flag: the common
+case rather than the exotic one, and there is no error to notice.
+
+**AN ACCESSOR IS TWO OFFSETS** — its own into a bufferView, and the view's into the buffer. Adding
+one and not the other looks like a model built slightly wrong rather than one read wrongly.
+
+**Indices arrive in three widths** (unsigned byte, short and int all appear), and a `normalized`
+integer stands for a FRACTION — a byte of 255 means 1, not 255.
+
+**The BIN chunk is found by TYPE, not by position.** The spec allows unknown chunks between JSON
+and BIN, and taking "the second chunk" hands back an extension's private bytes as vertex data.
+
+**A required extension is refused BY NAME**, except one that provably cannot touch geometry.
+`KHR_materials_unlit` is required by 246 files and is a lighting hint; this module reads no
+materials, so refusing on it would cost 4.7% of the corpus over something that cannot change a
+vertex. `GLTF_IGNORABLE_REQUIRED` is an explicit allow-list, using it is reported louder than an
+ordinary extension, and **it must be revisited when materials land**.
+
+**The buffer is supplied, not fetched.** A `.glb` carries its BIN chunk; the 254 `.gltf` files name
+an external `.bin` and 3,941 images are sidecars. The caller resolves those, exactly as it does a
+Tiled `.tsx`.
+
+**Not read yet:** materials, textures, animations (150 files), skins (26), morph targets, sparse
+accessors, and cameras.
+
 ### The Electron bridge — reading what a MAP FILE names
 
 ```ts

@@ -101,6 +101,10 @@ import { FontInfo, FontFlavour, parseFontFile, fontFileError, FONT_MAX_TABLES, F
 import { TiledMapResult, TiledTileset, TiledTileImage, TiledLayer, TiledCell, parseTiledMap, parseTiledTileset,
     tiledMapError, decodeGid, tilesetFor, tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow,
     TILED_MAX_CELLS, TILED_MAX_LAYERS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
+import { GlbContainer, GltfJson, GltfNode, GltfResult, GltfMeshInstance, GltfPrimitive,
+    parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
+    GLTF_IGNORABLE_REQUIRED, GLTF_MAX_VERTICES, GLTF_MAX_PRIMITIVES, GLTF_MAX_NODE_DEPTH
+} from "../import/Gltf";
 import { registerFont, registeredFonts, clearFonts } from "../../renderer/FontCache";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
     aseBytesPerPixel, celRgba, ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
@@ -767,6 +771,39 @@ export function __apiSurfacePin(): void {
     expectType<number>(tset.offsetX); expectType<number>(tset.offsetY);
     expectType<number>(TILED_MAX_CELLS); expectType<number>(TILED_MAX_LAYERS);
     expectType<number>(TILED_MAX_TILE_IMAGES);
+
+    // glTF: 3D arrives as a READER first. Nothing draws these yet — a schema, a node type and a
+    // pipeline are what that needs — but reading them correctly is a self-contained problem with a
+    // right answer, and doing it first is what makes the rest small.
+    expectType<string | null>(glbError(new Uint8Array(0)));
+    const gjson: GltfJson = { asset: { version: "2.0" } };
+    const glbBox: GlbContainer = { json: gjson, bin: null };
+    // `bin` NULL is part of the contract: a `.gltf` names an external buffer and a `.glb` may too,
+    // so a caller must be able to tell "no buffer here" from "an empty one".
+    expectType<Uint8Array | null>(glbBox.bin);
+    expectType<GlbContainer>(parseGlb(new Uint8Array([0x67, 0x6c, 0x54, 0x46])));
+    expectType<string | null>(gltfError(gjson));
+    const gres: GltfResult = parseGltf(gjson, new Uint8Array(0));
+    expectType<string>(gres.generator);
+    expectType<string[]>(gres.extensions); expectType<string[]>(gres.notes);
+    const inst: GltfMeshInstance | undefined = gres.instances[0];
+    expectType<GltfMeshInstance | undefined>(inst);
+    const prim: GltfPrimitive | undefined = inst?.primitive;
+    // Positions and indices are ALWAYS present; normals and uvs may not be, and a caller that
+    // assumed them would crash on a file that states neither.
+    expectType<Float32Array | undefined>(prim?.positions);
+    expectType<Uint32Array | undefined>(prim?.indices);
+    expectType<Float32Array | null | undefined>(prim?.normals);
+    expectType<Float32Array | null | undefined>(prim?.uvs);
+    expectType<number | null | undefined>(prim?.material);
+    expectType<number[] | undefined>(inst?.matrix);
+    expectType<Float64Array | null>(readAccessor(gjson, 0, new Uint8Array(0)));
+    const gnode: GltfNode = { name: "n" };
+    expectType<number[]>(nodeMatrix(gnode));
+    expectType<number[]>(multiplyMat4([], []));
+    expectType<string[]>(GLTF_IGNORABLE_REQUIRED);
+    expectType<number>(GLTF_MAX_VERTICES); expectType<number>(GLTF_MAX_PRIMITIVES);
+    expectType<number>(GLTF_MAX_NODE_DEPTH);
     expectType<{ x: number; y: number; width: number; height: number } | null>(imageInkBounds("a.png", region, 0));
 
     // ASEPRITE: the file a sheet was exported FROM, which states the grid, the trim and the clips
