@@ -78,7 +78,7 @@ import { parseSvgDocument, svgDocumentError } from "../core/import/SvgDocument";
 import { svgNodeSpecs, SvgNodeSpec } from "../core/import/SvgNodes";
 import { parseFontFile, fontFileError, FontInfo } from "../core/import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, tilesetFor, tileSourceRect,
-    tilePosition, tileTransform, TiledTileset } from "../core/import/TiledMap";
+    tilePosition, tileTransform, tileImageFor, TiledTileset } from "../core/import/TiledMap";
 import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
@@ -1046,7 +1046,7 @@ export function App() {
      */
     const importTiles = useCallback((tiles: {
         x: number; y: number; width: number; height: number; src: string;
-        sourceRect: SourceRect; name: string;
+        sourceRect: SourceRect | null; name: string;
         transform: { rotation: number; scaleX: number; scaleY: number } | null;
     }[]) => {
         if (tiles.length === 0) return;
@@ -2526,7 +2526,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     editContentFont: (family: string) => void;
     onImportTiles: (tiles: {
         x: number; y: number; width: number; height: number; src: string;
-        sourceRect: SourceRect; name: string;
+        sourceRect: SourceRect | null; name: string;
         transform: { rotation: number; scaleX: number; scaleY: number } | null;
     }[]) => void;
 }) {
@@ -2873,11 +2873,15 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                             } catch (err) { problems.push(`${stub.source}: ${String(err)}`); }
                                         }
                                         sets.push(set);
-                                        if (set.image && !sheets.has(set.image)) {
+                                        // A sheet-backed set has ONE image; a collection has one
+                                        // per tile. Both are cached by path, so a tile referenced
+                                        // a thousand times is still decoded once.
+                                        const wanted = set.image ? [set.image] : set.tiles.map(t => t.image);
+                                        for (const rel of wanted) {
+                                            if (sheets.has(rel)) continue;
                                             try {
-                                                sheets.set(set.image,
-                                                    await api.readTiledImage(tiledFolder, mapPath, set.image));
-                                            } catch (err) { problems.push(`${set.image}: ${String(err)}`); }
+                                                sheets.set(rel, await api.readTiledImage(tiledFolder, mapPath, rel));
+                                            } catch (err) { problems.push(`${rel}: ${String(err)}`); }
                                         }
                                     }
 
@@ -2888,17 +2892,27 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                             const cell = layer.cells[i];
                                             if (cell.gid === 0) continue;   // EMPTY is most of a map
                                             const set = tilesetFor(sets, cell.gid);
-                                            const rect = set ? tileSourceRect(set, cell.gid) : null;
-                                            const src = set && set.image ? sheets.get(set.image) : undefined;
-                                            if (!set || !rect || !src) { unresolved++; continue; }
+                                            if (!set) { unresolved++; continue; }
+                                            // A COLLECTION tile is asked about FIRST: it is a whole
+                                            // file at its own size, so there is no rect to cut and
+                                            // the set's declared tile size does not apply to it.
+                                            const own = tileImageFor(set, cell.gid);
+                                            const rect = own ? null : tileSourceRect(set, cell.gid);
+                                            const path = own ? own.image : set.image;
+                                            const src = path ? sheets.get(path) : undefined;
+                                            if (!src || (!own && !rect)) { unresolved++; continue; }
                                             const at = tilePosition(map, i % layer.width, Math.floor(i / layer.width));
                                             const t = tileTransform(cell);
                                             tiles.push({
-                                                x: at.x, y: at.y,
-                                                // The TILE's size, not the map's: a tileset may hold
-                                                // tiles taller than the grid, which is how a tree
-                                                // stands above the cell it is rooted in.
-                                                width: set.tileWidth, height: set.tileHeight,
+                                                // The set's OFFSET is what lets a tall tile hang
+                                                // above its own cell — a building rooted in one
+                                                // square standing over the three behind it.
+                                                x: at.x + set.offsetX, y: at.y + set.offsetY,
+                                                // The TILE's size, not the map's: a collection tile
+                                                // states its own, and a sheet tile may be taller
+                                                // than the grid it sits on.
+                                                width: own ? own.width : set.tileWidth,
+                                                height: own ? own.height : set.tileHeight,
                                                 src, sourceRect: rect,
                                                 name: `${layer.name} ${cell.gid}`,
                                                 // Only the 820-in-124,692 that need one, so an

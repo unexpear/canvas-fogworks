@@ -1057,6 +1057,12 @@ region field went in before this did.
 confines every one to the folder the USER picked rather than to the map's own directory: real maps
 reference `../Spritesheet/sheet.png` one level up from themselves and still well inside the pack.
 
+**Coverage is measured, not assumed.** Running every reader over the whole measured tree —
+88,815 files — reads 62,444 of them (70.3%) with nothing refused and nothing failing. The rest has
+no reader at all rather than a broken one: 24,051 3D files, 1,342 audio, and the remainder project
+files, archives and readmes. That sweep is what found the three Tiled forms above; a pass rate
+counted per FORMAT would have said 100% while 8.8% of the cells in the tree were being dropped.
+
 **`inflateSync` is the one synchronous channel in the app.** Both `parseTiledMap` and
 `parseAseprite` call their injected `inflate` DURING the parse, which is what keeps them pure; an
 async bridge cannot satisfy that. Both shipped with the injection point and nothing to inject.

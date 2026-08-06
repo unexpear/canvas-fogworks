@@ -854,7 +854,10 @@ interface TiledTileset {
     tileWidth: number; tileHeight: number; columns: number; tileCount: number;
     spacing: number; margin: number;
     image: string | null; imageWidth: number | null; imageHeight: number | null;
+    tiles: TiledTileImage[];            // a COLLECTION set's own files; empty for a sheet
+    offsetX: number; offsetY: number;   // <tileoffset>, applied to every tile the set draws
 }
+interface TiledTileImage { id: number; image: string; width: number; height: number }
 interface TiledLayer { name: string; width: number; height: number; cells: TiledCell[] }
 interface TiledMapResult {
     width: number; height: number; tileWidth: number; tileHeight: number;
@@ -870,6 +873,7 @@ function tileSourceRect(set: TiledTileset, gid: number): SourceRect | null;
 function tilePosition(map: { orientation: string; tileWidth: number; tileHeight: number },
                       col: number, row: number): { x: number; y: number };
 function tileTransform(cell: TiledCell): { rotation: number; scaleX: number; scaleY: number };
+function tileImageFor(set: TiledTileset, gid: number): TiledTileImage | null;
 ```
 
 **`tileTransform` is DERIVED, not tabulated.** The three bits are three reflections — transpose,
@@ -903,6 +907,23 @@ inverted, and it comes out at exactly 57x31 for both.
 
 **Orientation changes placement, not parsing.** `tilePosition` lays orthogonal on a grid and
 isometric on a diamond; the cells read identically either way.
+
+**A TILESET IS NOT ALWAYS A SHEET.** Tiled allows a set whose tiles are separate files, and three
+in the measured tree are built that way — 244, 348 and 236 tiles. Such a set has no sheet to cut:
+`image` is null, `tileSourceRect` returns null, and the whole file IS the tile at its own size. A
+caller asks `tileImageFor` FIRST and falls back to the rect. Checking `image` would be the wrong
+test, since both kinds have images — one has a sheet and the other has many. The first `<image>` in
+a collection belongs to its first `<tile>`, so taking it as the sheet gives a set whose every cell
+is cut out of tile zero's picture.
+
+**`<tileoffset>` moves every tile the set draws.** Four files carry one, all `-12,6`. It exists so a
+tall tile can hang ABOVE the cell it occupies — a building rooted in one square standing over the
+three behind it — so dropping it lays every such tile flat, which reads as a map drawn in the wrong
+order rather than as a lost attribute.
+
+**Either quote.** Two files write `<tile id='0'><image source='../Tiles/x.png'/>`, and a reader
+that knew only double quotes saw a tag with NO attributes rather than an error. The quote is
+back-referenced, so an apostrophe inside a double-quoted value does not end it early.
 
 **Not read:** infinite maps (chunked storage), object and image layers.
 

@@ -30,6 +30,7 @@ import { SourceRect } from "../document/Node";
 /** Bounds on a hand-editable file. A corrupt size should fail, not allocate. */
 export const TILED_MAX_CELLS = 1_000_000;
 export const TILED_MAX_LAYERS = 64;
+export const TILED_MAX_TILE_IMAGES = 4096;
 
 /** The three flip bits Tiled packs into the top of every GID. */
 const FLIP_H = 0x80000000;
@@ -64,6 +65,32 @@ export interface TiledTileset {
     image: string | null;
     imageWidth: number | null;
     imageHeight: number | null;
+    /**
+     * A COLLECTION set's own images, one per tile, empty for a sheet-backed set.
+     *
+     * Tiled allows a tileset whose tiles are separate files rather than cells of one sheet, and
+     * three sets in the measured tree are built that way. Such a set has no sheet to cut, so
+     * `image` is null and `tileSourceRect` has no rect to return — the whole file IS the tile.
+     */
+    tiles: TiledTileImage[];
+    /**
+     * `<tileoffset>`, in pixels, applied to every tile this set draws.
+     *
+     * Four files in the tree carry one. It exists so a tall tile can hang above the cell it
+     * occupies — a building rooted in one square standing over the three behind it — so dropping it
+     * lays every such tile flat on its own cell, which reads as a map drawn in the wrong order.
+     */
+    offsetX: number;
+    offsetY: number;
+}
+
+/** One tile of a collection set: its own file, at its own size. */
+export interface TiledTileImage {
+    /** The tile's id WITHIN the set, so the GID is this plus `firstGid`. */
+    id: number;
+    image: string;
+    width: number;
+    height: number;
 }
 
 /** One layer of cells. */
@@ -88,10 +115,17 @@ export interface TiledMapResult {
     notes: string[];
 }
 
-/** Attributes of one tag, read as this format defines them rather than as XML in general. */
+/**
+ * Attributes of one tag, read as this format defines them rather than as XML in general.
+ *
+ * EITHER QUOTE. Tiled writes double quotes and so does every hand-written example, but two files in
+ * the measured tree are written `<tile id='0'><image source='../Tiles/x.png'/>` — and a reader that
+ * only knew double quotes saw a tag with NO attributes at all rather than an error, which is the
+ * quiet kind of wrong. The captured quote is back-referenced so `a="it's"` does not end early.
+ */
 function attributes(tag: string): Record<string, string> {
     const out: Record<string, string> = {};
-    for (const m of tag.matchAll(/([A-Za-z_][\w:.-]*)\s*=\s*"([^"]*)"/g)) out[m[1]] = m[2];
+    for (const m of tag.matchAll(/([A-Za-z_][\w:.-]*)\s*=\s*(["'])(.*?)\2/g)) out[m[1]] = m[3];
     return out;
 }
 
@@ -125,6 +159,37 @@ function deriveGrid(set: TiledTileset): TiledTileset {
         columns,
         tileCount: set.tileCount > 0 ? set.tileCount : Math.max(0, columns * rows)
     };
+}
+
+/**
+ * A collection set's per-tile images, and its draw offset.
+ *
+ * Read from the same text for both paths — an embedded set and an external `.tsx` are the same
+ * element with the same children, so one function serves both rather than two that can drift.
+ */
+function tilesetExtras(body: string): { tiles: TiledTileImage[]; offsetX: number; offsetY: number } {
+    const tiles: TiledTileImage[] = [];
+    // A `<tile>` with its OWN `<image>` is what makes this a collection. `<tile>` also appears in
+    // sheet-backed sets carrying animation or collision data, where it has no image and is not one
+    // of these — so the image is what is matched on, not the tile.
+    for (const m of body.matchAll(/<tile\b([^>]*)>\s*<image\b([^>]*)>/g)) {
+        if (tiles.length >= TILED_MAX_TILE_IMAGES) break;
+        const ta = attributes("<tile" + m[1] + ">");
+        const ia = attributes("<image" + m[2] + ">");
+        if (ia.source === undefined) continue;
+        tiles.push({
+            id: num(ta.id, -1),
+            image: ia.source,
+            // The IMAGE's size, not the set's declared tile size: a collection set states a
+            // nominal `tilewidth` that its members freely exceed — in the measured tree the set
+            // says 232x110 while every tile in it is 256x352.
+            width: num(ia.width, 0),
+            height: num(ia.height, 0)
+        });
+    }
+    const off = /<tileoffset\b[^>]*>/.exec(body);
+    const oa = off ? attributes(off[0]) : {};
+    return { tiles: tiles.filter(t => t.id >= 0), offsetX: num(oa.x, 0), offsetY: num(oa.y, 0) };
 }
 
 /** A raw GID split into its tile and its flips. */
@@ -199,8 +264,12 @@ export function parseTiledMap(xml: string, opts?: { inflate?: (d: Uint8Array) =>
         const a = attributes(m[0]);
         // An EMBEDDED set carries its own <image>, which is the next one after this tag.
         const after = xml.slice(m.index + m[0].length);
-        const img = a.source === undefined ? /<image\b[^>]*>/.exec(after.slice(0, 400)) : null;
-        const ia = img ? attributes(img[0]) : {};
+        // The element's OWN body, so a collection set's tiles are read and the NEXT set's are not.
+        const end = after.search(/<\/tileset>/);
+        const body = a.source === undefined ? after.slice(0, end < 0 ? after.length : end) : "";
+        const img = a.source === undefined ? /<image\b[^>]*>/.exec(body.slice(0, 400)) : null;
+        const ia = img && !/<tile\b/.test(body.slice(0, (img.index ?? 0))) ? attributes(img[0]) : {};
+        const extras = tilesetExtras(body);
         tilesets.push(deriveGrid({
             firstGid: num(a.firstgid, 1),
             source: a.source ?? null,
@@ -213,7 +282,8 @@ export function parseTiledMap(xml: string, opts?: { inflate?: (d: Uint8Array) =>
             margin: num(a.margin, 0),
             image: ia.source ?? null,
             imageWidth: ia.width !== undefined ? num(ia.width, 0) : null,
-            imageHeight: ia.height !== undefined ? num(ia.height, 0) : null
+            imageHeight: ia.height !== undefined ? num(ia.height, 0) : null,
+            ...extras
         }));
     }
 
@@ -249,7 +319,10 @@ export function parseTiledTileset(xml: string, into: TiledTileset): TiledTileset
     const t = /<tileset\b[^>]*>/.exec(xml);
     const a = t ? attributes(t[0]) : {};
     const img = /<image\b[^>]*>/.exec(xml);
-    const ia = img ? attributes(img[0]) : {};
+    // A COLLECTION's first `<image>` belongs to its first `<tile>`, not to the set. Taking it as
+    // the sheet would give a set whose every cell is cut out of tile zero's picture.
+    const ia = img && !/<tile\b/.test(xml.slice(0, img.index)) ? attributes(img[0]) : {};
+    const extras = tilesetExtras(xml);
     // The map's `firstgid` is NOT in the external file — it belongs to the reference, not to the
     // set — so it is carried over rather than read, which is the one field a naive merge loses.
     // DERIVED AFTER the merge, never before: the image is what the grid is derived from and it
@@ -265,7 +338,8 @@ export function parseTiledTileset(xml: string, into: TiledTileset): TiledTileset
         margin: num(a.margin, into.margin),
         image: ia.source ?? into.image,
         imageWidth: ia.width !== undefined ? num(ia.width, 0) : into.imageWidth,
-        imageHeight: ia.height !== undefined ? num(ia.height, 0) : into.imageHeight
+        imageHeight: ia.height !== undefined ? num(ia.height, 0) : into.imageHeight,
+        ...extras
     });
 }
 
@@ -324,6 +398,22 @@ export function tileTransform(cell: TiledCell): { rotation: number; scaleX: numb
         // mirroring x is a clockwise quarter, while transposing alone is an anticlockwise one.
         : (cell.flipH ? 1 : 3);
     return { rotation: (quarter * Math.PI) / 2, scaleX, scaleY: 1 };
+}
+
+/**
+ * A collection set's own file for one GID, or null when the set is sheet-backed.
+ *
+ * A caller asks this FIRST: a collection tile is a whole file drawn at its own size, and only a
+ * sheet-backed set has a rect to cut. Checking `image` on the set would be the wrong test, since
+ * both kinds have images — one has a sheet and the other has many.
+ */
+export function tileImageFor(set: TiledTileset, gid: number): TiledTileImage | null {
+    // GID 0 is EMPTY by the format's reservation, not merely by falling below a firstGid of 1 — a
+    // set declaring `firstgid="0"` would otherwise make it index tile zero. A sheet-backed set
+    // needs no separate test: its `tiles` is empty, so the search below finds nothing.
+    if (gid <= 0) return null;
+    const id = gid - set.firstGid;
+    return set.tiles.find(t => t.id === id) ?? null;
 }
 
 /**

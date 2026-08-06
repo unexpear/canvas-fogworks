@@ -98,9 +98,9 @@ import { SvgShape, SvgDocumentResult, parseSvgDocument, svgDocumentError, parseS
     SVG_MAX_SHAPES, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
 import { SvgNodeSpec, svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { FontInfo, FontFlavour, parseFontFile, fontFileError, FONT_MAX_TABLES, FONT_MAX_NAMES } from "../import/FontFile";
-import { TiledMapResult, TiledTileset, TiledLayer, TiledCell, parseTiledMap, parseTiledTileset,
-    tiledMapError, decodeGid, tilesetFor, tileSourceRect, tilePosition, tileTransform,
-    TILED_MAX_CELLS, TILED_MAX_LAYERS } from "../import/TiledMap";
+import { TiledMapResult, TiledTileset, TiledTileImage, TiledLayer, TiledCell, parseTiledMap, parseTiledTileset,
+    tiledMapError, decodeGid, tilesetFor, tileSourceRect, tilePosition, tileTransform, tileImageFor,
+    TILED_MAX_CELLS, TILED_MAX_LAYERS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
 import { registerFont, registeredFonts, clearFonts } from "../../renderer/FontCache";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
     aseBytesPerPixel, celRgba, ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
@@ -733,7 +733,7 @@ export function __apiSurfacePin(): void {
     expectType<string[]>(tmap.notes);
     const tset: TiledTileset = tmap.tilesets[0] ?? { firstGid: 1, source: null, name: "", tileWidth: 16,
         tileHeight: 16, columns: 0, tileCount: 0, spacing: 0, margin: 0, image: null,
-        imageWidth: null, imageHeight: null };
+        imageWidth: null, imageHeight: null, tiles: [], offsetX: 0, offsetY: 0 };
     // `source` is the CONTRACT for an unresolved external set — a caller with no way to tell an
     // embedded set from a named one would silently draw nothing for 18 of the measured maps.
     expectType<string | null>(tset.source);
@@ -753,7 +753,16 @@ export function __apiSurfacePin(): void {
     // The flips as something the DOCUMENT can hold — a quarter turn and one axis flip, which is
     // exactly the eight symmetries of a square and no more than one way to say each.
     expectType<{ rotation: number; scaleX: number; scaleY: number }>(tileTransform(tcell));
+    // A COLLECTION set is a documented Tiled form whose tiles are separate files — three in the
+    // measured tree. `tiles` empty is the tell that a set is sheet-backed instead, which a caller
+    // must check FIRST, since only a sheet has a rect to cut.
+    const tileImage: TiledTileImage | undefined = tset.tiles[0];
+    expectType<TiledTileImage | undefined>(tileImage);
+    expectType<TiledTileImage | null>(tileImageFor(tset, 1));
+    // The draw offset lets a tall tile hang ABOVE its own cell; zero when the file omits it.
+    expectType<number>(tset.offsetX); expectType<number>(tset.offsetY);
     expectType<number>(TILED_MAX_CELLS); expectType<number>(TILED_MAX_LAYERS);
+    expectType<number>(TILED_MAX_TILE_IMAGES);
     expectType<{ x: number; y: number; width: number; height: number } | null>(imageInkBounds("a.png", region, 0));
 
     // ASEPRITE: the file a sheet was exported FROM, which states the grid, the trim and the clips

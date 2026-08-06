@@ -73,7 +73,8 @@ import { parseSvgDocument, svgDocumentError, parseSvgTransform, SVG_MAX_USE_DEPT
 import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
-    tileSourceRect, tilePosition, tileTransform, TILED_MAX_CELLS } from "../import/TiledMap";
+    tileSourceRect, tilePosition, tileTransform, tileImageFor,
+    TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -14638,6 +14639,145 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // from a correct one: 64x32 halves to 32 across and 16 down.
         expect(tilePosition({ orientation: "isometric", tileWidth: 64, tileHeight: 32 }, 1, 0))
             .toEqual({ x: 32, y: 16 });
+    });
+
+    test("a tileset can be a COLLECTION of files rather than one sheet", () => {
+        // Three sets in the measured tree are built this way -- 244, 348 and 236 tiles -- and they
+        // are a documented Tiled form, not a malformation. Such a set has no sheet to cut: the
+        // whole file IS the tile, so there is no rect and `image` on the set stays null.
+        const collection = '<tileset firstgid="1" name="Example" tilewidth="232" tileheight="110" '
+            + 'tilecount="3" columns="0"><tileoffset x="-12" y="6"/>'
+            + '<grid orientation="orthogonal" width="1" height="1"/>'
+            + '<tile id="0"><image width="256" height="352" source="../Tiles/bridge_N.png"/></tile>'
+            + '<tile id="1"><image width="256" height="352" source="../Tiles/bridge_E.png"/></tile>'
+            + '<tile id="2"><image width="256" height="352" source="../Tiles/bridge_S.png"/></tile>'
+            + '</tileset>';
+        const m = parseTiledMap(tmxMap({ data: "1,3,0,0", tileset: collection }));
+        const set = m.tilesets[0];
+        expect(set.tiles).toHaveLength(3);
+        // THE SET'S OWN `image` MUST STAY NULL. The first `<image>` in the text belongs to the
+        // first `<tile>`, and taking it as the sheet would give a set whose every cell is cut out
+        // of tile zero's picture -- a wrong picture rather than a missing one.
+        expect(set.image).toBeNull();
+        expect(set.imageWidth).toBeNull();
+        expect(tileSourceRect(set, 1)).toBeNull();
+
+        // The lookup is by GID, so it goes through `firstGid` exactly as the rect path does.
+        expect(tileImageFor(set, 1)).toEqual({ id: 0, image: "../Tiles/bridge_N.png", width: 256, height: 352 });
+        expect(tileImageFor(set, 3)).toEqual({ id: 2, image: "../Tiles/bridge_S.png", width: 256, height: 352 });
+        expect(tileImageFor(set, 4)).toBeNull();
+        expect(tileImageFor(set, 0)).toBeNull();
+
+        // The IMAGE'S size, not the set's declared one: this set says 232x110 while every tile in
+        // it is 256x352, which is exactly the case in the tree. Drawing at the declared size would
+        // squash every building in the pack.
+        expect(set.tileWidth).toBe(232);
+        expect(tileImageFor(set, 1)!.width).toBe(256);
+
+        // A SHEET-BACKED set has no per-tile images, so a caller can tell them apart without
+        // guessing from `image` -- both kinds have images, one sheet against many.
+        const sheet = parseTiledMap(tmxMap());
+        expect(sheet.tilesets[0].tiles).toEqual([]);
+        expect(tileImageFor(sheet.tilesets[0], 1)).toBeNull();
+        expect(tileSourceRect(sheet.tilesets[0], 1)).not.toBeNull();
+
+        // AN EXTERNAL COLLECTION is the case that actually occurs: all three real ones are `.tsx`
+        // files a map names, so the merge path -- not the embedded one -- is where this has to work.
+        const stub = parseTiledMap(tmxMap({ tileset: '<tileset firstgid="7" source="map_tiles.tsx"/>' })).tilesets[0];
+        const external = parseTiledTileset(
+            '<?xml version="1.0"?><tileset version="1.4" name="Example" tilewidth="232" '
+            + 'tileheight="110" tilecount="3" columns="0"><tileoffset x="-12" y="6"/>'
+            + "<tile id='0'><image width='256' height='352' source='../Tiles/a.png'/></tile>"
+            + "<tile id='1'><image width='256' height='352' source='../Tiles/b.png'/></tile>"
+            + "</tileset>", stub);
+        expect(external.tiles).toHaveLength(2);
+        expect(external.image).toBeNull();
+        expect(external.offsetX).toBe(-12);
+        // Through the map's firstGid, which the external file does not carry.
+        expect(tileImageFor(external, 7)).toMatchObject({ id: 0, image: "../Tiles/a.png" });
+        expect(tileImageFor(external, 8)).toMatchObject({ id: 1, image: "../Tiles/b.png" });
+        expect(tileSourceRect(external, 7)).toBeNull();
+
+        // TWO EMBEDDED SETS in one map: the first must not swallow the second's tiles. The element
+        // body is cut at its own `</tileset>`, or a map's first collection would absorb every tile
+        // after it and answer for GIDs that are not its own.
+        const two = parseTiledMap(tmxMap({ data: "1,3,0,0", tileset:
+            '<tileset firstgid="1" name="a" tilewidth="16" tileheight="16" tilecount="1" columns="0">'
+            + '<tile id="0"><image width="8" height="8" source="a0.png"/></tile></tileset>'
+            + '<tileset firstgid="2" name="b" tilewidth="16" tileheight="16" tilecount="2" columns="0">'
+            + '<tile id="0"><image width="9" height="9" source="b0.png"/></tile>'
+            + '<tile id="1"><image width="9" height="9" source="b1.png"/></tile></tileset>' }));
+        expect(two.tilesets[0].tiles).toHaveLength(1);
+        expect(two.tilesets[1].tiles).toHaveLength(2);
+        expect(tileImageFor(two.tilesets[0], 1)).toMatchObject({ image: "a0.png" });
+        expect(tileImageFor(two.tilesets[1], 3)).toMatchObject({ image: "b1.png" });
+
+        // GID 0 IS EMPTY even for a collection set declaring firstgid="0" -- the reservation is the
+        // format's, not an accident of the ids happening to start at 1.
+        const fromZero = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="0" name="z" tilewidth="16" tileheight="16" tilecount="2" columns="0">'
+            + '<tile id="0"><image width="8" height="8" source="z0.png"/></tile></tileset>' }));
+        expect(fromZero.tilesets[0].firstGid).toBe(0);
+        expect(tileImageFor(fromZero.tilesets[0], 0)).toBeNull();
+
+        // A MALFORMED tile entry is dropped rather than kept as a hole a caller would draw: an
+        // image with no source has nothing to show, and a tile with no id cannot be found by one.
+        const malformed = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="m" tilewidth="16" tileheight="16" tilecount="3" columns="0">'
+            + '<tile id="0"><image width="8" height="8"/></tile>'
+            + '<tile><image width="8" height="8" source="noid.png"/></tile>'
+            + '<tile id="2"><image width="8" height="8" source="good.png"/></tile></tileset>' }));
+        expect(malformed.tilesets[0].tiles).toEqual([
+            { id: 2, image: "good.png", width: 8, height: 8 }
+        ]);
+
+        // A `<tile>` WITHOUT an image is animation or collision data, which sheet-backed sets carry
+        // and which is not a collection. Counting it would make every such set look like one.
+        const annotated = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="4" tilecount="16">'
+            + '<image source="t.png" width="64" height="64"/>'
+            + '<tile id="0"><animation><frame tileid="0" duration="100"/></animation></tile>'
+            + '</tileset>' }));
+        expect(annotated.tilesets[0].tiles).toEqual([]);
+        expect(annotated.tilesets[0].image).toBe("t.png");
+        expect(TILED_MAX_TILE_IMAGES).toBeGreaterThan(348);
+    });
+
+    test("a tileset's draw offset is kept, and either quote is read", () => {
+        // `<tileoffset>` exists so a tall tile can hang ABOVE the cell it occupies -- a building
+        // rooted in one square standing over the three behind it. Four files in the tree carry
+        // one, and dropping it lays every such tile flat, which reads as a map drawn in the wrong
+        // order rather than as a lost attribute.
+        const offset = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="4" tilecount="16">'
+            + '<tileoffset x="-12" y="6"/><image source="t.png" width="64" height="64"/></tileset>' }));
+        expect(offset.tilesets[0].offsetX).toBe(-12);
+        expect(offset.tilesets[0].offsetY).toBe(6);
+        // A set without one is honestly zero rather than undefined, so a caller can always add it.
+        expect(parseTiledMap(tmxMap()).tilesets[0]).toMatchObject({ offsetX: 0, offsetY: 0 });
+        // It survives the EXTERNAL merge too, since that is where the four real ones live.
+        const stub = parseTiledMap(tmxMap({ tileset: '<tileset firstgid="5" source="s.tsx"/>' })).tilesets[0];
+        const merged = parseTiledTileset('<tileset name="s" tilewidth="16" tileheight="16" columns="2" '
+            + 'tilecount="4"><tileoffset x="-12" y="6"/><image source="s.png" width="32" height="32"/>'
+            + '</tileset>', stub);
+        expect(merged).toMatchObject({ offsetX: -12, offsetY: 6, firstGid: 5, image: "s.png" });
+
+        // SINGLE QUOTES. Tiled writes double ones and so does every example, but two files in the
+        // tree are written `<tile id='0'><image source='...'/>`. A reader that knew only double
+        // quotes saw a tag with NO attributes rather than an error -- the quiet kind of wrong.
+        const quoted = parseTiledMap(tmxMap({ tileset:
+            "<tileset firstgid='1' name='q' tilewidth='16' tileheight='16' tilecount='2' columns='0'>"
+            + "<tile id='0'><image width='256' height='352' source='../Tiles/a.png'/></tile>"
+            + "<tile id='1'><image width='256' height='352' source='../Tiles/b.png'/></tile></tileset>" }));
+        expect(quoted.tilesets[0].name).toBe("q");
+        expect(quoted.tilesets[0].tiles).toHaveLength(2);
+        expect(tileImageFor(quoted.tilesets[0], 2)).toMatchObject({ image: "../Tiles/b.png" });
+        // The quote is BACK-REFERENCED, so an apostrophe inside a double-quoted value does not end
+        // it early -- a name like "Kenney's" would otherwise truncate and never match.
+        const apostrophe = parseTiledMap(tmxMap({ tileset:
+            '<tileset firstgid="1" name="Kenney\'s set" tilewidth="16" tileheight="16" columns="4" '
+            + 'tilecount="16"><image source="t.png" width="64" height="64"/></tileset>' }));
+        expect(apostrophe.tilesets[0].name).toBe("Kenney's set");
     });
 
     test("a Tiled map names what it cannot read", () => {
