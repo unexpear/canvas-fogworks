@@ -178,6 +178,10 @@ const SCAN_MAX_BYTES = 2_000_000;   // per file; a source file larger than this 
 const SCAN_SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "out", "coverage", ".next", "vendor", ".cache"]);
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|vue|svelte)$/i;
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
+// FONTS are a separate channel from images rather than the same one with a wider pattern: the
+// image reader hardcodes a `data:image/…` mime, and a font arriving under it would be a URL no
+// `FontFace` accepts. Two narrow doors beat one that lies about what came through it.
+const FONT_EXT = /\.(ttf|otf)$/i;
 
 /** Walk a directory, collecting entries that pass `match`, bounded by count. */
 function walkDir(root, match, limit) {
@@ -237,6 +241,23 @@ ipcMain.handle("read-asset-folder", async (event, folder) => {
 });
 
 /** Read one image as a data: URL, so a placed asset travels with the document. */
+ipcMain.handle("read-font-folder", async (event, folder) => {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    return walkDir(folder, name => FONT_EXT.test(name), SCAN_MAX_FILES).map(full => ({
+        path: full,
+        name: path.basename(full),
+        relative: path.relative(folder, full)
+    }));
+});
+
+// BYTES, not a data URL: the family has to be read out of the file before anything can register
+// it, and base64 is only how they cross the bridge.
+ipcMain.handle("read-font-bytes", async (event, filePath) => {
+    if (!filePath || typeof filePath !== "string") throw new Error("Invalid file path.");
+    if (!FONT_EXT.test(filePath)) throw new Error("Not a font file.");
+    return fs.readFileSync(filePath).toString("base64");
+});
+
 ipcMain.handle("read-image-data-url", async (event, filePath) => {
     if (!filePath || typeof filePath !== "string") throw new Error("Invalid file path.");
     const ext = path.extname(filePath).slice(1).toLowerCase();

@@ -71,6 +71,7 @@ import { parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_EN
 import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/SvgPath";
 import { parseSvgDocument, svgDocumentError, parseSvgTransform, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
 import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
+import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -14200,6 +14201,124 @@ describe("Mesh — bending a shape (schema 41)", () => {
         `<?xml version="1.0" encoding="UTF-8"?>\n<TextureAtlas imagePath="${image}">\n${subs.join("\n")}\n</TextureAtlas>`;
     const sub = (attrs: Record<string, string | number>) =>
         "\t<SubTexture " + Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join("\t") + "/>";
+
+    // ── Font fixtures ────────────────────────────────────────────────────────
+    //
+    // An sfnt assembled from the spec: a header, a table directory, and the tables named. Built by
+    // hand rather than copied out of the tree, and checked against it separately — all 56 real
+    // fonts parse, every one yields a family, and 36 of them have a FILENAME that differs from the
+    // family the platform matches on, which is the whole reason this reads the file.
+    const beU16 = (v: number) => [(v >> 8) & 0xff, v & 0xff];
+    const beU32 = (v: number) => [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+    const utf16be = (text: string) => [...text].flatMap(c => beU16(c.charCodeAt(0)));
+    const fontFile = (opts?: {
+        version?: number; names?: { id: number; text: string; platform?: number; language?: number }[];
+        unitsPerEm?: number; macStyle?: number; weight?: number; omitOs2?: boolean; omitName?: boolean;
+    }) => {
+        const names = opts?.names ?? [{ id: 1, text: "Kenney Blocks" }, { id: 2, text: "Regular" },
+            { id: 4, text: "Kenney Blocks Regular" }, { id: 6, text: "KenneyBlocks-Regular" }];
+        const strings: number[] = [];
+        const records: number[] = [];
+        for (const n of names) {
+            const platform = n.platform ?? 3;
+            const bytes = platform === 3 || platform === 0
+                ? utf16be(n.text) : [...n.text].map(c => c.charCodeAt(0));
+            records.push(...beU16(platform), ...beU16(1), ...beU16(n.language ?? 0x409), ...beU16(n.id),
+                ...beU16(bytes.length), ...beU16(strings.length));
+            strings.push(...bytes);
+        }
+        const nameTable = [...beU16(0), ...beU16(names.length), ...beU16(6 + records.length),
+            ...records, ...strings];
+        const head = new Array(54).fill(0);
+        head.splice(18, 2, ...beU16(opts?.unitsPerEm ?? 2048));
+        head.splice(44, 2, ...beU16(opts?.macStyle ?? 0));
+        const os2 = new Array(78).fill(0);
+        os2.splice(4, 2, ...beU16(opts?.weight ?? 400));
+
+        const tables: [string, number[]][] = [["head", head]];
+        if (!opts?.omitName) tables.push(["name", nameTable]);
+        if (!opts?.omitOs2) tables.push(["OS/2", os2]);
+        let offset = 12 + tables.length * 16;
+        const dir: number[] = [];
+        const body: number[] = [];
+        for (const [tag, data] of tables) {
+            dir.push(...[...tag].map(c => c.charCodeAt(0)), ...beU32(0), ...beU32(offset), ...beU32(data.length));
+            body.push(...data);
+            offset += data.length;
+        }
+        return Uint8Array.from([...beU32(opts?.version ?? 0x00010000), ...beU16(tables.length),
+            ...beU16(0), ...beU16(0), ...beU16(0), ...dir, ...body]);
+    };
+
+    test("a font's family is read from the FILE, not from its name", () => {
+        const info = parseFontFile(fontFile());
+        expect(info).toMatchObject({
+            family: "Kenney Blocks", subfamily: "Regular",
+            fullName: "Kenney Blocks Regular", postScriptName: "KenneyBlocks-Regular",
+            flavour: "truetype", unitsPerEm: 2048, weight: 400, italic: false
+        });
+        // CFF outlines are the other flavour in the tree — 17 of the 56 files.
+        expect(parseFontFile(fontFile({ version: 0x4f54544f })).flavour).toBe("cff");
+        // `head.macStyle` bit 1 is ITALIC and bit 0 is BOLD; reading the wrong one makes every bold
+        // face italic, which is the kind of wrong that looks like a font problem.
+        expect(parseFontFile(fontFile({ macStyle: 0b10 })).italic).toBe(true);
+        expect(parseFontFile(fontFile({ macStyle: 0b01 })).italic).toBe(false);
+        // The weight lands in `style.fontWeight` unchanged, because both are the 1-1000 scale.
+        const bold = parseFontFile(fontFile({ weight: 700 }));
+        expect(bold.weight).toBe(700);
+        expect(styleError({ fill: "#fff", fontWeight: bold.weight })).toBeNull();
+        // A font declaring something outside that scale is CLAMPED into what the document accepts
+        // rather than refused — the field is a raw uint16 and nothing stops a font writing 0.
+        expect(parseFontFile(fontFile({ weight: 0 })).weight).toBe(1);
+        expect(parseFontFile(fontFile({ weight: 5000 })).weight).toBe(1000);
+    });
+
+    test("the best name record wins, and each platform's encoding is decoded as its own", () => {
+        // A font carries the same name for several platforms, and the Macintosh copy often comes
+        // FIRST while the Windows one is what the platform matches on. Taking the first record
+        // works on most files and quietly picks the wrong string on the rest.
+        expect(parseFontFile(fontFile({ names: [
+            { id: 1, text: "Mac Name", platform: 1 },
+            { id: 1, text: "Windows Name", platform: 3, language: 0x409 }
+        ] })).family).toBe("Windows Name");
+
+        // A MACINTOSH string is single-byte. Decoding UTF-16 as bytes leaves a NUL between every
+        // letter, and decoding bytes as UTF-16 folds pairs of letters into one character — so the
+        // tell is asserted directly rather than trusted.
+        const macOnly = parseFontFile(fontFile({ names: [{ id: 1, text: "Mac Only", platform: 1 }] }));
+        expect(macOnly.family).toBe("Mac Only");
+        // Length is the tell: reading a single-byte string as UTF-16 halves it, and reading a
+        // UTF-16 one as bytes doubles it. "Mac Only" is 8 characters either way only if the
+        // encoding was chosen by platform.
+        expect(macOnly.family).toHaveLength(8);
+
+        // A non-English Windows record beats a Mac one but loses to English.
+        expect(parseFontFile(fontFile({ names: [
+            { id: 1, text: "German", platform: 3, language: 0x407 },
+            { id: 1, text: "English", platform: 3, language: 0x409 }
+        ] })).family).toBe("English");
+    });
+
+    test("a font names what it cannot read, and survives a missing optional table", () => {
+        expect(fontFileError(fontFile())).toBeNull();
+        expect(fontFileError("not bytes")).toMatch(/must be bytes/);
+        expect(fontFileError(new Uint8Array(4))).toMatch(/shorter than its header/);
+        // A COLLECTION and a WOFF each need an unpacking step this does not do, so both are named
+        // rather than half-read: a partly-understood font would register the wrong face.
+        expect(fontFileError(Uint8Array.from([0x74, 0x74, 0x63, 0x66, 0, 1, 0, 0, 0, 0, 0, 0]))).toMatch(/collections/);
+        expect(fontFileError(Uint8Array.from([0x77, 0x4f, 0x46, 0x46, 0, 1, 0, 0, 0, 0, 0, 0]))).toMatch(/WOFF/);
+        expect(fontFileError(Uint8Array.from([0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]))).toMatch(/unrecognised sfnt/);
+        // The name table is the ONE table it must have: without it nothing can match the font.
+        expect(fontFileError(fontFile({ omitName: true }))).toMatch(/no name table/);
+        expect(() => parseFontFile(fontFile({ omitName: true }))).toThrow(/no name table/);
+        expect(FONT_MAX_TABLES).toBeGreaterThan(10);
+
+        // A MISSING OS/2 is not an error — plenty of fonts omit it — and falls back to what CSS
+        // would assume rather than failing a file that renders perfectly well.
+        const noOs2 = parseFontFile(fontFile({ omitOs2: true }));
+        expect(noOs2.weight).toBe(400);
+        expect(noOs2.family).toBe("Kenney Blocks");
+    });
 
     test("read shapes become nodes the document accepts", () => {
         // The shapes arrive with ABSOLUTE coordinates, because baking the group transforms leaves

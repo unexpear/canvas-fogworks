@@ -816,6 +816,32 @@ function parseSvgTransform(text: string): Mat2D;        // matrix/translate/scal
 - Gradients flatten to their first stop and every approximation lands in `notes`.
 - Verified against all 5,279 real files: 109,036 shapes, none empty, none rejected by `pathError`.
 
+### `core/import/FontFile` — the facts needed to register a face
+
+```ts
+type FontFlavour = "truetype" | "cff";
+interface FontInfo { family: string; subfamily: string; fullName: string; postScriptName: string;
+                     flavour: FontFlavour; unitsPerEm: number; weight: number; italic: boolean }
+function fontFileError(bytes: unknown): string | null;
+function parseFontFile(bytes: Uint8Array): FontInfo;
+```
+
+`renderer/FontCache` is the impure half, beside `ImageCache` because it needs a DOM:
+
+```ts
+function registerFont(info: FontInfo, bytes: Uint8Array): Promise<string | null>;   // null = registered
+function registeredFonts(): FontInfo[];
+```
+
+- THE FAMILY COMES OUT OF THE FILE. 36 of the 56 fonts measured have a filename that differs from
+  the name the platform matches on, so a picker built from filenames offers families no document
+  can use.
+- Parsing stops at the `name`, `head` and `OS/2` tables: the platform rasterises text itself once a
+  face is registered, so glyph outlines are not this engine's business.
+- `usWeightClass` lands in `style.fontWeight` unchanged — both are the 1–1000 scale — clamped into
+  range, since the field is a raw uint16.
+- Collections (`.ttc`) and WOFF are NAMED, not half-read: each needs an unpacking step this omits.
+
 ### `core/import/SvgNodes` — read shapes as `core.path` nodes
 
 ```ts

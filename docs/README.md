@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1230 — `src/core/tests/document.test.ts` (1121) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (40).
+- **Tests:** 1233 — `src/core/tests/document.test.ts` (1124) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (40).
 
 ## Source map
 
@@ -71,7 +71,8 @@ src/
                 Aseprite (the file a sheet came from),
                 TextureAtlas (the descriptor a packer wrote),
                 SvgPath (vector data), SvgDocument (whole
-                files), SvgNodes (shapes as nodes)
+                files), SvgNodes (shapes as nodes),
+                FontFile (a face's identity)
     ids/        UUID
     tests/      document.test.ts, apiSurface.ts (compile-time API pin —
                 a module that gains a documented export gains a line

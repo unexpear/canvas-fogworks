@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     pickFolder: () => ipcRenderer.invoke("pick-folder"),
     readSourceFolder: (folder) => ipcRenderer.invoke("read-source-folder", folder),
     readAssetFolder: (folder) => ipcRenderer.invoke("read-asset-folder", folder),
+    readFontFolder: (folder) => ipcRenderer.invoke("read-font-folder", folder),
+    readFontBytes: (filePath) => ipcRenderer.invoke("read-font-bytes", filePath),
     readImageDataUrl: (filePath) => ipcRenderer.invoke("read-image-data-url", filePath),
     writeIntoFolder: (folder, filename, content) => ipcRenderer.invoke("write-into-folder", folder, filename, content)
 });

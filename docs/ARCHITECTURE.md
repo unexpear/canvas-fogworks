@@ -1025,6 +1025,26 @@ that nothing can play it.
 not loaded rather than guessing at its dimensions — the same rule `emitSVG` follows for a region,
 and for the same reason: a grid computed against the wrong size is wrong everywhere at once.
 
+### Fonts — a family name is not a font
+
+**`style.fontFamily` has always been a STRING and nothing else.** A document could ask for "Kenney
+Blocks" and every backend would hand that name to the platform, which would shrug and draw something
+else — the text still laid out, just in the wrong typeface, which is the kind of wrong that looks
+like a rendering bug. 56 font files sit in the measured tree and none of them could be used.
+
+**The name has to come OUT of the file, not off the filename.** `Kenney Future Narrow.ttf` is a
+guess; the `name` table states the family the platform will match on, and the two are not reliably
+the same — a file renamed on download would silently never match. So the family is read from the
+font, along with the weight and italic flag that map onto `style.fontWeight`.
+
+**Parsing is pure and stops at the name.** Reading glyph outlines would be a typesetting engine, and
+this engine does not need one: the platform already rasterises text once a face is registered. What
+it needs is the handful of facts required to register the face and to describe it in a picker —
+family, subfamily, weight, italic, and which flavour of outline the file carries.
+
+**Registration is the impure half**, and belongs with the other decode work in the renderer layer
+beside `ImageCache`, for the same reason: it needs a DOM, and keeping it out of core is what lets
+every rule above be tested without one.
 ### SVG documents — flattened, because the transform model does not reach
 
 **A `<g transform>` cannot become a node transform.** VDE's `Transform` is rotation, scale and an

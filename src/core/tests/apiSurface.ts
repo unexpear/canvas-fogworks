@@ -97,6 +97,8 @@ import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/Svg
 import { SvgShape, SvgDocumentResult, parseSvgDocument, svgDocumentError, parseSvgTransform,
     SVG_MAX_SHAPES, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
 import { SvgNodeSpec, svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
+import { FontInfo, FontFlavour, parseFontFile, fontFileError, FONT_MAX_TABLES, FONT_MAX_NAMES } from "../import/FontFile";
+import { registerFont, registeredFonts, clearFonts } from "../../renderer/FontCache";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
     aseBytesPerPixel, celRgba, ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
@@ -703,6 +705,18 @@ export function __apiSurfacePin(): void {
     const svgSpecs: SvgNodeSpec[] = svgNodeSpecs(svgDoc.shapes);
     expectType<SvgNodeSpec[]>(svgSpecs);
     expectType<string>(SVG_TRANSPARENT);
+
+    // FONTS: the family comes out of the FILE, because 36 of the 56 measured have a filename that
+    // differs from the name the platform matches on. Parsing is pure; registering needs a DOM.
+    expectType<string | null>(fontFileError(new Uint8Array(0)));
+    const face: FontInfo = { family: "", subfamily: "", fullName: "", postScriptName: "",
+        flavour: "truetype" as FontFlavour, unitsPerEm: 1000, weight: 400, italic: false };
+    expectType<FontInfo>(face);
+    expectType<(b: Uint8Array) => FontInfo>(parseFontFile);
+    expectType<Promise<string | null>>(registerFont(face, new Uint8Array(0)));
+    expectType<FontInfo[]>(registeredFonts());
+    expectType<() => void>(clearFonts);
+    expectType<number>(FONT_MAX_TABLES); expectType<number>(FONT_MAX_NAMES);
     expectType<{ x: number; y: number; width: number; height: number } | null>(imageInkBounds("a.png", region, 0));
 
     // ASEPRITE: the file a sheet was exported FROM, which states the grid, the trim and the clips

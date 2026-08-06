@@ -76,6 +76,8 @@ import { sliceGrid, sliceCells, sliceTrack, blankCells } from "../core/import/Sh
 import { parseTextureAtlas, atlasError, AtlasEntry } from "../core/import/TextureAtlas";
 import { parseSvgDocument, svgDocumentError } from "../core/import/SvgDocument";
 import { svgNodeSpecs, SvgNodeSpec } from "../core/import/SvgNodes";
+import { parseFontFile, fontFileError, FontInfo } from "../core/import/FontFile";
+import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
 import { naturalSize } from "../../src/renderer/ImageCache";
@@ -250,6 +252,8 @@ declare global {
             readImageDataUrl: (filePath: string) => Promise<string>;
             writeIntoFolder: (folder: string, filename: string, content: string) => Promise<string>;
             writePngIntoFolder: (folder: string, filename: string, dataUrl: string) => Promise<string>;
+            readFontFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
+            readFontBytes: (filePath: string) => Promise<string>;
         };
     }
 }
@@ -1639,6 +1643,7 @@ export function App() {
                                 ? { id: node.id, src: node.src } : null}
                             onImportTrack={importTrack}
                             onImportSvg={importSvg}
+                            editContentFont={family => { editSelected({ style: { fontFamily: family } }); refresh(); }}
                             onSetRegion={rect => { editContent({ sourceRect: rect }); refresh(); }}
                         />
                     </div>
@@ -2456,7 +2461,7 @@ const LAYER_ICONS: Record<string, string> = {
  * Both are inert without Electron (the browser build has no `electronAPI`), so the drawer says
  * so rather than showing controls that do nothing.
  */
-function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion, onImportSvg }: {
+function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion, onImportSvg, editContentFont }: {
     onPlaceImage: (dataUrl: string, name: string) => void;
     getDocument: () => ReadonlyDocument;
     /** The selected node when it is an image with a source — what a SHEET import acts ON. */
@@ -2464,6 +2469,8 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     onImportTrack: (track: Keyframe[]) => void;
     onSetRegion: (rect: SourceRect) => void;
     onImportSvg: (specs: SvgNodeSpec[]) => void;
+    /** Apply a registered family to the selected node — the point of loading one. */
+    editContentFont: (family: string) => void;
 }) {
     const [tab, setTab] = useState<"source" | "assets" | "export" | "import">("source");
     /** Grid inputs. Strings, because a half-typed number is a state a number input has to hold. */
@@ -2475,6 +2482,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     const [atlasText, setAtlasText] = useState("");
     const [atlasEntries, setAtlasEntries] = useState<AtlasEntry[] | null>(null);
     const [svgText, setSvgText] = useState("");
+    const [fonts, setFonts] = useState<FontInfo[]>(registeredFonts());
     const [importNote, setImportNote] = useState<string | null>(null);
     const [exported, setExported] = useState<string | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
@@ -2691,6 +2699,57 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                         }}
                         style={DRAWER_BUTTON}
                     >Place the SVG</button>
+
+                    {/* FONTS need no selection either — registering a family makes it available to
+                        every backend at once, because all three ask the platform for it by name. */}
+                    <label style={INSPECTOR_LABEL}>Load fonts from a folder</label>
+                    <button
+                        data-font-btn="1"
+                        disabled={busy}
+                        onClick={async () => {
+                            const folder = await api.pickFolder();
+                            if (!folder) return;
+                            setBusy(true);
+                            try {
+                                const files = await api.readFontFolder(folder);
+                                const problems: string[] = [];
+                                let added = 0;
+                                for (const f of files) {
+                                    const base64 = await api.readFontBytes(f.path);
+                                    const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+                                    // The SHARED validator, so the panel refuses exactly what the
+                                    // reader would — and names which file it refused.
+                                    const bad = fontFileError(bytes);
+                                    if (bad) { problems.push(`${f.name}: ${bad}`); continue; }
+                                    // THE FAMILY COMES OUT OF THE FILE. 36 of the 56 fonts measured
+                                    // have a filename that differs from the name the platform
+                                    // matches on, so a picker built from filenames would offer
+                                    // families no document could ever use.
+                                    const note = await registerFont(parseFontFile(bytes), bytes);
+                                    if (note) problems.push(note); else added++;
+                                }
+                                setFonts(registeredFonts());
+                                setImportNote(`${added} font${added === 1 ? "" : "s"} registered of ${files.length}`
+                                    + (problems.length ? ` · ${problems[0]}` : ""));
+                            } finally { setBusy(false); }
+                        }}
+                        style={DRAWER_BUTTON}
+                    >{busy ? "Loading…" : "Load fonts…"}</button>
+                    {fonts.length > 0 && (
+                        <select
+                            data-font-list="1"
+                            onChange={e => { if (e.target.value) { editContentFont(e.target.value); } }}
+                            style={{ width: "100%", fontSize: 11, marginBottom: 6, background: UI.raised,
+                                color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3 }}
+                        >
+                            <option value="">Apply a family to the selection…</option>
+                            {fonts.map(f => (
+                                <option key={f.family} value={f.family}>
+                                    {f.family}{f.subfamily && f.subfamily !== "Regular" ? ` ${f.subfamily}` : ""}
+                                </option>
+                            ))}
+                        </select>
+                    )}
                     {importNote && <div style={{ color: "#6a9", wordBreak: "break-all" }}>{importNote}</div>}
                 </>
             ) : tab === "export" ? (
