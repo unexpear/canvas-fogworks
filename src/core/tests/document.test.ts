@@ -70,6 +70,7 @@ import { trimmedPlacement, inkUnion } from "../import/Trim";
 import { parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_ENTRIES } from "../import/TextureAtlas";
 import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/SvgPath";
 import { parseSvgDocument, svgDocumentError, parseSvgTransform, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
+import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -14199,6 +14200,70 @@ describe("Mesh — bending a shape (schema 41)", () => {
         `<?xml version="1.0" encoding="UTF-8"?>\n<TextureAtlas imagePath="${image}">\n${subs.join("\n")}\n</TextureAtlas>`;
     const sub = (attrs: Record<string, string | number>) =>
         "\t<SubTexture " + Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join("\t") + "/>";
+
+    test("read shapes become nodes the document accepts", () => {
+        // The shapes arrive with ABSOLUTE coordinates, because baking the group transforms leaves
+        // them that way. A node wants a BOX and commands relative to its corner — which is what
+        // selection, snapping, culling and hit-testing all read.
+        const doc = parseSvgDocument(
+            '<svg><g transform="translate(100,200)">' +
+            '<path d="M10 10 L30 10 L30 40 Z" fill="#112233" stroke="#445566" stroke-width="2"/>' +
+            "</g></svg>");
+        const specs = svgNodeSpecs(doc.shapes);
+        expect(specs).toHaveLength(1);
+        // The BOX is where the ink is, in file space: the path spans (110,210) to (130,240).
+        expect(specs[0].geometry).toEqual({ x: 110, y: 210, width: 20, height: 30 });
+        // …and the commands are RELATIVE to that corner, so the node's bounds describe its ink.
+        expect(specs[0].path[0]).toEqual({ c: "M", x: 0, y: 0 });
+        expect(specs[0].path[1]).toEqual({ c: "L", x: 20, y: 0 });
+        expect(specs[0].style).toEqual({ fill: "#112233", opacity: 1, stroke: "#445566", strokeWidth: 2 });
+
+        // AND THE DOCUMENT ACCEPTS THEM — the real bar, checked with the same validators the load
+        // path uses rather than by eye.
+        expect(pathError("core.path", specs[0].path)).toBeNull();
+        expect(styleError(specs[0].style)).toBeNull();
+        expect(dimensionError("core.path", specs[0].geometry.width, specs[0].geometry.height)).toBeNull();
+    });
+
+    test("a shape with no fill still becomes a node, and a hairline one is not dropped", () => {
+        // `fill` is REQUIRED on a node while SVG's may be `none` — 790 in the measured art. Fully
+        // transparent black keeps the shape, and is eight-digit hex because all three backends read
+        // that: the GPU's `parseColor` takes `#rrggbbaa` explicitly, where a word like
+        // `transparent` would fall back to the missing-colour magenta.
+        const none = svgNodeSpecs(parseSvgDocument(
+            '<svg><path d="M0 0 L10 10" fill="none" stroke="#000000"/></svg>').shapes);
+        expect(none[0].style.fill).toBe(SVG_TRANSPARENT);
+        expect(styleError(none[0].style)).toBeNull();
+        // No stroke means the field is ABSENT rather than empty — an empty string is a colour the
+        // renderer would have to interpret.
+        const plain = svgNodeSpecs(parseSvgDocument('<svg><path d="M0 0 L1 1" fill="#fff"/></svg>').shapes);
+        expect("stroke" in plain[0].style).toBe(false);
+        expect("strokeWidth" in plain[0].style).toBe(false);
+
+        // A SINGLE-AXIS collapse is kept: a perfectly horizontal stroke is a real path, and this is
+        // the rule `penNodeFrom` already applies.
+        const flat = svgNodeSpecs(parseSvgDocument('<svg><path d="M0 5 L20 5"/></svg>').shapes);
+        expect(flat).toHaveLength(1);
+        expect(flat[0].geometry).toMatchObject({ width: 20, height: 0 });
+        // A shape with NO extent at all has no ink and is dropped, because the document refuses it.
+        expect(svgNodeSpecs(parseSvgDocument('<svg><path d="M7 7"/></svg>').shapes)).toHaveLength(0);
+
+        // OPACITY is clamped into what `styleError` accepts — nested opacities multiply, and a
+        // product can land a hair outside [0,1] in floating point.
+        const faded = svgNodeSpecs(parseSvgDocument(
+            '<svg><g opacity="0.5"><path d="M0 0 L2 2" opacity="0.5"/></g></svg>').shapes);
+        expect(faded[0].style.opacity).toBeCloseTo(0.25, 9);
+        expect(styleError(faded[0].style)).toBeNull();
+        // OUT OF RANGE is where the clamp earns its keep, and a value inside it proves nothing.
+        // `opacity="2"` is malformed but writable, and nested products can leave [0,1] by a
+        // rounding error — either way `styleError` would refuse the shape over arithmetic.
+        const tooBright = svgNodeSpecs(parseSvgDocument('<svg><path d="M0 0 L2 2" opacity="2"/></svg>').shapes);
+        expect(tooBright[0].style.opacity).toBe(1);
+        expect(styleError(tooBright[0].style)).toBeNull();
+        const negative = svgNodeSpecs(parseSvgDocument('<svg><path d="M0 0 L2 2" opacity="-1"/></svg>').shapes);
+        expect(negative[0].style.opacity).toBe(0);
+        expect(styleError(negative[0].style)).toBeNull();
+    });
 
     test("a group's transform is BAKED into the coordinates, exactly", () => {
         // This engine's `Transform` is rotation, scale and an origin; SVG's is an arbitrary affine

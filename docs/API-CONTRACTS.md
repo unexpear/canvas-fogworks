@@ -816,6 +816,22 @@ function parseSvgTransform(text: string): Mat2D;        // matrix/translate/scal
 - Gradients flatten to their first stop and every approximation lands in `notes`.
 - Verified against all 5,279 real files: 109,036 shapes, none empty, none rejected by `pathError`.
 
+### `core/import/SvgNodes` — read shapes as `core.path` nodes
+
+```ts
+interface SvgNodeSpec { geometry: Rect; path: PathCommand[]; style: Style }
+const SVG_TRANSPARENT: string;                       // "#00000000" — every backend reads 8-digit hex
+function svgNodeSpecs(shapes: readonly SvgShape[]): SvgNodeSpec[];
+```
+
+- The commands arrive ABSOLUTE (baking the transforms leaves them so); a node wants a box and
+  commands relative to its corner. That conversion is `PathBuilder.normalizePathNode`, the one the
+  pen tool already uses — not a second copy.
+- A node's `fill` is required, so `fill="none"` becomes fully transparent black. Opacity is clamped
+  into what `styleError` accepts, since nested opacities multiply.
+- A shape with no extent in EITHER axis is dropped; a single-axis collapse is kept, because a
+  horizontal stroke is a real path.
+
 ### `core/import/SvgPath` — SVG path data into this engine's commands
 
 ```ts

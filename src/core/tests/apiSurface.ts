@@ -96,6 +96,7 @@ import { Atlas, AtlasEntry, parseTextureAtlas, atlasError, atlasEntry, atlasPlac
 import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/SvgPath";
 import { SvgShape, SvgDocumentResult, parseSvgDocument, svgDocumentError, parseSvgTransform,
     SVG_MAX_SHAPES, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
+import { SvgNodeSpec, svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
     aseBytesPerPixel, celRgba, ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
@@ -697,6 +698,11 @@ export function __apiSurfacePin(): void {
     expectType<string[]>(svgDoc.notes);
     expectType<Mat2D>(parseSvgTransform("translate(1,2)"));
     expectType<number>(SVG_MAX_SHAPES); expectType<number>(SVG_MAX_USE_DEPTH);
+    // …and the shapes as NODES: a box where the ink is, commands relative to its corner. The
+    // conversion is `PathBuilder.normalizePathNode`, the one the pen tool already uses.
+    const svgSpecs: SvgNodeSpec[] = svgNodeSpecs(svgDoc.shapes);
+    expectType<SvgNodeSpec[]>(svgSpecs);
+    expectType<string>(SVG_TRANSPARENT);
     expectType<{ x: number; y: number; width: number; height: number } | null>(imageInkBounds("a.png", region, 0));
 
     // ASEPRITE: the file a sheet was exported FROM, which states the grid, the trim and the clips

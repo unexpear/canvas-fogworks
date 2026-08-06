@@ -74,6 +74,10 @@ import { exportSVG, TextLines } from "../core/export/ExportSVG";
 import { planSheet, sheetAtlas, sheetTooLarge, drawSheet, SheetPlan } from "../core/export/SpriteSheet";
 import { sliceGrid, sliceCells, sliceTrack, blankCells } from "../core/import/SheetSlice";
 import { parseTextureAtlas, atlasError, AtlasEntry } from "../core/import/TextureAtlas";
+import { parseSvgDocument, svgDocumentError } from "../core/import/SvgDocument";
+import { svgNodeSpecs, SvgNodeSpec } from "../core/import/SvgNodes";
+import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
+import { generateUUID } from "../core/ids/UUID";
 import { naturalSize } from "../../src/renderer/ImageCache";
 import { SourceRect } from "../core/document/Node";
 import { Action } from "../core/actions/Action";
@@ -103,6 +107,15 @@ const UI = {
 };
 
 /** A panel's section heading — small, spaced, quiet. Used by every panel so they match. */
+/**
+ * Paths one SVG import will place.
+ *
+ * A drawing of a few hundred shapes is ordinary; a map of ten thousand is a document nobody meant
+ * to make by pasting into a text box. Refused rather than truncated — half a picture placed quietly
+ * is worse than a sentence saying it was too large.
+ */
+const SVG_PLACE_MAX = 2000;
+
 const DRAWER_BUTTON: React.CSSProperties = {
     width: "100%", boxSizing: "border-box", fontSize: 11, padding: "4px 6px", cursor: "pointer",
     background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, marginBottom: 4
@@ -978,6 +991,31 @@ export function App() {
         refresh();
     }, [selectedNodeId, dispatcher, refresh]);
 
+    /**
+     * Place imported SVG shapes as `core.path` nodes.
+     *
+     * ONE TRANSACTION for the whole drawing. An SVG is a single picture, so a single undo should
+     * remove it — and a node whose commands arrived in a later action would be an empty path if the
+     * import were interrupted between the two, which is the trap the pen tool already avoids.
+     */
+    const importSvg = useCallback((specs: SvgNodeSpec[]) => {
+        if (specs.length === 0) return;
+        const doc = dispatcher.getDocument();
+        const actions: Action[] = [];
+        const ids: string[] = [];
+        for (const spec of specs) {
+            // The id is minted HERE so both halves can name it — the same reason the pen tool does.
+            const id = generateUUID();
+            ids.push(id);
+            actions.push(new AddNodeAction(doc, "core.path", spec.geometry.x, spec.geometry.y,
+                spec.geometry.width, spec.geometry.height, spec.style.fill, id));
+            actions.push(new UpdateNodePathAction(doc, id, spec.path));
+        }
+        dispatcher.dispatchAction(new TransactionAction(doc, "import-svg", actions));
+        es.selectedNodeIds = ids.slice(0, 1);
+        refresh();
+    }, [dispatcher, es, refresh]);
+
     /** Transform edits — routed, so a copy gets a transform override (schema 26). */
     const editTransform = (patch: { rotation?: number; scaleX?: number; scaleY?: number }) => {
         if (!selectedNodeId) return;
@@ -1600,6 +1638,7 @@ export function App() {
                             selectedImage={node && node.type === "core.image" && node.src
                                 ? { id: node.id, src: node.src } : null}
                             onImportTrack={importTrack}
+                            onImportSvg={importSvg}
                             onSetRegion={rect => { editContent({ sourceRect: rect }); refresh(); }}
                         />
                     </div>
@@ -2417,13 +2456,14 @@ const LAYER_ICONS: Record<string, string> = {
  * Both are inert without Electron (the browser build has no `electronAPI`), so the drawer says
  * so rather than showing controls that do nothing.
  */
-function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion }: {
+function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion, onImportSvg }: {
     onPlaceImage: (dataUrl: string, name: string) => void;
     getDocument: () => ReadonlyDocument;
-    /** The selected node when it is an image with a source — what an import acts ON. */
+    /** The selected node when it is an image with a source — what a SHEET import acts ON. */
     selectedImage: { id: string; src: string } | null;
     onImportTrack: (track: Keyframe[]) => void;
     onSetRegion: (rect: SourceRect) => void;
+    onImportSvg: (specs: SvgNodeSpec[]) => void;
 }) {
     const [tab, setTab] = useState<"source" | "assets" | "export" | "import">("source");
     /** Grid inputs. Strings, because a half-typed number is a state a number input has to hold. */
@@ -2434,6 +2474,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     const [step, setStep] = useState("2");
     const [atlasText, setAtlasText] = useState("");
     const [atlasEntries, setAtlasEntries] = useState<AtlasEntry[] | null>(null);
+    const [svgText, setSvgText] = useState("");
     const [importNote, setImportNote] = useState<string | null>(null);
     const [exported, setExported] = useState<string | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
@@ -2512,7 +2553,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                         in, and is already on the canvas — so the result is visible where it lands. */}
                     {!selectedImage ? (
                         <div style={{ color: "#999", padding: "6px 2px" }}>
-                            Select an image node to import into it.
+                            Select an image node to slice a sheet into it.
                         </div>
                     ) : (
                         <>
@@ -2613,6 +2654,43 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                             )}
                         </>
                     )}
+                    {/* SVG NEEDS NO SELECTION, unlike a sheet: it CREATES nodes rather than filling
+                        in numbers on one that exists, so it sits outside the guard above. */}
+                    <label style={INSPECTOR_LABEL}>Import an SVG as paths</label>
+                    <textarea
+                        data-svg-input="1"
+                        value={svgText}
+                        onChange={e => setSvgText(e.target.value)}
+                        placeholder="<svg …>"
+                        spellCheck={false}
+                        style={{ width: "100%", boxSizing: "border-box", height: 60, fontSize: 10,
+                            fontFamily: "monospace", background: UI.raised, color: UI.text,
+                            border: `1px solid ${UI.line}`, borderRadius: 3, marginBottom: 4 }}
+                    />
+                    <button
+                        data-svg-btn="1"
+                        onClick={() => {
+                            // The SHARED validator, so the panel cannot accept what the reader
+                            // would refuse — and names the part it refused.
+                            const bad = svgDocumentError(svgText);
+                            if (bad) { setImportNote(bad); return; }
+                            const doc = parseSvgDocument(svgText);
+                            const specs = svgNodeSpecs(doc.shapes);
+                            if (specs.length > SVG_PLACE_MAX) {
+                                // BOUNDED, and refused rather than truncated: half a drawing placed
+                                // silently is worse than a sentence saying it was too big.
+                                setImportNote(`${specs.length} shapes is more than the ${SVG_PLACE_MAX} this will place at once.`);
+                                return;
+                            }
+                            onImportSvg(specs);
+                            // NOTES ARE SHOWN, not swallowed — a flattened gradient is a fact about
+                            // the drawing that just landed, and the reader already recorded it.
+                            const flattened = doc.notes.length;
+                            setImportNote(`placed ${specs.length} paths`
+                                + (flattened ? ` · ${flattened} approximation${flattened === 1 ? "" : "s"}: ${doc.notes[0]}` : ""));
+                        }}
+                        style={DRAWER_BUTTON}
+                    >Place the SVG</button>
                     {importNote && <div style={{ color: "#6a9", wordBreak: "break-all" }}>{importNote}</div>}
                 </>
             ) : tab === "export" ? (
