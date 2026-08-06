@@ -67,6 +67,7 @@ import { sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
 import { sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
 import { parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
 import { trimmedPlacement, inkUnion } from "../import/Trim";
+import { parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_ENTRIES } from "../import/TextureAtlas";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -14183,6 +14184,138 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // A truncated frame is a refusal, not a silent short read.
         const truncated = aseFile(aseHeader(2), [aseFrame(100, [])]);
         expect(() => parseAseprite(truncated)).toThrow(/truncated frame header/);
+    });
+
+    // ── Texture atlas fixtures ───────────────────────────────────────────────
+    //
+    // Written in the format's own shape using coordinates MEASURED from the real packs, rather than
+    // copied out of them — the bundle asks not to be redistributed, and reproducing the numbers is
+    // what the tests are actually about. The independent check is that the same reader parses all
+    // 421 real atlases: 26,892 entries, none refused, none skipped, 120 trimmed and 2 rotated,
+    // which matches a survey script written before the reader existed.
+    const atlasXml = (subs: string[], image = "sprites.png") =>
+        `<?xml version="1.0" encoding="UTF-8"?>\n<TextureAtlas imagePath="${image}">\n${subs.join("\n")}\n</TextureAtlas>`;
+    const sub = (attrs: Record<string, string | number>) =>
+        "\t<SubTexture " + Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join("\t") + "/>";
+
+    test("an atlas gives every sprite a source rect, where no grid could", () => {
+        // Coordinates from the real `Abstract Platformer` sheet: 359 sprites in 135 distinct sizes,
+        // at positions no division recovers. This is the case `SheetSlice` cannot read at all.
+        const xml = atlasXml([
+            sub({ name: "playerBlue_dead.png", x: 115, y: 0, width: 45, height: 47, frameX: -0, frameY: -0, frameWidth: 45, frameHeight: 47 }),
+            sub({ name: "playerBlue_duck.png", x: 0, y: 294, width: 56, height: 40, frameX: -0, frameY: -0, frameWidth: 56, frameHeight: 40 }),
+            sub({ name: "playerBlue_fall.png", x: 156, y: 420, width: 44, height: 54, frameX: -0, frameY: -0, frameWidth: 44, frameHeight: 54 })
+        ]);
+        expect(atlasError(xml)).toBeNull();
+        const atlas = parseTextureAtlas(xml);
+        expect(atlas.image).toBe("sprites.png");
+        expect(atlas.entries).toHaveLength(3);
+        expect(atlas.entries[1]).toEqual({
+            name: "playerBlue_duck.png", rotated: false,
+            source: { x: 0, y: 294, width: 56, height: 40 },
+            // A FRAME THE SAME SIZE AS THE REGION IS NOT A TRIM — it is a packer writing the fields
+            // out of habit, which 404 of the 421 real atlases do not even bother to do.
+            trim: null
+        });
+        expect(atlasEntry(atlas, "playerBlue_fall.png")!.source).toEqual({ x: 156, y: 420, width: 44, height: 54 });
+        expect(atlasEntry(atlas, "nosuch.png")).toBeNull();
+
+        // These positions are DELIBERATELY not on any grid — the property that makes an atlas
+        // necessary rather than merely convenient.
+        const xs = atlas.entries.map(e => e.source.x);
+        expect(new Set(atlas.entries.map(e => `${e.source.width}x${e.source.height}`)).size).toBe(3);
+        expect(xs.every(x => x % 45 === 0)).toBe(false);
+    });
+
+    test("trim is normalised at the edge and placed by the SAME arithmetic as a pixel trim", () => {
+        // The format writes the offset negated: frameX="-56" means the kept piece starts 56 pixels
+        // into a 120-wide original. Normalising the sign once here means nothing downstream has to
+        // remember it.
+        const xml = atlasXml([sub({
+            name: "hero_walk.png", x: 300, y: 40, width: 40, height: 30,
+            frameX: -56, frameY: -12, frameWidth: 120, frameHeight: 60
+        })]);
+        const entry = parseTextureAtlas(xml).entries[0];
+        expect(entry.trim).toEqual({ x: 56, y: 12, width: 120, height: 60 });
+        expect(entry.rotated).toBe(false);
+
+        // Drawn where the UNTRIMMED sprite would go, at half scale (120 wide into 60).
+        const placed = atlasPlacement(entry, { x: 200, y: 100, width: 60, height: 30 });
+        // The REGION is the entry's own, in TEXTURE space — `trimmedPlacement` returns a source in
+        // frame space, which is why only its box is taken.
+        expect(placed.source).toEqual({ x: 300, y: 40, width: 40, height: 30 });
+        expect(placed.box.x).toBeCloseTo(200 + 56 * 0.5, 9);
+        expect(placed.box.y).toBeCloseTo(100 + 12 * 0.5, 9);
+        expect(placed.box.width).toBeCloseTo(40 * 0.5, 9);
+        expect(placed.box.height).toBeCloseTo(30 * 0.5, 9);
+
+        // AND IT AGREES WITH `trimmedPlacement`, because it IS `trimmedPlacement` — the same
+        // question with the inputs named differently. A second copy of the arithmetic would drift.
+        const direct = trimmedPlacement({ x: 200, y: 100, width: 60, height: 30 },
+            { x: 0, y: 0, width: 120, height: 60 }, { x: 56, y: 12, width: 40, height: 30 })!;
+        expect(placed.box).toEqual(direct.box);
+
+        // An UNTRIMMED entry occupies the box it was given, untouched.
+        const plain = parseTextureAtlas(atlasXml([sub({ name: "a.png", x: 1, y: 2, width: 3, height: 4 })])).entries[0];
+        expect(atlasPlacement(plain, { x: 9, y: 9, width: 30, height: 40 }).box).toEqual({ x: 9, y: 9, width: 30, height: 40 });
+    });
+
+    test("a sprite stored TURNED is detected by its transpose, not by a flag", () => {
+        // The real case, found by reading all 421 atlases rather than the spec: `plantStem_vertical`
+        // declares a 64x10 region inside a 10x64 frame. The packer recorded a rotation by swapping
+        // the frame's dimensions instead of writing `rotated`, so an attribute check cannot see it —
+        // and the trim arithmetic would clip a kept piece against a frame narrower than itself.
+        const turned = parseTextureAtlas(atlasXml([sub({
+            name: "plantStem_vertical.png", x: 20, y: 30, width: 64, height: 10,
+            frameX: -0, frameY: -0, frameWidth: 10, frameHeight: 64
+        })])).entries[0];
+        expect(turned.rotated).toBe(true);
+        // The REGION is still right — a caller that turns the draw gets the sprite. Only the trim
+        // is declined, so nothing is placed wrongly.
+        expect(turned.source).toEqual({ x: 20, y: 30, width: 64, height: 10 });
+        expect(atlasPlacement(turned, { x: 0, y: 0, width: 100, height: 100 }).box)
+            .toEqual({ x: 0, y: 0, width: 100, height: 100 });
+
+        // A SQUARE sprite is excluded: its dimensions are its own transpose, so the test could never
+        // tell a turn from an ordinary frame — and calling every square trim a rotation would be
+        // worse than missing the rare real one.
+        const square = parseTextureAtlas(atlasXml([sub({
+            name: "box.png", x: 0, y: 0, width: 32, height: 32,
+            frameX: -4, frameY: -4, frameWidth: 32, frameHeight: 32
+        })])).entries[0];
+        expect(square.rotated).toBe(false);
+        expect(square.trim).toEqual({ x: 4, y: 4, width: 32, height: 32 });
+    });
+
+    test("an atlas refuses what it cannot read, and skips one bad line rather than the file", () => {
+        expect(atlasError("<html></html>")).toMatch(/no <TextureAtlas> element/);
+        expect(atlasError("<TextureAtlas imagePath=\"a.png\"></TextureAtlas>")).toMatch(/declares no sub-textures/);
+        // An EXPLICIT rotation flag is refused outright: unlike the transpose case, it says nothing
+        // about which way, so no region can be trusted.
+        expect(atlasError(atlasXml([sub({ name: "a.png", x: 0, y: 0, width: 4, height: 4, rotated: "true" })])))
+            .toMatch(/rotated sub-textures are not supported/);
+        expect(() => parseTextureAtlas("<html></html>")).toThrow(/no <TextureAtlas> element/);
+        // THE BOUND IS EXERCISED, not merely named. Asserting the constant proves nothing about
+        // the comparison that uses it — a battery removing that check survived until this existed.
+        // The real tree's largest atlas holds 359, so 26,892 across 421 files is well inside it.
+        expect(ATLAS_MAX_ENTRIES).toBeGreaterThan(26892);
+        const huge = "<TextureAtlas>" + '<SubTexture x="0" y="0" width="1" height="1"/>'.repeat(ATLAS_MAX_ENTRIES + 1) + "</TextureAtlas>";
+        expect(atlasError(huge)).toMatch(/more than this reads/);
+        expect(() => parseTextureAtlas(huge)).toThrow(/more than this reads/);
+
+        // ONE BAD LINE is skipped, not fatal: a generated descriptor with a malformed entry should
+        // not cost the other sprites in it. Three declared, two usable.
+        const patchy = atlasXml([
+            sub({ name: "good.png", x: 0, y: 0, width: 8, height: 8 }),
+            "\t<SubTexture name=\"broken.png\" x=\"nope\" y=\"0\" width=\"8\" height=\"8\"/>",
+            sub({ name: "zero.png", x: 0, y: 0, width: 0, height: 8 }),
+            sub({ name: "also-good.png", x: 8, y: 0, width: 8, height: 8 })
+        ]);
+        const parsed = parseTextureAtlas(patchy);
+        expect(parsed.entries.map(e => e.name)).toEqual(["good.png", "also-good.png"]);
+
+        // A missing imagePath is not fatal either — the texture may be named by convention.
+        expect(parseTextureAtlas("<TextureAtlas>" + sub({ name: "a.png", x: 0, y: 0, width: 1, height: 1 }) + "</TextureAtlas>").image).toBe("");
     });
 
     test("a trim moves the destination by exactly what it took off the source", () => {

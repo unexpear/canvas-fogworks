@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1211 — `src/core/tests/document.test.ts` (1102) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (40).
+- **Tests:** 1215 — `src/core/tests/document.test.ts` (1106) + `src/renderer/RenderModel.test.ts` (69) + `src/renderer/emitCanvas.test.ts` (40).
 
 ## Source map
 
@@ -68,7 +68,8 @@ src/
                 ActionJournal (what was dispatched, when)
     import/     SheetSlice (a sheet's grid), Sequence
                 (numbered frames), Trim (padding, kept in place),
-                Aseprite (the file a sheet came from)
+                Aseprite (the file a sheet came from),
+                TextureAtlas (the descriptor a packer wrote)
     ids/        UUID
     tests/      document.test.ts, apiSurface.ts (compile-time API pin —
                 a module that gains a documented export gains a line

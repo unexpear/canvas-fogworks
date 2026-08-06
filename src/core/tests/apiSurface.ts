@@ -92,6 +92,7 @@ import { Cell, SheetPlan, SheetAtlas, planSheet, sheetAtlas, sheetClipFrames, sh
 import { SliceGrid, SliceOptions, sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
 import { Sequence, SequenceFrame, parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
 import { Trim, TrimBox, trimmedPlacement, inkUnion } from "../import/Trim";
+import { Atlas, AtlasEntry, parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_ENTRIES } from "../import/TextureAtlas";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
     aseBytesPerPixel, celRgba, ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
@@ -665,6 +666,18 @@ export function __apiSurfacePin(): void {
     const trimBox: TrimBox = { x: 0, y: 0, width: 256, height: 256 };
     expectType<Trim | null>(trimmedPlacement(trimBox, region, region));
     expectType<SourceRect | null>(inkUnion([region]));
+
+    // TEXTURE ATLAS: the descriptor that says where each sprite is, for the 57% of real sheets that
+    // are irregularly packed and so have no grid to recover. Its trim reuses `trimmedPlacement`.
+    expectType<string | null>(atlasError("<TextureAtlas/>"));
+    const atlas: Atlas = { image: "sprites.png", entries: [] };
+    expectType<Atlas>(atlas);
+    expectType<AtlasEntry[]>(atlas.entries);
+    expectType<(t: string) => Atlas>(parseTextureAtlas);
+    const entry: AtlasEntry = { name: "a.png", source: region, trim: null, rotated: false };
+    expectType<AtlasEntry | null>(atlasEntry(atlas, "a.png"));
+    expectType<Trim>(atlasPlacement(entry, trimBox));
+    expectType<number>(ATLAS_MAX_ENTRIES);
     expectType<{ x: number; y: number; width: number; height: number } | null>(imageInkBounds("a.png", region, 0));
 
     // ASEPRITE: the file a sheet was exported FROM, which states the grid, the trim and the clips

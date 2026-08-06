@@ -998,6 +998,35 @@ edges — the pixel-art sets are hard-alpha (0.0000 soft-edge fraction) while th
 antialiased (0.0686) — so a fixed cutoff would either keep a halo of near-invisible pixels or eat
 the antialiasing off a character's outline.
 
+### Reading an atlas — when there is no grid to recover
+
+**Most real sheets are not grids.** Surveying 421 atlases shipped with 88,815 files of game art:
+**206 are irregularly packed, 33 are uniform but not aligned, and only 182 are true grids.** One
+holds 359 sprites in 135 distinct sizes at coordinates like 455,849 and 520,179. `SheetSlice` cannot
+read any of the first two groups — dividing that image by anything produces nonsense — so more than
+half of the real sheets are unreachable by measurement.
+
+**They do not need to be measured, because they come with a descriptor.** The Starling/ShoeBox
+`<TextureAtlas><SubTexture>` format is what almost every packer emits, and its fields land exactly
+on what this engine already has: `x,y,width,height` IS a `sourceRect` (schema 51), and
+`frameX/frameY/frameWidth/frameHeight` IS the trim placement `core/import/Trim` computes. Reading
+one is a rename plus arithmetic already written.
+
+**THE TRIM ARITHMETIC IS REUSED, NOT REWRITTEN.** An atlas states the untrimmed size and where the
+kept piece sits inside it; `trimmedPlacement` states where a kept piece goes so its ink does not
+move. They are the same question with the inputs named differently, so the atlas reader hands its
+numbers to that function rather than growing a second copy of the multiply-and-offset that would
+drift from it.
+
+**IT IS A TEXTUREATLAS READER, NOT AN XML PARSER**, and the distinction is deliberate. Core is pure
+and has no DOM, and a regex that pretends to parse XML is a liability the moment it meets a CDATA
+section or a namespace. This reads exactly the shape the format defines and refuses anything else by
+name, which is a much smaller promise and one that can be kept.
+
+**Rotation is refused rather than ignored.** No atlas in the surveyed tree uses it — the one genuinely
+fiddly feature of the format is simply absent — but a packer that emitted it and a reader that
+skipped the flag would draw every affected sprite on its side, so the flag is an error and not a
+shrug.
 ### Slicing a sheet — why the grid, and not the ink
 
 **Reading a sheet is not the inverse of writing one.** `SpriteSheet` exports a texture plus an
