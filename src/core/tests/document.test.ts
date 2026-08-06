@@ -66,6 +66,7 @@ import { solveTwoBone, solveFabrik, rotationDelta, FABRIK_PASSES, FABRIK_TOLERAN
 import { sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
 import { sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
 import { parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
+import { trimmedPlacement, inkUnion } from "../import/Trim";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
 import { planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
@@ -13866,6 +13867,121 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const air = applyFrame(ball, 6).nodes.get("ball")!.geometry;
         expect(contact.width).toBe(air.width);
         expect(contact.height).toBe(air.height);
+    });
+
+    test("a trim moves the destination by exactly what it took off the source", () => {
+        // The REAL measurement: `fighter_run_0017.png` is 512x512 with its ink at 223,210 sized
+        // 108x165 — four percent of the file. Drawn at 256x256 on screen, so the source-to-box
+        // scale is exactly one half and the arithmetic is checkable by hand.
+        const box = { x: 100, y: 50, width: 256, height: 256 };
+        const source = { x: 0, y: 0, width: 512, height: 512 };
+        const t = trimmedPlacement(box, source, { x: 223, y: 210, width: 108, height: 165 })!;
+
+        expect(t.source).toEqual({ x: 223, y: 210, width: 108, height: 165 });
+        // Half scale: the ink starts 223 source-pixels in, so the box starts 111.5 screen-pixels in.
+        expect(t.box.x).toBeCloseTo(100 + 223 / 2, 9);
+        expect(t.box.y).toBeCloseTo(50 + 210 / 2, 9);
+        expect(t.box.width).toBeCloseTo(108 / 2, 9);
+        expect(t.box.height).toBeCloseTo(165 / 2, 9);
+
+        // THE INK DOES NOT MOVE, which is the whole feature and the only thing worth asserting
+        // about it. Where a given source pixel lands is `box.x + (px - source.x) * scale`; that has
+        // to give the same answer before and after, or the optimisation has changed the picture.
+        const whereIs = (px: number, b: typeof box, sr: typeof source) =>
+            b.x + (px - sr.x) * (b.width / sr.width);
+        for (const px of [223, 250, 300, 330]) {
+            expect(whereIs(px, t.box, t.source)).toBeCloseTo(whereIs(px, box, source), 9);
+        }
+    });
+
+    test("a naive per-frame trim would JITTER, and the union is the trade that does not", () => {
+        // Four consecutive frames of the measured run cycle. Their ink origins genuinely differ —
+        // this is the reason trimming has to carry a placement rather than just a rectangle.
+        const frames = [
+            { x: 223, y: 210, width: 108, height: 165 },
+            { x: 209, y: 204, width: 122, height: 146 },
+            { x: 222, y: 208, width: 109, height: 165 },
+            { x: 225, y: 215, width: 106, height: 164 }
+        ];
+        expect(new Set(frames.map(f => f.x)).size).toBeGreaterThan(1);   // non-vacuous: they DO differ
+
+        const box = { x: 0, y: 0, width: 512, height: 512 };
+        const source = { x: 0, y: 0, width: 512, height: 512 };
+        // Each frame's ink lands in the same place as it did untrimmed — so a sequence of trims is
+        // steady even though every rectangle is different. Asserting the boxes were EQUAL would be
+        // asserting the wrong thing: they must differ, and the ink must not.
+        const lefts = frames.map(f => trimmedPlacement(box, source, f)!.box.x);
+        expect(new Set(lefts).size).toBe(4);
+        for (const [i, f] of frames.entries()) expect(lefts[i]).toBeCloseTo(f.x, 9);
+
+        // THE UNION is the other trade: one box for every frame, so nothing can jitter by
+        // construction, at the cost of keeping more padding.
+        const union = inkUnion(frames)!;
+        // Bottoms are 375, 350, 373 and 379, so from y=204 the union stands 175 tall — derived by
+        // hand from the rule rather than read off the implementation, which is how the first
+        // version of this line came out at 167 and was wrong.
+        expect(union).toEqual({ x: 209, y: 204, width: 122, height: 175 });
+        // It genuinely contains every frame — the property that makes it safe.
+        for (const f of frames) {
+            expect(f.x).toBeGreaterThanOrEqual(union.x);
+            expect(f.y).toBeGreaterThanOrEqual(union.y);
+            expect(f.x + f.width).toBeLessThanOrEqual(union.x + union.width);
+            expect(f.y + f.height).toBeLessThanOrEqual(union.y + union.height);
+        }
+        // And it is still a big saving: a quarter of the file rather than the whole of it.
+        expect((union.width * union.height) / (512 * 512)).toBeLessThan(0.1);
+        expect(inkUnion([])).toBeNull();
+        expect(inkUnion([{ x: 0, y: 0, width: 0, height: 5 }])).toBeNull();
+
+        // RAGGED RIGHT EDGES, because the real frames all happen to end at 331 — a coincidence of
+        // that particular run cycle — so a union taking the LAST rect's extent matched them exactly
+        // and survived. These do not line up on any side.
+        const ragged = inkUnion([
+            { x: 10, y: 5, width: 30, height: 10 },     // right 40, bottom 15
+            { x: 50, y: 0, width: 5, height: 40 },      // right 55, bottom 40
+            { x: 0, y: 20, width: 12, height: 3 }       // right 12, bottom 23
+        ])!;
+        expect(ragged).toEqual({ x: 0, y: 0, width: 55, height: 40 });
+
+        // AN EMPTY RECT ALONGSIDE REAL ONES must not drag the origin — the guard only shows here,
+        // since a lone empty rect is refused by the overlap check either way.
+        expect(inkUnion([{ x: -100, y: -100, width: 0, height: 0 }, { x: 10, y: 10, width: 5, height: 5 }]))
+            .toEqual({ x: 10, y: 10, width: 5, height: 5 });
+    });
+
+    test("a trim clips to its own cell, and an empty frame trims to nothing", () => {
+        const box = { x: 0, y: 0, width: 64, height: 64 };
+        const cell = { x: 32, y: 0, width: 32, height: 32 };
+        // Ink measured across a whole SHEET can report pixels belonging to the neighbouring frame.
+        // Anything outside this cell is not part of this frame, and keeping it would widen the
+        // region into somebody else's drawing.
+        const t = trimmedPlacement(box, cell, { x: 0, y: 0, width: 64, height: 64 })!;
+        expect(t.source).toEqual({ x: 32, y: 0, width: 32, height: 32 });
+        expect(t.box).toEqual({ x: 0, y: 0, width: 64, height: 64 });
+
+        // THE FAR EDGES need their own case: above, the cell ends where the image does, so an
+        // unclipped right edge lands on the same number and proves nothing. Here the cell sits in
+        // the MIDDLE and the ink runs past it on both sides.
+        const middle = { x: 16, y: 8, width: 16, height: 16 };
+        const wide = trimmedPlacement({ x: 0, y: 0, width: 32, height: 32 }, middle,
+            { x: 0, y: 0, width: 200, height: 200 })!;
+        expect(wide.source).toEqual({ x: 16, y: 8, width: 16, height: 16 });
+
+        // NON-SQUARE, because every fixture above scales the two axes equally and a mutation using
+        // the X scale for Y is invisible against them. 200 wide by 50 tall from a 100x100 cell is
+        // 2x horizontally and 0.5x vertically — two numbers that cannot be confused.
+        const oblong = trimmedPlacement({ x: 0, y: 0, width: 200, height: 50 },
+            { x: 0, y: 0, width: 100, height: 100 }, { x: 20, y: 40, width: 40, height: 20 })!;
+        expect(oblong.box.x).toBeCloseTo(40, 9);      // 20 * 2
+        expect(oblong.box.y).toBeCloseTo(20, 9);      // 40 * 0.5
+        expect(oblong.box.width).toBeCloseTo(80, 9);  // 40 * 2
+        expect(oblong.box.height).toBeCloseTo(10, 9); // 20 * 0.5
+
+        // NO OVERLAP AT ALL is a blank frame — a real thing in a sequence, and null rather than a
+        // zero-sized rect, which `sourceRectError` refuses because every backend divides by it.
+        expect(trimmedPlacement(box, cell, { x: 0, y: 0, width: 4, height: 4 })).toBeNull();
+        expect(trimmedPlacement(box, { x: 0, y: 0, width: 0, height: 8 }, cell)).toBeNull();
+        expect(trimmedPlacement(box, cell, { x: 32, y: 0, width: 0, height: 8 })).toBeNull();
     });
 
     test("frame names are parsed the way the REAL pack spells them", () => {

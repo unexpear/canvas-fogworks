@@ -770,6 +770,31 @@ function sliceTrack(cells: readonly SourceRect[], opts?: { start?: number; step?
 - Slicing yields plain rects; `sliceTrack` turns them into keyframes as a SEPARATE step, because
   which rectangles and how fast are different decisions.
 
+### `core/import/Trim` — cutting padding without moving the picture
+
+```ts
+interface TrimBox { x: number; y: number; width: number; height: number }
+interface Trim { source: SourceRect; box: TrimBox }
+
+function trimmedPlacement(box: TrimBox, source: SourceRect, ink: SourceRect): Trim | null;   // null = nothing to draw
+function inkUnion(rects: readonly SourceRect[]): SourceRect | null;
+```
+
+`renderer/ImageCache` supplies the measurement, because it needs pixels:
+
+```ts
+function imageInkBounds(href: string, within?: TrimBox, alphaThreshold?: number): TrimBox | null;
+```
+
+- A TRIM IS A RECTANGLE AND A PLACEMENT. Trimming each frame to its own ink and dropping them in
+  one box makes a character JITTER — measured ink origins across four run frames are (223,210),
+  (209,204), (222,208), (225,215). Narrowing the source is paid for by moving and scaling the
+  destination identically, so every pixel of ink stays exactly where it was.
+- `inkUnion` is the safer trade: one box for every frame, so nothing can jitter by construction.
+  On the measured run cycle it is 8% of the file where a per-frame trim reaches 4%.
+- The threshold is a parameter because the packs disagree — pixel art is hard-alpha (0.0000
+  soft-edge) while the stick figure is antialiased (0.0686).
+
 ### `core/import/Sequence` — a folder of numbered images
 
 ```ts

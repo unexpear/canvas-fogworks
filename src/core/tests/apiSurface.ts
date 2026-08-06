@@ -79,7 +79,7 @@ import { renderScene, RenderBackend } from "../../renderer/renderScene";
 import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
 import { emitCanvas, setImageReadyCallback, CanvasTarget } from "../../renderer/emitCanvas";
-import { resolveImage, imageGeneration, naturalSize } from "../../renderer/ImageCache";
+import { resolveImage, imageGeneration, naturalSize, imageInkBounds } from "../../renderer/ImageCache";
 import { exportSVG, EXPORT_MARGIN, TextLines } from "../export/ExportSVG";
 import { TextShape, drawTextInto, wrapText, wrapTextWith, textLinesFor, textRasterKey, textRasterScale, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
 import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, normalisedUV, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
@@ -91,6 +91,7 @@ import { IkConstraint, ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../
 import { Cell, SheetPlan, SheetAtlas, planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, drawSheet, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { SliceGrid, SliceOptions, sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
 import { Sequence, SequenceFrame, parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
+import { Trim, TrimBox, trimmedPlacement, inkUnion } from "../import/Trim";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
 import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
 import { JournalEntry, recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
@@ -655,6 +656,14 @@ export function __apiSurfacePin(): void {
     expectType<SequenceFrame[]>(sequences[0].frames);
     expectType<Keyframe[]>(sequenceTrack(sequences[0], { start: 0, step: 2, hrefFor: f => f }));
     expectType<number>(SEQUENCE_MAX);
+
+    // TRIMMING: a rectangle AND a placement, never a rectangle alone — narrowing the source is paid
+    // for by moving the destination, so the ink does not shift. Measuring needs pixels and lives in
+    // the renderer; this half takes the measurement as an argument.
+    const trimBox: TrimBox = { x: 0, y: 0, width: 256, height: 256 };
+    expectType<Trim | null>(trimmedPlacement(trimBox, region, region));
+    expectType<SourceRect | null>(inkUnion([region]));
+    expectType<{ x: number; y: number; width: number; height: number } | null>(imageInkBounds("a.png", region, 0));
 
     // WHICH END A NON-INTERPOLATABLE VALUE TAKES is the CALLER's question (schema 54). A timeline
     // steps so a drawing appears on its own keyframe; a state transition switches so a hover means

@@ -928,6 +928,33 @@ That needs the image's natural size, which comes from the shared `ImageCache` th
 already use — so an undecoded image draws nothing here exactly as it draws nothing on Canvas, rather
 than each backend inventing its own answer for "not ready yet".
 
+### Trimming — and why the offset is the whole feature
+
+**The padding is not small.** The measured stick-figure frames are 512x512 PNGs whose ink covers
+**4.0% of the file**. Everything else is transparent: texture memory, fill rate, and a selection box
+four times wider than the character it claims to be.
+
+**TRIMMING NAIVELY IS WORSE THAN NOT TRIMMING.** Each frame's ink sits at a different place in its
+padding — measured across four consecutive run frames, the ink origin moves (223,210), (209,204),
+(222,208), (225,215) and the size ranges from 106x164 to 122x146. Trim each frame to its own ink,
+drop them all into one box, and the character jitters sixteen pixels sideways and changes size every
+frame. The padding is what was holding the animation still.
+
+**So a trim is a rectangle AND a placement, never a rectangle alone.** Narrowing the source region
+has to be paid for by moving and shrinking the destination by exactly the same proportion, which
+leaves every pixel of ink exactly where it already was. That arithmetic is pure and is the part
+worth testing; a trim that changed what the frame LOOKS like would be a bug wearing an optimisation's
+clothes.
+
+**Measuring the ink needs pixels, so it lives in the renderer** beside `ImageCache`, and the pure
+half takes the measurement as an argument. The same split `SpriteSheet` makes between planning a
+sheet and drawing one, and `SheetSlice` makes between a grid and whether a cell has ink in it.
+
+**The threshold is a parameter defaulting to fully transparent.** The measured packs disagree about
+edges — the pixel-art sets are hard-alpha (0.0000 soft-edge fraction) while the stick figure is
+antialiased (0.0686) — so a fixed cutoff would either keep a halo of near-invisible pixels or eat
+the antialiasing off a character's outline.
+
 ### Slicing a sheet — why the grid, and not the ink
 
 **Reading a sheet is not the inverse of writing one.** `SpriteSheet` exports a texture plus an
