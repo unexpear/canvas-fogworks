@@ -87,6 +87,7 @@ import { capturePatch, applyPatch, revertPatch, invertPatch, readRegion, isEmpty
     patchCost } from "../paint/PixelPatch";
 import { makeBrush, brushError, stampBrush, brushBounds, strokePath, strokeBounds,
     BRUSH_MAX_SIZE } from "../paint/Brush";
+import { encodeSurface, decodeSurface, PIXEL_CODEC_VERSION, PIXEL_RUN_MAX } from "../paint/PixelCodec";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -15963,6 +15964,87 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const box = strokeBounds(makeBrush(3, false), [[5, 5], [9, 7]])!;
         expect(box).toMatchObject({ x: 4, y: 4, width: 7, height: 5 });
         expect(strokeBounds(brush, [])).toBeNull();
+    });
+
+    test("a surface round-trips through text, and says what it cost", () => {
+        // A document is JSON, so a buffer must become a string — and the codec is PURE rather than
+        // the platform's PNG encoder, because a format that only round-trips inside a browser
+        // cannot be tested in node or diffed deterministically.
+        const b = createPixelBuffer(8, 4);
+        drawLine(b, 0, 0, 7, 3, RED);
+        setPixel(b, 2, 2, BLUE);
+        const enc = encodeSurface(b);
+        const back = decodeSurface(enc.data, 8, 4)!;
+        expect(back).not.toBeNull();
+        expect([...back.data]).toEqual([...b.data]);
+        expect(back.width).toBe(8);
+        expect(back.height).toBe(4);
+
+        // A BLANK surface is the best case and the common one — a new layer.
+        const blank = createPixelBuffer(64, 64);
+        const blankEnc = encodeSurface(blank);
+        expect(blankEnc.rawBytes).toBe(64 * 64 * 4);
+        expect(blankEnc.packedBytes).toBeLessThan(blankEnc.rawBytes / 100);
+        expect([...decodeSurface(blankEnc.data, 64, 64)!.data]).toEqual([...blank.data]);
+
+        // IT IS NOT ALWAYS SMALLER, and the report says so rather than hiding it. Per-pixel noise
+        // costs a length byte per pixel, so it encodes LARGER than raw — a codec that quietly
+        // inflated a photograph while claiming to compress would be the wrong kind of quiet.
+        const noise = createPixelBuffer(16, 16);
+        for (let i = 0; i < noise.data.length; i += 4) {
+            noise.data[i] = (i * 7) % 251; noise.data[i + 1] = (i * 13) % 241;
+            noise.data[i + 2] = (i * 29) % 239; noise.data[i + 3] = 255;
+        }
+        const noisy = encodeSurface(noise);
+        expect(noisy.packedBytes).toBeGreaterThan(noisy.rawBytes);
+        // And it still round-trips EXACTLY, which is the property that actually matters.
+        expect([...decodeSurface(noisy.data, 16, 16)!.data]).toEqual([...noise.data]);
+    });
+
+    test("a run cannot outlive its limit, its buffer, or its version", () => {
+        // A RUN STOPS AT THE LENGTH LIMIT. A flat surface longer than 255 pixels must split, and a
+        // fixture smaller than that never reaches the case — so this one is deliberately larger.
+        const long = createPixelBuffer(300, 1);
+        for (let x = 0; x < 300; x++) setPixel(long, x, 0, RED);
+        const enc = encodeSurface(long);
+        expect(PIXEL_RUN_MAX).toBe(255);
+        // 300 identical pixels cannot be one run: 255 + 45.
+        expect(enc.packedBytes).toBe(1 + 2 * 5);
+        expect([...decodeSurface(enc.data, 300, 1)!.data]).toEqual([...long.data]);
+
+        // And it stops at the END OF THE BUFFER, not only at a colour change — a run that ran past
+        // it would decode to the wrong length for every surface whose last row is flat.
+        const flat = createPixelBuffer(3, 2);
+        for (let i = 0; i < flat.data.length; i++) flat.data[i] = 255;
+        expect([...decodeSurface(encodeSurface(flat).data, 3, 2)!.data]).toEqual([...flat.data]);
+
+        // ALPHA BREAKS A RUN. Two pixels with the same RGB and different alpha are different
+        // pixels, and every other fixture here differs in RGB too — so a comparison ignoring alpha
+        // would merge them and decode a solid block where a fade was drawn.
+        const fade = createPixelBuffer(3, 1);
+        setPixel(fade, 0, 0, [7, 8, 9, 255]);
+        setPixel(fade, 1, 0, [7, 8, 9, 128]);
+        setPixel(fade, 2, 0, [7, 8, 9, 0]);
+        const fadeEnc = encodeSurface(fade);
+        expect(fadeEnc.packedBytes).toBe(1 + 3 * 5);          // THREE runs, not one
+        expect([...decodeSurface(fadeEnc.data, 3, 1)!.data]).toEqual([...fade.data]);
+
+        // A payload that does not describe the size asked for is REFUSED, not padded or trimmed:
+        // padding leaves a transparent band that reads as an art mistake, trimming drops the tail.
+        expect(decodeSurface(enc.data, 300, 2)).toBeNull();
+        expect(decodeSurface(enc.data, 100, 1)).toBeNull();
+        // A VERSION byte, because a stored surface outlives the code that wrote it.
+        const wrongVersion = Buffer.from([PIXEL_CODEC_VERSION + 1, 1, 0, 0, 0, 255]).toString("base64");
+        expect(decodeSurface(wrongVersion, 1, 1)).toBeNull();
+        // A ZERO run would not advance, so a malformed payload could loop forever.
+        const zeroRun = Buffer.from([PIXEL_CODEC_VERSION, 0, 0, 0, 0, 255]).toString("base64");
+        expect(decodeSurface(zeroRun, 1, 1)).toBeNull();
+        // Truncated, empty and non-base64 payloads are all null rather than a partial surface.
+        expect(decodeSurface(Buffer.from([PIXEL_CODEC_VERSION, 1, 0, 0]).toString("base64"), 1, 1)).toBeNull();
+        expect(decodeSurface("", 1, 1)).toBeNull();
+        // A size the surface layer itself refuses is refused here too, rather than allocated.
+        expect(decodeSurface(enc.data, 0, 1)).toBeNull();
+        expect(decodeSurface(enc.data, 1e9, 1e9)).toBeNull();
     });
 
     test("read shapes become nodes the document accepts", () => {
