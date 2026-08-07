@@ -76,7 +76,8 @@ import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
     tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow,
     TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
 import { parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
-    GltfJson, GLTF_IGNORABLE_REQUIRED, GLTF_MAX_NODE_DEPTH } from "../import/Gltf";
+    GltfJson, GLTF_IGNORABLE_REQUIRED, GLTF_MAX_NODE_DEPTH,
+    gltfMaterials, gltfImageSource } from "../import/Gltf";
 import { parseObj, objError, parseMtl, mtlError, resolveObjIndex,
     OBJ_FACE_MAX_CORNERS, OBJ_MAX_GROUPS } from "../import/Obj";
 import { MESH_IDENTITY } from "../import/MeshData";
@@ -15198,6 +15199,98 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(r.instances[0].name).toBe("child");
         expect(r.instances[0].matrix.slice(12, 15)).toEqual([20, 0, 0]);
         expect(r.instances[0].matrix[0]).toBe(2);
+    });
+
+    test("a material's DEFAULTS answer for more than half the corpus", () => {
+        // 4,489 of the 7,955 measured materials state no `baseColorFactor` at all. A reader
+        // defaulting to black or transparent would render 56% of the tree wrong, with no field
+        // missing for any check to notice -- so the empty material is the important fixture.
+        const bare = gltfMaterials({ asset: { version: "2.0" }, materials: [{}] })[0];
+        expect(bare.baseColor).toEqual([1, 1, 1, 1]);      // opaque WHITE, per the spec
+        expect(bare.metallic).toBe(1);
+        expect(bare.roughness).toBe(1);
+        expect(bare.emissive).toEqual([0, 0, 0]);
+        expect(bare.alphaMode).toBe("OPAQUE");
+        expect(bare.alphaCutoff).toBe(0.5);
+        expect(bare.doubleSided).toBe(false);
+        expect(bare.baseColorImage).toBeNull();
+
+        // A STATED value wins over its default, asserted with values no default could produce.
+        const stated = gltfMaterials({ asset: { version: "2.0" }, materials: [{
+            name: "paint", doubleSided: true, alphaMode: "BLEND", alphaCutoff: 0.25,
+            emissiveFactor: [0.1, 0.2, 0.3],
+            pbrMetallicRoughness: { baseColorFactor: [0.2, 0.4, 0.6, 0.8],
+                metallicFactor: 0, roughnessFactor: 0.3 }
+        }] })[0];
+        expect(stated).toMatchObject({ name: "paint", baseColor: [0.2, 0.4, 0.6, 0.8],
+            metallic: 0, roughness: 0.3, emissive: [0.1, 0.2, 0.3],
+            alphaMode: "BLEND", alphaCutoff: 0.25, doubleSided: true });
+        // ZERO must survive, which `??` gives and `||` would not -- a fully non-metallic material
+        // is the common case and `metallicFactor: 0` is exactly what states it.
+        expect(stated.metallic).toBe(0);
+
+        // ZERO ROUGHNESS too -- a mirror-smooth material is as ordinary as a non-metallic one, and
+        // asserting only metallic left `||` alive on this line.
+        expect(gltfMaterials({ asset: { version: "2.0" }, materials: [{
+            pbrMetallicRoughness: { roughnessFactor: 0 } }] })[0].roughness).toBe(0);
+
+        // A THREE-component colour is malformed, not RGB-with-implied-alpha: taking it would leave
+        // alpha `undefined`, which reaches a renderer as NaN and blanks the surface.
+        expect(gltfMaterials({ asset: { version: "2.0" }, materials: [{
+            pbrMetallicRoughness: { baseColorFactor: [0.2, 0.4, 0.6] } }] })[0].baseColor)
+            .toEqual([1, 1, 1, 1]);
+
+        // A malformed factor falls back rather than yielding undefined components a renderer
+        // would turn into NaN.
+        expect(gltfMaterials({ asset: { version: "2.0" }, materials: [{
+            pbrMetallicRoughness: { baseColorFactor: [0.5, 0.5] } }] })[0].baseColor).toEqual([1, 1, 1, 1]);
+        expect(gltfMaterials({ asset: { version: "2.0" }, materials: [{ emissiveFactor: [1] }] })[0]
+            .emissive).toEqual([0, 0, 0]);
+        expect(gltfMaterials({ asset: { version: "2.0" } })).toEqual([]);
+    });
+
+    test("an image is located through TWO hops, and says which kind it is", () => {
+        // A material names a TEXTURE, which names an IMAGE. The indirection lets several materials
+        // share one picture, and skipping it reads a texture index as an image index -- which
+        // lands on a real picture often enough to look like a mismatched skin rather than a bug.
+        // The fixture is built so the two disagree: texture 0 points at image 1.
+        const json: GltfJson = {
+            asset: { version: "2.0" },
+            textures: [{ source: 1 }, { source: 0 }],
+            images: [{ uri: "wrong.png" }, { uri: "right.png", mimeType: "image/png" }],
+            materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }]
+        };
+        expect(gltfImageSource(json, 0)).toEqual({ kind: "uri", uri: "right.png", mimeType: "image/png" });
+        expect(gltfImageSource(json, 1)).toMatchObject({ uri: "wrong.png" });
+        expect(gltfMaterials(json)[0].baseColorImage).toMatchObject({ uri: "right.png" });
+
+        // A BUFFER-BACKED image is a slice of the bytes already in hand -- 125 of the measured
+        // images are stored that way -- and the offset comes from its bufferView, not from itself.
+        const embedded: GltfJson = {
+            asset: { version: "2.0" },
+            bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 4 },
+                { buffer: 0, byteOffset: 128, byteLength: 512 }],
+            textures: [{ source: 0 }],
+            images: [{ bufferView: 1, mimeType: "image/png" }]
+        };
+        expect(gltfImageSource(embedded, 0)).toEqual({ kind: "buffer", offset: 128, length: 512,
+            mimeType: "image/png" });
+
+        // A `data:` URI is bytes already, not a path, so it stays a URI for the caller to tell
+        // apart -- opening it as a file would fail on 0 real images but is the obvious mistake.
+        expect(gltfImageSource({ asset: { version: "2.0" }, textures: [{ source: 0 }],
+            images: [{ uri: "data:image/png;base64,iVBOR" }] }, 0))
+            .toMatchObject({ kind: "uri", uri: "data:image/png;base64,iVBOR" });
+
+        // Every dangling reference is NULL rather than a throw or a wrong picture.
+        expect(gltfImageSource(json, 99)).toBeNull();
+        expect(gltfImageSource({ asset: { version: "2.0" }, textures: [{}] }, 0)).toBeNull();
+        expect(gltfImageSource({ asset: { version: "2.0" }, textures: [{ source: 5 }], images: [] }, 0)).toBeNull();
+        expect(gltfImageSource({ asset: { version: "2.0" }, textures: [{ source: 0 }],
+            images: [{ bufferView: 9 }], bufferViews: [] }, 0)).toBeNull();
+        // An image with neither a uri nor a bufferView has no bytes anywhere.
+        expect(gltfImageSource({ asset: { version: "2.0" }, textures: [{ source: 0 }],
+            images: [{ mimeType: "image/png" }] }, 0)).toBeNull();
     });
 
     test("a glTF names what it will not read", () => {

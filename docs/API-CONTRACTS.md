@@ -951,7 +951,19 @@ ordinary extension, and **it must be revisited when materials land**.
 external `.bin` and most images are sidecars. The caller resolves those, exactly as it does a
 Tiled `.tsx`.
 
-**Not read yet:** materials, textures, animations (150 files), skins (26), morph targets, sparse
+**MATERIALS AND TEXTURES ARE READ.** `gltfMaterials(json)` returns base colour, its image,
+metallic, roughness, emissive, alpha mode and cutoff, and double-sidedness — with every default the
+spec states. **The defaults carry the corpus**: 4,489 of 7,955 measured materials state no
+`baseColorFactor` at all, so a reader defaulting to black renders 56% of the tree wrong with no
+field missing for a check to notice.
+
+**An image is LOCATED, not fetched.** `gltfImageSource(json, textureIndex)` follows TWO hops — a
+material names a texture, which names an image — and returns either `{kind:"uri"}` for a file the
+caller opens or `{kind:"buffer", offset, length}` for a slice of the bytes already in hand. Both
+occur (4,130 and 125). Skipping the indirection reads a texture index as an image index, which
+lands on a real picture often enough to look like a mismatched skin rather than a bug.
+
+**Not read yet:** animations (154 files), skins (31), normal/metallic-roughness texture maps, sparse
 accessors, and cameras.
 
 ### The Electron bridge — reading what a MAP FILE names

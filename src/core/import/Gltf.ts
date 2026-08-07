@@ -214,6 +214,9 @@ export interface GltfResult {
  */
 export function gltfImageSource(json: GltfJson, textureIndex: number): GltfImageSource | null {
     const texture = (json.textures ?? [])[textureIndex];
+    // `texture.source === undefined` is REDUNDANT with the lookup below — indexing an array with
+    // undefined yields undefined, which the next line already refuses — and is kept because a
+    // texture naming no image is a rule of the format rather than an accident of JS indexing.
     if (!texture || texture.source === undefined) return null;
     const image = (json.images ?? [])[texture.source];
     if (!image) return null;
