@@ -169,6 +169,25 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): v
 }
 
 /**
+ * `shadowBlur` IS TWICE THE STANDARD DEVIATION, which is not what `blur` means anywhere else here.
+ *
+ * `Shadow.blur` is a gaussian sigma — that is what SVG's `feDropShadow stdDeviation` takes and what
+ * CSS `filter: blur()` takes. The canvas shadow property is the odd one out: its spec defines the
+ * blur as a gaussian of sigma `shadowBlur / 2`. Passing sigma straight through therefore drew every
+ * drop shadow HALF as soft as the SVG backend drew the same document, which looks like a slightly
+ * crisper render rather than a wrong one.
+ *
+ * Measured in the real renderer rather than read off the spec — the reach of a shadow's alpha, in
+ * pixels, from a square's edge:
+ *
+ *     sigma:            4    8   20   40
+ *     SVG feDropShadow: 8   17   45   89
+ *     canvas, raw:      4    8   22   46      <- half
+ *     canvas, doubled:  8   18   46   87      <- matches
+ */
+const CANVAS_SHADOW_SIGMA_SCALE = 2;
+
+/**
  * Effects (schema 18), set BEFORE the shape draws so they apply to its whole ink (fill+stroke+text),
  * matching SVG's element-level `filter`. `scale` = z·dpr: canvas `shadow*`/`ctx.filter` are in
  * DEVICE space (the CTM never touches them), so the backend that owns the CTM must replay its uniform
@@ -177,7 +196,7 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): v
 function applyEffects(ctx: CanvasRenderingContext2D, paint: Paint, scale: number): void {
     if (paint.shadow !== null) {
         ctx.shadowColor = paint.shadow.color;
-        ctx.shadowBlur = paint.shadow.blur * scale;
+        ctx.shadowBlur = paint.shadow.blur * scale * CANVAS_SHADOW_SIGMA_SCALE;
         ctx.shadowOffsetX = paint.shadow.dx * scale;
         ctx.shadowOffsetY = paint.shadow.dy * scale;
     }

@@ -401,7 +401,11 @@ describe("emitCanvas — effects", () => {
         const doc = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1, shadow: SH } });
         const b = bracket(run(doc).calls, "rect", a => JSON.stringify(a) === "[0,0,200,100]");
         expect(call(b, "set shadowColor")!.args).toEqual(["#f00"]);
-        expect(call(b, "set shadowBlur")!.args).toEqual([3]);    // × z·dpr = 1
+        // DOUBLED: `Shadow.blur` is a gaussian SIGMA everywhere else in this engine -- it is what
+        // SVG's `feDropShadow stdDeviation` and CSS `filter: blur()` both take -- but the canvas
+        // shadow property is defined as TWICE the deviation. Passing sigma straight through drew
+        // every shadow half as soft as the SVG backend drew the same document.
+        expect(call(b, "set shadowBlur")!.args).toEqual([3 * 2]);    // × z·dpr = 1, × 2 for sigma
         expect(call(b, "set shadowOffsetX")!.args).toEqual([2]);
         expect(call(b, "set shadowOffsetY")!.args).toEqual([5]);
         expect(ops(b).indexOf("set shadowColor")).toBeLessThan(ops(b).indexOf("fill"));
@@ -413,8 +417,38 @@ describe("emitCanvas — effects", () => {
         const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed: computeGeometry(doc), viewport: { x: 0, y: 0, zoom: 2 } };
         emitCanvas(ctx as unknown as CanvasRenderingContext2D, buildRenderModel(SIZE, doc, state), 3); // scale = 2·3 = 6
         const b = bracket(ctx.calls, "rect", a => JSON.stringify(a) === "[0,0,200,100]");
-        expect(call(b, "set shadowBlur")!.args).toEqual([3 * 6]);
+        expect(call(b, "set shadowBlur")!.args).toEqual([3 * 6 * 2]);
         expect(call(b, "set shadowOffsetX")!.args).toEqual([2 * 6]);
+        // The OFFSETS are NOT doubled -- they are distances, not deviations. A fix that scaled the
+        // whole shadow block would move every shadow twice as far as the SVG backend puts it.
+        expect(call(b, "set shadowOffsetY")!.args).toEqual([5 * 6]);
+    });
+
+    test("the shadow's SOFTNESS matches SVG, and its OFFSET is untouched", () => {
+        // Measured in the real renderer, as the reach of a shadow's alpha in pixels from a square's
+        // edge -- spec-reading is not measurement and this was found by comparing backends:
+        //
+        //     sigma:            4    8   20   40
+        //     SVG feDropShadow: 8   17   45   89
+        //     canvas, raw:      4    8   22   46     <- half as soft
+        //     canvas, doubled:  8   18   46   87     <- matches
+        //
+        // The ratio is asserted rather than the literal, so this states the RELATIONSHIP that has
+        // to hold between the two backends rather than a number that happens to be right today.
+        const doc = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1, shadow: SH } });
+        const b = bracket(run(doc).calls, "rect", a => JSON.stringify(a) === "[0,0,200,100]");
+        const blurArg = call(b, "set shadowBlur")!.args[0] as number;
+        const dxArg = call(b, "set shadowOffsetX")!.args[0] as number;
+        const dyArg = call(b, "set shadowOffsetY")!.args[0] as number;
+        expect(blurArg / SH.blur).toBe(2);
+        expect(dxArg / SH.dx).toBe(1);
+        expect(dyArg / SH.dy).toBe(1);
+
+        // And BLUR is not doubled: `ctx.filter: blur()` already takes a sigma, so it agrees with
+        // SVG untouched. Doubling both would have been the easy wrong fix.
+        const blurred = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1, blur: 4 } });
+        const bb = bracket(run(blurred).calls, "rect", a => JSON.stringify(a) === "[0,0,200,100]");
+        expect(call(bb, "set filter")!.args).toEqual(["blur(4px)"]);
     });
 
     test("blur sets ctx.filter = blur(radius·scale px)", () => {

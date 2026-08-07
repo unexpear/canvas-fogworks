@@ -1135,6 +1135,29 @@ of those resolves beside it, but the reader does not fetch it — the same rule 
 **One mesh becomes several.** `usemtl` splits a file into runs, 13,852 of them across the tree, and
 each run is its own primitive so a model with a painted and a metal part is two draws rather than
 one with an arbitrary material.
+### Backend parity — the shadow that was half as soft
+
+**Three backends must draw one document the same way**, and until this was measured they drew it
+three ways. `Shadow.blur` is a gaussian SIGMA — it is what SVG's `feDropShadow stdDeviation` takes
+and what CSS `filter: blur()` takes — but the canvas shadow property is the odd one out: its spec
+defines the blur as a gaussian of sigma `shadowBlur / 2`. The Canvas backend passed sigma straight
+through, so every drop shadow it drew was HALF as soft as the same document on the SVG backend. That
+does not look like a bug; it looks like a slightly crisper render.
+
+MEASURED, NOT READ OFF THE SPEC — the reach of a shadow's alpha in pixels from a square's edge, in
+the real renderer:
+
+    sigma:            4    8   20   40
+    SVG feDropShadow: 8   17   45   89
+    canvas, raw:      4    8   22   46      <- what shipped
+    canvas, doubled:  8   18   46   87      <- matches
+
+**Only the softness was wrong.** The OFFSETS are distances rather than deviations and were already
+right, and `ctx.filter: blur()` already takes a sigma, so it already agreed. Correcting the whole
+shadow block would have moved every shadow twice as far as SVG puts it — which is why the test
+asserts the RATIO of each argument to its source value rather than three literals.
+
+The remaining parity gap is the GPU backend, which ignores both effects outright.
 ### Fonts — a family name is not a font
 
 **`style.fontFamily` has always been a STRING and nothing else.** A document could ask for "Kenney
