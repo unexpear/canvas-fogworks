@@ -22,6 +22,10 @@ import { EditorState, screenToWorld } from "../EditorState";
 import { polygonPoints, POLYGON_DEFAULT_SIDES } from "../../core/geometry/Polygon";
 import { Rect } from "../../core/geometry/Matrix";
 import { Tool } from "./ToolController";
+import { generateUUID } from "../../core/ids/UUID";
+import { RASTER_MAX_SIDE } from "../../core/document/Node";
+import { createPixelBuffer } from "../../core/paint/PixelBuffer";
+import { encodeSurface } from "../../core/paint/PixelCodec";
 
 const DEFAULT_FILL = "#4a90d9";
 /**
@@ -45,7 +49,7 @@ export function clampStrokeWidth(w: number): number {
 
 /** The basic shapes the editor can draw. Each maps to a node type plus, where the type needs
  *  more than a box, the content that makes it visible. */
-export type ShapeKind = "rectangle" | "ellipse" | "line" | "text" | "triangle" | "polygon" | "image";
+export type ShapeKind = "rectangle" | "ellipse" | "line" | "text" | "triangle" | "polygon" | "image" | "raster";
 
 /**
  * How an `image` gets its SOURCE. Picking a file is a DOM concern (a file input, a FileReader),
@@ -95,6 +99,25 @@ export function polygonCommands(sides: number, width: number, height: number): P
     ];
 }
 
+/**
+ * A blank surface sized to the drawn box, at ONE PIXEL PER WORLD UNIT.
+ *
+ * That ratio is a default, not a law — a pixel artist zooms in and paints big pixels, and a
+ * resample tool is what changes it later. It is the only ratio that needs no second control on
+ * the toolbar, and it makes the node's pixels and its box agree at 100% zoom, which is what a
+ * user drawing a box expects to get.
+ *
+ * CLAMPED AT BOTH ENDS. A drag can be sub-pixel (a click, or a box drawn while zoomed far out),
+ * and a zero-sided buffer is not a surface; a drag can also be enormous, and `RASTER_MAX_SIDE`
+ * squared at four bytes is 67 MB, which is already a lot to hold in one undo step.
+ */
+function blankSurface(width: number, height: number): { data: string; width: number; height: number } {
+    const w = Math.max(1, Math.min(RASTER_MAX_SIDE, Math.round(width)));
+    const h = Math.max(1, Math.min(RASTER_MAX_SIDE, Math.round(height)));
+    const encoded = encodeSurface(createPixelBuffer(w, h));
+    return { data: encoded.data, width: w, height: h };
+}
+
 const SHAPES: Record<ShapeKind, ShapeSpec> = {
     rectangle: { type: "core.rectangle", allowsCollapsedAxis: false, supportsPaintMode: true },
     ellipse: { type: "core.ellipse", allowsCollapsedAxis: false, supportsPaintMode: true },
@@ -117,11 +140,24 @@ const SHAPES: Record<ShapeKind, ShapeSpec> = {
     },
     // The one shape a drag alone cannot finish: an image with no source draws nothing, so the
     // node is only created once a source is resolved (see `SourceResolver`).
-    image: { type: "core.image", allowsCollapsedAxis: false, needsSource: true }
+    image: { type: "core.image", allowsCollapsedAxis: false, needsSource: true },
+    /**
+     * A surface to PAINT ON — the one shape whose content is pixels rather than geometry.
+     *
+     * IT IS BORN WITH A SURFACE, not given one later. A `core.raster` without one is not a
+     * smaller picture: `PaintSurfaceAction` refuses it, so the node would exist, validate,
+     * serialize and be permanently unpaintable. Creating it and giving it pixels is one act,
+     * which is why `NodeContent` carries a surface at all.
+     */
+    raster: {
+        type: "core.raster",
+        allowsCollapsedAxis: false,
+        content: (width, height): NodeContent => ({ surface: blankSurface(width, height) })
+    }
 };
 
 /** The shape kinds in toolbar order — the single list the UI and the tests both read. */
-export const SHAPE_KINDS: readonly ShapeKind[] = ["rectangle", "ellipse", "line", "text", "triangle", "polygon", "image"];
+export const SHAPE_KINDS: readonly ShapeKind[] = ["rectangle", "ellipse", "line", "text", "triangle", "polygon", "image", "raster"];
 
 /**
  * Whether FILLED/OUTLINE is offered for a kind. Read from the SAME `SHAPES` table the tool
@@ -258,6 +294,9 @@ export class ShapeTool implements Tool {
 
     private commit(rect: Rect, content?: NodeContent): void {
         const { fill, stroke, strokeWidth } = this.paint();
+        // The id is minted HERE so the new node can be SELECTED — `AddNodeAction` would generate
+        // one internally and the tool would never learn it.
+        const id = generateUUID();
         this.dispatcher.dispatchAction(new AddNodeAction(
             this.dispatcher.getDocument(),
             this.spec.type,
@@ -266,12 +305,19 @@ export class ShapeTool implements Tool {
             rect.width,
             rect.height,
             fill,
-            undefined,
+            id,
             null,
             content,
             stroke,
             strokeWidth
         ));
+        // WHAT YOU DREW IS WHAT IS SELECTED, which every editor does and `PenTool` already did.
+        // It stopped being a convenience with the raster tool: the brush paints the SELECTION, so
+        // without this, drawing a canvas and then painting on it silently does nothing — the exact
+        // failure found by driving the real app, where a fresh canvas took a stroke that went
+        // nowhere and left the surface blank.
+        this.editorState.selectedNodeIds = [id];
+        this.refresh();
     }
 
     onKeyDown(e: KeyboardEvent): void {

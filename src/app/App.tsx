@@ -37,6 +37,10 @@ import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
 import { PenTool } from "../editor/tools/PenTool";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../editor/tools/ShapeTool";
+import { RasterTool } from "../editor/tools/RasterTool";
+import { Rgba } from "../core/paint/PixelBuffer";
+import { makeBrush, BRUSH_MAX_SIZE } from "../core/paint/Brush";
+import { SymmetryMode, NO_SYMMETRY } from "../core/paint/Symmetry";
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { alignAction, distributeAction } from "../core/actions/alignActions";
 import { booleanAction, makeBooleanNodeAction } from "../core/actions/booleanActions";
@@ -182,8 +186,25 @@ const ALIGN_BUTTON_STYLE: React.CSSProperties = {
 };
 
 /** Toolbar glyph per basic shape (the label is the kind's own name). */
+/**
+ * `#rrggbb` from an `<input type="color">` as the four bytes a brush paints.
+ *
+ * FULLY OPAQUE, because the colour control has no alpha channel and inventing one would make
+ * every stroke silently translucent. Erasing is a separate mode (alpha 0), not a dimmed colour —
+ * `setPixel` REPLACES, so a transparent brush is the eraser.
+ */
+function hexToRgba(hex: string): Rgba {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+    if (!m) return [0, 0, 0, 255];
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 255];
+}
+
 const SHAPE_ICONS: Record<ShapeKind, string> = {
-    rectangle: "□", ellipse: "○", line: "╱", text: "T", triangle: "△", polygon: "⬟", image: "▣"
+    rectangle: "□", ellipse: "○", line: "╱", text: "T", triangle: "△", polygon: "⬟", image: "▣",
+    // A CANVAS to paint on, distinct from ▣ (an image someone else made). This tool CREATES the
+    // surface; the brush below paints on one that already exists.
+    raster: "▦"
 };
 
 /**
@@ -376,6 +397,26 @@ export function App() {
     const [strokeWidth, setStrokeWidth] = useState<number>(DEFAULT_STROKE_WIDTH);
     const strokeWidthRef = useRef(DEFAULT_STROKE_WIDTH);
     strokeWidthRef.current = strokeWidth;
+    // THE BRUSH. Same getter pattern again, and for the same reason: `RasterTool` is constructed
+    // once, so a captured colour would freeze whatever was chosen when the toolbar first rendered.
+    const [paintColour, setPaintColour] = useState<string>("#000000");
+    const paintColourRef = useRef<string>("#000000");
+    paintColourRef.current = paintColour;
+    // ERASING IS NOT A COLOUR, it is alpha 0 — `setPixel` REPLACES rather than blends, so the
+    // eraser is the pencil holding a transparent colour and needs no second code path.
+    const [erasing, setErasing] = useState(false);
+    const erasingRef = useRef(false);
+    erasingRef.current = erasing;
+    const [brushSize, setBrushSize] = useState<number>(1);
+    const brushSizeRef = useRef(1);
+    brushSizeRef.current = brushSize;
+    const [brushRound, setBrushRound] = useState(false);
+    const brushRoundRef = useRef(false);
+    brushRoundRef.current = brushRound;
+    const [symmetry, setSymmetry] = useState<SymmetryMode>(NO_SYMMETRY);
+    const symmetryRef = useRef<SymmetryMode>(NO_SYMMETRY);
+    symmetryRef.current = symmetry;
+
     // Which folders are collapsed in the layer tree. Purely a VIEW concern — it never touches
     // the document, so collapsing is not undoable and not persisted.
     const [collapsedLayers, setCollapsedLayers] = useState<Set<string>>(new Set());
@@ -436,6 +477,14 @@ export function App() {
     }, []);
 
     const selectedNodeId = ui.selectedNodeId;
+    // THE BRUSH'S TARGET, resolved here only to say so in the toolbar. `RasterTool` decides for
+    // itself at press time from the document — this is a label, not a second rule that could
+    // disagree with the one that paints.
+    const selectedRasterId = (() => {
+        if (es.selectedNodeIds.length !== 1) return null;
+        const n = dispatcher.getDocument().nodes.get(es.selectedNodeIds[0]);
+        return n && n.type === "core.raster" && n.surface ? n.id : null;
+    })();
 
     const toolControllerRef = useRef<ToolController | null>(null);
     if (!toolControllerRef.current) {
@@ -453,7 +502,14 @@ export function App() {
                 [kind, new ShapeTool(dispatcher, es, refresh, kind, pickImageSource, () => polygonSidesRef.current, () => paintModeRef.current, () => strokeWidthRef.current)])),
             // The PEN — the first way to create a `core.path`, which has been renderable since
             // schema 17 with no way to author one.
-            pen: new PenTool(dispatcher, es, refresh, () => paintModeRef.current === "outline" ? "none" : "#4a90d9")
+            pen: new PenTool(dispatcher, es, refresh, () => paintModeRef.current === "outline" ? "none" : "#4a90d9"),
+            // THE BRUSH. Keyed "paint", not "raster": the `raster` SHAPE creates a surface, this
+            // paints on one that exists. Two gestures, two tools — a single tool that did both
+            // could not tell "start a new canvas here" from "start a stroke here".
+            paint: new RasterTool(dispatcher, es, refresh,
+                () => erasingRef.current ? [0, 0, 0, 0] : hexToRgba(paintColourRef.current),
+                () => makeBrush(brushSizeRef.current, brushRoundRef.current),
+                () => symmetryRef.current)
         };
         toolController.setTool(toolsRef.current.select);
     }
@@ -1170,6 +1226,50 @@ export function App() {
                     />
                 ))}
                 <ToolButton icon="✒" label="Pen" active={toolName === "pen"} onClick={() => setTool("pen")} />
+                <ToolButton icon="✏" label="Paint" active={toolName === "paint"} onClick={() => setTool("paint")} />
+                {toolName === "paint" && (
+                    <>
+                        {/* THE TARGET IS THE SELECTION, so say so when there isn't one. A brush
+                            that silently does nothing reads as a broken tool. */}
+                        {!selectedRasterId && (
+                            <span style={{ fontSize: 10, color: UI.textFaint, marginRight: 8 }}>
+                                select a ▦ canvas to paint on
+                            </span>
+                        )}
+                        <input
+                            type="color"
+                            aria-label="Paint colour"
+                            data-testid="paint-colour"
+                            value={paintColour}
+                            disabled={erasing}
+                            onChange={e => setPaintColour(e.target.value)}
+                            style={{ width: 28, height: 22, padding: 0, background: "none",
+                                border: `1px solid ${UI.line}`, opacity: erasing ? 0.4 : 1 }}
+                        />
+                        <ToolButton icon="⌫" label="Erase" active={erasing}
+                            onClick={() => setErasing(v => !v)} />
+                        <label style={{ fontSize: 10, color: UI.textFaint, display: "flex", alignItems: "center", gap: 3 }}>
+                            size
+                            <input
+                                type="number" min={1} max={BRUSH_MAX_SIZE} step={1}
+                                aria-label="Brush size"
+                                data-testid="brush-size"
+                                value={brushSize}
+                                onChange={e => setBrushSize(Math.max(1, Math.min(BRUSH_MAX_SIZE,
+                                    Math.round(Number(e.target.value) || 1))))}
+                                style={{ width: 44, background: UI.bg, color: UI.text,
+                                    border: `1px solid ${UI.line}` }}
+                            />
+                        </label>
+                        <ToolButton icon="●" label="Round" active={brushRound}
+                            onClick={() => setBrushRound(v => !v)} />
+                        {/* Mirrored drawing: one stroke paints two, four, or one. */}
+                        <ToolButton icon="⇋" label="Mirror H" active={symmetry.horizontal}
+                            onClick={() => setSymmetry(m => ({ ...m, horizontal: !m.horizontal }))} />
+                        <ToolButton icon="⇵" label="Mirror V" active={symmetry.vertical}
+                            onClick={() => setSymmetry(m => ({ ...m, vertical: !m.vertical }))} />
+                    </>
+                )}
                 {toolName === "pen" && (
                     <span style={{ fontSize: 10, color: UI.textFaint, marginRight: 8 }}>
                         click to add · drag to curve · click the first point to close · Enter to finish

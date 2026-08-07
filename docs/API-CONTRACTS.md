@@ -1424,11 +1424,18 @@ Known and shared with every live-committed gesture here: the coalesce window is 
 quick separate strokes on the same node merge into one undo step. The picture is right either way;
 only the granularity is coarse.
 `ShapeTool` is ONE tool parameterised by `ShapeKind` (`SHAPE_KINDS` = rectangle | ellipse |
-line | text | triangle | polygon | image), since the corner-to-corner gesture, preview, Escape and zoom-independent
+line | text | triangle | polygon | image | **raster**), since the corner-to-corner gesture, preview, Escape and zoom-independent
 minimum size are identical for all of them — only the node type, the paint and the content
 differ. Its minimum-size rule is per-type on purpose, to agree with the shared `dimensionError`
 the action validates against (a `core.line` may collapse ONE axis; everything else needs a box),
-so the tool can never commit what validation would reject. FILLED vs OUTLINE is a toolbar mode,
+so the tool can never commit what validation would reject.
+**`raster` draws a CANVAS**: a `core.raster` born with a blank surface sized to the drag at one
+pixel per world unit, clamped to `RASTER_MAX_SIDE` and to at least one pixel. It must be born with
+one — a raster without a surface is a node `PaintSurfaceAction` refuses, so it would validate,
+serialize and be permanently unpaintable.
+**Every kind now SELECTS what it created.** Conventional, and load-bearing since `RasterTool`
+paints the selection: without it, drawing a canvas and painting on it silently did nothing, which
+is exactly what driving the real app found. FILLED vs OUTLINE is a toolbar mode,
 not a document concept: an outline is `fill: "none"` plus a `stroke`, both long-standing `Style`
 fields. `supportsPaintMode(kind)` reads the same table the tool commits from, so the control is
 never offered for a kind that would ignore it (a line is already only a stroke). An outline's

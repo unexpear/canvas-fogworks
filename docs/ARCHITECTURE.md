@@ -1256,6 +1256,27 @@ bundle, where it was tree-shaken before.
 threading it through `itemDraws` is a real change rather than a two-line one. It continues to skip
 rasters, alongside the effects regression already recorded against it above.
 
+**AND NEITHER IS SVG — measured in the running app, not inferred.** `emitSVG` never reads
+`shape.surface`; it emits `<image href="raster:<id>:<w>x<h>:<len>:<sum>">`, which is an identity
+key and not a URL, so the element is present, correctly placed, carries `image-rendering="pixelated"`
+— and loads nothing. On the SVG backend a painted canvas is INVISIBLE while behaving normally
+everywhere else. The href is still useful: it changes whenever the pixels do, which is how the live
+verification below observed painting at all.
+
+**The whole loop was driven over CDP** and each step read back rather than assumed: drawing with the
+▦ tool creates a `core.raster` with an 80x60 surface for an 80x60 drag; a brush stroke moves the
+payload from 128 to 404 bytes; ONE undo returns it to exactly 128 and redo restores 404 byte for
+byte; and the Canvas backend really does display it — 63 magenta and 36 black pixels counted inside
+the node's own box.
+
+**PAINTING IS ONE REPAINT BEHIND on Canvas, and this is structural rather than a bug.** The cache is
+keyed on the href, the href folds in a checksum of the pixels, so EVERY STROKE IS A FRESH MISS —
+`resolveSurface` returns null, decodes, and asks for a repaint. The "lazy on miss costs one frame"
+trade recorded above was reasoned about a picture that arrives once; a brush changes the key on
+every move. The first sample after a stroke found nothing and only a settled repaint showed the
+paint. Left as it is for now because the fix is a decoded-buffer fast path for the node being
+painted, which is a second source of truth for the picture — the thing this seam exists to avoid.
+
 **The previous state, for the record:** `buildRenderModel` does
 not know the type, so it falls through to a `rect` shape carrying the node's `fill` — which for a
 raster node is `"none"`. The node exists, validates, serializes, round-trips and accepts paint

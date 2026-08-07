@@ -6968,7 +6968,8 @@ describe("ShapeTool: every basic shape draws", () => {
     test("each kind commits its own node type, and the box is the drag", async () => {
         const expected: Record<ShapeKind, string> = {
             rectangle: "core.rectangle", ellipse: "core.ellipse", line: "core.line",
-            text: "core.text", triangle: "core.path", polygon: "core.path", image: "core.image"
+            text: "core.text", triangle: "core.path", polygon: "core.path", image: "core.image",
+            raster: "core.raster"
         };
         for (const kind of SHAPE_KINDS) {
             const { node } = await draw(kind, 10, 20, 110, 80);
@@ -21009,6 +21010,63 @@ describe("RasterTool — the drag that becomes paint", () => {
         }
         return n;
     };
+
+    test("drawing a canvas SELECTS it, so the brush has a target", () => {
+        // Found by driving the real app: a freshly drawn canvas took a stroke that went nowhere,
+        // because `RasterTool` paints the SELECTION and `ShapeTool` selected nothing. The tool
+        // reported success, the surface stayed blank, and nothing said why.
+        const doc = createEmptyDocument();
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        const tool = new ShapeTool(dispatcher, es, () => { }, "raster");
+        const rect = { left: 0, top: 0 } as DOMRect;
+        const ev = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1,
+            preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        tool.onMouseDown(ev(10, 20), rect);
+        tool.onMouseMove(ev(90, 80), rect);
+        tool.onMouseUp();
+
+        expect(es.selectedNodeIds).toHaveLength(1);
+        const node = dispatcher.getDocument().nodes.get(es.selectedNodeIds[0]);
+        expect(node).toBeDefined();
+        expect(node!.type).toBe("core.raster");
+        // BORN WITH A SURFACE, sized to the drag at one pixel per world unit — a raster without
+        // one is a node `PaintSurfaceAction` refuses, so it would exist and be unpaintable.
+        expect(node!.surface).toMatchObject({ width: 80, height: 60 });
+        expect(rasterSurfaceError(node!.surface!)).toBeNull();
+        // And the surface really is BLANK — a fresh canvas that arrived pre-painted would be a
+        // codec bug that only showed up as mysterious marks.
+        const buf = decodeSurface(node!.surface!.data, 80, 60)!;
+        expect([...buf.data].some(v => v !== 0)).toBe(false);
+
+        // THE SELECTION IS THE NEW NODE, not merely non-empty: a second canvas must take over.
+        tool.onMouseDown(ev(200, 200), rect);
+        tool.onMouseMove(ev(240, 230), rect);
+        tool.onMouseUp();
+        expect(es.selectedNodeIds).toHaveLength(1);
+        expect(es.selectedNodeIds[0]).not.toBe(node!.id);
+        expect(dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])!.surface)
+            .toMatchObject({ width: 40, height: 30 });
+    });
+
+    test("a canvas is clamped at both ends, because a drag is not a size", () => {
+        const doc = createEmptyDocument();
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        const tool = new ShapeTool(dispatcher, es, () => { }, "raster");
+        const rect = { left: 0, top: 0 } as DOMRect;
+        const ev = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1,
+            preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        // A drag can be SUB-PIXEL — drawn while zoomed far out — and a zero-sided buffer is not a
+        // surface. The two axes differ so a single clamp applied to both cannot pass.
+        es.viewport.zoom = 1;
+        tool.onMouseDown(ev(0, 0), rect);
+        tool.onMouseMove(ev(3, 40), rect);
+        tool.onMouseUp();
+        const small = dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])!;
+        expect(small.surface).toMatchObject({ width: 3, height: 40 });
+        expect(small.surface!.width).toBeGreaterThanOrEqual(1);
+    });
 
     test("a click paints ONE pixel, and it is the pixel under the pointer", () => {
         const { dispatcher, tool, computed } = harness();
