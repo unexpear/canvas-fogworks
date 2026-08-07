@@ -84,12 +84,13 @@ import { MESH_IDENTITY } from "../import/MeshData";
 import { createPixelBuffer, pixelBufferError, getPixel, setPixel, inBounds, linePoints,
     drawLine, floodFill, PIXEL_MAX_SIDE, Rgba } from "../paint/PixelBuffer";
 import { capturePatch, applyPatch, revertPatch, invertPatch, readRegion, isEmptyPatch,
-    patchCost } from "../paint/PixelPatch";
+    patchCost, EMPTY_PATCH } from "../paint/PixelPatch";
 import { makeBrush, brushError, stampBrush, brushBounds, strokePath, strokeBounds,
     BRUSH_MAX_SIZE, brushFromImage, brushWithVariants, pickFace } from "../paint/Brush";
 import { encodeSurface, decodeSurface, PIXEL_CODEC_VERSION, PIXEL_RUN_MAX } from "../paint/PixelCodec";
 import { beginStroke, extendStroke, endStroke, strokeEscaped } from "../paint/Stroke";
 import { rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
+import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -16223,6 +16224,86 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(back.type).toBe("core.raster");
         expect(back.surface).toEqual(stored);
         expect([...decodeSurface(back.surface!.data, 8, 4)!.data]).toEqual([...b.data]);
+    });
+
+    test("painting goes through the DISPATCHER, so undo is the normal path", () => {
+        // Every other edit here is an Action. A paint tool keeping its own undo stack would be the
+        // one feature that could not join a transaction, a component override or a coalesced drag.
+        const surf = createPixelBuffer(8, 8);
+        const doc = createEmptyDocument();
+        doc.nodes.set("r", { id: "r", type: "core.raster", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 8, height: 8 },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            surface: { data: encodeSurface(surf).data, width: 8, height: 8 } });
+        doc.rootNodeUuids = ["r"];
+        const dispatcher = new ActionDispatcher(doc);
+
+        // A stroke, captured exactly as a tool would.
+        const painted = createPixelBuffer(8, 8);
+        const session = beginStroke(painted, makeBrush(1, false), 2, 2, RED, 4)!;
+        extendStroke(painted, session, 5, 2, linePoints);
+        const patch = endStroke(painted, session, linePoints);
+        expect(isEmptyPatch(patch)).toBe(false);
+
+        expect(dispatcher.dispatchAction(new PaintSurfaceAction(doc, "r", patch)).success).toBe(true);
+
+        // THE DOCUMENT ACTUALLY CHANGED. A delta naming a field the apply layer ignores would
+        // report success and leave the surface exactly as it was — success is not evidence.
+        const after = dispatcher.getDocument().nodes.get("r")!.surface!;
+        // THE STORED DIMENSIONS SURVIVE. Decoding with a hard-coded 8x8 would pass even if the
+        // action had written the patch's size onto the node, so the node's own numbers are read.
+        expect(after.width).toBe(8);
+        expect(after.height).toBe(8);
+        const shown = decodeSurface(after.data, after.width, after.height)!;
+        expect(getPixel(shown, 2, 2)).toEqual(RED);
+        expect(getPixel(shown, 5, 2)).toEqual(RED);
+        expect(getPixel(shown, 7, 7)).toEqual([0, 0, 0, 0]);
+
+        // UNDO IS THE NORMAL PATH, not a private stack.
+        dispatcher.undo();
+        const undone = dispatcher.getDocument().nodes.get("r")!.surface!;
+        expect([...decodeSurface(undone.data, 8, 8)!.data].every(v => v === 0)).toBe(true);
+        dispatcher.redo();
+        expect(getPixel(decodeSurface(dispatcher.getDocument().nodes.get("r")!.surface!.data, 8, 8)!, 2, 2))
+            .toEqual(RED);
+    });
+
+    test("painting refuses what it cannot paint", () => {
+        const surf = createPixelBuffer(4, 4);
+        const doc = createEmptyDocument();
+        doc.nodes.set("r", { id: "r", type: "core.raster", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 4, height: 4 },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            surface: { data: encodeSurface(surf).data, width: 4, height: 4 } });
+        doc.nodes.set("rect", { id: "rect", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 4, height: 4 },
+            style: { fill: "#fff", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["r", "rect"];
+
+        const painted = createPixelBuffer(4, 4);
+        const before = readRegion(painted, 0, 0, 4, 4);
+        setPixel(painted, 1, 1, RED);
+        const patch = capturePatch(painted, before, 0, 0, 4, 4);
+
+        expect(new PaintSurfaceAction(doc, "r", patch).validate()).toBe(true);
+        // A node that HAS no surface is a caller bug, and fails rather than silently no-oping.
+        expect(new PaintSurfaceAction(doc, "rect", patch).validate()).toBe(false);
+        expect(new PaintSurfaceAction(doc, "missing", patch).validate()).toBe(false);
+        // AN EMPTY PATCH IS INVALID, not harmless: it would put an undo step on the stack that
+        // undoes nothing, so pressing undo once would appear to have been ignored.
+        expect(new PaintSurfaceAction(doc, "r", EMPTY_PATCH).validate()).toBe(false);
+        // A patch that does not LIE on the surface would write into the wrong rows — which is what
+        // a stroke captured against a differently-sized surface produces.
+        expect(new PaintSurfaceAction(doc, "r", { ...patch, x: 3, width: 4 }).validate()).toBe(false);
+        expect(new PaintSurfaceAction(doc, "r", { ...patch, y: -1 }).validate()).toBe(false);
+
+        // A surface that will not DECODE throws rather than painting onto a blank replacement,
+        // which would silently discard whatever the corrupt payload was meant to hold.
+        doc.nodes.set("bad", { id: "bad", type: "core.raster", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 4, height: 4 },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            surface: { data: "not-a-payload", width: 4, height: 4 } });
+        expect(() => new PaintSurfaceAction(doc, "bad", patch).execute()).toThrow(/will not decode/);
     });
 
     test("read shapes become nodes the document accepts", () => {

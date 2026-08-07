@@ -132,6 +132,14 @@ export function applyMutationsToDocument(
                 // NULL means REMOVE, which is why this cannot use the same `!== undefined` shape as
                 // its neighbours: "the whole image" is a real state and has to be reachable from a
                 // node that currently names a region.
+                // THE SURFACE (schema 55). A field the action layer emits and this layer ignores is
+                // the worst shape of bug available here: the action validates, reports success, and
+                // the document does not change — so `success` becomes evidence of nothing. Painting
+                // was exactly that until a test read the pixels back instead of trusting the result.
+                if (delta.surface !== undefined) {
+                    if (delta.surface === null) delete node.surface;
+                    else node.surface = delta.surface;
+                }
                 if (delta.sourceRect !== undefined) {
                     if (delta.sourceRect === null) delete node.sourceRect;
                     else node.sourceRect = delta.sourceRect;

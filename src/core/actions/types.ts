@@ -3,7 +3,7 @@
  * @description Shared types used across all Actions and History tracking.
  */
 
-import { SourceRect } from "../document/Node";
+import { SourceRect, RasterSurface } from "../document/Node";
 import { Node, Geometry, Style, Layout, Transform, VariantKey, StateDefinition, PathCommand, BooleanOp, RESERVED_NODE_ID } from "../document/Node";
 import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
 import { InstanceOverride } from "../document/Components";
@@ -59,6 +59,8 @@ export type NodeDelta =
          * already means "leave it alone" everywhere in this protocol.
          */
         sourceRect?: SourceRect | null;
+        /** A painted surface (schema 55). Null clears it. */
+        surface?: RasterSurface | null;
         /** Whether the image scales by nearest neighbour (schema 51). */
         pixelated?: boolean;
         src?: string;
