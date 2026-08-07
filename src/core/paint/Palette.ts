@@ -87,3 +87,52 @@ export function parseFloatColour(text: unknown): Rgba | null {
     // above 1 would otherwise land past 255 and wrap when it reached a byte.
     return parts.map(v => Math.round(Math.min(1, Math.max(0, v)) * 255)) as unknown as Rgba;
 }
+
+/** The shape a palette file states, kept loose so a bad one is refused rather than crashed on. */
+interface PaletteFile {
+    colors?: { color?: unknown; index?: unknown }[];
+    comment?: unknown;
+    width?: unknown;
+    height?: unknown;
+}
+
+/**
+ * A palette from an already-parsed file, or null when it does not describe one.
+ *
+ * TAKES PARSED JSON, NOT TEXT. `JSON.parse` throwing is the caller's to handle — it is the one
+ * failure that carries a useful message about WHERE the file is malformed, and swallowing it here
+ * would replace "unexpected token at line 4" with a flat null.
+ *
+ * `index` IS OBEYED, NOT ASSUMED. The file numbers every entry, and nothing guarantees they arrive
+ * in order — a palette written by a tool that reorders its rows would otherwise load with its
+ * colours shuffled, which is precisely the grouping the grid exists to preserve.
+ */
+export function parsePaletteFile(json: unknown, name: string): Palette | null {
+    if (json === null || typeof json !== "object") return null;
+    const file = json as PaletteFile;
+    if (!Array.isArray(file.colors)) return null;
+    const width = Number(file.width), height = Number(file.height);
+    if (!Number.isInteger(width) || !Number.isInteger(height)) return null;
+
+    // Placed by their stated index, so a hole in the numbering stays a hole in the grid.
+    const slots: (Rgba | null)[] = new Array(Math.max(0, width * height)).fill(null);
+    for (const entry of file.colors) {
+        const colour = parseFloatColour(entry?.color);
+        const at = Number(entry?.index);
+        if (!colour || !Number.isInteger(at) || at < 0 || at >= slots.length) continue;
+        slots[at] = colour;
+    }
+    // Trailing empty slots are dropped so `colours.length` says how many the file actually held,
+    // while interior holes are kept as transparent — a gap between two ramps is a layout choice.
+    let last = slots.length - 1;
+    while (last >= 0 && slots[last] === null) last--;
+    const colours = slots.slice(0, last + 1).map(c => c ?? ([0, 0, 0, 0] as Rgba));
+
+    const palette: Palette = {
+        name,
+        colours,
+        width, height,
+        comment: typeof file.comment === "string" ? file.comment : ""
+    };
+    return paletteError(palette) === null ? palette : null;
+}

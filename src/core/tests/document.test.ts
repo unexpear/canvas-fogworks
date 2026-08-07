@@ -91,7 +91,7 @@ import { encodeSurface, decodeSurface, PIXEL_CODEC_VERSION, PIXEL_RUN_MAX } from
 import { beginStroke, extendStroke, endStroke, strokeEscaped } from "../paint/Stroke";
 import { rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
 import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
-import { paletteError, paletteAt, parseFloatColour, PALETTE_MAX_COLOURS } from "../paint/Palette";
+import { paletteError, paletteAt, parseFloatColour, parsePaletteFile, PALETTE_MAX_COLOURS } from "../paint/Palette";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -16368,6 +16368,64 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(parseFloatColour("(1, red, 0, 1)")).toBeNull();
         expect(parseFloatColour(42)).toBeNull();
         expect(parseFloatColour("")).toBeNull();
+    });
+
+    test("a palette file places colours by their stated INDEX", () => {
+        // The file numbers every entry and nothing guarantees they arrive in order. A tool that
+        // reorders its rows would otherwise load with its colours shuffled — which is exactly the
+        // grouping the grid exists to preserve, so the index is obeyed rather than assumed.
+        const file = {
+            width: 2, height: 2, comment: "Author: Somebody",
+            colors: [
+                { color: "(0, 0, 1, 1)", index: 3 },
+                { color: "(1, 0, 0, 1)", index: 0 },
+                { color: "(0, 1, 0, 1)", index: 1 }
+            ]
+        };
+        const pal = parsePaletteFile(file, "Test")!;
+        expect(pal).not.toBeNull();
+        expect(pal.name).toBe("Test");
+        expect(pal.comment).toBe("Author: Somebody");
+        expect(paletteAt(pal, 0, 0)).toEqual([255, 0, 0, 255]);      // index 0, listed SECOND
+        expect(paletteAt(pal, 1, 0)).toEqual([0, 255, 0, 255]);
+        expect(paletteAt(pal, 1, 1)).toEqual([0, 0, 255, 255]);      // index 3, listed FIRST
+        // Slot 2 was never given, and stays a HOLE rather than pulling index 3 down into it.
+        expect(paletteAt(pal, 0, 1)).toEqual([0, 0, 0, 0]);
+
+        // TRAILING empty slots are dropped, so `colours.length` says what the file held; interior
+        // holes are kept, because a gap between two ramps is a layout choice.
+        const trailing = parsePaletteFile({ width: 4, height: 1,
+            colors: [{ color: "(1, 1, 1, 1)", index: 0 }] }, "T")!;
+        expect(trailing.colours).toHaveLength(1);
+        expect(trailing.width).toBe(4);
+
+        // Entries that are malformed or out of range are SKIPPED rather than shifting the rest.
+        const messy = parsePaletteFile({ width: 2, height: 1, colors: [
+            { color: "(1, 1, 1, 1)", index: 0 },
+            { color: "not a colour", index: 1 },
+            { color: "(0, 0, 0, 1)", index: 99 }
+        ] }, "M")!;
+        expect(messy.colours).toHaveLength(1);
+        expect(paletteAt(messy, 0, 0)).toEqual([255, 255, 255, 255]);
+
+        // A file that does not describe a palette is null, not a partial one.
+        expect(parsePaletteFile(null, "x")).toBeNull();
+        expect(parsePaletteFile({ width: 2, height: 2 }, "x")).toBeNull();          // no colors
+        expect(parsePaletteFile({ colors: [], width: "eight", height: 4 }, "x")).toBeNull();
+        expect(parsePaletteFile({ colors: [], width: 8.5, height: 4 }, "x")).toBeNull();
+        // A NUMERIC STRING is coerced and accepted, which is deliberate rather than overlooked:
+        // JSON writers differ about quoting numbers, and "8" describes the same grid as 8. What is
+        // refused is a value that does not describe one at all.
+        expect(parsePaletteFile({ colors: [], width: "8", height: 4 }, "x")!.width).toBe(8);
+        // A NON-STRING comment becomes empty rather than travelling as whatever it was — the field
+        // is shown to a user, and an object there would render as "[object Object]".
+        expect(parsePaletteFile({ colors: [], width: 2, height: 2, comment: { a: 1 } }, "x")!.comment).toBe("");
+        expect(parsePaletteFile({ colors: [], width: 2, height: 2 }, "x")!.comment).toBe("");
+        // And one whose colours outnumber its grid is refused by the SAME validator a hand-built
+        // palette meets, rather than by a second rule that could drift from it.
+        expect(parsePaletteFile({ width: 1, height: 1, colors: [
+            { color: "(1, 1, 1, 1)", index: 0 }, { color: "(0, 0, 0, 1)", index: 5 }] }, "x")!.colours)
+            .toHaveLength(1);
     });
 
     test("read shapes become nodes the document accepts", () => {
