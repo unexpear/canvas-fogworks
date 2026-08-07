@@ -1423,6 +1423,60 @@ purely-translated parents): `MoveTool` folds `computeSnap` into a drag (whole bo
 node's world origin/offset) and write `EditorState.snapGuides`. A multi-node, or rotated/scaled-
 chain, gesture is unsnapped (deferred).
 
+## Paint (`core/paint/`)
+
+```ts
+// PixelBuffer — a surface VDE authored, straight RGBA, not premultiplied
+interface PixelBuffer { width: number; height: number; data: Uint8ClampedArray }
+function createPixelBuffer(w, h): PixelBuffer;      function setPixel(b, x, y, colour): void;
+function getPixel(b, x, y): Rgba | null;            function inBounds(b, x, y): boolean;
+function linePoints(x0, y0, x1, y1): [number, number][];
+function drawLine(b, x0, y0, x1, y1, colour): void; function floodFill(b, x, y, colour): number;
+
+// PixelPatch — what a stroke costs to remember
+interface PixelPatch { x; y; width; height; before: Uint8ClampedArray; after: Uint8ClampedArray }
+function capturePatch(b, before, x, y, w, h): PixelPatch;   function applyPatch(b, p): void;
+function revertPatch(b, p): void;   function invertPatch(p): PixelPatch;   function patchCost(p): number;
+
+// Brush — a set of dabs, each optionally carrying its own colour
+interface BrushDab { dx: number; dy: number; colour: Rgba | null }
+interface Brush { width; height; round: boolean; dabs: BrushDab[]; variants: Brush[] }
+function makeBrush(size, round): Brush;             function brushFromImage(b: PixelBuffer): Brush;
+function brushWithVariants(faces): Brush | null;    function pickFace(brush, roll: number): Brush;
+function stampBrush(b, brush, x, y, colour): void;  function brushBounds(brush, x, y): Box;
+function strokePath(b, brush, points, colour, line): void;  function strokeBounds(brush, points): Box | null;
+
+// PixelCodec — a surface as text a document can hold
+function encodeSurface(b): { data: string; rawBytes: number; packedBytes: number };
+function decodeSurface(data, width, height): PixelBuffer | null;
+
+// Stroke — a drag, from first press to the patch it becomes
+function beginStroke(b, brush, x, y, colour, reach): StrokeSession | null;
+function extendStroke(b, session, x, y, line): void;
+function endStroke(b, session, line): PixelPatch;   function strokeEscaped(session): boolean;
+```
+
+**PAINTING REPLACES RATHER THAN BLENDS**, because an eraser is a pencil holding a transparent
+colour. A blending plot cannot erase, and editors that blend by default grow a separate eraser path
+that disagrees with the pencil about edges.
+
+**A plot's x bound is not implied by its index.** `(y * width + x) * 4` is valid for `x = -1` — it
+lands on the previous ROW — so bounding only the total index draws a stray column down the opposite
+edge whenever a stroke leaves the side.
+
+**Fill is FOUR-connected and queue-driven.** A diagonal seam is a wall in pixel art; eight-connected
+leaks through the corner and floods the sprite. The obvious recursive fill is 16.7M deep on a full
+surface.
+
+**A brush is a set of DABS, not offsets.** A dab's own colour wins over the stroke's, which is what
+makes an image brush a picture rather than a silhouette; `null` means "use the stroke's". Brushes
+are not square, and `variants` are faces of ONE brush chosen per stamp — `pickFace` takes an
+INJECTED roll, because a stroke must replay identically or undo and redo disagree about what was
+painted.
+
+**The order in `Stroke` is the whole difficulty**: capture the region BEFORE any paint, draw, then
+diff. Getting it wrong leaves the picture correct and only the undo broken.
+
 ## Renderer (`renderer/`)
 
 ### `renderer/emitWebGL` — the effects pass (blur + composite)
