@@ -816,6 +816,88 @@ function parseSvgTransform(text: string): Mat2D;        // matrix/translate/scal
 - Gradients flatten to their first stop and every approximation lands in `notes`.
 - Verified against all 5,279 real files: 109,036 shapes, none empty, none rejected by `pathError`.
 
+### `core/import/MeshData` — what every 3D reader produces
+
+```ts
+interface MeshPrimitive {
+    positions: Float32Array;
+    normals: Float32Array | null;     // UNIT LENGTH guaranteed here
+    uvs: Float32Array | null;
+    indices: Uint32Array;             // always present
+    material: number | string | null; // an index for glTF, a name for OBJ
+}
+interface MeshInstance { name: string; matrix: number[]; primitive: MeshPrimitive }
+const MESH_IDENTITY: readonly number[];
+```
+
+glTF and OBJ describe geometry very differently — a binary buffer with strides against text with
+three independent index streams — but what a renderer needs from either is the same four arrays.
+**Two nearly-identical types are how the drift starts**: the first field one reader gained would be
+the field the other quietly lacked, and every consumer would grow a branch per format. FBX will
+produce this too.
+
+**UNIT NORMALS ARE AN INVARIANT OF THIS TYPE, not of every source.** glTF's spec requires them and
+its files honour it; OBJ's does not, and 206 measured files carry normals of length exactly 0.1 —
+correct directions at a tenth scale. A renderer trusting the invariant would light those surfaces a
+tenth as brightly, so the reader that knows its format is loose is the one that fixes it. A zero
+normal stays zero, having no direction to preserve.
+
+### `core/import/Obj` — three index streams a GPU cannot use as three
+
+```ts
+interface ObjMaterial {
+    name: string;
+    diffuse: [number, number, number] | null;   // Kd
+    ambient: [number, number, number] | null;   // Ka
+    specular: [number, number, number] | null;  // Ks
+    shininess: number | null;                   // Ns
+    opacity: number;                            // d, or 1 - Tr
+    diffuseMap: string | null;                  // map_Kd — a path, never read
+    alphaMap: string | null;
+    bumpMap: string | null;
+}
+interface ObjResult { instances: MeshInstance[]; materialLibraries: string[]; notes: string[] }
+
+function objError(text: unknown): string | null;
+function parseObj(text: string): ObjResult;
+function mtlError(text: unknown): string | null;
+function parseMtl(text: string): Map<string, ObjMaterial>;
+function resolveObjIndex(raw: number, count: number): number;
+```
+
+**`v`, `vt` AND `vn` ARE INDEPENDENT.** A face names a position, a texcoord and a normal by separate
+indices and nothing requires them to agree. A GPU wants one index per vertex, so the obvious
+implementation — build the buffer from the `v` lines, index it by the position index — is wrong the
+moment a position is shared by faces with different normals. **It is wrong in 598 of 600 measured
+files.** A cube's corner takes whichever normal was written last and a hard-edged model shades like
+a soft one: well-formed geometry, quietly wrong lighting, no error anywhere. So `v/vt/vn` triples
+are de-duplicated into unique vertices, at a measured cost of 3.7 vertices per position.
+
+**FACES ARE NOT ALWAYS TRIANGLES.** 81,712 of the 2,605,375 faces in the tree have more than three
+corners — mostly quads, up to a 13-gon. Taking the first three drops 3% of every model's surface.
+They are fan-triangulated, exact for the convex faces an exporter emits.
+
+**Indices are 1-BASED and may be NEGATIVE**, counted back from what has been read *so far* — which
+is why `resolveObjIndex` takes a count rather than an array. No measured file uses a negative one,
+which is exactly why it is tested rather than assumed absent.
+
+**The index streams are FILE-WIDE, not per group.** A face after the second `usemtl` still indexes
+the file's list, so a reader that reset them per group misindexes every multi-material model — and
+every measured file has several.
+
+**`usemtl` splits a file into runs**, 13,852 across the tree, each its own primitive so a model with
+a painted and a metal part is two draws rather than one with an arbitrary material.
+
+**`Tr` is the INVERSE of `d`.** Reading it as opacity makes every solid material invisible and every
+invisible one solid, and both spellings appear in the wild for the same intent.
+
+**A `map_*` line may carry options before its path** — `map_Kd -s 1 1 1 tex.png` — so the file is
+the last token, not the first.
+
+**The material library is a sidecar**, reported and never fetched, exactly as Tiled and glTF do.
+
+**Not read yet:** smoothing groups (`s`), `usemap`, free-form surfaces, and `illum` models.
+
 ### `core/import/Gltf` — a `.glb` as triangles
 
 3D arrives as a READER first. Nothing draws these yet — that needs a schema, a node type and a

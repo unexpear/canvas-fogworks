@@ -77,6 +77,9 @@ import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
     TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
 import { parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GltfJson, GLTF_IGNORABLE_REQUIRED, GLTF_MAX_NODE_DEPTH } from "../import/Gltf";
+import { parseObj, objError, parseMtl, mtlError, resolveObjIndex,
+    OBJ_FACE_MAX_CORNERS, OBJ_MAX_GROUPS } from "../import/Obj";
+import { MESH_IDENTITY } from "../import/MeshData";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -15254,6 +15257,276 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(walked.notes.join(" ")).toMatch(/revisits a node/);
         expect(walked.instances).toHaveLength(1);
         expect(GLTF_MAX_NODE_DEPTH).toBeGreaterThan(8);
+    });
+
+    // -- OBJ fixtures ---------------------------------------------------------
+    //
+    // Written to the SPEC, never generated from the parser. The independent check is the tree: all
+    // 5,413 real files with geometry read (3 more are 70-byte files with none), 13,852 material
+    // runs, 2,687,220 triangles, and every file's triangle count EQUAL to what the file itself
+    // states -- counted by a separate pass that does not use the reader.
+    const objLines = (...lines: string[]) => lines.join("\n");
+
+    test("v, vt and vn are INDEPENDENT streams, reconciled into unique vertices", () => {
+        // THE TRAP. Two faces share positions 1 and 2 but give them DIFFERENT normals. A reader
+        // that built the buffer from the `v` lines and indexed it by the position index -- the
+        // obvious implementation -- would emit 3 vertices, each with whichever normal was written
+        // last, and a hard-edged model would shade like a soft one. Well-formed, quietly wrong,
+        // and no error anywhere. It is wrong in 598 of 600 measured files.
+        const text = objLines(
+            "v 0 0 0", "v 1 0 0", "v 0 1 0",
+            "vn 0 0 1", "vn 1 0 0",
+            "vt 0 0", "vt 1 0", "vt 0 1",
+            "f 1/1/1 2/2/1 3/3/1",
+            "f 1/1/2 2/2/2 3/3/2"
+        );
+        const r = parseObj(text);
+        expect(r.instances).toHaveLength(1);
+        const p = r.instances[0].primitive;
+        // SIX vertices from three positions: each position appears with two different normals, and
+        // a GPU needs one index per unique combination.
+        expect(p.positions.length / 3).toBe(6);
+        expect(p.indices.length).toBe(6);
+        expect([...p.indices]).toEqual([0, 1, 2, 3, 4, 5]);
+        // The first three carry the first normal, the second three the second.
+        expect([...p.normals!].slice(0, 9)).toEqual([0, 0, 1, 0, 0, 1, 0, 0, 1]);
+        expect([...p.normals!].slice(9)).toEqual([1, 0, 0, 1, 0, 0, 1, 0, 0]);
+        // And position 0 really does appear twice, with the SAME coordinates.
+        expect([...p.positions].slice(0, 3)).toEqual([0, 0, 0]);
+        expect([...p.positions].slice(9, 12)).toEqual([0, 0, 0]);
+
+        // A corner repeated with the SAME triple is reused, not duplicated -- otherwise the
+        // de-duplication would be a no-op that merely never collided.
+        const shared = parseObj(objLines(
+            "v 0 0 0", "v 1 0 0", "v 0 1 0", "v 1 1 0",
+            "vn 0 0 1",
+            "f 1//1 2//1 3//1",
+            "f 2//1 4//1 3//1"
+        ));
+        // Four positions, one normal each: four vertices, not six.
+        expect(shared.instances[0].primitive.positions.length / 3).toBe(4);
+        expect(shared.instances[0].primitive.indices.length).toBe(6);
+    });
+
+    test("a face with more than three corners is triangulated, not truncated", () => {
+        // 81,712 faces in the tree have more than three corners -- quads up to a 13-gon. Taking the
+        // first three would drop 3% of every model's surface and leave holes that read as a broken
+        // exporter rather than a broken reader.
+        const quad = parseObj(objLines(
+            "v 0 0 0", "v 1 0 0", "v 1 1 0", "v 0 1 0", "f 1 2 3 4"));
+        const p = quad.instances[0].primitive;
+        expect(p.indices.length).toBe(6);                       // TWO triangles, not one
+        expect([...p.indices]).toEqual([0, 1, 2, 0, 2, 3]);      // a fan from the first corner
+        expect(p.positions.length / 3).toBe(4);
+
+        // An n-gon becomes n-2 triangles. A 13-gon appears in the tree.
+        const verts = Array.from({ length: 13 }, (_, i) =>
+            `v ${Math.cos(i).toFixed(4)} ${Math.sin(i).toFixed(4)} 0`);
+        const ngon = parseObj(objLines(...verts,
+            "f " + Array.from({ length: 13 }, (_, i) => i + 1).join(" ")));
+        expect(ngon.instances[0].primitive.indices.length).toBe(11 * 3);
+
+        // A degenerate face with fewer than three corners is NOTED, not silently dropped.
+        const thin = parseObj(objLines("v 0 0 0", "v 1 0 0", "f 1 2", "f 1 2 1"));
+        expect(thin.notes.join(" ")).toMatch(/fewer than three corners/);
+        // And an absurd one is refused rather than fanned into a huge allocation.
+        const huge = parseObj(objLines("v 0 0 0",
+            "f " + new Array(OBJ_FACE_MAX_CORNERS + 5).fill("1").join(" ")));
+        expect(huge.notes.join(" ")).toMatch(new RegExp(`${OBJ_FACE_MAX_CORNERS + 5} corners`));
+    });
+
+    test("all four face forms are read, and indices are 1-based or negative", () => {
+        const base = ["v 0 0 0", "v 1 0 0", "v 0 1 0", "vt 0 0", "vt 1 0", "vt 0 1", "vn 0 0 1"];
+        // `v` alone: no texcoord and no normal, so both arrays are null rather than zeros a caller
+        // would mistake for data.
+        const plain = parseObj(objLines(...base, "f 1 2 3")).instances[0].primitive;
+        expect(plain.normals).toBeNull();
+        expect(plain.uvs).toBeNull();
+        // `v/vt`
+        const withUv = parseObj(objLines(...base, "f 1/1 2/2 3/3")).instances[0].primitive;
+        expect(withUv.uvs).not.toBeNull();
+        expect(withUv.normals).toBeNull();
+        expect([...withUv.uvs!]).toEqual([0, 0, 1, 0, 0, 1]);
+        // `v//vn` -- THE SEPARATOR IS SIGNIFICANT. A split that collapsed the empty middle field
+        // would read the normal as a texcoord for every file written this way.
+        const withNormal = parseObj(objLines(...base, "f 1//1 2//1 3//1")).instances[0].primitive;
+        expect(withNormal.normals).not.toBeNull();
+        expect(withNormal.uvs).toBeNull();
+        expect([...withNormal.normals!].slice(0, 3)).toEqual([0, 0, 1]);
+        // `v/vt/vn` -- the only form in the measured tree, and the one every file uses.
+        const full = parseObj(objLines(...base, "f 1/1/1 2/2/1 3/3/1")).instances[0].primitive;
+        expect(full.uvs).not.toBeNull();
+        expect(full.normals).not.toBeNull();
+
+        // A MIXED face -- some corners with a texcoord, some without -- is legal and is the only
+        // shape that shows whether a texcoord-less vertex still occupies a uv SLOT. If it did not,
+        // every later vertex's uv would shift by one and the texture would crawl across the model.
+        const mixed = parseObj(objLines(...base, "f 1/1/1 2//1 3/3/1")).instances[0].primitive;
+        expect(mixed.uvs).not.toBeNull();
+        expect(mixed.uvs!.length / 2).toBe(mixed.positions.length / 3);
+        expect([...mixed.uvs!]).toEqual([0, 0, 0, 0, 0, 1]);
+        // The third corner keeps ITS OWN texcoord (vt 3 = 0,1) rather than inheriting the gap's.
+
+        // ONE-BASED: index 1 is the FIRST vertex. Zero-based reading is off by one everywhere and
+        // silently drops the last vertex of every file.
+        expect(resolveObjIndex(1, 3)).toBe(0);
+        expect(resolveObjIndex(3, 3)).toBe(2);
+        expect(resolveObjIndex(0, 3)).toBe(-1);       // 0 is not a valid OBJ index
+        expect(resolveObjIndex(4, 3)).toBe(-1);
+        // NEGATIVE counts back from the end of what has been read SO FAR. No measured file uses
+        // one, which is exactly why it is tested rather than assumed absent.
+        expect(resolveObjIndex(-1, 3)).toBe(2);
+        expect(resolveObjIndex(-3, 3)).toBe(0);
+        expect(resolveObjIndex(-4, 3)).toBe(-1);
+        const negative = parseObj(objLines(...base, "f -3 -2 -1")).instances[0].primitive;
+        expect([...negative.positions]).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+        // A face naming a vertex that does not exist is NOTED and skipped, not read as garbage.
+        const missing = parseObj(objLines(...base, "f 1 2 3", "f 1 2 99"));
+        expect(missing.notes.join(" ")).toMatch(/a vertex the file does not have/);
+        expect(missing.instances[0].primitive.indices.length).toBe(3);
+    });
+
+    test("normals are made UNIT length, because this format does not promise it", () => {
+        // 206 measured files carry normals of length exactly 0.1 -- correct directions at a tenth
+        // scale. glTF's spec requires unit normals and its files honour it, so a shared mesh type
+        // whose invariant held for one reader and not the other is exactly the drift that type
+        // exists to prevent. A renderer trusting it would light those surfaces a tenth as brightly.
+        const r = parseObj(objLines(
+            "v 0 0 0", "v 1 0 0", "v 0 1 0",
+            "vn -0.1 0 0", "vn 0 0.1 0", "vn 0 0 0",
+            "f 1//1 2//2 3//3"));
+        const n = r.instances[0].primitive.normals!;
+        expect(Math.hypot(n[0], n[1], n[2])).toBeCloseTo(1);
+        expect([...n].slice(0, 3)).toEqual([-1, 0, 0]);
+        expect([...n].slice(3, 6)).toEqual([0, 1, 0]);
+        // A ZERO normal stays zero: it has no direction to preserve, and dividing by its length
+        // would put NaN through the whole vertex buffer.
+        expect([...n].slice(6, 9)).toEqual([0, 0, 0]);
+        expect([...n].every(v => Number.isFinite(v))).toBe(true);
+        // An already-unit normal is untouched rather than re-scaled.
+        const unit = parseObj(objLines("v 0 0 0", "v 1 0 0", "v 0 1 0",
+            "vn 0.5773503 0.5773503 0.5773503", "f 1//1 2//1 3//1"));
+        expect(unit.instances[0].primitive.normals![0]).toBeCloseTo(0.5773503, 6);
+    });
+
+    test("usemtl splits a file into runs, and the mtllib is reported not fetched", () => {
+        // 13,852 `usemtl` runs across the tree. Each is its own primitive, so a model with a
+        // painted and a metal part is two draws rather than one with an arbitrary material.
+        const r = parseObj(objLines(
+            "mtllib model.mtl",
+            "v 0 0 0", "v 1 0 0", "v 0 1 0", "v 1 1 0",
+            "usemtl paint", "f 1 2 3",
+            "usemtl metal", "f 2 4 3"));
+        expect(r.instances).toHaveLength(2);
+        expect(r.instances[0].primitive.material).toBe("paint");
+        expect(r.instances[1].primitive.material).toBe("metal");
+        expect(r.instances[0].primitive.indices.length).toBe(3);
+        expect(r.instances[1].primitive.indices.length).toBe(3);
+        // THE INDEX STREAMS ARE FILE-WIDE, not per group: the second run names vertex 4, which
+        // only exists in the file's list. A reader that reset the streams per group would misindex
+        // every model with more than one material -- and every measured file has several.
+        expect([...r.instances[1].primitive.positions]).toEqual([1, 0, 0, 1, 1, 0, 0, 1, 0]);
+
+        // THE SIDECAR IS NAMED, NOT READ. Every measured file names one and every one resolves
+        // beside it, but a parser that reached for a file would need a filesystem.
+        expect(r.materialLibraries).toEqual(["model.mtl"]);
+        // A run with no faces produces no primitive rather than an empty one to draw.
+        expect(parseObj(objLines("v 0 0 0", "v 1 0 0", "v 0 1 0",
+            "usemtl unused", "usemtl used", "f 1 2 3")).instances).toHaveLength(1);
+        // OBJ HAS NO HIERARCHY, so the identity is the honest matrix -- and keeping the field is
+        // what lets one consumer place both formats.
+        expect(r.instances[0].matrix).toEqual([...MESH_IDENTITY]);
+        expect(OBJ_MAX_GROUPS).toBeGreaterThan(100);
+    });
+
+    test("CRLF files read the same as LF ones", () => {
+        // 4,646 of the 5,416 measured files are CRLF. A trailing carriage return turns the last
+        // token on every line into something `Number` cannot parse -- so the last coordinate of
+        // every vertex and the last corner of every face would silently become 0.
+        const body = ["v 0 0 0", "v 1 0 2", "v 0 1 0", "vn 0 0 1", "f 1//1 2//1 3//1"];
+        const lf = parseObj(body.join("\n"));
+        const crlf = parseObj(body.join("\r\n") + "\r\n");
+        expect([...crlf.instances[0].primitive.positions]).toEqual([...lf.instances[0].primitive.positions]);
+        // The Z of the second vertex is the tell: it is the LAST token on its line.
+        expect([...crlf.instances[0].primitive.positions].slice(3, 6)).toEqual([1, 0, 2]);
+        expect([...crlf.instances[0].primitive.indices]).toEqual([...lf.instances[0].primitive.indices]);
+
+        // INDENTED lines are legal too, and are what separates stripping the carriage return from
+        // trimming the line: a leading space makes the keyword empty, so every vertex in an
+        // indented file would vanish while the file still parsed to something.
+        const indented = parseObj(["  v 0 0 0", "\tv 1 0 2", "  v 0 1 0", " f 1 2 3"].join("\r\n"));
+        expect(indented.instances).toHaveLength(1);
+        expect([...indented.instances[0].primitive.positions]).toEqual([0, 0, 0, 1, 0, 2, 0, 1, 0]);
+    });
+
+    test("an MTL's materials are read, and Tr is the INVERSE of d", () => {
+        const mtl = objLines(
+            "# comment",
+            "newmtl paint",
+            "Kd 1 0.5 0.25", "Ka 0.1 0.1 0.1", "Ks 0.9 0.9 0.9", "Ns 96", "d 0.5",
+            "map_Kd textures/paint.png",
+            "newmtl glass",
+            "Tr 0.75",
+            "map_Kd -s 1 1 1 -o 0 0 0 textures/glass.png",
+            "map_d masks/glass_alpha.png",
+            "map_Bump normals/glass_n.png");
+        expect(mtlError(mtl)).toBeNull();
+        const mats = parseMtl(mtl);
+        expect(mats.size).toBe(2);
+        expect(mats.get("paint")).toMatchObject({
+            name: "paint", diffuse: [1, 0.5, 0.25], ambient: [0.1, 0.1, 0.1],
+            specular: [0.9, 0.9, 0.9], shininess: 96, opacity: 0.5,
+            diffuseMap: "textures/paint.png"
+        });
+        // `Tr` IS TRANSPARENCY, the inverse of `d`. Reading it as opacity makes every solid
+        // material invisible and every invisible one solid, and both spellings appear in the wild
+        // for the same intent.
+        expect(mats.get("glass")!.opacity).toBeCloseTo(0.25);
+        // A `map_*` line may carry OPTIONS before the path, so the file is the LAST token rather
+        // than the first -- taking the first yields "-s", which resolves to nothing.
+        expect(mats.get("glass")!.diffuseMap).toBe("textures/glass.png");
+        expect(mats.get("glass")!.alphaMap).toBe("masks/glass_alpha.png");
+        expect(mats.get("glass")!.bumpMap).toBe("normals/glass_n.png");
+        // A COLOUR WITH TOO FEW COMPONENTS is null rather than a triple holding undefined, which
+        // would reach a renderer as NaN and paint the surface black or not at all.
+        const short = parseMtl("newmtl short\nKd 1\nKa 0.5 0.5\nKs 1 1 1");
+        expect(short.get("short")!.diffuse).toBeNull();
+        expect(short.get("short")!.ambient).toBeNull();
+        expect(short.get("short")!.specular).toEqual([1, 1, 1]);
+        // And one with a non-numeric component is refused the same way.
+        expect(parseMtl("newmtl bad\nKd 1 green 0").get("bad")!.diffuse).toBeNull();
+
+        // A material with no `d` or `Tr` is OPAQUE rather than invisible.
+        expect(parseMtl("newmtl plain\nKd 1 1 1").get("plain")!.opacity).toBe(1);
+        // Values before any `newmtl` belong to nothing and are DROPPED — not banked into a phantom
+        // material. Checking only that the later one is right misses that entirely: the phantom
+        // would reach a caller as a real material with an empty name and someone else's colour.
+        const orphaned = parseMtl("Kd 1 1 1\nNs 50\nnewmtl late\nKd 0 0 0");
+        expect(orphaned.get("late")!.diffuse).toEqual([0, 0, 0]);
+        expect(orphaned.size).toBe(1);
+        expect([...orphaned.keys()]).toEqual(["late"]);
+        expect(orphaned.has("")).toBe(false);
+    });
+
+    test("an OBJ names what it will not read", () => {
+        expect(objError("v 0 0 0\nf 1 1 1")).toBeNull();
+        expect(objError(42)).toMatch(/must be a string/);
+        // A file with NO GEOMETRY is refused by name rather than handed back as an empty model.
+        // Three real files in the tree are exactly this -- 70 bytes, a comment and an mtllib line.
+        expect(objError("# Created by Kenney\r\n\r\nmtllib character-soldier.mtl\n")).toMatch(/no vertex lines/);
+        expect(() => parseObj("mtllib x.mtl")).toThrow(/no vertex lines/);
+        // An MTL handed over by mistake is refused too -- it would otherwise parse to a model with
+        // no geometry and no complaint. `vn` and `vt` are NOT `v`.
+        expect(objError("newmtl paint\nKd 1 1 1")).toMatch(/no vertex lines/);
+        expect(objError("vn 0 0 1\nvt 0 0")).toMatch(/no vertex lines/);
+
+        expect(mtlError(42)).toMatch(/must be a string/);
+        expect(mtlError("v 0 0 0")).toMatch(/no newmtl lines/);
+        expect(() => parseMtl("v 0 0 0")).toThrow(/no newmtl lines/);
+
+        // A file with vertices but no faces has nothing to draw, and says so.
+        expect(parseObj("v 0 0 0\nv 1 0 0").notes.join(" ")).toMatch(/no faces/);
+        expect(parseObj("v 0 0 0\nv 1 0 0").instances).toHaveLength(0);
     });
 
     test("read shapes become nodes the document accepts", () => {

@@ -2,7 +2,8 @@
  * @module Gltf
  * @description A `.glb` or `.gltf` as triangles, read correctly rather than approximately.
  *
- * 5,286 glTF files sit in the measured tree and nothing could open one. This reads them; drawing
+ * Thousands of glTF files sit in the measured tree — 5,464 at the last count, and the count moves —
+ * and nothing could open one. This reads them all; drawing
  * them is a schema, a node type and a pipeline, and doing the reading well first is what makes that
  * small — the same order every 2D format went in.
  *
@@ -27,10 +28,12 @@
  * The exemption is an explicit ALLOW-LIST that must be revisited when materials land, and using it
  * is reported louder than an ordinary extension, because the file did say it mattered.
  *
- * THE BUFFER IS SUPPLIED, NOT FETCHED. A `.glb` carries its BIN chunk inside it, but the 254
- * `.gltf` files name an external `.bin`. Resolving that is the caller's job, exactly as it is for a
+ * THE BUFFER IS SUPPLIED, NOT FETCHED. A `.glb` carries its BIN chunk inside it, but the `.gltf`
+ * files name an external `.bin`. Resolving that is the caller's job, exactly as it is for a
  * Tiled `.tsx`: a parser that reached for a file would need a filesystem and stop being testable.
  */
+
+import { MeshPrimitive, MeshInstance } from "./MeshData";
 
 /** Bounds on a hand-editable file. A corrupt count should fail, not allocate. */
 export const GLTF_MAX_VERTICES = 4_000_000;
@@ -129,28 +132,15 @@ export interface GlbContainer {
     bin: Uint8Array | null;
 }
 
-/** One drawable primitive, in its own local space. */
-export interface GltfPrimitive {
-    /** Flat xyz triples. */
-    positions: Float32Array;
-    /** Flat xyz triples, or null when the file states none. */
-    normals: Float32Array | null;
-    /** Flat uv pairs, or null. */
-    uvs: Float32Array | null;
-    /** Triangle indices. Always present: a non-indexed primitive is given the implied 0..n-1. */
-    indices: Uint32Array;
-    /** The index into `materials`, or null — reported rather than resolved. */
-    material: number | null;
-}
-
-/** A primitive placed in the scene. */
-export interface GltfMeshInstance {
-    /** The node that placed it, for naming a layer something meaningful. */
-    name: string;
-    /** Column-major 4x4, the product of every transform from the scene root down. */
-    matrix: number[];
-    primitive: GltfPrimitive;
-}
+/**
+ * What this reader produces, which is what EVERY 3D reader here produces.
+ *
+ * The shape lives in `MeshData` rather than here so OBJ and, later, FBX hand back the same thing —
+ * two nearly-identical primitive types are how a consumer ends up with a branch per format, and how
+ * the first field one gains becomes the field the others quietly lack.
+ */
+export type GltfPrimitive = MeshPrimitive;
+export type GltfMeshInstance = MeshInstance;
 
 /** A read model. */
 export interface GltfResult {

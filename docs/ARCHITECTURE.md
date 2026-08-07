@@ -1108,6 +1108,33 @@ file silently is choosing to be wrong; naming it lets a caller decide.
 `.gltf` files name an external `.bin`, and 3,941 images are sidecar files. The reader resolves
 neither — the same rule the Tiled reader follows, and for the same reason: a parser that reached for
 a file would need a filesystem and stop being testable.
+### OBJ — three index streams that a GPU cannot use as three
+
+**`v`, `vt` and `vn` ARE INDEPENDENT.** A face names a position, a texcoord and a normal by SEPARATE
+indices, and nothing requires them to line up. A GPU wants one index per vertex, so the obvious
+implementation — build the vertex buffer from the `v` lines and index it by the position index — is
+wrong the moment a position is shared by faces with different normals. It is wrong in 598 of 600
+measured files. A cube's corner takes whichever normal was written last, and a hard-edged model
+shades like a soft one: well-formed geometry, quietly wrong lighting, no error anywhere.
+
+So the reader DE-DUPLICATES `v/vt/vn` triples into unique vertices. The measured expansion is 1.87
+vertices per position on average and 3.5x at worst, which is the cost of being right.
+
+**FACES ARE NOT ALWAYS TRIANGLES.** 81,712 of the 2,605,375 faces in the tree have more than three
+vertices — mostly quads, up to a 13-gon. A reader that took the first three vertices would drop 3%
+of every model's surface, leaving holes that look like a broken exporter. They are fan-triangulated,
+which is exact for the convex faces an exporter emits.
+
+**Indices are 1-BASED, and may be NEGATIVE** — counted back from the end of what has been read so
+far. None of the measured files uses a negative index, which is exactly why it has to be tested
+rather than assumed absent.
+
+**The material library is a sidecar.** Every one of the measured files names an `.mtl` and every one
+of those resolves beside it, but the reader does not fetch it — the same rule Tiled and glTF follow.
+
+**One mesh becomes several.** `usemtl` splits a file into runs, 13,852 of them across the tree, and
+each run is its own primitive so a model with a painted and a metal part is two draws rather than
+one with an arbitrary material.
 ### Fonts — a family name is not a font
 
 **`style.fontFamily` has always been a STRING and nothing else.** A document could ask for "Kenney

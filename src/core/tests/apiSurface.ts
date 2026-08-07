@@ -105,6 +105,9 @@ import { GlbContainer, GltfJson, GltfNode, GltfResult, GltfMeshInstance, GltfPri
     parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GLTF_IGNORABLE_REQUIRED, GLTF_MAX_VERTICES, GLTF_MAX_PRIMITIVES, GLTF_MAX_NODE_DEPTH
 } from "../import/Gltf";
+import { ObjResult, ObjMaterial, parseObj, objError, parseMtl, mtlError, resolveObjIndex,
+    OBJ_MAX_VERTICES, OBJ_MAX_GROUPS, OBJ_FACE_MAX_CORNERS } from "../import/Obj";
+import { MeshPrimitive, MeshInstance, MESH_IDENTITY } from "../import/MeshData";
 import { registerFont, registeredFonts, clearFonts } from "../../renderer/FontCache";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
     aseBytesPerPixel, celRgba, ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
@@ -795,7 +798,9 @@ export function __apiSurfacePin(): void {
     expectType<Uint32Array | undefined>(prim?.indices);
     expectType<Float32Array | null | undefined>(prim?.normals);
     expectType<Float32Array | null | undefined>(prim?.uvs);
-    expectType<number | null | undefined>(prim?.material);
+    // WIDENED when OBJ landed: glTF names a material by INDEX and OBJ by NAME, and the shared
+    // shape carries both rather than each reader declaring its own near-identical primitive.
+    expectType<number | string | null | undefined>(prim?.material);
     expectType<number[] | undefined>(inst?.matrix);
     expectType<Float64Array | null>(readAccessor(gjson, 0, new Uint8Array(0)));
     const gnode: GltfNode = { name: "n" };
@@ -804,6 +809,31 @@ export function __apiSurfacePin(): void {
     expectType<string[]>(GLTF_IGNORABLE_REQUIRED);
     expectType<number>(GLTF_MAX_VERTICES); expectType<number>(GLTF_MAX_PRIMITIVES);
     expectType<number>(GLTF_MAX_NODE_DEPTH);
+
+    // OBJ produces the SAME shape glTF does — `MeshData` names it once so a mesh node, a picker and
+    // a GPU path are each written once rather than per format. FBX will produce it too.
+    expectType<string | null>(objError("v 0 0 0"));
+    const objRes: ObjResult = parseObj("v 0 0 0");
+    const objInst: MeshInstance | undefined = objRes.instances[0];
+    const objPrim: MeshPrimitive | undefined = objInst?.primitive;
+    expectType<MeshInstance | undefined>(objInst);
+    expectType<MeshPrimitive | undefined>(objPrim);
+    // The material is a NAME here and an index in glTF; the shared field carries both.
+    expectType<number | string | null | undefined>(objPrim?.material);
+    // The `.mtl` files are REPORTED for a caller to resolve, never fetched.
+    expectType<string[]>(objRes.materialLibraries);
+    expectType<string[]>(objRes.notes);
+    expectType<readonly number[]>(MESH_IDENTITY);
+    // 1-based, and NEGATIVE counts back from what has been read so far.
+    expectType<number>(resolveObjIndex(-1, 3));
+    expectType<string | null>(mtlError("newmtl x"));
+    const objMat: ObjMaterial | undefined = parseMtl("newmtl x").get("x");
+    expectType<[number, number, number] | null | undefined>(objMat?.diffuse);
+    expectType<number | undefined>(objMat?.opacity);
+    expectType<string | null | undefined>(objMat?.diffuseMap);
+    expectType<Map<string, ObjMaterial>>(parseMtl("newmtl x"));
+    expectType<number>(OBJ_MAX_VERTICES); expectType<number>(OBJ_MAX_GROUPS);
+    expectType<number>(OBJ_FACE_MAX_CORNERS);
     expectType<{ x: number; y: number; width: number; height: number } | null>(imageInkBounds("a.png", region, 0));
 
     // ASEPRITE: the file a sheet was exported FROM, which states the grid, the trim and the clips
