@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v55 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1174) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (41) = 1293 tests.
+> 🔒 Frozen contract · schema v55 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1182) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (41) = 1300 tests.
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1293 tests
+npm test                                   # jest (ts-jest), 1300 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -42,7 +42,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1293 tests)
+## What is covered (1300 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -368,6 +368,15 @@ Observed shapes, each with the module it actually bit:
 
 The checklist, applied when the fixture is written:
 
+0. **Is this fixture a state the system can actually REACH?** The one that costs most. A
+   hand-built fixture can be perfectly self-consistent and describe a configuration no
+   producer ever emits — and then every assertion about it is true and says nothing.
+   `SurfaceSpace` was written against a fixture pairing an identity `world` matrix with a
+   non-zero `local` origin; `computeGeometry` never produces that pairing (it puts the whole
+   placement in `world` and draws from the origin — `RenderModel.ts:488`). The module
+   double-counted the node's position, six mutants died correctly, all assertions passed, and
+   the bug surfaced only when the tool was wired to a real document. **Where a fixture stands
+   in for a producer's output, build one from the producer.**
 1. **Is any dimension equal to another?** Square is the default and the default is blind. Use
    3×8, not 8×8.
 2. **Is the "before" state blank?** If so the test cannot tell a write from a merge.

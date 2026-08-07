@@ -1398,8 +1398,31 @@ class ToolController {
 }
 ```
 
-Tools: `SelectTool`, `MoveTool`, `ShapeTool` (all implement `Tool`). Tools construct
-Actions and dispatch them; they mutate only `EditorState`, never the document.
+Tools: `SelectTool`, `MoveTool`, `ShapeTool`, `PenTool`, `RasterTool` (all implement `Tool`).
+Tools construct Actions and dispatch them; they mutate only `EditorState`, never the document.
+
+```ts
+class RasterTool implements Tool {
+    constructor(dispatcher, editorState, refresh,
+        colour: () => Rgba, brush: () => Brush, symmetry: () => SymmetryMode);
+    isPainting(): boolean;
+    cancel(): void;
+}
+const STROKE_REACH: number;   // captured region beyond the first dab, in SURFACE pixels
+```
+
+`RasterTool` is the only caller of `PaintSurfaceAction`, and the seam that makes the whole
+`core/paint` layer reachable. **THE DOCUMENT IS THE PREVIEW**: a stroke commits on every move,
+coalesced, exactly like the rotate and vertex-drag gestures — so every backend draws it with no
+preview surface and no new plumbing. **The patch is CUMULATIVE from the stroke's start**, which
+is what lets the same action be re-sent each frame: its `after` bytes are absolute, so re-applying
+lands on the same result. **Release dispatches NOTHING** — a final identical patch would land as a
+second history entry, making the first Ctrl+Z appear to do nothing. **The target is the SELECTION**,
+captured at press with its `SurfaceSpace`, not re-picked per event.
+
+Known and shared with every live-committed gesture here: the coalesce window is timed, so two
+quick separate strokes on the same node merge into one undo step. The picture is right either way;
+only the granularity is coarse.
 `ShapeTool` is ONE tool parameterised by `ShapeKind` (`SHAPE_KINDS` = rectangle | ellipse |
 line | text | triangle | polygon | image), since the corner-to-corner gesture, preview, Escape and zoom-independent
 minimum size are identical for all of them — only the node type, the paint and the content
@@ -1454,7 +1477,29 @@ function decodeSurface(data, width, height): PixelBuffer | null;
 function beginStroke(b, brush, x, y, colour, reach): StrokeSession | null;
 function extendStroke(b, session, x, y, line): void;
 function endStroke(b, session, line): PixelPatch;   function strokeEscaped(session): boolean;
+
+// SurfaceSpace — where a pointer is, in pixels
+interface SurfaceSpace { world: Mat2D; localWidth: number; localHeight: number;
+                         surfaceWidth: number; surfaceHeight: number; }
+function surfaceSpaceError(space): string | null;
+function worldToSurface(space, worldX, worldY): [number, number] | null;
+function surfaceToWorld(space, sx, sy): { x: number; y: number } | null;
+function surfacePixelSize(space): { x: number; y: number } | null;
 ```
+
+**`SurfaceSpace` TAKES THE BOX'S SIZE, NEVER ITS ORIGIN.** `ComputedNode.local` is a Rect carrying
+the node's stored x/y, but the renderer does not place with them — `buildRenderModel` emits every
+shape at `x = 0, y = 0` and `world` carries the whole placement. A mapping that subtracted
+`local.x` as well would count the node's position TWICE; taking only `width`/`height` makes that
+unrepresentable. **This was a real bug**, and it passed six mutants and a full unit test because the
+fixture paired an identity `world` with a non-zero local origin — a pairing `computeGeometry` never
+emits. It surfaced only against a real document.
+
+The map FLOORS (a pixel is a cell, and rounding halves the reachable width of the two edge columns);
+the reverse map answers a pixel's CENTRE, not its corner. Results OUTSIDE the surface are returned
+rather than dropped — `setPixel` already bounds every dab, and a second bounds rule is a second
+thing that can disagree with it. What is refused is a conversion with no answer: a collapsed box, a
+singular matrix, a NaN point.
 
 **PAINTING REPLACES RATHER THAN BLENDS**, because an eraser is a pencil holding a transparent
 colour. A blending plot cannot erase, and editors that blend by default grow a separate eraser path

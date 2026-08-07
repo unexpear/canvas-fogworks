@@ -95,6 +95,8 @@ import { paletteError, paletteAt, parseFloatColour, parsePaletteFile, PALETTE_MA
 import { symmetryPoints, isMirrored, NO_SYMMETRY } from "../paint/Symmetry";
 import { nearestColour, colourDistance, quantizeToPalette } from "../paint/Quantize";
 import { worldToSurface, surfaceToWorld, surfacePixelSize, surfaceSpaceError } from "../paint/SurfaceSpace";
+import { RasterTool } from "../../editor/tools/RasterTool";
+import { SymmetryMode } from "../paint/Symmetry";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -16577,8 +16579,13 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // Deliberately NOTHING here is square or at the origin. The surface is 4x2, the box is
         // 40x10 at (100,20) — so a pixel is 10 world units across and 5 down, and a mapping that
         // used one scale factor for both, or forgot the box's origin, cannot pass.
-        const box = { x: 100, y: 20, width: 40, height: 10 };
-        const flat = { world: IDENTITY, local: box, surfaceWidth: 4, surfaceHeight: 2 };
+        // THE PLACEMENT LIVES IN `world`, NOT IN A LOCAL ORIGIN — which is how `computeGeometry`
+        // really reports a node at (100,20): `world` is translate(100,20) and the box is drawn from
+        // the origin. An earlier version of this test paired an IDENTITY world with a local origin
+        // of (100,20); every assertion passed and the module was WRONG, because that pairing is a
+        // state the engine cannot produce. A fixture has to be reachable, not merely consistent.
+        const flat = { world: translation(100, 20), localWidth: 40, localHeight: 10,
+            surfaceWidth: 4, surfaceHeight: 2 };
 
         expect(worldToSurface(flat, 100, 20)).toEqual([0, 0]);
         expect(worldToSurface(flat, 139, 29)).toEqual([3, 1]);
@@ -16597,10 +16604,13 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(worldToSurface(flat, 90, 20)).toEqual([-1, 0]);
         expect(worldToSurface(flat, 140, 20)).toEqual([4, 0]);
 
-        // A TRANSLATED node: the box moves with it, so the same pixel is under a different point.
-        const moved = { ...flat, world: translation(7, -3) };
+        // MOVING THE NODE moves the surface with it, because the placement IS the matrix.
+        const moved = { ...flat, world: translation(107, 17) };
         expect(worldToSurface(moved, 107, 17)).toEqual([0, 0]);
-        // ...and the untranslated point now lands a pixel earlier, rather than at the same place.
+        // ...and the point that was the origin now lands OFF the left edge, while staying inside
+        // the first row — it is 7 units left of the box (one 10-unit column) but 3 units DOWN into
+        // a 5-unit row. The two axes disagreeing here is the point: a single scale factor cannot
+        // produce this pair.
         expect(worldToSurface(moved, 100, 20)).toEqual([-1, 0]);
 
         // THE CENTRE OF A PIXEL, NOT ITS CORNER. Pixel (0,0) spans x 100..110 and y 20..25, so its
@@ -16649,7 +16659,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(surfacePixelSize(big)!.y).toBeCloseTo(15, 9);
 
         // WHAT HAS NO ANSWER IS REFUSED, rather than answered with a number that is not a pixel.
-        const collapsed = { ...flat, local: { ...box, width: 0 } };
+        const collapsed = { ...flat, localWidth: 0 };
         expect(surfaceSpaceError(collapsed)).toMatch(/must have area/);
         expect(worldToSurface(collapsed, 100, 20)).toBeNull();
         expect(surfaceToWorld(collapsed, 0, 0)).toBeNull();
@@ -16661,7 +16671,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // A surface must be a whole grid, and at least one pixel of it.
         expect(surfaceSpaceError({ ...flat, surfaceWidth: 2.5 })).toMatch(/whole dimensions/);
         expect(surfaceSpaceError({ ...flat, surfaceHeight: 0 })).toMatch(/at least one pixel/);
-        expect(surfaceSpaceError({ ...flat, local: { ...box, height: NaN } })).toMatch(/finite/);
+        expect(surfaceSpaceError({ ...flat, localHeight: NaN })).toMatch(/finite/);
         // A NaN POINT gives null, not a NaN coordinate — which would be stored and would compare
         // false against every bound it was later tested with.
         expect(worldToSurface(flat, NaN, 20)).toBeNull();
@@ -20799,5 +20809,186 @@ describe("emitWebGL geometry", () => {
         // 2y−50 = 300, the middle of an 800x600 canvas.
         expect(applyZ(250, 175)[0]).toBeCloseTo(0, 9);
         expect(applyZ(250, 175)[1]).toBeCloseTo(0, 9);
+    });
+});
+
+describe("RasterTool — the drag that becomes paint", () => {
+    const RED: Rgba = [255, 0, 0, 255];
+    // A NON-SQUARE surface in a NON-SQUARE box that is NOT at the origin — so a swapped axis, a
+    // dropped origin and a single scale factor each produce a different answer.
+    const SURFACE_W = 8, SURFACE_H = 4;
+    const BOX = { x: 100, y: 40, width: 80, height: 20 };   // one surface pixel = 10 x 5 world units
+    const rect = { left: 0, top: 0 } as DOMRect;
+    const md = (x: number, y: number) =>
+        ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { },
+            target: { getAttribute: () => null } } as unknown as MouseEvent);
+
+    /** A document holding one raster node with a blank surface, plus a tool pointed at it. */
+    function harness(opts?: { symmetry?: SymmetryMode; brushSize?: number; select?: string[] }) {
+        const doc = createEmptyDocument();
+        const blank = encodeSurface(createPixelBuffer(SURFACE_W, SURFACE_H));
+        doc.nodes.set("R", {
+            id: "R", type: "core.raster", parent: null, children: [],
+            geometry: { ...BOX }, style: { fill: "none", opacity: 1 }, layout: {},
+            surface: { data: blank.data, width: SURFACE_W, height: SURFACE_H }
+        });
+        doc.rootNodeUuids = ["R"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        es.selectedNodeIds = opts?.select ?? ["R"];
+        const tool = new RasterTool(dispatcher, es, () => { },
+            () => RED,
+            () => makeBrush(opts?.brushSize ?? 1, false),
+            () => opts?.symmetry ?? NO_SYMMETRY);
+        const computed = computeGeometry(dispatcher.getDocument());
+        return { dispatcher, es, tool, computed };
+    }
+
+    /** The document's surface, decoded — the only honest way to ask what was painted. */
+    const pixels = (d: ActionDispatcher) => {
+        const s = d.getDocument().nodes.get("R")!.surface!;
+        return decodeSurface(s.data, s.width, s.height)!;
+    };
+    /** The world point at the centre of a surface pixel. */
+    const at = (sx: number, sy: number) =>
+        [BOX.x + (sx + 0.5) * (BOX.width / SURFACE_W), BOX.y + (sy + 0.5) * (BOX.height / SURFACE_H)] as const;
+    /** How many pixels of the surface carry any paint. */
+    const paintedCount = (b: ReturnType<typeof pixels>) => {
+        let n = 0;
+        for (let y = 0; y < SURFACE_H; y++) for (let x = 0; x < SURFACE_W; x++) {
+            if (getPixel(b, x, y)![3] !== 0) n++;
+        }
+        return n;
+    };
+
+    test("a click paints ONE pixel, and it is the pixel under the pointer", () => {
+        const { dispatcher, tool, computed } = harness();
+        const [wx, wy] = at(2, 1);
+        tool.onMouseDown(md(wx, wy), rect, computed);
+        tool.onMouseUp();
+
+        const buf = pixels(dispatcher);
+        expect(getPixel(buf, 2, 1)).toEqual(RED);
+        // AND NOTHING ELSE. A click with a pencil is one dot; a tool that also stamped the
+        // transposed pixel would still pass the assertion above on a square surface.
+        expect(getPixel(buf, 1, 2)).toEqual([0, 0, 0, 0]);
+        expect(paintedCount(buf)).toBe(1);
+    });
+
+    test("a drag paints the whole path, with no gaps between pointer samples", () => {
+        const { dispatcher, tool, computed } = harness();
+        const start = at(1, 1), end = at(6, 1);
+        tool.onMouseDown(md(start[0], start[1]), rect, computed);
+        // ONE move that jumps five pixels, which is what a 60 Hz pointer does. Stamping only the
+        // reported points would draw two dots and call it a stroke.
+        tool.onMouseMove(md(end[0], end[1]), rect);
+        tool.onMouseUp();
+
+        const buf = pixels(dispatcher);
+        for (let x = 1; x <= 6; x++) expect(getPixel(buf, x, 1)).toEqual(RED);
+        expect(getPixel(buf, 0, 1)).toEqual([0, 0, 0, 0]);
+        expect(getPixel(buf, 7, 1)).toEqual([0, 0, 0, 0]);
+        // The rows above and below are untouched — the stroke is a line, not a band.
+        expect(getPixel(buf, 3, 0)).toEqual([0, 0, 0, 0]);
+        expect(getPixel(buf, 3, 2)).toEqual([0, 0, 0, 0]);
+        expect(paintedCount(buf)).toBe(6);
+    });
+
+    test("a continuous drag is ONE undo step, and undo removes the whole stroke", () => {
+        const { dispatcher, tool, computed } = harness();
+        const a = at(1, 1), b = at(3, 1), c = at(5, 1);
+        tool.onMouseDown(md(a[0], a[1]), rect, computed);
+        tool.onMouseMove(md(b[0], b[1]), rect);
+        tool.onMouseMove(md(c[0], c[1]), rect);
+        tool.onMouseUp();
+        expect(getPixel(pixels(dispatcher), 5, 1)).toEqual(RED);
+
+        // ONE undo, and the surface is blank again. Three dispatches that did not coalesce would
+        // leave the first two segments behind — and a release that dispatched a fourth, identical
+        // revision would make this undo appear to do nothing at all.
+        dispatcher.undo();
+        expect(paintedCount(pixels(dispatcher))).toBe(0);
+    });
+
+    test("symmetry mirrors the whole SEGMENT, not just its endpoint", () => {
+        const { dispatcher, tool, computed } = harness({ symmetry: { horizontal: true, vertical: false } });
+        const a = at(0, 2), b = at(3, 2);
+        tool.onMouseDown(md(a[0], a[1]), rect, computed);
+        tool.onMouseMove(md(b[0], b[1]), rect);
+        tool.onMouseUp();
+
+        const buf = pixels(dispatcher);
+        // The drawn side is filled...
+        for (let x = 0; x <= 3; x++) expect(getPixel(buf, x, 2)).toEqual(RED);
+        // ...and so is EVERY pixel of the mirror. A tool that stamped only the mirrored ENDPOINT
+        // would leave 7 and 4 painted with 5 and 6 blank — a dotted line — so the assertion that
+        // matters here is the one about the middle pixels.
+        for (let x = 4; x <= 7; x++) expect(getPixel(buf, x, 2)).toEqual(RED);
+        // Vertical symmetry is OFF, so nothing appears in the mirrored ROW.
+        expect(getPixel(buf, 0, 1)).toEqual([0, 0, 0, 0]);
+        expect(paintedCount(buf)).toBe(8);
+    });
+
+    test("it paints only a SELECTED raster, and only when there is exactly one", () => {
+        const [wx, wy] = at(2, 1);
+        // Nothing selected.
+        const none = harness({ select: [] });
+        none.tool.onMouseDown(md(wx, wy), rect, none.computed);
+        none.tool.onMouseUp();
+        expect(paintedCount(pixels(none.dispatcher))).toBe(0);
+        expect(none.tool.isPainting()).toBe(false);
+
+        // A selection naming something that is not a raster node cannot be painted either.
+        const wrong = harness({ select: ["nope"] });
+        wrong.tool.onMouseDown(md(wx, wy), rect, wrong.computed);
+        expect(wrong.tool.isPainting()).toBe(false);
+        expect(paintedCount(pixels(wrong.dispatcher))).toBe(0);
+    });
+
+    test("a press OFF the surface starts nothing, and a drag off the edge is clipped not wrapped", () => {
+        const { dispatcher, tool, computed } = harness();
+        // Well outside the node's box — the mapping answers a pixel, and it is off the grid.
+        tool.onMouseDown(md(BOX.x - 500, BOX.y - 500), rect, computed);
+        tool.onMouseUp();
+        expect(paintedCount(pixels(dispatcher))).toBe(0);
+
+        // A stroke that STARTS on the surface and runs off the right edge paints to the border and
+        // stops, rather than wrapping onto another row.
+        const start = at(6, 3);
+        tool.onMouseDown(md(start[0], start[1]), rect, computed);
+        tool.onMouseMove(md(start[0] + 400, start[1]), rect);
+        tool.onMouseUp();
+        const buf = pixels(dispatcher);
+        expect(getPixel(buf, 6, 3)).toEqual(RED);
+        expect(getPixel(buf, 7, 3)).toEqual(RED);
+        // EXACTLY those two. A wrap would have added a pixel at the left of some row, and counting
+        // is what catches that wherever it landed.
+        expect(paintedCount(buf)).toBe(2);
+    });
+
+    test("the pointer is mapped through the node's TRANSFORM, not its stored box", () => {
+        const { dispatcher, tool } = harness();
+        // Rotate the node a quarter turn about its own centre. The STORED box is unchanged, so a
+        // tool subtracting `geometry.x` would paint exactly where it did before — and be wrong.
+        const node = dispatcher.getDocument().nodes.get("R")!;
+        (node as { transform?: unknown }).transform = {
+            rotation: Math.PI / 2, scaleX: 1, scaleY: 1,
+            originX: BOX.width / 2, originY: BOX.height / 2
+        };
+        const computed = computeGeometry(dispatcher.getDocument());
+        const c = computed.nodes.get("R")!;
+        // Ask the mapping where pixel (6,3) now lives, and click THERE.
+        const target = surfaceToWorld({ world: c.world, localWidth: c.local.width,
+            localHeight: c.local.height, surfaceWidth: SURFACE_W, surfaceHeight: SURFACE_H }, 6, 3)!;
+        tool.onMouseDown(md(target.x, target.y), rect, computed);
+        tool.onMouseUp();
+
+        const buf = pixels(dispatcher);
+        expect(getPixel(buf, 6, 3)).toEqual(RED);
+        expect(paintedCount(buf)).toBe(1);
+        // That world point is nowhere near where pixel (6,3) sat unrotated, so reading the stored
+        // box would have landed somewhere else entirely.
+        const flat = at(6, 3);
+        expect(Math.hypot(target.x - flat[0], target.y - flat[1])).toBeGreaterThan(1);
     });
 });

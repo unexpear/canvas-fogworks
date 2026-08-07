@@ -24,7 +24,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1293;
+const EXPECTED_TESTS = 1300;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -57,17 +57,17 @@ const MUTANTS = [
     // SurfaceSpace — the same family plus its neighbours: a box at the ORIGIN hides a dropped
     // origin term, and a round-trip-only assertion hides a half-pixel shift in BOTH directions.
     { id: "SS1", file: "src/core/paint/SurfaceSpace.ts",
-      from: "const v = (p.y - space.local.y) / space.local.height;",
-      to: "const v = (p.y - space.local.y) / space.local.width;",
+      from: "const v = p.y / space.localHeight;",
+      to: "const v = p.y / space.localWidth;",
       note: "the vertical axis divides by the WRONG side — invisible on a square box" },
     { id: "SS2", file: "src/core/paint/SurfaceSpace.ts",
       from: "const sy = Math.floor(v * space.surfaceHeight);",
       to: "const sy = Math.floor(v * space.surfaceWidth);",
       note: "the row index scales by the wrong dimension — invisible on a square surface" },
     { id: "SS3", file: "src/core/paint/SurfaceSpace.ts",
-      from: "const u = (p.x - space.local.x) / space.local.width;",
-      to: "const u = p.x / space.local.width;",
-      note: "the box's ORIGIN is dropped — invisible on a box at (0,0)" },
+      from: "    const u = p.x / space.localWidth;",
+      to: "    const u = p.y / space.localWidth;",
+      note: "the horizontal axis reads the WRONG component — invisible on a point where x === y" },
     { id: "SS4", file: "src/core/paint/SurfaceSpace.ts",
       from: "const sx = Math.floor(u * space.surfaceWidth);",
       to: "const sx = Math.round(u * space.surfaceWidth);",

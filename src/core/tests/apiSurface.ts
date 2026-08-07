@@ -1117,7 +1117,7 @@ function _paintSurface(): void {
     // --- SurfaceSpace: where a pointer is, in pixels ---------------------------
     const space: SurfaceSpace = {
         world: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 },
-        local: { x: 0, y: 0, width: 4, height: 3 },
+        localWidth: 4, localHeight: 3,
         surfaceWidth: 4, surfaceHeight: 3
     };
     expectType<string | null>(surfaceSpaceError(space));

@@ -14,6 +14,18 @@
  * already holds the local→world matrix the renderer draws with, so inverting THAT is what keeps the
  * paint and the picture in the same place by construction.
  *
+ * THE LOCAL BOX'S ORIGIN IS DELIBERATELY ABSENT, and this is the one thing here that is easy to get
+ * backwards. `ComputedNode.local` is a Rect whose x/y hold the node's stored position — but the
+ * renderer does not place with them: `buildRenderModel` emits every shape at `x = 0, y = 0` with
+ * `local.width/height`, and `world` carries the whole placement. Subtracting `local.x` as well
+ * therefore counts the node's position TWICE. Taking only the size makes that unrepresentable.
+ *
+ * The first version of this module got it wrong, and every unit test passed — because the fixture
+ * paired an IDENTITY `world` with a non-zero `local` origin, which is a combination
+ * `computeGeometry` never produces. A self-consistent fixture that is not a state the system can
+ * reach proves nothing about the system. It surfaced the moment the tool was wired to a real
+ * document, where `world` was `translate(100,40)` and `local` was `{100,40,...}`.
+ *
  * A PIXEL IS A CELL, NOT A POINT — so the map FLOORS. Rounding would make the leftmost and topmost
  * half-pixel map off the surface and double the width of the two edge columns, which reads as a
  * brush that will not reach the border.
@@ -24,14 +36,19 @@
  * at all: a collapsed box, or a matrix that cannot be inverted.
  */
 
-import { Mat2D, Rect, invert, applyToPoint } from "../geometry/Matrix";
+import { Mat2D, invert, applyToPoint } from "../geometry/Matrix";
 
 /** Everything the conversion needs about a raster node: where its box is, and how big its grid is. */
 export interface SurfaceSpace {
-    /** Local→world, as `ComputedNode.world` gives it. */
+    /** Local→world, as `ComputedNode.world` gives it. Carries the node's whole placement. */
     world: Mat2D;
-    /** The node's box in its own LOCAL space, as `ComputedNode.local` gives it. */
-    local: Rect;
+    /**
+     * The node's box SIZE, from `ComputedNode.local.width/height`.
+     *
+     * THE ORIGIN IS NOT HERE ON PURPOSE — `world` already holds it. See the module header.
+     */
+    localWidth: number;
+    localHeight: number;
     /** The surface's grid, in pixels. */
     surfaceWidth: number;
     surfaceHeight: number;
@@ -39,12 +56,12 @@ export interface SurfaceSpace {
 
 /** Whether a space can be converted through at all. */
 export function surfaceSpaceError(space: SurfaceSpace): string | null {
-    if (!Number.isFinite(space.local.width) || !Number.isFinite(space.local.height)) {
+    if (!Number.isFinite(space.localWidth) || !Number.isFinite(space.localHeight)) {
         return "a raster node's box must be finite";
     }
     // A COLLAPSED BOX HAS NO MAPPING. Dividing by it yields Infinity, which floors to a number that
     // is not a pixel and would be painted somewhere.
-    if (space.local.width <= 0 || space.local.height <= 0) return "a raster node's box must have area";
+    if (space.localWidth <= 0 || space.localHeight <= 0) return "a raster node's box must have area";
     if (!Number.isInteger(space.surfaceWidth) || !Number.isInteger(space.surfaceHeight)) {
         return "a surface must have whole dimensions";
     }
@@ -66,8 +83,8 @@ export function worldToSurface(space: SurfaceSpace, worldX: number, worldY: numb
     const p = applyToPoint(inv, worldX, worldY);
     // The two axes are scaled INDEPENDENTLY, so a non-uniformly scaled node paints square pixels in
     // its own grid rather than the stretched ones a single scale factor would give.
-    const u = (p.x - space.local.x) / space.local.width;
-    const v = (p.y - space.local.y) / space.local.height;
+    const u = p.x / space.localWidth;
+    const v = p.y / space.localHeight;
     const sx = Math.floor(u * space.surfaceWidth);
     const sy = Math.floor(v * space.surfaceHeight);
     // A NaN can only arrive from a NaN world point, and flooring one gives NaN rather than throwing
@@ -87,7 +104,7 @@ export function surfaceToWorld(space: SurfaceSpace, sx: number, sy: number): { x
     if (surfaceSpaceError(space) !== null) return null;
     const u = (sx + 0.5) / space.surfaceWidth;
     const v = (sy + 0.5) / space.surfaceHeight;
-    return applyToPoint(space.world, space.local.x + u * space.local.width, space.local.y + v * space.local.height);
+    return applyToPoint(space.world, u * space.localWidth, v * space.localHeight);
 }
 
 /**

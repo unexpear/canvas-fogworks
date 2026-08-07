@@ -5,7 +5,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { Node, NodeType, PathCommand, Style, isNodeType, dimensionError, nodeIdError, pathError, srcError, styleError } from "../document/Node";
+import { Node, NodeType, PathCommand, Style, RasterSurface, isNodeType, dimensionError, nodeIdError, pathError, rasterSurfaceError, srcError, styleError } from "../document/Node";
 import { MutationResult, ActionPayload } from "./types";
 import { generateUUID } from "../ids/UUID";
 
@@ -23,6 +23,16 @@ export interface NodeContent {
     path?: readonly PathCommand[];
     /** A `core.image`'s source — a URL, or a `data:` URL for a file the user picked. */
     src?: string;
+    /**
+     * A `core.raster`'s pixels, as `PixelCodec` encodes them.
+     *
+     * A RASTER MUST BE BORN WITH ONE. Every other content field is optional decoration on a node
+     * that is already visible — a path without commands is an empty box, an image without a src is
+     * a blank frame. A raster without a surface is not a smaller picture, it is a node nothing can
+     * paint: `PaintSurfaceAction.validate` refuses it, so the node would exist and be permanently
+     * inert. Creating it and giving it pixels must therefore be one act.
+     */
+    surface?: RasterSurface;
 }
 
 export class AddNodeAction extends Action {
@@ -113,6 +123,14 @@ export class AddNodeAction extends Action {
         if (this.content?.src !== undefined && srcError(this.nodeType, this.content.src) !== null) {
             return false;
         }
+        // ONLY A RASTER MAY CARRY A SURFACE, and it must be one the loader would accept — the same
+        // rule `PaintSurfaceAction` enforces on every later stroke. Without this the editor could
+        // author a node it cannot reopen, which is the round-trip-closure rule this codebase is
+        // built on; and a surface on a rectangle would be a field no renderer looks at.
+        if (this.content?.surface !== undefined) {
+            if (this.nodeType !== "core.raster") return false;
+            if (rasterSurfaceError(this.content.surface) !== null) return false;
+        }
         return (
             // Membership, not just non-empty: TypeScript alone does not stop a cast,
             // a plugin (M15) or an AI-emitted action (M14) from supplying a bogus
@@ -146,6 +164,11 @@ export class AddNodeAction extends Action {
         if (this.content?.text !== undefined) node.text = this.content.text;
         if (this.content?.path !== undefined) node.path = this.content.path.map(c => ({ ...c }));
         if (this.content?.src !== undefined) node.src = this.content.src;
+        // Copied field-by-field rather than aliased, for the same reason `path` is: the caller's
+        // object must not become the document's.
+        if (this.content?.surface !== undefined) {
+            node.surface = { ...this.content.surface };
+        }
 
         return {
             updatedNodeIds: new Set([this.createdNodeId]),
