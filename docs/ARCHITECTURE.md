@@ -1223,7 +1223,27 @@ The next diagnostic is to read back the target's own pixels straight after the i
 and before any blur — one reading that splits "never drawn" from "lost in compositing".
 ### Pixels — the one thing no import can add
 
-**A `core.raster` NODE IS CURRENTLY INVISIBLE, and that is the next job.** `buildRenderModel` does
+**A `core.raster` NODE IS NAMED BUT NOT YET RESOLVED.** `buildRenderModel` now emits it as an image
+whose `href` identifies the surface — the same seam `core.image` uses, where the model names a
+picture and `ImageCache` resolves it impurely. What is missing is the resolving half, and there is
+a gap in the design as it stands:
+
+**THE HREF CARRIES IDENTITY, NOT THE PAYLOAD** — deliberately, since a base64 surface in a cache key
+would be enormous and would be rebuilt every frame. But `resolveImage` works by `img.src = href`,
+which for a `raster:` key simply fails to load and draws nothing. **The cache cannot decode a
+surface it cannot see.**
+
+The shape that fits: a `registerRasterSurface(href, surface)` on the cache, called from the impure
+renderer layer when a document changes, decoding the run-length payload into an `ImageData`, drawing
+that to a canvas and handing `toDataURL()` to the same `Image` every other href uses. That keeps one
+notion of "loaded" across all three backends — a second one is a second thing that can be wrong —
+and confines the impurity to the cache, where it already lives.
+
+What that leaves open is WHEN registration happens. Doing it inside `buildRenderModel` would make
+the model impure; doing it on every document change costs a decode per stroke; doing it lazily on
+first miss means a frame drawn without the picture. Decide before writing it.
+
+**The previous state, for the record:** `buildRenderModel` does
 not know the type, so it falls through to a `rect` shape carrying the node's `fill` — which for a
 raster node is `"none"`. The node exists, validates, serializes, round-trips and accepts paint
 through the dispatcher; nothing draws it. Measured, not assumed: a document with a raster node and
