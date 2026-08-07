@@ -20,9 +20,22 @@
  * names (18). Both are read, and an external one is resolved by the CALLER: a parser that reached
  * for a file would need a filesystem and stop being pure.
  *
- * ORIENTATION CHANGES PLACEMENT, NOT PARSING. Four maps are isometric, where a cell sits on a
+ * ORIENTATION CHANGES PLACEMENT, NOT PARSING. THREE maps are isometric, where a cell sits on a
  * diamond rather than a grid, so the placement formula lives here and the orientation is reported
- * rather than assumed.
+ * rather than assumed. (It was recorded here as four: a fourth file carries `orientation="isometric"`
+ * on a tileset's `<grid>`, not on its `<map>`. Counting a string rather than the element it sits on
+ * is how a corpus measurement goes quietly wrong.)
+ *
+ * WHAT THE SPEC SAYS IS NOT A GAP. `<grid>` appears in three tilesets here and is deliberately
+ * ignored: it "is only used in case of isometric orientation, and determines how tile overlays for
+ * terrain and collision information are rendered" — an EDITOR overlay for data this reader does not
+ * carry. Listing it as unread would have made it look like missing work.
+ *
+ * MEASURED AGAINST THE WHOLE TREE, which holds 20 `.tmx` and 13 `.tsx` and nothing else. ZERO of
+ * them use object layers, image layers, group layers, properties, tile animations, wangsets,
+ * terrains, infinite maps and chunks, templates, text objects, parallax factors, tint colours, or
+ * layer opacity/visibility. Those are real parts of the format and every one would be built BLIND —
+ * there is no fixture in this tree to verify a single one against.
  */
 
 import { SourceRect } from "../document/Node";
@@ -98,6 +111,15 @@ export interface TiledLayer {
     name: string;
     width: number;
     height: number;
+    /**
+     * `offsetx`/`offsety` in pixels, applied to the whole layer. Both default to 0.
+     *
+     * DISTINCT FROM A TILESET'S `<tileoffset>`, which shifts every tile drawn FROM THAT SET however
+     * many layers use it. This shifts one layer whatever sets it draws from. A reader that folded
+     * the two into one number would be right only while a map used exactly one of them.
+     */
+    offsetX: number;
+    offsetY: number;
     /** Row-major, `width * height` long. */
     cells: TiledCell[];
 }
@@ -300,8 +322,23 @@ export function parseTiledMap(xml: string, opts?: { inflate?: (d: Uint8Array) =>
             name: a.name ?? "",
             width: num(a.width, num(mapAttrs.width, 0)),
             height: num(a.height, num(mapAttrs.height, 0)),
+            // BOTH DEFAULT TO 0, per the spec. One map in the tree offsets a layer by -30 vertically;
+            // dropping it draws that layer 30 pixels low, which reads as art aligned wrongly rather
+            // than as a missing attribute.
+            offsetX: num(a.offsetx, 0),
+            offsetY: num(a.offsety, 0),
             cells: raw.map(decodeGid)
         });
+    }
+
+    // RENDER ORDER IS REPORTED, NOT IMPLEMENTED. All 20 maps in the tree use the default
+    // `right-down`, so nothing here has ever depended on it — which is exactly why a silent
+    // assumption is worth a note instead: the day a map says otherwise, the tiles come out in the
+    // wrong order and nothing says why. The spec adds that it is "only supported for orthogonal
+    // maps at the moment", so an isometric map naming one is Tiled's own no-op, not this reader's.
+    const order = mapAttrs.renderorder ?? "right-down";
+    if (order !== "right-down") {
+        notes.push(`render order "${order}" is not one this places; tiles are laid out right-down`);
     }
 
     // Reported for the sets this map could measure. An EXTERNAL one has no image until a caller

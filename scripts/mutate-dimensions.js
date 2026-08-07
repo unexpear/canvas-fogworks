@@ -24,7 +24,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1300;
+const EXPECTED_TESTS = 1302;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -80,6 +80,23 @@ const MUTANTS = [
       from: "    const p = applyToPoint(inv, worldX, worldY);",
       to: "    const p = applyToPoint(space.world, worldX, worldY);",
       note: "transforms FORWARD instead of inverting — invisible under an identity matrix" },
+
+    // TiledMap — a layer's offset. The convenient fixture is a map where the two axes are equal,
+    // or where one is absent, or where the layer offset and the tileset's tileoffset agree.
+    { id: "TM1", file: "src/core/import/TiledMap.ts",
+      from: "            offsetX: num(a.offsetx, 0),
+            offsetY: num(a.offsety, 0),",
+      to: "            offsetX: num(a.offsety, 0),
+            offsetY: num(a.offsetx, 0),",
+      note: "layer offset axes swapped — invisible when a map offsets only one axis" },
+    { id: "TM2", file: "src/core/import/TiledMap.ts",
+      from: "            offsetY: num(a.offsety, 0),",
+      to: "            offsetY: num(a.offsety, undefined as unknown as number),",
+      note: "an absent layer offset becomes undefined, not 0 — invisible unless a map omits it" },
+    { id: "TM3", file: "src/core/import/TiledMap.ts",
+      from: '    if (order !== "right-down") {',
+      to: '    if (order === "right-down") {',
+      note: "the render-order note fires on the DEFAULT — invisible if only one order is ever tested" },
 ];
 
 function runSuite() {

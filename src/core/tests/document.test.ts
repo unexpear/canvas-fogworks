@@ -14387,7 +14387,8 @@ describe("Mesh — bending a shape (schema 41)", () => {
     // 20 real maps parse, all 124,692 cells resolve to a rect inside its sheet, and 820 carry a flip
     // flag. The two files that forced the grid derivation are named in the test that covers it.
     const tmxMap = (opts?: { orientation?: string; data?: string; encoding?: string;
-        compression?: string; tileset?: string; layers?: string; infinite?: string; size?: string }) => {
+        compression?: string; tileset?: string; layers?: string; infinite?: string; size?: string;
+        renderorder?: string }) => {
         const tileset = opts?.tileset ?? '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" '
             + 'columns="4" tilecount="16" spacing="0"><image source="t.png" width="64" height="64"/></tileset>';
         const enc = opts?.encoding === undefined ? ' encoding="csv"' : ` encoding="${opts.encoding}"`;
@@ -14395,7 +14396,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const layers = opts?.layers ?? `<layer id="1" name="L" width="2" height="2">`
             + `<data${enc}${comp}>${opts?.data ?? "1,2,5,6"}</data></layer>`;
         return `<?xml version="1.0"?><map version="1.2" orientation="${opts?.orientation ?? "orthogonal"}" `
-            + `renderorder="right-down" width="${opts?.size ?? "2"}" height="${opts?.size ?? "2"}" `
+            + `renderorder="${opts?.renderorder ?? "right-down"}" width="${opts?.size ?? "2"}" height="${opts?.size ?? "2"}" `
             + `tilewidth="16" tileheight="16" infinite="${opts?.infinite ?? "0"}">${tileset}${layers}</map>`;
     };
     /** Little-endian uint32s, which is the one place this format is not text. */
@@ -14406,6 +14407,63 @@ describe("Mesh — bending a shape (schema 41)", () => {
         return out;
     };
     const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
+
+    test("a layer carries its OWN offset, distinct from a tileset's", () => {
+        // Two DIFFERENT non-zero values, and neither axis zero: `offsetx="0" offsety="-30"` is what
+        // the one real file in the tree uses, and a reader that swapped the two would still put a
+        // zero where a zero belongs. This cannot.
+        const shifted = parseTiledMap(tmxMap({
+            layers: '<layer id="1" name="L" width="2" height="2" offsetx="7" offsety="-30">'
+                + '<data encoding="csv">1,2,5,6</data></layer>'
+        }));
+        expect(shifted.layers[0]).toMatchObject({ offsetX: 7, offsetY: -30 });
+
+        // The shape Tiled itself writes, taken from `sampleMap.tmx` — a zero x with a real y.
+        const real = parseTiledMap(tmxMap({
+            layers: '<layer id="4" name="Object (offset)" width="2" height="2" offsetx="0" offsety="-30">'
+                + '<data encoding="csv">1,2,5,6</data></layer>'
+        }));
+        expect(real.layers[0]).toMatchObject({ name: "Object (offset)", offsetX: 0, offsetY: -30 });
+
+        // ABSENT MEANS ZERO, per the spec — not undefined, which would propagate into arithmetic
+        // and place the layer at NaN.
+        expect(parseTiledMap(tmxMap()).layers[0]).toMatchObject({ offsetX: 0, offsetY: 0 });
+
+        // A LAYER'S OFFSET IS NOT A TILESET'S. `<tileoffset>` shifts every tile drawn from that set
+        // however many layers use it; this shifts one layer whatever sets it draws from. Here the
+        // two are set to different values on the same map, so a reader that folded them into one
+        // number cannot report both.
+        const both = parseTiledMap(tmxMap({
+            tileset: '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="4" '
+                + 'tilecount="16" spacing="0"><tileoffset x="3" y="11"/>'
+                + '<image source="t.png" width="64" height="64"/></tileset>',
+            layers: '<layer id="1" name="L" width="2" height="2" offsetx="7" offsety="-30">'
+                + '<data encoding="csv">1,2,5,6</data></layer>'
+        }));
+        expect(both.tilesets[0]).toMatchObject({ offsetX: 3, offsetY: 11 });
+        expect(both.layers[0]).toMatchObject({ offsetX: 7, offsetY: -30 });
+    });
+
+    test("a render order this does not place is REPORTED, not silently ignored", () => {
+        // Every one of the 20 maps in the tree uses the default, so nothing has ever depended on
+        // this — which is precisely why the assumption is worth stating out loud. A map that says
+        // otherwise would come out in the wrong order with nothing to say why.
+        const odd = parseTiledMap(tmxMap({ renderorder: "left-up" }));
+        expect(odd.notes.some(n => /left-up/.test(n))).toBe(true);
+        // The cells are still read — a note is a note, not a refusal.
+        expect(odd.layers[0].cells).toHaveLength(4);
+
+        // THE DEFAULT IS SILENT. A note on every ordinary map would train a caller to ignore notes,
+        // which is worse than not having them.
+        expect(parseTiledMap(tmxMap()).notes.some(n => /render order/.test(n))).toBe(false);
+        // ...and so is an ABSENT attribute, which the spec says means right-down.
+        const bare = parseTiledMap('<?xml version="1.0"?><map version="1.2" orientation="orthogonal" '
+            + 'width="2" height="2" tilewidth="16" tileheight="16" infinite="0">'
+            + '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="4" tilecount="16" '
+            + 'spacing="0"><image source="t.png" width="64" height="64"/></tileset>'
+            + '<layer id="1" name="L" width="2" height="2"><data encoding="csv">1,2,5,6</data></layer></map>');
+        expect(bare.notes.some(n => /render order/.test(n))).toBe(false);
+    });
 
     test("a Tiled map's cells resolve to rects in a sheet", () => {
         const m = parseTiledMap(tmxMap());

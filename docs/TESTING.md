@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v55 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1182) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (41) = 1300 tests.
+> 🔒 Frozen contract · schema v55 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1184) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (41) = 1302 tests.
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1300 tests
+npm test                                   # jest (ts-jest), 1302 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -42,7 +42,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1300 tests)
+## What is covered (1302 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -390,10 +390,14 @@ The checklist, applied when the fixture is written:
 
 This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
-cannot see — over the paint modules, exiting non-zero on a survivor: currently **13 mutants, 13
-killed**. Six of the thirteen cover `SurfaceSpace`, where the convenient fixture is not a square
-buffer but **a box at the origin** (which hides a dropped origin term) and **a round-trip-only
-assertion** (which hides a half-pixel shift, because it shifts both directions equally).
+cannot see — over the paint modules and the Tiled reader, exiting non-zero on a survivor:
+currently **16 mutants, 16 killed**. Six cover `SurfaceSpace`, where the convenient fixture is not
+a square buffer but **a box at the origin** (which hides a dropped origin term) and **a
+round-trip-only assertion** (which hides a half-pixel shift, because it shifts both directions
+equally). Three cover `TiledMap`, where it is **a map that offsets only one axis** (so a swap is
+invisible), **a map that always states the attribute** (so a missing default is invisible), and
+**a corpus where only one render order ever occurs** (so an inverted condition is invisible —
+all 20 maps in the tree use `right-down`).
 
 It found the first survivor — `Symmetry`'s vertical axis reading
 `width`, which survived all 1292 tests because every fixture but one was 8×8, and that one
