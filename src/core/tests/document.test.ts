@@ -85,6 +85,8 @@ import { createPixelBuffer, pixelBufferError, getPixel, setPixel, inBounds, line
     drawLine, floodFill, PIXEL_MAX_SIDE, Rgba } from "../paint/PixelBuffer";
 import { capturePatch, applyPatch, revertPatch, invertPatch, readRegion, isEmptyPatch,
     patchCost } from "../paint/PixelPatch";
+import { makeBrush, brushError, stampBrush, brushBounds, strokePath, strokeBounds,
+    BRUSH_MAX_SIZE } from "../paint/Brush";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -15860,6 +15862,107 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(p).toMatchObject({ x: 4, y: 1, width: 1, height: 1 });
         revertPatch(wide, p);
         expect(getPixel(wide, 4, 1)).toEqual([0, 0, 0, 0]);
+    });
+
+    test("a brush does not DRIFT as its size changes", () => {
+        // An even diameter has no centre pixel, and pretending otherwise is the classic pixel-art
+        // frustration: a brush that lands up-left of the cursor at some sizes and centred at
+        // others. The rule is symmetric for ODD, consistently biased down-right for EVEN.
+        expect(makeBrush(1, false).offsets).toEqual([[0, 0]]);
+        const sq2 = makeBrush(2, false).offsets.map(o => o.join(",")).sort();
+        expect(sq2).toEqual(["0,0", "0,1", "1,0", "1,1"]);      // down-right of the cursor
+        const sq3 = makeBrush(3, false).offsets.map(o => o.join(",")).sort();
+        expect(sq3).toContain("-1,-1");
+        expect(sq3).toContain("1,1");
+        expect(sq3).toHaveLength(9);
+
+        // EVERY size includes the cursor's own pixel. A brush that does not is one the user cannot
+        // aim, and it is exactly what an off-by-one in the span produces.
+        for (let n = 1; n <= 8; n++) {
+            for (const round of [true, false]) {
+                const b = makeBrush(n, round);
+                expect(b.offsets.some(([dx, dy]) => dx === 0 && dy === 0)).toBe(true);
+                // And the offsets never exceed the size the brush claims.
+                expect(b.offsets.length).toBeLessThanOrEqual(n * n);
+                const bounds = brushBounds(b, 0, 0);
+                for (const [dx, dy] of b.offsets) {
+                    expect(dx).toBeGreaterThanOrEqual(bounds.x);
+                    expect(dx).toBeLessThan(bounds.x + bounds.width);
+                    expect(dy).toBeGreaterThanOrEqual(bounds.y);
+                    expect(dy).toBeLessThan(bounds.y + bounds.height);
+                }
+            }
+        }
+
+        // A ROUND brush is a true disc, and that means it EQUALS the square one at size 3: a disc
+        // of diameter 3 contains all nine pixel centres, the corner sitting at 1.414 against a
+        // radius of 1.5. Some editors draw a plus there instead, which is an artistic convention —
+        // asserting it would mean tuning a constant until the shape matched a preconception.
+        expect(makeBrush(3, true).offsets).toHaveLength(9);
+        // Round starts DIFFERING at 4, where the corner is at 2.12 against a radius of 2.
+        expect(makeBrush(4, true).offsets.length).toBeLessThan(makeBrush(4, false).offsets.length);
+        expect(makeBrush(8, true).offsets.length).toBeLessThan(makeBrush(8, false).offsets.length);
+        // AN EVEN ROUND BRUSH is the only one that can tell the disc's centre apart from the
+        // cursor: for odd sizes the span's middle IS zero, so measuring from either gives the same
+        // disc. At size 4 the span runs -1..2 and its middle is 0.5, and a disc centred on the
+        // cursor instead would be lopsided — three quadrants clipped and one not.
+        const r4 = new Set(makeBrush(4, true).offsets.map(o => o.join(",")));
+        // Symmetric about the span's middle: reflecting an offset through 0.5 must land on another.
+        for (const key of r4) {
+            const [dx, dy] = key.split(",").map(Number);
+            expect(r4.has(`${1 - dx},${1 - dy}`)).toBe(true);
+        }
+        // All four corners of the 4x4 box are outside the disc, and exactly those four.
+        expect(r4.has("-1,-1")).toBe(false);
+        expect(r4.has("2,2")).toBe(false);
+        expect(r4.has("-1,2")).toBe(false);
+        expect(r4.has("2,-1")).toBe(false);
+        expect(r4.size).toBe(12);
+
+        // And a disc is never wider than its square: no offset escapes the box.
+        expect(makeBrush(9, true).offsets.length).toBeLessThan(9 * 9);
+        // A round brush is SYMMETRIC at odd sizes: every offset has its mirror.
+        const r5 = new Set(makeBrush(5, true).offsets.map(o => o.join(",")));
+        for (const key of r5) {
+            const [dx, dy] = key.split(",").map(Number);
+            expect(r5.has(`${-dx},${-dy}`)).toBe(true);
+        }
+
+        expect(brushError(0, false)).toMatch(/at least one pixel/);
+        expect(brushError(2.5, false)).toMatch(/whole number/);
+        expect(brushError(BRUSH_MAX_SIZE + 1, false)).toMatch(/may not exceed/);
+        expect(brushError(BRUSH_MAX_SIZE, false)).toBeNull();
+        expect(brushError(3, "yes")).toMatch(/whether it is round/);
+        expect(() => makeBrush(0, false)).toThrow(/at least one pixel/);
+    });
+
+    test("a drag fills the GAPS between its samples", () => {
+        // A pointer at 60Hz moving quickly reports positions tens of pixels apart. Stamping only
+        // at the reported points draws beads rather than a stroke.
+        const b = createPixelBuffer(32, 8);
+        const brush = makeBrush(1, false);
+        strokePath(b, brush, [[0, 4], [20, 4]], RED, linePoints);
+        for (let x = 0; x <= 20; x++) expect(getPixel(b, x, 4)).toEqual(RED);
+        expect(getPixel(b, 21, 4)).toEqual([0, 0, 0, 0]);
+
+        // A SINGLE point is a click, and a click with a pencil leaves a mark.
+        const c = createPixelBuffer(8, 8);
+        strokePath(c, brush, [[3, 3]], BLUE, linePoints);
+        expect(getPixel(c, 3, 3)).toEqual(BLUE);
+        // An empty path paints nothing rather than throwing.
+        strokePath(c, brush, [], RED, linePoints);
+        expect(getPixel(c, 0, 0)).toEqual([0, 0, 0, 0]);
+
+        // A stamp near the edge is CLIPPED, not wrapped — the same guard `setPixel` already has.
+        const d = createPixelBuffer(4, 4);
+        stampBrush(d, makeBrush(3, false), 0, 0, RED);
+        expect(getPixel(d, 0, 0)).toEqual(RED);
+        expect(getPixel(d, 3, 3)).toEqual([0, 0, 0, 0]);   // nothing wrapped to the far corner
+
+        // The stroke's BOX covers every stamp, so one `capturePatch` can wrap the whole drag.
+        const box = strokeBounds(makeBrush(3, false), [[5, 5], [9, 7]])!;
+        expect(box).toMatchObject({ x: 4, y: 4, width: 7, height: 5 });
+        expect(strokeBounds(brush, [])).toBeNull();
     });
 
     test("read shapes become nodes the document accepts", () => {
