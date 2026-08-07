@@ -179,6 +179,24 @@ function hexColor(s: string): string {
  * effects share ONE `<filter>` def and the backend needs zero escaping. The `fx` prefix guarantees a
  * letter-leading id; the charset is `[A-Za-z0-9_]`.
  */
+/**
+ * The href a raster surface is resolved by.
+ *
+ * IDENTITY, NOT A LOCATION. Nothing fetches this — a renderer-side cache decodes the surface it
+ * names, exactly as `ImageCache` decodes a `src`. The payload's own length and a cheap checksum ride
+ * along so the key CHANGES when the pixels do: a key built from the node id alone would leave every
+ * stroke showing the picture from before it, because the id is what does not change when a surface
+ * is painted.
+ */
+export function rasterHref(nodeId: string, surface: { data: string; width: number; height: number }): string {
+    // A sum of char codes rather than a real hash: this only has to change when the payload does,
+    // and it is recomputed for every raster node on every frame. Collisions cost a stale frame,
+    // not a wrong picture, because the length and dimensions travel with it.
+    let sum = 0;
+    for (let i = 0; i < surface.data.length; i++) sum = (sum + surface.data.charCodeAt(i) * (i + 1)) % 0xffffffff;
+    return `raster:${nodeId}:${surface.width}x${surface.height}:${surface.data.length}:${sum}`;
+}
+
 export function effectFilterId(shadow: Shadow | null, blur: number | null): string | null {
     const hasBlur = blur !== null && blur > 0;
     if (!shadow && !hasBlur) return null;
@@ -568,6 +586,30 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = {
                 kind: "image", x, y, width, height, href: node.src ?? null,
                 source: node.sourceRect ?? null, pixelated: node.pixelated === true
+            };
+            paint = {
+                fill: null, opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
+                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
+            };
+        } else if (node.type === "core.raster") {
+            // A RASTER IS AN IMAGE THE MODEL NAMES RATHER THAN CARRIES. The surface is run-length
+            // text; turning it into something a backend can draw needs a decode and, for SVG, an
+            // encode — both impure. That is exactly what `href` already means here: the model
+            // NAMES a picture and the renderer resolves it, the same seam `core.image` uses with
+            // `ImageCache`. Emitting pixels instead would push impurity into the model, which is
+            // the property the whole codec decision was made to protect.
+            //
+            // THE KEY CARRIES THE PAYLOAD'S IDENTITY, not just the node's. A cache keyed on the
+            // node id alone would keep showing the pre-stroke picture after every paint, since the
+            // id does not change when the pixels do — the surface's own text is what changed.
+            shape = {
+                kind: "image", x, y, width, height,
+                href: node.surface ? rasterHref(node.id, node.surface) : null,
+                source: null,
+                // PIXEL ART IS NEAREST-NEIGHBOUR BY DEFAULT. A painted surface zoomed in is meant
+                // to show its pixels; smoothing them is the one thing a pixel artist never wants,
+                // and an image node defaults the other way because a photograph does.
+                pixelated: node.pixelated !== false
             };
             paint = {
                 fill: null, opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,

@@ -12,7 +12,7 @@
 
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { buildRenderModel, DisplayList, HANDLE_SIZE_PX, commandsToPathData, effectFilterId } from "./RenderModel";
+import { buildRenderModel, DisplayList, HANDLE_SIZE_PX, commandsToPathData, effectFilterId, rasterHref } from "./RenderModel";
 import { gaussianKernel, gaussianOuterProduct, GAUSSIAN_MAX_RADIUS, GAUSSIAN_SIGMA_CUTOFF,
     blurPlan, GAUSSIAN_MAX_SIGMA, GAUSSIAN_MAX_DOWNSAMPLE } from "./Gaussian";
 import { RendererState } from "./RendererState";
@@ -945,5 +945,68 @@ describe("Gaussian — the blur kernel the GPU backend spends", () => {
         // Infinity is REFUSED rather than producing a kernel of NaNs, which would blank every
         // fragment it touched -- a blur that erases is worse than one that does nothing.
         expect(gaussianKernel(Infinity).weights.every(Number.isFinite)).toBe(true);
+    });
+});
+
+describe("buildRenderModel — raster (schema 55)", () => {
+    const rasterDoc = (surface: { data: string; width: number; height: number } | undefined) => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("r", { id: "r", type: "core.raster", parent: null, children: [],
+            geometry: { x: 4, y: 6, width: 8, height: 8 },
+            style: { fill: "none", opacity: 1 }, layout: {}, surface } as Node);
+        doc.rootNodeUuids = ["r"];
+        return doc;
+    };
+    const state = (doc: ReadonlyDocument): RendererState => ({
+        selectedNodeIds: [], hoveredNodeId: null, previewRect: null,
+        computed: computeGeometry(doc), viewport: { x: 0, y: 0, zoom: 1 }
+    });
+
+    test("a raster node becomes an IMAGE, not an invisible rect", () => {
+        // It used to fall through to a `rect` carrying the node's fill — which for a raster node is
+        // "none", so the node validated, serialized, accepted paint, and drew nothing at all.
+        const doc = rasterDoc({ data: "AQAAAAA=", width: 8, height: 8 });
+        const item = buildRenderModel({ width: 400, height: 300 }, doc, state(doc)).content[0];
+        expect(item.shape.kind).toBe("image");
+        const shape = item.shape as { kind: "image"; href: string | null; pixelated: boolean;
+            x: number; y: number; width: number; height: number };
+        expect(shape.href).not.toBeNull();
+        // The shape's box is LOCAL — the node's position rides on the item's world matrix, exactly
+        // as it does for `core.image`. Asserting the geometry here rather than the placement.
+        expect(shape.width).toBe(8);
+        expect(shape.height).toBe(8);
+        expect(item.world).not.toBeNull();
+
+        // PIXEL ART IS NEAREST-NEIGHBOUR BY DEFAULT, unlike an image node — a painted surface
+        // zoomed in is meant to show its pixels, and smoothing them is what a pixel artist never
+        // wants. An image node defaults the other way because a photograph does.
+        expect(shape.pixelated).toBe(true);
+
+        // A node with NO surface names nothing rather than a broken href, so a backend skips it
+        // exactly as it skips an image whose source has not decoded.
+        const empty = rasterDoc(undefined);
+        const emptyShape = buildRenderModel({ width: 400, height: 300 }, empty, state(empty))
+            .content[0].shape as { kind: "image"; href: string | null };
+        expect(emptyShape.kind).toBe("image");
+        expect(emptyShape.href).toBeNull();
+    });
+
+    test("the href CHANGES when the pixels do, and only then", () => {
+        // A cache key built from the node id alone would show the picture from before every
+        // stroke, because the id is exactly what does not change when a surface is painted.
+        const a = rasterHref("r", { data: "AQAAAAA=", width: 8, height: 8 });
+        const same = rasterHref("r", { data: "AQAAAAA=", width: 8, height: 8 });
+        const painted = rasterHref("r", { data: "AQD/AAA=", width: 8, height: 8 });
+        expect(a).toBe(same);                 // stable, so nothing re-decodes every frame
+        expect(a).not.toBe(painted);          // and changes the moment the payload does
+
+        // Dimensions and node id are part of the identity too — two nodes holding identical
+        // pixels must not share a key, or resizing one would show the other's picture.
+        expect(rasterHref("s", { data: "AQAAAAA=", width: 8, height: 8 })).not.toBe(a);
+        expect(rasterHref("r", { data: "AQAAAAA=", width: 4, height: 16 })).not.toBe(a);
+
+        // A payload differing only in ORDER must still differ: a plain character sum would collide.
+        expect(rasterHref("r", { data: "AB", width: 1, height: 1 }))
+            .not.toBe(rasterHref("r", { data: "BA", width: 1, height: 1 }));
     });
 });
