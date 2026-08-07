@@ -47,6 +47,7 @@
  */
 
 import { DisplayList, DrawItem, Shape } from "./RenderModel";
+import { gaussianKernel, GAUSSIAN_MAX_RADIUS } from "./Gaussian";
 import { Mat2D, translation } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
 import { subdivideTriangles, triangulate } from "../core/geometry/Tessellate";
@@ -88,6 +89,54 @@ void main() {
     // z comes from the node's DEPTH, not from the draw order — that is what makes the depth
     // buffer do the deciding rather than the sequence of draw calls.
     gl_Position = vec4(p.xy, u_z, 1.0);
+}`;
+
+/**
+ * Taps the blur shader's loop is compiled for — the FULL span at the widest kernel.
+ *
+ * IT MUST BE A COMPILE-TIME CONSTANT. GLSL ES 1.00 refuses `for (int i = 0; i < u_radius; i++)`
+ * outright — "Loop index cannot be compared with non-constant expression" — so the loop runs to a
+ * constant and BREAKS on the uniform. Measured in this renderer rather than assumed; the same
+ * constraint is why Material Maker's blur loops a fixed -50..50 regardless of its sigma.
+ */
+const BLUR_MAX_TAPS = GAUSSIAN_MAX_RADIUS * 2 + 1;
+
+/** A full-screen triangle pair in clip space; `v_uv` is the same corner in texture space. */
+const BLUR_VERTEX_SHADER = `
+attribute vec2 a_pos;
+varying vec2 v_uv;
+void main() {
+    v_uv = a_pos * 0.5 + 0.5;
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+}`;
+
+/**
+ * One axis of a separable gaussian.
+ *
+ * PREMULTIPLIED THROUGHOUT. Blurring straight (non-premultiplied) RGBA mixes the colour of fully
+ * transparent texels into its neighbours, and a transparent texel's colour is usually black — so
+ * every soft edge gains a dark fringe that looks like a bad shadow rather than a bad blend. The
+ * target is drawn premultiplied and composited with `ONE, ONE_MINUS_SRC_ALPHA` to match.
+ *
+ * The weights arrive already normalised, so this sums them without dividing: the division happened
+ * once on the CPU rather than per fragment.
+ */
+const BLUR_FRAGMENT_SHADER = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform vec2 u_texel;
+uniform vec2 u_dir;
+uniform int u_radius;
+uniform float u_weights[${BLUR_MAX_TAPS}];
+varying vec2 v_uv;
+void main() {
+    vec4 sum = vec4(0.0);
+    for (int i = 0; i < ${BLUR_MAX_TAPS}; i++) {
+        if (i > 2 * u_radius) break;
+        float off = float(i - u_radius);
+        sum += texture2D(u_tex, v_uv + u_dir * u_texel * off) * u_weights[i];
+    }
+    gl_FragColor = sum;
 }`;
 
 const FRAGMENT_SHADER = `
@@ -187,6 +236,36 @@ void main() {
  * takes it — and a documented signature whose type cannot be named is a contract nobody outside
  * this file can hold. It was private until the API pin tried to state the contract and could not.
  */
+/**
+ * One offscreen colour target: a texture and the framebuffer that draws into it.
+ *
+ * Two are needed, not one. A separable blur reads the whole of one image while writing another, so
+ * the horizontal pass cannot write into what it is still sampling — the passes PING-PONG between a
+ * pair. Sampling and writing the same texture is undefined in GL and, worse, usually looks almost
+ * right.
+ */
+export interface BlurTarget {
+    framebuffer: WebGLFramebuffer;
+    texture: WebGLTexture;
+    width: number;
+    height: number;
+}
+
+/** The second program: a full-screen pass that spends the weights `Gaussian` computed. */
+export interface BlurState {
+    program: WebGLProgram;
+    /** A clip-space quad. The blur never uses the scene's geometry — it filters an IMAGE. */
+    quad: WebGLBuffer;
+    posLoc: number;
+    texLoc: WebGLUniformLocation | null;
+    texelLoc: WebGLUniformLocation | null;
+    dirLoc: WebGLUniformLocation | null;
+    radiusLoc: WebGLUniformLocation | null;
+    weightsLoc: WebGLUniformLocation | null;
+    /** Ping and pong. Allocated lazily and grown to fit, never shrunk. */
+    targets: [BlurTarget | null, BlurTarget | null];
+}
+
 export interface GLState {
     gl: WebGLRenderingContext;
     program: WebGLProgram;
@@ -198,6 +277,14 @@ export interface GLState {
     imgUVLoc: WebGLUniformLocation | null;
     /** What currently lives in `imageTex` — an image's href+generation, or a text raster's key. */
     imageKey: string | null;
+    /**
+     * The effects pass, or null when it could not be built.
+     *
+     * NULL IS A REAL ANSWER: a context that cannot link a second program or allocate a render
+     * target still draws every shape correctly, just without shadow or blur — which is exactly
+     * what this backend did before. Failing the whole frame over an effect would be worse.
+     */
+    blur: BlurState | null;
     posLoc: number;
     viewLoc: WebGLUniformLocation | null;
     colorLoc: WebGLUniformLocation | null;
@@ -229,6 +316,114 @@ function compile(gl: WebGLRenderingContext, type: number, source: string): WebGL
 }
 
 /** Build the program and buffer, or null when WebGL is unavailable (a headless test, an old GPU). */
+/**
+ * The blur program and its quad, or null if this context will not have it.
+ *
+ * Returning null rather than failing `initGL` is deliberate: every shape still draws, and the
+ * backend loses only what it never had.
+ */
+export function initBlur(gl: WebGLRenderingContext): BlurState | null {
+    const vs = compile(gl, gl.VERTEX_SHADER, BLUR_VERTEX_SHADER);
+    const fs = compile(gl, gl.FRAGMENT_SHADER, BLUR_FRAGMENT_SHADER);
+    const program = gl.createProgram();
+    const quad = gl.createBuffer();
+    if (!vs || !fs || !program || !quad) return null;
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
+    // TWO TRIANGLES covering clip space. `v_uv` is derived from the position rather than sent as a
+    // second attribute, so the quad is four numbers per corner and nothing can disagree about
+    // which corner maps to which texel.
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+    return {
+        program, quad,
+        posLoc: gl.getAttribLocation(program, "a_pos"),
+        texLoc: gl.getUniformLocation(program, "u_tex"),
+        texelLoc: gl.getUniformLocation(program, "u_texel"),
+        dirLoc: gl.getUniformLocation(program, "u_dir"),
+        radiusLoc: gl.getUniformLocation(program, "u_radius"),
+        // AN ARRAY UNIFORM IS ADDRESSED BY ITS FIRST ELEMENT. `getUniformLocation(p, "u_weights")`
+        // returns null on some drivers and the whole kernel would silently upload nothing.
+        weightsLoc: gl.getUniformLocation(program, "u_weights[0]"),
+        targets: [null, null]
+    };
+}
+
+/**
+ * A render target at least `width` x `height`, reusing the one already there when it fits.
+ *
+ * GROWN, NEVER SHRUNK. Reallocating a texture every time the window narrows would churn GPU memory
+ * for no gain, and the blur only ever reads the part of the target it just drew into.
+ */
+export function ensureTarget(
+    gl: WebGLRenderingContext, held: BlurTarget | null, width: number, height: number
+): BlurTarget | null {
+    if (held && held.width >= width && held.height >= height) return held;
+    const w = Math.max(width, held ? held.width : 0);
+    const h = Math.max(height, held ? held.height : 0);
+    if (held) { gl.deleteFramebuffer(held.framebuffer); gl.deleteTexture(held.texture); }
+    const texture = gl.createTexture();
+    const framebuffer = gl.createFramebuffer();
+    if (!texture || !framebuffer) return null;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    // LINEAR so a half-texel offset does not alias, CLAMP so a tap past the edge repeats the edge
+    // rather than wrapping the far side of the image into the blur.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (!ok) { gl.deleteFramebuffer(framebuffer); gl.deleteTexture(texture); return null; }
+    return { framebuffer, texture, width: w, height: h };
+}
+
+/**
+ * One axis of the blur: `from`'s texture filtered into `into`'s framebuffer.
+ *
+ * `sigma` is in DEVICE PIXELS — the caller has already multiplied the world-unit `blur` by `z·dpr`,
+ * the same one arithmetic exception `emitCanvas` makes for `ctx.filter`.
+ *
+ * Returns false when the kernel is the identity, so a caller can skip the pass entirely rather than
+ * spend a full-screen draw copying an image to itself.
+ */
+export function blurPass(
+    gl: WebGLRenderingContext, blur: BlurState, from: BlurTarget, into: BlurTarget,
+    sigma: number, horizontal: boolean
+): boolean {
+    const kernel = gaussianKernel(sigma);
+    if (kernel.radius === 0) return false;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, into.framebuffer);
+    gl.viewport(0, 0, into.width, into.height);
+    gl.useProgram(blur.program);
+    gl.disable(gl.DEPTH_TEST);
+    // The pass REPLACES rather than blends: it is filtering an image, not compositing one.
+    gl.disable(gl.BLEND);
+    gl.bindBuffer(gl.ARRAY_BUFFER, blur.quad);
+    gl.enableVertexAttribArray(blur.posLoc);
+    gl.vertexAttribPointer(blur.posLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, from.texture);
+    gl.uniform1i(blur.texLoc, 0);
+    gl.uniform2f(blur.texelLoc, 1 / from.width, 1 / from.height);
+    gl.uniform2f(blur.dirLoc, horizontal ? 1 : 0, horizontal ? 0 : 1);
+    gl.uniform1i(blur.radiusLoc, kernel.radius);
+    // PADDED to the compiled span. The shader breaks at `2*radius`, so the tail is never read —
+    // but uploading a short array leaves whatever the last frame put there in the slots past it,
+    // which a driver that ignores the break would then sample.
+    const padded = new Float32Array(BLUR_MAX_TAPS);
+    padded.set(kernel.weights);
+    gl.uniform1fv(blur.weightsLoc, padded);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return true;
+}
+
 export function initGL(canvas: HTMLCanvasElement): GLState | null {
     const gl = (canvas.getContext("webgl") || canvas.getContext("experimental-webgl")) as WebGLRenderingContext | null;
     if (!gl) return null;
@@ -248,6 +443,7 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
     return {
         gl, program, buffer, normalBuffer, localBuffer, heightTex, imageTex,
         imageKey: null,
+        blur: initBlur(gl),
         posLoc: gl.getAttribLocation(program, "a_pos"),
         viewLoc: gl.getUniformLocation(program, "u_view"),
         colorLoc: gl.getUniformLocation(program, "u_color"),

@@ -21,3 +21,8 @@ freeassets/
 .DS_Store
 Thumbs.db
 *.log
+
+# Third-party tools kept beside the project for reference, not part of it.
+# Pixelorama and Material Maker are MIT (Material Maker's assets CC0); Tiled is GPLv2 — which is
+# why nothing here is ever copied into src/. Formats are learned by MEASURING files these produce.
+possable tools/
