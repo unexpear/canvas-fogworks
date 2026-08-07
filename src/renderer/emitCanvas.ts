@@ -40,7 +40,7 @@
 
 import { isTranslationOnly } from "../core/geometry/Matrix";
 import { DisplayList, DrawItem, Paint, Shape, textParagraphs } from "./RenderModel";
-import { resolveImage, setImageReadyCallback } from "./ImageCache";
+import { resolveSurface, resolveImage, setImageReadyCallback } from "./ImageCache";
 import { drawTextInto } from "./TextRaster";
 
 /** Matches the SVG background (`svg.style.background`) so the two backends look alike. */
@@ -141,7 +141,13 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): v
             // Load the href once (cached); draw it when decoded. Until then (or with no href /
             // no DOM) nothing is drawn — the node's box still selects/culls via geometry.
             if (shape.href === null) return;
-            const img = resolveImage(shape.href);
+            // A RASTER carries its payload along the display list, because its href is only a
+            // cache KEY — the cache cannot decode a surface it cannot see. Both paths return the
+            // same `HTMLImageElement`, so everything below is unchanged and the three backends
+            // keep ONE notion of when a picture is ready.
+            const img = shape.surface
+                ? resolveSurface(shape.href, shape.surface)
+                : resolveImage(shape.href);
             if (img) {
                 if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
                 // SET FOR EVERY IMAGE, both ways, never only when `pixelated` is true.

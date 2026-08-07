@@ -20,6 +20,8 @@ type ImageEntry = { img: HTMLImageElement; loaded: boolean };
 
 const imageCache = new Map<string, ImageEntry>();
 let onImageReady: (() => void) | null = null;
+import { decodeSurface } from "../core/paint/PixelCodec";
+
 let generation = 0;
 
 /** Register the callback invoked when a lazily-loaded image finishes decoding (so the view repaints). */
@@ -42,6 +44,49 @@ export function imageGeneration(): number {
 }
 
 /** The decoded bitmap for an href, or null while it loads / fails (or with no DOM, e.g. node tests). */
+/**
+ * A raster surface as a drawable image, decoded once and cached under its own key.
+ *
+ * ONE NOTION OF "LOADED" ACROSS ALL THREE BACKENDS. A raster could have been handed to each backend
+ * as raw pixels — `putImageData` for Canvas, `texImage2D` for the GPU — but SVG has no such path and
+ * would still need a URL, so the three would have disagreed about when a surface was ready. Turning
+ * it into the same `HTMLImageElement` every other href resolves to means they cannot.
+ *
+ * DECODED LAZILY, ON A MISS. The alternatives both cost more: decoding inside `buildRenderModel`
+ * would make the model impure, and decoding on every document change would run whether or not
+ * anything drew the node. A miss costs one frame without the picture — which is exactly what an
+ * ordinary image load already costs, so it is the established behaviour rather than a new one.
+ */
+export function resolveSurface(
+    href: string, surface: { data: string; width: number; height: number }
+): HTMLImageElement | null {
+    if (typeof Image === "undefined" || typeof document === "undefined") return null;
+    const held = imageCache.get(href);
+    if (held) return held.loaded ? held.img : null;
+
+    const buffer = decodeSurface(surface.data, surface.width, surface.height);
+    // A payload that will not decode is cached as a PERMANENT miss rather than retried every frame
+    // — the entry exists, so this branch is never reached again for that key.
+    const img = new Image();
+    const entry = { img, loaded: false };
+    imageCache.set(href, entry);
+    if (!buffer) return null;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = surface.width;
+    canvas.height = surface.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    // `data` is already straight RGBA in exactly the order `ImageData` wants, which is why the
+    // paint layer is not premultiplied — handing it over is a copy rather than a conversion.
+    ctx.putImageData(new ImageData(buffer.data, surface.width, surface.height), 0, 0);
+    // The SAME onload path as a fetched image, so the generation bump and the repaint request come
+    // from one place and cannot disagree about whether a frame has new pixels in it.
+    img.onload = () => { entry.loaded = true; generation++; onImageReady?.(); };
+    img.src = canvas.toDataURL();
+    return null;
+}
+
 export function resolveImage(href: string): HTMLImageElement | null {
     if (typeof Image === "undefined") return null; // no DOM (unit tests) — draw nothing, exactly as before
     let entry = imageCache.get(href);

@@ -106,7 +106,7 @@ describe("buildRenderModel — content", () => {
         // absent flag would have to invent a default, and the Canvas one must set its filter
         // for every image regardless, because the smoothing flag is sticky context state.
         expect(a.shape).toEqual({ kind: "image", x: 0, y: 0, width: 200, height: 100,
-            href: "data:image/png;base64,AAA", source: null, pixelated: false });
+            href: "data:image/png;base64,AAA", source: null, pixelated: false, surface: null });
         expect(a.paint.opacity).toBe(1);
 
         const noSrc = docWith({ type: "core.image", style: { fill: "#000", opacity: 1 } });

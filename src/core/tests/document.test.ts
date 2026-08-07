@@ -13313,7 +13313,7 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         expect(picture.image).toEqual({ href: "cat.png", x: 10, y: 20, width: 80, height: 40 });
         // The rect it reports is the one the shader turns into texture coordinates, so it has to
         // be the shape's OWN rect — not the box at the origin the triangles happen to start from.
-        expect(shapeToLocalCommands({ kind: "image", x: 10, y: 20, width: 80, height: 40, href: "c", source: null, pixelated: false }, null))
+        expect(shapeToLocalCommands({ kind: "image", x: 10, y: 20, width: 80, height: 40, href: "c", source: null, pixelated: false, surface: null }, null))
             .not.toBeNull();
         // The item's OPACITY rides in the colour's alpha, because an image has no fill of its own
         // and the shader multiplies the sampled alpha by it.

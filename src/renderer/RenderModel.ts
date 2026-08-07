@@ -74,6 +74,17 @@ export type Shape =
         source: SourceRect | null;
         /** Scale by nearest neighbour. Carried for EVERY image, never only when true — see below. */
         pixelated: boolean;
+        /**
+         * The run-length payload for a `core.raster`, or null for a `core.image`.
+         *
+         * CARRIED, BECAUSE THE HREF IS ONLY A KEY. The cache cannot decode a surface it cannot see,
+         * and the alternatives all cost something real: registering from inside the model would
+         * make the model impure, and registering on every document change would decode whether or
+         * not anything drew. Handing the payload along the display list keeps the model plain data
+         * — this is a reference to a string the document already holds, not a copy — and lets the
+         * cache decode LAZILY on a miss, which is exactly what image loading already does.
+         */
+        surface: { data: string; width: number; height: number } | null;
     };
 
 /** Compile error if a `PathCommand` variant is ever added without a `commandsToPathData` case. */
@@ -585,7 +596,9 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             // what makes that impossible to forget.
             shape = {
                 kind: "image", x, y, width, height, href: node.src ?? null,
-                source: node.sourceRect ?? null, pixelated: node.pixelated === true
+                source: node.sourceRect ?? null, pixelated: node.pixelated === true,
+                // An image node REFERENCES a picture; there is no payload to carry.
+                surface: null
             };
             paint = {
                 fill: null, opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
@@ -606,6 +619,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 kind: "image", x, y, width, height,
                 href: node.surface ? rasterHref(node.id, node.surface) : null,
                 source: null,
+                surface: node.surface ?? null,
                 // PIXEL ART IS NEAREST-NEIGHBOUR BY DEFAULT. A painted surface zoomed in is meant
                 // to show its pixels; smoothing them is the one thing a pixel artist never wants,
                 // and an image node defaults the other way because a photograph does.
