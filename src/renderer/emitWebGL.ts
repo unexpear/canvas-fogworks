@@ -456,17 +456,18 @@ export function compositeTarget(
 }
 
 /**
- * A render target at least `width` x `height`, reusing the one already there when it fits.
+ * A render target of EXACTLY `width` x `height`, reusing the one already there when it matches.
  *
- * GROWN, NEVER SHRUNK. Reallocating a texture every time the window narrows would churn GPU memory
- * for no gain, and the blur only ever reads the part of the target it just drew into.
+ * EXACT, NOT GROWN. A target larger than the canvas would be a quiet scaling bug: the composite
+ * samples `v_uv` across the whole texture, so content drawn into a corner of an oversized target
+ * comes back stretched over the screen. Reallocating on resize is rare and cheap; being subtly the
+ * wrong size every frame after a window narrows is neither.
  */
 export function ensureTarget(
     gl: WebGLRenderingContext, held: BlurTarget | null, width: number, height: number
 ): BlurTarget | null {
-    if (held && held.width >= width && held.height >= height) return held;
-    const w = Math.max(width, held ? held.width : 0);
-    const h = Math.max(height, held ? held.height : 0);
+    if (held && held.width === width && held.height === height) return held;
+    const w = width, h = height;
     if (held) { gl.deleteFramebuffer(held.framebuffer); gl.deleteTexture(held.texture); }
     const texture = gl.createTexture();
     const framebuffer = gl.createFramebuffer();
@@ -526,6 +527,41 @@ export function blurPass(
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     return true;
+}
+
+/** What an item's effects come to in DEVICE pixels, or null when it needs no offscreen pass. */
+export interface EffectPlan {
+    /** Sigma for the shape's own blur, 0 when it has none. */
+    blurSigma: number;
+    /** The shadow, already in device pixels, or null. */
+    shadow: { dx: number; dy: number; sigma: number; color: [number, number, number, number] } | null;
+}
+
+/**
+ * The effects an item needs, with every world-unit value already scaled.
+ *
+ * `scale` is `zoom * dpr` — the SAME one arithmetic exception `emitCanvas` makes for `shadow*` and
+ * `ctx.filter`, and for the same reason: effect magnitudes are device-space, so the backend that
+ * owns the CTM has to replay its scale onto them.
+ *
+ * Null means "draw this the ordinary way". A shadow whose colour will not parse is dropped rather
+ * than drawn black — an invented colour looks deliberate.
+ */
+export function effectPlan(paint: DrawItem["paint"], scale: number): EffectPlan | null {
+    const blurSigma = paint.blur !== null && paint.blur > 0 ? paint.blur * scale : 0;
+    let shadow: EffectPlan["shadow"] = null;
+    if (paint.shadow !== null) {
+        const color = parseColor(paint.shadow.color);
+        if (color) {
+            shadow = {
+                dx: paint.shadow.dx * scale,
+                dy: paint.shadow.dy * scale,
+                sigma: Math.max(0, paint.shadow.blur) * scale,
+                color
+            };
+        }
+    }
+    return blurSigma > 0 || shadow ? { blurSigma, shadow } : null;
 }
 
 export function initGL(canvas: HTMLCanvasElement): GLState | null {
@@ -1008,7 +1044,39 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
     // the resolution — which is why a fixed world tolerance went unnoticed until a backend had to
     // commit to a vertex count.
     const viewScale = vp.zoom * dpr;
+    /** Puts the scene's program, buffer and blend state back after an effects detour. */
+    const restoreSceneState = (): void => {
+        gl.useProgram(program);
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.enable(gl.DEPTH_TEST);
+    };
+
     for (const item of [...list.grid.lines, ...list.content, ...list.overlay]) {
+        // EFFECTS ARE AN OFFSCREEN DETOUR. An item with a shadow or a blur is drawn into a target
+        // first, filtered, and composited back — because both are per-fragment work over a
+        // RENDERED IMAGE and there is no such image while the item is still being drawn.
+        const plan = state.blur ? effectPlan(item.paint, viewScale) : null;
+        let target: BlurTarget | null = null;
+        if (plan && state.blur) {
+            target = ensureTarget(gl, state.blur.targets[0], width, height);
+            state.blur.targets[0] = target;
+            if (target) {
+                gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+                gl.viewport(0, 0, target.width, target.height);
+                gl.clearColor(0, 0, 0, 0);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+                // NO DEPTH while filling the target: it has no depth attachment, and one item's
+                // fill and stroke share a depth anyway. Leaving the test on would make the result
+                // depend on whether the driver gave us a depth buffer we never asked for.
+                gl.disable(gl.DEPTH_TEST);
+                restoreSceneState();
+                gl.disable(gl.DEPTH_TEST);
+            }
+        }
         for (const d of itemDraws(item, itemTolerance(item, viewScale))) {
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.vertices), gl.DYNAMIC_DRAW);
             gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
@@ -1114,6 +1182,47 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
             gl.uniform1f(zLoc, depthToClipZ(item.depth ?? 0));
             gl.uniform4fv(colorLoc, d.color);
             gl.drawArrays(gl.TRIANGLES, 0, d.vertices.length / 2);
+        }
+
+        if (plan && target && state.blur) {
+            const b = state.blur;
+            const ping = ensureTarget(gl, b.targets[1], width, height);
+            const pong = ensureTarget(gl, b.targets[2], width, height);
+            b.targets[1] = ping;
+            b.targets[2] = pong;
+            if (ping && pong) {
+                // THE SHAPE'S OWN BLUR FIRST, in place, so what follows sees the blurred look —
+                // the order SVG's filter chain uses, where `feDropShadow` takes the blur's output.
+                if (plan.blurSigma > 0) {
+                    blurPass(gl, b, target, ping, plan.blurSigma, true);
+                    blurPass(gl, b, ping, target, plan.blurSigma, false);
+                }
+                // THE SHADOW IS A SEPARATE COPY, which is why there are three targets: `target`
+                // must survive to be drawn sharp on top of the shadow made from it.
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                gl.viewport(0, 0, width, height);
+                if (plan.shadow) {
+                    const soft = plan.shadow.sigma > 0;
+                    if (soft) {
+                        blurPass(gl, b, target, ping, plan.shadow.sigma, true);
+                        blurPass(gl, b, ping, pong, plan.shadow.sigma, false);
+                    }
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                    gl.viewport(0, 0, width, height);
+                    // A ZERO-blur shadow is a hard offset copy, not an absent one.
+                    compositeTarget(gl, b, soft ? pong : target,
+                        plan.shadow.dx, plan.shadow.dy, plan.shadow.color);
+                }
+                // The shape itself, over its own shadow, untinted and unmoved.
+                compositeTarget(gl, b, target, 0, 0, null);
+            } else {
+                // Targets would not allocate. The item was drawn into one that did, so it is
+                // composited PLAINLY rather than lost — no effect is better than no shape.
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                gl.viewport(0, 0, width, height);
+                compositeTarget(gl, b, target, 0, 0, null);
+            }
+            restoreSceneState();
         }
     }
     return true;
