@@ -93,6 +93,7 @@ import { rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
 import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
 import { paletteError, paletteAt, parseFloatColour, parsePaletteFile, PALETTE_MAX_COLOURS } from "../paint/Palette";
 import { symmetryPoints, isMirrored, NO_SYMMETRY } from "../paint/Symmetry";
+import { nearestColour, colourDistance, quantizeToPalette } from "../paint/Quantize";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -16469,6 +16470,94 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(isMirrored(NO_SYMMETRY)).toBe(false);
         expect(isMirrored(h)).toBe(true);
         expect(isMirrored(v)).toBe(true);
+    });
+
+    test("quantizing weighs the channels an EYE weighs, and alpha is a wall", () => {
+        const pal = (cols: Rgba[]) => ({ name: "P", colours: cols, width: cols.length || 1, height: 1, comment: "" });
+
+        // EQUAL STEPS IN R, G AND B ARE NOT EQUAL TO AN EYE. Green carries most of the perceived
+        // brightness and blue almost none, so a plain sum-of-squares picks a blue-ish match for a
+        // grey — arithmetically closest, visibly wrong. Weighted 2:4:3.
+        // EQUAL MAGNITUDES are what isolate the weighting: both of these are 50 steps from grey,
+        // so a PLAIN sum-of-squares calls them exactly equidistant and the choice falls to
+        // whichever was listed first. Weighted, erring in blue is cheaper than erring in green,
+        // because green carries most of the perceived brightness and blue almost none.
+        const grey: Rgba = [128, 128, 128, 255];
+        const blueish: Rgba = [128, 128, 178, 255];      // 50 off in BLUE alone
+        const greenish: Rgba = [128, 178, 128, 255];     // 50 off in GREEN alone
+        expect(colourDistance(grey, blueish)).toBeLessThan(colourDistance(grey, greenish));
+        // Listed green-first, so an unweighted distance would return the GREEN one on the tie.
+        expect(nearestColour(pal([greenish, blueish]), grey)).toEqual(blueish);
+
+        // TIES GO TO THE FIRST, so the same input always gives the same output — a palette often
+        // holds two entries equidistant from a grey, and picking either would make an imported
+        // image quantize differently on each run.
+        const a: Rgba = [100, 0, 0, 255], b: Rgba = [140, 0, 0, 255];
+        expect(nearestColour(pal([a, b]), [120, 0, 0, 255])).toEqual(a);
+        expect(nearestColour(pal([b, a]), [120, 0, 0, 255])).toEqual(b);
+
+        // ALPHA IS A WALL. A transparent pixel must never snap to an opaque colour however near
+        // its RGB — an erased area would fill in with paint, which is the one result nobody wants.
+        expect(nearestColour(pal([[255, 0, 0, 255]]), [255, 0, 0, 0])).toEqual([0, 0, 0, 0]);
+        // And the input's own alpha is KEPT: a palette states colours, and how transparent a pixel
+        // is belongs to the pixel.
+        expect(nearestColour(pal([[255, 0, 0, 255]]), [250, 10, 10, 128])).toEqual([255, 0, 0, 128]);
+
+        // A transparent SLOT is a hole in the grid, not a colour to match. The hole is given the
+        // input's OWN RGB here, so ignoring the skip would make it an exact match and win — a
+        // slot that merely sat far away in colour could not tell the two behaviours apart.
+        expect(nearestColour(pal([[10, 240, 10, 0], [0, 255, 0, 255]]), [10, 240, 10, 255]))
+            .toEqual([0, 255, 0, 255]);
+
+        // EVERY CHANNEL COUNTS. Dropping one makes colours that differ only in it look identical,
+        // so an exact match must beat a candidate differing ONLY in the dropped channel — which is
+        // the one arrangement a missing term cannot survive.
+        expect(nearestColour(pal([[128, 128, 178, 255], [128, 128, 128, 255]]), grey))
+            .toEqual([128, 128, 128, 255]);
+        expect(nearestColour(pal([[128, 178, 128, 255], [128, 128, 128, 255]]), grey))
+            .toEqual([128, 128, 128, 255]);
+        expect(nearestColour(pal([[178, 128, 128, 255], [128, 128, 128, 255]]), grey))
+            .toEqual([128, 128, 128, 255]);
+        expect(nearestColour(pal([]), [1, 2, 3, 255])).toBeNull();
+    });
+
+    test("a whole buffer quantizes, and reports whether it changed anything", () => {
+        const pal = { name: "P", colours: [[0, 0, 0, 255], [255, 255, 255, 255]] as Rgba[],
+            width: 2, height: 1, comment: "" };
+        const b = createPixelBuffer(2, 2);
+        setPixel(b, 0, 0, [10, 10, 10, 255]);        // -> black
+        setPixel(b, 1, 0, [240, 240, 240, 255]);     // -> white
+        setPixel(b, 0, 1, [0, 0, 0, 255]);           // already black
+        // (1,1) stays fully transparent and must NOT be painted.
+
+        const changed = quantizeToPalette(b, pal);
+        expect(getPixel(b, 0, 0)).toEqual([0, 0, 0, 255]);
+        expect(getPixel(b, 1, 0)).toEqual([255, 255, 255, 255]);
+        expect(getPixel(b, 0, 1)).toEqual([0, 0, 0, 255]);
+        expect(getPixel(b, 1, 1)).toEqual([0, 0, 0, 0]);
+        // TWO changed, not four: a pixel already on the palette is not a change, and the
+        // transparent one was never a candidate. A count that included them would make an editor
+        // push an undo step for a no-op.
+        expect(changed).toBe(2);
+
+        // AN EMPTY PALETTE leaves the buffer alone rather than painting it black — there is no
+        // colour to snap to, and inventing one would destroy the picture.
+        const untouched = createPixelBuffer(1, 1);
+        setPixel(untouched, 0, 0, [7, 8, 9, 255]);
+        expect(quantizeToPalette(untouched, { name: "E", colours: [], width: 1, height: 1, comment: "" })).toBe(0);
+        expect(getPixel(untouched, 0, 0)).toEqual([7, 8, 9, 255]);
+
+        // Running it AGAIN changes nothing, which is what "already quantized" has to mean.
+        expect(quantizeToPalette(b, pal)).toBe(0);
+
+        // The memo folds ALPHA into its key: two pixels with the same RGB and different alpha
+        // resolve differently, and a cache ignoring that would paint over the erased one.
+        const c = createPixelBuffer(2, 1);
+        setPixel(c, 0, 0, [10, 10, 10, 255]);
+        setPixel(c, 1, 0, [10, 10, 10, 0]);
+        quantizeToPalette(c, pal);
+        expect(getPixel(c, 0, 0)).toEqual([0, 0, 0, 255]);
+        expect(getPixel(c, 1, 0)).toEqual([0, 0, 0, 0]);
     });
 
     test("read shapes become nodes the document accepts", () => {
