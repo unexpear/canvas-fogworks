@@ -1467,7 +1467,10 @@ interface GaussianKernel {
 }
 function gaussianKernel(sigma: number): GaussianKernel;   // sigma in DEVICE pixels
 function gaussianOuterProduct(kernel: GaussianKernel): number[][];
+function blurPlan(sigma: number): { levels: number; sigma: number; clamped: boolean };
 const GAUSSIAN_MAX_RADIUS: number;      // 64 taps per side
+const GAUSSIAN_MAX_SIGMA: number;       // 21.33 — the widest one full-res pass expresses
+const GAUSSIAN_MAX_DOWNSAMPLE: number;  // 4 halvings
 const GAUSSIAN_SIGMA_CUTOFF: number;    // 3 sigma, keeping 99.73% of the curve
 ```
 
@@ -1489,6 +1492,17 @@ touches, more the wider it gets. **The radius is clamped and says so** — zoom 
 a 500-tap kernel is reachable by zooming in rather than by an odd document.
 
 **A sigma of zero or less is the IDENTITY kernel, not an error**, so a caller has one code path.
+
+**A WIDE BLUR IS COMPUTED SMALL, NOT CLAMPED FLAT.** `gaussianKernel` alone pins the effective
+sigma at 21.33, so a blur of 40 and a blur of 160 come out identical and both far sharper than the
+other backends draw them — and a 20px blur at 1:1 on a Retina display already reaches that, since
+device sigma is `blur * zoom * dpr`. `blurPlan` moves the work instead: halving the resolution
+halves the sigma needed, and a gaussian is scale-covariant, so blurring a half-size image by
+sigma/2 and stretching it back is the same picture. Both correct and cheaper — the expensive pass
+runs over a quarter of the pixels per level. Bounded at 4 halvings, which expresses sigma 341.
+
+**The invariant a caller can rely on: `plan.sigma * 2^plan.levels` reconstructs the sigma asked
+for.** That is what the tests assert, rather than the level counts themselves.
 
 
 

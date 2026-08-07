@@ -55,6 +55,56 @@ export const GAUSSIAN_MAX_RADIUS = 64;
 /** The truncation point, in sigmas. 3 keeps 99.73% of the curve. */
 export const GAUSSIAN_SIGMA_CUTOFF = 3;
 
+/** The largest sigma one full-resolution pass can express without clamping. */
+export const GAUSSIAN_MAX_SIGMA = GAUSSIAN_MAX_RADIUS / GAUSSIAN_SIGMA_CUTOFF;
+
+/**
+ * How far down to halve before blurring. 4 is a sixteenth in each axis.
+ *
+ * Bounded because each level costs a resample pass and loses detail the upsample cannot invent.
+ * At the cap this expresses sigma 341 — `GAUSSIAN_MAX_SIGMA * 2^4` — which is a blur wider than
+ * any canvas it could be drawn on.
+ */
+export const GAUSSIAN_MAX_DOWNSAMPLE = 4;
+
+/** Where to do the work, and with what sigma once you are there. */
+export interface BlurPlan {
+    /** Halvings of resolution before blurring. 0 means blur at full size. */
+    levels: number;
+    /** The sigma to use AT that resolution — the original divided by `2^levels`. */
+    sigma: number;
+    /** True when even the smallest allowed resolution cannot express the blur asked for. */
+    clamped: boolean;
+}
+
+/**
+ * Where a blur of `sigma` device pixels should actually be computed.
+ *
+ * A KERNEL CANNOT GROW WITHOUT BOUND, so a wide blur is done small instead. Halving the resolution
+ * halves the sigma needed, and a gaussian is scale-covariant — blurring a half-size image by
+ * sigma/2 and stretching the result back is the same picture as blurring the full image by sigma,
+ * to within the resample. That is why this is the standard answer rather than a shortcut: it is
+ * both correct and cheaper, since the expensive pass runs over a quarter of the pixels per level.
+ *
+ * WITHOUT IT THE CLAMP IS A COLLAPSE. `gaussianKernel` alone pins the effective sigma at
+ * `GAUSSIAN_MAX_SIGMA`, so a blur of 40 and a blur of 160 come out identical — and both far
+ * sharper than the other two backends draw the same document. A 20px blur at 1:1 on a Retina
+ * display already reaches that, which is an ordinary design file rather than an extreme one.
+ */
+export function blurPlan(sigma: number): BlurPlan {
+    if (!Number.isFinite(sigma) || sigma <= 0) return { levels: 0, sigma: 0, clamped: false };
+    let levels = 0;
+    let s = sigma;
+    // HALVE UNTIL IT FITS. `Math.log2` would give the same answer in one step, but the loop is what
+    // the caller has to perform anyway — one resample per level — so counting them is the honest
+    // shape and cannot disagree with what the GL side does.
+    while (s > GAUSSIAN_MAX_SIGMA && levels < GAUSSIAN_MAX_DOWNSAMPLE) {
+        s /= 2;
+        levels++;
+    }
+    return { levels, sigma: s, clamped: s > GAUSSIAN_MAX_SIGMA };
+}
+
 /** A 1D kernel, to be applied once per axis. */
 export interface GaussianKernel {
     /** Taps per side. 0 means no blur at all — `weights` is then `[1]`. */

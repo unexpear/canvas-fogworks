@@ -13,7 +13,8 @@
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { buildRenderModel, DisplayList, HANDLE_SIZE_PX, commandsToPathData, effectFilterId } from "./RenderModel";
-import { gaussianKernel, gaussianOuterProduct, GAUSSIAN_MAX_RADIUS, GAUSSIAN_SIGMA_CUTOFF } from "./Gaussian";
+import { gaussianKernel, gaussianOuterProduct, GAUSSIAN_MAX_RADIUS, GAUSSIAN_SIGMA_CUTOFF,
+    blurPlan, GAUSSIAN_MAX_SIGMA, GAUSSIAN_MAX_DOWNSAMPLE } from "./Gaussian";
 import { RendererState } from "./RendererState";
 import { createEmptyDocument, ProjectDocument, ReadonlyDocument } from "../core/document/Document";
 import { VARIABLE_FALLBACK_COLOR } from "../core/document/Variables";
@@ -835,6 +836,7 @@ describe("Gaussian — the blur kernel the GPU backend spends", () => {
         // normalised kernel rather than an allocation of 500 taps per fragment.
         const huge = gaussianKernel(1000);
         expect(huge.radius).toBe(GAUSSIAN_MAX_RADIUS);
+
         expect(huge.clamped).toBe(true);
         expect(sum(huge.weights)).toBeCloseTo(1, 10);
         // Clamping cuts the curve early, so the kernel is FLATTER than an unclamped one would be:
@@ -845,6 +847,46 @@ describe("Gaussian — the blur kernel the GPU backend spends", () => {
         const atLimit = gaussianKernel(GAUSSIAN_MAX_RADIUS / GAUSSIAN_SIGMA_CUTOFF);
         expect(atLimit.radius).toBe(GAUSSIAN_MAX_RADIUS);
         expect(atLimit.clamped).toBe(false);
+    });
+
+    test("a wide blur is computed SMALL rather than clamped flat", () => {
+        // The clamp alone is a COLLAPSE: past GAUSSIAN_MAX_SIGMA the effective sigma pins, so a
+        // blur of 40 and a blur of 160 come out identical and both far sharper than SVG and Canvas
+        // draw them. A 20px blur at 1:1 on a Retina display already reaches that.
+        expect(gaussianKernel(40).radius).toBe(gaussianKernel(160).radius);   // the collapse itself
+
+        // Halving the resolution halves the sigma needed, and a gaussian is scale-covariant — so
+        // the plan moves the work rather than truncating it.
+        expect(blurPlan(4)).toMatchObject({ levels: 0, sigma: 4, clamped: false });
+        expect(blurPlan(40).levels).toBe(1);
+        expect(blurPlan(160).levels).toBe(3);
+
+        // THE INVARIANT THAT MATTERS: the plan must describe the SAME blur, just computed
+        // elsewhere. `sigma * 2^levels` has to reconstruct what was asked, or the picture is
+        // quietly weaker at some zooms and not others.
+        for (const sigma of [1, 7, 21, 40, 80, 160, 320]) {
+            const p = blurPlan(sigma);
+            expect(p.sigma * Math.pow(2, p.levels)).toBeCloseTo(sigma, 6);
+            // And what it asks the kernel for must actually FIT, or nothing was gained.
+            expect(p.sigma).toBeLessThanOrEqual(GAUSSIAN_MAX_SIGMA);
+            expect(gaussianKernel(p.sigma).clamped).toBe(false);
+        }
+
+        // THE BOUNDARY, from both sides — exactly at the limit needs no downsample, a hair over
+        // needs one. An off-by-one here would resample every blur in the app for no reason.
+        expect(blurPlan(GAUSSIAN_MAX_SIGMA).levels).toBe(0);
+        expect(blurPlan(GAUSSIAN_MAX_SIGMA + 0.01).levels).toBe(1);
+
+        // Levels are BOUNDED: each costs a resample and loses detail the upsample cannot invent.
+        expect(blurPlan(1e6).levels).toBe(GAUSSIAN_MAX_DOWNSAMPLE);
+        expect(blurPlan(1e6).clamped).toBe(true);
+        // And below the cap nothing is clamped — sigma 320 is a blur wider than most canvases.
+        expect(blurPlan(320).clamped).toBe(false);
+
+        // Zero and nonsense are the identity, not an error, so a caller has one path.
+        expect(blurPlan(0)).toMatchObject({ levels: 0, sigma: 0, clamped: false });
+        expect(blurPlan(-5).sigma).toBe(0);
+        expect(blurPlan(NaN).sigma).toBe(0);
     });
 
     test("convolved with an edge it reproduces the browser's own blur", () => {
