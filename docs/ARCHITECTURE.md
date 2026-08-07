@@ -1221,6 +1221,33 @@ piece-wise checking could not see it. That is the whole lesson: **the cross-back
 the oracle this work needed from the start**, and every piece-wise check is a weaker proxy for it.
 The next diagnostic is to read back the target's own pixels straight after the item draws into it
 and before any blur — one reading that splits "never drawn" from "lost in compositing".
+### Pixels — the one thing no import can add
+
+**Every node type this engine has is composed from geometry or references an image someone else
+made.** Nothing holds pixels VDE authored, which is why no amount of import work adds up to pixel
+art: a sprite editor's whole subject is a buffer you can change one dot at a time.
+
+**THE OPERATIONS ARE PURE FUNCTIONS OVER A BUFFER, not methods on a canvas.** A 2D context would do
+all of this and could not be unit-tested, undone, or replayed — and the action layer needs exactly
+those three. Keeping the arithmetic in `core/paint` means a stroke is a VALUE, which is something
+the document can hold and the dispatcher can reverse.
+
+**A plot's x bound is not implied by its index.** `(y * width + x) * 4` is a valid offset for an x
+of -1 or of `width`; it simply lands on the previous or next ROW. Bounding only the total index
+draws a stray column down the opposite edge whenever a stroke runs off the side — a rendering
+artefact rather than missing arithmetic.
+
+**Painting REPLACES rather than blends**, because an eraser is a pencil with a transparent colour.
+A blending plot cannot erase, and every editor that blends by default grows a separate eraser path
+that then disagrees with the pencil about edges.
+
+**Fill is four-connected and queue-driven.** A diagonal seam is a WALL in pixel art — it is exactly
+the join an artist uses to enclose a shape — so eight-connected leaks through the corner and floods
+the sprite. And the obvious recursive fill is 16.7 million deep on a full 4096-square surface, which
+gives out as a stack overflow in the middle of a stroke.
+
+**Still to come:** a node type that holds one of these, the serialization decision (a 4096-square
+RGBA buffer is 67 MB, which is also what one undo step would weigh), and the tools.
 ### Fonts — a family name is not a font
 
 **`style.fontFamily` has always been a STRING and nothing else.** A document could ask for "Kenney

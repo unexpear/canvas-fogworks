@@ -81,6 +81,8 @@ import { parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, mul
 import { parseObj, objError, parseMtl, mtlError, resolveObjIndex,
     OBJ_FACE_MAX_CORNERS, OBJ_MAX_GROUPS } from "../import/Obj";
 import { MESH_IDENTITY } from "../import/MeshData";
+import { createPixelBuffer, pixelBufferError, getPixel, setPixel, inBounds, linePoints,
+    drawLine, floodFill, PIXEL_MAX_SIDE, Rgba } from "../paint/PixelBuffer";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -15620,6 +15622,143 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // A file with vertices but no faces has nothing to draw, and says so.
         expect(parseObj("v 0 0 0\nv 1 0 0").notes.join(" ")).toMatch(/no faces/);
         expect(parseObj("v 0 0 0\nv 1 0 0").instances).toHaveLength(0);
+    });
+
+    // -- Pixel surface --------------------------------------------------------
+    const RED: Rgba = [255, 0, 0, 255];
+    const BLUE: Rgba = [0, 0, 255, 255];
+    const CLEAR: Rgba = [0, 0, 0, 0];
+
+    test("plotting off the side does not wrap onto the next row", () => {
+        // `(y * width + x) * 4` is a VALID offset for x = -1 or x = width — it just lands on the
+        // previous or next ROW. A plot bounded only by the total index therefore draws a stray
+        // column down the opposite edge whenever a stroke runs off the side, which reads as a
+        // rendering artefact rather than as missing arithmetic.
+        const b = createPixelBuffer(4, 4);
+        setPixel(b, -1, 2, RED);        // would land at the end of row 1
+        setPixel(b, 4, 1, RED);         // would land at the start of row 2
+        expect([...b.data].some(v => v !== 0)).toBe(false);
+        expect(inBounds(b, -1, 2)).toBe(false);
+        expect(inBounds(b, 4, 1)).toBe(false);
+        expect(inBounds(b, 3, 3)).toBe(true);
+        expect(getPixel(b, -1, 2)).toBeNull();
+
+        // A plot INSIDE lands where it was asked, and nowhere else.
+        setPixel(b, 1, 2, RED);
+        expect(getPixel(b, 1, 2)).toEqual(RED);
+        expect([...b.data].filter(v => v !== 0)).toHaveLength(2);   // one R and one A
+
+        // REPLACE, NOT BLEND: the eraser is the pencil with a transparent colour, and a blending
+        // plot cannot erase — painting alpha 0 over an opaque pixel would leave it opaque.
+        setPixel(b, 1, 2, CLEAR);
+        expect(getPixel(b, 1, 2)).toEqual([0, 0, 0, 0]);
+
+        // A NON-SQUARE surface, which is the only shape that can tell the row stride apart from
+        // the column one. On a square buffer `y * width` and `y * height` are the same number, so
+        // every assertion above would pass with the two swapped.
+        const wide = createPixelBuffer(5, 2);
+        setPixel(wide, 4, 1, RED);
+        expect(getPixel(wide, 4, 1)).toEqual(RED);
+        expect(getPixel(wide, 0, 1)).toEqual([0, 0, 0, 0]);
+        expect(getPixel(wide, 4, 0)).toEqual([0, 0, 0, 0]);
+        // The byte really is the last one on the surface, not somewhere in the middle of it.
+        expect(wide.data[(1 * 5 + 4) * 4]).toBe(255);
+    });
+
+    test("a line is walked in integers, and both ends are inclusive", () => {
+        // A single click with a pencil is ONE pixel, not none.
+        expect(linePoints(2, 3, 2, 3)).toEqual([[2, 3]]);
+        // Axis-aligned runs are exact and have no gaps or repeats.
+        expect(linePoints(0, 0, 3, 0)).toEqual([[0, 0], [1, 0], [2, 0], [3, 0]]);
+        expect(linePoints(0, 0, 0, 2)).toEqual([[0, 0], [0, 1], [0, 2]]);
+        // A perfect diagonal steps one and one.
+        expect(linePoints(0, 0, 3, 3)).toEqual([[0, 0], [1, 1], [2, 2], [3, 3]]);
+        // BACKWARDS is the same set of pixels reversed — a line that depends on which end you
+        // started from makes a stroke and its undo disagree about which pixels it touched.
+        expect(linePoints(3, 1, 0, 0)).toEqual([...linePoints(0, 0, 3, 1)].reverse());
+
+        // NO GAPS AND NO DUPLICATES at a shallow angle, which is where a float stepper wobbles.
+        const pts = linePoints(0, 0, 10, 3);
+        expect(pts[0]).toEqual([0, 0]);
+        expect(pts[pts.length - 1]).toEqual([10, 3]);
+        for (let i = 1; i < pts.length; i++) {
+            const dx = Math.abs(pts[i][0] - pts[i - 1][0]);
+            const dy = Math.abs(pts[i][1] - pts[i - 1][1]);
+            expect(dx <= 1 && dy <= 1).toBe(true);          // no gap
+            expect(dx + dy).toBeGreaterThan(0);             // no repeat
+        }
+        expect(new Set(pts.map(p => p.join(","))).size).toBe(pts.length);
+
+        // Drawn, a line off the edge paints only what is on the surface — and nothing wraps.
+        const b = createPixelBuffer(4, 4);
+        drawLine(b, -3, 1, 6, 1, BLUE);
+        expect(getPixel(b, 0, 1)).toEqual(BLUE);
+        expect(getPixel(b, 3, 1)).toEqual(BLUE);
+        expect(getPixel(b, 3, 0)).toEqual([0, 0, 0, 0]);
+        expect(getPixel(b, 0, 2)).toEqual([0, 0, 0, 0]);
+    });
+
+    test("a flood fill stops at a DIAGONAL seam, and never recurses", () => {
+        // FOUR-CONNECTED, because a diagonal seam is a WALL in pixel art — it is exactly the join
+        // an artist uses to enclose a shape. An eight-connected fill leaks through the corner
+        // where two diagonal lines touch and floods the whole sprite.
+        const b = createPixelBuffer(4, 4);
+        // A diagonal from the top-right to the bottom-left, splitting the surface in two.
+        drawLine(b, 3, 0, 0, 3, RED);
+        const filled = floodFill(b, 0, 0, BLUE);          // the top-left region
+        expect(filled).toBeGreaterThan(0);
+        expect(getPixel(b, 0, 0)).toEqual(BLUE);
+        // The far side must be UNTOUCHED. Eight-connected would have crossed the seam.
+        expect(getPixel(b, 3, 3)).toEqual([0, 0, 0, 0]);
+        // And the wall itself is not painted over.
+        expect(getPixel(b, 3, 0)).toEqual(RED);
+
+        // FILLING WITH THE COLOUR ALREADY THERE does nothing rather than looping forever: every
+        // pixel it painted would still match the seed and be requeued by its neighbours.
+        expect(floodFill(b, 0, 0, BLUE)).toBe(0);
+        // A seed off the surface fills nothing.
+        expect(floodFill(b, -1, 0, RED)).toBe(0);
+
+        // ALPHA IS PART OF THE COLOUR. Two pixels with the same RGB and different alpha are
+        // different pixels, so a fill must stop between them — comparing only RGB would flood
+        // straight through a half-transparent edge, which is exactly what antialiased art has.
+        const alpha = createPixelBuffer(2, 1);
+        setPixel(alpha, 0, 0, [255, 0, 0, 255]);
+        setPixel(alpha, 1, 0, [255, 0, 0, 128]);
+        expect(floodFill(alpha, 0, 0, BLUE)).toBe(1);
+        expect(getPixel(alpha, 1, 0)).toEqual([255, 0, 0, 128]);
+
+        // TRANSPARENCY IS ONE COLOUR, not four channels. An erase can leave RGB behind, and a fill
+        // that compared all four would stop dead at the boundary between two invisible pixels.
+        const c = createPixelBuffer(3, 1);
+        setPixel(c, 0, 0, [9, 9, 9, 0]);
+        setPixel(c, 1, 0, [0, 0, 0, 0]);
+        setPixel(c, 2, 0, [200, 30, 40, 0]);
+        expect(floodFill(c, 0, 0, RED)).toBe(3);
+
+        // A whole EMPTY surface fills in one go, which is the common "paint bucket on a new
+        // layer" case and the one a recursive implementation dies on at scale.
+        const big = createPixelBuffer(64, 64);
+        expect(floodFill(big, 32, 32, RED)).toBe(64 * 64);
+        expect(getPixel(big, 0, 0)).toEqual(RED);
+        expect(getPixel(big, 63, 63)).toEqual(RED);
+    });
+
+    test("a surface names what it will not allocate", () => {
+        expect(pixelBufferError(16, 16)).toBeNull();
+        expect(pixelBufferError(0, 16)).toMatch(/at least one pixel/);
+        expect(pixelBufferError(16, -1)).toMatch(/at least one pixel/);
+        expect(pixelBufferError(1.5, 16)).toMatch(/whole dimensions/);
+        expect(pixelBufferError("16", 16)).toMatch(/whole dimensions/);
+        expect(pixelBufferError(PIXEL_MAX_SIDE + 1, 16)).toMatch(/may not exceed/);
+        // Exactly at the limit is allowed — the boundary is asserted from both sides.
+        expect(pixelBufferError(PIXEL_MAX_SIDE, 1)).toBeNull();
+        expect(() => createPixelBuffer(0, 0)).toThrow(/at least one pixel/);
+        // A new surface is TRANSPARENT, not black: an opaque default would make the first stroke
+        // on a new layer look like it had erased a background nobody asked for.
+        const b = createPixelBuffer(2, 2);
+        expect(b.data).toHaveLength(2 * 2 * 4);
+        expect([...b.data].every(v => v === 0)).toBe(true);
     });
 
     test("read shapes become nodes the document accepts", () => {
