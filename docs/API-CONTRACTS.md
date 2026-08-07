@@ -1413,6 +1413,50 @@ chain, gesture is unsnapped (deferred).
 
 ## Renderer (`renderer/`)
 
+### `renderer/emitWebGL` — the effects pass (blur + composite)
+
+```ts
+interface BlurTarget { framebuffer: WebGLFramebuffer; texture: WebGLTexture; width: number; height: number }
+interface BlurState {
+    program: WebGLProgram; quad: WebGLBuffer; composite: WebGLProgram;
+    targets: [BlurTarget | null, BlurTarget | null, BlurTarget | null];
+    /* attribute/uniform locations */
+}
+function initBlur(gl): BlurState | null;
+function ensureTarget(gl, held: BlurTarget | null, w: number, h: number): BlurTarget | null;
+function blurPass(gl, blur, from, into, sigma: number, horizontal: boolean): boolean;
+function compositeTarget(gl, blur, from, offsetX, offsetY, tint: [number,number,number,number] | null): void;
+```
+
+**`GLState.blur` is nullable and that is a real answer** — a context that cannot link the second
+program still draws every shape, losing only what this backend never had. It is built EAGERLY:
+`initGL` runs on the first frame, so the programs are compiled for every context even though
+nothing spends them until the loop wrap lands.
+
+**THE LOOP BOUND MUST BE A COMPILE-TIME CONSTANT.** GLSL ES 1.00 refuses `for (i < u_radius)`
+outright, so the blur loops to `BLUR_MAX_TAPS` and breaks on the uniform, with weights as a
+dynamically-indexed uniform array. Measured in this renderer, not assumed.
+
+**THREE targets, not two.** Two suffice for a blur alone (a separable pass ping-pongs between a
+pair). A SHADOW needs a third, because it is a blurred copy drawn UNDER an item that is still
+needed sharp — blurring in place consumes the thing being shadowed.
+
+**PREMULTIPLIED throughout.** Targets are drawn into a transparent-cleared framebuffer with
+ordinary src-alpha blending, which leaves RGB already scaled by alpha, so compositing uses
+`ONE, ONE_MINUS_SRC_ALPHA`. Blurring straight RGBA would mix the colour of transparent texels —
+usually black — into every soft edge, giving a dark fringe that reads as a bad shadow.
+
+**`compositeTarget`'s offsets are in the DOCUMENT's axes — y grows DOWNWARD**, like `Shadow.dy`.
+The y is negated inside, because a GL framebuffer's y grows upward; measured with a probe texel,
+not reasoned about.
+
+**`blurPass` returns false for an identity kernel**, so a caller skips the pass rather than
+spending a full-screen draw copying an image to itself.
+
+**NOT YET CALLED.** `ensureTarget`, `blurPass` and `compositeTarget` are absent from
+`dist/app/bundle.js` entirely — esbuild tree-shakes what nothing calls. The loop wrap in
+`emitWebGL` is what will bring them in.
+
 ### `renderer/Gaussian` — the blur kernel, as plain numbers
 
 ```ts
