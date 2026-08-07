@@ -1256,12 +1256,22 @@ bundle, where it was tree-shaken before.
 threading it through `itemDraws` is a real change rather than a two-line one. It continues to skip
 rasters, alongside the effects regression already recorded against it above.
 
-**AND NEITHER IS SVG — measured in the running app, not inferred.** `emitSVG` never reads
-`shape.surface`; it emits `<image href="raster:<id>:<w>x<h>:<len>:<sum>">`, which is an identity
-key and not a URL, so the element is present, correctly placed, carries `image-rendering="pixelated"`
-— and loads nothing. On the SVG backend a painted canvas is INVISIBLE while behaving normally
-everywhere else. The href is still useful: it changes whenever the pixels do, which is how the live
-verification below observed painting at all.
+**SVG WAS THE SAME, AND IS NOW FIXED.** It emitted `<image href="raster:<id>:<w>x<h>:<len>:<sum>">`
+— an identity key, not a URL — so the element was present, correctly placed, carried
+`image-rendering="pixelated"`, and loaded NOTHING. A painted canvas was invisible on the DEFAULT
+backend while behaving normally everywhere else. Found by driving the running app; no test in 1312
+could see it, because the emitters have no DOM coverage.
+
+`emitSVG` now resolves the surface through `ImageCache.resolveSurface` — the SAME cache the Canvas
+backend uses, so there is one notion of "loaded" rather than a second that could disagree — and
+sets the decoded element's `src`. **While it decodes there is NO href at all**, rather than the
+unusable key: an `<image>` with a broken href is a broken-image glyph in some renderers, which is a
+WRONG picture rather than a missing one.
+
+Verified live end to end: the emitted href is a `data:image` URL, and decoding it back gives a
+70x50 picture holding exactly 51 opaque black pixels — the stroke — against 3,449 transparent.
+`emitSVG.test.ts` pins the half a DOM-less run can see (the key is never emitted as an href) and was
+proven to FAIL on the pre-fix line with the exact signature.
 
 **The whole loop was driven over CDP** and each step read back rather than assumed: drawing with the
 ▦ tool creates a `core.raster` with an 80x60 surface for an 80x60 drag; a brush stroke moves the

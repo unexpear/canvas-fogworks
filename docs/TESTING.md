@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v55 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1194) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (41) = 1312 tests.
+> 🔒 Frozen contract · schema v55 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1194) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (41) + `src/renderer/emitSVG.test.ts` (2) = 1314 tests.
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1312 tests
+npm test                                   # jest (ts-jest), 1314 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -42,7 +42,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1312 tests)
+## What is covered (1314 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -452,7 +452,11 @@ test that was never seen to fail proves nothing.
 
 ## Gaps / not yet automated (tracked, not silently ignored)
 
-- **Renderer & tools** have no automated **DOM** tests: the renderer's pure model is
+- **Renderer & tools** have only the beginning of automated **DOM** coverage. `emitSVG.test.ts`
+  drives the emitter through a ~40-line FAKE DOM (attributes, children, the two `:scope >`
+  selectors it uses) — the same move `emitCanvas.test.ts` made with a mock context. It exists
+  because a real regression shipped that 1312 tests could not see: a raster's identity key was set
+  as an `<image>` href, so a painted canvas was invisible on the DEFAULT backend. Beyond that: the renderer's pure model is
   unit-tested (`RenderModel.test.ts`), but the `emitSVG` backend, the `renderSVG`/
   `renderCanvas`/`renderScene` shims (canvas sizing, DPR, the backend switch), and the DOM
   plumbing of the move/draw tools are validated by browser smoke tests. Tool *logic* that is DOM-free
