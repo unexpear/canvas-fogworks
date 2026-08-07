@@ -1181,6 +1181,22 @@ matches too.
 0.9973 of the light is a blur that DARKENS what it touches, more the wider it gets — which reads as
 a shadow too weak rather than a kernel too short. **The radius is clamped** at 64 taps and says so,
 because zoom multiplies sigma: a 500-tap kernel is reachable by zooming in, not by an odd document.
+
+**Where this has got to.** The kernel, the blur program with its render targets, and the composite
+pass all exist and are each verified against something independent — the kernel per-pixel against
+`ctx.filter`, the shader against a CPU convolution, the composite against hand-computed tint and
+offset expectations. What remains is the LOOP WRAP: binding a target before an effected item's
+draws and compositing the shadow under the shape afterwards.
+
+**Three things were caught by measuring rather than reasoning, and each would have survived a
+reading.** An `initBlur` that left `ARRAY_BUFFER` bound, safe only because its one caller happened
+to rebind twenty lines later. A composite that declared an offset its shader never used, so every
+shadow would have landed exactly on its shape. And a y axis pointing the wrong way — GL's
+framebuffer grows upward, the document's downward, so `dy: +4` rose instead of falling.
+
+**Unwired code is ABSENT, not merely inert.** `ensureTarget`, `blurPass` and `compositeTarget` are
+tree-shaken out of the shipped bundle entirely, which is worth knowing before trusting any claim
+that something was "verified in the bundle" about a path nothing calls.
 ### Fonts — a family name is not a font
 
 **`style.fontFamily` has always been a STRING and nothing else.** A document could ask for "Kenney
