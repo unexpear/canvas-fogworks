@@ -89,6 +89,7 @@ import { makeBrush, brushError, stampBrush, brushBounds, strokePath, strokeBound
     BRUSH_MAX_SIZE, brushFromImage, brushWithVariants, pickFace } from "../paint/Brush";
 import { encodeSurface, decodeSurface, PIXEL_CODEC_VERSION, PIXEL_RUN_MAX } from "../paint/PixelCodec";
 import { beginStroke, extendStroke, endStroke, strokeEscaped } from "../paint/Stroke";
+import { rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -4468,9 +4469,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 53→54 landed, making EVERY
-        // non-interpolatable keyframed value step rather than only `src`.)
-        expect(() => migrateIfNeeded(legacy, "55")).toThrow('Migration not implemented for document schema "54"');
+        // time a real migration is added — most recently when 54→55 landed, adding `core.raster`,
+        // the first node type holding pixels the document itself owns.)
+        expect(() => migrateIfNeeded(legacy, "56")).toThrow('Migration not implemented for document schema "55"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -16174,6 +16175,54 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(strokeEscaped(tight)).toBe(false);
         extendStroke(c, tight, 7, 7, linePoints);
         expect(strokeEscaped(tight)).toBe(true);
+    });
+
+    test("a raster node holds a surface the DOCUMENT owns", () => {
+        // The difference from `core.image` is AUTHORSHIP. An image node references a picture
+        // somebody else made; a raster node holds pixels the user painted, and it is the first
+        // node type in this engine that does.
+        expect(NODE_TYPES).toContain("core.raster");
+        expect(isNodeType("core.raster")).toBe(true);
+
+        // A surface round-trips from the paint layer into the document's shape and back.
+        const b = createPixelBuffer(8, 4);
+        drawLine(b, 0, 0, 7, 3, RED);
+        const enc = encodeSurface(b);
+        const stored = { data: enc.data, width: 8, height: 4 };
+        expect(rasterSurfaceError(stored)).toBeNull();
+        expect([...decodeSurface(stored.data, stored.width, stored.height)!.data]).toEqual([...b.data]);
+
+        // DIMENSIONS LIVE BESIDE THE PAYLOAD, so a resize and a stale payload cannot disagree
+        // about which is authoritative — the decoder is told the size and refuses a mismatch.
+        expect(decodeSurface(stored.data, 8, 5)).toBeNull();
+
+        // The VALIDATOR checks shape, not pixels: it runs on every load, and decoding a
+        // 4096-square surface to validate it would cost a full decode per document.
+        expect(rasterSurfaceError(null)).toMatch(/must be an object/);
+        expect(rasterSurfaceError({ width: 8, height: 4 })).toMatch(/data must be a string/);
+        expect(rasterSurfaceError({ data: "x", width: 0, height: 4 })).toMatch(/at least one pixel/);
+        expect(rasterSurfaceError({ data: "x", width: 1.5, height: 4 })).toMatch(/whole numbers/);
+        expect(rasterSurfaceError({ data: "x", width: RASTER_MAX_SIDE + 1, height: 1 })).toMatch(/may not exceed/);
+        // BOTH AXES. Testing only the width leaves a bound on one side of the surface and none on
+        // the other, which is invisible until someone paints a tall thin canvas.
+        expect(rasterSurfaceError({ data: "x", width: 1, height: RASTER_MAX_SIDE + 1 })).toMatch(/may not exceed/);
+        expect(rasterSurfaceError({ data: "x", width: 1, height: 0 })).toMatch(/at least one pixel/);
+        // The boundary from both sides.
+        expect(rasterSurfaceError({ data: "x", width: RASTER_MAX_SIDE, height: 1 })).toBeNull();
+
+        // A node carrying one is a node the document ACCEPTS, which is the point of the schema bump.
+        const doc = createEmptyDocument();
+        doc.nodes.set("r1", { id: "r1", type: "core.raster", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 8, height: 4 },
+            style: { fill: "none", opacity: 1 }, layout: {}, surface: stored });
+        doc.rootNodeUuids = ["r1"];
+        // Integrity runs inside `deserializeDocument`, so a clean round trip IS the check —
+        // a surface the loader refused would throw there rather than come back.
+        const reloaded = deserializeDocument(serializeDocument(doc));
+        const back = reloaded.nodes.get("r1")!;
+        expect(back.type).toBe("core.raster");
+        expect(back.surface).toEqual(stored);
+        expect([...decodeSurface(back.surface!.data, 8, 4)!.data]).toEqual([...b.data]);
     });
 
     test("read shapes become nodes the document accepts", () => {

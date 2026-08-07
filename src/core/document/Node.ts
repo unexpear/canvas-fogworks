@@ -19,7 +19,7 @@ function isNumberToken(v: unknown): boolean {
  * it, and both validation paths check membership against it — so adding a type is
  * one edit, and an unknown type cannot slip in through a hand-edited file.
  */
-export const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path", "core.instance", "core.boolean"] as const;
+export const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path", "core.instance", "core.boolean", "core.raster"] as const;
 export type NodeType = typeof NODE_TYPES[number];
 
 /**
@@ -185,6 +185,38 @@ const SRC_ALLOWED = ["http", "https", "blob"];
 export const SOURCE_RECT_MAX = 1_000_000;
 
 /** A sub-rectangle of an image, in the SOURCE image's own pixels. */
+/** A painted surface as the document stores it: run-length text plus its size. */
+export interface RasterSurface {
+    /** `PixelCodec` output — base64 of the run-length payload. */
+    data: string;
+    width: number;
+    height: number;
+}
+
+/**
+ * What is wrong with a surface, or null.
+ *
+ * The PAYLOAD is not decoded here. Validation runs on every load and a 4096-square surface would
+ * cost a full decode to check — so this checks the SHAPE, and `decodeSurface` refuses a payload
+ * that does not fill the size when something actually needs the pixels.
+ */
+export function rasterSurfaceError(surface: unknown): string | null {
+    if (surface === null || typeof surface !== "object") return "surface must be an object";
+    const s = surface as Partial<RasterSurface>;
+    if (typeof s.data !== "string") return "surface.data must be a string";
+    if (!Number.isInteger(s.width) || !Number.isInteger(s.height)) {
+        return "surface dimensions must be whole numbers";
+    }
+    if ((s.width as number) < 1 || (s.height as number) < 1) return "a surface must be at least one pixel";
+    if ((s.width as number) > RASTER_MAX_SIDE || (s.height as number) > RASTER_MAX_SIDE) {
+        return `a surface may not exceed ${RASTER_MAX_SIDE} on a side`;
+    }
+    return null;
+}
+
+/** Mirrors `PIXEL_MAX_SIDE`; stated here so the document layer needs no paint import. */
+export const RASTER_MAX_SIDE = 4096;
+
 export interface SourceRect {
     x: number;
     y: number;
@@ -333,6 +365,17 @@ export interface Node {
      * one 360x168 picture. See `sourceRectError` for why the unit is pixels rather than fractions.
      */
     sourceRect?: SourceRect;
+    /**
+     * A surface this document OWNS, for `core.raster` (schema 55).
+     *
+     * The difference from `src` is authorship. An image node REFERENCES a picture somebody else
+     * made; a raster node holds pixels the user painted, and every paint tool writes here.
+     *
+     * DIMENSIONS LIVE BESIDE THE PAYLOAD, not inside it, so a surface resized in the document and
+     * a payload written before the resize cannot disagree about which is authoritative — the
+     * decoder is TOLD the size and refuses a payload that does not fill it.
+     */
+    surface?: RasterSurface;
     /**
      * Scale by NEAREST NEIGHBOUR rather than interpolating (schema 51). Absent = smooth, as before.
      *

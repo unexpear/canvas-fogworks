@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v54 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v55 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -797,6 +797,41 @@ boundary** instead of corrupting state later.
 > later milestones don't require a breaking change, but the current renderer/actions do
 > not yet interpret them. **`layout.container` (M2 auto-layout) and the `variables`
 > store + `$token` resolution (M5 design tokens) are live.**
+
+## RasterSurface (pixels the document OWNS — schema 55)
+
+```ts
+type NodeType = ... | "core.raster";
+
+interface RasterSurface {
+    data: string;    // PixelCodec output: base64 of a run-length payload
+    width: number;
+    height: number;
+}
+interface Node { ...; surface?: RasterSurface }
+
+function rasterSurfaceError(surface: unknown): string | null;
+const RASTER_MAX_SIDE: number;   // 4096
+```
+
+**THE DIFFERENCE FROM `core.image` IS AUTHORSHIP.** An image node REFERENCES a picture somebody
+else made — `src` is a URL or a data URI, and every import path in `core/import` produces one. A
+raster node holds pixels the USER PAINTED, and it is the first node type in this engine that does.
+Every paint tool writes here.
+
+**DIMENSIONS LIVE BESIDE THE PAYLOAD, not inside it.** A surface resized in the document and a
+payload written before that resize must not be able to disagree about which is authoritative, so
+the node states the size and `decodeSurface` REFUSES a payload that does not fill it exactly —
+rather than padding a transparent band, which reads as an art mistake.
+
+**`rasterSurfaceError` checks SHAPE, not pixels.** Validation runs on every load; decoding a
+4096-square surface to check it would cost a full decode per document. The payload is validated
+when something actually needs the pixels.
+
+**Schema 55 changes no existing field**, and that is precisely why the version had to move: schema
+54 had no node type that could hold a surface, so an older build meeting a `core.raster` node would
+find a `type` it does not know. `migrate_54_to_55` is a re-stamp, and the gate that refuses a
+future schema is what makes that safe.
 
 ## VariableStore (design tokens — LIVE at schema 19, Milestone 5)
 

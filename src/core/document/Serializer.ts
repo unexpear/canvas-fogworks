@@ -345,6 +345,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "51") { raw = migrate_51_to_52(raw); version = "52"; }
     if (version === "52") { raw = migrate_52_to_53(raw); version = "53"; }
     if (version === "53") { raw = migrate_53_to_54(raw); version = "54"; }
+    if (version === "54") { raw = migrate_54_to_55(raw); version = "55"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -828,6 +829,17 @@ function migrate_21_to_22(raw: any): any {
  * No field changes shape, and again that is why the version must move: a schema-53 document with a
  * keyframed `text` showed the next label an interval early and now does not.
  */
+/**
+ * Schema 55 — `core.raster`, a node holding pixels the document itself owns.
+ *
+ * No existing field changes shape, and that is exactly why the version must move: schema 54 had no
+ * node type that could hold a surface, so a build reading a 55 document would meet a `type` it does
+ * not know and an unfamiliar `surface` field. The gate refusing the future is what makes that safe.
+ */
+function migrate_54_to_55(raw: any): any {
+    return { ...raw, version: "55" };
+}
+
 function migrate_53_to_54(raw: any): any {
     return { ...raw, version: "54" };
 }
