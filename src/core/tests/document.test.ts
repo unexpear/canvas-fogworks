@@ -5,6 +5,7 @@
 
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { inflateSync } from "zlib";
 import { createEmptyDocument, ProjectDocument, ReadonlyDocument, CURRENT_VERSION, SCHEMA_VERSION } from "../document/Document";
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, isTokenRef, tokenRefFor, tokenKeyOf, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
@@ -21048,5 +21049,122 @@ describe("RasterTool — the drag that becomes paint", () => {
         // box would have landed somewhere else entirely.
         const flat = at(6, 3);
         expect(Math.hypot(target.x - flat[0], target.y - flat[1])).toBeGreaterThan(1);
+    });
+});
+
+describe("Tiled, against files Tiled actually wrote", () => {
+    // REAL FILES, NOT HAND-WRITTEN XML. A fixture invented to match a reader proves only that the
+    // reader matches the fixture. These are unmodified Kenney CC0 assets; see
+    // test-fixtures/tiled/README.md for provenance and for why they sit outside `src/`.
+    const fixture = (name: string) =>
+        readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", name), "utf8");
+    const inflate = (d: Uint8Array) => new Uint8Array(inflateSync(Buffer.from(d)));
+
+    test("the only real ISOMETRIC map with tiles in it reads, and lands on a diamond", () => {
+        // Until this file was found — inside a .zip the asset sweep had never opened — every
+        // isometric map in the tree was blank, so this branch had never met real data.
+        const m = parseTiledMap(fixture("isometric-sample.tmx"), { inflate });
+        expect(m).toMatchObject({ orientation: "isometric", width: 60, height: 32,
+            tileWidth: 256, tileHeight: 128 });
+        expect(m.notes).toEqual([]);
+        expect(m.layers).toHaveLength(3);
+
+        // Every layer holds exactly its own cell count. A decoder that dropped or doubled a row
+        // still returns an array, and only this arithmetic catches that.
+        for (const L of m.layers) expect(L.cells).toHaveLength(L.width * L.height);
+        const painted = m.layers.reduce((n, L) => n + L.cells.filter(c => c.gid !== 0).length, 0);
+        expect(painted).toBe(51);
+
+        // Every non-empty gid resolves to a tileset the map declares — the check that means the
+        // cells are real references rather than plausible numbers.
+        for (const L of m.layers) for (const c of L.cells) {
+            if (c.gid !== 0) expect(tilesetFor(m.tilesets, c.gid)).not.toBeNull();
+        }
+
+        // THE PLACEMENT IS A DIAMOND, and this map is the reason that matters: moving one column
+        // goes half a tile right AND half a tile down, so a cell's neighbour is never level with
+        // it. Treating it as a grid puts every tile in a rectangle that overlaps nothing.
+        const origin = tilePosition(m, 0, 0);
+        const right = tilePosition(m, 1, 0);
+        const down = tilePosition(m, 0, 1);
+        expect(origin).toEqual({ x: 0, y: 0 });
+        expect(right).toEqual({ x: 128, y: 64 });      // half of 256, half of 128
+        expect(down).toEqual({ x: -128, y: 64 });      // the OTHER way along x
+        // The two axes go opposite ways horizontally and the SAME way vertically. That asymmetry
+        // is the whole difference from an orthogonal grid, and a swapped formula loses it.
+        expect(right.x).toBe(-down.x);
+        expect(right.y).toBe(down.y);
+
+        // The external tileset is NAMED and left for the caller — a parser that reached for the
+        // file would need a filesystem and stop being pure.
+        expect(m.tilesets[0].source).toBe("Sample.tsx");
+        expect(m.tilesets[0].firstGid).toBe(1);
+    });
+
+    test("a real layer offset survives the round trip, and the other axis stays 0", () => {
+        const m = parseTiledMap(fixture("layer-offset.tmx"), { inflate });
+        const offset = m.layers.find(L => L.offsetY !== 0);
+        expect(offset).toBeDefined();
+        // The file writes offsetx="0" offsety="-30". Reading the axes the wrong way round would
+        // put the -30 on x, and reading an absent default wrongly would put undefined on either.
+        expect(offset).toMatchObject({ offsetX: 0, offsetY: -30 });
+        // Its SIBLINGS carry no offset at all, which is what makes the offset a layer's own
+        // property rather than the map's.
+        const others = m.layers.filter(L => L !== offset);
+        expect(others.length).toBeGreaterThan(0);
+        for (const L of others) expect([L.offsetX, L.offsetY]).toEqual([0, 0]);
+    });
+
+    test("a real zlib-compressed map with an EMBEDDED tileset decodes", () => {
+        const m = parseTiledMap(fixture("zlib-embedded.tmx"), { inflate });
+        expect(m.notes).toEqual([]);
+        // EMBEDDED, so the sheet is known here and nothing needs resolving.
+        expect(m.tilesets[0].source).toBeNull();
+        expect(m.tilesets[0].image).not.toBeNull();
+        const painted = m.layers.reduce((n, L) => n + L.cells.filter(c => c.gid !== 0).length, 0);
+        // A specific number, not "greater than zero": a decoder that inflated to the wrong length
+        // or misread the little-endian words still produces a lot of non-zero cells.
+        expect(painted).toBe(10618);
+        for (const L of m.layers) expect(L.cells).toHaveLength(L.width * L.height);
+        // And the sheet really holds what the set claims.
+        for (const s of m.tilesets) expect(tilesetOverflow(s)).toBeNull();
+
+        // WITHOUT AN INFLATER the same file is REPORTED, not silently read as empty — the caller
+        // has no way to supply one in a node test by accident, so this is the honest failure.
+        const blind = parseTiledMap(fixture("zlib-embedded.tmx"));
+        expect(blind.notes.some(n => /zlib/.test(n))).toBe(true);
+        expect(blind.layers).toHaveLength(0);
+    });
+
+    test("a real image-COLLECTION tileset reads, and its own tilecount is not believed", () => {
+        const set = parseTiledTileset(fixture("collection.tsx"), {
+            firstGid: 1, source: null, name: "", tileWidth: 0, tileHeight: 0, columns: 0,
+            tileCount: 0, spacing: 0, margin: 0, image: null, imageWidth: null, imageHeight: null,
+            tiles: [], offsetX: 0, offsetY: 0
+        });
+        // 244 tiles that are separate FILES — there is no sheet to cut, so the whole image is the
+        // tile and `image` stays null.
+        expect(set.tiles).toHaveLength(244);
+        expect(set.image).toBeNull();
+
+        // THE FILE DECLARES `tilecount="3"` AND IS WRONG. Kenney's exporter wrote it; 244 <tile>
+        // elements follow. This is pinned deliberately: the reader reports what the file says and
+        // decides with none of it. `tilesetFor` keys on firstGid alone and `tileImageFor` searches
+        // by id, so a tile past the declared count still resolves — which is the only reason this
+        // asset works at all.
+        expect(set.tileCount).toBe(3);
+        expect(tileImageFor(set, 1 + 200)).not.toBeNull();
+        expect(tileImageFor(set, 1 + 243)).not.toBeNull();
+        // Past the real end there is nothing, so the search is a lookup and not a clamp.
+        expect(tileImageFor(set, 1 + 244)).toBeNull();
+        // GID 0 is EMPTY by the format's reservation, whatever a set's firstGid happens to be.
+        expect(tileImageFor(set, 0)).toBeNull();
+
+        // The tiles are NOT uniform — a collection is the one kind of set where each tile has its
+        // own size, which is exactly what a sheet cannot express.
+        expect(set.tiles[0]).toMatchObject({ id: 0, width: 256, height: 352 });
+        // `<tileoffset>` is read: these tiles hang off their cell so a tall building can stand
+        // over the squares behind it.
+        expect([set.offsetX, set.offsetY]).toEqual([-12, 6]);
     });
 });

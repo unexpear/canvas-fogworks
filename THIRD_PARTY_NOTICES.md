@@ -63,3 +63,18 @@ The `freeassets` tree used throughout development as a measurement corpus. Not r
 VDE; it is gitignored. Every reader in `core/import` was verified against it, and most of the faults
 found this way — interleaved glTF vertex data, OBJ's three index streams, non-unit normals in 206
 files, tilesets declaring no `columns` — were found because real files disagreed with the spec.
+
+## Files vendored into this repository
+
+Everything above describes software *studied*, not copied. This section is the exception, and it
+is deliberately small.
+
+`test-fixtures/tiled/` holds **five unmodified Tiled map and tileset files** (about 43 KB of XML)
+from packs by **Kenney** (<https://kenney.nl>), each released under **Creative Commons Zero
+(CC0 1.0)** — <http://creativecommons.org/publicdomain/zero/1.0/>. Every pack ships its own
+`License.txt` stating this, and each was read before the file was copied.
+
+They are test fixtures, not assets the product uses: the reader is pure text parsing, so the
+referenced PNGs are deliberately absent. They exist because a fixture invented to match a reader
+proves only that the reader matches the fixture. Provenance per file is in
+`test-fixtures/tiled/README.md`.
