@@ -1523,6 +1523,35 @@ spending a full-screen draw copying an image to itself.
 `dist/app/bundle.js` entirely — esbuild tree-shakes what nothing calls. The loop wrap in
 `emitWebGL` is what will bring them in.
 
+### `renderer/RenderModel` — naming a raster surface
+
+```ts
+function rasterHref(nodeId: string, surface: { data: string; width: number; height: number }): string;
+```
+
+A `core.raster` node becomes an image item whose `href` **identifies** its surface. The model names
+a picture and the renderer resolves it — the same seam `core.image` uses with `ImageCache`, chosen
+because it needs no new pattern and keeps the model pure, which is the property the run-length codec
+decision was made to protect.
+
+**THE KEY CARRIES THE PAYLOAD'S IDENTITY, NOT THE NODE'S.** A cache keyed on the node id would show
+the picture from before every stroke, since the id is exactly what does not change when a surface is
+painted. The href folds in the dimensions, the payload length and a **position-weighted** checksum —
+weighted because a plain character sum collides on any reordering, and a reordered payload is a
+different picture. Collisions cost a stale frame, not a wrong picture, because the length and
+dimensions travel alongside.
+
+**A raster with no surface names `null`**, so a backend skips it exactly as it skips an image whose
+source has not decoded.
+
+**Nearest-neighbour by DEFAULT**, unlike `core.image`: a painted surface zoomed in is meant to show
+its pixels, while a photograph is not. Two node types, two opposite correct defaults.
+
+**Not resolved yet.** The href is identity-only, so `ImageCache` cannot decode a surface it cannot
+see — `resolveImage` sets `img.src = href`, which for a `raster:` key fails to load. The missing
+piece is a registration step; see ARCHITECTURE.md for the shape and the open question about when it
+runs.
+
 ### `renderer/Gaussian` — the blur kernel, as plain numbers
 
 ```ts
