@@ -86,7 +86,7 @@ import { createPixelBuffer, pixelBufferError, getPixel, setPixel, inBounds, line
 import { capturePatch, applyPatch, revertPatch, invertPatch, readRegion, isEmptyPatch,
     patchCost } from "../paint/PixelPatch";
 import { makeBrush, brushError, stampBrush, brushBounds, strokePath, strokeBounds,
-    BRUSH_MAX_SIZE } from "../paint/Brush";
+    BRUSH_MAX_SIZE, brushFromImage, brushWithVariants, pickFace } from "../paint/Brush";
 import { encodeSurface, decodeSurface, PIXEL_CODEC_VERSION, PIXEL_RUN_MAX } from "../paint/PixelCodec";
 import { beginStroke, extendStroke, endStroke, strokeEscaped } from "../paint/Stroke";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
@@ -15866,14 +15866,17 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(getPixel(wide, 4, 1)).toEqual([0, 0, 0, 0]);
     });
 
+    /** A brush's dabs as plain [dx,dy] pairs — the shape these assertions were written against. */
+    const offsetsOf = (b: { dabs: { dx: number; dy: number }[] }) => b.dabs.map(d => [d.dx, d.dy] as [number, number]);
+
     test("a brush does not DRIFT as its size changes", () => {
         // An even diameter has no centre pixel, and pretending otherwise is the classic pixel-art
         // frustration: a brush that lands up-left of the cursor at some sizes and centred at
         // others. The rule is symmetric for ODD, consistently biased down-right for EVEN.
-        expect(makeBrush(1, false).offsets).toEqual([[0, 0]]);
-        const sq2 = makeBrush(2, false).offsets.map(o => o.join(",")).sort();
+        expect(offsetsOf(makeBrush(1, false))).toEqual([[0, 0]]);
+        const sq2 = offsetsOf(makeBrush(2, false)).map(o => o.join(",")).sort();
         expect(sq2).toEqual(["0,0", "0,1", "1,0", "1,1"]);      // down-right of the cursor
-        const sq3 = makeBrush(3, false).offsets.map(o => o.join(",")).sort();
+        const sq3 = offsetsOf(makeBrush(3, false)).map(o => o.join(",")).sort();
         expect(sq3).toContain("-1,-1");
         expect(sq3).toContain("1,1");
         expect(sq3).toHaveLength(9);
@@ -15883,11 +15886,11 @@ describe("Mesh — bending a shape (schema 41)", () => {
         for (let n = 1; n <= 8; n++) {
             for (const round of [true, false]) {
                 const b = makeBrush(n, round);
-                expect(b.offsets.some(([dx, dy]) => dx === 0 && dy === 0)).toBe(true);
+                expect(offsetsOf(b).some(([dx, dy]) => dx === 0 && dy === 0)).toBe(true);
                 // And the offsets never exceed the size the brush claims.
-                expect(b.offsets.length).toBeLessThanOrEqual(n * n);
+                expect(b.dabs.length).toBeLessThanOrEqual(n * n);
                 const bounds = brushBounds(b, 0, 0);
-                for (const [dx, dy] of b.offsets) {
+                for (const [dx, dy] of offsetsOf(b)) {
                     expect(dx).toBeGreaterThanOrEqual(bounds.x);
                     expect(dx).toBeLessThan(bounds.x + bounds.width);
                     expect(dy).toBeGreaterThanOrEqual(bounds.y);
@@ -15900,15 +15903,15 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // of diameter 3 contains all nine pixel centres, the corner sitting at 1.414 against a
         // radius of 1.5. Some editors draw a plus there instead, which is an artistic convention —
         // asserting it would mean tuning a constant until the shape matched a preconception.
-        expect(makeBrush(3, true).offsets).toHaveLength(9);
+        expect(offsetsOf(makeBrush(3, true))).toHaveLength(9);
         // Round starts DIFFERING at 4, where the corner is at 2.12 against a radius of 2.
-        expect(makeBrush(4, true).offsets.length).toBeLessThan(makeBrush(4, false).offsets.length);
-        expect(makeBrush(8, true).offsets.length).toBeLessThan(makeBrush(8, false).offsets.length);
+        expect(offsetsOf(makeBrush(4, true)).length).toBeLessThan(offsetsOf(makeBrush(4, false)).length);
+        expect(offsetsOf(makeBrush(8, true)).length).toBeLessThan(offsetsOf(makeBrush(8, false)).length);
         // AN EVEN ROUND BRUSH is the only one that can tell the disc's centre apart from the
         // cursor: for odd sizes the span's middle IS zero, so measuring from either gives the same
         // disc. At size 4 the span runs -1..2 and its middle is 0.5, and a disc centred on the
         // cursor instead would be lopsided — three quadrants clipped and one not.
-        const r4 = new Set(makeBrush(4, true).offsets.map(o => o.join(",")));
+        const r4 = new Set(offsetsOf(makeBrush(4, true)).map(o => o.join(",")));
         // Symmetric about the span's middle: reflecting an offset through 0.5 must land on another.
         for (const key of r4) {
             const [dx, dy] = key.split(",").map(Number);
@@ -15922,9 +15925,9 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(r4.size).toBe(12);
 
         // And a disc is never wider than its square: no offset escapes the box.
-        expect(makeBrush(9, true).offsets.length).toBeLessThan(9 * 9);
+        expect(offsetsOf(makeBrush(9, true)).length).toBeLessThan(9 * 9);
         // A round brush is SYMMETRIC at odd sizes: every offset has its mirror.
-        const r5 = new Set(makeBrush(5, true).offsets.map(o => o.join(",")));
+        const r5 = new Set(offsetsOf(makeBrush(5, true)).map(o => o.join(",")));
         for (const key of r5) {
             const [dx, dy] = key.split(",").map(Number);
             expect(r5.has(`${-dx},${-dy}`)).toBe(true);
@@ -16046,6 +16049,67 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // A size the surface layer itself refuses is refused here too, rather than allocated.
         expect(decodeSurface(enc.data, 0, 1)).toBeNull();
         expect(decodeSurface(enc.data, 1e9, 1e9)).toBeNull();
+    });
+
+    test("a brush can be a PICTURE, a single axis, or several faces", () => {
+        // 1. A STAMP CARRIES ITS OWN COLOUR. Pixelorama ships brushes as PNGs — grass, stars, a
+        // blended circle — and a brush model holding only positions can express their silhouette
+        // but not their picture.
+        const stamp = createPixelBuffer(3, 1);
+        setPixel(stamp, 0, 0, RED);
+        setPixel(stamp, 2, 0, BLUE);
+        // The middle pixel is TRANSPARENT and must be dropped, not stamped: an image brush's
+        // rectangle is mostly empty, and painting its clear parts would erase what it was placed
+        // over. That is the difference between a stamp and a rubber.
+        const b = brushFromImage(stamp);
+        const tall0 = brushFromImage(createPixelBuffer(1, 3));
+        expect(b.dabs).toHaveLength(2);
+        expect(b.width).toBe(3);
+        expect(b.height).toBe(1);
+
+        const surface = createPixelBuffer(8, 8);
+        // The stroke's colour is GREEN, and the stamp must ignore it.
+        stampBrush(surface, b, 4, 4, [0, 255, 0, 255]);
+        expect(getPixel(surface, 3, 4)).toEqual(RED);
+        expect(getPixel(surface, 5, 4)).toEqual(BLUE);
+        expect(getPixel(surface, 4, 4)).toEqual([0, 0, 0, 0]);      // the transparent middle
+
+        // 2. NOT SQUARE. A 3x1 and a 1x3 are both real pixel-art tools, and a single `size` cannot
+        // express either. The box reports each axis separately.
+        // The ORIGIN as well as the size: a box that used one axis for both would shift a 3x1
+        // stamp up by a pixel, and asserting only the dimensions cannot see that.
+        expect(brushBounds(b, 4, 4)).toEqual({ x: 3, y: 4, width: 3, height: 1 });
+        expect(brushBounds(tall0, 4, 4)).toEqual({ x: 4, y: 3, width: 1, height: 3 });
+        expect(tall0.width).toBe(1);
+        expect(tall0.height).toBe(3);
+        // A shape brush still reports a square box, so the two kinds agree about the field.
+        expect(brushBounds(makeBrush(3, false), 0, 0)).toMatchObject({ width: 3, height: 3 });
+
+        // 3. SEVERAL FACES, chosen per stamp — what makes scattered foliage look natural rather
+        // than tiled. `~Grass1..5` in Pixelorama is ONE brush with five faces.
+        const one = makeBrush(1, false), three = makeBrush(3, false);
+        const multi = brushWithVariants([one, three])!;
+        expect(multi.variants).toHaveLength(1);
+        // VARIANTS DO NOT NEST. A face carrying the whole set again would make `pickFace` able to
+        // recurse, and every face would report a box spanning brushes it is not.
+        const nested = brushWithVariants([one, multi, three])!;
+        expect(nested.variants).toHaveLength(2);
+        expect(nested.variants.every(v => v.variants.length === 0)).toBe(true);
+        expect(brushWithVariants([])).toBeNull();
+
+        // THE ROLL IS INJECTED, not taken from Math.random: a stroke has to replay identically or
+        // undo and redo would disagree about what was painted.
+        expect(pickFace(multi, 0).dabs).toHaveLength(1);
+        expect(pickFace(multi, 0.99).dabs).toHaveLength(9);
+        // Out-of-range rolls are clamped rather than indexing past the end.
+        expect(pickFace(multi, -5).dabs).toHaveLength(1);
+        expect(pickFace(multi, 5).dabs).toHaveLength(9);
+        // A brush with no variants ignores the roll entirely.
+        expect(pickFace(one, 0.7)).toBe(one);
+
+        // THE BOX SPANS EVERY FACE. A patch captured for the small face would leave the large
+        // face's marks outside the region it can undo — paint that cannot be reversed.
+        expect(brushBounds(multi, 0, 0)).toMatchObject({ width: 3, height: 3 });
     });
 
     test("a drag becomes ONE patch, and undoing it leaves nothing behind", () => {

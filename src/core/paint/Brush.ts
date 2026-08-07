@@ -20,12 +20,39 @@ import { PixelBuffer, Rgba, setPixel } from "./PixelBuffer";
 /** The widest brush this builds. Beyond this a "brush" is a fill with extra steps. */
 export const BRUSH_MAX_SIZE = 256;
 
-/** A brush shape, as offsets from the cursor. */
+/**
+ * One dab of a brush: where, and optionally what colour.
+ *
+ * A NULL COLOUR MEANS "use the stroke's colour", which is what a shape brush wants. A stamp read
+ * from an image carries its own, which is what makes a grass or star brush a picture rather than a
+ * silhouette — measured from Pixelorama, which ships exactly those as PNGs.
+ */
+export interface BrushDab {
+    dx: number;
+    dy: number;
+    colour: Rgba | null;
+}
+
+/**
+ * A brush: a set of dabs, and the box they occupy.
+ *
+ * NOT SQUARE. `width` and `height` are separate because single-axis brushes are a real pixel-art
+ * tool — Pixelorama ships a 3x1 and a 1x3 — and a single `size` cannot express either.
+ */
 export interface Brush {
-    size: number;
+    width: number;
+    height: number;
+    /** True only for a brush built by `makeBrush` as a disc; a stamp is neither. */
     round: boolean;
-    /** `[dx, dy]` pairs, in no particular order. */
-    offsets: [number, number][];
+    dabs: BrushDab[];
+    /**
+     * Other faces of the SAME brush, chosen at random per stamp.
+     *
+     * Pixelorama marks these with a `~` filename prefix — `~Grass1..5` is one brush with five
+     * faces — and it is what makes scattered foliage look natural rather than tiled. Empty for a
+     * brush with only one face; `this` is always face zero.
+     */
+    variants: Brush[];
 }
 
 /** What went wrong, or null. */
@@ -60,6 +87,7 @@ export function makeBrush(size: number, round: boolean): Brush {
     // the origin.
     const lo = 0 - Math.floor((size - 1) / 2);
     const hi = lo + size - 1;
+    const dabs: BrushDab[] = [];
     // Radius measured from the span's true middle, which for an even size sits on a pixel BOUNDARY.
     const centre = (lo + hi) / 2;
     const radius = size / 2;
@@ -78,10 +106,58 @@ export function makeBrush(size: number, round: boolean): Brush {
                 // 2.12 against a radius of 2.
                 if (ox * ox + oy * oy > radius * radius) continue;
             }
-            offsets.push([dx, dy]);
+            // A SHAPE brush carries no colour of its own — the stroke supplies it.
+            dabs.push({ dx, dy, colour: null });
         }
     }
-    return { size, round, offsets };
+    return { width: size, height: size, round, dabs, variants: [] };
+}
+
+/**
+ * A brush from an image — a STAMP, which is a picture rather than a silhouette.
+ *
+ * Fully transparent pixels are dropped rather than stamped, because an image brush's rectangle is
+ * mostly empty and painting its transparent corners would erase whatever the stamp was placed over.
+ * That is the difference between a stamp and a rubber.
+ *
+ * The origin is the image's CENTRE, by the same rule `makeBrush` uses, so swapping a shape brush
+ * for a stamp of the same size does not move where it lands.
+ */
+export function brushFromImage(buffer: PixelBuffer): Brush {
+    const dabs: BrushDab[] = [];
+    const lox = 0 - Math.floor((buffer.width - 1) / 2);
+    const loy = 0 - Math.floor((buffer.height - 1) / 2);
+    for (let y = 0; y < buffer.height; y++) {
+        for (let x = 0; x < buffer.width; x++) {
+            const at = (y * buffer.width + x) * 4;
+            if (buffer.data[at + 3] === 0) continue;
+            dabs.push({
+                dx: lox + x, dy: loy + y,
+                colour: [buffer.data[at], buffer.data[at + 1], buffer.data[at + 2], buffer.data[at + 3]]
+            });
+        }
+    }
+    return { width: buffer.width, height: buffer.height, round: false, dabs, variants: [] };
+}
+
+/** One brush with several faces, chosen at random per stamp. */
+export function brushWithVariants(faces: readonly Brush[]): Brush | null {
+    if (faces.length === 0) return null;
+    return { ...faces[0], variants: faces.slice(1).map(f => ({ ...f, variants: [] })) };
+}
+
+/**
+ * The face a stamp should use.
+ *
+ * RANDOMNESS IS INJECTED, not taken from `Math.random`. A stroke has to be replayable — the same
+ * drag must produce the same marks when an action is re-applied, or undo and redo would disagree
+ * about what was painted.
+ */
+export function pickFace(brush: Brush, roll: number): Brush {
+    if (brush.variants.length === 0) return brush;
+    const faces = [brush, ...brush.variants];
+    const i = Math.min(faces.length - 1, Math.max(0, Math.floor(roll * faces.length)));
+    return faces[i];
 }
 
 /** Stamp a brush once, centred on `(x, y)`. */
@@ -89,7 +165,8 @@ export function stampBrush(buffer: PixelBuffer, brush: Brush, x: number, y: numb
     const cx = Math.round(x), cy = Math.round(y);
     // `setPixel` bounds each dot itself, so a stamp near an edge is clipped rather than wrapped —
     // the same guard, not a second copy of it that could disagree.
-    for (const [dx, dy] of brush.offsets) setPixel(buffer, cx + dx, cy + dy, colour);
+    // A dab's OWN colour wins when it has one: that is what makes a stamp a picture.
+    for (const d of brush.dabs) setPixel(buffer, cx + d.dx, cy + d.dy, d.colour ?? colour);
 }
 
 /**
@@ -102,8 +179,13 @@ export function stampBrush(buffer: PixelBuffer, brush: Brush, x: number, y: numb
 export function brushBounds(
     brush: Brush, x: number, y: number
 ): { x: number; y: number; width: number; height: number } {
-    const lo = 0 - Math.floor((brush.size - 1) / 2);
-    return { x: Math.round(x) + lo, y: Math.round(y) + lo, width: brush.size, height: brush.size };
+    const lox = 0 - Math.floor((brush.width - 1) / 2);
+    const loy = 0 - Math.floor((brush.height - 1) / 2);
+    // THE BOX SPANS EVERY VARIANT, because a stamp may pick any face and a patch captured for one
+    // face would leave another's marks outside the region it can undo.
+    let w = brush.width, h = brush.height;
+    for (const v of brush.variants) { w = Math.max(w, v.width); h = Math.max(h, v.height); }
+    return { x: Math.round(x) + lox, y: Math.round(y) + loy, width: w, height: h };
 }
 
 /**
