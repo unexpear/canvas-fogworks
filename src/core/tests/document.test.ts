@@ -92,6 +92,7 @@ import { beginStroke, extendStroke, endStroke, strokeEscaped } from "../paint/St
 import { rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
 import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
 import { paletteError, paletteAt, parseFloatColour, parsePaletteFile, PALETTE_MAX_COLOURS } from "../paint/Palette";
+import { symmetryPoints, isMirrored, NO_SYMMETRY } from "../paint/Symmetry";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -16426,6 +16427,48 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(parsePaletteFile({ width: 1, height: 1, colors: [
             { color: "(1, 1, 1, 1)", index: 0 }, { color: "(0, 0, 0, 1)", index: 5 }] }, "x")!.colours)
             .toHaveLength(1);
+    });
+
+    test("symmetry mirrors BETWEEN pixels, not on one", () => {
+        const both = { horizontal: true, vertical: true };
+        const h = { horizontal: true, vertical: false };
+        const v = { horizontal: false, vertical: true };
+
+        // A surface of width W mirrors x to W-1-x, so column 0 pairs with the LAST column and
+        // nothing is left over. Placing the axis at W/2 is the classic off-by-one — the halves come
+        // out a pixel apart, which is obvious on a 16-pixel sprite and invisible on a big canvas,
+        // so it ships.
+        expect(symmetryPoints(0, 0, 8, 8, h)).toEqual([[0, 0], [7, 0]]);
+        expect(symmetryPoints(1, 3, 8, 8, h)).toEqual([[1, 3], [6, 3]]);
+        expect(symmetryPoints(2, 1, 8, 8, v)).toEqual([[2, 1], [2, 6]]);
+
+        // THE ORIGINAL COMES FIRST, so a caller wanting one point can take the head rather than
+        // having to know which of several is the real one.
+        expect(symmetryPoints(1, 2, 8, 8, both)[0]).toEqual([1, 2]);
+        // BOTH axes give four points, and the diagonal is the mirror of a mirror.
+        expect(symmetryPoints(1, 2, 8, 8, both)).toEqual([[1, 2], [6, 2], [1, 5], [6, 5]]);
+        // A single axis must NOT paint the diagonal — that would put a phantom in the opposite
+        // corner of every stroke.
+        expect(symmetryPoints(1, 2, 8, 8, h)).toHaveLength(2);
+        expect(symmetryPoints(1, 2, 8, 8, v)).toHaveLength(2);
+
+        // AN ODD WIDTH HAS A CENTRE COLUMN, and a point on it mirrors to itself — returned ONCE.
+        // Stamping twice costs nothing for an opaque pencil and is wrong for anything that
+        // accumulates, which every blending mode does.
+        expect(symmetryPoints(2, 1, 5, 5, h)).toEqual([[2, 1], [2, 1]].slice(0, 1));
+        expect(symmetryPoints(2, 2, 5, 5, both)).toEqual([[2, 2]]);
+        // An EVEN width has no centre column, so nothing is ever its own mirror there.
+        expect(symmetryPoints(3, 0, 8, 1, h)).toEqual([[3, 0], [4, 0]]);
+
+        // Off-surface points are NOT dropped: `setPixel` already bounds every dab, and a second
+        // bounds rule here is a second thing that can disagree with it.
+        expect(symmetryPoints(-2, 0, 8, 8, h)).toEqual([[-2, 0], [9, 0]]);
+
+        // No symmetry is the point itself, so a caller has one code path.
+        expect(symmetryPoints(3, 4, 8, 8, NO_SYMMETRY)).toEqual([[3, 4]]);
+        expect(isMirrored(NO_SYMMETRY)).toBe(false);
+        expect(isMirrored(h)).toBe(true);
+        expect(isMirrored(v)).toBe(true);
     });
 
     test("read shapes become nodes the document accepts", () => {
