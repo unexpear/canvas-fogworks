@@ -24,7 +24,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1306;
+const EXPECTED_TESTS = 1310;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -95,6 +95,14 @@ const MUTANTS = [
       from: '    if (order !== "right-down") {',
       to: '    if (order === "right-down") {',
       note: "the render-order note fires on the DEFAULT — invisible if only one order is ever tested" },
+    { id: "TM4", file: "src/core/import/TiledMap.ts",
+      from: "visible: a.visible === undefined ? true : num(a.visible, 1) !== 0,",
+      to: "visible: a.visible !== undefined,",
+      note: "treats the ATTRIBUTE'S PRESENCE as the flag — invisible unless a map says visible=\"1\"" },
+    { id: "TM5", file: "src/core/import/TiledMap.ts",
+      from: "opacity: Math.min(1, Math.max(0, num(a.opacity, 1))),",
+      to: "opacity: num(a.opacity, 1),",
+      note: "opacity is not clamped — invisible unless a map states one outside 0..1" },
 ];
 
 function runSuite() {

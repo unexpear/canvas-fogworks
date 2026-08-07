@@ -31,11 +31,23 @@
  * terrain and collision information are rendered" — an EDITOR overlay for data this reader does not
  * carry. Listing it as unread would have made it look like missing work.
  *
- * MEASURED AGAINST THE WHOLE TREE, which holds 20 `.tmx` and 13 `.tsx` and nothing else. ZERO of
- * them use object layers, image layers, group layers, properties, tile animations, wangsets,
- * terrains, infinite maps and chunks, templates, text objects, parallax factors, tint colours, or
- * layer opacity/visibility. Those are real parts of the format and every one would be built BLIND —
- * there is no fixture in this tree to verify a single one against.
+ * MEASURED AGAINST TWO CORPORA, which is the correction that matters. The ASSET TREE holds 22
+ * `.tmx` and 14 `.tsx` (two of them inside a `.zip` the sweep had never opened) and uses none of
+ * the format's richer parts. TILED'S OWN EXAMPLES ship nearly all of them, and this reader has now
+ * been run over every one: object layers, image layers, properties, tile animations, wangsets,
+ * hexagonal maps, templates, parallax factors, and layer opacity/visibility. Nothing threw, nothing
+ * was refused, no layer came out the wrong length and no gid failed to resolve.
+ *
+ * WHAT THAT RUN FOUND was not a crash but a SILENCE: `sticker-knight/sandbox.tmx` is 79x45 with
+ * ELEVEN object layers and not one `<layer>`, and it parsed "successfully" into zero layers and
+ * zero cells with nothing said — indistinguishable from a blank map. Unread content is now counted
+ * and reported for exactly that reason. Layer `opacity` and `visible` are READ rather than noted,
+ * because both are cheap and both are wrong to ignore in a way a viewer sees at once.
+ *
+ * STILL DELIBERATELY UNREAD, and now reported: object layers, image layers, group nesting, and any
+ * orientation `tilePosition` cannot place. Tile animations, wangsets, terrains, templates, infinite
+ * chunks and custom properties are unread and NOT reported — they change no tile's position, so a
+ * note about them would be noise on a map that draws correctly.
  */
 
 import { SourceRect } from "../document/Node";
@@ -120,6 +132,16 @@ export interface TiledLayer {
      */
     offsetX: number;
     offsetY: number;
+    /**
+     * `opacity`, 0..1, defaulting to 1 — and `visible`, defaulting to true.
+     *
+     * READ RATHER THAN NOTED, because both are cheap and both are WRONG to ignore in a way a
+     * viewer sees immediately. Tiled's own automapping examples hide three layers of a six-layer
+     * map; drawing them puts the rule's OUTPUT on top of its input, which looks like a corrupt map
+     * rather than a layer flag nobody read.
+     */
+    opacity: number;
+    visible: boolean;
     /** Row-major, `width * height` long. */
     cells: TiledCell[];
 }
@@ -327,8 +349,37 @@ export function parseTiledMap(xml: string, opts?: { inflate?: (d: Uint8Array) =>
             // than as a missing attribute.
             offsetX: num(a.offsetx, 0),
             offsetY: num(a.offsety, 0),
+            // CLAMPED, not trusted: the format states 0..1 and nothing enforces it, and an opacity
+            // above 1 would brighten rather than fade wherever a backend multiplies by it.
+            opacity: Math.min(1, Math.max(0, num(a.opacity, 1))),
+            // ABSENT MEANS SHOWN. Only an explicit "0" hides a layer — treating any present value
+            // as a flag would hide every layer that says visible="1".
+            visible: a.visible === undefined ? true : num(a.visible, 1) !== 0,
             cells: raw.map(decodeGid)
         });
+    }
+
+    // CONTENT THIS READER DOES NOT CARRY IS REPORTED, NOT PASSED OVER IN SILENCE. A map whose
+    // whole content is object layers — Tiled's own `sticker-knight` sandbox is exactly that, 79x45
+    // with not one <layer> in it — otherwise parses "successfully" into zero layers and zero cells,
+    // and a caller cannot tell that from an empty map. That is the same silent-nothing this
+    // codebase has been bitten by twice, and a count is what makes it visible.
+    const groups = [...xml.matchAll(/<objectgroup\b/g)].length;
+    if (groups > 0) notes.push(`${groups} object layer(s) are not read; only tile layers are`);
+    const imageLayers = [...xml.matchAll(/<imagelayer\b/g)].length;
+    if (imageLayers > 0) notes.push(`${imageLayers} image layer(s) are not read`);
+    // A <group> NESTS layers, so its children are found by the layer scan above but their grouping
+    // — and any offset or opacity the group carries — is lost. Reported for that reason, not
+    // because the tiles go missing.
+    const nested = [...xml.matchAll(/<group\b/g)].length;
+    if (nested > 0) notes.push(`${nested} group layer(s) are flattened; their own offset and opacity are lost`);
+
+    // AN ORIENTATION `tilePosition` CANNOT PLACE. Hexagonal and staggered maps parse perfectly —
+    // the cells are right — and then land on an orthogonal grid, which is wrong in a way that looks
+    // like a broken tileset. Tiled ships a hexagonal example; this tree has none.
+    const orientation = mapAttrs.orientation ?? "orthogonal";
+    if (orientation !== "orthogonal" && orientation !== "isometric") {
+        notes.push(`orientation "${orientation}" is not one this places; cells are laid out orthogonally`);
     }
 
     // RENDER ORDER IS REPORTED, NOT IMPLEMENTED. All 20 maps in the tree use the default
@@ -353,7 +404,7 @@ export function parseTiledMap(xml: string, opts?: { inflate?: (d: Uint8Array) =>
         height: num(mapAttrs.height, 0),
         tileWidth: num(mapAttrs.tilewidth, 0),
         tileHeight: num(mapAttrs.tileheight, 0),
-        orientation: mapAttrs.orientation ?? "orthogonal",
+        orientation,
         tilesets, layers, notes
     };
 }

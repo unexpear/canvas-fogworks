@@ -14409,6 +14409,96 @@ describe("Mesh — bending a shape (schema 41)", () => {
     };
     const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
 
+    test("a map that is ALL object layers says so, instead of reading as empty", () => {
+        // Tiled's own sticker-knight sandbox: 79x45, eleven object layers, and NOT ONE <layer>.
+        // Before this it parsed "successfully" into zero layers and zero cells with nothing said —
+        // indistinguishable from a blank map, which is the same silent-nothing that lost `surface`
+        // twice. Found by running the reader over the examples Tiled ships, not over our own tree.
+        const m = parseTiledMap(readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "object-only.tmx"), "utf8"));
+        expect(m).toMatchObject({ orientation: "orthogonal", width: 79, height: 45 });
+        expect(m.layers).toHaveLength(0);
+        // THE COUNT IS THE POINT. "Some objects were skipped" cannot be told from "one stray tag";
+        // eleven says the whole map is over there.
+        expect(m.notes).toContain("11 object layer(s) are not read; only tile layers are");
+
+        // The map is still USABLE for what it does carry — its tileset resolves, so a caller can
+        // decide to read the objects itself rather than being handed a failure.
+        expect(m.tilesets).toHaveLength(1);
+        expect(m.tilesets[0].source).toBe("objs.tsx");
+        expect(m.tilesets[0].firstGid).toBe(1);
+
+        // ...and its tileset really is an image COLLECTION, which is what makes an object map work
+        // at all: each object names a whole file rather than a cell of a sheet.
+        const set = parseTiledTileset(readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "object-only-tiles.tsx"), "utf8"), m.tilesets[0]);
+        expect(set.tiles.length).toBeGreaterThan(20);
+        expect(set.image).toBeNull();
+    });
+
+    test("an object's GID still decodes, flip flags and all", () => {
+        // The sandbox stores flipped scenery as gid 2147483655 — flag bit 31 set over gid 7. That
+        // is the same encoding a tile layer uses, so the decoder is already right; this pins that
+        // it stays right for the object path a caller will write.
+        expect(decodeGid(2147483655)).toEqual({ gid: 7, flipH: true, flipV: false, flipD: false });
+        // A plain gid in the same map is untouched, so the mask is not applied blindly.
+        expect(decodeGid(16)).toEqual({ gid: 16, flipH: false, flipV: false, flipD: false });
+    });
+
+    test("a layer's opacity and visibility are READ, because ignoring them is visibly wrong", () => {
+        // The shape Tiled's automapping examples use: some layers dimmed, some hidden outright.
+        // Drawing a hidden layer puts a rule's OUTPUT over its input, which looks like a corrupt
+        // map rather than an unread flag.
+        const m = parseTiledMap(tmxMap({
+            layers: '<layer id="1" name="Shown" width="2" height="2"><data encoding="csv">1,2,5,6</data></layer>'
+                + '<layer id="2" name="Dimmed" width="2" height="2" opacity="0.44">'
+                + '<data encoding="csv">1,2,5,6</data></layer>'
+                + '<layer id="3" name="Hidden" width="2" height="2" visible="0">'
+                + '<data encoding="csv">1,2,5,6</data></layer>'
+        }));
+        // ABSENT MEANS SHOWN AT FULL STRENGTH — not undefined, which would propagate into a
+        // multiply and blank the layer.
+        expect(m.layers[0]).toMatchObject({ name: "Shown", opacity: 1, visible: true });
+        expect(m.layers[1]).toMatchObject({ name: "Dimmed", opacity: 0.44, visible: true });
+        // ONLY AN EXPLICIT "0" HIDES. A reader treating the attribute's PRESENCE as the flag would
+        // hide every layer that says visible="1", which is most of them.
+        expect(m.layers[2]).toMatchObject({ name: "Hidden", opacity: 1, visible: false });
+        const shown = parseTiledMap(tmxMap({
+            layers: '<layer id="1" name="L" width="2" height="2" visible="1">'
+                + '<data encoding="csv">1,2,5,6</data></layer>'
+        }));
+        expect(shown.layers[0].visible).toBe(true);
+
+        // CLAMPED, not trusted: the format states 0..1 and enforces nothing, and an opacity above
+        // 1 would BRIGHTEN wherever a backend multiplies by it.
+        const wild = parseTiledMap(tmxMap({
+            layers: '<layer id="1" name="A" width="2" height="2" opacity="3">'
+                + '<data encoding="csv">1,2,5,6</data></layer>'
+                + '<layer id="2" name="B" width="2" height="2" opacity="-2">'
+                + '<data encoding="csv">1,2,5,6</data></layer>'
+        }));
+        expect(wild.layers[0].opacity).toBe(1);
+        expect(wild.layers[1].opacity).toBe(0);
+        // A hidden layer's CELLS are still read — visibility is a display fact, and a caller
+        // toggling it back on must not have to re-parse the file.
+        expect(m.layers[2].cells).toHaveLength(4);
+    });
+
+    test("an orientation this cannot place is reported, and the cells are still right", () => {
+        // Tiled ships a hexagonal example (`hexagonal-mini.tmx`, staggeraxis="y"); this tree has
+        // none, so the shape is mirrored here rather than vendored — the Tiled examples' own data
+        // licence is not stated, unlike sticker-knight's public domain.
+        const hex = parseTiledMap(tmxMap({ orientation: "hexagonal" }));
+        expect(hex.notes).toContain(
+            'orientation "hexagonal" is not one this places; cells are laid out orthogonally');
+        // PARSING IS UNAFFECTED — the note is about PLACEMENT. The cells are correct and a caller
+        // that knows how to place hexes can use them.
+        expect(hex.layers[0].cells.map(c => c.gid)).toEqual([1, 2, 5, 6]);
+        expect(parseTiledMap(tmxMap({ orientation: "staggered" })).notes.some(n => /staggered/.test(n))).toBe(true);
+
+        // THE TWO THIS DOES PLACE STAY SILENT, so a note keeps meaning something.
+        expect(parseTiledMap(tmxMap()).notes).toEqual([]);
+        expect(parseTiledMap(tmxMap({ orientation: "isometric" })).notes).toEqual([]);
+    });
+
     test("a layer carries its OWN offset, distinct from a tileset's", () => {
         // Two DIFFERENT non-zero values, and neither axis zero: `offsetx="0" offsety="-30"` is what
         // the one real file in the tree uses, and a reader that swapped the two would still put a

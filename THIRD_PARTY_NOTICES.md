@@ -74,6 +74,13 @@ from packs by **Kenney** (<https://kenney.nl>), each released under **Creative C
 (CC0 1.0)** — <http://creativecommons.org/publicdomain/zero/1.0/>. Every pack ships its own
 `License.txt` stating this, and each was read before the file was copied.
 
+Two further fixtures — `object-only.tmx` and `object-only-tiles.tsx` — are the **sticker-knight**
+example that ships with Tiled, by **@ponywolf** and, per its own README, *"released to the public
+domain"* (<http://opengameart.org/content/sticker-knight-platformer>). Tiled's other bundled
+examples are **not** vendored: `COPYING.txt` licenses Tiled's source directories but says nothing
+about the example DATA, and `desert.tsx` draws on The Mana World art, so their status is unclear.
+Where one of those was needed, its structure was mirrored in synthetic XML instead.
+
 They are test fixtures, not assets the product uses: the reader is pure text parsing, so the
 referenced PNGs are deliberately absent. They exist because a fixture invented to match a reader
 proves only that the reader matches the fixture. Provenance per file is in
