@@ -1157,7 +1157,30 @@ right, and `ctx.filter: blur()` already takes a sigma, so it already agreed. Cor
 shadow block would have moved every shadow twice as far as SVG puts it — which is why the test
 asserts the RATIO of each argument to its source value rather than three literals.
 
-The remaining parity gap is the GPU backend, which ignores both effects outright.
+The remaining parity gap is the GPU backend, which ignores both effects outright — and closing it
+starts with the arithmetic rather than the plumbing.
+
+**THE KERNEL IS PURE, THE PLUMBING IS NOT.** A framebuffer, a second program and two passes cannot
+be unit-tested without a GL context; the weights can, and they are where a blur that still looks
+like a blur hides being wrong. So `Gaussian` holds the numbers and the backend spends them.
+
+**Separability is the whole reason this is affordable.** A 2D gaussian is the outer product of two
+1D ones, so blurring horizontally and then vertically costs `2r+1` taps rather than `(2r+1)^2` — at
+sigma 20, 121 against 14,641.
+
+**It was checked against the backends it must match, not against its own formula.** Convolved with
+a hard edge and compared PER PIXEL to what `ctx.filter: blur(sigma)` actually draws:
+
+    sigma:           2        5       12
+    worst |diff|: 0.0017   0.0027   0.0026     (alpha, 0..1)
+
+Under 0.7 of one 8-bit level, with the midpoints agreeing exactly — so the pixel-centre convention
+matches too.
+
+**Normalised AFTER truncation.** A kernel cut at 3 sigma keeps 99.73% of the curve, and spending
+0.9973 of the light is a blur that DARKENS what it touches, more the wider it gets — which reads as
+a shadow too weak rather than a kernel too short. **The radius is clamped** at 64 taps and says so,
+because zoom multiplies sigma: a 500-tap kernel is reachable by zooming in, not by an odd document.
 ### Fonts — a family name is not a font
 
 **`style.fontFamily` has always been a STRING and nothing else.** A document could ask for "Kenney

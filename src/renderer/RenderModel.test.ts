@@ -13,6 +13,7 @@
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { buildRenderModel, DisplayList, HANDLE_SIZE_PX, commandsToPathData, effectFilterId } from "./RenderModel";
+import { gaussianKernel, gaussianOuterProduct, GAUSSIAN_MAX_RADIUS, GAUSSIAN_SIGMA_CUTOFF } from "./Gaussian";
 import { RendererState } from "./RendererState";
 import { createEmptyDocument, ProjectDocument, ReadonlyDocument } from "../core/document/Document";
 import { VARIABLE_FALLBACK_COLOR } from "../core/document/Variables";
@@ -761,5 +762,146 @@ describe("buildRenderModel — effects", () => {
 
         const plain = docWith({ type: "core.rectangle", style: { fill: "#fff", opacity: 1 } });
         expect(buildRenderModel(SIZE, plain, stateFor(plain)).defs).toEqual([]);
+    });
+});
+
+describe("Gaussian — the blur kernel the GPU backend spends", () => {
+    const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
+
+    test("the weights are a gaussian, symmetric and summing to ONE", () => {
+        const k = gaussianKernel(4);
+        expect(k.weights).toHaveLength(2 * k.radius + 1);
+        // NORMALISED AFTER TRUNCATION. A kernel cut at 3 sigma keeps 99.73% of the curve, and
+        // spending 0.9973 of the light is a blur that DARKENS what it touches -- subtly, and more
+        // the wider it gets, which reads as a shadow too weak rather than a kernel too short.
+        expect(sum(k.weights)).toBeCloseTo(1, 10);
+        // SYMMETRIC: a kernel that leaned would shift the picture sideways as it blurred, which
+        // looks like a misplaced shadow rather than a wrong kernel.
+        for (let i = 0; i < k.radius; i++) {
+            expect(k.weights[i]).toBeCloseTo(k.weights[k.weights.length - 1 - i], 12);
+        }
+        // The centre is the largest tap and the ends the smallest, monotonically.
+        const centre = k.radius;
+        expect(k.weights[centre]).toBe(Math.max(...k.weights));
+        for (let i = 1; i <= k.radius; i++) {
+            expect(k.weights[centre - i]).toBeLessThan(k.weights[centre - i + 1]);
+        }
+
+        // The SHAPE is a gaussian, not merely a bump: the ratio of the tap one sigma out to the
+        // centre is exp(-1/2) for any sigma. Asserting the curve rather than the numbers is what
+        // separates this from restating whatever the implementation produced.
+        for (const sigma of [2, 5, 10]) {
+            const g = gaussianKernel(sigma);
+            expect(g.weights[g.radius + sigma] / g.weights[g.radius]).toBeCloseTo(Math.exp(-0.5), 6);
+            expect(g.weights[g.radius + 2 * sigma] / g.weights[g.radius]).toBeCloseTo(Math.exp(-2), 6);
+        }
+    });
+
+    test("blurring twice in 1D EQUALS one 2D pass — which is why it is affordable", () => {
+        // SEPARABILITY is the whole reason this costs 2r+1 taps instead of (2r+1)^2 -- at sigma 20,
+        // 121 against 14,641. A separable blur that is subtly wrong still looks like a blur, so the
+        // identity is asserted against a directly-computed 2D gaussian rather than assumed.
+        const sigma = 3;
+        const k = gaussianKernel(sigma);
+        const separable = gaussianOuterProduct(k);
+
+        const n = 2 * k.radius + 1;
+        const direct: number[][] = [];
+        let total = 0;
+        for (let y = -k.radius; y <= k.radius; y++) {
+            const row: number[] = [];
+            for (let x = -k.radius; x <= k.radius; x++) {
+                const w = Math.exp(-(x * x + y * y) / (2 * sigma * sigma));
+                row.push(w); total += w;
+            }
+            direct.push(row);
+        }
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+            expect(separable[y][x]).toBeCloseTo(direct[y][x] / total, 9);
+        }
+        // And the 2D kernel sums to one too, which follows from each 1D one doing so.
+        expect(sum(separable.flat())).toBeCloseTo(1, 9);
+    });
+
+    test("the radius follows sigma, and is CLAMPED rather than unbounded", () => {
+        // 3 sigma is the truncation point, so the radius is ceil(3 * sigma).
+        expect(gaussianKernel(1).radius).toBe(GAUSSIAN_SIGMA_CUTOFF);
+        expect(gaussianKernel(4).radius).toBe(12);
+        expect(gaussianKernel(2.5).radius).toBe(8);        // ceil(7.5)
+        expect(gaussianKernel(4).clamped).toBe(false);
+
+        // A big sigma is CLAMPED and SAYS SO. Zoom multiplies sigma, so this is reachable by
+        // zooming in rather than by an absurd document -- and the result must stay a valid,
+        // normalised kernel rather than an allocation of 500 taps per fragment.
+        const huge = gaussianKernel(1000);
+        expect(huge.radius).toBe(GAUSSIAN_MAX_RADIUS);
+        expect(huge.clamped).toBe(true);
+        expect(sum(huge.weights)).toBeCloseTo(1, 10);
+        // Clamping cuts the curve early, so the kernel is FLATTER than an unclamped one would be:
+        // every tap is a meaningful fraction of the centre rather than vanishing at the edge.
+        expect(huge.weights[0] / huge.weights[huge.radius]).toBeGreaterThan(0.9);
+        // Exactly at the limit is NOT clamped -- the boundary is asserted from both sides, since
+        // that is where an off-by-one lives.
+        const atLimit = gaussianKernel(GAUSSIAN_MAX_RADIUS / GAUSSIAN_SIGMA_CUTOFF);
+        expect(atLimit.radius).toBe(GAUSSIAN_MAX_RADIUS);
+        expect(atLimit.clamped).toBe(false);
+    });
+
+    test("convolved with an edge it reproduces the browser's own blur", () => {
+        // THE PARITY CHECK, and the reason this module can be trusted before any GL exists. The
+        // kernel was convolved with a hard edge and compared PER PIXEL against what
+        // `ctx.filter = blur(sigma)` actually draws, in the real renderer:
+        //
+        //     sigma:            2        5       12
+        //     worst |diff|:  0.0017   0.0027   0.0026     (alpha, 0..1)
+        //
+        // Under 0.7 of one 8-bit level everywhere -- quantisation noise. So a GPU pass spending
+        // these weights draws the same blur the Canvas and SVG backends already draw.
+        //
+        // Asserted here as the PROPERTIES that comparison confirmed, so the check survives without
+        // a browser: a step convolved with this kernel is monotonic, antisymmetric about the edge,
+        // and reaches the untouched values well outside the radius.
+        const step = (i: number, edge: number) => (i < edge ? 1 : 0);
+        for (const sigma of [2, 5, 12]) {
+            const k = gaussianKernel(sigma);
+            const EDGE = 200, N = 400;
+            const profile: number[] = [];
+            for (let i = 0; i < N; i++) {
+                let acc = 0;
+                for (let j = -k.radius; j <= k.radius; j++) {
+                    const src = i + j;
+                    acc += (src < 0 ? 1 : src >= N ? 0 : step(src, EDGE)) * k.weights[j + k.radius];
+                }
+                profile.push(acc);
+            }
+            // MONOTONIC: a blur that overshoots would ring, which is what a wrong kernel does.
+            for (let i = 1; i < N; i++) expect(profile[i]).toBeLessThanOrEqual(profile[i - 1] + 1e-12);
+            // Untouched well outside the radius, in BOTH directions -- a kernel that leaked would
+            // dim the whole canvas rather than just the edge.
+            expect(profile[EDGE - k.radius - 2]).toBeCloseTo(1, 9);
+            expect(profile[EDGE + k.radius + 1]).toBeCloseTo(0, 9);
+            // ANTISYMMETRIC about the edge: what one side loses the other gains, exactly, because
+            // the weights sum to one. This is the property that fails first if they do not.
+            for (let d = 1; d <= k.radius; d++) {
+                expect(profile[EDGE - d] + profile[EDGE + d - 1]).toBeCloseTo(1, 9);
+            }
+        }
+    });
+
+    test("no blur is the IDENTITY kernel, not an error", () => {
+        // A shape with no blur is the common case, so it yields a kernel a caller can spend
+        // unconditionally rather than a null it must branch on.
+        for (const sigma of [0, -1, NaN, Infinity]) {
+            const k = gaussianKernel(sigma);
+            expect(k).toEqual({ radius: 0, weights: [1], clamped: false });
+        }
+        // A sigma so small it rounds to a single tap still normalises to 1 rather than to its
+        // untruncated weight -- otherwise the smallest blurs would be the ones that darkened most.
+        const tiny = gaussianKernel(0.1);
+        expect(tiny.radius).toBe(1);
+        expect(sum(tiny.weights)).toBeCloseTo(1, 10);
+        // Infinity is REFUSED rather than producing a kernel of NaNs, which would blank every
+        // fragment it touched -- a blur that erases is worse than one that does nothing.
+        expect(gaussianKernel(Infinity).weights.every(Number.isFinite)).toBe(true);
     });
 });

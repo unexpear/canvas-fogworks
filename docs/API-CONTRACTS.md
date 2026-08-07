@@ -1413,6 +1413,41 @@ chain, gesture is unsnapped (deferred).
 
 ## Renderer (`renderer/`)
 
+### `renderer/Gaussian` — the blur kernel, as plain numbers
+
+```ts
+interface GaussianKernel {
+    radius: number;      // taps per side; 0 means no blur
+    weights: number[];   // 2*radius+1, symmetric, summing to 1
+    clamped: boolean;    // true when the curve was cut at GAUSSIAN_MAX_RADIUS
+}
+function gaussianKernel(sigma: number): GaussianKernel;   // sigma in DEVICE pixels
+function gaussianOuterProduct(kernel: GaussianKernel): number[][];
+const GAUSSIAN_MAX_RADIUS: number;      // 64 taps per side
+const GAUSSIAN_SIGMA_CUTOFF: number;    // 3 sigma, keeping 99.73% of the curve
+```
+
+`shadow` and `blur` are the last thing the WebGL backend cannot draw, and both are a gaussian over
+a rendered image. **The GL plumbing cannot be unit-tested without a context; the arithmetic can,
+and it is where a blur that still looks like a blur hides being wrong** — so the weights live here
+and the backend spends them.
+
+**SIGMA IS IN DEVICE PIXELS.** `Shadow.blur` and `Style.blur` are world units; the backend that
+owns the CTM multiplies by `z·dpr` before asking — the same one arithmetic exception `emitCanvas`
+already makes for `shadow*`/`ctx.filter`.
+
+**Separability is why this is affordable**: blurring per axis costs `2r+1` taps rather than
+`(2r+1)^2`, which at sigma 20 is 121 against 14,641. `gaussianOuterProduct` exists only so that
+identity can be asserted against a directly-computed 2D gaussian.
+
+**Normalised AFTER truncation.** Spending 0.9973 of the light is a blur that darkens what it
+touches, more the wider it gets. **The radius is clamped and says so** — zoom multiplies sigma, so
+a 500-tap kernel is reachable by zooming in rather than by an odd document.
+
+**A sigma of zero or less is the IDENTITY kernel, not an error**, so a caller has one code path.
+
+
+
 The renderer is a pure display-list builder plus a thin backend. `buildRenderModel`
 turns `(size, doc, state)` into a plain-data `DisplayList`; a backend transcribes it to
 the screen. Every draw decision lives in the model (unit-tested in the `node` env like
