@@ -103,7 +103,8 @@ import { TiledMapResult, TiledTileset, TiledTileImage, TiledLayer, TiledCell, pa
     TILED_MAX_CELLS, TILED_MAX_LAYERS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
 import { GlbContainer, GltfJson, GltfNode, GltfResult, GltfMeshInstance, GltfPrimitive,
     parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
-    GLTF_IGNORABLE_REQUIRED, GLTF_MAX_VERTICES, GLTF_MAX_PRIMITIVES, GLTF_MAX_NODE_DEPTH
+    GLTF_IGNORABLE_REQUIRED, GLTF_MAX_VERTICES, GLTF_MAX_PRIMITIVES, GLTF_MAX_NODE_DEPTH,
+    GltfMaterial, GltfImageSource, gltfMaterials, gltfImageSource
 } from "../import/Gltf";
 import { ObjResult, ObjMaterial, parseObj, objError, parseMtl, mtlError, resolveObjIndex,
     OBJ_MAX_VERTICES, OBJ_MAX_GROUPS, OBJ_FACE_MAX_CORNERS } from "../import/Obj";
@@ -809,6 +810,21 @@ export function __apiSurfacePin(): void {
     expectType<string[]>(GLTF_IGNORABLE_REQUIRED);
     expectType<number>(GLTF_MAX_VERTICES); expectType<number>(GLTF_MAX_PRIMITIVES);
     expectType<number>(GLTF_MAX_NODE_DEPTH);
+
+    // MATERIALS. 7,955 across the tree, 4,255 naming a base-colour texture, and 4,489 relying on
+    // the spec's default white — so the DEFAULTS are load-bearing for more than half the corpus.
+    const gmats: GltfMaterial[] = gltfMaterials(gjson);
+    expectType<GltfMaterial[]>(gmats);
+    const gmat: GltfMaterial | undefined = gmats[0];
+    expectType<[number, number, number, number] | undefined>(gmat?.baseColor);
+    expectType<number | undefined>(gmat?.metallic);
+    expectType<string | undefined>(gmat?.alphaMode);
+    expectType<boolean | undefined>(gmat?.doubleSided);
+    // An image is LOCATED, not fetched: a `uri` names a file the caller opens, a `buffer` names a
+    // slice of the bytes already in hand. Both appear — 4,130 and 125.
+    const gimg: GltfImageSource | null = gltfImageSource(gjson, 0);
+    expectType<GltfImageSource | null>(gimg);
+    expectType<GltfImageSource | null | undefined>(gmat?.baseColorImage);
 
     // OBJ produces the SAME shape glTF does — `MeshData` names it once so a mesh node, a picker and
     // a GPU path are each written once rather than per format. FBX will produce it too.

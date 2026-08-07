@@ -23,8 +23,8 @@
  * A REQUIRED EXTENSION IS REFUSED BY NAME unless it provably cannot touch the geometry. The spec
  * says a client MUST NOT load an asset requiring an extension it lacks, and that rule exists so
  * nothing is drawn confidently wrong. The only one required anywhere in the tree is
- * `KHR_materials_unlit`, in 246 files — a lighting hint, and this reads no materials at all, so
- * refusing on it would cost 4.7% of the corpus over something that cannot change a single vertex.
+ * `KHR_materials_unlit`, in 246 files — a lighting hint, and nothing here lights anything, so
+ * refusing on it would cost 4.7% of the corpus over something that cannot change what is read.
  * The exemption is an explicit ALLOW-LIST that must be revisited when materials land, and using it
  * is reported louder than an ordinary extension, because the file did say it mattered.
  *
@@ -53,9 +53,16 @@ const CHUNK_BIN = 0x004e4942;    // "BIN\0"
  * materials at all, so an extension that only decorates a material cannot make its output wrong —
  * and refusing on one costs 246 files, 4.7% of the tree, over a lighting hint.
  *
- * IT IS AN ALLOW-LIST, NOT A LENIENCY. Anything not named here is still refused by name. WHEN
- * MATERIALS ARE READ, THIS LIST MUST BE REVISITED: `KHR_materials_unlit` becomes load-bearing the
- * moment there is a material to light, and leaving it here then would be the silent kind of wrong.
+ * IT IS AN ALLOW-LIST, NOT A LENIENCY. Anything not named here is still refused by name.
+ *
+ * REVISITED WHEN MATERIALS LANDED, as the previous note demanded. The answer did not change, and
+ * the reason is worth pinning down: `gltfMaterials` now reads base colour, metallic, roughness and
+ * emissive, but NOTHING LIGHTS THEM — there is no 3D renderer. `KHR_materials_unlit` says "do not
+ * light this material", which cannot change an unlit reading of it.
+ *
+ * THE EXACT TRIGGER for removing it: the first time a lighting term is applied to a glTF material.
+ * On that day these 246 files must either honour the extension or be refused, because from then on
+ * ignoring it means shading something the file said to leave flat.
  */
 export const GLTF_IGNORABLE_REQUIRED = ["KHR_materials_unlit"];
 
@@ -85,7 +92,9 @@ export interface GltfJson {
     accessors?: GltfAccessor[];
     bufferViews?: GltfBufferView[];
     buffers?: { byteLength?: number; uri?: string }[];
-    materials?: unknown[];
+    materials?: GltfMaterialJson[];
+    textures?: { source?: number; sampler?: number }[];
+    images?: { uri?: string; mimeType?: string; bufferView?: number }[];
     extensionsUsed?: string[];
     extensionsRequired?: string[];
 }
@@ -125,6 +134,49 @@ interface GltfBufferView {
     byteStride?: number;
 }
 
+interface GltfMaterialJson {
+    name?: string;
+    doubleSided?: boolean;
+    alphaMode?: string;
+    alphaCutoff?: number;
+    emissiveFactor?: number[];
+    normalTexture?: { index?: number };
+    pbrMetallicRoughness?: {
+        baseColorFactor?: number[];
+        baseColorTexture?: { index?: number; texCoord?: number };
+        metallicFactor?: number;
+        roughnessFactor?: number;
+    };
+}
+
+/**
+ * Where an image's bytes are, without fetching them.
+ *
+ * A glTF image is EITHER a file beside the document or a slice of the buffer already in hand, and
+ * 4,150 of the measured images are the first while 125 are the second. Naming which, rather than
+ * handing back bytes, is the same rule every reader here follows: resolving a path needs a
+ * filesystem, and a parser that reaches for one stops being testable.
+ */
+export type GltfImageSource =
+    | { kind: "uri"; uri: string; mimeType: string | null }
+    | { kind: "buffer"; offset: number; length: number; mimeType: string | null };
+
+/** One material, as the PBR model states it. Colours are linear RGBA, 0..1. */
+export interface GltfMaterial {
+    name: string;
+    /** `baseColorFactor`, defaulting to opaque white as the spec does. */
+    baseColor: [number, number, number, number];
+    /** The IMAGE this material paints with, or null. Resolved through `textures` to `images`. */
+    baseColorImage: GltfImageSource | null;
+    metallic: number;
+    roughness: number;
+    emissive: [number, number, number];
+    /** "OPAQUE", "MASK" or "BLEND" — 3,329 of the measured materials state one. */
+    alphaMode: string;
+    alphaCutoff: number;
+    doubleSided: boolean;
+}
+
 /** A GLB opened: its JSON and, when present, its embedded buffer. */
 export interface GlbContainer {
     json: GltfJson;
@@ -150,6 +202,67 @@ export interface GltfResult {
     extensions: string[];
     /** What could not be represented exactly, reported rather than left to be discovered. */
     notes: string[];
+}
+
+/**
+ * An image's bytes located, following `textures[i].source` to `images[]`.
+ *
+ * TWO HOPS, NOT ONE. A material names a TEXTURE, which names an IMAGE — the indirection exists so
+ * several materials can share one picture with different samplers, and skipping it reads the
+ * texture index as an image index. That is off-by-whatever silently, and lands on a real image
+ * often enough to look like a mismatched-but-plausible skin rather than a bug.
+ */
+export function gltfImageSource(json: GltfJson, textureIndex: number): GltfImageSource | null {
+    const texture = (json.textures ?? [])[textureIndex];
+    if (!texture || texture.source === undefined) return null;
+    const image = (json.images ?? [])[texture.source];
+    if (!image) return null;
+    const mimeType = image.mimeType ?? null;
+    if (image.uri !== undefined) {
+        // A `data:` URI is bytes already, not a path — the caller must not try to open it as one.
+        return { kind: "uri", uri: image.uri, mimeType };
+    }
+    if (image.bufferView !== undefined) {
+        const view = (json.bufferViews ?? [])[image.bufferView];
+        if (!view) return null;
+        return { kind: "buffer", offset: view.byteOffset ?? 0, length: view.byteLength, mimeType };
+    }
+    return null;
+}
+
+/**
+ * The document's materials, with every default the spec states filled in.
+ *
+ * DEFAULTS MATTER MORE THAN THEY LOOK. Only 3,798 of the 7,955 measured materials state a
+ * `baseColorFactor` at all; the rest rely on the spec's opaque white. A reader defaulting to black
+ * or to transparent would render half the corpus invisible or unlit, and would do it without any
+ * field being missing that a check could notice.
+ */
+export function gltfMaterials(json: GltfJson): GltfMaterial[] {
+    return (json.materials ?? []).map(m => {
+        const pbr = m.pbrMetallicRoughness ?? {};
+        const base = pbr.baseColorFactor;
+        const emissive = m.emissiveFactor;
+        const textureIndex = pbr.baseColorTexture?.index;
+        return {
+            name: m.name ?? "",
+            baseColor: base && base.length >= 4
+                ? [base[0], base[1], base[2], base[3]]
+                : [1, 1, 1, 1],
+            baseColorImage: textureIndex === undefined ? null : gltfImageSource(json, textureIndex),
+            // 1 and 1 are the spec's defaults — fully metallic and fully rough — and 7,476 of the
+            // measured materials state metallic explicitly while only 3,488 state roughness, so
+            // the default is load-bearing for over half of them.
+            metallic: pbr.metallicFactor ?? 1,
+            roughness: pbr.roughnessFactor ?? 1,
+            emissive: emissive && emissive.length >= 3
+                ? [emissive[0], emissive[1], emissive[2]]
+                : [0, 0, 0],
+            alphaMode: m.alphaMode ?? "OPAQUE",
+            alphaCutoff: m.alphaCutoff ?? 0.5,
+            doubleSided: m.doubleSided === true
+        };
+    });
 }
 
 /** What went wrong with a GLB container, or null. */
