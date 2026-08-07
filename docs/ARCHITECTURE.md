@@ -1223,6 +1223,30 @@ The next diagnostic is to read back the target's own pixels straight after the i
 and before any blur — one reading that splits "never drawn" from "lost in compositing".
 ### Pixels — the one thing no import can add
 
+**A `core.raster` NODE IS CURRENTLY INVISIBLE, and that is the next job.** `buildRenderModel` does
+not know the type, so it falls through to a `rect` shape carrying the node's `fill` — which for a
+raster node is `"none"`. The node exists, validates, serializes, round-trips and accepts paint
+through the dispatcher; nothing draws it. Measured, not assumed: a document with a raster node and
+a rectangle produces two items, both `shape: "rect"`, neither carrying an image.
+
+**That is the same failure class as the delta layer dropping `surface`** — no error, no log, just
+nothing. Twice in one sitting, which says the shape is systemic: a field or a type that one layer
+emits and the next does not recognise fails SILENTLY here, because every layer is permissive about
+what it does not understand.
+
+**The design question it opens.** A backend draws pictures by `href`; a `RasterSurface` is
+run-length text. Three ways out, none obviously right:
+- decode to pixels in the render model and have each backend upload them (`putImageData`,
+  `texImage2D`) — but SVG has no such path and would still need a URL;
+- encode to a PNG data URL at render time — needs a canvas, so the render model stops being pure,
+  which is the property the whole codec decision was made to protect;
+- cache a data URL beside the node, invalidated on paint — impure at the edge only, but a cache is
+  a second source of truth for what the picture is.
+
+Settle that before writing any of it.
+
+
+
 **Every node type this engine has is composed from geometry or references an image someone else
 made.** Nothing holds pixels VDE authored, which is why no amount of import work adds up to pixel
 art: a sprite editor's whole subject is a buffer you can change one dot at a time.
