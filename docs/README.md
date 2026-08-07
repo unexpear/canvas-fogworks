@@ -47,6 +47,9 @@ This is the primary defense against architectural drift.
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
 - **Tests:** 1292 — `src/core/tests/document.test.ts` (1174) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (41).
+- **Verify the tests themselves:** `npm run mutate:dimensions` (7/7) — breaks the paint arithmetic
+  on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
+  and it refuses a dirty tree. See TESTING.md § Fixture design.
 
 ## Source map
 
