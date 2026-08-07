@@ -139,6 +139,35 @@ void main() {
     gl_FragColor = sum;
 }`;
 
+/**
+ * Draws a finished target onto the screen, optionally offset and tinted.
+ *
+ * This is what turns a blurred copy into a SHADOW: the alpha is kept, the colour is replaced by
+ * the shadow's, and the whole thing is shifted. Tinting in the same pass that composites means the
+ * blurred image is read once rather than copied into a third texture first.
+ *
+ * PREMULTIPLIED. The target was drawn into a transparent-cleared framebuffer with ordinary
+ * src-alpha blending, which leaves its RGB already multiplied by its own alpha — so it composites
+ * with `ONE, ONE_MINUS_SRC_ALPHA`, and the tint multiplies by alpha here to stay in that space.
+ */
+const COMPOSITE_FRAGMENT_SHADER = `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform vec4 u_tint;
+uniform float u_useTint;
+uniform vec2 u_offset;
+varying vec2 v_uv;
+void main() {
+    // SUBTRACTED, not added. Moving the sample point back is what moves the IMAGE forward — a
+    // shadow with dx of +4 must land four pixels to the right, and adding here would put it four
+    // to the left, which reads as a light source on the wrong side rather than a sign error.
+    vec4 src = texture2D(u_tex, v_uv - u_offset);
+    // A tinted draw keeps only the COVERAGE. Reusing the source's colour would give a shadow the
+    // shape's own hue, which looks like a badly-offset duplicate rather than a shadow.
+    vec4 tinted = vec4(u_tint.rgb * src.a * u_tint.a, src.a * u_tint.a);
+    gl_FragColor = mix(src, tinted, u_useTint);
+}`;
+
 const FRAGMENT_SHADER = `
 precision mediump float;
 varying vec3 v_normal;
@@ -262,8 +291,21 @@ export interface BlurState {
     dirLoc: WebGLUniformLocation | null;
     radiusLoc: WebGLUniformLocation | null;
     weightsLoc: WebGLUniformLocation | null;
-    /** Ping and pong. Allocated lazily and grown to fit, never shrunk. */
-    targets: [BlurTarget | null, BlurTarget | null];
+    /** The composite program — the same quad, drawn with an optional tint and offset. */
+    composite: WebGLProgram;
+    compositePosLoc: number;
+    compositeTexLoc: WebGLUniformLocation | null;
+    compositeTintLoc: WebGLUniformLocation | null;
+    compositeUseTintLoc: WebGLUniformLocation | null;
+    compositeOffsetLoc: WebGLUniformLocation | null;
+    /**
+     * THREE targets, not two.
+     *
+     * Two would do for a blur alone — a separable pass ping-pongs between a pair. A SHADOW needs a
+     * third, because the shadow is a blurred copy of the item that must be drawn UNDER the item
+     * which is still needed sharp. Blurring in place would consume the very thing being shadowed.
+     */
+    targets: [BlurTarget | null, BlurTarget | null, BlurTarget | null];
 }
 
 export interface GLState {
@@ -331,13 +373,21 @@ function compile(gl: WebGLRenderingContext, type: number, source: string): WebGL
 export function initBlur(gl: WebGLRenderingContext): BlurState | null {
     const vs = compile(gl, gl.VERTEX_SHADER, BLUR_VERTEX_SHADER);
     const fs = compile(gl, gl.FRAGMENT_SHADER, BLUR_FRAGMENT_SHADER);
+    const cfs = compile(gl, gl.FRAGMENT_SHADER, COMPOSITE_FRAGMENT_SHADER);
     const program = gl.createProgram();
+    const composite = gl.createProgram();
     const quad = gl.createBuffer();
-    if (!vs || !fs || !program || !quad) return null;
+    if (!vs || !fs || !cfs || !program || !composite || !quad) return null;
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
+    // The composite shares the blur's vertex shader — both draw the same full-screen quad, and
+    // one source for that means the two cannot disagree about which corner is which texel.
+    gl.attachShader(composite, vs);
+    gl.attachShader(composite, cfs);
+    gl.linkProgram(composite);
+    if (!gl.getProgramParameter(composite, gl.LINK_STATUS)) return null;
     // TWO TRIANGLES covering clip space. `v_uv` is derived from the position rather than sent as a
     // second attribute, so the quad is four numbers per corner and nothing can disagree about
     // which corner maps to which texel.
@@ -358,8 +408,51 @@ export function initBlur(gl: WebGLRenderingContext): BlurState | null {
         // AN ARRAY UNIFORM IS ADDRESSED BY ITS FIRST ELEMENT. `getUniformLocation(p, "u_weights")`
         // returns null on some drivers and the whole kernel would silently upload nothing.
         weightsLoc: gl.getUniformLocation(program, "u_weights[0]"),
-        targets: [null, null]
+        composite,
+        compositePosLoc: gl.getAttribLocation(composite, "a_pos"),
+        compositeTexLoc: gl.getUniformLocation(composite, "u_tex"),
+        compositeTintLoc: gl.getUniformLocation(composite, "u_tint"),
+        compositeUseTintLoc: gl.getUniformLocation(composite, "u_useTint"),
+        compositeOffsetLoc: gl.getUniformLocation(composite, "u_offset"),
+        targets: [null, null, null]
     };
+}
+
+/**
+ * A finished target drawn onto whatever framebuffer is bound.
+ *
+ * `offsetX`/`offsetY` are in DEVICE PIXELS **in the document's axes — y grows DOWNWARD**, like
+ * `Shadow.dy` and like every other coordinate in this engine. They move the TEXTURE READ rather
+ * than the quad, so the quad stays exactly the screen and nothing has to be clipped.
+ *
+ * THE Y IS NEGATED HERE because a GL framebuffer's y grows UPWARD. Measured, not reasoned: a raw
+ * `+4` moved a probe texel from row 8 to row 12 of `readPixels`, whose row 0 is the BOTTOM — so a
+ * shadow with `dy: +4` would have risen four pixels instead of falling four. That is a light
+ * source on the wrong side of the scene, which reads as a design choice rather than a sign error.
+ */
+export function compositeTarget(
+    gl: WebGLRenderingContext, blur: BlurState, from: BlurTarget,
+    offsetX: number, offsetY: number, tint: [number, number, number, number] | null
+): void {
+    gl.useProgram(blur.composite);
+    gl.bindBuffer(gl.ARRAY_BUFFER, blur.quad);
+    gl.enableVertexAttribArray(blur.compositePosLoc);
+    gl.vertexAttribPointer(blur.compositePosLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, from.texture);
+    gl.uniform1i(blur.compositeTexLoc, 0);
+    gl.uniform4f(blur.compositeTintLoc, tint ? tint[0] : 0, tint ? tint[1] : 0,
+        tint ? tint[2] : 0, tint ? tint[3] : 1);
+    gl.uniform1f(blur.compositeUseTintLoc, tint ? 1 : 0);
+    // DEVICE pixels to UV, using the target's own size — the target is grown-not-shrunk, so it is
+    // often larger than the canvas and dividing by the canvas would drift as the window resized.
+    gl.uniform2f(blur.compositeOffsetLoc, offsetX / from.width, -offsetY / from.height);
+    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    // PREMULTIPLIED source: the target's RGB is already scaled by its alpha.
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.disable(gl.BLEND);
 }
 
 /**
