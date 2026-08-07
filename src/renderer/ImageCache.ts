@@ -43,35 +43,60 @@ export function imageGeneration(): number {
     return generation;
 }
 
-/** The decoded bitmap for an href, or null while it loads / fails (or with no DOM, e.g. node tests). */
 /**
- * A raster surface as a drawable image, decoded once and cached under its own key.
+ * A decoded raster surface, drawn straight from the canvas it was decoded into.
  *
- * ONE NOTION OF "LOADED" ACROSS ALL THREE BACKENDS. A raster could have been handed to each backend
- * as raw pixels — `putImageData` for Canvas, `texImage2D` for the GPU — but SVG has no such path and
- * would still need a URL, so the three would have disagreed about when a surface was ready. Turning
- * it into the same `HTMLImageElement` every other href resolves to means they cannot.
+ * SYNCHRONOUS, AND THAT IS THE WHOLE POINT. The first version routed the pixels through
+ * `canvas.toDataURL()` into an `HTMLImageElement` and waited for `onload`, so the picture arrived a
+ * frame late. For an image that arrives once, one frame is nothing — it is what an ordinary load
+ * already costs. FOR A BRUSH IT IS EVERY STROKE: the cache key folds in a checksum of the pixels,
+ * so painting changes the key on every move and every move was a fresh miss. The lag was measured
+ * in the running app, where the first sample after a stroke found nothing and only a settled
+ * repaint showed the paint.
  *
- * DECODED LAZILY, ON A MISS. The alternatives both cost more: decoding inside `buildRenderModel`
- * would make the model impure, and decoding on every document change would run whether or not
- * anything drew the node. A miss costs one frame without the picture — which is exactly what an
- * ordinary image load already costs, so it is the established behaviour rather than a new one.
+ * A canvas needs no load, and all three backends take one: `drawImage` accepts a
+ * `CanvasImageSource`, `texImage2D` accepts a canvas, and SVG takes `toDataURL()` — which is where
+ * the URL still gets built, once, in `surfaceUrl` below.
+ *
+ * KEYED BY NODE, NOT BY HREF. The href changes with every stroke, so an href-keyed cache would keep
+ * one full-size canvas PER STROKE for the life of the session — a 512-square surface is a megabyte,
+ * and a few minutes of drawing is hundreds. One entry per node, replaced when the payload changes,
+ * is the only version of this that does not leak while someone paints.
  */
-export function resolveSurface(
+type SurfaceEntry = { key: string; canvas: HTMLCanvasElement | null; url: string | null };
+
+const surfaceCache = new Map<string, SurfaceEntry>();
+
+/**
+ * The node id inside a `raster:<id>:<w>x<h>:<len>:<sum>` key.
+ *
+ * Falls back to the WHOLE href when the shape is not recognised, which degrades to the old
+ * href-keyed behaviour rather than collapsing every unrecognised surface onto one entry — being
+ * wrong about identity is worse than being wrong about memory.
+ */
+function surfaceNodeId(href: string): string {
+    const parts = href.split(":");
+    return parts.length >= 3 && parts[0] === "raster" && parts[1].length > 0 ? parts[1] : href;
+}
+
+function surfaceEntry(
     href: string, surface: { data: string; width: number; height: number }
-): HTMLImageElement | null {
-    if (typeof Image === "undefined" || typeof document === "undefined") return null;
-    const held = imageCache.get(href);
-    if (held) return held.loaded ? held.img : null;
+): SurfaceEntry | null {
+    if (typeof document === "undefined") return null;
+    const id = surfaceNodeId(href);
+    const held = surfaceCache.get(id);
+    // SAME PAYLOAD, SAME PICTURE — the key carries the dimensions, the length and a checksum, so an
+    // unchanged key means unchanged pixels and the decode is skipped.
+    if (held && held.key === href) return held;
 
     const buffer = decodeSurface(surface.data, surface.width, surface.height);
-    // A payload that will not decode is cached as a PERMANENT miss rather than retried every frame
-    // — the entry exists, so this branch is never reached again for that key.
-    const img = new Image();
-    const entry = { img, loaded: false };
-    imageCache.set(href, entry);
-    if (!buffer) return null;
-
+    if (!buffer) {
+        // A payload that will not decode is remembered as a failure for THAT key, so it is not
+        // retried every frame — but a later, different payload for the same node still decodes.
+        const dead: SurfaceEntry = { key: href, canvas: null, url: null };
+        surfaceCache.set(id, dead);
+        return dead;
+    }
     const canvas = document.createElement("canvas");
     canvas.width = surface.width;
     canvas.height = surface.height;
@@ -80,11 +105,36 @@ export function resolveSurface(
     // `data` is already straight RGBA in exactly the order `ImageData` wants, which is why the
     // paint layer is not premultiplied — handing it over is a copy rather than a conversion.
     ctx.putImageData(new ImageData(buffer.data, surface.width, surface.height), 0, 0);
-    // The SAME onload path as a fetched image, so the generation bump and the repaint request come
-    // from one place and cannot disagree about whether a frame has new pixels in it.
-    img.onload = () => { entry.loaded = true; generation++; onImageReady?.(); };
-    img.src = canvas.toDataURL();
-    return null;
+    const entry: SurfaceEntry = { key: href, canvas, url: null };
+    // REPLACES the node's previous entry, which is what stops a stroke-per-entry leak.
+    surfaceCache.set(id, entry);
+    // The generation moves because the pixels available really did change — a future GPU path
+    // re-uploads on it. `onImageReady` is deliberately NOT called: this runs inside a draw, and
+    // asking for a repaint from there is a loop.
+    generation++;
+    return entry;
+}
+
+/** The surface as something to draw, ready THIS frame, or null when it cannot be decoded. */
+export function resolveSurface(
+    href: string, surface: { data: string; width: number; height: number }
+): HTMLCanvasElement | null {
+    return surfaceEntry(href, surface)?.canvas ?? null;
+}
+
+/**
+ * The surface as a `data:` URL, for the one backend that can only take a URL.
+ *
+ * BUILT LAZILY AND CACHED, because `toDataURL` re-encodes the whole surface to PNG — cheap once per
+ * stroke, ruinous once per frame.
+ */
+export function surfaceUrl(
+    href: string, surface: { data: string; width: number; height: number }
+): string | null {
+    const entry = surfaceEntry(href, surface);
+    if (!entry || !entry.canvas) return null;
+    if (entry.url === null) entry.url = entry.canvas.toDataURL();
+    return entry.url;
 }
 
 export function resolveImage(href: string): HTMLImageElement | null {

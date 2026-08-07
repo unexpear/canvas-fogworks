@@ -1606,13 +1606,21 @@ model stays pure and the href stays identity-only. `resolveImage` could never do
 
 ```ts
 function resolveSurface(href: string, surface: { data: string; width: number; height: number }):
-    HTMLImageElement | null;
+    HTMLCanvasElement | null;      // ready THIS frame — no load to wait for
+function surfaceUrl(href: string, surface: { data: string; width: number; height: number }):
+    string | null;                 // the same entry, encoded — for the one backend that needs a URL
 ```
 
-**Decoded LAZILY, on a miss**, into the same `HTMLImageElement` every other href resolves to — so
-all three backends share one notion of "loaded". A miss costs one frame without the picture, which
-is what an ordinary image load already costs. A payload that will not decode is cached as a
-PERMANENT miss rather than retried every frame.
+**Decoded SYNCHRONOUSLY into an offscreen canvas**, so the frame that asks gets the pixels. The
+`HTMLImageElement` this replaced needed `toDataURL` then `onload`, which costs a frame — nothing for
+a picture that arrives once, but a brush changes the cache key on EVERY MOVE and paid it every time.
+All three backends take a canvas; SVG alone needs a URL and gets it from `surfaceUrl`, which encodes
+lazily and caches per entry.
+
+**KEYED BY NODE, NOT BY HREF.** The href folds in a pixel checksum, so an href-keyed cache kept one
+full-size canvas per stroke for the life of the session. One entry per node, replaced when the
+payload changes. A payload that will not decode is remembered as a failure for THAT key — so it is
+not retried every frame, while a later, different payload for the same node still decodes.
 
 **Canvas draws rasters; the GPU backend does not yet** — its `Draw` structure has no payload field,
 so threading one through `itemDraws` is a real change. It skips them, alongside the effects

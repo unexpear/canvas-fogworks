@@ -16,7 +16,7 @@
 
 import { toMatrixString, isTranslationOnly } from "../core/geometry/Matrix";
 import { DisplayList, DrawItem, Paint, FilterDef, commandsToPathData, effectFilterId } from "./RenderModel";
-import { naturalSize, resolveSurface } from "./ImageCache";
+import { naturalSize, surfaceUrl } from "./ImageCache";
 
 const svgNS = "http://www.w3.org/2000/svg";
 
@@ -193,9 +193,11 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         // showed it. The surface is decoded through the SAME cache the Canvas backend uses, so
         // there is one notion of "loaded" rather than a second that could disagree.
         // A raster with NO href names nothing to cache under, so there is nothing to resolve —
-        // `RenderModel` already returns null for a raster carrying no surface.
-        const decoded = shape.surface && shape.href ? resolveSurface(shape.href, shape.surface) : null;
-        const href = shape.surface ? (decoded ? decoded.src : null) : shape.href;
+        // `RenderModel` already returns null for a raster carrying no surface. SVG is the one
+        // backend that can only take a URL, so it asks for the encoded form; the others draw the
+        // decoded canvas straight, and both come from the same entry.
+        const decoded = shape.surface && shape.href ? surfaceUrl(shape.href, shape.surface) : null;
+        const href = shape.surface ? decoded : shape.href;
         // NO HREF WHILE IT DECODES, rather than the unusable key: an `<image>` with a broken href
         // is a broken-image glyph in some renderers, which is a WRONG picture rather than a
         // missing one. `ImageCache` bumps its generation on load and asks for the repaint.

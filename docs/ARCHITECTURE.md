@@ -1279,7 +1279,33 @@ payload from 128 to 404 bytes; ONE undo returns it to exactly 128 and redo resto
 byte; and the Canvas backend really does display it — 63 magenta and 36 black pixels counted inside
 the node's own box.
 
-**PAINTING IS ONE REPAINT BEHIND on Canvas, and this is structural rather than a bug.** The cache is
+**PAINTING IS NO LONGER A REPAINT BEHIND** — `resolveSurface` decodes into an offscreen CANVAS and
+returns it synchronously, so the frame that asks for the pixels gets them. The `Image` round-trip it
+replaced was the whole cause: `toDataURL` then `onload` is asynchronous, and while one late frame is
+nothing for a picture that arrives once, a brush changes the cache key on EVERY MOVE, so every move
+paid it. All three backends take a canvas (`drawImage` accepts a `CanvasImageSource`, `texImage2D`
+accepts a canvas); SVG alone needs a URL and gets it from `surfaceUrl`, which encodes lazily and
+caches per entry because `toDataURL` re-encodes the whole surface.
+
+**The cache is now keyed by NODE, not by href.** The href folds in a pixel checksum, so an
+href-keyed cache kept one full-size canvas PER STROKE for the life of the session — a 512-square
+surface is a megabyte and a few minutes of drawing is hundreds. One entry per node, replaced when
+the payload changes, is the only version that does not leak while somebody paints.
+
+Measured live: a stroke is visible after ONE animation frame (46 near-black pixels found with no
+settling delay, where the previous build found nothing).
+
+> **UNRESOLVED, found in the same session and not explained.** With two strokes on one surface, the
+> stored surface decodes to BOTH (rows 24 and 39 of a 70x50 canvas, 51 and 46 pixels) and the SVG
+> backend renders both — while the Canvas backend renders only the newer one, before and after a
+> forced repaint, at any threshold. Two consumers of ONE cache entry disagreeing should not be
+> possible, which means the assumption that they read the same entry is what to test first: log the
+> entry key each backend resolves for that node in the same frame. It may also be a fault in the
+> measurement rather than the renderer — the world-to-device mapping used for sampling is provably
+> not exact (a one-pixel line reads across two sampled rows). Recorded rather than glossed; the
+> synchronous decode is kept because its own benefit is independently measured.
+
+**The superseded reasoning, for the record:** The cache is
 keyed on the href, the href folds in a checksum of the pixels, so EVERY STROKE IS A FRESH MISS —
 `resolveSurface` returns null, decodes, and asks for a repaint. The "lazy on miss costs one frame"
 trade recorded above was reasoned about a picture that arrives once; a brush changes the key on
