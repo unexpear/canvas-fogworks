@@ -25,10 +25,30 @@
 /**
  * The widest kernel this will build, in taps per side.
  *
- * A sigma large enough to need more than this is clamped, and the blur comes out slightly tighter
- * than asked rather than costing 500 texture fetches per fragment. 64 covers sigma 21 exactly at
- * the 3-sigma rule, which is past anything a design file plausibly asks for at 1:1 — but zoom
- * multiplies sigma, so the clamp is reachable by zooming in far enough and must not be a cliff.
+ * 64 taps covers sigma 21.33 at the 3-sigma rule, and **THAT IS NOT ENOUGH** — a claim in an
+ * earlier version of this comment said it was past anything a design file plausibly asks for at
+ * 1:1, which measuring proved false. Device sigma is `blur * zoom * dpr`, so:
+ *
+ *     world blur 20, zoom 1, dpr 2  ->  sigma  40, wants 120 taps    CLAMPED
+ *     world blur 40, zoom 1, dpr 1  ->  sigma  40, wants 120 taps    CLAMPED
+ *     world blur 20, zoom 4, dpr 2  ->  sigma 160, wants 480 taps    CLAMPED
+ *
+ * A 20px blur at 1:1 on any Retina display is already past it. WORSE, the clamp is a collapse
+ * rather than a taper: the effective sigma pins at ~21.3 whatever was asked, so a 40px blur and a
+ * 160px blur come out IDENTICAL, and both far sharper than SVG and Canvas draw the same document.
+ * That is the same shape of fault as the half-soft canvas shadow — it looks like a crisper render.
+ *
+ *     sigma  32 -> the kernel covers 95.4% of the curve
+ *     sigma  64 -> 68.3%
+ *     sigma 160 -> 31.1%
+ *
+ * RAISING THIS IS NOT THE FIX. The shader's loop bound is a compile-time constant, so radius 480
+ * means 961 texture fetches per fragment per pass. The standard answer is to DOWNSAMPLE: render the
+ * target at half or quarter resolution and blur there, since halving the resolution halves the
+ * sigma needed. That is both correct and faster, and it is the work this constant is waiting on.
+ *
+ * Until then `clamped` is reported so a caller can at least know the blur it got is not the blur it
+ * asked for.
  */
 export const GAUSSIAN_MAX_RADIUS = 64;
 
