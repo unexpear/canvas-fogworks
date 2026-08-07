@@ -1057,10 +1057,19 @@ region field went in before this did.
 confines every one to the folder the USER picked rather than to the map's own directory: real maps
 reference `../Spritesheet/sheet.png` one level up from themselves and still well inside the pack.
 
-**Coverage is measured, not assumed.** Running every reader over the whole measured tree —
-88,815 files — reads 62,444 of them (70.3%) with nothing refused and nothing failing. The rest has
-no reader at all rather than a broken one: 24,051 3D files, 1,342 audio, and the remainder project
-files, archives and readmes. That sweep is what pointed at the three Tiled forms above — but only
+**Coverage is measured, not assumed — and re-measured, because the tree moves.** Running every
+reader over it reads 62,929 of 90,360 files (69.6%) with nothing refused and nothing failing. The
+rest has no reader at all rather than a broken one: ~25,700 3D files, 1,342 audio, and the remainder
+project files, archives and readmes. THE COUNT IS A SNAPSHOT: the tree grew by 2,044 files between
+two runs, which is how the AppleDouble problem below surfaced — so the sweep is re-run rather than
+its last answer quoted.
+
+**465 FILES IN THE TREE ARE NOT ASSETS.** A macOS copy onto a non-HFS volume leaves an AppleDouble
+sidecar beside every file — `._sheet.png` next to `sheet.png` — holding a resource fork rather than
+an image. 410 carry a `.png` extension. An extension test alone therefore puts 410 entries in the
+asset browser that every decoder then refuses, which reads as corrupt art rather than as metadata,
+so `walkDir` skips them along with `.DS_Store` and `Thumbs.db`. The readers were already right to
+refuse them; the fault was in what was offered to them. That sweep is what pointed at the three Tiled forms above — but only
 partly, and the shortfall is the lesson. It failed on two files, and it failed on them for their
 QUOTING rather than for being collections; the third collection set used ordinary double quotes,
 took its first tile's image as the whole sheet, and PASSED, because the sweep's only question was

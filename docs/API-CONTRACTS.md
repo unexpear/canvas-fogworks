@@ -865,8 +865,8 @@ materials, so refusing on it would cost 4.7% of the corpus over something that c
 vertex. `GLTF_IGNORABLE_REQUIRED` is an explicit allow-list, using it is reported louder than an
 ordinary extension, and **it must be revisited when materials land**.
 
-**The buffer is supplied, not fetched.** A `.glb` carries its BIN chunk; the 254 `.gltf` files name
-an external `.bin` and 3,941 images are sidecars. The caller resolves those, exactly as it does a
+**The buffer is supplied, not fetched.** A `.glb` carries its BIN chunk; the `.gltf` files name an
+external `.bin` and most images are sidecars. The caller resolves those, exactly as it does a
 Tiled `.tsx`.
 
 **Not read yet:** materials, textures, animations (150 files), skins (26), morph targets, sparse

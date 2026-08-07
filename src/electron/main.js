@@ -193,6 +193,16 @@ const TILED_EXT = /\.tmx$/i;
  */
 const INFLATE_MAX_BYTES = 64 * 1024 * 1024;
 
+/**
+ * Files that are filesystem BOOKKEEPING rather than assets.
+ *
+ * A macOS copy onto a non-HFS volume leaves an AppleDouble sidecar beside every file — `._sheet.png`
+ * next to `sheet.png` — holding the resource fork, not an image. The measured tree carries 465 of
+ * them, 410 with a `.png` extension, so an extension test alone puts 410 entries in the asset
+ * browser that every decoder then refuses. They look like corrupt art rather than like metadata.
+ */
+const JUNK_FILE = /^(\._|\.DS_Store$|Thumbs\.db$)/i;
+
 /** Walk a directory, collecting entries that pass `match`, bounded by count. */
 function walkDir(root, match, limit) {
     const out = [];
@@ -206,7 +216,7 @@ function walkDir(root, match, limit) {
             const full = path.join(dir, e.name);
             if (e.isDirectory()) {
                 if (!SCAN_SKIP_DIRS.has(e.name) && !e.name.startsWith(".")) stack.push(full);
-            } else if (match(e.name)) {
+            } else if (!JUNK_FILE.test(e.name) && match(e.name)) {
                 out.push(full);
             }
         }
