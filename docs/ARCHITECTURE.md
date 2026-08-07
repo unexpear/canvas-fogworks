@@ -1223,25 +1223,38 @@ The next diagnostic is to read back the target's own pixels straight after the i
 and before any blur — one reading that splits "never drawn" from "lost in compositing".
 ### Pixels — the one thing no import can add
 
-**A `core.raster` NODE IS NAMED BUT NOT YET RESOLVED.** `buildRenderModel` now emits it as an image
-whose `href` identifies the surface — the same seam `core.image` uses, where the model names a
-picture and `ImageCache` resolves it impurely. What is missing is the resolving half, and there is
-a gap in the design as it stands:
+**A `core.raster` NODE IS NAMED, RESOLVED AND DRAWN — on the Canvas backend.** `buildRenderModel`
+emits it as an image whose `href` identifies the surface, the same seam `core.image` uses, and
+`ImageCache.resolveSurface` decodes it.
 
 **THE HREF CARRIES IDENTITY, NOT THE PAYLOAD** — deliberately, since a base64 surface in a cache key
-would be enormous and would be rebuilt every frame. But `resolveImage` works by `img.src = href`,
-which for a `raster:` key simply fails to load and draws nothing. **The cache cannot decode a
-surface it cannot see.**
+would be enormous and would be rebuilt every frame. `resolveImage` works by `img.src = href`, which
+for a `raster:` key simply fails to load, so the cache cannot decode a surface it cannot see.
 
-The shape that fits: a `registerRasterSurface(href, surface)` on the cache, called from the impure
-renderer layer when a document changes, decoding the run-length payload into an `ImageData`, drawing
-that to a canvas and handing `toDataURL()` to the same `Image` every other href uses. That keeps one
-notion of "loaded" across all three backends — a second one is a second thing that can be wrong —
-and confines the impurity to the cache, where it already lives.
+**The registration question dissolved rather than being answered: the SHAPE carries the payload**
+along the display list. That is a reference to a string the document already holds, not a copy, so
+the model stays plain data and stays pure — and the cache decodes lazily on a miss. All three
+alternatives cost something this codebase already refuses: registering from inside
+`buildRenderModel` makes the model impure, which is the property the codec decision exists to
+protect; registering on every document change decodes whether or not anything drew the node;
+lazy-on-miss costs one frame without the picture, which is exactly what an ordinary image load
+already costs — the ESTABLISHED behaviour rather than a new one.
 
-What that leaves open is WHEN registration happens. Doing it inside `buildRenderModel` would make
-the model impure; doing it on every document change costs a decode per stroke; doing it lazily on
-first miss means a frame drawn without the picture. Decide before writing it.
+**ONE NOTION OF "LOADED" ACROSS THE BACKENDS.** A raster could have been handed to each as raw
+pixels — `putImageData` for Canvas, `texImage2D` for the GPU — but SVG has no such path and would
+still need a URL, so the three would have disagreed about when a surface was ready. Turning it into
+the same `HTMLImageElement` every other href resolves to means they cannot, and the `onload` path
+that bumps the generation and asks for a repaint stays in one place. `data` is already straight RGBA
+in exactly the order `ImageData` wants — which is WHY the paint layer is not premultiplied.
+
+Verified in the real renderer rather than by construction: an 11-byte run-length payload decodes,
+reaches a canvas, survives `toDataURL` and an `Image` load, and reads back `[255,0,0,255]` where it
+should be red and `[0,0,0,0]` where it should be clear. `putImageData` is present in the shipped
+bundle, where it was tree-shaken before.
+
+**THE GPU BACKEND IS NOT WIRED.** Its `Draw` carries an image structure with no payload field, so
+threading it through `itemDraws` is a real change rather than a two-line one. It continues to skip
+rasters, alongside the effects regression already recorded against it above.
 
 **The previous state, for the record:** `buildRenderModel` does
 not know the type, so it falls through to a `rect` shape carrying the node's `fill` — which for a

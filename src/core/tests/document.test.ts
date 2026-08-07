@@ -16461,6 +16461,18 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // An EVEN width has no centre column, so nothing is ever its own mirror there.
         expect(symmetryPoints(3, 0, 8, 1, h)).toEqual([[3, 0], [4, 0]]);
 
+        // A NON-SQUARE surface, which is the only shape that can tell the two axes apart. Every
+        // assertion above uses 8x8 or 5x5, where `width` and `height` are the same number — so the
+        // vertical axis could read the WIDTH and not one of them would notice. (It did: a mutation
+        // swapping `height` for `width` in `my` survived all 1292 tests before these four lines.)
+        expect(symmetryPoints(1, 2, 3, 8, v)).toEqual([[1, 2], [1, 5]]);
+        // BOTH axes on a non-square surface pin both dimensions at once — the diagonal is the only
+        // point that depends on the two of them together.
+        expect(symmetryPoints(0, 2, 3, 8, both)).toEqual([[0, 2], [2, 2], [0, 5], [2, 5]]);
+        // An ODD HEIGHT has a centre ROW, and the 5x5 case above cannot tell it from a centre
+        // column: on a square surface the two coincide.
+        expect(symmetryPoints(1, 2, 4, 5, v)).toEqual([[1, 2]]);
+
         // Off-surface points are NOT dropped: `setPixel` already bounds every dab, and a second
         // bounds rule here is a second thing that can disagree with it.
         expect(symmetryPoints(-2, 0, 8, 8, h)).toEqual([[-2, 0], [9, 0]]);

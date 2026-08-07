@@ -332,6 +332,51 @@ Both regression tests were proven to fail on the unfixed code. *Reinforces: the 
 fuzz cannot see a bug that is uniformly wrong across incremental and full — an adversarial
 review can.*
 
+### Fixture design: the assertion must be able to SEE the mutation
+
+Across the paint modules, roughly ten of every mutation survivor had the same cause, and it
+was never a missing assertion — it was a **fixture in which the mutation makes no
+difference**. The test asserted the right thing about a case that cannot distinguish the two
+behaviours. This is worth stating as a rule because it is cheap to apply *before* writing the
+fixture and expensive to discover afterwards.
+
+Observed shapes, each with the module it actually bit:
+
+| Blind fixture | What it hides | Where |
+|---|---|---|
+| A **square** buffer, surface or grid | `width` ↔ `height`, row stride ↔ column stride, a transposed index | `Symmetry` (survived), `PixelBuffer`, `PixelPatch`, `Palette` |
+| An **odd-only** (or even-only) size | the centre column/row case, and the de-duplication that depends on it | `Brush`, `Symmetry` |
+| A **blank** "before" region | anything that reads the prior state — a patch that overwrites vs. one that composites | `PixelPatch` |
+| **Equal error magnitudes** across compared candidates | a weighting, a tie-break, a channel drop | `Quantize` |
+| A candidate placed **far away** in the compared space | "skipped" vs. "considered and lost" | `Quantize` (transparent palette slot) |
+| **Small or sequential** indices | a stride, an offset, a two-hop lookup collapsing to one | `Gltf`, `Palette` |
+| A bound checked on **one axis only** | the other axis's bound being absent | `PixelBuffer`, `TiledMap` |
+| A **blank or uniform** input document | anything order- or content-dependent | `TiledMap` |
+
+The checklist, applied when the fixture is written:
+
+1. **Is any dimension equal to another?** Square is the default and the default is blind. Use
+   3×8, not 8×8.
+2. **Is the "before" state blank?** If so the test cannot tell a write from a merge.
+3. **Are the competing candidates distinguishable only by the property under test?** If two
+   things differ in three ways, the assertion pins none of them.
+4. **Would the assertion still hold if I dropped the term I am testing?** If yes, it is not
+   testing that term. (In `Quantize`, dropping the blue channel made the original test pass
+   *more* strongly.)
+5. **Does one test carry the whole protection?** Note it — `copyRect`, `applyPatch` and
+   `diffRect` are each killed by exactly one test.
+
+This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
+runs the dimension-confusion family over the paint modules and exits non-zero on a survivor:
+currently **7 mutants, 7 killed**. It found the first one — `Symmetry`'s vertical axis reading
+`width`, which survived all 1292 tests because every fixture but one was 8×8, and that one
+exercised the horizontal axis only. It is not part of `npm run check` (it runs the suite once
+per mutant, so it costs minutes rather than seconds) and it **refuses to run on a dirty tree**,
+because it edits real source files and restores them.
+
+A mutation whose `from` no longer matches is reported as **NOT APPLIED** and counted as a
+failure, not skipped — the code moved out from under it and the battery is testing nothing.
+
 ## Doc-staleness tripwire (`npm run doc-drift`)
 
 Each doc that describes specific code declares it in the doc itself:

@@ -1547,10 +1547,24 @@ source has not decoded.
 **Nearest-neighbour by DEFAULT**, unlike `core.image`: a painted surface zoomed in is meant to show
 its pixels, while a photograph is not. Two node types, two opposite correct defaults.
 
-**Not resolved yet.** The href is identity-only, so `ImageCache` cannot decode a surface it cannot
-see — `resolveImage` sets `img.src = href`, which for a `raster:` key fails to load. The missing
-piece is a registration step; see ARCHITECTURE.md for the shape and the open question about when it
-runs.
+**Resolved by `ImageCache.resolveSurface(href, surface)`**, because the SHAPE CARRIES THE PAYLOAD
+along the display list — a reference to a string the document already holds, not a copy, so the
+model stays pure and the href stays identity-only. `resolveImage` could never do it: it sets
+`img.src = href`, which for a `raster:` key fails to load.
+
+```ts
+function resolveSurface(href: string, surface: { data: string; width: number; height: number }):
+    HTMLImageElement | null;
+```
+
+**Decoded LAZILY, on a miss**, into the same `HTMLImageElement` every other href resolves to — so
+all three backends share one notion of "loaded". A miss costs one frame without the picture, which
+is what an ordinary image load already costs. A payload that will not decode is cached as a
+PERMANENT miss rather than retried every frame.
+
+**Canvas draws rasters; the GPU backend does not yet** — its `Draw` structure has no payload field,
+so threading one through `itemDraws` is a real change. It skips them, alongside the effects
+regression recorded against it in ARCHITECTURE.md.
 
 ### `renderer/Gaussian` — the blur kernel, as plain numbers
 
