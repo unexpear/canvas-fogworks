@@ -83,6 +83,8 @@ import { parseObj, objError, parseMtl, mtlError, resolveObjIndex,
 import { MESH_IDENTITY } from "../import/MeshData";
 import { createPixelBuffer, pixelBufferError, getPixel, setPixel, inBounds, linePoints,
     drawLine, floodFill, PIXEL_MAX_SIDE, Rgba } from "../paint/PixelBuffer";
+import { capturePatch, applyPatch, revertPatch, invertPatch, readRegion, isEmptyPatch,
+    patchCost } from "../paint/PixelPatch";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -15759,6 +15761,105 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const b = createPixelBuffer(2, 2);
         expect(b.data).toHaveLength(2 * 2 * 4);
         expect([...b.data].every(v => v === 0)).toBe(true);
+    });
+
+    test("a stroke is remembered as the pixels it changed, not the surface", () => {
+        // A 4096-square RGBA surface is 67 MB. Snapshotting it per stroke would make twenty pencil
+        // dots cost 1.3 GB while the dots themselves changed a few hundred bytes.
+        const b = createPixelBuffer(64, 64);
+        const before = readRegion(b, 0, 0, 64, 64);
+        setPixel(b, 10, 20, RED);
+        setPixel(b, 12, 22, RED);
+        const patch = capturePatch(b, before, 0, 0, 64, 64);
+
+        // THE BOUNDS ARE MEASURED, NOT DECLARED. The caller offered the whole surface; the patch
+        // is the tight box around what actually differs — so a brush that over-reports its reach
+        // costs nothing for being cautious.
+        expect(patch).toMatchObject({ x: 10, y: 20, width: 3, height: 3 });
+        expect(patchCost(patch)).toBe(3 * 3 * 4 * 2);
+        // Which is a rounding error against the surface it came from.
+        expect(patchCost(patch)).toBeLessThan(b.data.length / 100);
+
+        // APPLY and REVERT are exact inverses on the pixels they cover, and touch nothing else.
+        revertPatch(b, patch);
+        expect(getPixel(b, 10, 20)).toEqual([0, 0, 0, 0]);
+        expect(getPixel(b, 12, 22)).toEqual([0, 0, 0, 0]);
+        applyPatch(b, patch);
+        expect(getPixel(b, 10, 20)).toEqual(RED);
+        expect(getPixel(b, 12, 22)).toEqual(RED);
+        // The pixel BETWEEN the two dots was inside the patch's box and must come back untouched.
+        expect(getPixel(b, 11, 21)).toEqual([0, 0, 0, 0]);
+
+        // INVERTING swaps the sides, so redo is the same code path rather than a second one that
+        // could disagree about edges.
+        revertPatch(b, patch);
+        applyPatch(b, invertPatch(invertPatch(patch)));
+        expect(getPixel(b, 10, 20)).toEqual(RED);
+        applyPatch(b, invertPatch(patch));
+        expect(getPixel(b, 10, 20)).toEqual([0, 0, 0, 0]);
+    });
+
+    test("a patch reads ROWS, and an edit that changed nothing is empty", () => {
+        // A surface's rows are NOT adjacent in memory unless a region spans its full width. A
+        // single span copy would take the pixels either side of the rectangle too — and put them
+        // back on undo, erasing whatever the user had drawn beside the stroke.
+        const b = createPixelBuffer(4, 3);
+        setPixel(b, 0, 0, RED);        // outside the region, to the left of row 0
+        setPixel(b, 3, 1, BLUE);       // outside the region, to the right of row 1
+        const region = readRegion(b, 1, 0, 2, 2);
+        expect(region).toHaveLength(2 * 2 * 4);
+        expect([...region].every(v => v === 0)).toBe(true);
+
+        // An edit that changed nothing produces an EMPTY patch rather than a zero-size rectangle
+        // a caller has to special-case.
+        const untouched = readRegion(b, 0, 0, 4, 3);
+        expect(isEmptyPatch(capturePatch(b, untouched, 0, 0, 4, 3))).toBe(true);
+        expect(patchCost(capturePatch(b, untouched, 0, 0, 4, 3))).toBe(0);
+        // Applying or reverting an empty patch is a no-op, not a crash.
+        const copy = [...b.data];
+        applyPatch(b, capturePatch(b, untouched, 0, 0, 4, 3));
+        expect([...b.data]).toEqual(copy);
+
+        // A region entirely off the surface is empty rather than negative-sized.
+        expect(isEmptyPatch(capturePatch(b, new Uint8ClampedArray(0), 99, 99, 4, 4))).toBe(true);
+        // And a `before` that does not match the region it claims is refused rather than mis-read.
+        expect(isEmptyPatch(capturePatch(b, new Uint8ClampedArray(8), 0, 0, 4, 3))).toBe(true);
+
+        // A NON-UNIFORM 'before', which is the only kind that can tell a row offset apart from a
+        // wrong one. Every earlier fixture started from a blank surface, so reading the wrong row
+        // of it returned zeros — the right answer by accident.
+        const painted = createPixelBuffer(4, 3);
+        for (let yy = 0; yy < 3; yy++) for (let xx = 0; xx < 4; xx++)
+            setPixel(painted, xx, yy, [10 * xx, 20 * yy, 0, 255]);
+        const was = readRegion(painted, 0, 0, 4, 3);
+        setPixel(painted, 2, 1, RED);
+        const p2 = capturePatch(painted, was, 0, 0, 4, 3);
+        expect(p2).toMatchObject({ x: 2, y: 1, width: 1, height: 1 });
+        // The stored 'before' must be THAT pixel's old colour, not some other row's.
+        expect([...p2.before]).toEqual([20, 20, 0, 255]);
+        revertPatch(painted, p2);
+        expect(getPixel(painted, 2, 1)).toEqual([20, 20, 0, 255]);
+
+        // AN ALPHA-ONLY CHANGE must be recorded. Every earlier edit changed RGB as well, so a
+        // comparison that ignored alpha still noticed them — an erase changes alpha alone.
+        const fade = createPixelBuffer(2, 1);
+        setPixel(fade, 0, 0, [7, 8, 9, 255]);
+        const fadeWas = readRegion(fade, 0, 0, 2, 1);
+        setPixel(fade, 0, 0, [7, 8, 9, 0]);
+        const p3 = capturePatch(fade, fadeWas, 0, 0, 2, 1);
+        expect(isEmptyPatch(p3)).toBe(false);
+        expect(p3).toMatchObject({ x: 0, y: 0, width: 1, height: 1 });
+        revertPatch(fade, p3);
+        expect(getPixel(fade, 0, 0)).toEqual([7, 8, 9, 255]);
+
+        // A NON-SQUARE surface again, since square ones cannot tell a row stride from a column one.
+        const wide = createPixelBuffer(5, 2);
+        const w0 = readRegion(wide, 0, 0, 5, 2);
+        setPixel(wide, 4, 1, RED);
+        const p = capturePatch(wide, w0, 0, 0, 5, 2);
+        expect(p).toMatchObject({ x: 4, y: 1, width: 1, height: 1 });
+        revertPatch(wide, p);
+        expect(getPixel(wide, 4, 1)).toEqual([0, 0, 0, 0]);
     });
 
     test("read shapes become nodes the document accepts", () => {
