@@ -91,6 +91,7 @@ import { encodeSurface, decodeSurface, PIXEL_CODEC_VERSION, PIXEL_RUN_MAX } from
 import { beginStroke, extendStroke, endStroke, strokeEscaped } from "../paint/Stroke";
 import { rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
 import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
+import { paletteError, paletteAt, parseFloatColour, PALETTE_MAX_COLOURS } from "../paint/Palette";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -16304,6 +16305,69 @@ describe("Mesh — bending a shape (schema 41)", () => {
             style: { fill: "none", opacity: 1 }, layout: {},
             surface: { data: "not-a-payload", width: 4, height: 4 } });
         expect(() => new PaintSurfaceAction(doc, "bad", patch).execute()).toThrow(/will not decode/);
+    });
+
+    test("a palette carries its GRID, because the layout is the artist's meaning", () => {
+        // DawnBringer's 32 colours laid out 8x4 group ramps into rows. A picker that reflowed them
+        // to fit its panel would keep every colour and destroy the grouping.
+        const ramp = (n: number): Rgba => [n * 8, n * 4, n * 2, 255];
+        const pal = { name: "DB32", colours: Array.from({ length: 32 }, (_, i) => ramp(i)),
+            width: 8, height: 4, comment: "Author: DawnBringer" };
+        expect(paletteError(pal)).toBeNull();
+
+        // Slots are addressed ROW-MAJOR, so row 1 column 0 is the ninth colour and not the second.
+        expect(paletteAt(pal, 0, 0)).toEqual(ramp(0));
+        expect(paletteAt(pal, 1, 0)).toEqual(ramp(1));
+        expect(paletteAt(pal, 0, 1)).toEqual(ramp(8));
+        expect(paletteAt(pal, 7, 3)).toEqual(ramp(31));
+        // Off the grid is null, not a wrapped neighbour.
+        expect(paletteAt(pal, 8, 0)).toBeNull();
+        expect(paletteAt(pal, 0, 4)).toBeNull();
+        expect(paletteAt(pal, -1, 0)).toBeNull();
+
+        // A GRID MAY BE INCOMPLETE. Pixelorama's own palette is 56 colours in 12x5, so the last
+        // row is short — the empty slots must read null so a picker draws holes rather than
+        // shifting the next colour up and silently rearranging the artist's rows.
+        const short = { name: "P", colours: [ramp(1), ramp(2), ramp(3)], width: 2, height: 2, comment: "" };
+        expect(paletteError(short)).toBeNull();
+        expect(paletteAt(short, 0, 1)).toEqual(ramp(3));
+        expect(paletteAt(short, 1, 1)).toBeNull();
+
+        // MORE COLOURS THAN SLOTS is refused, not truncated: the colours would be there and
+        // unreachable, which is worse than a file that will not load.
+        expect(paletteError({ ...short, width: 1, height: 1 })).toMatch(/more colours than/);
+        expect(paletteError(null)).toMatch(/must be an object/);
+        expect(paletteError({ ...pal, name: 5 })).toMatch(/must have a name/);
+        expect(paletteError({ ...pal, colours: "red" })).toMatch(/list of colours/);
+        expect(paletteError({ ...pal, width: 0 })).toMatch(/at least one slot/);
+        expect(paletteError({ ...pal, width: 1.5 })).toMatch(/whole dimensions/);
+        expect(paletteError({ ...short, colours: [[1, 2, 3]] })).toMatch(/four components/);
+        expect(paletteError({ ...short, colours: [[0, 0, 0, 300]] })).toMatch(/0\.\.255/);
+        expect(PALETTE_MAX_COLOURS).toBeGreaterThan(256);
+    });
+
+    test("a palette file's colours are FLOATS, not bytes", () => {
+        // Pixelorama writes `"(1, 0.5, 0, 1)"` with components 0..1. Reading those as 0..255 gives
+        // near-black for every colour in the file — a palette that loads, displays, and is
+        // uniformly wrong, which looks like a broken screen rather than a broken parser.
+        expect(parseFloatColour("(1, 0.5, 0, 1)")).toEqual([255, 128, 0, 255]);
+        expect(parseFloatColour("(0, 0, 0, 1)")).toEqual([0, 0, 0, 255]);
+        // The real file's own values, to four places.
+        expect(parseFloatColour("(0.1294, 0.1216, 0.2039, 1)")).toEqual([33, 31, 52, 255]);
+        // Whitespace varies between writers; the parentheses do not.
+        expect(parseFloatColour("(1,1,1,1)")).toEqual([255, 255, 255, 255]);
+        expect(parseFloatColour("  (0, 1, 0, 0.5)  ")).toEqual([0, 255, 0, 128]);
+
+        // CLAMPED rather than trusted: nothing enforces 0..1 in the file, and a component above 1
+        // would land past 255 and wrap when it reached a byte.
+        expect(parseFloatColour("(2, -1, 0, 1)")).toEqual([255, 0, 0, 255]);
+
+        // Anything that is not that shape is null rather than a guess.
+        expect(parseFloatColour("1, 0, 0, 1")).toBeNull();      // no parentheses
+        expect(parseFloatColour("(1, 0, 0)")).toBeNull();       // three components
+        expect(parseFloatColour("(1, red, 0, 1)")).toBeNull();
+        expect(parseFloatColour(42)).toBeNull();
+        expect(parseFloatColour("")).toBeNull();
     });
 
     test("read shapes become nodes the document accepts", () => {
