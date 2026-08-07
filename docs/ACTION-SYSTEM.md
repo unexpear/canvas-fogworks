@@ -7,6 +7,35 @@
 The action system is the engine's spine: it is **the only way the document changes**,
 and it is what makes undo/redo, and later AI, plugins, and collaboration, safe.
 
+## PaintSurfaceAction — a stroke through the dispatcher (schema 55)
+
+```ts
+new PaintSurfaceAction(document, nodeId, patch: PixelPatch)
+```
+
+Painting is an Action like everything else, so undo, transactions and coalescing work by default
+rather than through a private stack beside them.
+
+**IT CARRIES A PATCH, NOT A SURFACE.** A 4096-square buffer is 67 MB; an action holding one would
+make twenty pencil dots cost 1.3 GB of history. The patch is the rectangle that changed, already
+measured by `capturePatch` rather than trusted from the caller.
+
+**The new payload is computed IN the action** — decode, patch, re-encode. A caller supplying both
+the patch and the encoded result could get them out of step, and the disagreement would only appear
+on the next load.
+
+**An EMPTY patch is invalid**, not a harmless no-op: it would put a step on the undo stack that
+undoes nothing, so a user pressing undo once would appear to have been ignored.
+
+**There is no `reverse` flag.** An earlier version had one and nothing reached it — the dispatcher
+undoes by REPLAYING DELTAS, never by running an inverted action. A parameter no path reaches is a
+second way to express undo that can disagree with the real one.
+
+> **A DELTA FIELD THIS LAYER EMITS MUST EXIST IN `applyMutations`.** `surface` did not, so the
+> action validated, returned `success: true`, and the document kept its old pixels. Nothing threw.
+> `success` is not evidence that anything changed — a test must read the RESULT back out of the
+> document, not assert on the action's return.
+
 ## 1. The Action contract
 
 `Action` (`Action.ts`) is abstract. Every mutation is a subclass.
