@@ -88,6 +88,7 @@ import { capturePatch, applyPatch, revertPatch, invertPatch, readRegion, isEmpty
 import { makeBrush, brushError, stampBrush, brushBounds, strokePath, strokeBounds,
     BRUSH_MAX_SIZE } from "../paint/Brush";
 import { encodeSurface, decodeSurface, PIXEL_CODEC_VERSION, PIXEL_RUN_MAX } from "../paint/PixelCodec";
+import { beginStroke, extendStroke, endStroke, strokeEscaped } from "../paint/Stroke";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -16045,6 +16046,70 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // A size the surface layer itself refuses is refused here too, rather than allocated.
         expect(decodeSurface(enc.data, 0, 1)).toBeNull();
         expect(decodeSurface(enc.data, 1e9, 1e9)).toBeNull();
+    });
+
+    test("a drag becomes ONE patch, and undoing it leaves nothing behind", () => {
+        // The whole module exists to get one sequence right: capture the region BEFORE any paint,
+        // then draw, then diff. Get it wrong and the picture is still correct — only the undo is
+        // broken, which is why it has to be asserted rather than looked at.
+        const b = createPixelBuffer(32, 32);
+        const brush = makeBrush(2, false);
+        const s = beginStroke(b, brush, 5, 5, RED, 32)!;
+        expect(s).not.toBeNull();
+        extendStroke(b, s, 15, 8, linePoints);
+        extendStroke(b, s, 20, 20, linePoints);
+        const patch = endStroke(b, s, linePoints);
+
+        // The stroke is visibly there.
+        expect(getPixel(b, 5, 5)).toEqual(RED);
+        expect(getPixel(b, 20, 20)).toEqual(RED);
+        // ONE patch for the whole drag — one undo step, which is what "undo my last stroke" means.
+        expect(patch.width).toBeGreaterThan(0);
+        // And undoing it leaves NOTHING. A per-segment capture would record the previous segment's
+        // paint as the next one's "before", so most of the stroke would survive the undo.
+        revertPatch(b, patch);
+        expect([...b.data].every(v => v === 0)).toBe(true);
+        // Redo puts all of it back.
+        applyPatch(b, patch);
+        expect(getPixel(b, 5, 5)).toEqual(RED);
+        expect(getPixel(b, 20, 20)).toEqual(RED);
+    });
+
+    test("a stroke does not disturb what it was drawn over, and a click still marks", () => {
+        // Painting must not resurrect pixels outside the stroke when undone — the captured region
+        // is bigger than the marks, so the untouched parts of it have to come back unchanged.
+        const b = createPixelBuffer(16, 16);
+        setPixel(b, 1, 1, BLUE);           // existing art, well away from the stroke
+        setPixel(b, 14, 14, BLUE);
+        const s = beginStroke(b, makeBrush(1, false), 6, 6, RED, 4)!;
+        extendStroke(b, s, 9, 6, linePoints);
+        const patch = endStroke(b, s, linePoints);
+        revertPatch(b, patch);
+        expect(getPixel(b, 1, 1)).toEqual(BLUE);
+        expect(getPixel(b, 14, 14)).toEqual(BLUE);
+        expect(getPixel(b, 6, 6)).toEqual([0, 0, 0, 0]);
+
+        // A PRESS WITH NO DRAG still paints. `beginStroke` deliberately paints nothing, so the dot
+        // has to be stamped at the end — otherwise the first mark would land before the region it
+        // belongs to was captured, and would be un-undoable.
+        const c = createPixelBuffer(8, 8);
+        const click = beginStroke(c, makeBrush(1, false), 3, 3, RED, 2)!;
+        expect(getPixel(c, 3, 3)).toEqual([0, 0, 0, 0]);      // nothing yet
+        const dot = endStroke(c, click, linePoints);
+        expect(getPixel(c, 3, 3)).toEqual(RED);
+        revertPatch(c, dot);
+        expect(getPixel(c, 3, 3)).toEqual([0, 0, 0, 0]);
+
+        // A stroke entirely off the surface begins as NULL rather than capturing nothing and
+        // silently painting into space.
+        expect(beginStroke(c, makeBrush(1, false), 99, 99, RED, 1)).toBeNull();
+
+        // ESCAPING the captured region is detectable, because paint outside it cannot be undone.
+        // The reach is a guess about the future of a drag, and a guess can be wrong.
+        const tight = beginStroke(c, makeBrush(1, false), 4, 4, RED, 1)!;
+        expect(strokeEscaped(tight)).toBe(false);
+        extendStroke(c, tight, 7, 7, linePoints);
+        expect(strokeEscaped(tight)).toBe(true);
     });
 
     test("read shapes become nodes the document accepts", () => {
