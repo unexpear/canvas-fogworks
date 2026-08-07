@@ -283,6 +283,12 @@ export interface GLState {
      * NULL IS A REAL ANSWER: a context that cannot link a second program or allocate a render
      * target still draws every shape correctly, just without shadow or blur — which is exactly
      * what this backend did before. Failing the whole frame over an effect would be worse.
+     *
+     * BUILT EAGERLY, and that is a live cost rather than a dormant one: `initGL` runs on the first
+     * frame, so the second program is compiled and linked for every context even though nothing
+     * spends it until compositing lands. One shader link per canvas is worth not carrying a lazy
+     * path — but it is a cost being paid now, not later, and `blurPass`/`ensureTarget` are the
+     * parts that are genuinely uncalled.
      */
     blur: BlurState | null;
     posLoc: number;
@@ -337,6 +343,11 @@ export function initBlur(gl: WebGLRenderingContext): BlurState | null {
     // which corner maps to which texel.
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+    // UNBOUND before returning. An init function that leaves a global binding behind is safe only
+    // while its one caller happens to rebind before drawing — which `emitWebGL` does, twenty lines
+    // later, by coincidence rather than by contract. Left as it was, moving that rebind or calling
+    // `initGL` from anywhere else would draw this quad's two triangles as scene geometry.
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
     return {
         program, quad,
         posLoc: gl.getAttribLocation(program, "a_pos"),
