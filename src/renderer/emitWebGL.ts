@@ -47,7 +47,7 @@
  */
 
 import { DisplayList, DrawItem, Shape } from "./RenderModel";
-import { gaussianKernel, GAUSSIAN_MAX_RADIUS } from "./Gaussian";
+import { gaussianKernel, blurPlan, GAUSSIAN_MAX_RADIUS } from "./Gaussian";
 import { Mat2D, translation } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
 import { subdivideTriangles, triangulate } from "../core/geometry/Tessellate";
@@ -416,6 +416,37 @@ export function initBlur(gl: WebGLRenderingContext): BlurState | null {
         compositeOffsetLoc: gl.getUniformLocation(composite, "u_offset"),
         targets: [null, null, null]
     };
+}
+
+/**
+ * `from` redrawn into `into` at whatever size `into` is — a resample.
+ *
+ * THIS IS HOW A WIDE BLUR BECOMES AFFORDABLE. `blurPlan` says to halve the resolution N times
+ * before blurring, and each halving is one of these. The composite program already samples `v_uv`
+ * across the WHOLE source texture, so drawing its quad into a smaller target IS the downscale; the
+ * LINEAR filter does the averaging.
+ *
+ * REPLACE, NOT BLEND. The destination is about to be overwritten entirely, and blending a
+ * premultiplied image onto stale contents would leave the previous item's ghost in the margins.
+ */
+export function resampleTo(
+    gl: WebGLRenderingContext, blur: BlurState, from: BlurTarget, into: BlurTarget
+): void {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, into.framebuffer);
+    gl.viewport(0, 0, into.width, into.height);
+    gl.useProgram(blur.composite);
+    gl.bindBuffer(gl.ARRAY_BUFFER, blur.quad);
+    gl.enableVertexAttribArray(blur.compositePosLoc);
+    gl.vertexAttribPointer(blur.compositePosLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, from.texture);
+    gl.uniform1i(blur.compositeTexLoc, 0);
+    gl.uniform1f(blur.compositeUseTintLoc, 0);
+    gl.uniform2f(blur.compositeOffsetLoc, 0, 0);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
 
 /**
@@ -1186,38 +1217,75 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
 
         if (plan && target && state.blur) {
             const b = state.blur;
-            const ping = ensureTarget(gl, b.targets[1], width, height);
-            const pong = ensureTarget(gl, b.targets[2], width, height);
-            b.targets[1] = ping;
-            b.targets[2] = pong;
-            if (ping && pong) {
-                // THE SHAPE'S OWN BLUR FIRST, in place, so what follows sees the blurred look —
-                // the order SVG's filter chain uses, where `feDropShadow` takes the blur's output.
-                if (plan.blurSigma > 0) {
-                    blurPass(gl, b, target, ping, plan.blurSigma, true);
-                    blurPass(gl, b, ping, target, plan.blurSigma, false);
+            /**
+             * One blur, done at whatever resolution `blurPlan` says it should be.
+             *
+             * The plan halves the resolution until the sigma fits a 64-tap kernel, and each
+             * halving is a resample. Without this the kernel CLAMPS, which is a collapse rather
+             * than a taper: past sigma 21.3 every blur comes out the same width, and far sharper
+             * than SVG and Canvas draw the same document.
+             *
+             * Returns the target holding the result — which may be smaller than the screen. The
+             * composite stretches it back, since it samples across the whole texture.
+             */
+            const runBlur = (source: BlurTarget, sigma: number): BlurTarget | null => {
+                const plan = blurPlan(sigma);
+                if (plan.sigma <= 0) return source;
+                const w = Math.max(1, width >> plan.levels);
+                const h = Math.max(1, height >> plan.levels);
+                const a = ensureTarget(gl, b.targets[1], w, h);
+                const c = ensureTarget(gl, b.targets[2], w, h);
+                b.targets[1] = a;
+                b.targets[2] = c;
+                if (!a || !c) return null;
+                // DOWN FIRST, in one step rather than one per level: the composite's LINEAR filter
+                // averages whatever ratio it is given, and repeated halvings would cost a pass
+                // each to arrive at the same place.
+                let src = source;
+                if (plan.levels > 0) { resampleTo(gl, b, source, a); src = a; }
+                // Then the separable pair, ping-ponging at that size.
+                const first = src === a ? c : a;
+                const second = src === a ? a : c;
+                blurPass(gl, b, src, first, plan.sigma, true);
+                blurPass(gl, b, first, second, plan.sigma, false);
+                return second;
+            };
+
+            // THE SHAPE'S OWN BLUR FIRST, so what follows sees the blurred look — the order
+            // SVG's filter chain uses, where `feDropShadow` consumes `feGaussianBlur`'s output.
+            let look: BlurTarget | null = target;
+            if (plan.blurSigma > 0) {
+                const blurred = runBlur(target, plan.blurSigma);
+                if (blurred && plan.shadow) {
+                    // BOTH EFFECTS: the blurred look is living in a scratch target that the
+                    // shadow's own blur is about to overwrite, so it is copied back to the item's
+                    // target first. Without this the shape would be composited from pixels the
+                    // shadow pass had already replaced — the shape wearing its own shadow.
+                    resampleTo(gl, b, blurred, target);
+                    look = target;
+                } else if (blurred) {
+                    look = blurred;
                 }
-                // THE SHADOW IS A SEPARATE COPY, which is why there are three targets: `target`
-                // must survive to be drawn sharp on top of the shadow made from it.
-                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-                gl.viewport(0, 0, width, height);
+            }
+
+            if (look) {
                 if (plan.shadow) {
-                    const soft = plan.shadow.sigma > 0;
-                    if (soft) {
-                        blurPass(gl, b, target, ping, plan.shadow.sigma, true);
-                        blurPass(gl, b, ping, pong, plan.shadow.sigma, false);
-                    }
+                    // A ZERO-blur shadow is a hard offset copy, not an absent one.
+                    const shadowSrc = plan.shadow.sigma > 0 ? runBlur(look, plan.shadow.sigma) : look;
                     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
                     gl.viewport(0, 0, width, height);
-                    // A ZERO-blur shadow is a hard offset copy, not an absent one.
-                    compositeTarget(gl, b, soft ? pong : target,
-                        plan.shadow.dx, plan.shadow.dy, plan.shadow.color);
+                    if (shadowSrc) {
+                        compositeTarget(gl, b, shadowSrc,
+                            plan.shadow.dx, plan.shadow.dy, plan.shadow.color);
+                    }
                 }
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                gl.viewport(0, 0, width, height);
                 // The shape itself, over its own shadow, untinted and unmoved.
-                compositeTarget(gl, b, target, 0, 0, null);
+                compositeTarget(gl, b, look, 0, 0, null);
             } else {
-                // Targets would not allocate. The item was drawn into one that did, so it is
-                // composited PLAINLY rather than lost — no effect is better than no shape.
+                // Scratch targets would not allocate. The item is composited PLAINLY rather than
+                // lost — no effect is better than no shape.
                 gl.bindFramebuffer(gl.FRAMEBUFFER, null);
                 gl.viewport(0, 0, width, height);
                 compositeTarget(gl, b, target, 0, 0, null);
