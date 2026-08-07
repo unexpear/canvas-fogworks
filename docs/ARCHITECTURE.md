@@ -1194,9 +1194,33 @@ to rebind twenty lines later. A composite that declared an offset its shader nev
 shadow would have landed exactly on its shape. And a y axis pointing the wrong way — GL's
 framebuffer grows upward, the document's downward, so `dy: +4` rose instead of falling.
 
-**Unwired code is ABSENT, not merely inert.** `ensureTarget`, `blurPass` and `compositeTarget` are
-tree-shaken out of the shipped bundle entirely, which is worth knowing before trusting any claim
-that something was "verified in the bundle" about a path nothing calls.
+**Unwired code is ABSENT, not merely inert.** `ensureTarget`, `blurPass` and `compositeTarget` were
+tree-shaken out of the shipped bundle entirely until the loop wrap called them — worth knowing
+before trusting any claim that something was "verified in the bundle" about a path nothing calls.
+
+**A WIDE BLUR IS COMPUTED SMALL.** `blurPlan` halves the resolution until the sigma fits the kernel,
+because the clamp alone is a COLLAPSE rather than a taper: past sigma 21.3 every blur came out the
+same width, and a 20px blur at 1:1 on a Retina display already reaches that, since device sigma is
+`blur * zoom * dpr`. Sigma 320 now renders where 21.3 was the ceiling.
+
+### THE EFFECTS PATH IS CURRENTLY BROKEN, and knowing that came from one measurement
+
+**A shape carrying a blur renders as a HOLE on the WebGL backend.** Measured by diffing the same
+document across backends: the centre pixel is `[74,144,217]` on Canvas and `[26,26,46]` on WebGL —
+the clear colour. 59.7% of the shape's region differs. `gl.getError()` is 0 and the console is
+clean, so no error check finds it.
+
+**This is worse than the gap it was closing.** Before the loop wrap the backend drew shapes
+correctly and merely ignored their effects; now a blurred shape vanishes. It is knowingly left in
+place while other work proceeds, not overlooked.
+
+**Every component was independently verified and the assembly is still wrong** — the kernel to
+0.0027 against `ctx.filter`, the shader to 0.0018 against a CPU convolution, the composite's tint
+and offset against hand-computed values, `blurPlan`'s invariant across seven sigmas. Six commits of
+piece-wise checking could not see it. That is the whole lesson: **the cross-backend pixel diff is
+the oracle this work needed from the start**, and every piece-wise check is a weaker proxy for it.
+The next diagnostic is to read back the target's own pixels straight after the item draws into it
+and before any blur — one reading that splits "never drawn" from "lost in compositing".
 ### Fonts — a family name is not a font
 
 **`style.fontFamily` has always been a STRING and nothing else.** A document could ask for "Kenney
