@@ -24,7 +24,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1292;
+const EXPECTED_TESTS = 1293;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -53,6 +53,33 @@ const MUTANTS = [
       from: "const at = ((box.y + row) * buffer.width + box.x + col) * 4;",
       to: "const at = ((box.y + row) * buffer.height + box.x + col) * 4;",
       note: "diffRect strides by height — invisible on a square buffer" },
+
+    // SurfaceSpace — the same family plus its neighbours: a box at the ORIGIN hides a dropped
+    // origin term, and a round-trip-only assertion hides a half-pixel shift in BOTH directions.
+    { id: "SS1", file: "src/core/paint/SurfaceSpace.ts",
+      from: "const v = (p.y - space.local.y) / space.local.height;",
+      to: "const v = (p.y - space.local.y) / space.local.width;",
+      note: "the vertical axis divides by the WRONG side — invisible on a square box" },
+    { id: "SS2", file: "src/core/paint/SurfaceSpace.ts",
+      from: "const sy = Math.floor(v * space.surfaceHeight);",
+      to: "const sy = Math.floor(v * space.surfaceWidth);",
+      note: "the row index scales by the wrong dimension — invisible on a square surface" },
+    { id: "SS3", file: "src/core/paint/SurfaceSpace.ts",
+      from: "const u = (p.x - space.local.x) / space.local.width;",
+      to: "const u = p.x / space.local.width;",
+      note: "the box's ORIGIN is dropped — invisible on a box at (0,0)" },
+    { id: "SS4", file: "src/core/paint/SurfaceSpace.ts",
+      from: "const sx = Math.floor(u * space.surfaceWidth);",
+      to: "const sx = Math.round(u * space.surfaceWidth);",
+      note: "rounds instead of flooring — invisible unless a point sits inside a pixel's first half" },
+    { id: "SS5", file: "src/core/paint/SurfaceSpace.ts",
+      from: "const u = (sx + 0.5) / space.surfaceWidth;",
+      to: "const u = sx / space.surfaceWidth;",
+      note: "names a pixel's CORNER, not its centre — invisible to a round-trip-only assertion" },
+    { id: "SS6", file: "src/core/paint/SurfaceSpace.ts",
+      from: "    const p = applyToPoint(inv, worldX, worldY);",
+      to: "    const p = applyToPoint(space.world, worldX, worldY);",
+      note: "transforms FORWARD instead of inverting — invisible under an identity matrix" },
 ];
 
 function runSuite() {

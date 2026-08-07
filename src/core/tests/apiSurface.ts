@@ -43,6 +43,28 @@ import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
 } from "../document/Serializer";
+// --- core/paint ---------------------------------------------------------------------------
+// Nine modules that shipped over one day with NONE of them pinned here, while API-CONTRACTS grew
+// entries for every one. That is the exact failure this file's header describes: a pin that
+// silently stops covering new work reads as enforcement while checking nothing.
+import { PixelBuffer, Rgba, PIXEL_MAX_SIDE, PIXEL_FILL_MAX, pixelBufferError, createPixelBuffer,
+    inBounds, getPixel, setPixel, linePoints, drawLine, floodFill } from "../paint/PixelBuffer";
+import { PixelPatch, EMPTY_PATCH, isEmptyPatch, readRegion, capturePatch, applyPatch,
+    revertPatch, invertPatch, patchCost } from "../paint/PixelPatch";
+import { Brush, BrushDab, BRUSH_MAX_SIZE, brushError, makeBrush, brushFromImage, brushWithVariants,
+    pickFace, stampBrush, brushBounds, strokePath, strokeBounds } from "../paint/Brush";
+import { EncodedSurface, PIXEL_CODEC_VERSION, PIXEL_RUN_MAX, encodeSurface,
+    decodeSurface } from "../paint/PixelCodec";
+import { StrokeSession, beginStroke, extendStroke, endStroke, strokeEscaped,
+    NO_STROKE } from "../paint/Stroke";
+import { Palette, PALETTE_MAX_COLOURS, PALETTE_MAX_SIDE, paletteError, paletteAt, parseFloatColour,
+    parsePaletteFile } from "../paint/Palette";
+import { SymmetryMode, NO_SYMMETRY, symmetryPoints, isMirrored } from "../paint/Symmetry";
+import { colourDistance, nearestColour, quantizeToPalette } from "../paint/Quantize";
+import { SurfaceSpace, surfaceSpaceError, worldToSurface, surfaceToWorld,
+    surfacePixelSize } from "../paint/SurfaceSpace";
+import { RasterSurface, rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
+import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
@@ -999,4 +1021,115 @@ export function __apiSurfacePin(): void {
     expectType<Action>(new SetDepthAction(doc, "id", 1));
     expectType<Action>(new SetMeshAction(doc, "id", mesh));
     expectType<Action>(new SetLightingAction(doc, [light], 0.2));
+}
+
+/**
+ * The `core/paint` surface — the pixel side of 2D.
+ *
+ * A BOX TYPE IS SPELT OUT rather than aliased to `Rect`. These modules deliberately do not import
+ * the geometry types (a brush knows nothing about world space), so pinning them against `Rect`
+ * would assert a coupling the code does not have and would go green if one were introduced.
+ */
+function _paintSurface(): void {
+    type Box = { x: number; y: number; width: number; height: number };
+    const buffer: PixelBuffer = createPixelBuffer(4, 3);
+    const colour: Rgba = [0, 0, 0, 0];
+    const brush: Brush = makeBrush(3, true);
+
+    // --- PixelBuffer: the surface itself ---------------------------------------
+    expectType<number>(PIXEL_MAX_SIDE);
+    expectType<number>(PIXEL_FILL_MAX);
+    expectType<string | null>(pixelBufferError(1, 1));
+    expectType<{ width: number; height: number; data: Uint8ClampedArray }>(buffer);
+    expectType<boolean>(inBounds(buffer, 0, 0));
+    // NULL IS PART OF THE CONTRACT: off the surface is a real answer, not an exception.
+    expectType<Rgba | null>(getPixel(buffer, 0, 0));
+    expectType<void>(setPixel(buffer, 0, 0, colour));
+    expectType<[number, number][]>(linePoints(0, 0, 1, 1));
+    expectType<void>(drawLine(buffer, 0, 0, 1, 1, colour));
+    expectType<number>(floodFill(buffer, 0, 0, colour));
+
+    // --- PixelPatch: what an edit was ------------------------------------------
+    const patch: PixelPatch = capturePatch(buffer, readRegion(buffer, 0, 0, 2, 2), 0, 0, 2, 2);
+    expectType<{ x: number; y: number; width: number; height: number;
+        before: Uint8ClampedArray; after: Uint8ClampedArray }>(patch);
+    expectType<PixelPatch>(EMPTY_PATCH);
+    expectType<boolean>(isEmptyPatch(patch));
+    expectType<Uint8ClampedArray>(readRegion(buffer, 0, 0, 1, 1));
+    expectType<void>(applyPatch(buffer, patch));
+    expectType<void>(revertPatch(buffer, patch));
+    expectType<PixelPatch>(invertPatch(patch));
+    expectType<number>(patchCost(patch));
+
+    // --- Brush: the mark a press leaves ----------------------------------------
+    expectType<number>(BRUSH_MAX_SIZE);
+    expectType<string | null>(brushError(3, true));
+    // WIDTH AND HEIGHT ARE SEPARATE, because a 3x1 brush is a real tool and one `size` cannot say it.
+    expectType<{ width: number; height: number; round: boolean; dabs: BrushDab[]; variants: Brush[] }>(brush);
+    expectType<{ dx: number; dy: number; colour: Rgba | null }>(brush.dabs[0]);
+    expectType<Brush>(brushFromImage(buffer));
+    expectType<Brush | null>(brushWithVariants([brush]));
+    expectType<Brush>(pickFace(brush, 0));
+    expectType<void>(stampBrush(buffer, brush, 0, 0, colour));
+    expectType<Box>(brushBounds(brush, 0, 0));
+    expectType<void>(strokePath(buffer, brush, [[0, 0]], colour, linePoints));
+    expectType<Box | null>(strokeBounds(brush, [[0, 0]]));
+
+    // --- PixelCodec: a surface as text a document can hold ---------------------
+    expectType<number>(PIXEL_CODEC_VERSION);
+    expectType<number>(PIXEL_RUN_MAX);
+    const encoded: EncodedSurface = encodeSurface(buffer);
+    expectType<{ data: string; rawBytes: number; packedBytes: number }>(encoded);
+    expectType<PixelBuffer | null>(decodeSurface(encoded.data, 4, 3));
+
+    // --- Stroke: a drag, from press to patch -----------------------------------
+    const session: StrokeSession | null = beginStroke(buffer, brush, 0, 0, colour, 8);
+    expectType<StrokeSession | null>(session);
+    expectType<{ brush: Brush; colour: Rgba; points: [number, number][];
+        region: Box; before: Uint8ClampedArray }>(session!);
+    expectType<void>(extendStroke(buffer, session!, 1, 1, linePoints));
+    expectType<PixelPatch>(endStroke(buffer, session!, linePoints));
+    expectType<boolean>(strokeEscaped(session!));
+    expectType<PixelPatch>(NO_STROKE);
+
+    // --- Palette: colours plus the layout the artist chose ---------------------
+    const palette: Palette = { name: "p", colours: [colour], width: 1, height: 1, comment: "" };
+    expectType<number>(PALETTE_MAX_COLOURS);
+    expectType<number>(PALETTE_MAX_SIDE);
+    expectType<{ name: string; colours: Rgba[]; width: number; height: number; comment: string }>(palette);
+    expectType<string | null>(paletteError(palette));
+    // NULL IS A REAL ANSWER — a grid may have holes, and a picker must draw one rather than shift up.
+    expectType<Rgba | null>(paletteAt(palette, 0, 0));
+    expectType<Rgba | null>(parseFloatColour("(1, 1, 1, 1)"));
+    expectType<Palette | null>(parsePaletteFile({}, "n"));
+
+    // --- Symmetry: one stroke that paints two, four, or one --------------------
+    const mode: SymmetryMode = NO_SYMMETRY;
+    expectType<{ horizontal: boolean; vertical: boolean }>(mode);
+    expectType<[number, number][]>(symmetryPoints(0, 0, 4, 3, mode));
+    expectType<boolean>(isMirrored(mode));
+
+    // --- Quantize: snapping to the palette an artist chose ---------------------
+    expectType<number>(colourDistance(colour, colour));
+    expectType<Rgba | null>(nearestColour(palette, colour));
+    expectType<number>(quantizeToPalette(buffer, palette));
+
+    // --- SurfaceSpace: where a pointer is, in pixels ---------------------------
+    const space: SurfaceSpace = {
+        world: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 },
+        local: { x: 0, y: 0, width: 4, height: 3 },
+        surfaceWidth: 4, surfaceHeight: 3
+    };
+    expectType<string | null>(surfaceSpaceError(space));
+    expectType<[number, number] | null>(worldToSurface(space, 0, 0));
+    expectType<{ x: number; y: number } | null>(surfaceToWorld(space, 0, 0));
+    expectType<{ x: number; y: number } | null>(surfacePixelSize(space));
+
+    // --- The document side: a node that HOLDS a surface ------------------------
+    const stored: RasterSurface = { data: encoded.data, width: 4, height: 3 };
+    expectType<{ data: string; width: number; height: number }>(stored);
+    expectType<string | null>(rasterSurfaceError(stored));
+    expectType<number>(RASTER_MAX_SIDE);
+    const paintDoc: ProjectDocument = createEmptyDocument();
+    expectType<Action>(new PaintSurfaceAction(paintDoc, "id", patch));
 }

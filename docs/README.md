@@ -46,8 +46,8 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1292 — `src/core/tests/document.test.ts` (1174) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (41).
-- **Verify the tests themselves:** `npm run mutate:dimensions` (7/7) — breaks the paint arithmetic
+- **Tests:** 1293 — `src/core/tests/document.test.ts` (1175) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (41).
+- **Verify the tests themselves:** `npm run mutate:dimensions` (13/13) — breaks the paint arithmetic
   on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
   and it refuses a dirty tree. See TESTING.md § Fixture design.
 
@@ -76,6 +76,9 @@ src/
                 SvgPath (vector data), SvgDocument (whole
                 files), SvgNodes (shapes as nodes),
                 FontFile (a face's identity)
+    paint/      PixelBuffer, PixelPatch, Brush, PixelCodec,   (the pixel side of 2D)
+                Stroke, Palette, Symmetry, Quantize,
+                SurfaceSpace (world point -> surface pixel)
     ids/        UUID
     tests/      document.test.ts, apiSurface.ts (compile-time API pin —
                 a module that gains a documented export gains a line
@@ -88,4 +91,5 @@ src/
   electron/     main.js (main process), preload.js (contextBridge)
 scripts/build.js   three esbuild builds -> dist/{app,electron}
 scripts/{check-module-headers,check-doc-drift}.js   lint + doc-staleness tripwire
+scripts/mutate-dimensions.js   mutation battery over core/paint (13/13)
 ```

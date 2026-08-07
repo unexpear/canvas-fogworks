@@ -94,6 +94,7 @@ import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
 import { paletteError, paletteAt, parseFloatColour, parsePaletteFile, PALETTE_MAX_COLOURS } from "../paint/Palette";
 import { symmetryPoints, isMirrored, NO_SYMMETRY } from "../paint/Symmetry";
 import { nearestColour, colourDistance, quantizeToPalette } from "../paint/Quantize";
+import { worldToSurface, surfaceToWorld, surfacePixelSize, surfaceSpaceError } from "../paint/SurfaceSpace";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
@@ -16570,6 +16571,101 @@ describe("Mesh — bending a shape (schema 41)", () => {
         quantizeToPalette(c, pal);
         expect(getPixel(c, 0, 0)).toEqual([0, 0, 0, 255]);
         expect(getPixel(c, 1, 0)).toEqual([0, 0, 0, 0]);
+    });
+
+    test("a world point becomes a surface PIXEL, through the node's own matrix", () => {
+        // Deliberately NOTHING here is square or at the origin. The surface is 4x2, the box is
+        // 40x10 at (100,20) — so a pixel is 10 world units across and 5 down, and a mapping that
+        // used one scale factor for both, or forgot the box's origin, cannot pass.
+        const box = { x: 100, y: 20, width: 40, height: 10 };
+        const flat = { world: IDENTITY, local: box, surfaceWidth: 4, surfaceHeight: 2 };
+
+        expect(worldToSurface(flat, 100, 20)).toEqual([0, 0]);
+        expect(worldToSurface(flat, 139, 29)).toEqual([3, 1]);
+        // THE CELL BOUNDARY belongs to the pixel it starts, not the one it ends.
+        expect(worldToSurface(flat, 110, 20)).toEqual([1, 0]);
+        expect(worldToSurface(flat, 109.9, 20)).toEqual([0, 0]);
+
+        // FLOOR, NOT ROUND. A point a quarter of the way into the first pixel is still in the
+        // first pixel; rounding would put it in the second, and would halve the reachable area
+        // of the two edge columns — which reads as a brush that will not touch the border.
+        expect(worldToSurface(flat, 105, 20)).toEqual([0, 0]);
+        expect(worldToSurface(flat, 100, 22.4)).toEqual([0, 0]);
+
+        // OFF THE SURFACE IS RETURNED, NOT DROPPED — `setPixel` bounds every dab, and a second
+        // bounds rule here is a second thing that can disagree with it.
+        expect(worldToSurface(flat, 90, 20)).toEqual([-1, 0]);
+        expect(worldToSurface(flat, 140, 20)).toEqual([4, 0]);
+
+        // A TRANSLATED node: the box moves with it, so the same pixel is under a different point.
+        const moved = { ...flat, world: translation(7, -3) };
+        expect(worldToSurface(moved, 107, 17)).toEqual([0, 0]);
+        // ...and the untranslated point now lands a pixel earlier, rather than at the same place.
+        expect(worldToSurface(moved, 100, 20)).toEqual([-1, 0]);
+
+        // THE CENTRE OF A PIXEL, NOT ITS CORNER. Pixel (0,0) spans x 100..110 and y 20..25, so its
+        // centre is (105, 22.5) — the corner would be (100, 20), which is where a brush cursor
+        // drawn from this would sit half a pixel up and to the left of the pixel it marks.
+        expect(surfaceToWorld(flat, 0, 0)).toEqual({ x: 105, y: 22.5 });
+        expect(surfaceToWorld(flat, 3, 1)).toEqual({ x: 135, y: 27.5 });
+
+        // ROUND TRIP over every pixel: a centre maps back to the pixel it came from. This is the
+        // invariant that ties the two directions together — either one alone can be self-consistent
+        // and wrong.
+        for (let sy = 0; sy < 2; sy++) {
+            for (let sx = 0; sx < 4; sx++) {
+                const w = surfaceToWorld(flat, sx, sy)!;
+                expect(worldToSurface(flat, w.x, w.y)).toEqual([sx, sy]);
+            }
+        }
+
+        // A ROTATED node is the reason this inverts a matrix instead of subtracting an origin.
+        // Quarter-turn about the world origin: local (100,20) lands at world (-20,100). The round
+        // trip is asserted at pixel CENTRES rather than corners — a corner under a rotation lands
+        // within floating-point noise of the boundary, and `floor` reads that noise as a pixel.
+        const spun = { ...flat, world: compose(0, 0, Math.PI / 2, 1, 1, 0, 0) };
+        for (let sy = 0; sy < 2; sy++) {
+            for (let sx = 0; sx < 4; sx++) {
+                const w = surfaceToWorld(spun, sx, sy)!;
+                expect(worldToSurface(spun, w.x, w.y)).toEqual([sx, sy]);
+            }
+        }
+        // And it really did rotate: the pixel that was to the RIGHT is now BELOW.
+        const p00 = surfaceToWorld(spun, 0, 0)!;
+        const p10 = surfaceToWorld(spun, 1, 0)!;
+        expect(p10.y).toBeGreaterThan(p00.y);
+        expect(Math.abs(p10.x - p00.x)).toBeLessThan(1e-9);
+
+        // PIXEL SIZE HAS TWO ANSWERS on a non-uniformly scaled node, and reporting one would make a
+        // brush cursor square on a surface whose pixels are not.
+        expect(surfacePixelSize(flat)).toEqual({ x: 10, y: 5 });
+        // Measured THROUGH the matrix: a rotation moves pixels without resizing them...
+        const spunSize = surfacePixelSize(spun)!;
+        expect(spunSize.x).toBeCloseTo(10, 9);
+        expect(spunSize.y).toBeCloseTo(5, 9);
+        // ...while a scale does resize them.
+        const big = { ...flat, world: compose(0, 0, 0, 2, 3, 0, 0) };
+        expect(surfacePixelSize(big)!.x).toBeCloseTo(20, 9);
+        expect(surfacePixelSize(big)!.y).toBeCloseTo(15, 9);
+
+        // WHAT HAS NO ANSWER IS REFUSED, rather than answered with a number that is not a pixel.
+        const collapsed = { ...flat, local: { ...box, width: 0 } };
+        expect(surfaceSpaceError(collapsed)).toMatch(/must have area/);
+        expect(worldToSurface(collapsed, 100, 20)).toBeNull();
+        expect(surfaceToWorld(collapsed, 0, 0)).toBeNull();
+        expect(surfacePixelSize(collapsed)).toBeNull();
+        // A ZERO SCALE collapses the space and cannot be undone.
+        const singular = { ...flat, world: compose(0, 0, 0, 0, 1, 0, 0) };
+        expect(surfaceSpaceError(singular)).toMatch(/invertible/);
+        expect(worldToSurface(singular, 100, 20)).toBeNull();
+        // A surface must be a whole grid, and at least one pixel of it.
+        expect(surfaceSpaceError({ ...flat, surfaceWidth: 2.5 })).toMatch(/whole dimensions/);
+        expect(surfaceSpaceError({ ...flat, surfaceHeight: 0 })).toMatch(/at least one pixel/);
+        expect(surfaceSpaceError({ ...flat, local: { ...box, height: NaN } })).toMatch(/finite/);
+        // A NaN POINT gives null, not a NaN coordinate — which would be stored and would compare
+        // false against every bound it was later tested with.
+        expect(worldToSurface(flat, NaN, 20)).toBeNull();
+        expect(surfaceSpaceError(flat)).toBeNull();
     });
 
     test("read shapes become nodes the document accepts", () => {

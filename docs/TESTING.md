@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v55 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1174) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (41) = 1292 tests.
+> 🔒 Frozen contract · schema v55 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1174) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (41) = 1293 tests.
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1292 tests
+npm test                                   # jest (ts-jest), 1293 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -42,7 +42,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1292 tests)
+## What is covered (1293 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -181,6 +181,19 @@ own type — and the check must be verified by breaking the code on purpose.
 
 **Not covered:** prose describing behaviour that has since changed. Nothing mechanical
 catches that; it needs review.
+
+**The pin stopped covering new work, again.** All nine `core/paint` modules — roughly sixty
+documented exports, shipped over a single day — had **no line here at all**, while API-CONTRACTS
+grew an entry for each. That is the identical failure this file's header records against the
+schema-37–42 work, and it is the more dangerous kind: a pin that silently stops growing reads as
+enforcement while checking nothing. `_paintSurface()` now covers all nine plus `RasterSurface`
+and `PaintSurfaceAction`, and it was verified the required way — widening `worldToSurface` to
+return `[number, number] | null | undefined` (a change that still compiles in its own module)
+fails `tsc` **with `apiSurface.ts` named**.
+
+The recurrence says the rule needs a trigger, not just a statement: **a new file under `src/core`
+is the trigger**. It is the moment the pin is cheapest to extend and the moment it is always
+forgotten.
 
 ## Mutation testing (verifying the tests, not the code)
 
@@ -367,8 +380,13 @@ The checklist, applied when the fixture is written:
    `diffRect` are each killed by exactly one test.
 
 This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
-runs the dimension-confusion family over the paint modules and exits non-zero on a survivor:
-currently **7 mutants, 7 killed**. It found the first one — `Symmetry`'s vertical axis reading
+runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
+cannot see — over the paint modules, exiting non-zero on a survivor: currently **13 mutants, 13
+killed**. Six of the thirteen cover `SurfaceSpace`, where the convenient fixture is not a square
+buffer but **a box at the origin** (which hides a dropped origin term) and **a round-trip-only
+assertion** (which hides a half-pixel shift, because it shifts both directions equally).
+
+It found the first survivor — `Symmetry`'s vertical axis reading
 `width`, which survived all 1292 tests because every fixture but one was 8×8, and that one
 exercised the horizontal axis only. It is not part of `npm run check` (it runs the suite once
 per mutant, so it costs minutes rather than seconds) and it **refuses to run on a dirty tree**,
