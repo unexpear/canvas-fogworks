@@ -2796,11 +2796,19 @@ describe("Components: detach instance", () => {
         expect(() => deserializeDocument(serializeDocument(d))).not.toThrow();
     });
 
-    test("the App's Detach button is enabled exactly when the action would succeed", () => {
-        // The button asks `validate()` rather than re-deriving the rule — the failure mode
-        // being a control that looks available and silently does nothing.
+    test("Detach asks the action whether it would succeed, rather than re-deriving the rule", () => {
+        // This used to pin a DISABLED toolbar button. The button is gone — the command moved to
+        // the Edit menu, and a menu item has no disabled state to lean on — so the guard moved
+        // into the command itself, which is the stronger place for it: every caller now inherits
+        // it instead of each control re-implementing the rule.
+        // The failure mode is unchanged and is why this is pinned at all: a control that looks
+        // available and silently does nothing.
         const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
-        expect(src).toMatch(/new DetachInstanceAction\(dispatcher\.getDocument\(\), sel\[0\]\)\.validate\(\)/);
+        expect(src).toMatch(/const detachInstance = useCallback\(/);
+        expect(src).toMatch(/if \(!action\.validate\(\)\) return;/);
+        // And it is asked BEFORE the dispatch, not after — checking afterwards is not a check.
+        const body = src.slice(src.indexOf("const detachInstance = useCallback("));
+        expect(body.indexOf("action.validate()")).toBeLessThan(body.indexOf("dispatchAction"));
     });
 
     test("an `add` delta places at its index, and still appends without one", () => {

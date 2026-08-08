@@ -700,6 +700,48 @@ export function App() {
      * inapplicable press still reaches the active tool (Escape cancelling a drag, say).
      * Every branch goes through an existing Action, so shortcuts inherit undo for free.
      */
+    /**
+     * Component commands, reachable from the Edit menu as well as the toolbar.
+     *
+     * Lifted out of their buttons for one reason: a command that only exists inside an onClick can
+     * only ever be run by clicking that exact button. These now have two callers and could have a
+     * shortcut tomorrow without moving again.
+     */
+    const createInstance = useCallback(() => {
+        const masterId = es.selectedNodeIds[0];
+        if (!masterId) return;
+        const doc = dispatcher.getDocument();
+        const master = doc.nodes.get(masterId);
+        if (!master || master.type === "core.instance") return;
+        // Place it near the master in WORLD space: the new instance is a ROOT, so its x/y are
+        // world coords, while a nested master's stored x/y are parent-relative — using those
+        // directly would misplace the instance.
+        const box = computeGeometry(doc).nodes.get(masterId)?.bounds;
+        const at = box ?? { x: master.geometry.x, y: master.geometry.y };
+        const action = new CreateInstanceAction(doc, masterId, at.x + 40, at.y + 40);
+        if (dispatcher.dispatchAction(action).success) {
+            const created = action.getCreatedNodeId();
+            if (created) es.selectedNodeIds = [created];
+        }
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    const detachInstance = useCallback(() => {
+        const id = es.selectedNodeIds[0];
+        if (es.selectedNodeIds.length !== 1 || !id) return;
+        const action = new DetachInstanceAction(dispatcher.getDocument(), id);
+        // Asked BEFORE dispatching, so a menu item that cannot apply does nothing rather than
+        // throwing — the toolbar button used to be disabled instead, and the menu has no such gate.
+        if (!action.validate()) return;
+        if (dispatcher.dispatchAction(action).success) {
+            // Select the baked ROOT: the instance the user had selected is gone, and a stale
+            // selection would leave the inspector empty.
+            const created = action.getCreatedNodeIds();
+            es.selectedNodeIds = created.length > 0 ? [created[0]] : [];
+        }
+        refresh();
+    }, [dispatcher, es, refresh]);
+
     const runShortcut = useCallback((s: Shortcut): boolean => {
         const doc = dispatcher.getDocument();
         const sel = es.selectedNodeIds;
@@ -1013,6 +1055,8 @@ export function App() {
                     case "edit.selectAll": runShortcut({ kind: "select-all" }); return;
                     case "edit.deselect": runShortcut({ kind: "deselect" }); return;
                     case "edit.group": runShortcut({ kind: "group" }); return;
+                    case "edit.instance": createInstance(); return;
+                    case "edit.detach": detachInstance(); return;
 
                     // ZOOM ABOUT THE CANVAS CENTRE, not the viewport origin. Scaling around the
                     // origin slides whatever you were looking at off the edge, which is why every
@@ -1337,22 +1381,7 @@ export function App() {
                     </>
                 )}
                 <Divider />
-                <button
-                    title="Wrap the selected nodes in a frame that fits them — the way to build a hierarchy (they must share a parent)"
-                    disabled={!new FrameSelectionAction(dispatcher.getDocument(), es.selectedNodeIds).validate()}
-                    onClick={() => {
-                        const action = new FrameSelectionAction(dispatcher.getDocument(), es.selectedNodeIds);
-                        if (dispatcher.dispatchAction(action).success) {
-                            const frame = action.getFrameId();
-                            if (frame) es.selectedNodeIds = [frame];
-                        }
-                        refresh();
-                    }}
-                    style={{ fontSize: 11, padding: "3px 8px", background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
-                >
-                    ⧉̲ Frame
-                </button>
-                <Divider />
+                                <Divider />
                 {/* PLAY (M7): run the prototype. Leaving play mode drops the run's state and its
                     transition, so the document is exactly as it was — playing is not editing. */}
                 <button
@@ -1382,8 +1411,6 @@ export function App() {
                     }}
                 >{es.playing ? "■ Stop" : "▶ Play"}</button>
                 <Divider />
-                <ToolButton icon="↩" label="Undo" disabled={!ui.canUndo} onClick={() => { dispatcher.undo(); refresh(); }} />
-                <ToolButton icon="↪" label="Redo" disabled={!ui.canRedo} onClick={() => { dispatcher.redo(); refresh(); }} />
                 {ui.truncated && (
                     // Only shown once history actually truncated: undo now stops at the
                     // oldest retained step, so this is the explicit way back to the start.
@@ -1403,55 +1430,7 @@ export function App() {
                         }}
                     />
                 )}
-                <button
-                    title="Create an instance of the selected node — it mirrors that master until you edit the master (M6 components)"
-                    disabled={es.selectedNodeIds.length !== 1 || dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.type === "core.instance"}
-                    onClick={() => {
-                        const masterId = es.selectedNodeIds[0];
-                        const doc = dispatcher.getDocument();
-                        const master = doc.nodes.get(masterId);
-                        if (!master) return;
-                        // Place it near the master in WORLD space: the new instance is a ROOT, so
-                        // its x/y are world coords, while a nested master's stored x/y are
-                        // parent-relative — using those directly would misplace the instance.
-                        const box = computeGeometry(doc).nodes.get(masterId)?.bounds;
-                        const at = box ?? { x: master.geometry.x, y: master.geometry.y };
-                        const action = new CreateInstanceAction(doc, masterId, at.x + 40, at.y + 40);
-                        if (dispatcher.dispatchAction(action).success) {
-                            const created = action.getCreatedNodeId();
-                            if (created) es.selectedNodeIds = [created];
-                        }
-                        refresh();
-                    }}
-                    style={{ fontSize: 11, padding: "3px 8px", marginLeft: 8, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
-                >
-                    ⧉ Instance
-                </button>
-                <button
-                    title="Detach the selected instance — bakes what it draws into ordinary nodes and severs the link to its master (undoable)"
-                    disabled={(() => {
-                        const sel = es.selectedNodeIds;
-                        if (sel.length !== 1) return true;
-                        // Enabled exactly when the action would succeed, so the control never
-                        // offers a click that silently does nothing (a dangling instance has
-                        // nothing to bake).
-                        return !new DetachInstanceAction(dispatcher.getDocument(), sel[0]).validate();
-                    })()}
-                    onClick={() => {
-                        const action = new DetachInstanceAction(dispatcher.getDocument(), es.selectedNodeIds[0]);
-                        if (dispatcher.dispatchAction(action).success) {
-                            // Select the baked ROOT: the instance the user had selected is gone,
-                            // and a stale selection would leave the inspector empty.
-                            const created = action.getCreatedNodeIds();
-                            es.selectedNodeIds = created.length > 0 ? [created[0]] : [];
-                        }
-                        refresh();
-                    }}
-                    style={{ fontSize: 11, padding: "3px 8px", marginLeft: 6, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
-                >
-                    ⊘ Detach
-                </button>
-                <div style={{ flex: 1 }} />
+                                                <div style={{ flex: 1 }} />
                 {/* THE DEBUG CONTROLS ARE NOT HERE ANY MORE. Design tokens, the script console,
                     asset folders, the renderer switch and the demo exercises all moved to the
                     Developer menu — the renderer switch especially, which changes what a user sees

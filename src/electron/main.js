@@ -109,6 +109,11 @@ function createWindow() {
                 { label: "Deselect	Esc", click: send("edit.deselect") },
                 { label: "Frame Selection	Ctrl+G", click: send("edit.group") },
                 { type: "separator" },
+                // The component commands. No accelerator on either: neither has ever had one, and
+                // inventing a chord here would be picking a binding the canvas knows nothing about.
+                { label: "Create Instance", click: send("edit.instance") },
+                { label: "Detach Instance", click: send("edit.detach") },
+                { type: "separator" },
                 // Still the right verbs: these serve the inspector's text fields, not the canvas.
                 { role: "cut" }, { role: "copy" }, { role: "paste" }
             ]
