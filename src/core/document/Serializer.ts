@@ -356,6 +356,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "54") { raw = migrate_54_to_55(raw); version = "55"; }
     if (version === "55") { raw = migrate_55_to_56(raw); version = "56"; }
     if (version === "56") { raw = migrate_56_to_57(raw); version = "57"; }
+    if (version === "57") { raw = migrate_57_to_58(raw); version = "58"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -856,6 +857,20 @@ function migrate_21_to_22(raw: any): any {
  */
 function migrate_56_to_57(raw: any): any {
     return { ...raw, version: "57" };
+}
+
+/**
+ * Schema 58 — `Mesh.points[i].bones`, the join between the skeleton and the artwork.
+ *
+ * A pass-through in this direction: no schema-57 mesh point names a bone, and one that names none
+ * is not skinned. The bump is for the other direction, and here it is not merely cosmetic. A 58
+ * document reaching a 57 build meets a `bones` array its `meshError` has never heard of — and the
+ * validator ignores unknown keys, so it would LOAD. The rig would be silently absent: every posed
+ * limb snapped back to the pose it was drawn in, no error to say a skeleton had been dropped. The
+ * version gate is the only thing standing between that file and a build that cannot animate it.
+ */
+function migrate_57_to_58(raw: any): any {
+    return { ...raw, version: "58" };
 }
 
 function migrate_54_to_55(raw: any): any {

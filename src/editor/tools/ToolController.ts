@@ -16,6 +16,7 @@ import { PICK_RADIUS_PX } from "./SelectTool";
 import { handleAtPoint, groupHandleAtPoint, vertexIndexOf, vertexHandleAtPoint, meshIndexOf, meshHandleAtPoint, gradientHandleAtPoint, gradientPointOf, isGradientHandle, GradientHandle } from "../../core/geometry/SelectionHandles";
 import { withHandleAt } from "../../core/document/GradientEdit";
 import { SetMeshAction } from "../../core/actions/SetMeshAction";
+import { copyMeshPoint } from "../../core/document/Mesh";
 import { movePathVertex, normalizePathNode } from "../../core/geometry/PathBuilder";
 import { UpdateNodePathAction } from "../../core/actions/UpdateNodePathAction";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupScaleInput } from "../../core/geometry/GroupTransform";
@@ -387,8 +388,8 @@ export class ToolController {
             if (bw === 0 || bh === 0) { this.refresh(); return; }
             const points = node.mesh.points.map((p, i) =>
                 i === this.meshIndex
-                    ? { ...p, x: p.x + dx / bw, y: p.y + dy / bh }
-                    : { ...p });
+                    ? { ...copyMeshPoint(p), x: p.x + dx / bw, y: p.y + dy / bh }
+                    : copyMeshPoint(p));
             this.dispatcher.dispatchAction(
                 new SetMeshAction(doc, this.meshNodeId, { cols: node.mesh.cols, rows: node.mesh.rows, points }),
                 { coalesce: true });

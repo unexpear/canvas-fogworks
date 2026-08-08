@@ -36,13 +36,13 @@ import { ProjectDocument, ReadonlyDocument } from "./Document";
 import { dimensionError, Geometry, Layout, layoutError, mergeLayout, Node, slotContentError, STATES_MAX, Style, styleError, srcValueError, Transform, transformError, variantNameError } from "./Node";
 import { ReadonlyNode } from "./SceneGraph";
 import { PathCommand, SourceRect, sourceRectError } from "./Node";
-import { Mat2D, compose } from "../geometry/Matrix";
+import { Mat2D, compose, localMatrix } from "../geometry/Matrix";
 import { flattenPath, hitShapeOf } from "../geometry/ShapeHit";
 import { shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
 import { resolveBooleanPaths } from "../geometry/Resolve";
 import { normalizePathNode } from "../geometry/PathBuilder";
 import { applyFrame } from "./Timeline";
-import { isFlatMesh, isIdentityMesh, warpCommands } from "./Mesh";
+import { isFlatMesh, isIdentityMesh, warpCommands, skinMesh, ReadonlyMesh } from "./Mesh";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
  *  Reserved: a stored node id may not contain it (checked on the edit AND load paths). */
@@ -724,15 +724,24 @@ export function resolveScene(doc: ReadonlyDocument): ReadonlyDocument {
     // ground for part of a walk and lifted for the rest is the ordinary case, and solving before
     // the frame was applied would pose every limb to its rest target. Before states and expansion
     // for the same reason time is: everything downstream sees an ordinary, un-rigged document.
-    return resolveMeshes(resolveBooleans(expandInstances(applyActiveState(applyIk(applyFrame(dropHidden(doc), doc.frame))))));
+    // SKINNING NEEDS THE POSE THE ART WAS DRAWN IN, which is this same chain without the two
+    // steps that move things: the frame and the IK solve. Passed as a thunk because it is a second
+    // full derivation, and an unskinned document — every document today — must never pay for it.
+    return resolveMeshes(
+        resolveBooleans(expandInstances(applyActiveState(applyIk(applyFrame(dropHidden(doc), doc.frame))))),
+        () => resolveBooleans(expandInstances(applyActiveState(dropHidden(doc))))
+    );
 }
 
-/** Local matrix for a node from its geometry + transform — the engine's own composition rule. */
+/**
+ * Local matrix for a node from its geometry + transform — the engine's own composition rule.
+ *
+ * A THIN ALIAS, not a second rule: this and the geometry engine each had their own copy of the
+ * same six lines until skinning needed a third, at which point three places could drift about
+ * where a rotation pivots. `localMatrix` in `geometry/Matrix` is now the only one.
+ */
 function nodeMatrix(geo: Geometry, t: Transform | undefined): Mat2D {
-    if (!t) return { a: 1, b: 0, c: 0, d: 1, e: geo.x, f: geo.y };
-    const ox = (t.origin?.x ?? 0.5) * geo.width;
-    const oy = (t.origin?.y ?? 0.5) * geo.height;
-    return compose(geo.x, geo.y, t.rotation ?? 0, t.scaleX ?? 1, t.scaleY ?? 1, ox, oy);
+    return localMatrix(geo, t);
 }
 
 /**
@@ -768,15 +777,84 @@ function nodeMatrix(geo: Geometry, t: Transform | undefined): Mat2D {
  * A mesh still at REST is skipped, and a document with no mesh at all is returned by reference —
  * this runs on every derivation, so an unmeshed document must cost what it always did.
  */
-export function resolveMeshes(doc: ReadonlyDocument): ReadonlyDocument {
+/**
+ * The scope a virtual id lives in — `I::OI::X` gives `I::OI::`, a stored id gives `""`.
+ *
+ * A binding names a bone by its STORED id, because that is what the author picked and what gets
+ * saved. Inside an instance the same bone exists as a copy under a prefix, so a copy's mesh has to
+ * be read against the copies BESIDE IT rather than the masters it came from — otherwise every
+ * instance of a rigged component would pose to the master's skeleton and they would all move
+ * identically no matter what each instance overrode.
+ */
+function idScope(id: string): string {
+    const at = id.lastIndexOf("::");
+    return at === -1 ? "" : id.slice(0, at + 2);
+}
+
+/**
+ * One node's mesh with its rig applied, or the stored mesh when nothing is bound.
+ *
+ * The sibling rule is NOT re-checked here. `Integrity` refuses a binding that crosses parents on
+ * the way in, and repeating the test at derivation time would make a foreign bone silently inert
+ * instead of rejected — two answers to one question, and the quieter one wins by accident.
+ */
+function poseMesh(
+    mesh: ReadonlyMesh,
+    id: string,
+    node: Node,
+    doc: ReadonlyDocument,
+    rest: () => ReadonlyDocument | null
+): ReadonlyMesh {
+    let bound = false;
+    for (const p of mesh.points) { if (p.bones && p.bones.length > 0) { bound = true; break; } }
+    if (!bound) return mesh;
+    const restDoc = rest();
+    if (!restDoc) return mesh;
+    const restNode = restDoc.nodes.get(id);
+    if (!restNode) return mesh;
+    const scope = idScope(id);
+    const boxOf = (g: { width: number; height: number }) => ({ width: g.width, height: g.height });
+
+    return skinMesh(
+        mesh,
+        { box: boxOf(restNode.geometry), matrix: localMatrix(restNode.geometry, restNode.transform) },
+        { box: boxOf(node.geometry), matrix: localMatrix(node.geometry, node.transform) },
+        boneId => {
+            // The copy beside this one first, the stored node second — so a rig works both inside
+            // an instance and out, and a bone named across scopes is simply not found.
+            const candidates = scope ? [scope + boneId, boneId] : [boneId];
+            for (const candidate of candidates) {
+                const posed = doc.nodes.get(candidate);
+                const drawn = restDoc.nodes.get(candidate);
+                if (!posed || !drawn) continue;
+                return {
+                    rest: localMatrix(drawn.geometry, drawn.transform),
+                    posed: localMatrix(posed.geometry, posed.transform),
+                };
+            }
+            return null;
+        }
+    );
+}
+
+export function resolveMeshes(doc: ReadonlyDocument, restOf?: () => ReadonlyDocument): ReadonlyDocument {
     let any = false;
     doc.nodes.forEach(n => { if (n.mesh) any = true; });
     if (!any) return doc;
 
+    // Built ONCE, and only if a bound point is actually reached — see `resolveScene`.
+    let restDoc: ReadonlyDocument | null = null;
+    const rest = (): ReadonlyDocument | null => {
+        if (!restOf) return null;
+        if (!restDoc) restDoc = restOf();
+        return restDoc;
+    };
+
     const nodes = new Map<string, Node>();
     doc.nodes.forEach((n, id) => {
-        const mesh = n.mesh;
+        const stored = n.mesh;
         const box = { width: n.geometry.width, height: n.geometry.height };
+        const mesh = stored ? poseMesh(stored, id, n as Node, doc, rest) : undefined;
         // Converted when the mesh moves the outline (`isIdentityMesh`) OR when it has HEIGHT.
         // Height changes no coordinate, so it looked like nothing to do — but a rectangle
         // tessellates to two triangles whose vertices are only its four CORNERS, and at the rim

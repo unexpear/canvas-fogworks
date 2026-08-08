@@ -25,6 +25,7 @@ import { DetachInstanceAction } from "../actions/DetachInstanceAction";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy , overrideTargetFor} from "../actions/nodeEdit";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
+import { validateDocumentIntegrity } from "../document/Integrity";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
 import { AddNodeAction } from "../actions/AddNodeAction";
@@ -53,6 +54,7 @@ import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyP
 import { Mesh, meshError, restMesh, warpPoint, isIdentityMesh, MESH_MAX_DIVISIONS } from "../document/Mesh";
 import { meshHandles, meshHandleAtPoint, meshIndexOf } from "../geometry/SelectionHandles";
 import { normalAt, surfaceNormal, warpHeight, isFlatMesh, heightRange } from "../document/Mesh";
+import { skinMesh } from "../document/Mesh";
 import { Light, lightsError, ambientError, lambert, shadowOffset, heightAbovePage, LIGHTS_MAX } from "../document/Light";
 import { resolveMeshes } from "../document/Components";
 import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry/CastShadow";
@@ -4522,9 +4524,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 56→57 landed, adding
-        // `Node.nineSlice`, a bitmap whose corners keep their size.)
-        expect(() => migrateIfNeeded(legacy, "58")).toThrow('Migration not implemented for document schema "57"');
+        // time a real migration is added — most recently when 57→58 landed, adding
+        // `Mesh.points[i].bones`, the join between the skeleton and the artwork.)
+        expect(() => migrateIfNeeded(legacy, "59")).toThrow('Migration not implemented for document schema "58"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -23182,5 +23184,207 @@ describe("skinnedPoint", () => {
         expect(boneWeightsError([{ node: "", weight: 1 }])).toMatch(/must name a node/);
         // Zero is LEGAL — it is how a bone is unbound without rewriting the list.
         expect(boneWeightsError([{ node: "a", weight: 0 }])).toBeNull();
+    });
+});
+
+describe("Skinning a mesh (schema 58)", () => {
+    /**
+     * A group holding a mesh node and a bone BESIDE it — the arrangement the sibling rule asks for.
+     *
+     * The bone is keyframed rather than moved by hand, because a pose has to come from a step the
+     * REST chain does not run. `resolveScene` builds its rest document without `applyFrame` and
+     * without `applyIk`, so those two are the only things that can make posed differ from rest;
+     * writing a different number into `geometry` would move both and deform nothing.
+     */
+    const rigged = (bones?: { node: string; weight: number }[], meshTrack = false): ProjectDocument => {
+        const d = createEmptyDocument();
+        d.timeline = { frames: 30, fps: 24 };
+        const mesh = restMesh(1, 1);
+        if (bones) mesh.points[0] = { ...mesh.points[0], bones };
+        d.nodes.set("G", { id: "G", type: "core.rectangle", parent: null, children: ["M", "B"],
+            geometry: { x: 0, y: 0, width: 200, height: 200 }, style: { fill: "none", opacity: 1 }, layout: {} } as Node);
+        d.nodes.set("M", { id: "M", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {}, mesh,
+            ...(meshTrack ? { track: [{ frame: 0, values: { geometry: { x: 0 } } },
+                                      { frame: 10, values: { geometry: { x: 20 } } }] } : {}) } as Node);
+        d.nodes.set("B", { id: "B", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 10, y: 10, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {},
+            track: [{ frame: 0, values: { geometry: { x: 10 } } }, { frame: 10, values: { geometry: { x: 30 } } }] } as Node);
+        d.rootNodeUuids = ["G"];
+        return d;
+    };
+    /** The smallest x among the resolved outline's points that sit on the TOP edge. */
+    const topLeftX = (path: readonly PathCommand[]): number =>
+        Math.min(...path.filter(c => c.c !== "Z" && Math.abs((c as { y: number }).y) < 1e-9)
+                        .map(c => (c as { x: number }).x));
+
+    test("a bone that MOVED drags the control point it carries, and only that one", () => {
+        // Hand-computed. The bone is drawn at x = 10 and posed at x = 30, so `posed · rest⁻¹` is a
+        // translation of +20 in the group's space. The bound point is the mesh's TOP-LEFT corner
+        // at fraction (0, 0) — local (0, 0), and `M` sits at the group's origin untransformed, so
+        // the point lands at 20 and its fraction becomes 0.2. Nothing else in the grid is bound.
+        const d = rigged([{ node: "B", weight: 1 }]);
+        d.frame = 10;
+        const out = resolveScene(d).nodes.get("M")!;
+        expect(out.type).toBe("core.path");
+        expect(topLeftX(out.path!)).toBeCloseTo(20, 9);
+        // The TOP-RIGHT corner is unbound and stays exactly where it was drawn — an unweighted
+        // point is not skinned, it is not pinned to the origin.
+        expect(Math.max(...out.path!.filter(c => c.c !== "Z").map(c => (c as { x: number }).x))).toBeCloseTo(100, 9);
+
+        // AT FRAME 0 the bone is at its drawn position, so nothing moves and the node is still an
+        // ordinary rectangle. The falsifiable half: without it, a test that only ever sees a path
+        // could not tell skinning from a mesh that was never at rest.
+        const still = rigged([{ node: "B", weight: 1 }]);
+        expect(resolveScene(still).nodes.get("M")!.type).toBe("core.rectangle");
+    });
+
+    test("HALF a bone moves a point half as far, and two bones average", () => {
+        // Weights are relative and normalised, so one bone at 0.5 is one bone at 1 — the point
+        // still follows it all the way. It takes a SECOND influence to split the difference.
+        const one = rigged([{ node: "B", weight: 0.5 }]);
+        one.frame = 10;
+        expect(topLeftX(resolveScene(one).nodes.get("M")!.path!)).toBeCloseTo(20, 9);
+        // `G` has not moved, so it contributes its own rest position — half of +20 and half of 0.
+        const two = rigged([{ node: "B", weight: 1 }, { node: "G", weight: 1 }]);
+        two.nodes.set("G", { ...(two.nodes.get("G") as Node), parent: null });
+        two.frame = 10;
+        // …but `G` is the mesh node's PARENT, not its sibling, so the document is refused before
+        // it can average anything. The averaging itself is covered against matrices in
+        // `skinnedPoint`; here the point is that the rule is enforced on a real document.
+        expect(() => validateDocumentIntegrity(two)).toThrow(/not a sibling/);
+    });
+
+    test("a point bound to a bone that moved exactly as its OWN node did stays put", () => {
+        // Why the point goes out through the node's REST matrix and comes back through its POSED
+        // one. The artwork is already carried by wherever `M` now is; the rig must only add what
+        // the bones did BEYOND that. Posing both ways would count `M`'s own +20 twice and bend a
+        // shape that should have travelled rigidly.
+        const d = rigged([{ node: "B", weight: 1 }], true);
+        d.frame = 10;
+        const out = resolveScene(d).nodes.get("M")!;
+        expect(out.type).toBe("core.rectangle");
+        expect(out.geometry.x).toBe(20);
+    });
+
+    test("the rest document is built ONCE, and not at all for an unskinned mesh", () => {
+        // A second full derivation of the whole scene. An unrigged document — every document that
+        // exists today — must not pay for it, and a rigged one must not pay per meshed node.
+        const boom = () => { throw new Error("rest derivation should not have been built"); };
+        expect(() => resolveMeshes(rigged(), boom)).not.toThrow();
+
+        // TWO bound meshes, one derivation. Without the memo this is two, and the cost grows with
+        // the scene rather than staying flat — invisible to every assertion about what is drawn.
+        const many = rigged([{ node: "B", weight: 1 }]);
+        many.nodes.set("M2", { ...(many.nodes.get("M") as Node), id: "M2" } as Node);
+        many.nodes.set("G", { ...(many.nodes.get("G") as Node), children: ["M", "M2", "B"] } as Node);
+        many.frame = 10;
+        let built = 0;
+        const counted = resolveMeshes(applyFrame(many, 10), () => { built++; return many; });
+        expect(built).toBe(1);
+        expect(counted.nodes.get("M")!.type).toBe("core.path");   // it really did skin something
+
+        // And with no thunk at all — the signature older callers still use — skinning is simply
+        // absent rather than a crash.
+        const bound = rigged([{ node: "B", weight: 1 }]);
+        bound.frame = 10;
+        expect(() => resolveMeshes(bound)).not.toThrow();
+    });
+
+    test("a binding is refused unless it names a SIBLING that exists and is not the node itself", () => {
+        const missing = rigged([{ node: "ghost", weight: 1 }]);
+        expect(() => validateDocumentIntegrity(missing)).toThrow(/missing bone "ghost"/);
+        const itself = rigged([{ node: "M", weight: 1 }]);
+        // Binding to itself cancels exactly and the point never moves however far the node is
+        // dragged — refused rather than allowed as a silent no-op.
+        expect(() => validateDocumentIntegrity(itself)).toThrow(/to itself as a bone/);
+        const ok = rigged([{ node: "B", weight: 1 }]);
+        expect(() => validateDocumentIntegrity(ok)).not.toThrow();
+        // The document-free half is `meshError`, reached from the same place every other mesh
+        // rule is — so a fifth influence is refused on the LOAD path, not only by the editor.
+        const five = restMesh(1, 1);
+        five.points[0] = { ...five.points[0], bones: [1, 2, 3, 4, 5].map(i => ({ node: `b${i}`, weight: 1 })) };
+        expect(meshError(five)).toMatch(/more than 4 bones/);
+    });
+
+    test("bindings survive a save and a load", () => {
+        const d = rigged([{ node: "B", weight: 0.25 }]);
+        const back = deserializeDocument(serializeDocument(d));
+        expect(back.nodes.get("M")!.mesh!.points[0].bones).toEqual([{ node: "B", weight: 0.25 }]);
+        // …and the same file at the PREVIOUS schema is carried forward untouched, because no
+        // schema-57 point names a bone.
+        const raw = JSON.parse(serializeDocument(d));
+        raw.version = "57";
+        expect(migrateIfNeeded(raw).version).toBe("58");
+    });
+
+    test("DRAGGING a control point keeps its bindings", () => {
+        // The nine-slice lesson, applied before it could cost anything: geometry tests and a pixel
+        // sweep both watch what is DRAWN, and neither can see the editor's own copy of a point
+        // quietly dropping a field. Only asking the document what it holds afterwards can.
+        // The CENTRE point of a 2x2 grid, because every point of a 1x1 grid is also a resize
+        // handle and the selection box is picked first.
+        const d = rigged();
+        const grid = restMesh(2, 2);
+        grid.points[4] = { ...grid.points[4], bones: [{ node: "B", weight: 1 }] };
+        d.nodes.set("M", { ...(d.nodes.get("M") as Node), mesh: grid });
+        const dispatcher = new ActionDispatcher(d);
+        const es = createEditorState();
+        es.selectedNodeIds = ["M"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        const ev = (x: number, y: number) =>
+            ({ clientX: x, clientY: y, button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        const canvas = { left: 0, top: 0, width: 800, height: 600 } as DOMRect;
+        tc.onMouseDown(ev(50, 50), canvas);
+        tc.onMouseMove(ev(60, 50), canvas);
+        tc.onMouseUp(ev(60, 50));
+        const moved = dispatcher.getDocument().nodes.get("M")!.mesh!.points[4];
+        expect(moved.x).toBeCloseTo(0.6, 9);            // the drag landed, so the assertion below is live
+        expect(moved.bones).toEqual([{ node: "B", weight: 1 }]);
+    });
+
+    test("the box enters TWICE, and each time on its own axis", () => {
+        // A NON-SQUARE box and a point that is not at the origin, which is what it takes to see
+        // this at all: a point is a fraction, so the box multiplies on the way out and divides on
+        // the way back, and swapping width for height in either place is invisible on a square
+        // node or on a corner point at (0, 0) — which is every other fixture here. The pair is in
+        // `mutate:dimensions` as SK1/SK2, where that family belongs.
+        const mesh = restMesh(2, 2);
+        mesh.points[4] = { ...mesh.points[4], bones: [{ node: "B", weight: 1 }] };   // the centre
+        const box = { width: 100, height: 60 };
+        const moved = skinMesh(
+            mesh,
+            { box, matrix: IDENTITY },
+            { box, matrix: IDENTITY },
+            // A bone that translated +20 in x and +6 in y.
+            () => ({ rest: IDENTITY, posed: { a: 1, b: 0, c: 0, d: 1, e: 20, f: 6 } })
+        );
+        // Out: (0.5, 0.5) -> (50, 30). Skinned: (70, 36). Back: 70/100, 36/60.
+        expect(moved.points[4].x).toBeCloseTo(0.7, 9);
+        expect(moved.points[4].y).toBeCloseTo(0.6, 9);
+        // Unbound points are untouched, and the binding rides along with the point it belongs to.
+        expect(moved.points[0]).toEqual({ x: 0, y: 0 });
+        expect(moved.points[4].bones).toEqual([{ node: "B", weight: 1 }]);
+    });
+
+    test("inside an INSTANCE a mesh poses to the bone beside it, not the master's", () => {
+        // Why a binding is looked up under the copy's own scope first. A copy names its bone by
+        // the STORED id the author picked, and the same bone exists once per instance; reading the
+        // master's would make every copy of a rigged component move identically no matter what
+        // the instance said. Reachable because an override is applied AFTER the frame — pinning
+        // this copy's bone to x = 50 leaves it at 50 in both the posed and the rest document, so
+        // this copy's bone has not moved while the master's has.
+        const d = rigged([{ node: "B", weight: 1 }]);
+        d.nodes.set("I", { id: "I", type: "core.instance", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 200, height: 200 }, style: { fill: "none", opacity: 1 }, layout: {},
+            componentId: "G", overrides: { B: { geometry: { x: 50 } } } } as Node);
+        d.rootNodeUuids = ["G", "I"];
+        d.frame = 10;
+        const scene = resolveScene(d);
+        // The master's own copy still bends: its bone went 10 -> 30.
+        expect(topLeftX(scene.nodes.get("M")!.path!)).toBeCloseTo(20, 9);
+        // The instance's does not, because ITS bone is pinned. Reading the master's bone would
+        // have bent this one by the same 20.
+        expect(scene.nodes.get("I::M")!.type).toBe("core.rectangle");
     });
 });

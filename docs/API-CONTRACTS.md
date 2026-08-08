@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v57 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v58 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -1871,13 +1871,28 @@ interface Slice { src: Rect; dst: Rect }
 function nineSliceRects(source: Rect, dest: Rect, insets: NineSliceInsets): Slice[];
 // Linear blend skinning — the join between `Rig` (which poses a skeleton) and `Mesh` (which bends
 // a shape). One bone's answer is `posed · rest⁻¹` applied to the point: where it moved TO, undoing
-// where it started FROM. Space-agnostic, so the caller decides the frame. NOTHING CONSUMES IT YET:
-// binding control points to bones is a schema change, and the arithmetic completes on its own.
+// where it started FROM. Space-agnostic, so the caller decides the frame.
 const SKIN_MAX_BONES = 4;   // measured — all 52 skins in 5,037 glTF models use JOINTS_0 only
 interface BoneWeight { node: string; weight: number }
 interface BonePose { rest: Mat2D; posed: Mat2D; weight: number }
 function boneWeightsError(weights: unknown): string | null;
 function skinnedPoint(point: { x; y }, bones: readonly BonePose[]): { x; y };
+// A control point names its bones (schema 58). SKINNING PRODUCES A MESH, so the warp, the path
+// conversion, hit testing and all three backends need no knowledge that a skeleton exists — which
+// is also why a skinned limb is clickable where it is drawn. Out through the node's REST matrix and
+// back through its POSED one, so a point bound to a bone that moved exactly as its node did stays
+// put. A bone must SHARE the mesh node's parent (`Integrity`): one space, so no world matrices.
+Mesh.points[i].bones?: BoneWeight[];                          // absent = not skinned
+interface BoneMatrices { rest: Mat2D; posed: Mat2D }
+function skinMesh(mesh, rest: { box; matrix }, posed: { box; matrix },
+                  bone: (id: string) => BoneMatrices | null): ReadonlyMesh;   // by reference if unbound
+function copyMeshPoint(p): Mesh["points"][number];            // a mutable copy, BINDINGS INCLUDED
+// The rest pose is this chain without `applyFrame` and without `applyIk` — the only two steps that
+// move anything. A THUNK, so an unrigged document never builds it and a rigged one builds it once.
+function resolveMeshes(doc: ReadonlyDocument, restOf?: () => ReadonlyDocument): ReadonlyDocument;
+// The one composition rule for a node's local matrix, in `geometry/Matrix` because the document
+// layer needs the same answer the geometry engine does. There were three copies before skinning.
+function localMatrix(geo: Rect, t: Transform | undefined): Mat2D;
 // All three backends implement it: SVG nests `<g opacity>`, Canvas opens an offscreen canvas per
 // run, the GPU pushes a render target per nesting depth and fades it back through the composite
 // shader's `u_fade`. They are pixel-identical on a translucent group, a group whose child has a

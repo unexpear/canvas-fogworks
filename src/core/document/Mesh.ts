@@ -43,6 +43,8 @@
  */
 
 import { PathCommand } from "./Node";
+import { BonePose, BoneWeight, boneWeightsError, skinnedPoint } from "../geometry/Skin";
+import { Mat2D, applyToPoint, invert } from "../geometry/Matrix";
 
 /** Grid size a mesh may declare. Bounded: the point count is the product, and it is hand-editable. */
 export const MESH_MAX_DIVISIONS = 64;
@@ -57,7 +59,10 @@ export const MESH_MAX_DIVISIONS = 64;
 export interface ReadonlyMesh {
     readonly cols: number;
     readonly rows: number;
-    readonly points: readonly { readonly x: number; readonly y: number; readonly z?: number }[];
+    readonly points: readonly {
+        readonly x: number; readonly y: number; readonly z?: number;
+        readonly bones?: readonly { readonly node: string; readonly weight: number }[];
+    }[];
 }
 
 export interface Mesh {
@@ -78,7 +83,21 @@ export interface Mesh {
      * somewhere to face, and the outline is unaffected: `warpPoint` still reads only x and y, so
      * a heightfield changes how a shape is LIT without changing what it covers.
      */
-    points: { x: number; y: number; z?: number }[];
+    points: {
+        x: number; y: number; z?: number;
+        /**
+         * The bones carrying this point, and how strongly (schema 58). Absent = not skinned.
+         *
+         * A BONE IS AN ORDINARY NODE, because the skeleton in this engine IS the node tree — the
+         * same thing `Rig` already assumes when it rotates a chain's parent and grandparent. It
+         * must SHARE THIS NODE'S PARENT, which `Integrity` checks: the deform is computed in that
+         * one shared space out of stored transforms alone, so a bone from elsewhere in the tree
+         * would be a matrix in a different frame with nothing to say where the two meet.
+         *
+         * At most `SKIN_MAX_BONES`, which is measured rather than chosen — see `geometry/Skin`.
+         */
+        bones?: BoneWeight[];
+    }[];
 }
 
 export function meshError(mesh: unknown): string | null {
@@ -100,6 +119,12 @@ export function meshError(mesh: unknown): string | null {
             return "mesh.points must all be finite {x, y} points";
         }
         if (p.z !== undefined && !Number.isFinite(p.z)) return "mesh.points z must be finite when present";
+        // The influence rules live once, in `geometry/Skin`, and are REACHED from here — so the
+        // edit path, the load path and every importer cannot disagree about what a legal binding
+        // is. What this cannot check is whether the named node exists and is a sibling; that needs
+        // the document, and lives in `Integrity`.
+        const bonesBad = boneWeightsError(p.bones);
+        if (bonesBad) return `mesh.points: ${bonesBad}`;
     }
     return null;
 }
@@ -130,6 +155,89 @@ export function isIdentityMesh(mesh: ReadonlyMesh): boolean {
  * and extrapolating a bilinear patch beyond its corners diverges fast, so a slightly overhanging
  * outline would be flung across the canvas instead of following the edge it is near.
  */
+/**
+ * A mutable copy of one control point, bindings included.
+ *
+ * Exists because a spread of a `ReadonlyMesh` point is not assignable to a `Mesh` point once
+ * bindings are an array — and because the editor's drag path copying every field EXCEPT `bones`
+ * would silently unbind whatever it touched.
+ */
+export function copyMeshPoint(p: ReadonlyMesh["points"][number]): Mesh["points"][number] {
+    const out: Mesh["points"][number] = { x: p.x, y: p.y };
+    if (p.z !== undefined) out.z = p.z;
+    if (p.bones) out.bones = p.bones.map(b => ({ node: b.node, weight: b.weight }));
+    return out;
+}
+
+/** One bone resolved to matrices: where it was drawn, and where it is now. */
+export interface BoneMatrices { rest: Mat2D; posed: Mat2D }
+
+/**
+ * The mesh a rig has moved — every bound control point carried by its bones.
+ *
+ * SKINNING PRODUCES A MESH, and that is the whole design. The deform could have been applied to
+ * the outline after `warpCommands` ran, but then a skinned shape and a warped one would be two
+ * different pipelines and a shape that was both would depend on which ran first. Folding the pose
+ * into the CONTROL POINTS instead means everything downstream — the warp, the conversion to a
+ * `core.path`, hit testing, all three backends — keeps working with no knowledge that a skeleton
+ * exists, exactly as they already do for a hand-dragged point.
+ *
+ * THE SPACE IS THE PARENT'S. A point is a fraction of the box (schema 43), so it is scaled into
+ * the node's own units, pushed OUT through the node's rest matrix into the space its bones are
+ * expressed in, skinned there, and pulled back through the node's POSED matrix. Out through rest
+ * and back through posed, not posed both ways: the artwork is placed by where the node is NOW, so
+ * a point bound to a bone that moved exactly as the node did has to come back unchanged, and those
+ * two matrices are what cancel to make that true.
+ *
+ * Returned BY REFERENCE when no point names a bone, because this runs on every derivation and an
+ * unrigged mesh must cost what it always did.
+ */
+export function skinMesh(
+    mesh: ReadonlyMesh,
+    rest: { box: { width: number; height: number }; matrix: Mat2D },
+    posed: { box: { width: number; height: number }; matrix: Mat2D },
+    bone: (id: string) => BoneMatrices | null
+): ReadonlyMesh {
+    let bound = false;
+    for (const p of mesh.points) { if (p.bones && p.bones.length > 0) { bound = true; break; } }
+    if (!bound) return mesh;
+    // A node scaled to nothing has no way back from parent space. Leaving the mesh at rest beats
+    // every point collapsing onto one coordinate.
+    const back = invert(posed.matrix);
+    if (!back) return mesh;
+    // Bones are shared between points — a 64x64 mesh is 4,225 of them against a skeleton of six.
+    const resolved = new Map<string, BoneMatrices | null>();
+    const lookup = (id: string): BoneMatrices | null => {
+        if (resolved.has(id)) return resolved.get(id) ?? null;
+        const m = bone(id);
+        resolved.set(id, m);
+        return m;
+    };
+
+    const points = mesh.points.map(p => {
+        if (!p.bones || p.bones.length === 0) return p;
+        const poses: BonePose[] = [];
+        for (const w of p.bones) {
+            const m = lookup(w.node);
+            // A DANGLING BONE IS NOT AN ERROR HERE. `Integrity` refuses one on the way in; by the
+            // time a document is being derived, a missing bone means a node was deleted, and the
+            // point's remaining influences should still carry it rather than the whole drawing
+            // snapping back to its rest pose.
+            if (m) poses.push({ rest: m.rest, posed: m.posed, weight: w.weight });
+        }
+        if (poses.length === 0) return p;
+        const at = applyToPoint(rest.matrix, p.x * rest.box.width, p.y * rest.box.height);
+        const moved = skinnedPoint(at, poses);
+        const local = applyToPoint(back, moved.x, moved.y);
+        return {
+            ...p,
+            x: posed.box.width === 0 ? p.x : local.x / posed.box.width,
+            y: posed.box.height === 0 ? p.y : local.y / posed.box.height,
+        };
+    });
+    return { cols: mesh.cols, rows: mesh.rows, points };
+}
+
 export function warpPoint(mesh: ReadonlyMesh, box: { width: number; height: number }, x: number, y: number): { x: number; y: number } {
     const u = box.width === 0 ? 0 : Math.max(0, Math.min(1, x / box.width));
     const v = box.height === 0 ? 0 : Math.max(0, Math.min(1, y / box.height));

@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v57 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v58 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -849,6 +849,24 @@ snapping and all three backends learn nothing about skeletons.
 **THE SOLVED ANGLE IS A DELTA FROM THE REST POSE.** A bone's rest direction is the direction of its
 child's authored offset, so a rig posed by IK composes with however the character was drawn instead
 of assuming every limb was authored pointing down the y axis.
+
+**AND THE BONES NOW CARRY THE ARTWORK (schema 58).** Until then a rig could swing a limb and the
+drawing stayed exactly where it was — `Rig` posed a skeleton, `Mesh` bent a shape, and nothing
+joined them. A mesh control point may now name up to four bones, and lands at the weighted average
+of where each would have put it: `posed · rest⁻¹`, the same delta-from-how-it-was-drawn the solved
+angle already is, one dimension up.
+
+Skinning **produces a mesh**, which is the design decision the rest follows from. Deforming the
+outline after the warp would make a skinned shape and a warped one two pipelines, and a shape that
+was both would depend on which ran first; folding the pose into the CONTROL POINTS instead means
+`resolveMeshes` proceeds exactly as it always did, and a skinned limb is clickable where it is
+drawn for the same reason a warped one is. The constraint that buys it is that a bone must SHARE
+the mesh node's parent — one shared space, so the deform needs no world matrices and `Integrity`
+can check the rule.
+
+The rest pose is this same chain **without `applyFrame` and without `applyIk`**, the only two steps
+that move anything, built as a thunk `resolveScene` hands to `resolveMeshes` — so an unrigged
+document never builds it and a rigged one builds it once, not once per meshed node.
 
 ### Motion paths — the route, kept apart from the spacing
 

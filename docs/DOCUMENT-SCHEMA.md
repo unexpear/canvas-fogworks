@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v57 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v58 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -1116,6 +1116,65 @@ source rect, and a panel whose middle has collapsed genuinely has four pieces.
 
 **Stretched, not tiled.** Tiling needs a repeat count, a rule for partial tiles and a per-axis
 choice; it is not pretended to exist.
+
+## Skinning (bones that deform the artwork — schema 58)
+
+```ts
+interface BoneWeight { node: string; weight: number }        // geometry/Skin
+Mesh.points[i].bones?: BoneWeight[]                          // absent = not skinned
+SKIN_MAX_BONES = 4
+
+skinnedPoint(point, bones): { x, y }                         // geometry/Skin — space-agnostic
+skinMesh(mesh, rest, posed, boneLookup): ReadonlyMesh        // document/Mesh
+```
+
+`Rig` posed a skeleton and `Mesh` bent a shape, and until schema 58 nothing joined them: a rig
+could swing a limb and the artwork stayed exactly where it was drawn. A control point now names the
+bones that carry it, and its new position is the weighted average of where each of those bones
+would have put it — **`posed · rest⁻¹`**, where the bone has moved TO undoing where it started
+FROM. Without the inverse a bone drawn already rotated would snap its artwork onto the axis on the
+first frame, which is the same delta-from-rest reasoning `Rig` states for its own directions.
+
+**A bone is an ordinary node**, because the skeleton in this engine IS the node tree — there is no
+bone type and `Rig` already assumes this. It must **share the mesh node's parent**, which
+`Integrity` enforces. That single rule is what makes the whole feature need no world matrices: the
+bone and the artwork are placed by matrices in one shared space, so the deform composes there and
+nowhere else. A node may not be its own bone — that cancels exactly and moves nothing, which is a
+harder bug to see than an error.
+
+**Four influences, measured.** Every one of the 52 skins in the 5,037 glTF models in `freeassets`
+carries `JOINTS_0`/`WEIGHTS_0` and never a `JOINTS_1`, and 47 of the 52 have six or seven joints.
+The cap is what the art actually uses, and a bound on a hand-editable list besides.
+
+**Weights are normalised, not trusted.** A rig summing to 1.2 does not deform 20% more, it deforms
+wrongly — and exported weights miss by a rounding error constantly. Zero is legal: it is how a bone
+is unbound without rewriting the list. Negative is refused, because it can shrink or flip the
+normalising sum and send a point to infinity.
+
+**Skinning produces a MESH, and that is the whole design.** The deform could have been applied to
+the outline after the warp, but then a skinned shape and a warped one would be two pipelines and a
+shape that was both would depend on which ran first. Folding the pose into the control points
+instead means the warp, the conversion to `core.path`, hit testing and all three backends need no
+knowledge that a skeleton exists — exactly as they already need none for a hand-dragged point. A
+skinned limb is therefore **clickable where it is drawn**, for free.
+
+**Out through rest, back through posed.** A point is a fraction of the box (schema 43), so it is
+scaled into the node's own units, pushed out through the node's REST matrix into the space its
+bones live in, skinned, and pulled back through the node's POSED matrix. The artwork is already
+carried by wherever the node is now; the rig adds only what the bones did beyond that.
+
+**The rest pose is the document without `applyFrame` and without `applyIk`** — the two steps that
+move things. `resolveScene` builds it as a **thunk**, so an unrigged document pays nothing and a
+rigged one builds it once per derivation rather than once per meshed node. A binding is looked up
+under the copy's own scope first (`I::B` before `B`), so a rigged component instance poses to the
+bone beside it rather than the master's.
+
+**Not dual-quaternion blending.** Linear blending collapses a joint bent past about 120° — the
+"candy wrapper" — and every 2D rigging tool ships with it anyway, because at the angles a limb
+actually bends the difference is invisible and the arithmetic is a quarter the size.
+
+**Not yet authored.** Nothing in the editor writes a binding; the field, the arithmetic, the
+validation and the derivation are what schema 58 adds.
 
 ## Gradient (a fill that changes across the shape — schema 56)
 

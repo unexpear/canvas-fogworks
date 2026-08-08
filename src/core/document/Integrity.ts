@@ -186,6 +186,35 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
         }
     });
 
+    // 2b. Mesh bone bindings name a node, and one that SHARES THIS NODE'S PARENT (schema 58).
+    //
+    // The sibling rule is the whole reason skinning needs no world matrices: both the bone and the
+    // artwork are placed by matrices in one shared space, so `posed · rest⁻¹` composes there and
+    // nowhere else. A bone two levels up would need each intervening transform to say where the
+    // two frames meet, and every one of those is itself animatable. Checked HERE, once, because
+    // it is a fact about the document rather than about a mesh — `meshError` cannot see the tree.
+    doc.nodes.forEach(node => {
+        if (!node.mesh) return;
+        for (const point of node.mesh.points) {
+            for (const bone of point.bones ?? []) {
+                const target = doc.nodes.get(bone.node);
+                if (!target) {
+                    throw new Error(`Invalid document: node "${node.id}" binds a mesh point to a missing bone "${bone.node}".`);
+                }
+                if ((target.parent ?? null) !== (node.parent ?? null)) {
+                    throw new Error(`Invalid document: node "${node.id}" binds a mesh point to bone "${bone.node}", which is not a sibling.`);
+                }
+                // A NODE IS NOT ITS OWN BONE. Its own matrix is what carries the point out to the
+                // bones and back again, so binding to itself cancels exactly — `posed⁻¹ · posed ·
+                // rest⁻¹ · rest` — and the point never moves however far the node is dragged.
+                // Refused rather than allowed as a silent no-op, which is the harder bug to see.
+                if (bone.node === node.id) {
+                    throw new Error(`Invalid document: node "${node.id}" binds a mesh point to itself as a bone.`);
+                }
+            }
+        }
+    });
+
     // 3. Children resolve, are claimed exactly once, and back-point correctly.
     const claimedBy = new Map<string, string>();
     doc.nodes.forEach(node => {

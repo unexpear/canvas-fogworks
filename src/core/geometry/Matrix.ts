@@ -130,6 +130,27 @@ export function unionRect(a: Rect, b: Rect): Rect {
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
+/**
+ * Local matrix for one node from its geometry + optional transform.
+ *
+ * HERE rather than inside the geometry engine, which is where it started: skinning needs the same
+ * answer at the DOCUMENT layer (a bone's matrix in its parent's space) and importing it from the
+ * engine would have the document depending on the thing that consumes it. Matrix imports nothing,
+ * so it is the one place both can reach.
+ *
+ * The rotation pivot is the transform's ORIGIN as a fraction of the box, defaulting to the centre —
+ * the same convention `Transform` states, applied in the one function that turns it into numbers.
+ */
+export function localMatrix(
+    geo: Rect,
+    t: { rotation?: number; scaleX?: number; scaleY?: number; origin?: { x: number; y: number } } | undefined
+): Mat2D {
+    if (!t) return { a: 1, b: 0, c: 0, d: 1, e: geo.x, f: geo.y };
+    const ox = (t.origin?.x ?? 0.5) * geo.width;
+    const oy = (t.origin?.y ?? 0.5) * geo.height;
+    return compose(geo.x, geo.y, t.rotation ?? 0, t.scaleX ?? 1, t.scaleY ?? 1, ox, oy);
+}
+
 /** SVG/Canvas-ready serialization. */
 export function toMatrixString(m: Mat2D): string {
     return `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})`;

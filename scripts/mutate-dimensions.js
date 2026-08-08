@@ -24,7 +24,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1432;
+const EXPECTED_TESTS = 1441;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -117,6 +117,19 @@ const MUTANTS = [
       from: "[source.y + source.height - sb, sb, dest.y + dest.height - db, db]",
       to: "[source.y + source.height - sb, sb, dest.y + dest.height - dt, dt]",
       note: "the bottom row takes the TOP inset — invisible on a symmetric border" },
+
+    { id: "SK1", file: "src/core/document/Mesh.ts",
+      from: "const at = applyToPoint(rest.matrix, p.x * rest.box.width, p.y * rest.box.height);",
+      to: "const at = applyToPoint(rest.matrix, p.x * rest.box.height, p.y * rest.box.width);",
+      note: "a control point scaled out on the wrong axis — invisible on a square node, and on a corner point at (0, 0)" },
+    { id: "SK2", file: "src/core/document/Mesh.ts",
+      from: "x: posed.box.width === 0 ? p.x : local.x / posed.box.width,",
+      to: "x: posed.box.width === 0 ? p.x : local.x / posed.box.height,",
+      note: "the skinned point divided back on the wrong axis — the same blindness, on the return trip" },
+    { id: "SK3", file: "src/core/document/Mesh.ts",
+      from: "y: posed.box.height === 0 ? p.y : local.y / posed.box.height,",
+      to: "y: posed.box.height === 0 ? p.y : local.y / posed.box.width,",
+      note: "and the other axis of the same division, which a square box cannot tell apart" },
 
     { id: "TM5", file: "src/core/import/TiledMap.ts",
       from: "opacity: Math.min(1, Math.max(0, num(a.opacity, 1))),",

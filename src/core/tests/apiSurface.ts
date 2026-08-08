@@ -149,7 +149,7 @@ import { EASABLE_PATHS } from "../document/Timeline";
 import { EaseFor, DiscreteMode, blendNode } from "../document/Prototype";
 import { Keyframe, TimelineSettings, timelineError, trackError, channelsError, CHANNELS_MAX, keyframesAt, applyFrame, onionFrames, TIMELINE_MAX_FRAMES, TRACK_MAX_KEYFRAMES, FPS_MIN, FPS_MAX } from "../document/Timeline";
 import { DEPTH_MIN, DEPTH_MAX, depthError, depthOf, parallaxRate, parallaxOffset, depthToClipZ, byDepth, applyParallax } from "../document/Depth";
-import { Mesh, ReadonlyMesh, MESH_MAX_DIVISIONS, meshError, restPoint, restMesh, isIdentityMesh, warpPoint, warpCommands, heightOf, warpHeight, heightRange, surfaceNormal, normalAt, isFlatMesh } from "../document/Mesh";
+import { Mesh, ReadonlyMesh, MESH_MAX_DIVISIONS, meshError, restPoint, restMesh, isIdentityMesh, warpPoint, warpCommands, heightOf, warpHeight, heightRange, surfaceNormal, normalAt, isFlatMesh, skinMesh, copyMeshPoint, BoneMatrices } from "../document/Mesh";
 import { Light, LIGHTS_MAX, lightsError, ambientError, normalize, lambert, shadowOffset, heightAbovePage } from "../document/Light";
 import { resolveScene, resolveMeshes, resolveBooleans, applyActiveState, dropHidden } from "../document/Components";
 import { BooleanOp, Ring, Point, Piece, windingAt, insideRings, splitAgainst, chainPieces, booleanRings, ringsToCommands, commandsToRings, booleanPaths } from "../geometry/PathBoolean";
@@ -306,6 +306,12 @@ export function __apiSurfacePin(): void {
     expectType<number>(SKIN_MAX_BONES);
     expectType<string | null>(boneWeightsError([{ node: "b", weight: 1 }]));
     expectType<{ x: number; y: number }>(skinnedPoint({ x: 0, y: 0 }, [{ rest: IDENTITY, posed: IDENTITY, weight: 1 }]));
+    // Skinning produces a MESH, which is what lets the warp, the path conversion, hit testing and
+    // all three backends stay ignorant that a skeleton exists (schema 58).
+    const oneBone: BoneMatrices = { rest: IDENTITY, posed: IDENTITY };
+    expectType<ReadonlyMesh>(skinMesh(restMesh(1, 1), { box: { width: 1, height: 1 }, matrix: IDENTITY },
+                                      { box: { width: 1, height: 1 }, matrix: IDENTITY }, () => oneBone));
+    expectType<{ x: number; y: number }>(copyMeshPoint({ x: 0, y: 0 }));
     // The two answers the on-canvas text editor shares with the renderer.
     expectType<string>(overlayTransform(IDENTITY, { x: 0, y: 0, zoom: 1 }));
     expectType<ResolvedType>(resolveTypography({}, {} as VariableStore, "light"));
@@ -609,6 +615,8 @@ export function __apiSurfacePin(): void {
     expectType<ReadonlyDocument>(applyActiveState(doc));
     expectType<ReadonlyDocument>(resolveBooleans(doc));
     expectType<ReadonlyDocument>(resolveMeshes(doc));
+    // The REST document skinning poses against — a thunk, so an unrigged scene never builds it.
+    expectType<ReadonlyDocument>(resolveMeshes(doc, () => doc));
 
     // --- Animation (schema 39) -----------------------------------------------
     const keyframe: Keyframe = { frame: 0, values: {} };

@@ -41,8 +41,7 @@ import { resolveScene, isVirtualId, ownerInstanceOf, VIRTUAL_ID_SEP } from "../d
 import { expandDirtyForLayout, isAbsolute, isLayoutContainer, layoutChildren, layoutGridChildren, measureIntrinsicSizes, resolveConstraints } from "./LayoutEngine";
 import {
     Mat2D, IDENTITY, Rect, multiply, compose, invert, applyToPoint,
-    transformRectToAABB, unionRect
-} from "./Matrix";
+    transformRectToAABB, unionRect, localMatrix } from "./Matrix";
 
 export interface ComputedNode {
     /** Local→world matrix, ready for `matrix(a b c d e f)`. */
@@ -90,14 +89,6 @@ function shapeOf(node: DeepReadonly<Node>, doc: ReadonlyDocument): HitShape {
     const raw = node.style.radius;
     const r = raw === undefined ? null : typeof raw === "number" ? raw : resolveNumber(doc.variables, raw, doc.activeTheme);
     return hitShapeOf(node as unknown as { type: string; path?: readonly PathCommand[]; style: { fill: string } }, r ?? 0);
-}
-
-/** Local matrix for one node from its stored geometry + optional transform. */
-function localMatrix(geo: Rect, t: { rotation?: number; scaleX?: number; scaleY?: number; origin?: { x: number; y: number } } | undefined): Mat2D {
-    if (!t) return { a: 1, b: 0, c: 0, d: 1, e: geo.x, f: geo.y };
-    const ox = (t.origin?.x ?? 0.5) * geo.width;
-    const oy = (t.origin?.y ?? 0.5) * geo.height;
-    return compose(geo.x, geo.y, t.rotation ?? 0, t.scaleX ?? 1, t.scaleY ?? 1, ox, oy);
 }
 
 /**
