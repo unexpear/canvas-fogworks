@@ -46,7 +46,7 @@
  * content is worse than one that admits what it cannot do.
  */
 
-import { DisplayList, DrawItem, PaintGradient, Shape } from "./RenderModel";
+import { DisplayList, DrawItem, PaintGradient, Shape, layerTransition } from "./RenderModel";
 import { gaussianKernel, blurPlan, GAUSSIAN_MAX_RADIUS } from "./Gaussian";
 import { Mat2D, translation, multiply, invert, IDENTITY } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
@@ -156,6 +156,10 @@ uniform sampler2D u_tex;
 uniform vec4 u_tint;
 uniform float u_useTint;
 uniform vec2 u_offset;
+// A whole-layer FADE, 1 for everything but an opacity group (schema 32). The target is
+// PREMULTIPLIED, so scaling the whole vec4 by one number is exactly what fading it means — which
+// is the reason a group can be composited at all rather than needing its alpha folded into parts.
+uniform float u_fade;
 varying vec2 v_uv;
 void main() {
     // SUBTRACTED, not added. Moving the sample point back is what moves the IMAGE forward — a
@@ -165,7 +169,7 @@ void main() {
     // A tinted draw keeps only the COVERAGE. Reusing the source's colour would give a shadow the
     // shape's own hue, which looks like a badly-offset duplicate rather than a shadow.
     vec4 tinted = vec4(u_tint.rgb * src.a * u_tint.a, src.a * u_tint.a);
-    gl_FragColor = mix(src, tinted, u_useTint);
+    gl_FragColor = mix(src, tinted, u_useTint) * u_fade;
 }`;
 
 /**
@@ -383,6 +387,7 @@ export interface BlurState {
     compositeTintLoc: WebGLUniformLocation | null;
     compositeUseTintLoc: WebGLUniformLocation | null;
     compositeOffsetLoc: WebGLUniformLocation | null;
+    compositeFadeLoc: WebGLUniformLocation | null;
     /**
      * THREE targets, not two.
      *
@@ -395,6 +400,15 @@ export interface BlurState {
 
 export interface GLState {
     gl: WebGLRenderingContext;
+    /**
+     * One render target per OPEN opacity-group layer (schema 32), indexed by nesting depth.
+     *
+     * SEPARATE from the blur's three scratch targets, because an item INSIDE a group may have an
+     * effect: the detour would then be filtering into the very target the group is being drawn on.
+     * Kept across frames and grown on demand, like every other target here — a document with three
+     * levels of translucent group allocates three and reuses them.
+     */
+    layerTargets: (BlurTarget | null)[];
     program: WebGLProgram;
     buffer: WebGLBuffer;
     normalBuffer: WebGLBuffer;
@@ -507,6 +521,7 @@ export function initBlur(gl: WebGLRenderingContext): BlurState | null {
         compositeTintLoc: gl.getUniformLocation(composite, "u_tint"),
         compositeUseTintLoc: gl.getUniformLocation(composite, "u_useTint"),
         compositeOffsetLoc: gl.getUniformLocation(composite, "u_offset"),
+        compositeFadeLoc: gl.getUniformLocation(composite, "u_fade"),
         targets: [null, null, null]
     };
 }
@@ -556,7 +571,8 @@ export function resampleTo(
  */
 export function compositeTarget(
     gl: WebGLRenderingContext, blur: BlurState, from: BlurTarget,
-    offsetX: number, offsetY: number, tint: [number, number, number, number] | null
+    offsetX: number, offsetY: number, tint: [number, number, number, number] | null,
+    fade: number = 1
 ): void {
     gl.useProgram(blur.composite);
     gl.bindBuffer(gl.ARRAY_BUFFER, blur.quad);
@@ -571,6 +587,7 @@ export function compositeTarget(
     // DEVICE pixels to UV, using the target's own size — the target is grown-not-shrunk, so it is
     // often larger than the canvas and dividing by the canvas would drift as the window resized.
     gl.uniform2f(blur.compositeOffsetLoc, offsetX / from.width, -offsetY / from.height);
+    gl.uniform1f(blur.compositeFadeLoc, fade);
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     // PREMULTIPLIED source: the target's RGB is already scaled by its alpha.
@@ -735,7 +752,8 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
         // AN ARRAY UNIFORM IS ADDRESSED BY ITS FIRST ELEMENT — the same trap the blur weights
         // carry a note about: `getUniformLocation(p, "u_gradOffset")` returns null on some drivers.
         gradOffsetLoc: gl.getUniformLocation(program, "u_gradOffset[0]"),
-        gradColorLoc: gl.getUniformLocation(program, "u_gradColor[0]")
+        gradColorLoc: gl.getUniformLocation(program, "u_gradColor[0]"),
+        layerTargets: []
     };
 }
 
@@ -1269,7 +1287,82 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
         gl.enable(gl.DEPTH_TEST);
     };
 
+    /**
+     * OPACITY GROUPS (schema 32) as a stack of render targets.
+     *
+     * A group composites as ONE and is then faded, so its items go into a target of their own and
+     * the target is drawn back under the group's alpha. Ignoring `list.groups` — which this backend
+     * did until a cross-backend pixel comparison put it 137 channels from SVG — draws a translucent
+     * group fully opaque.
+     *
+     * `destination` is where the CURRENT item belongs, and every composite in this loop has to
+     * respect it. The effect detour used to bind `null` and put a shadowed item straight on the
+     * screen, which would jump it out of its own group.
+     */
+    const groupAlpha = new Map(list.groups.map(gr => [gr.id, gr.opacity]));
+    const layerStack: { target: BlurTarget; parent: WebGLFramebuffer | null; opacity: number }[] = [];
+    let destination: WebGLFramebuffer | null = null;
+
+    /**
+     * DEPTH IS OFF INSIDE A LAYER, and that is correct rather than a compromise: a layer target has
+     * no depth attachment, and `content` was already sorted far-to-near by the model, so painter's
+     * order inside the group produces exactly what the depth test would have.
+     *
+     * NOT MUTATION-KILLABLE, and deliberately kept. GL says a depth test against a framebuffer with
+     * no depth buffer always passes, so leaving the test enabled changes nothing here and forcing
+     * it on survives the pixel sweep. It is written out for the reason the effect detour gives for
+     * its own `disable`: the alternative is code whose correctness depends on an attachment nobody
+     * asked for, and that is a worse thing to rely on than one redundant call per layer.
+     */
+    const applyDepth = (): void => {
+        if (layerStack.length > 0) gl.disable(gl.DEPTH_TEST); else gl.enable(gl.DEPTH_TEST);
+    };
+
+    const openLayer = (opacity: number): void => {
+        const depth = layerStack.length;
+        const t = ensureTarget(gl, state.layerTargets[depth] ?? null, width, height);
+        state.layerTargets[depth] = t;
+        // No target: the group is drawn WITHOUT its fade rather than not at all. Losing the alpha
+        // is visible; losing the subtree is not — the same choice the canvas backend makes.
+        if (!t) return;
+        layerStack.push({ target: t, parent: destination, opacity });
+        destination = t.framebuffer;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, destination);
+        gl.viewport(0, 0, t.width, t.height);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        // THE FEEDBACK LOOP AGAIN. This target's own texture is still bound to unit 0 from the
+        // composite that closed it last frame, and the scene program samples unit 0 — so drawing
+        // into it now would be discarded with INVALID_OPERATION and the group would come out
+        // empty. The same unbinding the effect detour does, for the same reason.
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        restoreSceneState();
+        applyDepth();
+    };
+
+    const closeLayer = (): void => {
+        const top = layerStack.pop();
+        if (!top || !state.blur) return;
+        destination = top.parent;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, destination);
+        gl.viewport(0, 0, width, height);
+        // Untinted and unmoved — only faded. The target is premultiplied, so the fade is one
+        // multiply in the composite shader.
+        compositeTarget(gl, state.blur, top.target, 0, 0, null, top.opacity);
+        restoreSceneState();
+        applyDepth();
+    };
+
+    let openPath: readonly string[] = [];
     for (const item of [...list.grid.lines, ...list.content, ...list.overlay]) {
+        const nextPath = item.groups ?? [];
+        const step = layerTransition(openPath, nextPath);
+        for (let i = 0; i < step.close; i++) closeLayer();
+        for (const id of step.open) openLayer(groupAlpha.get(id) ?? 1);
+        openPath = nextPath;
         // EFFECTS ARE AN OFFSCREEN DETOUR. An item with a shadow or a blur is drawn into a target
         // first, filtered, and composited back — because both are per-fragment work over a
         // RENDERED IMAGE and there is no such image while the item is still being drawn.
@@ -1494,27 +1587,32 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
                 if (plan.shadow) {
                     // A ZERO-blur shadow is a hard offset copy, not an absent one.
                     const shadowSrc = plan.shadow.sigma > 0 ? runBlur(look, plan.shadow.sigma) : look;
-                    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, destination);
                     gl.viewport(0, 0, width, height);
                     if (shadowSrc) {
                         compositeTarget(gl, b, shadowSrc,
                             plan.shadow.dx, plan.shadow.dy, plan.shadow.color);
                     }
                 }
-                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                gl.bindFramebuffer(gl.FRAMEBUFFER, destination);
                 gl.viewport(0, 0, width, height);
                 // The shape itself, over its own shadow, untinted and unmoved.
                 compositeTarget(gl, b, look, 0, 0, null);
             } else {
                 // Scratch targets would not allocate. The item is composited PLAINLY rather than
                 // lost — no effect is better than no shape.
-                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                gl.bindFramebuffer(gl.FRAMEBUFFER, destination);
                 gl.viewport(0, 0, width, height);
                 compositeTarget(gl, b, target, 0, 0, null);
             }
             restoreSceneState();
+            applyDepth();
         }
     }
+    // Anything still open at the end of the frame is composited now — an overlay closes the
+    // content's groups on the way past, but a document that ends inside one would otherwise leave
+    // its last group on a target nobody ever drew.
+    while (layerStack.length > 0) closeLayer();
     return true;
 }
 

@@ -1850,6 +1850,10 @@ function effectFilterId(shadow: Shadow | null, blur: number | null): string | nu
 // stated once. A RUN, not a lookup by id — creating a layer on first mention and reusing it would
 // pull a group's items back together in draw order and change what is in front of what.
 function layerTransition(prev: readonly string[], next: readonly string[]): { close: number; open: string[] };
+// All three backends implement it: SVG nests `<g opacity>`, Canvas opens an offscreen canvas per
+// run, the GPU pushes a render target per nesting depth and fades it back through the composite
+// shader's `u_fade`. They are pixel-identical on a translucent group, a group whose child has a
+// shadow, nested groups, and a group followed by a sibling.
 
 function buildRenderModel(
   size: { width: number; height: number },

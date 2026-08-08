@@ -944,9 +944,19 @@ order, so a group whose children sit at different depths genuinely is not contig
 reopening preserves the z-order the model published, at the cost of compositing such a group in two
 pieces, which is the lesser wrong.
 
-**The GPU still ignores groups entirely** — a translucent group draws fully opaque there. It needs
-a stack of render targets and the effect detour rerouted to composite into the current layer rather
-than straight to the screen. It is the one remaining backend divergence, measured at 137 channels.
+**The GPU keeps a STACK of render targets, one per nesting depth**, and composites each back
+through the composite shader's `u_fade` — the target is premultiplied, so fading it is one multiply.
+Two things had to change with it. The effect detour bound the DEFAULT framebuffer to composite a
+shadowed item, which would jump that item out of its own group and onto the screen unfaded; it now
+composites into the current destination. And a layer's own texture is still bound to unit 0 from the
+composite that closed it last frame, so opening one unbinds units 0 and 1 — the same feedback loop
+that once made a blurred shape come out as a hole.
+
+**Depth is off inside a layer**, which is correct rather than a compromise: `content` is already
+sorted far-to-near by the model, so painter's order gives what the depth test would have. The call
+is redundant — GL says a depth test against a framebuffer with no depth attachment always passes —
+and is kept for the reason the effect detour keeps its own: code that is correct only because of an
+attachment nobody asked for is worse than one extra call per layer.
 
 ### A gradient on the GPU, and the blend that was wrong all along
 
