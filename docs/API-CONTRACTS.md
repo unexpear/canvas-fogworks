@@ -611,7 +611,19 @@ function scanCapabilities(files: readonly SourceFile[]): Capability[];
 // content, not the viewport; grid and selection chrome excluded.
 const EXPORT_MARGIN: number;
 type TextLines = (shape: TextShape) => string[];                    // how text breaks into lines
-function exportSVG(doc: ReadonlyDocument, linesOf?: TextLines): string;
+interface ExportImages {                                            // what a PURE function cannot know
+    naturalSize?(href: string): { width: number; height: number } | null;
+    surfaceUrl?(href: string, surface: { data: string; width: number; height: number }): string | null;
+}
+function exportSVG(doc: ReadonlyDocument, linesOf?: TextLines, images?: ExportImages): string;
+// FOUR SILENT LOSSES, now fixed. The exporter read the same DisplayList as the live backends and
+// then dropped: a sourceRect (one cell of a tileset exported as the WHOLE sheet), `pixelated`
+// (exported pixel art came out smoothed), opacity GROUPS (it read model.content and never
+// model.groups, so a translucent group exported at full strength with its children individually
+// opaque), and a core.raster (whose href is a cache key, not a URL — an <image> loading nowhere).
+// Two of those need an image MEASURED or a surface ENCODED, which a pure function cannot do, so
+// they are injected like the text wrapper. ABSENT, THE EXPORTER OMITS what it cannot express:
+// a whole sheet in place of one cell is a different picture, and it looks like a success.
 // WRAPPING is injected because this module is pure and wrapping has to MEASURE. The default
 // honours explicit newlines and nothing else — which is all it ever did, and it meant a long
 // paragraph ran past its box in the exported file while the editor wrapped it on screen. The

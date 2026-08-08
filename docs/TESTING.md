@@ -391,7 +391,7 @@ The checklist, applied when the fixture is written:
 This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
 cannot see — over the paint modules and the Tiled reader, exiting non-zero on a survivor:
-currently **16 mutants, 16 killed**. Six cover `SurfaceSpace`, where the convenient fixture is not
+currently **18 mutants, 18 killed**. Six cover `SurfaceSpace`, where the convenient fixture is not
 a square buffer but **a box at the origin** (which hides a dropped origin term) and **a
 round-trip-only assertion** (which hides a half-pixel shift, because it shifts both directions
 equally). Three cover `TiledMap`, where it is **a map that offsets only one axis** (so a swap is
