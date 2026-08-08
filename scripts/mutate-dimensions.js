@@ -24,7 +24,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1411;
+const EXPECTED_TESTS = 1425;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -99,6 +99,25 @@ const MUTANTS = [
       from: "visible: a.visible === undefined ? true : num(a.visible, 1) !== 0,",
       to: "visible: a.visible !== undefined,",
       note: "treats the ATTRIBUTE'S PRESENCE as the flag — invisible unless a map says visible=\"1\"" },
+    // NineSlice — the newest member of the family, and it arrived with two survivors: every
+    // fixture used a SQUARE 9x9 source, so "clamp the vertical against the width" was invisible.
+    { id: "NS1", file: "src/core/geometry/NineSlice.ts",
+      from: "const [st, sb] = fitPair(Math.max(0, insets.top), Math.max(0, insets.bottom), source.height);",
+      to: "const [st, sb] = fitPair(Math.max(0, insets.top), Math.max(0, insets.bottom), source.width);",
+      note: "vertical insets clamped against the source's WIDTH — invisible on square art" },
+    { id: "NS2", file: "src/core/geometry/NineSlice.ts",
+      from: "const [dt, db] = fitPair(st, sb, dest.height);",
+      to: "const [dt, db] = fitPair(st, sb, dest.width);",
+      note: "vertical corners fitted to the box's WIDTH — invisible on a square box" },
+    { id: "NS3", file: "src/core/geometry/NineSlice.ts",
+      from: "[source.x + source.width - sr, sr, dest.x + dest.width - dr, dr]",
+      to: "[source.x + source.width - sr, sr, dest.x + dest.width - dl, dl]",
+      note: "the right column takes the LEFT inset — invisible on a symmetric border" },
+    { id: "NS4", file: "src/core/geometry/NineSlice.ts",
+      from: "[source.y + source.height - sb, sb, dest.y + dest.height - db, db]",
+      to: "[source.y + source.height - sb, sb, dest.y + dest.height - dt, dt]",
+      note: "the bottom row takes the TOP inset — invisible on a symmetric border" },
+
     { id: "TM5", file: "src/core/import/TiledMap.ts",
       from: "opacity: Math.min(1, Math.max(0, num(a.opacity, 1))),",
       to: "opacity: num(a.opacity, 1),",

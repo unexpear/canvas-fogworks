@@ -21,7 +21,8 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { srcError, sourceRectError, SourceRect } from "../document/Node";
+import { srcError, sourceRectError, nineSliceError, SourceRect } from "../document/Node";
+import { NineSliceInsets } from "../geometry/NineSlice";
 import { MutationResult, ActionPayload, NodeDelta } from "./types";
 
 type PatchDelta = Extract<NodeDelta, { kind: "patch" }>;
@@ -35,6 +36,8 @@ export interface ContentPatch {
     sourceRect?: SourceRect | null;
     /** Whether the image scales by nearest neighbour (schema 51). */
     pixelated?: boolean;
+    /** A bitmap's nine-slice insets (schema 57). `null` clears it back to one stretched picture. */
+    nineSlice?: NineSliceInsets | null;
 }
 
 /** Longest display name a node may carry — an OOM guard on a hand-editable field. */
@@ -66,6 +69,10 @@ export class UpdateNodeContentAction extends Action {
         if (this.patch.sourceRect !== undefined && this.patch.sourceRect !== null
             && sourceRectError(this.patch.sourceRect) !== null) return false;
         if (this.patch.pixelated !== undefined && typeof this.patch.pixelated !== "boolean") return false;
+        // Again the loader's own rule, so the inspector cannot author insets the document could
+        // not reopen — and `null` is the clear rather than a value to check.
+        if (this.patch.nineSlice !== undefined && this.patch.nineSlice !== null
+            && nineSliceError(node.type, this.patch.nineSlice) !== null) return false;
         return true;
     }
 
@@ -86,6 +93,8 @@ export class UpdateNodeContentAction extends Action {
         // field is dropped would make a region impossible to remove once set.
         if (this.patch.sourceRect !== undefined) delta.sourceRect = this.patch.sourceRect;
         if (this.patch.pixelated !== undefined) delta.pixelated = this.patch.pixelated;
+        // `null` survives here too, for the same reason the region's does: it is the clear.
+        if (this.patch.nineSlice !== undefined) delta.nineSlice = this.patch.nineSlice;
 
         return {
             updatedNodeIds: new Set([this.nodeId]),

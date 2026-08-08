@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v56 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v57 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -1083,6 +1083,39 @@ parameter so the future-bump case is testable today):
 - **When you bump `SCHEMA_VERSION`:** add the migration step in `migrateIfNeeded`,
   update this doc, and add a round-trip + migration test. (See the freeze rule.)
   Bumping the **app** version requires none of this.
+
+## Nine-slice (a bitmap whose corners keep their size — schema 57)
+
+```ts
+interface NineSliceInsets { left: number; top: number; right: number; bottom: number }
+Node.nineSlice?: NineSliceInsets            // only core.image / core.raster; absent = one stretched picture
+
+nineSliceError(type, slice): string | null  // shared by the edit path and the load path
+nineSliceRects(source, dest, insets): { src: Rect; dst: Rect }[]   // geometry/NineSlice
+```
+
+**Insets are in SOURCE pixels**, relative to `sourceRect` when there is one — so a sliced button
+can live inside an atlas, and a four-pixel border stays four pixels however large the panel grows.
+A fraction of the box would thicken as the panel grew, which is the exact thing nine-slice prevents.
+
+**Solved as geometry, not three times in three backends.** Each backend already draws one
+sub-rectangle of an image into one destination rectangle — Canvas has the nine-argument
+`drawImage`, SVG a nested `<svg viewBox>`, the GPU a quad with a uv rect — so the whole feature is
+a list of (source, destination) pairs and each backend doing nine of what it already does.
+
+**The insets travel, not the nine rectangles.** The pieces depend on the source's pixel size, and
+for a `core.image` with no `sourceRect` that is unknown until the file decodes — which the pure
+render model can never wait for. So each backend calls the shared `nineSliceRects` with the size it
+has: three call sites, one arithmetic.
+
+**Overflow scales both corners.** A twelve-pixel border in an eight-pixel box cannot have both
+corners at native size; clamping one makes it asymmetric, clipping loses the detail the corner
+exists for, and overlapping draws the same pixels twice. Scaling both is what CSS `border-image`
+does. A piece with no extent is omitted rather than drawn at zero — Canvas throws on a zero-width
+source rect, and a panel whose middle has collapsed genuinely has four pieces.
+
+**Stretched, not tiled.** Tiling needs a repeat count, a rule for partial tiles and a per-axis
+choice; it is not pretended to exist.
 
 ## Gradient (a fill that changes across the shape — schema 56)
 

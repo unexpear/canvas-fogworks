@@ -38,7 +38,7 @@ import {
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
 import { Variable, VariableStore, VariableType, VariableValue, ThemeMode, THEME_MODES, VARIABLES_MAX, VARIABLE_KEY_MAX, VARIABLE_FALLBACK_COLOR, isTokenRef, variableError, variableKeyError, variableStoreError, resolveVariable, resolveColor, resolveNumber } from "../document/Variables";
-import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, flatFill, Shadow, Layout, RESERVED_NODE_ID, RESERVED_ID_SUBSTRING, nodeIdError, SourceRect, sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
+import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, flatFill, Shadow, Layout, RESERVED_NODE_ID, RESERVED_ID_SUBSTRING, nodeIdError, SourceRect, sourceRectError, SOURCE_RECT_MAX, nineSliceError } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
@@ -74,6 +74,7 @@ import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode, contentBounds } from "../geometry/GeometryEngine";
+import { NineSliceInsets, Slice, nineSliceRects } from "../geometry/NineSlice";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, GridCell, breakFlexLines, FlexLine, resolveMargin, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, parseSvgTransform, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
@@ -295,6 +296,11 @@ export function __apiSurfacePin(): void {
     // The union of EVERY node — what an export is cropped to and what zoom-to-fit frames, shared
     // so the two cannot disagree about what "all the content" is.
     expectType<Rect | null>(contentBounds(computed));
+    // Nine-slice (schema 57): the shared arithmetic, and the validator both paths use.
+    const insets: NineSliceInsets = { left: 1, top: 2, right: 3, bottom: 4 };
+    expectType<NineSliceInsets>(insets);
+    expectType<Slice[]>(nineSliceRects({ x: 0, y: 0, width: 9, height: 9 }, { x: 0, y: 0, width: 90, height: 90 }, insets));
+    expectType<string | null>(nineSliceError("core.image", insets));
     // The two answers the on-canvas text editor shares with the renderer.
     expectType<string>(overlayTransform(IDENTITY, { x: 0, y: 0, zoom: 1 }));
     expectType<ResolvedType>(resolveTypography({}, {} as VariableStore, "light"));

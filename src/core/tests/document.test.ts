@@ -38,6 +38,7 @@ import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, contentBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
+import { nineSliceRects } from "../geometry/NineSlice";
 import { flattenPath, hitsShape, isPaintBearing, FLATTEN_TOLERANCE, FLATTEN_MAX_DEPTH, hitShapeOf, displayTolerance, localScaleOf, DISPLAY_DEVIATION_PX, DISPLAY_TOLERANCE_MIN, DISPLAY_TOLERANCE_MAX } from "../geometry/ShapeHit";
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
@@ -64,14 +65,14 @@ import { channelsError, CHANNELS_MAX } from "../document/Timeline";
 import { DiscreteMode, blendNode } from "../document/Prototype";
 import { MotionPath, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
 import { solveTwoBone, solveFabrik, rotationDelta, FABRIK_PASSES, FABRIK_TOLERANCE } from "../geometry/Ik";
-import { sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
+import { sourceRectError, SOURCE_RECT_MAX, nineSliceError } from "../document/Node";
 import { sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
 import { parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
 import { trimmedPlacement, inkUnion } from "../import/Trim";
 import { parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_ENTRIES } from "../import/TextureAtlas";
 import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/SvgPath";
 import { parseSvgDocument, svgDocumentError, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
-import { parseSvgTransform } from "../geometry/Matrix";
+import { parseSvgTransform, Rect } from "../geometry/Matrix";
 import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
@@ -4520,9 +4521,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 55→56 landed, widening
-        // `Style.fill` to hold a gradient and not only a colour string.)
-        expect(() => migrateIfNeeded(legacy, "57")).toThrow('Migration not implemented for document schema "56"');
+        // time a real migration is added — most recently when 56→57 landed, adding
+        // `Node.nineSlice`, a bitmap whose corners keep their size.)
+        expect(() => migrateIfNeeded(legacy, "58")).toThrow('Migration not implemented for document schema "57"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -13370,7 +13371,7 @@ describe("Lighting — normals from the mesh, Lambert on the GPU (schema 42)", (
         expect(picture.image).toEqual({ href: "cat.png", x: 10, y: 20, width: 80, height: 40 });
         // The rect it reports is the one the shader turns into texture coordinates, so it has to
         // be the shape's OWN rect — not the box at the origin the triangles happen to start from.
-        expect(shapeToLocalCommands({ kind: "image", x: 10, y: 20, width: 80, height: 40, href: "c", source: null, pixelated: false, surface: null }, null))
+        expect(shapeToLocalCommands({ kind: "image", x: 10, y: 20, width: 80, height: 40, href: "c", source: null, pixelated: false, nineSlice: null, surface: null }, null))
             .not.toBeNull();
         // The item's OPACITY rides in the colour's alpha, because an image has no fill of its own
         // and the shader multiplies the sampled alpha by it.
@@ -21956,7 +21957,9 @@ describe("A gradient as a fill (schema 56)", () => {
         expect(fill.transform).toEqual({ a: 2, b: 0, c: 0, d: 3, e: 5, f: 7 });
         expect(fill.stops.map(s => [s.offset, s.color, s.opacity]))
             .toEqual([[0, "#ff0000", 1], [0.4, "#00ff00", 0.5], [1, "#0000ff", 1]]);
-        expect(JSON.parse(text).version).toBe("56");
+        // The envelope carries whatever the CURRENT schema is — asserted against the constant
+        // rather than a literal, so a later bump does not have to remember this line.
+        expect(JSON.parse(text).version).toBe(SCHEMA_VERSION);
     });
 
     test("a MALFORMED gradient in a file is refused on load, not drawn as nothing", () => {
@@ -22876,5 +22879,222 @@ describe("The on-canvas text editor's two shared answers", () => {
         expect({ fontSize: shape.fontSize, fontFamily: shape.fontFamily, fontWeight: shape.fontWeight,
             textAlign: shape.textAlign, lineHeight: shape.lineHeight, letterSpacing: shape.letterSpacing })
             .toEqual(type);
+    });
+});
+
+// ─── Nine-slice: the arithmetic the cross-backend sweep is BLIND to ───
+//
+// All three backends call `nineSliceRects`, which is the point — and it means a pixel comparison
+// between them cannot see a wrong answer, only a disagreement. Mutating this function moves the
+// sweep by exactly zero. So the expected rectangles here are computed BY HAND, not read off the
+// implementation: they are the only check that the shared arithmetic is right rather than merely
+// shared.
+describe("nineSliceRects", () => {
+    const SRC = { x: 0, y: 0, width: 9, height: 9 };
+    const INSETS = { left: 3, top: 3, right: 3, bottom: 3 };
+    const key = (s: { src: Rect; dst: Rect }) =>
+        [s.src.x, s.src.y, s.src.width, s.src.height, s.dst.x, s.dst.y, s.dst.width, s.dst.height];
+
+    test("nine pieces: corners at NATIVE size, edges stretched on one axis, middle on both", () => {
+        // 9x9 art, 3px border, into a 100x50 box at (10, 20). By hand:
+        //   source columns  x = 0,3,6  widths 3,3,3      rows y = 0,3,6  heights 3,3,3
+        //   dest   columns  x = 10,13,107 widths 3,94,3  rows y = 20,23,67 heights 3,44,3
+        const out = nineSliceRects(SRC, { x: 10, y: 20, width: 100, height: 50 }, INSETS);
+        expect(out).toHaveLength(9);
+        expect(out.map(key)).toEqual([
+            [0, 0, 3, 3, 10, 20, 3, 3], [3, 0, 3, 3, 13, 20, 94, 3], [6, 0, 3, 3, 107, 20, 3, 3],
+            [0, 3, 3, 3, 10, 23, 3, 44], [3, 3, 3, 3, 13, 23, 94, 44], [6, 3, 3, 3, 107, 23, 3, 44],
+            [0, 6, 3, 3, 10, 67, 3, 3], [3, 6, 3, 3, 13, 67, 94, 3], [6, 6, 3, 3, 107, 67, 3, 3]
+        ]);
+        // Read back the property that makes it nine-slice at all: the corners came out 3x3, the
+        // size they are in the art, at a box twenty times wider than the art.
+        for (const i of [0, 2, 6, 8]) {
+            expect([out[i].dst.width, out[i].dst.height]).toEqual([3, 3]);
+        }
+    });
+
+    test("a box SMALLER than its own border scales both corners, keeping their ratio", () => {
+        // 3 + 3 = 6 into a width of 4 → each becomes 2. The middle then has nothing left, so the
+        // piece is omitted rather than emitted at zero — Canvas throws on a zero-width source and
+        // a panel whose middle has collapsed genuinely has four pieces.
+        const out = nineSliceRects(SRC, { x: 0, y: 0, width: 4, height: 4 }, INSETS);
+        expect(out).toHaveLength(4);
+        expect(out.map(key)).toEqual([
+            [0, 0, 3, 3, 0, 0, 2, 2], [6, 0, 3, 3, 2, 0, 2, 2],
+            [0, 6, 3, 3, 0, 2, 2, 2], [6, 6, 3, 3, 2, 2, 2, 2]
+        ]);
+        // Clipping instead would lose the very detail a corner exists for, and letting them
+        // overlap would draw the same pixels twice; scaling both is what CSS border-image does.
+        const uneven = nineSliceRects(SRC, { x: 0, y: 0, width: 6, height: 20 },
+            { left: 1, top: 0, right: 3, bottom: 0 });
+        // 1 + 3 = 4 fits in 6, so nothing is scaled — the guard must not fire when it need not.
+        expect(uneven.map(s => s.dst.width)).toEqual([1, 2, 3]);
+    });
+
+    test("ASYMMETRIC insets are four independent numbers, not two", () => {
+        // A fixture with all four equal cannot tell `left` from `right` or a transposed pair from
+        // a correct one. Every value distinct: 2, 1, 4, 5.
+        const out = nineSliceRects(SRC, { x: 0, y: 0, width: 40, height: 30 },
+            { left: 2, top: 1, right: 4, bottom: 5 });
+        expect(out.map(s => s.src.width)).toEqual([2, 3, 4, 2, 3, 4, 2, 3, 4]);
+        expect(out.map(s => s.src.height)).toEqual([1, 1, 1, 3, 3, 3, 5, 5, 5]);
+        expect(out.map(s => s.dst.width)).toEqual([2, 34, 4, 2, 34, 4, 2, 34, 4]);
+        expect(out.map(s => s.dst.height)).toEqual([1, 1, 1, 24, 24, 24, 5, 5, 5]);
+        // And the pieces TILE the destination exactly — no gap, no overlap.
+        expect(out[0].dst.x).toBe(0);
+        expect(out[2].dst.x + out[2].dst.width).toBe(40);
+        expect(out[6].dst.y + out[6].dst.height).toBe(30);
+    });
+
+    test("the source region may be OFFSET — a sliced button inside an atlas", () => {
+        // Insets are relative to the region, not to the sheet, which is what lets a nine-slice
+        // live in a texture atlas at all.
+        const out = nineSliceRects({ x: 3, y: 3, width: 9, height: 9 },
+            { x: 0, y: 0, width: 30, height: 30 }, INSETS);
+        expect(out.map(s => s.src.x)).toEqual([3, 6, 9, 3, 6, 9, 3, 6, 9]);
+        expect(out.map(s => s.src.y)).toEqual([3, 3, 3, 6, 6, 6, 9, 9, 9]);
+        // …and the destination is untouched by the offset.
+        expect(out[0].dst.x).toBe(0);
+    });
+
+    test("insets larger than the ART are clamped against the SOURCE first", () => {
+        // A corner cannot contain more pixels than exist. Without this the two edge columns
+        // overlap and the same pixels are sampled twice — which no backend would report.
+        const out = nineSliceRects({ x: 0, y: 0, width: 4, height: 4 },
+            { x: 0, y: 0, width: 100, height: 100 }, { left: 3, top: 3, right: 3, bottom: 3 });
+        // 3 + 3 = 6 into a source 4 wide → 2 each, and the middle is then zero PIXELS wide, so
+        // only the four corners exist however big the box is.
+        expect(out).toHaveLength(4);
+        expect(out.map(s => s.src.width)).toEqual([2, 2, 2, 2]);
+        expect(out.map(s => s.src.x)).toEqual([0, 2, 0, 2]);
+    });
+
+    test("the VERTICAL insets are clamped against the source's HEIGHT, not its width", () => {
+        // A SQUARE source cannot tell the two apart, and every other fixture here is 9x9 — both
+        // "clamp against width" mutations survived until this existed. The art is 9 WIDE and 4
+        // TALL: horizontally 3 + 3 fits, vertically it does not.
+        const out = nineSliceRects({ x: 0, y: 0, width: 9, height: 4 },
+            { x: 0, y: 0, width: 100, height: 100 }, { left: 3, top: 3, right: 3, bottom: 3 });
+        // Rows scaled to 2 each, so the middle ROW has no pixels; columns untouched, so the middle
+        // COLUMN does. Six pieces: two full rows of three.
+        expect(out).toHaveLength(6);
+        expect(out.map(s => s.src.height)).toEqual([2, 2, 2, 2, 2, 2]);
+        expect(out.map(s => s.src.width)).toEqual([3, 3, 3, 3, 3, 3]);
+    });
+
+    test("the vertical DESTINATION is fitted against the box's HEIGHT, not its width", () => {
+        // The same confusion one step later: a box 100 wide and 4 tall has room for the corners
+        // across and none down. Fitted against the width they would stay 3 and overflow.
+        const out = nineSliceRects(SRC, { x: 0, y: 0, width: 100, height: 4 }, INSETS);
+        expect(out.map(s => s.dst.height)).toEqual([2, 2, 2, 2, 2, 2]);
+        expect(out.map(s => s.dst.width)).toEqual([3, 94, 3, 3, 94, 3]);
+        // The pieces still tile the box exactly, which is what overflowing would break.
+        expect(out[3].dst.y + out[3].dst.height).toBe(4);
+    });
+
+    test("a ZERO inset is a three-slice, not a mistake", () => {
+        // How a horizontal bar is done: stretch the middle, keep the two ends. The rows collapse
+        // to one because top and bottom are zero, so there are three pieces and not nine.
+        const out = nineSliceRects(SRC, { x: 0, y: 0, width: 50, height: 9 },
+            { left: 3, top: 0, right: 3, bottom: 0 });
+        expect(out).toHaveLength(3);
+        expect(out.map(s => s.dst.height)).toEqual([9, 9, 9]);
+        expect(out.map(s => s.dst.width)).toEqual([3, 44, 3]);
+    });
+
+    test("a negative inset is treated as none rather than as a corner outside the art", () => {
+        // `nineSliceError` refuses one on the way in, so this is the second line: a value that
+        // reached here anyway must not produce a source rect outside the bitmap.
+        const out = nineSliceRects(SRC, { x: 0, y: 0, width: 50, height: 50 },
+            { left: -5, top: 0, right: 3, bottom: 0 });
+        expect(out.every(s => s.src.x >= 0 && s.src.width > 0)).toBe(true);
+        expect(out.map(s => s.dst.width)).toEqual([47, 3]);
+    });
+});
+
+// ─── Nine-slice reaches the document, and comes back ───
+describe("A nine-slice on a node (schema 57)", () => {
+    const INSETS = { left: 2, top: 1, right: 4, bottom: 5 };
+    const imageDoc = (): ProjectDocument => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("I", { id: "I", type: "core.image", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 40 }, src: "https://example.test/b.png",
+            style: { fill: "#000000", opacity: 1 }, layout: {} } as never);
+        doc.rootNodeUuids = ["I"];
+        return doc;
+    };
+
+    test("the ordinary edit path STORES it — the whole chain, not just the validator", () => {
+        // THE TEST THIS SLICE WAS MISSING. The geometry was unit-tested, the three backends were
+        // compared pixel by pixel, and setting the field from the inspector still did nothing:
+        // `UpdateNodeContentAction` validated `nineSlice` and then built its delta field by field,
+        // so the value was checked and dropped. Neither a geometry test nor a backend comparison
+        // can see a gap in the middle — only asking the DOCUMENT what it now holds can.
+        const dispatcher = new ActionDispatcher(imageDoc());
+        dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), "I", { nineSlice: INSETS }));
+        expect(dispatcher.getDocument().nodes.get("I")!.nineSlice).toEqual(INSETS);
+        // …and `null` clears it, which an omitted-key protocol cannot express any other way.
+        dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), "I", { nineSlice: null }));
+        expect(dispatcher.getDocument().nodes.get("I")!.nineSlice).toBeUndefined();
+        // Undo restores it, so the edit is an ordinary reversible one and not a side effect.
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.get("I")!.nineSlice).toEqual(INSETS);
+    });
+
+    test("it SURVIVES a save and a load", () => {
+        const doc = imageDoc();
+        doc.nodes.get("I")!.nineSlice = { ...INSETS };
+        const back = deserializeDocument(serializeDocument(doc));
+        expect(back.nodes.get("I")!.nineSlice).toEqual(INSETS);
+    });
+
+    test("only a BITMAP may carry one, and the insets must be sane", () => {
+        expect(nineSliceError("core.image", INSETS)).toBeNull();
+        expect(nineSliceError("core.raster", INSETS)).toBeNull();
+        // A rectangle with four numbers nothing reads is a field somebody sets and then spends an
+        // hour wondering about.
+        expect(nineSliceError("core.rectangle", INSETS)).toMatch(/only a core.image or core.raster/);
+        expect(nineSliceError("core.image", undefined)).toBeNull();
+        expect(nineSliceError("core.image", { ...INSETS, left: -1 })).toMatch(/must not be negative/);
+        expect(nineSliceError("core.image", { ...INSETS, top: NaN })).toMatch(/finite/);
+        expect(nineSliceError("core.image", 7)).toMatch(/must be an object/);
+        // Zero is LEGAL: a three-slice bar has no top or bottom corner.
+        expect(nineSliceError("core.image", { left: 3, top: 0, right: 3, bottom: 0 })).toBeNull();
+    });
+
+    test("a MALFORMED nine-slice in a file is refused on load", () => {
+        // The serializer's gate is shallow — "object or absent" — so this proves the semantic half
+        // runs. Without it a file could hold a negative inset and draw a corner outside its art.
+        const file = (nineSlice: unknown) => JSON.stringify({
+            version: SCHEMA_VERSION,
+            document: {
+                metadata: { project_name: "p", created_by: "t", date: new Date().toISOString() },
+                nodes: { I: { id: "I", type: "core.image", parent: null, children: [],
+                    geometry: { x: 0, y: 0, width: 10, height: 10 }, src: "https://example.test/b.png",
+                    style: { fill: "#000000", opacity: 1 }, layout: {}, nineSlice } },
+                rootNodeUuids: ["I"], variables: {}
+            }
+        });
+        expect(() => deserializeDocument(file({ ...INSETS, right: -2 }))).toThrow(/must not be negative/);
+        expect(() => deserializeDocument(file(5))).toThrow(/malformed/);
+        expect(() => deserializeDocument(file(INSETS))).not.toThrow();
+    });
+
+    test("the render model carries the insets, and null when there are none", () => {
+        // The MODEL cannot cut the pieces: a whole image's pixel size is unknown until it decodes,
+        // and this model is pure. So the insets travel and each backend slices with the shared
+        // function — which is the one design decision here worth pinning.
+        const doc = imageDoc();
+        doc.nodes.get("I")!.nineSlice = { ...INSETS };
+        const state = { viewport: { x: 0, y: 0, zoom: 1 }, selectedNodeIds: [], hoveredNodeId: null,
+            computed: computeGeometry(doc) } as unknown as import("../../renderer/RendererState").RendererState;
+        const shape = buildRenderModel({ width: 400, height: 300 }, doc, state)
+            .content.find(i => i.nodeId === "I")!.shape as Extract<Shape, { kind: "image" }>;
+        expect(shape.nineSlice).toEqual(INSETS);
+        const plain = buildRenderModel({ width: 400, height: 300 }, imageDoc(),
+            { viewport: { x: 0, y: 0, zoom: 1 }, selectedNodeIds: [], hoveredNodeId: null,
+                computed: computeGeometry(imageDoc()) } as unknown as import("../../renderer/RendererState").RendererState)
+            .content.find(i => i.nodeId === "I")!.shape as Extract<Shape, { kind: "image" }>;
+        expect(plain.nineSlice).toBeNull();
     });
 });

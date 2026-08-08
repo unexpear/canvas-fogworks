@@ -12,7 +12,7 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError, layoutError, dimensionError, pathError, booleanOpError, srcError, sourceRectError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError } from "./Node";
+import { transformError, layoutError, dimensionError, pathError, booleanOpError, srcError, sourceRectError, nineSliceError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError } from "./Node";
 import { interactionsError } from "./Prototype";
 import { timelineError, trackError, channelsError } from "./Timeline";
 import { clipsError } from "./Clips";
@@ -90,6 +90,8 @@ function checkNodeRanges(node: ReadonlyNode): void {
     if (motionErr) throw new Error(`Invalid document: node "${node.id}" ${motionErr}.`);
     const rectErr = sourceRectError(node.sourceRect);
     if (rectErr) throw new Error(`Invalid document: node "${node.id}" ${rectErr}.`);
+    const sliceErr = nineSliceError(node.type, node.nineSlice);
+    if (sliceErr) throw new Error(`Invalid document: node "${node.id}" ${sliceErr}.`);
     const srcErr = srcError(node.type, node.src);
     if (srcErr) throw new Error(`Invalid document: node "${node.id}" ${srcErr}.`);
     // `componentId` (M6): only an instance may carry one; a DANGLING reference is deliberately

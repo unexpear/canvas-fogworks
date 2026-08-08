@@ -15,6 +15,7 @@
 
 import { ReadonlyDocument } from "../document/Document";
 import { computeGeometry, contentBounds } from "../geometry/GeometryEngine";
+import { nineSliceRects } from "../geometry/NineSlice";
 import { Rect } from "../geometry/Matrix";
 import { toMatrixString } from "../geometry/Matrix";
 import { buildRenderModel, commandsToPathData, textParagraphs, effectFilterId as effectId, DrawItem, FilterDef, PaintGradient, Shape } from "../../renderer/RenderModel";
@@ -161,18 +162,39 @@ function itemMarkup(item: DrawItem, linesOf: TextLines, images: ExportImages): s
             // the default, and an exported sprite smoothed into mush is the failure this prevents.
             const rendering = ` image-rendering="${s.pixelated ? "pixelated" : "auto"}"`;
             const src = s.source;
-            const natural = src ? (images.naturalSize?.(s.href) ?? null) : null;
+            // The bitmap's own size — needed for a source rect AND for a nine-slice, because the
+            // inner image sits at natural size so the viewBox's units are source pixels. A raster
+            // carries its size in the payload; an image's comes from the caller's resolver.
+            const natural = (src || s.nineSlice)
+                ? (s.surface
+                    ? { width: s.surface.width, height: s.surface.height }
+                    : (images.naturalSize?.(s.href) ?? null))
+                : null;
+            /** One (source → destination) piece, as the nested-`<svg>` construction. */
+            const piece = (sx: number, sy: number, sw: number, sh: number,
+                           dx: number, dy: number, dw: number, dh: number): string =>
+                `<svg x="${num(dx)}" y="${num(dy)}" width="${num(dw)}" height="${num(dh)}"`
+                + ` viewBox="${num(sx)} ${num(sy)} ${num(sw)} ${num(sh)}" preserveAspectRatio="none">`
+                + `<image x="0" y="0" width="${num(natural!.width)}" height="${num(natural!.height)}"`
+                + ` href="${esc(href)}" preserveAspectRatio="none"${rendering}/></svg>`;
+            // NINE-SLICE (schema 57), the same nine pieces the live backend writes — grouped so the
+            // panel stays one element in the file rather than nine loose images.
+            if (s.nineSlice && natural) {
+                const region = src ?? { x: 0, y: 0, width: natural.width, height: natural.height };
+                const dest = { x: s.x, y: s.y, width: s.width, height: s.height };
+                const pieces = nineSliceRects(region, dest, s.nineSlice)
+                    .map(p => piece(p.src.x, p.src.y, p.src.width, p.src.height,
+                        p.dst.x, p.dst.y, p.dst.width, p.dst.height)).join("");
+                return `<g${t}>${pieces}</g>`;
+            }
+            if (s.nineSlice && !natural) return "";
             if (src && natural) {
                 // A SOURCE RECT has no `<image>` attribute. A nested `<svg viewBox>` does the job:
                 // the viewBox maps the source rectangle onto the destination box and the nested
                 // element clips what falls outside, with the inner image at its NATURAL size so
                 // the viewBox's units are source pixels. The same construction `emitSVG` uses.
-                return `<svg x="${num(s.x)}" y="${num(s.y)}" width="${num(s.width)}" height="${num(s.height)}"`
-                    + ` viewBox="${num(src.x)} ${num(src.y)} ${num(src.width)} ${num(src.height)}"`
-                    + ` preserveAspectRatio="none"${t}>`
-                    + `<image x="0" y="0" width="${num(natural.width)}" height="${num(natural.height)}"`
-                    + ` href="${esc(href)}" preserveAspectRatio="none"${rendering}/>`
-                    + `</svg>`;
+                return `<g${t}>${piece(src.x, src.y, src.width, src.height,
+                    s.x, s.y, s.width, s.height)}</g>`;
             }
             // A SOURCE RECT WITH NO SIZE TO RESOLVE IT draws nothing, rather than the whole sheet.
             // One cell of a tileset and the entire tileset are not a near miss — the second is a

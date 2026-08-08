@@ -140,6 +140,10 @@ export function applyMutationsToDocument(
                     if (delta.surface === null) delete node.surface;
                     else node.surface = delta.surface;
                 }
+                if (delta.nineSlice !== undefined) {
+                    if (delta.nineSlice === null) delete node.nineSlice;
+                    else node.nineSlice = delta.nineSlice;
+                }
                 if (delta.sourceRect !== undefined) {
                     if (delta.sourceRect === null) delete node.sourceRect;
                     else node.sourceRect = delta.sourceRect;

@@ -4,6 +4,7 @@
  */
 
 import { SourceRect, RasterSurface } from "../document/Node";
+import { NineSliceInsets } from "../geometry/NineSlice";
 import { Node, Geometry, Style, Layout, Transform, VariantKey, StateDefinition, PathCommand, BooleanOp, RESERVED_NODE_ID } from "../document/Node";
 import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
 import { InstanceOverride } from "../document/Components";
@@ -63,6 +64,8 @@ export type NodeDelta =
         surface?: RasterSurface | null;
         /** Whether the image scales by nearest neighbour (schema 51). */
         pixelated?: boolean;
+        /** A bitmap's nine-slice insets (schema 57). `null` REMOVES them, like a region's. */
+        nineSlice?: NineSliceInsets | null;
         src?: string;
         name?: string;
         /** Whole-map replace of a `core.instance`'s per-instance overrides (M6 slice 2). Whole-map

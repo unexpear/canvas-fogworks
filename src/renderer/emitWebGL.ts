@@ -61,7 +61,8 @@ import { Light, normalize } from "../core/document/Light";
 import { ellipseCommands, rectCommands, transformCommands } from "../core/geometry/ShapeToPath";
 import { PathCommand } from "../core/document/Node";
 import { FLATTEN_TOLERANCE, displayTolerance, localScaleOf } from "../core/geometry/ShapeHit";
-import { imageGeneration, resolveImage, resolveSurface } from "./ImageCache";
+import { imageGeneration, resolveImage, resolveSurface, naturalSize } from "./ImageCache";
+import { nineSliceRects } from "../core/geometry/NineSlice";
 import { TextShape, drawTextInto, textRasterKey, textRasterScale } from "./TextRaster";
 
 const VERTEX_SHADER = `
@@ -1138,7 +1139,18 @@ export function itemTolerance(item: DrawItem, viewScale: number): number {
     return displayTolerance(item.world ? localScaleOf(item.world, viewScale) : viewScale);
 }
 
-export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE): Draw[] {
+/**
+ * How big a bitmap really is, for the one caller that cannot know: nine-slice.
+ *
+ * INJECTED RATHER THAN IMPORTED, so `itemDraws` stays pure and stays testable in the `node`
+ * environment. The size lives in a cache full of decoded images and belongs to the draw loop; a
+ * direct import would drag that into the one part of this backend a test can reach.
+ */
+export type NaturalSizeOf = (href: string) => { width: number; height: number } | null;
+
+export function itemDraws(
+    item: DrawItem, tolerance: number = FLATTEN_TOLERANCE, naturalOf?: NaturalSizeOf
+): Draw[] {
     const paint = item.paint;
     const local = shapeToLocalCommands(item.shape, paint.radius);
     if (!local) return [];
@@ -1190,11 +1202,41 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
     // putting it through the fragment shader rather than blitting it.
     if (isRaster && item.shape.kind === "image" && item.shape.href !== null) {
         const rect = item.shape;
-        const picture = draw(resolveRings(commandsToRings(local, tolerance), "nonzero"),
-            item.world, "#ffffff", paint.opacity,
-            { href: rect.href!, x: rect.x, y: rect.y, width: rect.width, height: rect.height,
-              source: rect.source, pixelated: rect.pixelated, surface: rect.surface }, null, surface);
-        if (picture) out.push(picture);
+        // NINE-SLICE (schema 57) is NINE DRAWS, each one exactly the single-image draw this
+        // backend already makes: its own quad, its own source rect. Nothing new reaches the
+        // shader — which is the point of keeping the pieces as geometry rather than teaching the
+        // fragment stage a piecewise remap it would then own alone.
+        //
+        // A RASTER KNOWS ITS OWN SIZE; an image's comes from the injected resolver, and without
+        // one (a `node` test, an undecoded bitmap) the slice cannot be cut — so it draws whole,
+        // which is the same picture the other two backends show while a file is still loading.
+        const natural = rect.surface
+            ? { width: rect.surface.width, height: rect.surface.height }
+            : (rect.href !== null ? naturalOf?.(rect.href) ?? null : null);
+        if (rect.nineSlice && natural) {
+            const region = rect.source ?? { x: 0, y: 0, width: natural.width, height: natural.height };
+            const dest = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+            for (const piece of nineSliceRects(region, dest, rect.nineSlice)) {
+                // The quad through `rectCommands` + `transformCommands`, the same two functions
+                // every other rectangle in this engine goes through — a fifth private idea of
+                // what a rectangle is would be one more thing to keep in step.
+                const quad = transformCommands(translation(piece.dst.x, piece.dst.y),
+                    rectCommands(piece.dst.width, piece.dst.height));
+                const part = draw(resolveRings(commandsToRings(quad, tolerance), "nonzero"),
+                    item.world, "#ffffff", paint.opacity,
+                    { href: rect.href!, x: piece.dst.x, y: piece.dst.y,
+                      width: piece.dst.width, height: piece.dst.height,
+                      source: piece.src, pixelated: rect.pixelated, surface: rect.surface },
+                    null, surface);
+                if (part) out.push(part);
+            }
+        } else {
+            const picture = draw(resolveRings(commandsToRings(local, tolerance), "nonzero"),
+                item.world, "#ffffff", paint.opacity,
+                { href: rect.href!, x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+                  source: rect.source, pixelated: rect.pixelated, surface: rect.surface }, null, surface);
+            if (picture) out.push(picture);
+        }
     }
     // TEXT is its box, with the typeset result painted over it. The geometry is a rectangle
     // because that is what a bitmap goes on; everything that makes it text happened in
@@ -1415,7 +1457,7 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
                 gl.bindTexture(gl.TEXTURE_2D, null);
             }
         }
-        for (const d of itemDraws(item, itemTolerance(item, viewScale))) {
+        for (const d of itemDraws(item, itemTolerance(item, viewScale), naturalSize)) {
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(d.vertices), gl.DYNAMIC_DRAW);
             gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
             // Normals ride in their own buffer rather than interleaved: the position buffer is
@@ -1521,8 +1563,17 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
                 // THE SOURCE REGION, normalised here because this is the only place that knows the
                 // texture's real pixel size — the document stores source pixels and cannot know it.
                 // Text and whole images pass the identity, so they take the same path.
-                const uv = d.image?.source && source instanceof HTMLImageElement
-                    ? normalisedUV(d.image.source, source.naturalWidth, source.naturalHeight)
+                //
+                // BOTH KINDS OF SOURCE, and that was a real hole. A decoded image is an
+                // `HTMLImageElement` and a painted RASTER is a canvas, and this asked only about
+                // the first — so a raster with a source region silently sampled the whole surface.
+                // Nothing had ever given a raster one until nine-slice gave every piece of one,
+                // and then every slice of every painted panel showed the entire button. Found by
+                // comparing pixels with the other two backends, which put it 240 channels out.
+                const texW = source instanceof HTMLImageElement ? source.naturalWidth : source.width;
+                const texH = source instanceof HTMLImageElement ? source.naturalHeight : source.height;
+                const uv = d.image?.source
+                    ? normalisedUV(d.image.source, texW, texH)
                     : { x: 0, y: 0, width: 1, height: 1 };
                 gl.uniform4f(state.imgUVLoc, uv.x, uv.y, uv.width, uv.height);
                 gl.uniform1f(state.hasImageLoc, 1);

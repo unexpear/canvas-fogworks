@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v56 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v57 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -1863,6 +1863,12 @@ function effectFilterId(shadow: Shadow | null, blur: number | null): string | nu
 interface ResolvedType { fontSize; fontFamily; fontWeight; textAlign; lineHeight; letterSpacing }
 function resolveTypography(style, store: VariableStore, theme: string): ResolvedType;
 function layerTransition(prev: readonly string[], next: readonly string[]): { close: number; open: string[] };
+// A bitmap whose corners keep their size (schema 57), in `core/geometry/NineSlice`. ONE arithmetic,
+// called by all three backends and the exporter — which is exactly why a cross-backend pixel sweep
+// cannot check it: they would agree on a wrong answer. Its expected rectangles are hand-computed.
+interface NineSliceInsets { left; top; right; bottom }        // SOURCE pixels, relative to sourceRect
+interface Slice { src: Rect; dst: Rect }
+function nineSliceRects(source: Rect, dest: Rect, insets: NineSliceInsets): Slice[];
 // All three backends implement it: SVG nests `<g opacity>`, Canvas opens an offscreen canvas per
 // run, the GPU pushes a render target per nesting depth and fades it back through the composite
 // shader's `u_fade`. They are pixel-identical on a translucent group, a group whose child has a

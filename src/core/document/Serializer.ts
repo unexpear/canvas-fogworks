@@ -48,6 +48,9 @@ function isValidNode(n: any): n is Node {
         // Shallow structural gate for the schema-18 effects; the semantic rules (finite, >=0)
         // live once in `styleError` (Integrity), like the transform gate.
         (n.style.blur === undefined || typeof n.style.blur === "number") &&
+        // nineSlice (schema 57): the shallow gate, like the effects. Which node types may carry
+        // one, and what makes four insets legal, lives once in `nineSliceError` (Integrity).
+        (n.nineSlice === undefined || isPlainObject(n.nineSlice)) &&
         (n.style.shadow === undefined || (isPlainObject(n.style.shadow) &&
             typeof n.style.shadow.dx === "number" && typeof n.style.shadow.dy === "number" &&
             typeof n.style.shadow.blur === "number" && typeof n.style.shadow.color === "string")) &&
@@ -352,6 +355,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "53") { raw = migrate_53_to_54(raw); version = "54"; }
     if (version === "54") { raw = migrate_54_to_55(raw); version = "55"; }
     if (version === "55") { raw = migrate_55_to_56(raw); version = "56"; }
+    if (version === "56") { raw = migrate_56_to_57(raw); version = "57"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -842,6 +846,18 @@ function migrate_21_to_22(raw: any): any {
  * node type that could hold a surface, so a build reading a 55 document would meet a `type` it does
  * not know and an unfamiliar `surface` field. The gate refusing the future is what makes that safe.
  */
+/**
+ * Schema 57 — `Node.nineSlice`, a bitmap whose corners keep their size.
+ *
+ * No existing field changes, and nothing in a schema-56 document gains insets — so the migration
+ * is a pass-through and the bump is for the other direction, as always. A 57 document reaching a
+ * 56 build would draw every nine-sliced panel as one stretched picture: the border thick at the
+ * corners, smeared along the edges, and no error anywhere to say why.
+ */
+function migrate_56_to_57(raw: any): any {
+    return { ...raw, version: "57" };
+}
+
 function migrate_54_to_55(raw: any): any {
     return { ...raw, version: "55" };
 }

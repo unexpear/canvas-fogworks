@@ -76,7 +76,8 @@ import { resolveShortcut, isTypingTarget, Shortcut, SHORTCUT_HELP } from "../edi
 import { ClipboardContents, copyNodes, remapForPaste } from "../core/document/Clipboard";
 import { PasteNodesAction } from "../core/actions/PasteNodesAction";
 import { AlignEdge, DistributeAxis } from "../core/geometry/Alignment";
-import { IMAGE_SRC_MAX, srcError, sourceRectError } from "../core/document/Node";
+import { IMAGE_SRC_MAX, srcError, sourceRectError, nineSliceError, NodeType } from "../core/document/Node";
+import { NineSliceInsets } from "../core/geometry/NineSlice";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
 import { scanCapabilities, Capability } from "../core/scan/CapabilityScan";
 import { exportSVG, TextLines } from "../core/export/ExportSVG";
@@ -2563,6 +2564,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                         />
                                         Pixel art (no smoothing)
                                     </label>
+                                    <NineSliceFields node={node} onEdit={patch => { editContent(patch); refresh(); }} />
                                 </InspectorSection>
                             )}
 
@@ -3313,6 +3315,48 @@ function CanvasTextEditor({ nodeId, doc, viewport, onChange, onDone }: {
                 boxSizing: "border-box"
             }}
         />
+    );
+}
+
+/**
+ * The four nine-slice insets (schema 57).
+ *
+ * BLANK CLEARS THE WHOLE THING, like the region fields above and for the same reason: a nine-slice
+ * missing one number is not a narrower border, it is not a nine-slice. Zero IS a real value — a
+ * three-slice bar has no top or bottom corner — so the clear has to be emptiness rather than 0.
+ *
+ * The SAME shared validator the loader uses, so a field cannot author insets the document would
+ * refuse to reopen.
+ */
+function NineSliceFields({ node, onEdit }: {
+    node: { type: NodeType; nineSlice?: NineSliceInsets };
+    onEdit: (patch: { nineSlice: NineSliceInsets | null }) => void;
+}) {
+    return (
+        <>
+            <label style={INSPECTOR_LABEL}>Nine-slice (source pixels)</label>
+            <div style={{ display: "flex", gap: 4 }}>
+                {(["left", "top", "right", "bottom"] as const).map(key => (
+                    <input
+                        key={key}
+                        type="number"
+                        data-nineslice={key}
+                        placeholder={key}
+                        value={node.nineSlice ? String(node.nineSlice[key]) : ""}
+                        onChange={e => {
+                            const raw = e.target.value;
+                            if (raw === "") { onEdit({ nineSlice: null }); return; }
+                            const base = node.nineSlice ?? { left: 0, top: 0, right: 0, bottom: 0 };
+                            const next = { ...base, [key]: Number(raw) };
+                            if (nineSliceError(node.type, next) !== null) return;
+                            onEdit({ nineSlice: next });
+                        }}
+                        style={{ width: "25%", boxSizing: "border-box", fontSize: 11, padding: "2px 4px",
+                            background: UI.raised, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3 }}
+                    />
+                ))}
+            </div>
+        </>
     );
 }
 

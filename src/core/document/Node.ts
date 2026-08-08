@@ -6,6 +6,7 @@
 
 import { isTokenRef } from "./Variables";
 import { Gradient, gradientError } from "./Gradient";
+import { NineSliceInsets } from "../geometry/NineSlice";
 import { Interaction } from "./Prototype";
 import { IkConstraint } from "./Rig";
 
@@ -254,6 +255,37 @@ export function sourceRectError(rect: unknown): string | null {
     return null;
 }
 
+/**
+ * Validity of a nine-slice, SHARED by the edit path and the load path.
+ *
+ * LIKE `sourceRectError`, IT CANNOT BE CHECKED AGAINST THE IMAGE. Whether four insets fit inside
+ * the real bitmap is unknowable until the file decodes and unknowable forever if it never does —
+ * so this checks what a document can be wrong about alone, and `nineSliceRects` clamps the rest
+ * against the size it actually gets. Being explicit about the split is worth more than a validator
+ * that pretends to know.
+ *
+ * ONLY A BITMAP MAY CARRY ONE. A nine-sliced rectangle is a rectangle with four numbers nothing
+ * reads — silently ignored, which is the kind of field somebody sets and then spends an hour
+ * wondering about.
+ */
+export function nineSliceError(type: NodeType, slice: unknown): string | null {
+    if (slice === undefined) return null;
+    if (type !== "core.image" && type !== "core.raster") {
+        return "only a core.image or core.raster node may carry a nineSlice";
+    }
+    if (typeof slice !== "object" || slice === null || Array.isArray(slice)) return "nineSlice must be an object";
+    const n = slice as Partial<NineSliceInsets>;
+    for (const key of ["left", "top", "right", "bottom"] as const) {
+        const v = n[key];
+        if (!Number.isFinite(v)) return `nineSlice.${key} must be a finite number`;
+        // NEGATIVE IS NOT A MIRRORED INSET, it is a corner reaching outside the art. Zero is legal
+        // and means that edge has no corner — a three-slice, which is how a horizontal bar is done.
+        if ((v as number) < 0) return `nineSlice.${key} must not be negative`;
+        if ((v as number) > SOURCE_RECT_MAX) return `nineSlice.${key} must be within ${SOURCE_RECT_MAX}`;
+    }
+    return null;
+}
+
 export function srcError(type: NodeType, src: unknown): string | null {
     if (src === undefined) return null;
     if (type !== "core.image") return "only a core.image node may carry a src";
@@ -366,6 +398,19 @@ export interface Node {
      * one 360x168 picture. See `sourceRectError` for why the unit is pixels rather than fractions.
      */
     sourceRect?: SourceRect;
+    /**
+     * How far in from each edge a bitmap's CORNERS reach, in source pixels (schema 57).
+     *
+     * Nine-slice: the corners keep their size at any scale, the edges stretch along one axis, the
+     * middle along both. A nine-pixel button bitmap becomes a button of any size with a border
+     * that stays four pixels thick — which is what a fraction-based inset could never do, since it
+     * would thicken as the panel grew.
+     *
+     * Absent = the whole region is drawn as one stretched picture, which is what every image was
+     * before this field existed. The arithmetic is `geometry/NineSlice`; the insets are relative to
+     * `sourceRect` when there is one, so a sliced button can live inside an atlas.
+     */
+    nineSlice?: NineSliceInsets;
     /**
      * A surface this document OWNS, for `core.raster` (schema 55).
      *

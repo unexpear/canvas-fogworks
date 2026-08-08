@@ -27,6 +27,7 @@ import { SourceRect } from "../core/document/Node";
 import { ReadonlyDocument } from "../core/document/Document";
 import { FillRule, PathCommand, Shadow, StrokeCap, StrokeJoin, TextAlign, flatFill } from "../core/document/Node";
 import { Gradient, GradientStop, GradientUnits } from "../core/document/Gradient";
+import { NineSliceInsets, nineSliceRects } from "../core/geometry/NineSlice";
 import { depthOf } from "../core/document/Depth";
 import { ReadonlyMesh, isFlatMesh } from "../core/document/Mesh";
 import { Light, shadowOffset } from "../core/document/Light";
@@ -75,6 +76,16 @@ export type Shape =
         source: SourceRect | null;
         /** Scale by nearest neighbour. Carried for EVERY image, never only when true — see below. */
         pixelated: boolean;
+        /**
+         * Nine-slice insets in SOURCE pixels, or null for one stretched picture (schema 57).
+         *
+         * THE INSETS TRAVEL, NOT THE NINE RECTANGLES, and that is forced rather than chosen: the
+         * pieces depend on the source's PIXEL SIZE, and for a `core.image` with no `sourceRect`
+         * that size is unknown until the file decodes — which this model, being pure, can never
+         * wait for. Each backend already resolves the bitmap before it draws, so each calls the
+         * one shared `nineSliceRects` with the size it has. Three call sites, one arithmetic.
+         */
+        nineSlice: NineSliceInsets | null;
         /**
          * The run-length payload for a `core.raster`, or null for a `core.image`.
          *
@@ -725,6 +736,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = {
                 kind: "image", x, y, width, height, href: node.src ?? null,
                 source: node.sourceRect ?? null, pixelated: node.pixelated === true,
+                nineSlice: node.nineSlice ?? null,
                 // An image node REFERENCES a picture; there is no payload to carry.
                 surface: null
             };
@@ -748,6 +760,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 href: node.surface ? rasterHref(node.id, node.surface) : null,
                 source: null,
                 surface: node.surface ?? null,
+                nineSlice: node.nineSlice ?? null,
                 // PIXEL ART IS NEAREST-NEIGHBOUR BY DEFAULT. A painted surface zoomed in is meant
                 // to show its pixels; smoothing them is the one thing a pixel artist never wants,
                 // and an image node defaults the other way because a photograph does.

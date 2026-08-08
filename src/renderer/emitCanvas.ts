@@ -41,6 +41,7 @@
 import { isTranslationOnly } from "../core/geometry/Matrix";
 import { DisplayList, DrawItem, Paint, PaintGradient, Shape, layerTransition, textParagraphs } from "./RenderModel";
 import { GradientStop } from "../core/document/Gradient";
+import { nineSliceRects } from "../core/geometry/NineSlice";
 import { parseColor } from "./emitWebGL";
 import { resolveSurface, resolveImage, setImageReadyCallback } from "./ImageCache";
 import { drawTextInto } from "./TextRaster";
@@ -232,7 +233,20 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint,
                 // tile would make every later photograph in the frame crunchy.
                 ctx.imageSmoothingEnabled = !shape.pixelated;
                 const src = shape.source;
-                if (src) {
+                // NINE-SLICE (schema 57) is nine of the nine-argument `drawImage` this backend
+                // already makes for a source rect. The pieces come from the shared
+                // `nineSliceRects` — a per-backend idea of how a border should stretch is three
+                // implementations and three ways to disagree.
+                if (shape.nineSlice) {
+                    // The bitmap's own size, which is the one thing the pure model could not know
+                    // for an image with no source rect: it is not decoded until here.
+                    const region = src ?? { x: 0, y: 0, width: img.width, height: img.height };
+                    const dest = { x: shape.x, y: shape.y, width: shape.width, height: shape.height };
+                    for (const piece of nineSliceRects(region, dest, shape.nineSlice)) {
+                        ctx.drawImage(img, piece.src.x, piece.src.y, piece.src.width, piece.src.height,
+                            piece.dst.x, piece.dst.y, piece.dst.width, piece.dst.height);
+                    }
+                } else if (src) {
                     // The NINE-argument form, which is the whole feature: a tileset or a sprite
                     // strip is a grid inside one file, and until now only the five-argument form
                     // existed, so the grid could only be drawn entire.

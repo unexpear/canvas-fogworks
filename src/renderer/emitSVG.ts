@@ -17,6 +17,7 @@
 import { toMatrixString, isTranslationOnly } from "../core/geometry/Matrix";
 import { DisplayList, DrawItem, Paint, FilterDef, PaintGradient, commandsToPathData, effectFilterId } from "./RenderModel";
 import { naturalSize, surfaceUrl } from "./ImageCache";
+import { nineSliceRects } from "../core/geometry/NineSlice";
 
 const svgNS = "http://www.w3.org/2000/svg";
 
@@ -273,28 +274,61 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         // destination box and the nested element clips whatever falls outside. The inner image is
         // placed at its NATURAL size, which is what makes the viewBox's units source pixels.
         const src = shape.source;
-        const natural = shape.href ? naturalSize(shape.href) : null;
-        if (src && natural) {
+        // A RASTER KNOWS ITS OWN SIZE — it is in the payload — while an image's comes from the
+        // decoded bitmap. Both are needed for the same thing: the inner image is placed at natural
+        // size so the viewBox's units are source pixels.
+        const natural = shape.surface
+            ? { width: shape.surface.width, height: shape.surface.height }
+            : shape.href ? naturalSize(shape.href) : null;
+
+        /** One (source → destination) piece as a nested `<svg>` holding its own `<image>`. */
+        const piece = (sx: number, sy: number, sw: number, sh: number,
+                       dx: number, dy: number, dw: number, dh: number): SVGElement => {
             const nested = document.createElementNS(svgNS, "svg");
-            nested.setAttribute("x", String(shape.x));
-            nested.setAttribute("y", String(shape.y));
-            nested.setAttribute("width", String(shape.width));
-            nested.setAttribute("height", String(shape.height));
-            nested.setAttribute("viewBox", `${src.x} ${src.y} ${src.width} ${src.height}`);
+            nested.setAttribute("x", String(dx));
+            nested.setAttribute("y", String(dy));
+            nested.setAttribute("width", String(dw));
+            nested.setAttribute("height", String(dh));
+            nested.setAttribute("viewBox", `${sx} ${sy} ${sw} ${sh}`);
             nested.setAttribute("preserveAspectRatio", "none");
-            el.setAttribute("x", "0");
-            el.setAttribute("y", "0");
-            el.setAttribute("width", String(natural.width));
-            el.setAttribute("height", String(natural.height));
-            nested.appendChild(el);
+            const img = el.cloneNode(false) as SVGElement;
+            img.setAttribute("x", "0");
+            img.setAttribute("y", "0");
+            img.setAttribute("width", String(natural!.width));
+            img.setAttribute("height", String(natural!.height));
+            nested.appendChild(img);
+            return nested;
+        };
+
+        // NINE-SLICE (schema 57) is nine of the nested-`<svg>` trick this backend already does for
+        // one source rect — which is the whole reason the arithmetic lives in `nineSliceRects` and
+        // not in a per-backend idea of what a stretched border should look like.
+        if (shape.nineSlice && natural) {
+            const region = src ?? { x: 0, y: 0, width: natural.width, height: natural.height };
+            const dest = { x: shape.x, y: shape.y, width: shape.width, height: shape.height };
+            // A GROUP, so the whole panel carries ONE `data-node-id` and picks as one thing —
+            // nine separately-tagged images would make a click land on whichever piece it hit.
+            const g = document.createElementNS(svgNS, "g");
+            for (const slice of nineSliceRects(region, dest, shape.nineSlice)) {
+                g.appendChild(piece(slice.src.x, slice.src.y, slice.src.width, slice.src.height,
+                    slice.dst.x, slice.dst.y, slice.dst.width, slice.dst.height));
+            }
+            applyTail(g, item);
+            group.appendChild(g);
+            return;
+        }
+        if (src && natural) {
+            const nested = piece(src.x, src.y, src.width, src.height,
+                shape.x, shape.y, shape.width, shape.height);
             applyTail(nested, item);
             group.appendChild(nested);
             return;
         }
         // A rect on an image that has NOT decoded draws nothing, exactly as Canvas draws nothing
         // for an href that is not ready — rather than briefly drawing the whole sheet, which is
-        // the wrong picture rather than a missing one.
-        if (src && !natural) return;
+        // the wrong picture rather than a missing one. The same holds for a nine-slice, which
+        // cannot be cut without knowing what it is cutting.
+        if ((src || shape.nineSlice) && !natural) return;
         applyTail(el, item);
         group.appendChild(el);
     }
