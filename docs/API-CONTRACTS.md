@@ -1825,6 +1825,8 @@ interface PaintGradient {
 //   GPU_MAX_STOPS: 16   — the shader's cap, not the schema's: WebGL 1 guarantees 16 fragment
 //                         uniform vectors and the document allows 64 (the corpus's worst case: 11)
 //   gpuGradient(g: PaintGradient, box): Draw["gradient"]
+// `Draw.image.surface` carries a `core.raster`'s run-length payload (schema 55) — the href is an
+// identity key, not a URL, so without it this backend has nothing to fetch and draws nothing.
 function gradientDefId(g: Omit<PaintGradient, "id">): string;
 function resolvePaintGradient(g: Gradient, color: (raw: string) => string): PaintGradient;
 // `localBox` carries the box an objectBoundingBox ramp is a fraction of. It is NOT on

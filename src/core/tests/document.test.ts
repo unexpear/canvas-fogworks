@@ -22607,3 +22607,49 @@ describe("gpuGradient — a ramp as uniforms", () => {
         expect(itemDraws(flatItem).map(d => d.gradient)).toEqual([null]);
     });
 });
+
+// ─── The GPU draws a RASTER (schema 55) ───
+describe("itemDraws carries a raster's pixels, not just its key", () => {
+    const surface = { data: "AAAA", width: 4, height: 4 };
+    const rasterDoc = (): ProjectDocument => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("R", { id: "R", type: "core.raster", parent: null, children: [],
+            geometry: { x: 10, y: 20, width: 80, height: 40 },
+            style: { fill: "#000000", opacity: 1 }, layout: {}, surface } as never);
+        doc.rootNodeUuids = ["R"];
+        return doc;
+    };
+    const itemFor = (doc: ProjectDocument) => {
+        const state = { viewport: { x: 0, y: 0, zoom: 1 }, selectedNodeIds: [], hoveredNodeId: null,
+            computed: computeGeometry(doc) } as unknown as import("../../renderer/RendererState").RendererState;
+        return buildRenderModel({ width: 400, height: 300 }, doc, state).content.find(i => i.nodeId === "R")!;
+    };
+
+    test("the PAYLOAD rides on the draw, because the href is only an identity", () => {
+        // A raster's href is `raster:<id>:<w>x<h>:<len>:<sum>` — nothing to fetch. This backend
+        // called `resolveImage` on it, got null, and drew nothing at all while the other two drew
+        // the picture: a painted canvas invisible on the GPU. A cross-backend comparison put it
+        // 229 channels apart.
+        const draws = itemDraws(itemFor(rasterDoc()));
+        const picture = draws.find(d => d.image !== null)!;
+        expect(picture).toBeDefined();
+        expect(picture.image!.surface).toEqual(surface);
+        expect(picture.image!.href.startsWith("raster:")).toBe(true);
+        // NEAREST, because a raster is pixel art: the flag travels with it and is not re-derived.
+        expect(picture.image!.pixelated).toBe(true);
+    });
+
+    test("an ordinary IMAGE carries no payload — its href is a real URL", () => {
+        // The pairing matters: without it, "the surface is there" could equally describe a backend
+        // that invented one for every image, and `resolveSurface` would then be asked to decode a
+        // URL every frame.
+        const doc = createEmptyDocument();
+        doc.nodes.set("R", { id: "R", type: "core.image", parent: null, children: [],
+            geometry: { x: 10, y: 20, width: 80, height: 40 },
+            style: { fill: "#000000", opacity: 1 }, layout: {}, src: "https://example.test/a.png" } as never);
+        doc.rootNodeUuids = ["R"];
+        const picture = itemDraws(itemFor(doc)).find(d => d.image !== null)!;
+        expect(picture.image!.surface).toBeNull();
+        expect(picture.image!.href).toBe("https://example.test/a.png");
+    });
+});

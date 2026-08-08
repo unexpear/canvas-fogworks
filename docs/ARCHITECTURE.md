@@ -928,6 +928,19 @@ That needs the image's natural size, which comes from the shared `ImageCache` th
 already use — so an undecoded image draws nothing here exactly as it draws nothing on Canvas, rather
 than each backend inventing its own answer for "not ready yet".
 
+### A raster on the GPU — the href is a key, not a URL
+
+**A `core.raster` holds pixels the DOCUMENT owns**, and its href is `raster:<id>:<w>x<h>:<len>:<sum>`
+— an identity, not something to fetch. This backend called `resolveImage` on it, got null, and drew
+nothing: a painted canvas invisible on the GPU while SVG and Canvas both showed it. The payload now
+rides on the draw, exactly as it already rides on the display list, and the shared cache turns it
+into a canvas synchronously — a `TexImageSource` like any bitmap.
+
+**The texture key carries no decode generation**, unlike the image path. An image's href is stable
+while its bitmap loads, so that path needs the generation to notice the arrival; a surface decodes
+at once and its href already carries the size, length and checksum of the payload. The href
+changing IS the pixels changing.
+
 ### An opacity group is a LAYER, not an alpha folded into its parts
 
 **A node with children and opacity below 1 composites as one and is then faded.** SVG nests a real

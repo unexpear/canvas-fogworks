@@ -61,7 +61,7 @@ import { Light, normalize } from "../core/document/Light";
 import { ellipseCommands, rectCommands, transformCommands } from "../core/geometry/ShapeToPath";
 import { PathCommand } from "../core/document/Node";
 import { FLATTEN_TOLERANCE, displayTolerance, localScaleOf } from "../core/geometry/ShapeHit";
-import { imageGeneration, resolveImage } from "./ImageCache";
+import { imageGeneration, resolveImage, resolveSurface } from "./ImageCache";
 import { TextShape, drawTextInto, textRasterKey, textRasterScale } from "./TextRaster";
 
 const VERTEX_SHADER = `
@@ -861,6 +861,16 @@ export interface Draw {
         /** The SOURCE sub-rectangle in the image's own pixels, or null for the whole image. */
         source: { x: number; y: number; width: number; height: number } | null;
         pixelated: boolean;
+        /**
+         * A `core.raster`'s run-length payload, or null for a `core.image` (schema 55).
+         *
+         * CARRIED, BECAUSE THE HREF IS ONLY A KEY. A raster's href is
+         * `raster:<id>:<w>x<h>:<len>:<sum>` — an identity, not a URL — so `resolveImage` has
+         * nothing to fetch and this backend drew NOTHING for a painted canvas while the other two
+         * drew it correctly. The same reference the display list already holds, not a copy; the
+         * cache decodes it lazily on a miss.
+         */
+        surface: { data: string; width: number; height: number } | null;
     } | null;
     /**
      * The text to RASTERISE into this draw's triangles, or null.
@@ -1183,7 +1193,7 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
         const picture = draw(resolveRings(commandsToRings(local, tolerance), "nonzero"),
             item.world, "#ffffff", paint.opacity,
             { href: rect.href!, x: rect.x, y: rect.y, width: rect.width, height: rect.height,
-              source: rect.source, pixelated: rect.pixelated }, null, surface);
+              source: rect.source, pixelated: rect.pixelated, surface: rect.surface }, null, surface);
         if (picture) out.push(picture);
     }
     // TEXT is its box, with the typeset result painted over it. The geometry is a rectangle
@@ -1455,7 +1465,20 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
             let source: TexImageSource | null = null;
             let texKey: string | null = null;
             let rect: { x: number; y: number; width: number; height: number } | null = null;
-            if (d.image) {
+            if (d.image?.surface) {
+                // A RASTER's pixels belong to the document, so there is nothing to fetch — the
+                // shared cache turns the payload into a canvas synchronously, which is a
+                // `TexImageSource` like any bitmap.
+                const painted = resolveSurface(d.image.href, d.image.surface);
+                if (!painted) continue;
+                source = painted;
+                // NO GENERATION in the key. An image's href is stable while its bitmap loads, so
+                // that path needs the generation to notice the arrival; a surface decodes at once
+                // and its href already carries the payload's size, length and checksum — the href
+                // changing IS the pixels changing.
+                texKey = `sur:${d.image.href}`;
+                rect = d.image;
+            } else if (d.image) {
                 const bitmap = resolveImage(d.image.href);
                 // A shape whose image has not decoded yet is SKIPPED rather than drawn white: a
                 // placeholder rectangle is a worse lie than nothing.
