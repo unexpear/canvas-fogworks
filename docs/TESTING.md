@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v56 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1267) + `src/renderer/RenderModel.test.ts` (81) + `src/renderer/emitCanvas.test.ts` (51) + `src/renderer/emitSVG.test.ts` (5) = 1404 tests.
+> 🔒 Frozen contract · schema v56 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1269) + `src/renderer/RenderModel.test.ts` (81) + `src/renderer/emitCanvas.test.ts` (51) + `src/renderer/emitSVG.test.ts` (5) = 1406 tests.
 
 ## Philosophy
 
@@ -25,12 +25,27 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1404 tests
+npm test                                   # jest (ts-jest), 1406 tests
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
 npm run check                              # typecheck + lint + test + build (the gate)
+
+# Fire a native menu command in the running app (needs the main-process inspector):
+npx electron --inspect=9229 dist/electron/main.js --remote-debugging-port=9222
+node scripts/menu-command.js --list
+node scripts/menu-command.js "Zoom to Fit"
 ```
+
+- **`scripts/menu-command.js` is how a menu item is verified**, and the indirection is not
+  optional. A menu accelerator is handled before the renderer sees the key, so
+  `dispatchEvent(new KeyboardEvent(...))` from the page is silently ignored. CDP's
+  `Input.dispatchKeyEvent` reaches the browser layer and does work — but only while the window
+  happens to be focused, so it fired once here and then quietly stopped, which is the worst
+  behaviour a verification tool can have (a green run that means nothing). Clicking the item
+  through the MAIN process has no such condition and exercises the real `send()` closure, the real
+  channel and the real handler. A missing or disabled item exits non-zero, so a script cannot
+  mistake "no such item" for success.
 
 - `npm run lint` also refuses a BACKTICK inside a shader template literal. GLSL lives in template
   strings, so a comment quoting a symbol the way every other comment here does ends the string —
@@ -42,7 +57,7 @@ npm run check                              # typecheck + lint + test + build (th
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1404 tests)
+## What is covered (1406 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -84,6 +99,7 @@ npm run check                              # typecheck + lint + test + build (th
 | **M2 fuzz** | `incremental === full` over a 300-op seeded sequence that adds **hug flags, flex-grow/shrink, WRAP (+alignContent/wrapReverse), GRID (per-row `rows`, `auto` tracks, hug, `colSpan`/`rowSpan`, `autoFlow` row/column/dense, explicit `gridColumn`/`gridRow` pins), constraints, margins (uniform AND per-side), absolute escapes, container toggles, reparents and deletes** to the M1 op set (nesting + reparent build multi-level hug chains; resize drives grow/shrink by sign, constraints from both sources, and — now that wrap and grid enter the measure pass — a child's size feeds its line/`auto` track and the container's own hug size; spans exercise the placement in both passes) |
 | **Depth / mesh / lighting (schemas 40–42)** | `depth` drives display ORDER, the GPU's clip **z**, and PARALLAX (an unlayered doc returns BY REFERENCE, so a pan costs nothing); a warped node resolves to an ordinary `core.path` and is **clickable where it is drawn**; a rest mesh is the identity and is skipped; bilinear is **exact at the control points** and clamped outside the box; `lambert` is **clamped at 0** so a second light can never darken; a flat mesh faces the viewer *exactly*; a MIRRORED patch still faces the viewer; the shadow a light casts is **derived** and an explicit `style.shadow` still wins; every one validated on **both** paths + a migration from the previous schema |
 | **Discrete mode (schema 55)** | WHICH END a non-interpolatable value takes is the caller's question, and both answers are pinned against each other so neither can quietly become the other: a timeline STEPS (a drawing appears on its own keyframe) while a state transition SWITCHES (a hover means it now), asserted side by side on one fixture — without that pairing, a `blendNode` ignoring the parameter entirely would pass the timeline half. `switch` is proven to be the DEFAULT, so a caller that has not thought about it keeps what transitions were written against. `text` is the field that proves the rule generalised: it was never special-cased and behaves correctly because the rule covers it, replacing a per-property list that had already grown a clause for `src` and another for `sourceRect`. The STYLE half needs its own case — `text` is a node field, so a mutation ignoring the mode for `style` alone left every text assertion passing — using a numeric slot with a TOKEN on one end, which cannot be averaged and so falls through to whichever end the mode chose. And the CHANNEL blend needs its own again, since it is a second call site with its own argument to keep in step |
+| **One chord, one owner** | a chord the native menu CLAIMS is handled before the renderer sees the key, so binding it in both places leaves one copy dead and both looking authoritative — which is what I wrote first when adding Zoom to Fit. A test parses every `accelerator:` out of the electron menu and asserts none of them resolves in `resolveShortcut`. Its second half is the part that makes it worth having: it proves the check can SEE a collision (`CmdOrCtrl+D`, `Delete` and `Esc` are all bound in the renderer and must be reported), because a broken accelerator parser would otherwise let everything pass. The Edit menu shows Ctrl+Z and friends in its LABELS and sets no accelerator — the same rule from the other side, and correctly invisible to this check |
 | **Zoom to fit** | the `contentBounds` fixture went blind first time and is worth the note: a node with a NaN `geometry` never reaches the guard at all, because `computeGeometry` DROPS such a node — so the mutation that deletes the finiteness check survived while the test passed for the wrong reason. A NaN in the TRANSFORM is the reachable case, and the test now asserts reachability (the node is computed, its bounds are non-finite) before asserting the behaviour. The exporter's frame is checked to be the shared bounds plus its own margin, so the two cannot drift back apart. A structural test also pins every `send("…")` in the electron menu against a `case "…"` in App.tsx — this codebase has already shipped TWO dead menu items, where the command was sent and nothing matched it, and neither side's own tests could see a gap that is BETWEEN them |
 | **Rasters on the GPU (schema 55)** | the surface is FOUR SOLID QUADRANTS, so a flipped or transposed upload is unmistakable — a single-colour fixture would pass whatever the orientation. Two more cases exist only to make specific mutations fail: TWO different rasters in one frame, because one texture object is shared and a key that does not distinguish two payloads paints the second shape with the first one's pixels (a single-raster case cannot tell that from correct, and it is the only case that mutation breaks); and a 2x2 surface blown up to 180x100, which puts the quadrant boundary in the middle of the shape so LINEAR filtering has nowhere flat left to hide. The gap it closed was total: a painted canvas drew NOTHING on this backend, 229 channels from the other two, because a raster's href is an identity key and `resolveImage` had nothing to fetch |
 | **Opacity groups on the GPU (schema 32)** | a stack of render targets, one per nesting depth, verified only by pixels — twelve cases now agree to within 2 channels where the group ones were 137 apart. Every mutation breaks exactly its own cases, and the misses are as informative as the hits: removing the feedback-loop unbind breaks three group cases but NOT the one whose child has a shadow, because that item's effect detour already unbinds; sharing one target across depths breaks only the NESTED case; dropping the end-of-frame close breaks every case that ends inside a group and spares the one with a sibling after it. One mutation SURVIVES and is kept anyway — forcing the depth test on inside a layer changes nothing, because GL says a depth test against a framebuffer with no depth attachment always passes. It is written out for the reason the effect detour gives for its own `disable`: relying on an attachment nobody asked for is worse than one redundant call per layer |

@@ -22737,3 +22737,65 @@ describe("Zoom to fit", () => {
         expect(sent.filter(c => !app.includes(`case "${c}"`))).toEqual([]);
     });
 });
+
+// ─── One chord, one owner ───
+describe("A menu accelerator never collides with a canvas shortcut", () => {
+    /**
+     * An Electron accelerator string as the chord `resolveShortcut` would receive.
+     *
+     * Test-local on purpose: it translates a FOREIGN format (Electron's) into this app's, and
+     * neither side should grow a dependency on the other to satisfy a test. Only the spellings the
+     * menu actually uses need to be right; anything unrecognised falls through as its own literal,
+     * which fails loudly against `resolveShortcut` rather than silently matching nothing.
+     */
+    const NAMED: Record<string, string> = {
+        Delete: "Delete", Backspace: "Backspace", Esc: "Escape", Escape: "Escape",
+        Up: "ArrowUp", Down: "ArrowDown", Left: "ArrowLeft", Right: "ArrowRight",
+        Return: "Enter", Enter: "Enter", Space: " ", Tab: "Tab", Plus: "+"
+    };
+    const chordOf = (accel: string) => {
+        const parts = accel.split("+");
+        // A trailing "+" ("CmdOrCtrl+=" is fine, "CmdOrCtrl++" is a plus key) leaves an empty last
+        // part; the key is then the plus itself.
+        const key = parts[parts.length - 1] || "+";
+        const has = (...names: string[]) => parts.some(p => names.includes(p));
+        return {
+            key: NAMED[key] ?? key,
+            ctrlKey: has("CmdOrCtrl", "CommandOrControl", "Ctrl", "Control"),
+            metaKey: has("Cmd", "Command", "Super", "Meta"),
+            shiftKey: has("Shift"),
+            altKey: has("Alt", "Option")
+        };
+    };
+
+    test("nothing the native menu CLAIMS is also bound in the renderer", () => {
+        // A chord belongs to exactly one layer. The menu is handled first, so a chord it claims
+        // never reaches the key handler — bind it in both and one copy is dead while both look
+        // authoritative. (The Edit menu shows Ctrl+Z and friends in its LABELS for discoverability
+        // and sets no accelerator, which is the same rule from the other side; those labels carry
+        // a tab rather than an `accelerator:` and so are correctly invisible here.)
+        const main = readFileSync(resolve(__dirname, "../../electron/main.js"), "utf8");
+        const accels = [...main.matchAll(/accelerator:\s*"([^"]+)"/g)].map(m => m[1]);
+        expect(accels.length).toBeGreaterThan(5);   // the sweep found the menu at all
+        const claimedTwice = accels.filter(a => {
+            const c = chordOf(a);
+            // Both cases, because a letter arrives from the keyboard either way depending on Shift
+            // and `resolveShortcut` tests for both spellings.
+            return resolveShortcut(c) !== null
+                || resolveShortcut({ ...c, key: c.key.toLowerCase() }) !== null
+                || resolveShortcut({ ...c, key: c.key.toUpperCase() }) !== null;
+        });
+        expect(claimedTwice).toEqual([]);
+    });
+
+    test("…and the check can actually see a collision", () => {
+        // Without this the test above passes just as well when `chordOf` is broken and every chord
+        // resolves to null. Ctrl+D IS bound in the renderer, so a menu that claimed it must fail.
+        expect(resolveShortcut(chordOf("CmdOrCtrl+D"))).toEqual({ kind: "duplicate" });
+        expect(resolveShortcut(chordOf("Delete"))).toEqual({ kind: "delete" });
+        expect(resolveShortcut(chordOf("Esc"))).toEqual({ kind: "deselect" });
+        // …and that the ones the menu really uses are genuinely free.
+        expect(resolveShortcut(chordOf("Shift+1"))).toBeNull();
+        expect(resolveShortcut(chordOf("CmdOrCtrl+T"))).toBeNull();
+    });
+});

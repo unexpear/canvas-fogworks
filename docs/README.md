@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1404 — `src/core/tests/document.test.ts` (1267) + `src/renderer/RenderModel.test.ts` (81) + `src/renderer/emitCanvas.test.ts` (51) + `src/renderer/emitSVG.test.ts` (5).
+- **Tests:** 1406 — `src/core/tests/document.test.ts` (1269) + `src/renderer/RenderModel.test.ts` (81) + `src/renderer/emitCanvas.test.ts` (51) + `src/renderer/emitSVG.test.ts` (5).
 - **Verify the tests themselves:** `npm run mutate:dimensions` (18/18) — breaks the paint arithmetic
   on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
   and it refuses a dirty tree. See TESTING.md § Fixture design.
@@ -102,5 +102,8 @@ src/
   electron/     main.js (main process), preload.js (contextBridge)
 scripts/build.js   three esbuild builds -> dist/{app,electron}
 scripts/{check-module-headers,check-doc-drift}.js   lint + doc-staleness tripwire
+scripts/menu-command.js   fire a native menu item in the running app (main-process
+                          inspector); the only reliable way — an accelerator never
+                          reaches the renderer, and CDP key injection needs focus
 scripts/mutate-dimensions.js   mutation battery over core/paint + TiledMap (18/18)
 ```
