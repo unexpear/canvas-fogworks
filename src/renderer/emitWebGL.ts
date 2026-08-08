@@ -37,13 +37,22 @@
  *     PREVIEW is the one thing in the app that carries a pattern today, and it used to come out
  *     solid here while the other two backends dashed it.
  *
- * THE REMAINING GAP, stated rather than discovered later: EFFECTS — `shadow` and `blur` — are
- * ignored. Both are per-fragment work over a rendered image, which needs a render target this
- * backend does not allocate. Drawing a HARD shadow instead would be worse than drawing none: it
- * would differ visibly from the other two backends while looking deliberate.
+ *   - EFFECTS. `shadow` and `blur` are per-fragment work over a rendered IMAGE, so this backend
+ *     had to grow what it never had: render targets. It keeps a ping-pong pair for the separable
+ *     gaussian and a third for a shadow, which is a blurred copy that must land UNDER the item it
+ *     belongs to. `effectPlan` replays the CTM's scale onto the magnitudes, the same arithmetic
+ *     exception `emitCanvas` makes, because an effect is measured in device space.
  *
- * The app offers this backend as a preview and says so, because a backend that quietly drops
- * content is worse than one that admits what it cannot do.
+ * THIS PARAGRAPH REPLACES ONE THAT SAID EFFECTS WERE IGNORED, and it was wrong for as long as it
+ * took somebody to read it — the sentence was written when it was true and nothing brought it back
+ * when the render targets landed. A header claiming an ABSENCE is the only kind that rots without
+ * anything noticing: the claim and the code share a file, so no timestamp can compare them, and
+ * the lint gate only ever asked whether a header EXISTS. A sweep of all 151 headers found this to
+ * be the only one, and `npm run header-claims` is what found it — advisory, because the judgement
+ * is a read. A sentence describing an ABSENCE has a shelf life; write it expecting to come back.
+ *
+ * The app still offers this backend as a preview, because a backend that quietly drops content is
+ * worse than one that admits what it cannot do — but the effects gap is no longer why.
  */
 
 import { DisplayList, DrawItem, PaintGradient, Shape, layerTransition } from "./RenderModel";

@@ -12,7 +12,8 @@
     "dist": "node scripts/build.js && npx electron-builder",
     "lint": "node scripts/check-module-headers.js",
     "doc-drift": "node scripts/check-doc-drift.js",
-    "mutate:dimensions": "node scripts/mutate-dimensions.js"
+    "mutate:dimensions": "node scripts/mutate-dimensions.js",
+    "header-claims": "node scripts/check-header-claims.js"
   },
   "dependencies": {
     "react": "^19.2.8",
