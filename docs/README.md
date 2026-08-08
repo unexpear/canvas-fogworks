@@ -85,6 +85,12 @@ src/
                 there in the SAME commit; see TESTING.md)
   editor/       EditorState + tools/ (Select/Move/Shape/Pen/Raster,
                 ToolController)
+  app/          App.tsx — the shell: workspace tabs (Design/Paint/
+                Animate), a 48px tool strip, a fixed-height tool
+                options row, Layers + Inspector, status bar. The
+                native menu owns File/Edit/View/Developer/Help and
+                reaches the renderer through ONE `menu-command`
+                channel carrying a command string.
   renderer/     RenderModel (pure display list) + emitSVG /  (read-only)
                 emitCanvas / emitWebGL backends + ImageCache/TextRaster +
                 renderScene selector (SVG/Canvas/WebGL)

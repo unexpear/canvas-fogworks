@@ -467,6 +467,12 @@ test that was never seen to fail proves nothing.
   `nodesInRect`, click-to-select, shift-additive), and **alignment snapping** (`computeSnap`/`snapPoint`/
   `guidesForRect`/`snapTargetsExcludingSubtree`, with the MOVE drag and the corner-RESIZE both folding it in
   for a single top-level node). Adding jsdom-based emitter/tool tests is future work.
+- **The interface shell** (workspace tabs, the tool strip, the options row, the menu) has no
+  automated coverage and was verified by DRIVING THE RUNNING APP over CDP — element rects read
+  back per tool and per workspace, because the faults it fixes are geometric: the canvas moved
+  27px when a tool was chosen and 11px when a workspace was. The one thing pinned in the suite is
+  a source assertion that `detachInstance` calls `validate()` BEFORE dispatching, which replaced
+  an older pin on the disabled Detach button when that button moved into the Edit menu.
 - **Electron main/preload** IPC is not unit-tested (thin, and requires an Electron host).
   The Open → edit → Ctrl+S round-trip in particular is only manually verified.
 - `applyMutationsToDocument`'s `text` / `src` / `name` branches have no producing Action
