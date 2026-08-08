@@ -70,6 +70,8 @@ import { DeleteNodeAction } from "../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../core/actions/TransactionAction";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveShortcut, isTypingTarget, Shortcut, SHORTCUT_HELP } from "../editor/shortcuts";
+import { ClipboardContents, copyNodes, remapForPaste } from "../core/document/Clipboard";
+import { PasteNodesAction } from "../core/actions/PasteNodesAction";
 import { AlignEdge, DistributeAxis } from "../core/geometry/Alignment";
 import { IMAGE_SRC_MAX, srcError, sourceRectError } from "../core/document/Node";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
@@ -483,6 +485,10 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     // Help ▸ Keyboard Shortcuts. The menu item existed from the moment the menu did and sent a
     // command NOTHING HANDLED — a dead entry, which is the thing I removed a Tiled submenu for.
     const [showShortcuts, setShowShortcuts] = useState(false);
+    // A REF, NOT STATE. The clipboard changes nothing on screen, so re-rendering on copy would be
+    // a repaint for no visible reason — and it must NOT live in the document, or copying would be
+    // an undoable edit and Ctrl+Z after Ctrl+C would "un-copy".
+    const clipboardRef = useRef<ClipboardContents | null>(null);
     // The layer drag in flight: what is being dragged, and where the pointer currently is.
     // Kept in React state (not a ref) because the row that is being hovered has to REDRAW to
     // show the indicator — a ref would move the data without moving the picture.
@@ -805,6 +811,43 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             // A TOOL SWITCH IS NOT AN ACTION, so it is not handled here: it changes no document
             // and it needs `setTool`, which is declared after this. The key handler takes it.
             case "tool": return false;
+            case "copy": {
+                const copied = copyNodes(doc, sel);
+                // NOTHING SELECTED LEAVES THE CLIPBOARD ALONE rather than clearing it: pressing
+                // Ctrl+C on empty space should not destroy what you copied a minute ago.
+                if (copied) clipboardRef.current = copied;
+                return true;
+            }
+            case "cut": {
+                const copied = copyNodes(doc, sel);
+                if (!copied) return true;
+                clipboardRef.current = copied;
+                // The DELETE goes through the ordinary action, so a cut is undoable like any other
+                // removal — and the clipboard keeps its own detached copy, which is the whole
+                // reason the payload holds nodes rather than ids.
+                // THE SAME REMOVAL THE DELETE KEY MAKES — one transaction of per-node deletes, so
+                // a cut is one undo step and cannot behave differently from a delete.
+                const stored = sel.filter(id => !isVirtualId(id) && doc.nodes.has(id));
+                if (stored.length === 0) return true;
+                dispatcher.dispatchAction(new TransactionAction(doc, "cut",
+                    stored.map(id => new DeleteNodeAction(doc, id))));
+                es.selectedNodeIds = [];
+                refresh();
+                return true;
+            }
+            case "paste": {
+                const held = clipboardRef.current;
+                if (!held) return true;
+                const { nodes, rootIds } = remapForPaste(held);
+                const action = new PasteNodesAction(doc, nodes, rootIds);
+                if (dispatcher.dispatchAction(action).success) {
+                    // SELECT WHAT WAS PASTED, so a second Ctrl+V does not stack copies invisibly
+                    // and the arrow keys move what just appeared.
+                    es.selectedNodeIds = action.getCreatedRootIds();
+                }
+                refresh();
+                return true;
+            }
             case "undo": dispatcher.undo(); refresh(); return true;
             case "redo": dispatcher.redo(); refresh(); return true;
             case "select-all": {

@@ -97,6 +97,8 @@ import { symmetryPoints, isMirrored, NO_SYMMETRY } from "../paint/Symmetry";
 import { nearestColour, colourDistance, quantizeToPalette } from "../paint/Quantize";
 import { worldToSurface, surfaceToWorld, surfacePixelSize, surfaceSpaceError } from "../paint/SurfaceSpace";
 import { defaultGradient, gradientError, normalizeStops, sampleGradient, GRADIENT_MAX_STOPS } from "../document/Gradient";
+import { copyNodes, remapForPaste, PASTE_OFFSET } from "../document/Clipboard";
+import { PasteNodesAction } from "../actions/PasteNodesAction";
 import { RasterTool } from "../../editor/tools/RasterTool";
 import { SymmetryMode } from "../paint/Symmetry";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
@@ -21636,7 +21638,12 @@ describe("Keyboard shortcuts match the apps people arrive from", () => {
 
         // WITH A MODIFIER IT IS NOT A TOOL. Ctrl+V is paste on every platform, and reading it as
         // "the move tool" would make the most reflexive chord on the keyboard do the wrong thing.
-        expect(press("v", true)).toBeNull();
+        // Ctrl+V is PASTE, which is the point: the chord keeps the meaning it has in every other
+        // application rather than being stolen by a tool that happens to share the letter.
+        expect(press("v", true)).toEqual({ kind: "paste" });
+        expect(press("c", true)).toEqual({ kind: "copy" });
+        expect(press("x", true)).toEqual({ kind: "cut" });
+        // A letter with a modifier that nothing claims stays unclaimed.
         expect(press("b", true)).toBeNull();
         // ...and the modified letters that ARE bound still win.
         expect(press("d", true)).toEqual({ kind: "duplicate" });
@@ -21659,5 +21666,124 @@ describe("Keyboard shortcuts match the apps people arrive from", () => {
             expect(row.keys.length).toBeGreaterThan(0);
             expect(row.does.length).toBeGreaterThan(0);
         }
+    });
+});
+
+describe("Clipboard — copy, cut and paste", () => {
+    /** A parent with two children, plus a lone node beside it. */
+    const doc3 = () => {
+        const doc = createEmptyDocument();
+        const mk = (id: string, parent: string | null, x: number, children: string[] = []) => {
+            doc.nodes.set(id, { id, type: "core.rectangle", parent, children,
+                geometry: { x, y: 5, width: 10, height: 10 },
+                style: { fill: "#abc", opacity: 1 }, layout: {} } as never);
+        };
+        mk("P", null, 100, ["A", "B"]);
+        mk("A", "P", 0);
+        mk("B", "P", 20);
+        mk("Z", null, 300);
+        doc.rootNodeUuids = ["P", "Z"];
+        return doc;
+    };
+
+    test("copying takes ROOTS and their subtrees, once", () => {
+        const doc = doc3();
+        // Selecting a parent AND its child must not copy the child twice — the second copy is
+        // identical and exactly on top, which reads as a rendering bug rather than a paste one.
+        const both = copyNodes(doc, ["P", "A"])!;
+        expect(both.rootIds).toEqual(["P"]);
+        expect(both.nodes.map(n => n.id).sort()).toEqual(["A", "B", "P"]);
+
+        // Two independent roots are both copied.
+        expect(copyNodes(doc, ["P", "Z"])!.rootIds.sort()).toEqual(["P", "Z"]);
+        // Nothing copyable returns null, so a caller can leave the previous clipboard ALONE.
+        expect(copyNodes(doc, [])).toBeNull();
+        expect(copyNodes(doc, ["missing"])).toBeNull();
+    });
+
+    test("the clipboard is DETACHED, so editing the original does not change what pastes", () => {
+        const doc = doc3();
+        const held = copyNodes(doc, ["P"])!;
+        // Mutate the document after copying, the way a user would between Ctrl+C and Ctrl+V.
+        doc.nodes.get("P")!.geometry.x = 999;
+        doc.nodes.get("P")!.style.fill = "#changed";
+        doc.nodes.get("P")!.children.push("intruder");
+        const copiedP = held.nodes.find(n => n.id === "P")!;
+        expect(copiedP.geometry.x).toBe(100);
+        expect(copiedP.style.fill).toBe("#abc");
+        expect(copiedP.children).toEqual(["A", "B"]);
+    });
+
+    test("pasting mints fresh ids and rewires the links INSIDE the copy", () => {
+        const doc = doc3();
+        const held = copyNodes(doc, ["P"])!;
+        const first = remapForPaste(held);
+
+        // Nothing pasted may reuse an id — a collision would REPLACE a node and orphan its children.
+        for (const n of first.nodes) expect(doc.nodes.has(n.id)).toBe(false);
+        // The copy's children are the COPIES, not the originals.
+        const root = first.nodes.find(n => n.id === first.rootIds[0])!;
+        expect(root.parent).toBeNull();
+        expect(root.children).toHaveLength(2);
+        for (const c of root.children) {
+            expect(["A", "B"]).not.toContain(c);
+            expect(first.nodes.find(n => n.id === c)!.parent).toBe(root.id);
+        }
+        // ONLY THE ROOT MOVES. A child's position is relative to its parent, so offsetting it too
+        // would move it twice and the subtree would come apart.
+        expect(root.geometry.x).toBe(100 + PASTE_OFFSET);
+        for (const c of root.children) expect(first.nodes.find(n => n.id === c)!.geometry.x).not.toBe(20 + PASTE_OFFSET);
+
+        // PASTING TWICE gives two distinct sets — ids are minted at paste, not at copy, so the
+        // second press cannot collide with what the first created.
+        const second = remapForPaste(held);
+        expect(second.rootIds[0]).not.toBe(first.rootIds[0]);
+        const firstIds = new Set(first.nodes.map(n => n.id));
+        for (const n of second.nodes) expect(firstIds.has(n.id)).toBe(false);
+    });
+
+    test("CUT THEN PASTE works, which is why the clipboard holds nodes and not ids", () => {
+        const doc = doc3();
+        const dispatcher = new ActionDispatcher(doc);
+        const held = copyNodes(dispatcher.getDocument(), ["P"])!;
+
+        // Cut: the originals go. A clipboard that remembered IDS would now have nothing to paste,
+        // which is the single case that rules out the three-line implementation.
+        dispatcher.dispatchAction(new TransactionAction(dispatcher.getDocument(), "cut",
+            ["P"].map(id => new DeleteNodeAction(dispatcher.getDocument(), id))));
+        expect(dispatcher.getDocument().nodes.has("P")).toBe(false);
+
+        const { nodes, rootIds } = remapForPaste(held);
+        const action = new PasteNodesAction(dispatcher.getDocument(), nodes, rootIds);
+        expect(action.validate()).toBe(true);
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+
+        const after = dispatcher.getDocument();
+        const pasted = after.nodes.get(action.getCreatedRootIds()[0])!;
+        expect(pasted).toBeDefined();
+        expect(pasted.children).toHaveLength(2);
+        for (const c of pasted.children) expect(after.nodes.get(c)!.parent).toBe(pasted.id);
+
+        // ONE UNDO removes the whole paste, not its last node.
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.has(pasted.id)).toBe(false);
+    });
+
+    test("a paste that would corrupt the document is refused", () => {
+        const doc = doc3();
+        const node = (id: string, parent: string | null = null) => ({
+            id, type: "core.rectangle", parent, children: [],
+            geometry: { x: 0, y: 0, width: 5, height: 5 },
+            style: { fill: "#000", opacity: 1 }, layout: {} } as never);
+
+        expect(new PasteNodesAction(doc, [], []).validate()).toBe(false);
+        // A COLLIDING ID would replace an existing node and orphan its children.
+        expect(new PasteNodesAction(doc, [node("P")], ["P"]).validate()).toBe(false);
+        // AN ORPHAN — a parent neither in the payload nor absent — saves fine and fails to reopen,
+        // which is the worst shape of bug this codebase has.
+        expect(new PasteNodesAction(doc, [node("N1", "nowhere")], ["N1"]).validate()).toBe(false);
+        // A root that is not among the nodes leaves the caller selecting something that does not exist.
+        expect(new PasteNodesAction(doc, [node("N2")], ["other"]).validate()).toBe(false);
+        expect(new PasteNodesAction(doc, [node("N3")], ["N3"]).validate()).toBe(true);
     });
 });

@@ -33,7 +33,10 @@ export type Shortcut =
      * closely enough that muscle memory transfers. Unmodified single letters are free here because
      * nothing else claims one, and `isTypingTarget` already stops any of them reaching a text field.
      */
-    | { kind: "tool"; name: string };
+    | { kind: "tool"; name: string }
+    | { kind: "copy" }
+    | { kind: "cut" }
+    | { kind: "paste" };
 
 /** The parts of a key event a binding depends on — so a test needs no DOM. */
 export interface KeyChord {
@@ -90,6 +93,8 @@ export const SHORTCUT_HELP: { keys: string; does: string; kind: Shortcut["kind"]
     { keys: "B", does: "Paint brush", kind: "tool" },
     { keys: "Arrows", does: "Nudge by 1", kind: "nudge" },
     { keys: "Shift+Arrows", does: "Nudge by 10", kind: "nudge" },
+    { keys: "Ctrl+C / Ctrl+X", does: "Copy · Cut", kind: "copy" },
+    { keys: "Ctrl+V", does: "Paste", kind: "paste" },
     { keys: "Ctrl+D", does: "Duplicate", kind: "duplicate" },
     { keys: "Ctrl+G", does: "Frame selection", kind: "group" },
     { keys: "Ctrl+A", does: "Select all", kind: "select-all" },
@@ -119,6 +124,13 @@ export function resolveShortcut(e: KeyChord): Shortcut | null {
         const tool = TOOL_KEYS[e.key.toLowerCase()];
         if (tool) return { kind: "tool", name: tool };
     }
+
+    // COPY, CUT, PASTE — the most reflexive chords on the keyboard, and this engine had none of
+    // them. Bound to the same letters every application on both platforms uses; a person who
+    // pressed Ctrl+C here got silence.
+    if (mod && (e.key === "c" || e.key === "C")) return { kind: "copy" };
+    if (mod && (e.key === "x" || e.key === "X")) return { kind: "cut" };
+    if (mod && (e.key === "v" || e.key === "V")) return { kind: "paste" };
 
     if (mod && (e.key === "d" || e.key === "D")) return { kind: "duplicate" };
     if (mod && (e.key === "g" || e.key === "G")) return { kind: "group" };

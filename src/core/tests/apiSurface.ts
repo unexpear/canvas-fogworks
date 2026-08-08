@@ -64,6 +64,8 @@ import { colourDistance, nearestColour, quantizeToPalette } from "../paint/Quant
 import { SurfaceSpace, surfaceSpaceError, worldToSurface, surfaceToWorld,
     surfacePixelSize } from "../paint/SurfaceSpace";
 import { RasterSurface, rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
+import { ClipboardContents, PasteResult, PASTE_OFFSET, copyNodes, remapForPaste } from "../document/Clipboard";
+import { PasteNodesAction } from "../actions/PasteNodesAction";
 import { Gradient, GradientStop, GradientUnits, GradientSample, GRADIENT_MAX_STOPS,
     defaultGradient, gradientError, normalizeStops, sampleGradient } from "../document/Gradient";
 import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
@@ -1158,4 +1160,20 @@ function _gradientSurface(): void {
     expectType<GradientSample | null>(sampleGradient(g, 0.5));
     expectType<{ color: string; opacity: number; mix: number | null; from: number; to: number } | null>(
         sampleGradient(g, 0.5));
+}
+
+/** `core/document/Clipboard` and the action that lands a paste — pinned on arrival. */
+function _clipboardSurface(): void {
+    const doc: ProjectDocument = createEmptyDocument();
+    expectType<number>(PASTE_OFFSET);
+    // NULL IS A REAL ANSWER: nothing copyable must leave a previous clipboard alone rather than
+    // clearing it, so the caller has to be able to tell "nothing" from "empty".
+    expectType<ClipboardContents | null>(copyNodes(doc, ["id"]));
+    const held: ClipboardContents = { nodes: [], rootIds: [] };
+    expectType<{ nodes: Node[]; rootIds: string[] }>(held);
+    expectType<PasteResult>(remapForPaste(held));
+    expectType<{ nodes: Node[]; rootIds: string[] }>(remapForPaste(held, 10));
+    const paste = new PasteNodesAction(doc, [], []);
+    expectType<Action>(paste);
+    expectType<string[]>(paste.getCreatedRootIds());
 }
