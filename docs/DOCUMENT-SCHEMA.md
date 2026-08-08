@@ -999,6 +999,25 @@ from having selected that state.
 | the blended document carries NO `activeState` | every consumer resolves through `resolveScene`, which applies it again — naming the target overwrote the interpolation with the target's own values |
 | a captured state records geometry and transform, not just style | `blendStates` interpolates them, so style-only capture left most of the transition machinery with no authorable input |
 
+## Gradient — modelled, NOT yet persisted
+
+`core/document/Gradient.ts` exists and **the schema is unchanged at 55**, deliberately. Nothing in
+a document can hold a gradient yet: `Style.fill` is still a colour string, so there is nothing to
+migrate and nothing to bump.
+
+It is written down here because the file sits in `src/core/document` and a reader will find it and
+reasonably ask whether documents carry one. They do not.
+
+Making it a fill IS a schema change — `Style.fill` would become a colour **or** a gradient, which
+alters the interpretation of a persisted field and therefore demands a `SCHEMA_VERSION` bump, a
+`migrate_55_to_56` step, and this banner moving with it. That is the next commit's job, not a side
+effect of adding a model.
+
+The model's shape was measured before it was designed: 3,127 gradients across 516 of 5,279 SVG
+files, 97% linear, 96% exactly two stops (worst case 11), **72% carrying a `gradientTransform`**,
+and **95% using `userSpaceOnUse` rather than SVG's own default**. Exactly one stroke in the corpus
+references a gradient against 2,491 fills, which is why stroke gradients are not modelled.
+
 ## Serialization
 
 `Serializer.ts` converts to/from a versioned JSON **envelope**. Because JSON has no

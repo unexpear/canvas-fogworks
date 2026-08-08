@@ -641,8 +641,18 @@ function textParagraphs(text: string): string[];   // RenderModel — hard break
 // platform; a press from a text field is never a shortcut.
 const NUDGE_STEP: number;         // 1
 const NUDGE_STEP_LARGE: number;   // 10, with Shift
-type Shortcut = { kind: "nudge"; dx; dy } | { kind: "duplicate" | "delete" | "group" | "select-all" | "deselect" | "undo" | "redo" };
+type Shortcut = { kind: "nudge"; dx; dy } | { kind: "tool"; name: string }
+             | { kind: "duplicate" | "delete" | "group" | "select-all" | "deselect" | "undo" | "redo" };
 function resolveShortcut(e: KeyChord): Shortcut | null;
+const SHORTCUT_HELP: { keys: string; does: string; kind: Shortcut["kind"] }[];
+// TOOL KEYS — V select · M move · R/E/T rectangle/ellipse/text · P pen · B paint. Matched to the
+// apps people arrive from (Figma, Illustrator, Photoshop, Aseprite) so muscle memory transfers.
+// UNMODIFIED ONLY: Ctrl+V is paste everywhere, and reading it as "move tool" would break the most
+// reflexive chord on the keyboard. `isTypingTarget` already keeps every letter out of text fields.
+// A tool key also switches WORKSPACE when the current one does not show that tool — a live tool
+// with no button is a gesture whose state is invisible.
+// SHORTCUT_HELP lives beside the bindings because a sheet assembled elsewhere drifts, and a
+// shortcut sheet that lies teaches a key that does nothing. A test pins every kind into it.
 function isTypingTarget(target): boolean;
 
 // geometry/Alignment.ts — pure align/distribute maths over WORLD rects; returns the new origin
