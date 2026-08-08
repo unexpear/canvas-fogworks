@@ -15402,6 +15402,39 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(r.instances[0].matrix[0]).toBe(2);
     });
 
+    test("KHR_materials_unlit is READ, and its signal is the KEY, not a value", () => {
+        // 479 materials across 246 files carry it, and every one of those files declares it
+        // REQUIRED. The reader used to drop it: a lighting hint cannot change an unlit reading,
+        // which was true and meant the one thing those files insist on was the one thing lost.
+        //
+        // THE EXTENSION OBJECT IS EMPTY in all 479 — `{"KHR_materials_unlit": {}}` — so a reader
+        // testing the VALUE for truthiness reads every one of them as lit. That is the fixture
+        // that matters here, and a `{ enabled: true }` shape would have hidden it completely.
+        const empty = gltfMaterials({ asset: { version: "2.0" }, materials: [
+            { extensions: { KHR_materials_unlit: {} } }
+        ] })[0];
+        expect(empty.unlit).toBe(true);
+
+        // A DIFFERENT extension does not make a material unlit — the name is checked, not merely
+        // the presence of an extensions bag, which 3,000-odd materials have for other reasons.
+        expect(gltfMaterials({ asset: { version: "2.0" }, materials: [
+            { extensions: { KHR_texture_transform: {} } }
+        ] })[0].unlit).toBe(false);
+        expect(gltfMaterials({ asset: { version: "2.0" }, materials: [{ extensions: {} }] })[0].unlit).toBe(false);
+
+        // The rest of the material is unaffected: reading the flag must not disturb the fields
+        // that answer for the other 7,476.
+        const both = gltfMaterials({ asset: { version: "2.0" }, materials: [{
+            extensions: { KHR_materials_unlit: {} },
+            pbrMetallicRoughness: { baseColorFactor: [0.1, 0.2, 0.3, 1] }
+        }] })[0];
+        expect(both).toMatchObject({ unlit: true, baseColor: [0.1, 0.2, 0.3, 1], metallic: 1 });
+
+        // The REQUIREMENT is still ignorable, deliberately: refusing to open 246 models over a
+        // lighting hint, while nothing lights anything, costs the models and buys nothing.
+        expect(GLTF_IGNORABLE_REQUIRED).toContain("KHR_materials_unlit");
+    });
+
     test("a material's DEFAULTS answer for more than half the corpus", () => {
         // 4,489 of the 7,955 measured materials state no `baseColorFactor` at all. A reader
         // defaulting to black or transparent would render 56% of the tree wrong, with no field
@@ -15415,6 +15448,8 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(bare.alphaCutoff).toBe(0.5);
         expect(bare.doubleSided).toBe(false);
         expect(bare.baseColorImage).toBeNull();
+        // UNLIT DEFAULTS TO FALSE, which is what the absence of the extension means.
+        expect(bare.unlit).toBe(false);
 
         // A STATED value wins over its default, asserted with values no default could produce.
         const stated = gltfMaterials({ asset: { version: "2.0" }, materials: [{

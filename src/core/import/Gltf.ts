@@ -60,9 +60,15 @@ const CHUNK_BIN = 0x004e4942;    // "BIN\0"
  * emissive, but NOTHING LIGHTS THEM — there is no 3D renderer. `KHR_materials_unlit` says "do not
  * light this material", which cannot change an unlit reading of it.
  *
- * THE EXACT TRIGGER for removing it: the first time a lighting term is applied to a glTF material.
- * On that day these 246 files must either honour the extension or be refused, because from then on
- * ignoring it means shading something the file said to leave flat.
+ * THE EXTENSION IS NOW READ, even though it is still ignorable: `GltfMaterial.unlit` carries it,
+ * so the information those 246 files insist on is no longer discarded. What stays ignorable is the
+ * REQUIREMENT — refusing to open a file over a lighting hint, while nothing lights anything, would
+ * cost 246 models for no benefit.
+ *
+ * THE EXACT TRIGGER for removing it from this list: the first time a lighting term is applied to a
+ * glTF material. On that day these files must honour `unlit` — and now they can, because the flag
+ * is already there — or be refused, because from then on ignoring it means shading something the
+ * file said to leave flat.
  */
 export const GLTF_IGNORABLE_REQUIRED = ["KHR_materials_unlit"];
 
@@ -141,6 +147,8 @@ interface GltfMaterialJson {
     alphaCutoff?: number;
     emissiveFactor?: number[];
     normalTexture?: { index?: number };
+    /** Kept LOOSE: a file may name any extension, and this reader only asks whether a key exists. */
+    extensions?: Record<string, unknown>;
     pbrMetallicRoughness?: {
         baseColorFactor?: number[];
         baseColorTexture?: { index?: number; texCoord?: number };
@@ -175,6 +183,18 @@ export interface GltfMaterial {
     alphaMode: string;
     alphaCutoff: number;
     doubleSided: boolean;
+    /**
+     * `KHR_materials_unlit` — the file saying "do not light this; show the base colour as it is".
+     *
+     * READ RATHER THAN IGNORED, which is the change. 479 materials across 246 files carry it, and
+     * every one of those files declares it REQUIRED. Until now the reader dropped it on the
+     * grounds that a lighting hint cannot change an unlit reading — true, and it meant the one
+     * piece of information those files insist on was the one piece thrown away.
+     *
+     * Carrying the flag costs a boolean and means the day a lighting term arrives, the answer is
+     * already in the data rather than needing a second pass over 5,464 files to recover it.
+     */
+    unlit: boolean;
 }
 
 /** A GLB opened: its JSON and, when present, its embedded buffer. */
@@ -263,7 +283,11 @@ export function gltfMaterials(json: GltfJson): GltfMaterial[] {
                 : [0, 0, 0],
             alphaMode: m.alphaMode ?? "OPAQUE",
             alphaCutoff: m.alphaCutoff ?? 0.5,
-            doubleSided: m.doubleSided === true
+            doubleSided: m.doubleSided === true,
+            // PRESENCE IS THE WHOLE SIGNAL. The extension's object is empty in every one of the
+            // 479 measured materials, so testing for a property inside it would read every one as
+            // lit — the value is that the key is there at all.
+            unlit: !!(m.extensions && Object.prototype.hasOwnProperty.call(m.extensions, "KHR_materials_unlit"))
         };
     });
 }

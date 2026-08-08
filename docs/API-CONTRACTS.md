@@ -952,10 +952,17 @@ external `.bin` and most images are sidecars. The caller resolves those, exactly
 Tiled `.tsx`.
 
 **MATERIALS AND TEXTURES ARE READ.** `gltfMaterials(json)` returns base colour, its image,
-metallic, roughness, emissive, alpha mode and cutoff, and double-sidedness — with every default the
-spec states. **The defaults carry the corpus**: 4,489 of 7,955 measured materials state no
+metallic, roughness, emissive, alpha mode and cutoff, double-sidedness, and **`unlit`** — with every
+default the spec states. **The defaults carry the corpus**: 4,489 of 7,955 measured materials state no
 `baseColorFactor` at all, so a reader defaulting to black renders 56% of the tree wrong with no
 field missing for a check to notice.
+
+**`KHR_materials_unlit` IS READ, AND ITS SIGNAL IS THE KEY.** 479 materials across 246 files carry
+it, every one of those files declares it REQUIRED, and the extension's object is EMPTY in all 479 —
+`{"KHR_materials_unlit": {}}`. A reader testing that object for truthiness marks every one of them
+as lit. The requirement stays on `GLTF_IGNORABLE_REQUIRED` deliberately: refusing to open 246 models
+over a lighting hint, while nothing lights anything, costs the models and buys nothing. Carrying the
+flag means the day a lighting term arrives the answer is already in the data.
 
 **An image is LOCATED, not fetched.** `gltfImageSource(json, textureIndex)` follows TWO hops — a
 material names a texture, which names an image — and returns either `{kind:"uri"}` for a file the
