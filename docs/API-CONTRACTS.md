@@ -1862,8 +1862,12 @@ Preload (`electron/preload.js`) exposes on `window.electronAPI`:
 
 ```ts
 interface ElectronAPI {
-  onMenuNew(cb: () => void): () => void;            // returns disposer
-  onMenuSave(cb: () => void): () => void;
+  // ONE channel for every menu entry, carrying a command string ("file.save", "edit.undo",
+  // "view.backend.canvas"...). It replaced a channel per item, which meant main, preload and
+  // App.tsx all had to change to add one line to a menu. An unrecognised command is IGNORED:
+  // the menu lives in the main process and the renderer is a separate build, so a newer menu
+  // meeting an older renderer is a real state and must degrade to a dead click, not a crash.
+  onMenuCommand(cb: (command: string) => void): () => void;   // returns disposer
   onFileOpened(cb: (p: { filePath: string; content: string }) => void): () => void;
   onRequestSave(cb: (filePath: string) => void): () => void;
   saveFile(filePath: string, content: string): Promise<boolean>;
