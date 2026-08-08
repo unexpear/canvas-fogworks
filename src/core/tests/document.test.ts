@@ -96,6 +96,7 @@ import { paletteError, paletteAt, parseFloatColour, parsePaletteFile, PALETTE_MA
 import { symmetryPoints, isMirrored, NO_SYMMETRY } from "../paint/Symmetry";
 import { nearestColour, colourDistance, quantizeToPalette } from "../paint/Quantize";
 import { worldToSurface, surfaceToWorld, surfacePixelSize, surfaceSpaceError } from "../paint/SurfaceSpace";
+import { defaultGradient, gradientError, normalizeStops, sampleGradient, GRADIENT_MAX_STOPS } from "../document/Gradient";
 import { RasterTool } from "../../editor/tools/RasterTool";
 import { SymmetryMode } from "../paint/Symmetry";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
@@ -21503,5 +21504,117 @@ describe("exportSVG keeps what the editor draws", () => {
         } as never);
         plain.rootNodeUuids = ["P"];
         expect(exportSVG(plain)).not.toContain("<g ");
+    });
+});
+
+describe("Gradient — the fill that changes across a shape", () => {
+    const stop = (offset: number, color: string, opacity = 1) => ({ offset, color, opacity });
+    const linear = (stops: { offset: number; color: string; opacity: number }[]) =>
+        ({ ...defaultGradient("linear"), stops });
+
+    test("SVG's own defaults are what a gradient stating nothing means", () => {
+        // 150 of 3,127 measured gradients state no units and rely on the default, and a reader
+        // guessing `userSpaceOnUse` there is wrong by an entire coordinate system rather than a
+        // little — the box is 0..1 and the user space is hundreds of units.
+        const l = defaultGradient("linear");
+        expect(l.units).toBe("objectBoundingBox");
+        expect([l.x1, l.y1, l.x2, l.y2]).toEqual([0, 0, 1, 0]);   // left to right across the object
+        const r = defaultGradient("radial");
+        expect([r.cx, r.cy, r.r]).toEqual([0.5, 0.5, 0.5]);        // a circle filling the box
+        expect([r.fx, r.fy]).toEqual([0.5, 0.5]);                  // focus at the centre
+        // The default is IDENTITY, not absent — 72% of the corpus carries a real one, and a null
+        // here would make every consumer test for it.
+        expect(l.transform).toEqual({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+    });
+
+    test("a gradient is refused for the things that make it unpaintable", () => {
+        expect(gradientError(linear([stop(0, "#000"), stop(1, "#fff")]))).toBeNull();
+        expect(gradientError(null)).toMatch(/must be an object/);
+        expect(gradientError({ ...defaultGradient("linear"), kind: "conic" })).toMatch(/linear or radial/);
+        expect(gradientError({ ...defaultGradient("linear"), units: "inches" })).toMatch(/units/);
+        // NO STOPS is `none` in SVG — refused rather than treated as transparent, because a fill
+        // that silently disappears reads as a broken renderer.
+        expect(gradientError(linear([]))).toMatch(/at least one stop/);
+        expect(gradientError(linear(Array.from({ length: GRADIENT_MAX_STOPS + 1 },
+            (_, i) => stop(i / 100, "#000"))))).toMatch(/may not exceed/);
+        expect(gradientError(linear([stop(1.5, "#000")]))).toMatch(/offset must be 0..1/);
+        expect(gradientError(linear([{ offset: 0, color: "", opacity: 1 }]))).toMatch(/must have a colour/);
+        expect(gradientError(linear([{ offset: 0, color: "#000", opacity: 2 }]))).toMatch(/opacity must be 0..1/);
+        // BACKWARDS STOPS are refused because `sampleGradient` walks the list once; `normalizeStops`
+        // is what repairs an imported file so it never reaches here.
+        expect(gradientError(linear([stop(0.8, "#000"), stop(0.2, "#fff")]))).toMatch(/must not go backwards/);
+        expect(gradientError({ ...linear([stop(0, "#000")]), r: -1 })).toMatch(/must not be negative/);
+        // ZERO radius is LEGAL — it paints the last stop everywhere, which is a real way files
+        // flatten a fill, and refusing it would reject valid documents.
+        expect(gradientError({ ...linear([stop(0, "#000")]), kind: "radial", r: 0 })).toBeNull();
+        expect(gradientError({ ...linear([stop(0, "#000")]), x2: NaN })).toMatch(/must be finite/);
+        expect(gradientError({ ...linear([stop(0, "#000")]),
+            transform: { a: 1, b: 0, c: 0, d: 1, e: Infinity, f: 0 } })).toMatch(/must be finite/);
+    });
+
+    test("stops are repaired the way a browser repairs them", () => {
+        // SVG requires non-decreasing offsets and browsers silently raise any that trails. A
+        // reader that trusts the file disagrees with every browser about those files.
+        const fixed = normalizeStops([stop(0.6, "#a"), stop(0.2, "#b"), stop(0.9, "#c")]);
+        expect(fixed.map(s => s.offset)).toEqual([0.2, 0.6, 0.9]);
+        expect(fixed.map(s => s.color)).toEqual(["#b", "#a", "#c"]);
+
+        // OUT OF RANGE is clamped, not dropped: the colour is still part of the ramp.
+        expect(normalizeStops([stop(-3, "#a"), stop(9, "#b")]).map(s => s.offset)).toEqual([0, 1]);
+        expect(normalizeStops([{ offset: 0.5, color: "#a", opacity: 4 }])[0].opacity).toBe(1);
+        expect(normalizeStops([{ offset: NaN, color: "#a", opacity: NaN }])[0])
+            .toMatchObject({ offset: 0, opacity: 1 });
+
+        // A TIE KEEPS DOCUMENT ORDER, and that pair is how a file states a HARD colour break —
+        // reversing it reverses the break. Two colours at one offset, asserted by colour rather
+        // than by offset, because the offsets are equal and cannot show the difference.
+        expect(normalizeStops([stop(0.5, "#first"), stop(0.5, "#second")]).map(s => s.color))
+            .toEqual(["#first", "#second"]);
+        // Sorting is stable even when an EARLIER element must move past a tie.
+        expect(normalizeStops([stop(0.9, "#z"), stop(0.5, "#first"), stop(0.5, "#second")]).map(s => s.color))
+            .toEqual(["#first", "#second", "#z"]);
+    });
+
+    test("sampling returns the two stops, not a blended colour", () => {
+        // BLENDING NEEDS A COLOUR SPACE, and this module has no business choosing one: `Style.fill`
+        // holds hex, rgb() and design TOKENS, and a token cannot be interpolated before it is
+        // resolved. So the pair and the ratio come back, and whoever has resolved colours blends.
+        const g = linear([stop(0, "#000"), stop(0.5, "#888"), stop(1, "#fff")]);
+        const mid = sampleGradient(g, 0.25)!;
+        expect(mid).toMatchObject({ color: "#000", from: 0, to: 1 });
+        expect(mid.mix).toBeCloseTo(0.5, 9);
+        const late = sampleGradient(g, 0.75)!;
+        expect(late).toMatchObject({ color: "#888", from: 1, to: 2 });
+        expect(late.mix).toBeCloseTo(0.5, 9);
+
+        // ON a stop reports no mix at all, so a caller need not test for a zero ratio.
+        expect(sampleGradient(g, 0.5)).toMatchObject({ color: "#888", mix: null, from: 1, to: 1 });
+
+        // PAST EITHER END is the end stop — `spreadMethod="pad"`, the SVG default and the only
+        // value any of the 2,424 files that state one uses.
+        expect(sampleGradient(g, -5)).toMatchObject({ color: "#000", mix: null, from: 0, to: 0 });
+        expect(sampleGradient(g, 5)).toMatchObject({ color: "#fff", mix: null, from: 2, to: 2 });
+        expect(sampleGradient(g, NaN)).toMatchObject({ color: "#000", mix: null });
+
+        // A HARD BREAK — two stops at one offset — takes the FAR side, which is what makes the
+        // break visible. Dividing by the zero span instead would give Infinity.
+        const hard = linear([stop(0, "#a"), stop(0.5, "#b"), stop(0.5, "#c"), stop(1, "#d")]);
+        expect(sampleGradient(hard, 0.5)).toMatchObject({ color: "#b", mix: null });
+        expect(sampleGradient(hard, 0.7)!.color).toBe("#c");
+
+        // ONE STOP is a flat fill everywhere, not a division by an empty range.
+        const flat = linear([stop(0.3, "#solid")]);
+        expect(sampleGradient(flat, 0)).toMatchObject({ color: "#solid", mix: null });
+        expect(sampleGradient(flat, 1)).toMatchObject({ color: "#solid", mix: null });
+        // NO stops has no answer, rather than a made-up one.
+        expect(sampleGradient(linear([]), 0.5)).toBeNull();
+
+        // THE OPACITY TRAVELS WITH THE COLOUR. 920 stops in the corpus state one, and a gradient
+        // fading a colour to transparent states the SAME colour twice with two opacities — so a
+        // sampler reporting only the colour reports the two ends as identical.
+        const fade = linear([stop(0, "#f00", 1), stop(1, "#f00", 0)]);
+        expect(sampleGradient(fade, 0)!.opacity).toBe(1);
+        expect(sampleGradient(fade, 1)!.opacity).toBe(0);
+        expect(sampleGradient(fade, 0)!.color).toBe(sampleGradient(fade, 1)!.color);
     });
 });

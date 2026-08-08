@@ -64,6 +64,8 @@ import { colourDistance, nearestColour, quantizeToPalette } from "../paint/Quant
 import { SurfaceSpace, surfaceSpaceError, worldToSurface, surfaceToWorld,
     surfacePixelSize } from "../paint/SurfaceSpace";
 import { RasterSurface, rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
+import { Gradient, GradientStop, GradientUnits, GradientSample, GRADIENT_MAX_STOPS,
+    defaultGradient, gradientError, normalizeStops, sampleGradient } from "../document/Gradient";
 import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
@@ -1132,4 +1134,28 @@ function _paintSurface(): void {
     expectType<number>(RASTER_MAX_SIDE);
     const paintDoc: ProjectDocument = createEmptyDocument();
     expectType<Action>(new PaintSurfaceAction(paintDoc, "id", patch));
+}
+
+/**
+ * `core/document/Gradient` — the fill that changes across a shape.
+ *
+ * Pinned on arrival, per the trigger this file's header now carries: a new file under `src/core`
+ * is the moment the pin is cheapest to extend and the moment it is always forgotten.
+ */
+function _gradientSurface(): void {
+    expectType<number>(GRADIENT_MAX_STOPS);
+    const g: Gradient = defaultGradient("linear");
+    expectType<{ kind: "linear" | "radial"; stops: GradientStop[]; units: GradientUnits;
+        transform: { a: number; b: number; c: number; d: number; e: number; f: number };
+        x1: number; y1: number; x2: number; y2: number;
+        cx: number; cy: number; r: number; fx: number; fy: number }>(g);
+    expectType<{ offset: number; color: string; opacity: number }>(g.stops[0]);
+    expectType<Gradient>(defaultGradient("radial"));
+    expectType<string | null>(gradientError(g));
+    expectType<GradientStop[]>(normalizeStops(g.stops));
+    // NULL IS A REAL ANSWER: a gradient with no stops has no colour to report, and inventing one
+    // would paint something the document never said.
+    expectType<GradientSample | null>(sampleGradient(g, 0.5));
+    expectType<{ color: string; opacity: number; mix: number | null; from: number; to: number } | null>(
+        sampleGradient(g, 0.5));
 }
