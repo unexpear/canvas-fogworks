@@ -22,6 +22,17 @@ const SIZE = { width: 800, height: 600 };
 // ─── Recording mock ctx ──────────────────────────────────────────────────────
 type Call = { op: string; args: unknown[] };
 
+/** What `createLinear/RadialGradient` hands back — its stops are part of the recorded output. */
+class MockGradient {
+    stops: [number, string][] = [];
+    constructor(private ctx: MockCtx) {}
+    addColorStop(offset: number, color: string) {
+        this.stops.push([offset, color]);
+        this.ctx.calls.push({ op: "addColorStop", args: [offset, color] });
+    }
+    describe(): string { return `gradient(${this.stops.map(s => s.join("@")).join(",")})`; }
+}
+
 class MockCtx {
     calls: Call[] = [];
     canvas = { width: 800, height: 600 };
@@ -52,8 +63,13 @@ class MockCtx {
     measureText(t: string) { return { width: t.length * 10 }; }
     drawImage(...a: unknown[]) { this.log("drawImage", ...a); }
     setLineDash(a: number[]) { this.log("setLineDash", a); }
+    // A gradient is an OBJECT here, not a string, so the recorded `set fillStyle` shows which ramp
+    // was built and with which stops — the stops are what a wrong colour or a dropped opacity
+    // shows up in, and they never reach the call log any other way.
+    createLinearGradient(...a: number[]) { this.log("createLinearGradient", ...a); return new MockGradient(this); }
+    createRadialGradient(...a: number[]) { this.log("createRadialGradient", ...a); return new MockGradient(this); }
 
-    private _fillStyle = ""; get fillStyle() { return this._fillStyle; } set fillStyle(v: string) { this._fillStyle = v; this.log("set fillStyle", v); }
+    private _fillStyle: unknown = ""; get fillStyle() { return this._fillStyle; } set fillStyle(v: unknown) { this._fillStyle = v; this.log("set fillStyle", v instanceof MockGradient ? v.describe() : v); }
     private _strokeStyle = ""; get strokeStyle() { return this._strokeStyle; } set strokeStyle(v: string) { this._strokeStyle = v; this.log("set strokeStyle", v); }
     private _lineWidth = 1; get lineWidth() { return this._lineWidth; } set lineWidth(v: number) { this._lineWidth = v; this.log("set lineWidth", v); }
     private _globalAlpha = 1; get globalAlpha() { return this._globalAlpha; } set globalAlpha(v: number) { this._globalAlpha = v; this.log("set globalAlpha", v); }
@@ -703,5 +719,128 @@ describe("SPRITE SHEET drawing", () => {
         // The rect ALONE is not a clip — it is a path nobody used. One `clip` per cell, or a
         // frame that overflows its measured union corrupts its neighbour instead of itself.
         expect(ctx.calls.filter(c => c.op === "clip")).toHaveLength(plan.cells.length);
+    });
+});
+
+// ─── Gradient fills (schema 56) ──────────────────────────────────────────────
+/**
+ * Canvas paints a ramp by MOVING THE CTM, not by clipping and flooding.
+ *
+ * The path's coordinates are fixed when each segment is added; a gradient is evaluated in the
+ * space live at the FILL. Those are two different moments, and the whole mechanism lives in the
+ * gap: transform after the path is built and the ramp moves while the shape does not. What this
+ * file can see is the CALL SEQUENCE — that the transforms are issued between the path and the
+ * fill, in SVG's order, and are undone afterwards. Whether the pixels then MATCH the SVG backend
+ * is a browser check; see TESTING.md.
+ */
+describe("emitCanvas — a gradient fill", () => {
+    const RAMP = {
+        kind: "linear" as const, units: "objectBoundingBox" as const,
+        transform: { a: 2, b: 0, c: 0, d: 3, e: 5, f: 7 },
+        x1: 0, y1: 0.5, x2: 1, y2: 0.5, cx: 0.5, cy: 0.5, r: 0.5, fx: 0.5, fy: 0.5,
+        stops: [{ offset: 0, color: "#ff0000", opacity: 1 },
+            { offset: 1, color: "#0000ff", opacity: 0.5 }]
+    };
+    const gradientDoc = (fill: unknown) =>
+        docWith({ type: "core.rectangle", style: { fill: fill as never, opacity: 1 } });
+
+    test("the CTM moves between the path and the fill, and is undone after it", () => {
+        const c = run(gradientDoc(RAMP)).calls;
+        const from = c.findIndex(x => x.op === "rect");
+        const seq = ops(c.slice(from)).slice(0, 8);
+        // The box first, then the ramp's own matrix — SVG's order — and both AFTER the path. The
+        // node's own opacity is still set once for the whole fill, outside the ramp's bracket,
+        // exactly as it is for a flat colour.
+        expect(seq).toEqual(["rect", "set globalAlpha", "save", "transform", "transform",
+            "createLinearGradient", "addColorStop", "addColorStop"]);
+        const t = c.slice(from).filter(x => x.op === "transform");
+        // The node is 200x100 (`docWith`), so the box fold is exactly that and nothing else.
+        expect(t[0].args).toEqual([200, 0, 0, 100, 0, 0]);
+        expect(t[1].args).toEqual([2, 0, 0, 3, 5, 7]);
+        // The gradient is built in its OWN coordinates — 0..1, not 0..200. The CTM does the rest.
+        expect(c.slice(from).find(x => x.op === "createLinearGradient")!.args).toEqual([0, 0.5, 1, 0.5]);
+        // …and the fill happens under that CTM, with the restore after it, or the next shape
+        // inherits a matrix that has nothing to do with it.
+        const tail = ops(c.slice(from));
+        expect(tail.indexOf("fill")).toBeGreaterThan(tail.indexOf("createLinearGradient"));
+        expect(tail.indexOf("restore")).toBeGreaterThan(tail.indexOf("fill"));
+    });
+
+    test("stop-opacity is folded into the colour, because Canvas has one string per stop", () => {
+        const c = run(gradientDoc(RAMP)).calls;
+        const stops = c.filter(x => x.op === "addColorStop").map(x => x.args);
+        // Full opacity passes the colour through untouched; anything less becomes rgba. SVG keeps
+        // the two apart, so this is the one place they have to be combined.
+        expect(stops).toEqual([[0, "#ff0000"], [1, "rgba(0, 0, 255, 0.5)"]]);
+    });
+
+    test("a RADIAL is built as SVG defines it: radius zero AT THE FOCUS, growing to r", () => {
+        const c = run(gradientDoc({ ...RAMP, kind: "radial", fx: 0.25, fy: 0.3 })).calls;
+        const g = c.find(x => x.op === "createRadialGradient")!;
+        // Not (cx, cy, 0, cx, cy, r): the inner circle sits on the FOCUS, which is what makes the
+        // highlight off-centre. With the focus at the centre the two spellings agree, which is why
+        // this fixture moves it.
+        expect(g.args).toEqual([0.25, 0.3, 0, 0.5, 0.5, 0.5]);
+    });
+
+    test("userSpaceOnUse gets NO box fold — one transform, not two", () => {
+        const c = run(gradientDoc({ ...RAMP, units: "userSpaceOnUse" })).calls;
+        const from = c.findIndex(x => x.op === "rect");
+        const t = c.slice(from).filter(x => x.op === "transform");
+        expect(t.map(x => x.args)).toEqual([[2, 0, 0, 3, 5, 7]]);
+    });
+
+    test("a plain colour still takes the short path — no transform, no save", () => {
+        // Without this, every assertion above could equally describe a backend that wraps EVERY
+        // fill in a save/transform pair, which would be a real cost on every shape in the frame.
+        const c = run(gradientDoc("#123456")).calls;
+        const from = c.findIndex(x => x.op === "rect");
+        expect(ops(c.slice(from)).slice(0, 4)).toEqual(["rect", "set globalAlpha", "set fillStyle", "fill"]);
+        expect(c.slice(from).find(x => x.op === "createLinearGradient")).toBeUndefined();
+    });
+
+    test("save and restore stay BALANCED, so the next shape does not inherit the ramp's matrix", () => {
+        // Deleting the ramp's own `restore` passed every assertion above: the item's outer
+        // restore also comes after the fill, so "a restore happens later" is satisfied by the
+        // wrong one. What it actually leaves behind is an unpopped state — the CTM leaks into
+        // every shape drawn after it, which is the sort of fault that shows up three shapes away
+        // from its cause.
+        const doc = gradientDoc(RAMP);
+        doc.nodes.set("n2", { id: "n2", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 300, y: 20, width: 50, height: 50 },
+            style: { fill: "#00ff00", opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["n1", "n2"];
+        const c = run(doc).calls;
+        expect(ops(c).filter(o => o === "save").length).toBe(ops(c).filter(o => o === "restore").length);
+        // And a restore sits between the ramp and the NEXT shape's path, so the bracket closed
+        // rather than merely being balanced somewhere later in the frame.
+        const o = ops(c);
+        const built = o.indexOf("createLinearGradient");
+        const nextPath = o.indexOf("rect", built);
+        expect(nextPath).toBeGreaterThan(built);
+        expect(o.slice(built, nextPath)).toContain("restore");
+    });
+
+    test("a STROKE is not drawn under the ramp's matrix", () => {
+        // The ramp's transform brackets the FILL alone. A stroke inside it would be skewed by the
+        // gradient's own matrix — a border that changes width and angle with the fill's direction.
+        const c = run(docWith({ type: "core.rectangle",
+            style: { fill: RAMP as never, opacity: 1, stroke: "#ffffff", strokeWidth: 4 } })).calls;
+        // Scoped to this item: the GRID is stroked long before any content is filled, so a
+        // whole-frame `indexOf("stroke")` answers a different question entirely.
+        const o = ops(c.slice(c.findIndex(x => x.op === "rect")));
+        expect(o.indexOf("stroke")).toBeGreaterThan(o.indexOf("fill"));
+        // And the ramp's bracket closes BETWEEN them, so the stroke runs under the item's own
+        // matrix rather than the gradient's.
+        expect(o.slice(o.indexOf("fill"), o.indexOf("stroke"))).toContain("restore");
+    });
+
+    test("a zero-radius radial paints the LAST stop, which is what SVG does with one", () => {
+        // Canvas paints nothing for a zero-radius gradient; SVG paints the last stop everywhere,
+        // and files use exactly that to flatten a fill. A hole would be the wrong answer.
+        const c = run(gradientDoc({ ...RAMP, kind: "radial", r: 0 })).calls;
+        expect(c.find(x => x.op === "createRadialGradient")).toBeUndefined();
+        const from = c.findIndex(x => x.op === "rect");
+        expect(c.slice(from).find(x => x.op === "set fillStyle")!.args).toEqual(["#0000ff"]);
     });
 });

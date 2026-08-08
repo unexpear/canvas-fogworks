@@ -928,6 +928,30 @@ That needs the image's natural size, which comes from the shared `ImageCache` th
 already use — so an undecoded image draws nothing here exactly as it draws nothing on Canvas, rather
 than each backend inventing its own answer for "not ready yet".
 
+### A gradient on Canvas — two moments, and the gap between them
+
+**A path's coordinates are fixed when each segment is ADDED; a gradient is evaluated in the space
+live at the FILL.** Those are two different moments, and everything the Canvas backend does with a
+ramp lives in the gap: build the path, then move the CTM, then fill. The ramp moves and the shape
+does not.
+
+**Which is why there is no clip.** The obvious construction — clip to the shape, transform into
+gradient space, flood a rect — also works, and then needs its own answer for the drop shadow the
+clip eats. This one needs none: `shadow*` and `ctx.filter` are DEVICE-space and the CTM never
+touches them, so effects set before the fill survive it unchanged. Both facts were measured in the
+running app before the code was written, not read off a specification.
+
+**`objectBoundingBox` is applied as a second `ctx.transform`, not as a multiplied matrix.** SVG's
+order is the box and then `gradientTransform`; issuing them as two context calls means this backend
+still composes nothing. The box arrives on `DrawItem.localBox`, because deriving it here would mean
+computing a `path` item's extent — the arithmetic a backend must not do — and putting it on the
+deduped `PaintGradient` would split one ramp across two differently-sized shapes into two defs.
+
+**Verified by pixels, not by inspection.** A browser harness rendered one display list through both
+backends and compared: seven cases including a sheared `gradientTransform`, a radial ellipse and a
+rotated node, all identical to the channel. See TESTING.md for what makes that check falsifiable —
+and for the way it lied the first time it was run.
+
 ### Reading `.aseprite` — the source of truth, not the export
 
 **The sheet importers reconstruct by measurement what this file simply states.** Slicing recovers a

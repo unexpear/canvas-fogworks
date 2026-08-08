@@ -433,6 +433,9 @@ export function __apiSurfacePin(): void {
     // shapes sharing one ramp reference one `<defs>` entry.
     expectType<PaintGradient[]>(model.gradients);
     expectType<string | PaintGradient | null>(model.content[0].paint.fill);
+    // The node's own box, carried ONLY for an objectBoundingBox ramp — the Canvas backend is the
+    // one surface that has to apply the box itself.
+    expectType<{ width: number; height: number } | undefined>(model.content[0].localBox);
     const paintRamp: PaintGradient = resolvePaintGradient(defaultGradient("radial"), c => c);
     expectType<PaintGradient>(paintRamp);
     expectType<string>(paintRamp.flat);

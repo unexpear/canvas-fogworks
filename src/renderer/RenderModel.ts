@@ -296,6 +296,18 @@ export interface DrawItem {
     nodeId: string | null;
     /** `data-resize-handle` for resize hit-testing (handles only). */
     handle?: string;
+    /**
+     * The node's own box in LOCAL units — carried only for an `objectBoundingBox` gradient
+     * (schema 56), which is a fraction of it.
+     *
+     * NOT ON `PaintGradient`, deliberately. That is deduped by content into one `<defs>` entry per
+     * ramp, and a box on it would split the identical ramp on two differently-sized shapes into
+     * two defs. And not derived in the backend either: a `path` item carries commands, not an
+     * extent, and working one out there is exactly the arithmetic a backend must not do.
+     *
+     * The SVG backend never reads it — SVG has `gradientUnits` and applies the box itself.
+     */
+    localBox?: { width: number; height: number };
     role: DrawRole;
     /**
      * How far BACK the item sits (schema 40). Absent = 0, the plane of the page.
@@ -600,6 +612,10 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
 
         let shape: Shape;
         let paint: Paint;
+        // Only when the fill is a ramp that MEASURES itself against the box. A plain colour, or a
+        // `userSpaceOnUse` ramp already in local units, needs nothing.
+        const localBox = typeof sty.fill !== "string" && sty.fill.units === "objectBoundingBox"
+            ? { width, height } : undefined;
 
         if (node.type === "core.rectangle") {
             shape = { kind: "rect", x, y, width, height };
@@ -751,6 +767,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         const source = original?.nodes.get(id);
         const mesh = source?.mesh && !isFlatMesh(source.mesh) ? source.mesh : undefined;
         items.push({ shape, paint, world: c.world, nodeId: id, role: "content",
+            ...(localBox ? { localBox } : {}),
             ...(depth !== 0 ? { depth } : {}),
             ...(mesh ? { surface: { mesh, box: { width: source!.geometry.width, height: source!.geometry.height } } } : {}),
             ...(groups.length ? { groups } : {}) });

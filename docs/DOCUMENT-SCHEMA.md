@@ -1130,11 +1130,18 @@ pre-distorted points.
 | SVG backend (the default) | painted exactly — `<defs>` + `fill="url(#id)"`, with `gradientUnits` and `gradientTransform` verbatim |
 | `exportSVG` | painted exactly, including on TEXT (a real `<text>` element takes the paint server) |
 | SVG backend, TEXT | flattened to the first stop — text is drawn through a `foreignObject` div, and CSS `color` takes no paint server |
-| Canvas backend | flattened to the first stop — Canvas resolves a gradient in the space live at the fill, so honouring the transform means transforming the context and flooding a clip |
+| Canvas backend | painted exactly — the path's coordinates are fixed when it is BUILT and a gradient is evaluated in the space live at the FILL, so moving the CTM between the two places the ramp and leaves the shape. No clip, and `shadow*`/`ctx.filter` are device-space so effects survive it untouched |
+| Canvas backend, TEXT | flattened to the first stop — the glyphs are rastered by `TextRaster`, which agrees with the SVG backend so a label looks the same on both |
 | GPU backend | flattened to the first stop — one draw carries one colour uniform; a ramp needs a per-fragment shader walk |
 
 The flat colour is decided once, in the render model (`PaintGradient.flat`), so the three surfaces
 that flatten all show the same colour rather than each choosing.
+
+`objectBoundingBox` is a fraction of the shape's own box, and the Canvas backend is the one surface
+that has to apply that box itself (SVG has the attribute; the GPU flattens). The box travels on
+`DrawItem.localBox` rather than on `PaintGradient` — the ramp is deduped by content into one
+`<defs>` entry, and a size on it would split one ramp used on two differently-sized shapes into two
+defs. It is also not derived in the backend: a `path` item carries commands, not an extent.
 
 **Authored in the inspector.** The Fill row is a solid/gradient pair; `gradientFromColor` makes the
 ramp from the colour already there — the SAME colour at both ends, opaque to transparent — so the

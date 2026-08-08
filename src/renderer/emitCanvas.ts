@@ -39,7 +39,9 @@
  */
 
 import { isTranslationOnly } from "../core/geometry/Matrix";
-import { DisplayList, DrawItem, Paint, Shape, textParagraphs } from "./RenderModel";
+import { DisplayList, DrawItem, Paint, PaintGradient, Shape, textParagraphs } from "./RenderModel";
+import { GradientStop } from "../core/document/Gradient";
+import { parseColor } from "./emitWebGL";
 import { resolveSurface, resolveImage, setImageReadyCallback } from "./ImageCache";
 import { drawTextInto } from "./TextRaster";
 
@@ -70,22 +72,87 @@ function unreachable(x: never): never {
 }
 
 
-function fillAndStroke(ctx: CanvasRenderingContext2D, paint: Paint): void {
+/**
+ * One stop as a CSS colour, its `stop-opacity` folded into the alpha.
+ *
+ * SVG keeps the two apart — a ramp that fades a colour out states that colour twice with two
+ * opacities — and Canvas has one string per stop, so they have to be combined here. The existing
+ * alpha is MULTIPLIED rather than replaced: `#ff000080` at `stop-opacity="0.5"` is a quarter
+ * opaque, which is what both SVG and this now say.
+ *
+ * A colour `parseColor` cannot take apart (a `rgb()` string, a CSS name) keeps its own alpha and
+ * loses the stop's — the same boundary the GPU backend already draws, and the alternative is a
+ * second colour parser in a third place.
+ */
+function stopCss(stop: GradientStop): string {
+    if (stop.opacity >= 1) return stop.color;
+    const c = parseColor(stop.color);
+    if (!c) return stop.color;
+    const ch = (i: number): number => Math.round(c[i] * 255);
+    return `rgba(${ch(0)}, ${ch(1)}, ${ch(2)}, ${c[3] * stop.opacity})`;
+}
+
+/**
+ * A ramp as a Canvas fill style, in the gradient's OWN coordinates.
+ *
+ * THE CALLER PLACES IT WITH THE CTM, which is the whole technique — see `fillAndStroke`. A radial
+ * is built as SVG defines it: an inner circle of radius zero AT THE FOCUS, growing to `r` at the
+ * centre, which is exactly `createRadialGradient(fx, fy, 0, cx, cy, r)`.
+ *
+ * A ZERO RADIUS is legal in SVG and paints the LAST stop everywhere — a real way for a file to
+ * flatten a fill. Canvas paints nothing for it, so it is answered here as a colour rather than
+ * left as a hole. And `addColorStop` THROWS on a colour it cannot parse, which would take the
+ * whole frame down over one bad stop; the catch returns the flat colour instead.
+ */
+function gradientStyle(ctx: CanvasRenderingContext2D, g: PaintGradient): string | CanvasGradient {
+    if (g.kind === "radial" && g.r === 0) return g.stops[g.stops.length - 1]?.color ?? g.flat;
+    try {
+        const grad = g.kind === "linear"
+            ? ctx.createLinearGradient(g.x1, g.y1, g.x2, g.y2)
+            : ctx.createRadialGradient(g.fx, g.fy, 0, g.cx, g.cy, g.r);
+        for (const s of g.stops) grad.addColorStop(s.offset, stopCss(s));
+        return grad;
+    } catch {
+        return g.flat;
+    }
+}
+
+function fillAndStroke(ctx: CanvasRenderingContext2D, paint: Paint, localBox?: { width: number; height: number }): void {
     if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
     // `fill: "none"` (outline items) has no canvas colour equivalent — skip the fill,
     // exactly as SVG's fill="none" paints no interior.
-    // A GRADIENT FLATTENS TO ITS FIRST STOP HERE (schema 56), and this is a KNOWN GAP, not a
-    // decision. Canvas evaluates a gradient in the coordinate space live at the moment of the
-    // fill, so honouring `gradientTransform` and `objectBoundingBox` means transforming the
-    // CONTEXT and then flooding a clip — a real change to how this backend draws a shape, with
-    // its own answer needed for shadows and blur. The SVG backend (the default) paints the ramp
-    // exactly; this one paints `flat`, which the model decided so all three agree on the colour.
-    const fill = paint.fill === null ? null : typeof paint.fill === "string" ? paint.fill : paint.fill.flat;
-    if (fill !== null && fill !== "none") {
-        ctx.fillStyle = fill;
+    // `fill: "none"` (outline items) has no canvas colour equivalent — skip the fill,
+    // exactly as SVG's fill="none" paints no interior.
+    if (paint.fill !== null && paint.fill !== "none") {
+        // A GRADIENT (schema 56) is painted by MOVING THE CTM, not by clipping and flooding.
+        //
+        // Canvas fixes a path's coordinates when each segment is ADDED and evaluates a gradient in
+        // the space live at the moment of the FILL. Those are two different moments, and the gap
+        // between them is the whole mechanism: the path is already built, so changing the CTM now
+        // moves the ramp and leaves the shape exactly where it is.
+        //
+        // Which is why there is no clip here. Clipping the shape and flooding a rect in gradient
+        // space would also work, and would then need its own answer for the drop shadow the clip
+        // eats. Nothing needs an answer: `shadow*` and `ctx.filter` are DEVICE-space and the CTM
+        // never touches them, so a shadow set before this survives it unchanged. Both facts were
+        // measured in the running app before this was written, not read off a specification.
+        const ramp = typeof paint.fill === "string" ? null : paint.fill;
+        if (typeof paint.fill === "string") ctx.fillStyle = paint.fill;
+        if (ramp) {
+            ctx.save();
+            // `objectBoundingBox` first, then the ramp's own matrix — SVG's order, applied as two
+            // context calls so no matrix is multiplied anywhere in this backend.
+            if (localBox && ramp.units === "objectBoundingBox") {
+                ctx.transform(localBox.width, 0, 0, localBox.height, 0, 0);
+            }
+            const t = ramp.transform;
+            ctx.transform(t.a, t.b, t.c, t.d, t.e, t.f);
+            ctx.fillStyle = gradientStyle(ctx, ramp);
+        }
         // Canvas takes the rule as an argument to `fill` rather than as state, and its spelling
         // is the document's, so this is a pass-through and not a lookup.
         if (paint.fillRule !== undefined) ctx.fill(paint.fillRule); else ctx.fill();
+        if (ramp) ctx.restore();
     }
     if (paint.stroke !== null) {
         ctx.strokeStyle = paint.stroke;
@@ -106,24 +173,25 @@ function fillAndStroke(ctx: CanvasRenderingContext2D, paint: Paint): void {
     }
 }
 
-function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): void {
+function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint,
+                   localBox?: { width: number; height: number }): void {
     switch (shape.kind) {
         case "rect":
             ctx.beginPath();
             if (paint.radius !== null) ctx.roundRect(shape.x, shape.y, shape.width, shape.height, paint.radius);
             else ctx.rect(shape.x, shape.y, shape.width, shape.height);
-            fillAndStroke(ctx, paint);
+            fillAndStroke(ctx, paint, localBox);
             return;
         case "ellipse":
             ctx.beginPath();
             ctx.ellipse(shape.cx, shape.cy, shape.rx, shape.ry, 0, 0, Math.PI * 2);
-            fillAndStroke(ctx, paint);
+            fillAndStroke(ctx, paint, localBox);
             return;
         case "line":
             ctx.beginPath();
             ctx.moveTo(shape.x1, shape.y1);
             ctx.lineTo(shape.x2, shape.y2);
-            fillAndStroke(ctx, paint); // lines carry fill:null, so only the stroke paints
+            fillAndStroke(ctx, paint, localBox); // lines carry fill:null, so only the stroke paints
             return;
         case "path":
             ctx.beginPath();
@@ -137,7 +205,7 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint): v
                     default: unreachable(cmd);
                 }
             }
-            fillAndStroke(ctx, paint);
+            fillAndStroke(ctx, paint, localBox);
             return;
         case "text":
             // The layout lives in `TextRaster`, shared with the GPU backend — one typesetter, so
@@ -229,7 +297,7 @@ function drawItem(ctx: CanvasRenderingContext2D, item: DrawItem, scale: number):
         else ctx.transform(w.a, w.b, w.c, w.d, w.e, w.f);
     }
     applyEffects(ctx, item.paint, scale);
-    drawShape(ctx, item.shape, item.paint);
+    drawShape(ctx, item.shape, item.paint, item.localBox);
     ctx.restore();
 }
 
