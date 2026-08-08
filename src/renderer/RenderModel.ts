@@ -1110,6 +1110,31 @@ function collectDefs(content: DrawItem[]): FilterDef[] {
     return defs;
 }
 
+/**
+ * The layers a backend must close and open between two consecutive items (schema 32).
+ *
+ * An opacity group composites as ONE and is then faded, which every backend has to express as a
+ * layer: SVG nests a `<g opacity>`, Canvas needs an offscreen canvas, the GPU a render target. What
+ * they share is the SEQUENCING — which layers just ended, and which just began — and it is exactly
+ * the part that is easy to get subtly wrong and identical in all three. One statement of it here.
+ *
+ * A RUN, not a lookup by id. Creating a layer the first time a group is named and reusing it later
+ * would pull a group's items back together in draw order, which changes what is in front of what:
+ * `content` is sorted by depth before the tree's own order, so a group's items are contiguous in
+ * the common case and genuinely are not when its children sit at different depths. Closing and
+ * reopening keeps the z-order the model published, at the cost of compositing such a group in two
+ * pieces — which is the lesser wrong, because the alternative silently reorders the picture.
+ *
+ * `prev`/`next` are the enclosing groups outermost-first, which is how `DrawItem.groups` is built.
+ */
+export function layerTransition(
+    prev: readonly string[], next: readonly string[]
+): { close: number; open: string[] } {
+    let same = 0;
+    while (same < prev.length && same < next.length && prev[same] === next[same]) same++;
+    return { close: prev.length - same, open: next.slice(same) };
+}
+
 /** Dedupe (by id) the gradient defs referenced by the visible content, in content order. */
 function collectGradients(content: DrawItem[]): PaintGradient[] {
     const out: PaintGradient[] = [];

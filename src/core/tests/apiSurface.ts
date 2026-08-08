@@ -104,7 +104,7 @@ import { rulerTicks, niceStep, RulerTick } from "../geometry/Ruler";
 import { renderSVG, clearRenderState, RendererState } from "../../renderer/SVGRenderer";
 import { renderCanvas } from "../../renderer/CanvasRenderer";
 import { renderScene, RenderBackend } from "../../renderer/renderScene";
-import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, PaintGradient, gradientDefId, resolvePaintGradient, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
+import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, PaintGradient, gradientDefId, resolvePaintGradient, commandsToPathData, effectFilterId, layerTransition } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
 import { emitCanvas, setImageReadyCallback, CanvasTarget } from "../../renderer/emitCanvas";
 import { resolveImage, imageGeneration, naturalSize, imageInkBounds } from "../../renderer/ImageCache";
@@ -432,6 +432,8 @@ export function __apiSurfacePin(): void {
     // Gradient defs (schema 56): resolved here, deduped by a content-derived id, so a hundred
     // shapes sharing one ramp reference one `<defs>` entry.
     expectType<PaintGradient[]>(model.gradients);
+    // The layer sequencing every backend shares for an opacity group (schema 32).
+    expectType<{ close: number; open: string[] }>(layerTransition(["a"], ["a", "b"]));
     expectType<string | PaintGradient | null>(model.content[0].paint.fill);
     // The node's own box, carried ONLY for an objectBoundingBox ramp — the Canvas backend is the
     // one surface that has to apply the box itself.

@@ -12,7 +12,7 @@
 
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { buildRenderModel, DisplayList, HANDLE_SIZE_PX, commandsToPathData, effectFilterId, rasterHref } from "./RenderModel";
+import { buildRenderModel, DisplayList, HANDLE_SIZE_PX, commandsToPathData, effectFilterId, rasterHref, layerTransition } from "./RenderModel";
 import { gaussianKernel, gaussianOuterProduct, GAUSSIAN_MAX_RADIUS, GAUSSIAN_SIGMA_CUTOFF,
     blurPlan, GAUSSIAN_MAX_SIGMA, GAUSSIAN_MAX_DOWNSAMPLE } from "./Gaussian";
 import { RendererState } from "./RendererState";
@@ -1008,5 +1008,46 @@ describe("buildRenderModel — raster (schema 55)", () => {
         // A payload differing only in ORDER must still differ: a plain character sum would collide.
         expect(rasterHref("r", { data: "AB", width: 1, height: 1 }))
             .not.toBe(rasterHref("r", { data: "BA", width: 1, height: 1 }));
+    });
+});
+
+/**
+ * `layerTransition` — the sequencing every backend shares for an opacity group (schema 32).
+ *
+ * Three backends express a group three ways (a `<g opacity>`, an offscreen canvas, a render
+ * target) and agree on exactly one thing: which layers just ended and which just began. That is
+ * the part that is easy to get subtly wrong, so it is stated once.
+ */
+describe("layerTransition", () => {
+    test("a shared prefix STAYS OPEN — the common case, and the whole point", () => {
+        // Two siblings inside the same group must not close and reopen it between them: that
+        // would composite the group in two pieces and fade each separately, which is the bug the
+        // layer exists to fix.
+        expect(layerTransition(["G"], ["G"])).toEqual({ close: 0, open: [] });
+        expect(layerTransition(["G", "H"], ["G", "H"])).toEqual({ close: 0, open: [] });
+    });
+
+    test("entering and leaving are counted from the OUTSIDE in", () => {
+        expect(layerTransition([], ["G"])).toEqual({ close: 0, open: ["G"] });
+        expect(layerTransition(["G"], [])).toEqual({ close: 1, open: [] });
+        expect(layerTransition(["G"], ["G", "H"])).toEqual({ close: 0, open: ["H"] });
+        expect(layerTransition(["G", "H"], ["G"])).toEqual({ close: 1, open: [] });
+        // Deeper on both sides: three closed, two opened, and the shared "G" untouched.
+        expect(layerTransition(["G", "H", "I", "J"], ["G", "K", "L"]))
+            .toEqual({ close: 3, open: ["K", "L"] });
+    });
+
+    test("a DIFFERENT group at the same depth is a close AND an open, not a no-op", () => {
+        // Equal lengths are the case a naive `prev.length !== next.length` check misses entirely,
+        // and it is what two sibling groups produce.
+        expect(layerTransition(["G"], ["H"])).toEqual({ close: 1, open: ["H"] });
+        expect(layerTransition(["A", "G"], ["A", "H"])).toEqual({ close: 1, open: ["H"] });
+    });
+
+    test("a prefix match is by IDENTITY at each depth, not by membership", () => {
+        // The same id reappearing at a DIFFERENT depth is a different layer. Matching by "is it in
+        // the list" would leave a layer open that the new item is not actually inside.
+        expect(layerTransition(["G", "H"], ["H", "G"])).toEqual({ close: 2, open: ["H", "G"] });
+        expect(layerTransition(["G"], ["H", "G"])).toEqual({ close: 1, open: ["H", "G"] });
     });
 });

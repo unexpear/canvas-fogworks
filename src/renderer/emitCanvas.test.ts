@@ -38,7 +38,7 @@ class MockCtx {
     canvas = { width: 800, height: 600 };
     private log(op: string, ...args: unknown[]) { this.calls.push({ op, args }); }
 
-    setTransform(...a: number[]) { this.log("setTransform", ...a); }
+    setTransform(...a: number[]) { this._m = a.slice(0, 6); this.log("setTransform", ...a); }
     transform(...a: number[]) { this.log("transform", ...a); }
     translate(x: number, y: number) { this.log("translate", x, y); }
     save() { this.log("save"); }
@@ -66,6 +66,10 @@ class MockCtx {
     // A gradient is an OBJECT here, not a string, so the recorded `set fillStyle` shows which ramp
     // was built and with which stops — the stops are what a wrong colour or a dropped opacity
     // shows up in, and they never reach the call log any other way.
+    // A LAYER's context reads the parent's CTM and its device size, and the composite draws it
+    // back at the identity. The mock tracks the transform well enough to answer that.
+    private _m = [1, 0, 0, 1, 0, 0];
+    getTransform() { return { a: this._m[0], b: this._m[1], c: this._m[2], d: this._m[3], e: this._m[4], f: this._m[5] }; }
     createLinearGradient(...a: number[]) { this.log("createLinearGradient", ...a); return new MockGradient(this); }
     createRadialGradient(...a: number[]) { this.log("createRadialGradient", ...a); return new MockGradient(this); }
 
@@ -81,6 +85,28 @@ class MockCtx {
     private _shadowOffsetX = 0; get shadowOffsetX() { return this._shadowOffsetX; } set shadowOffsetX(v: number) { this._shadowOffsetX = v; this.log("set shadowOffsetX", v); }
     private _shadowOffsetY = 0; get shadowOffsetY() { return this._shadowOffsetY; } set shadowOffsetY(v: number) { this._shadowOffsetY = v; this.log("set shadowOffsetY", v); }
     private _filter = ""; get filter() { return this._filter; } set filter(v: string) { this._filter = v; this.log("set filter", v); }
+}
+
+/**
+ * A `document.createElement("canvas")` that hands back another recording mock.
+ *
+ * There is no jsdom here, and an opacity group now needs a real offscreen layer — so the layer's
+ * own call log is part of what this file asserts. Each layer is kept in `layers` in creation order.
+ */
+function withFakeCanvas<T>(layers: MockCtx[], body: () => T): T {
+    const g = globalThis as unknown as { document?: unknown };
+    const saved = g.document;
+    g.document = {
+        createElement: (tag: string) => {
+            if (tag !== "canvas") throw new Error(`unexpected createElement(${tag})`);
+            const ctx = new MockCtx();
+            layers.push(ctx);
+            const canvas = { width: 0, height: 0, getContext: () => ctx, __ctx: ctx };
+            ctx.canvas = canvas as unknown as MockCtx["canvas"];
+            return canvas;
+        }
+    };
+    try { return body(); } finally { g.document = saved; }
 }
 
 function run(doc: ProjectDocument, over?: Partial<RendererState>, dpr?: number): MockCtx {
@@ -528,26 +554,87 @@ describe("emitCanvas — image", () => {
         }
     });
 
-    test("canvas FOLDS the group alphas — it cannot composite a group, and says so", () => {
-        // SVG nests a real `<g opacity>` and fades the subtree once. Canvas has no layer here,
-        // so it multiplies each item by the groups around it — the documented approximation.
-        // Two overlapping children therefore show through each other on canvas and not in SVG;
-        // this test pins the approximation so the gap is a decision rather than a surprise.
+    test("an opacity GROUP gets a real layer, composited once and then faded", () => {
+        // It used to fold each group's alpha into its items, and said so. That is wrong in the
+        // ordinary case — a group is usually a group because its parts touch, and folding makes
+        // them show through one another. A cross-backend pixel comparison put the overlap 55
+        // channels away from SVG, which composites the subtree once and fades the result.
         const doc = createEmptyDocument();
         const mk = (id: string, kids: string[], parent: string | null, opacity: number) =>
             doc.nodes.set(id, { id, type: "core.rectangle", parent, children: kids, geometry: { x: 0, y: 0, width: 40, height: 40 }, style: { fill: "#4a90d9", opacity }, layout: {} } as Node);
-        mk("G", ["A"], null, 0.5); mk("A", [], "G", 0.5);
+        mk("G", ["A"], null, 0.5); mk("A", [], "G", 1);
         doc.rootNodeUuids = ["G"];
 
         const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed: computeGeometry(doc as ProjectDocument), viewport: { x: 0, y: 0, zoom: 1 } };
         const model = buildRenderModel(SIZE, doc as ProjectDocument, state);
         const ctx = new MockCtx();
-        emitCanvas(ctx as unknown as CanvasRenderingContext2D, model, 1);
+        const layers: MockCtx[] = [];
+        withFakeCanvas(layers, () => emitCanvas(ctx as unknown as CanvasRenderingContext2D, model, 1));
 
-        const alphas = ctx.calls.filter(c => c.op === "set globalAlpha").map(c => c.args[0] as number);
-        // G draws inside its own group (1 x 0.5) and A inside it too (0.5 x 0.5).
-        expect(alphas).toContain(0.5);
-        expect(alphas.some(a => Math.abs(a - 0.25) < 1e-9)).toBe(true);
+        // ONE layer for the one group, and the group's items went INTO it rather than onto the
+        // target — if they had gone to the target the fade would be applied to nothing.
+        expect(layers).toHaveLength(1);
+        expect(ops(layers[0].calls)).toContain("rect");
+        // The layer inherits the CTM, so what is drawn inside lands where it would have.
+        expect(ops(layers[0].calls)[0]).toBe("setTransform");
+        // …and it is drawn back ONCE, at the IDENTITY so no resampling happens, under the
+        // group's own alpha.
+        const back = ctx.calls.findIndex(c => c.op === "drawImage");
+        expect(back).toBeGreaterThan(-1);
+        const before = ctx.calls.slice(0, back);
+        expect(before[before.length - 1].args).toEqual([0.5]);
+        expect(before[before.length - 2].args).toEqual([1, 0, 0, 1, 0, 0]);
+        // The group's own alpha is NOT also folded into the items: that was the old behaviour and
+        // it is what made the overlap wrong. Nothing inside the layer sets 0.5.
+        expect(layers[0].calls.filter(c => c.op === "set globalAlpha").map(c => c.args[0]))
+            .not.toContain(0.5);
+    });
+
+    test("a sibling AFTER the group is drawn outside it, not into it", () => {
+        // The layer has to close when the group's run ENDS, not merely by the end of the frame.
+        // With only one group and nothing after it the two are indistinguishable — deleting the
+        // in-loop close passed every other assertion here, because the sweep at the end still
+        // composited the layer. What it actually does is pull every later shape inside the group
+        // and fade it too.
+        const doc = createEmptyDocument();
+        doc.nodes.set("G", { id: "G", type: "core.rectangle", parent: null, children: ["A"],
+            geometry: { x: 0, y: 0, width: 40, height: 40 },
+            style: { fill: "#4a90d9", opacity: 0.5 }, layout: {} } as Node);
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 0, y: 0, width: 20, height: 20 },
+            style: { fill: "#ff0000", opacity: 1 }, layout: {} } as Node);
+        doc.nodes.set("S", { id: "S", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 60, y: 0, width: 20, height: 20 },
+            style: { fill: "#00ff00", opacity: 1 }, layout: {} } as Node);
+        doc.rootNodeUuids = ["G", "S"];
+        const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed: computeGeometry(doc as ProjectDocument), viewport: { x: 0, y: 0, zoom: 1 } };
+        const ctx = new MockCtx();
+        const layers: MockCtx[] = [];
+        withFakeCanvas(layers, () => emitCanvas(ctx as unknown as CanvasRenderingContext2D, buildRenderModel(SIZE, doc as ProjectDocument, state), 1));
+
+        expect(layers).toHaveLength(1);
+        // The sibling's colour is set on the TARGET and never inside the layer.
+        const inLayer = layers[0].calls.filter(c => c.op === "set fillStyle").map(c => c.args[0]);
+        expect(inLayer).toContain("#ff0000");
+        expect(inLayer).not.toContain("#00ff00");
+        expect(ctx.calls.filter(c => c.op === "set fillStyle").map(c => c.args[0])).toContain("#00ff00");
+        // …and it is drawn AFTER the layer came back, so the group is behind it, in tree order.
+        const back = ctx.calls.findIndex(c => c.op === "drawImage");
+        const sibling = ctx.calls.findIndex(c => c.op === "set fillStyle" && c.args[0] === "#00ff00");
+        expect(sibling).toBeGreaterThan(back);
+    });
+
+    test("no group, no layer — the ordinary shape does not pay for the feature", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("n1", { id: "n1", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 40, height: 40 },
+            style: { fill: "#4a90d9", opacity: 1 }, layout: {} } as Node);
+        doc.rootNodeUuids = ["n1"];
+        const state: RendererState = { selectedNodeIds: [], hoveredNodeId: null, previewRect: null, computed: computeGeometry(doc as ProjectDocument), viewport: { x: 0, y: 0, zoom: 1 } };
+        const ctx = new MockCtx();
+        const layers: MockCtx[] = [];
+        withFakeCanvas(layers, () => emitCanvas(ctx as unknown as CanvasRenderingContext2D, buildRenderModel(SIZE, doc as ProjectDocument, state), 1));
+        expect(layers).toHaveLength(0);
     });
 });
 

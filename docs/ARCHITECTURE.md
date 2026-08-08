@@ -928,6 +928,26 @@ That needs the image's natural size, which comes from the shared `ImageCache` th
 already use — so an undecoded image draws nothing here exactly as it draws nothing on Canvas, rather
 than each backend inventing its own answer for "not ready yet".
 
+### An opacity group is a LAYER, not an alpha folded into its parts
+
+**A node with children and opacity below 1 composites as one and is then faded.** SVG nests a real
+`<g opacity>`; Canvas draws the group's run into an offscreen canvas and brings it back under the
+group's alpha at the identity transform, so no resampling happens. Folding the alpha into each item
+instead — which is what Canvas used to do, and said it did — makes overlapping children show
+through one another. That is not an edge case: a group is usually a group precisely because its
+parts touch.
+
+**`layerTransition` is the shared part, and it is a RUN rather than a lookup.** Creating a layer the
+first time a group is named and reusing it later would pull that group's items back together in
+draw order, changing what is in front of what — `content` is sorted by depth before the tree's own
+order, so a group whose children sit at different depths genuinely is not contiguous. Closing and
+reopening preserves the z-order the model published, at the cost of compositing such a group in two
+pieces, which is the lesser wrong.
+
+**The GPU still ignores groups entirely** — a translucent group draws fully opaque there. It needs
+a stack of render targets and the effect detour rerouted to composite into the current layer rather
+than straight to the screen. It is the one remaining backend divergence, measured at 137 channels.
+
 ### A gradient on the GPU, and the blend that was wrong all along
 
 **The ramp is walked per fragment, with a CONSTANT loop bound and an early break.** GLSL ES 1.00

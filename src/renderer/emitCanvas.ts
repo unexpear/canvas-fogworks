@@ -39,7 +39,7 @@
  */
 
 import { isTranslationOnly } from "../core/geometry/Matrix";
-import { DisplayList, DrawItem, Paint, PaintGradient, Shape, textParagraphs } from "./RenderModel";
+import { DisplayList, DrawItem, Paint, PaintGradient, Shape, layerTransition, textParagraphs } from "./RenderModel";
 import { GradientStop } from "../core/document/Gradient";
 import { parseColor } from "./emitWebGL";
 import { resolveSurface, resolveImage, setImageReadyCallback } from "./ImageCache";
@@ -337,15 +337,53 @@ export function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dp
     // shadow*/filter are device-space (untouched by the CTM), so effect values are replayed × scale.
     const scale = z * dpr;
     model.grid.lines.forEach(item => drawItem(ctx, item, scale));
-    // OPACITY GROUPS (schema 32): SVG nests a real `<g opacity>` and composites the subtree
-    // once. Canvas cannot without an offscreen layer per group, so it FOLDS the group alphas
-    // into each item instead — the approximation this backend already makes for per-op
-    // `globalAlpha`. Overlapping children inside a translucent group therefore show through
-    // one another here and not in SVG; a true fix needs a layer per group and is not this.
+    // OPACITY GROUPS (schema 32) get a REAL LAYER, one offscreen canvas per group run.
+    //
+    // This used to fold each group's alpha into its items, and said so: overlapping children inside
+    // a translucent group showed through one another here and not in SVG. That is not a subtlety —
+    // it is the ordinary case, because a group is usually a group precisely because its parts
+    // touch. A cross-backend pixel comparison put the overlap 55 channels apart.
+    //
+    // THE LAYER IS DEVICE-SIZED and drawn back at the IDENTITY transform, so no resampling happens
+    // and the composite is exact. Its context inherits the current CTM, which is what makes the
+    // items inside land where they would have.
     const groupAlpha = new Map(model.groups.map(gr => [gr.id, gr.opacity]));
+    const layers: { into: CanvasRenderingContext2D; canvas: HTMLCanvasElement; opacity: number }[] = [];
+    let target = ctx;
+    const closeLayer = (): void => {
+        const top = layers.pop();
+        if (!top) return;
+        const alpha = top.into.globalAlpha;
+        top.into.save();
+        top.into.setTransform(1, 0, 0, 1, 0, 0);
+        top.into.globalAlpha = top.opacity;
+        top.into.drawImage(top.canvas, 0, 0);
+        top.into.restore();
+        top.into.globalAlpha = alpha;
+        target = top.into;
+    };
+    const openLayer = (opacity: number): void => {
+        const canvas = document.createElement("canvas");
+        canvas.width = target.canvas.width;
+        canvas.height = target.canvas.height;
+        const into = canvas.getContext("2d");
+        // No 2D context (a context-loss, a headless host): the group is drawn WITHOUT its fade
+        // rather than not at all. Losing the alpha is visible; losing the subtree is not.
+        if (!into) return;
+        const m = target.getTransform();
+        into.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+        layers.push({ into: target, canvas, opacity });
+        target = into;
+    };
+    let openPath: readonly string[] = [];
     for (const item of model.content) {
-        const folded = (item.groups ?? []).reduce((a, id) => a * (groupAlpha.get(id) ?? 1), 1);
-        drawItem(ctx, folded === 1 ? item : { ...item, paint: { ...item.paint, opacity: (item.paint.opacity ?? 1) * folded } }, scale);
+        const next = item.groups ?? [];
+        const step = layerTransition(openPath, next);
+        for (let i = 0; i < step.close; i++) closeLayer();
+        for (const id of step.open) openLayer(groupAlpha.get(id) ?? 1);
+        drawItem(target, item, scale);
+        openPath = next;
     }
+    while (layers.length > 0) closeLayer();
     model.overlay.forEach(item => drawItem(ctx, item, scale));
 }

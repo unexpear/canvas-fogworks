@@ -1844,6 +1844,12 @@ interface DisplayList {
 // zero, so a document that never mentions depth draws exactly as it always did.
 // Pure, deterministic, INJECTIVE, SVG-id-safe filter id (the twin of commandsToPathData); null = no effect.
 function effectFilterId(shadow: Shadow | null, blur: number | null): string | null;
+// Which layers just ended and which just began, between two consecutive items (schema 32). An
+// opacity group composites as ONE and is then faded, and every backend expresses that as a layer:
+// a `<g opacity>`, an offscreen canvas, a render target. Only the SEQUENCING is shared, so it is
+// stated once. A RUN, not a lookup by id — creating a layer on first mention and reusing it would
+// pull a group's items back together in draw order and change what is in front of what.
+function layerTransition(prev: readonly string[], next: readonly string[]): { close: number; open: string[] };
 
 function buildRenderModel(
   size: { width: number; height: number },
