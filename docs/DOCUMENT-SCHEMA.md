@@ -1132,10 +1132,10 @@ pre-distorted points.
 | SVG backend, TEXT | flattened to the first stop — text is drawn through a `foreignObject` div, and CSS `color` takes no paint server |
 | Canvas backend | painted exactly — the path's coordinates are fixed when it is BUILT and a gradient is evaluated in the space live at the FILL, so moving the CTM between the two places the ramp and leaves the shape. No clip, and `shadow*`/`ctx.filter` are device-space so effects survive it untouched |
 | Canvas backend, TEXT | flattened to the first stop — the glyphs are rastered by `TextRaster`, which agrees with the SVG backend so a label looks the same on both |
-| GPU backend | flattened to the first stop — one draw carries one colour uniform; a ramp needs a per-fragment shader walk |
+| GPU backend | painted exactly, up to **16 stops** — a per-fragment walk with a constant loop bound and an early break, since GLSL ES 1.00 cannot size a loop from a uniform. WebGL 1 only guarantees 16 fragment uniform vectors, so a longer ramp falls back to `flat` (the corpus's worst case is 11) |
 
-The flat colour is decided once, in the render model (`PaintGradient.flat`), so the three surfaces
-that flatten all show the same colour rather than each choosing.
+The flat colour is decided once, in the render model (`PaintGradient.flat`), so every surface that
+falls back shows the same colour rather than each choosing.
 
 `objectBoundingBox` is a fraction of the shape's own box, and the Canvas backend is the one surface
 that has to apply that box itself (SVG has the attribute; the GPU flattens). The box travels on

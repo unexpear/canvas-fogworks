@@ -928,6 +928,30 @@ That needs the image's natural size, which comes from the shared `ImageCache` th
 already use — so an undecoded image draws nothing here exactly as it draws nothing on Canvas, rather
 than each backend inventing its own answer for "not ready yet".
 
+### A gradient on the GPU, and the blend that was wrong all along
+
+**The ramp is walked per fragment, with a CONSTANT loop bound and an early break.** GLSL ES 1.00
+cannot size a loop from a uniform — `i < u_gradStops` does not compile at all — so the loop runs to
+a compile-time 16 and leaves as soon as the real stop count is reached. Sixteen is the shader's
+cap and not the schema's: WebGL 1 guarantees only 16 fragment uniform vectors, and the document
+allows 64. A longer ramp falls back to the flat colour, which is what this backend already does
+with anything it cannot draw.
+
+**The radial case is SVG's focal formula, not a distance.** The colour at a point is how far along
+the ray *from the focus* through that point it sits, as a fraction of where that ray leaves the end
+circle. With the focus at the centre it collapses to `|p - c| / r`, which is exactly why a fixture
+that never moves the focus cannot tell a correct implementation from a lazy one.
+
+**And the alpha blend was wrong, and had been.** `blendFunc(SRC_ALPHA, ONE_MINUS_SRC_ALPHA)` applies
+`SRC_ALPHA` to the ALPHA channel too, so a half-transparent fill over an opaque background leaves
+`dst.a = 0.5·0.5 + 1·0.5 = 0.75`: the colour correct, the surface no longer opaque, and the canvas
+then composited over the page with that alpha. `blendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA,
+ONE, ONE_MINUS_SRC_ALPHA)` is the fix. It predates gradients — any translucent fill hit it — and it
+survived because the RGB is right, `gl.getError()` is 0, and on a dark page the result looks
+plausible. A ramp fading to transparent is simply the first thing that made a whole shape wrong
+rather than one shade off. It was found by comparing pixels with the other two backends, which is
+the only thing that could have found it.
+
 ### A gradient on Canvas — two moments, and the gap between them
 
 **A path's coordinates are fixed when each segment is ADDED; a gradient is evaluated in the space

@@ -118,7 +118,7 @@ import { overrideValueError } from "../document/Components";
 import { strokeOutline, STROKE_JOINS, STROKE_CAPS, STROKE_ALIGNS, DEFAULT_MITER_LIMIT } from "../geometry/StrokeOutline";
 import { StrokeAlign } from "../geometry/StrokeOutline";
 import { outlineStrokeAction, strokeWidthOf } from "../actions/outlineStrokeActions";
-import { itemDraws, itemTolerance, parseColor, viewMatrix, shapeToLocalCommands, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
+import { itemDraws, itemTolerance, parseColor, viewMatrix, shapeToLocalCommands, heightTexture, decodeHeight, HEIGHT_TEX_SIZE, gpuGradient, GPU_MAX_STOPS } from "../../renderer/emitWebGL";
 import { imageGeneration, resolveImage } from "../../renderer/ImageCache";
 import { textRasterScale, textRasterKey, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
 import { ellipseCommands, rectCommands, shapeToCommands, transformCommands } from "../geometry/ShapeToPath";
@@ -141,7 +141,7 @@ import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
 import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
-import { buildRenderModel, PaintGradient } from "../../renderer/RenderModel";
+import { buildRenderModel, PaintGradient, resolvePaintGradient } from "../../renderer/RenderModel";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, polygonCommands, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../../editor/tools/ShapeTool";
 import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../geometry/Polygon";
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
@@ -22495,5 +22495,115 @@ describe("Gradient handles on the canvas", () => {
             expect(gradientError(g)).toBeNull();
         }
         expect(styleError({ fill: g })).toBeNull();
+    });
+});
+
+// ─── The GPU's ramp: the pure half a node test can reach (schema 56) ───
+//
+// The shader itself is verified by PIXELS against the other two backends (see TESTING.md) — a
+// fragment program cannot be unit-tested and a broken one leaves `gl.getError()` at zero. What is
+// checkable here is everything the CPU decides before the uniforms are uploaded: the fold, the
+// inverse, the caps, and every reason this backend refuses a ramp and falls back to flat.
+describe("gpuGradient — a ramp as uniforms", () => {
+    const stops = (n: number) => Array.from({ length: n },
+        (_, i) => ({ offset: i / Math.max(1, n - 1), color: "#ff0000", opacity: 1 }));
+    // Built the way the MODEL builds one — resolved, with an id — because that is what reaches
+    // this backend. A hand-made `Gradient` would let a `$token` colour through, which the model
+    // has already turned into a real one by the time the GPU sees it.
+    const ramp = (over: Partial<Gradient> = {}) =>
+        resolvePaintGradient({ ...defaultGradient("linear"), stops: stops(2), ...over }, c => c);
+    const BOX = { width: 200, height: 50 };
+
+    test("objectBoundingBox is FOLDED in, and the matrix handed over is the INVERSE", () => {
+        // The shader maps a fragment's LOCAL position into gradient space, which is the opposite
+        // direction from the one the document stores.
+        const g = gpuGradient(ramp(), BOX)!;
+        expect(g.kind).toBe(1);
+        // fold = scale(200, 50); its inverse is scale(1/200, 1/50). A box that was square could
+        // not tell that apart from a swapped one.
+        // Compared numerically: `invert` produces a signed zero for the off-diagonal terms, and
+        // -0 is a different value to `toEqual` while being the same number to everything else.
+        expect([g.inv.a, g.inv.b, g.inv.c, g.inv.d, g.inv.e, g.inv.f].map(v => v + 0))
+            .toEqual([1 / 200, 0, 0, 1 / 50, 0, 0].map(v => v + 0));
+        expect(g.inv.b === 0 && g.inv.c === 0).toBe(true);
+        // Read back: the shape's far corner is offset 1 along the ramp, which is what
+        // objectBoundingBox means.
+        expect(applyToPoint(g.inv, 200, 50)).toEqual({ x: 1, y: 1 });
+    });
+
+    test("userSpaceOnUse gets NO box, and the ramp's own matrix still inverts", () => {
+        const g = gpuGradient(ramp({ units: "userSpaceOnUse",
+            transform: { a: 2, b: 0, c: 0, d: 4, e: 10, f: 20 } }), BOX)!;
+        // Only the gradient's own transform, inverted — the box must not creep in, or every
+        // imported ramp lands 200x out.
+        expect(applyToPoint(g.inv, 10, 20)).toEqual({ x: 0, y: 0 });
+        expect(applyToPoint(g.inv, 12, 24)).toEqual({ x: 1, y: 1 });
+    });
+
+    test("the fold goes BEFORE the ramp's own matrix, which only shows when both are real", () => {
+        // With either one an identity the two orders agree, so this is the fixture that separates
+        // them — and it is the one the cross-backend sweep had to grow before a reversed order
+        // stopped surviving.
+        const g = gpuGradient(ramp({ transform: { a: 1, b: 0, c: 0, d: 1, e: 0.5, f: 0 } }), BOX)!;
+        // Gradient-space (0,0) is the ramp's origin, offset half a BOX WIDTH along x — 100 local
+        // units, not 0.5. The other order would put it half a local unit in.
+        expect(applyToPoint(invert(g.inv)!, 0, 0).x).toBeCloseTo(100, 9);
+    });
+
+    test("a radial hands over the circle and the focus SEPARATELY", () => {
+        const g = gpuGradient(ramp({ kind: "radial", cx: 0.5, cy: 0.25, r: 0.4, fx: 0.1, fy: 0.2 }), BOX)!;
+        expect(g.kind).toBe(2);
+        expect(g.axis).toEqual([0.5, 0.25, 0.4, 0]);
+        expect(g.focus).toEqual([0.1, 0.2]);
+        // A linear one puts its axis in the same four floats — one uniform, two meanings, which is
+        // why `kind` is uploaded as well and not inferred.
+        expect(gpuGradient(ramp({ x1: 0, y1: 0.5, x2: 1, y2: 0.5 }), BOX)!.axis).toEqual([0, 0.5, 1, 0.5]);
+    });
+
+    test("stop-opacity is folded into the alpha, and the existing alpha is MULTIPLIED", () => {
+        const g = gpuGradient(ramp({ stops: [
+            { offset: 0, color: "#ff000080", opacity: 0.5 },
+            { offset: 1, color: "#0000ff", opacity: 1 }] }), BOX)!;
+        expect(g.offsets).toEqual([0, 1]);
+        // #80 is 128/255; halved again by the stop opacity. Replacing rather than multiplying
+        // would give 0.5 here, which is why the fixture states both.
+        expect(g.colors.slice(0, 4).map(v => +v.toFixed(4)))
+            .toEqual([1, 0, 0, +((128 / 255) * 0.5).toFixed(4)]);
+        expect(g.colors.slice(4)).toEqual([0, 0, 1, 1]);
+    });
+
+    test("NULL is the refusal, and the caller then paints flat", () => {
+        // More stops than the uniform arrays hold. The document allows 64; WebGL 1 only guarantees
+        // 16 fragment uniform vectors, so the cap is the shader's and not the schema's.
+        expect(gpuGradient(ramp({ stops: stops(GPU_MAX_STOPS) }), BOX)).not.toBeNull();
+        expect(gpuGradient(ramp({ stops: stops(GPU_MAX_STOPS + 1) }), BOX)).toBeNull();
+        // A colour this backend cannot take apart — it refuses rather than guessing, the same rule
+        // `draw` follows for a fill colour.
+        expect(gpuGradient(ramp({ stops: [
+            { offset: 0, color: "rebeccapurple", opacity: 1 },
+            { offset: 1, color: "#000000", opacity: 1 }] }), BOX)).toBeNull();
+        // A mapping with no inverse — a zero gradientTransform, a shape scaled to nothing.
+        expect(gpuGradient(ramp({ transform: { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0 } }), BOX)).toBeNull();
+        expect(gpuGradient(ramp(), { width: 0, height: 50 })).toBeNull();
+        expect(gpuGradient(ramp({ stops: [] }), BOX)).toBeNull();
+    });
+
+    test("a gradient-filled item carries the ramp AND a white colour, not the flat one", () => {
+        // The shader takes only the ALPHA of `u_color` for a gradient — the same arrangement an
+        // image uses — so a coloured uniform here would be a second tint nothing asked for.
+        const doc = createEmptyDocument();
+        doc.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 200, height: 50 },
+            style: { fill: ramp() as never, opacity: 0.5 }, layout: {} });
+        doc.rootNodeUuids = ["R"];
+        const state = { viewport: { x: 0, y: 0, zoom: 1 }, selectedNodeIds: [], hoveredNodeId: null,
+            computed: computeGeometry(doc) } as unknown as import("../../renderer/RendererState").RendererState;
+        const item = buildRenderModel({ width: 400, height: 300 }, doc, state).content.find(i => i.nodeId === "R")!;
+        const draws = itemDraws(item);
+        expect(draws[0].gradient).not.toBeNull();
+        expect(draws[0].color).toEqual([1, 1, 1, 0.5]);
+        // A plain colour carries no ramp at all, or the shader would keep the previous one.
+        const flatItem = { ...item, paint: { ...item.paint, fill: "#123456" } };
+        expect(itemDraws(flatItem).map(d => d.gradient)).toEqual([null]);
     });
 });

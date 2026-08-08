@@ -46,9 +46,9 @@
  * content is worse than one that admits what it cannot do.
  */
 
-import { DisplayList, DrawItem, Shape } from "./RenderModel";
+import { DisplayList, DrawItem, PaintGradient, Shape } from "./RenderModel";
 import { gaussianKernel, blurPlan, GAUSSIAN_MAX_RADIUS } from "./Gaussian";
-import { Mat2D, translation } from "../core/geometry/Matrix";
+import { Mat2D, translation, multiply, invert, IDENTITY } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
 import { subdivideTriangles, triangulate } from "../core/geometry/Tessellate";
 import { strokeOutline } from "../core/geometry/StrokeOutline";
@@ -168,6 +168,18 @@ void main() {
     gl_FragColor = mix(src, tinted, u_useTint);
 }`;
 
+/**
+ * Stops this backend can carry, and the reason it is not `GRADIENT_MAX_STOPS`.
+ *
+ * A shader holds its ramp in uniform ARRAYS, and WebGL 1 only guarantees 16 fragment uniform
+ * vectors — so the document's cap of 64 would be a promise the hardware need not keep. Sixteen
+ * covers the corpus with room to spare: 2,860 of 2,969 measured gradients have exactly two stops
+ * and the most any file uses is 11. A ramp with more falls back to `flat`, like every other thing
+ * this backend cannot draw, rather than being cut short — a truncated ramp looks like a design
+ * decision, and a flat one looks like the gap it is.
+ */
+export const GPU_MAX_STOPS = 16;
+
 const FRAGMENT_SHADER = `
 precision mediump float;
 varying vec3 v_normal;
@@ -189,6 +201,18 @@ uniform vec4 u_imgRect;
 // changes nothing for them rather than a branch that has to be kept in step with the other case.
 uniform vec4 u_imgUV;
 uniform float u_hasImage;
+// A GRADIENT (schema 56). 0 = none, 1 = linear, 2 = radial.
+uniform int u_gradKind;
+// LOCAL space -> the gradient's own space, inverted on the CPU. objectBoundingBox is already
+// folded in, so this shader knows nothing about units — the same mapping the canvas handles use,
+// undone. (No backticks in here: this is inside a template literal.)
+uniform mat3 u_gradInv;
+// linear: x1, y1, x2, y2. radial: cx, cy, r, unused.
+uniform vec4 u_gradAxis;
+uniform vec2 u_gradFocus;
+uniform int u_gradStops;
+uniform float u_gradOffset[${GPU_MAX_STOPS}];
+uniform vec4 u_gradColor[${GPU_MAX_STOPS}];
 
 // The heightfield at a point in LOCAL units. The texture holds 16 bits packed across two
 // channels; these constants are that packing undone, written so every intermediate stays near 1
@@ -215,6 +239,60 @@ float visibility(vec2 p) {
         if (sampleHeight(p + toLight.xy * t) > start + toLight.z * t) return 0.0;
     }
     return 1.0;
+}
+
+/**
+ * Where along the ramp this point falls, 0..1.
+ *
+ * The RADIAL case is SVG's focal formula, not a plain distance: the colour at a point is how far
+ * along the ray FROM THE FOCUS through that point it sits, as a fraction of where that ray leaves
+ * the end circle. Solving |f + s(p - f) - c|^2 = r^2 for the positive root gives that crossing, and
+ * t is its reciprocal. With the focus at the centre it collapses to |p - c| / r, which is why a
+ * fixture that never moves the focus cannot tell the two apart.
+ *
+ * PADDED at both ends, which is SVG's default spread and the only one any measured file states.
+ */
+float rampT(vec2 g) {
+    if (u_gradKind == 1) {
+        vec2 d = u_gradAxis.zw - u_gradAxis.xy;
+        float len2 = dot(d, d);
+        return len2 > 0.0 ? dot(g - u_gradAxis.xy, d) / len2 : 0.0;
+    }
+    vec2 d = g - u_gradFocus;
+    float a = dot(d, d);
+    float r = u_gradAxis.z;
+    if (a <= 0.0 || r <= 0.0) return 1.0;
+    vec2 fc = u_gradFocus - u_gradAxis.xy;
+    float b = dot(d, fc);
+    float disc = b * b - a * (dot(fc, fc) - r * r);
+    float sHit = (-b + sqrt(max(disc, 0.0))) / a;
+    return sHit > 0.0 ? 1.0 / sHit : 1.0;
+}
+
+/**
+ * The ramp's colour at a point in LOCAL units.
+ *
+ * THE LOOP IS BOUNDED BY A CONSTANT and leaves early on the real stop count: GLSL ES 1.00 cannot
+ * size a loop from a uniform, so i < u_gradStops does not compile at all. The break is what makes
+ * the constant bound cost nothing for the two-stop ramp that is 96% of the corpus.
+ */
+vec4 rampColor(vec2 p) {
+    float t = clamp(rampT((u_gradInv * vec3(p, 1.0)).xy), 0.0, 1.0);
+    vec4 c = u_gradColor[0];
+    for (int i = 1; i < ${GPU_MAX_STOPS}; i++) {
+        if (i >= u_gradStops) break;
+        float a0 = u_gradOffset[i - 1];
+        float a1 = u_gradOffset[i];
+        if (t <= a0) break;
+        c = u_gradColor[i];
+        if (t <= a1) {
+            // A ZERO SPAN is two stops at one offset — a hard colour break, not a division. The
+            // far side wins, which is what makes the break visible at all.
+            if (a1 > a0) c = mix(u_gradColor[i - 1], u_gradColor[i], (t - a0) / (a1 - a0));
+            break;
+        }
+    }
+    return c;
 }
 
 void main() {
@@ -246,6 +324,13 @@ void main() {
     // is lit and shadowed by exactly the arithmetic a fill is. The rect is a uniform rather than a
     // second attribute because the local position is already interpolated for the heightfield.
     vec4 base = u_color;
+    // A GRADIENT supplies the colour, and u_color then carries only the item's OPACITY — the
+    // same arrangement an image uses, and for the same reason: neither has a fill colour of its
+    // own, and folding the opacity in twice would darken every translucent gradient.
+    if (u_gradKind > 0) {
+        base = rampColor(v_local);
+        base.a *= u_color.a;
+    }
     if (u_hasImage > 0.5) {
         vec2 uv01 = (v_local - u_imgRect.xy) / u_imgRect.zw;
         base = texture2D(u_image, u_imgUV.xy + uv01 * u_imgUV.zw);
@@ -351,6 +436,14 @@ export interface GLState {
     imageLoc: WebGLUniformLocation | null;
     imgRectLoc: WebGLUniformLocation | null;
     hasImageLoc: WebGLUniformLocation | null;
+    /** Gradient uniforms (schema 56) — a ramp walked per fragment. */
+    gradKindLoc: WebGLUniformLocation | null;
+    gradInvLoc: WebGLUniformLocation | null;
+    gradAxisLoc: WebGLUniformLocation | null;
+    gradFocusLoc: WebGLUniformLocation | null;
+    gradStopsLoc: WebGLUniformLocation | null;
+    gradOffsetLoc: WebGLUniformLocation | null;
+    gradColorLoc: WebGLUniformLocation | null;
 }
 
 function compile(gl: WebGLRenderingContext, type: number, source: string): WebGLShader | null {
@@ -633,7 +726,16 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
         imageLoc: gl.getUniformLocation(program, "u_image"),
         imgRectLoc: gl.getUniformLocation(program, "u_imgRect"),
         imgUVLoc: gl.getUniformLocation(program, "u_imgUV"),
-        hasImageLoc: gl.getUniformLocation(program, "u_hasImage")
+        hasImageLoc: gl.getUniformLocation(program, "u_hasImage"),
+        gradKindLoc: gl.getUniformLocation(program, "u_gradKind"),
+        gradInvLoc: gl.getUniformLocation(program, "u_gradInv"),
+        gradAxisLoc: gl.getUniformLocation(program, "u_gradAxis"),
+        gradFocusLoc: gl.getUniformLocation(program, "u_gradFocus"),
+        gradStopsLoc: gl.getUniformLocation(program, "u_gradStops"),
+        // AN ARRAY UNIFORM IS ADDRESSED BY ITS FIRST ELEMENT — the same trap the blur weights
+        // carry a note about: `getUniformLocation(p, "u_gradOffset")` returns null on some drivers.
+        gradOffsetLoc: gl.getUniformLocation(program, "u_gradOffset[0]"),
+        gradColorLoc: gl.getUniformLocation(program, "u_gradColor[0]")
     };
 }
 
@@ -752,6 +854,24 @@ export interface Draw {
      */
     text: TextShape | null;
     color: [number, number, number, number];
+    /**
+     * The ramp this draw is filled with, or null for a flat colour (schema 56).
+     *
+     * ALREADY INVERTED and already flattened to numbers, because a shader takes uniforms and not
+     * objects — and because inverting per frame in the draw loop would put the one piece of
+     * arithmetic here that a `node` test cannot reach. `inv` maps LOCAL units to the gradient's own
+     * space with `objectBoundingBox` folded in, so the shader knows nothing about units.
+     */
+    gradient: {
+        kind: 1 | 2;
+        inv: Mat2D;
+        /** linear: x1, y1, x2, y2. radial: cx, cy, r, 0. */
+        axis: [number, number, number, number];
+        focus: [number, number];
+        offsets: number[];
+        /** Four floats per stop, its `stop-opacity` already folded into the alpha. */
+        colors: number[];
+    } | null;
 }
 
 /** Side of the square heightfield texture. 64 covers the finest grid a mesh may declare. */
@@ -887,6 +1007,45 @@ function vertexNormal(n: { x: number; y: number; z: number }): { x: number; y: n
     return (n.x === 0 && n.y === 0 && n.z === 0) ? FLAT_NORMAL : n;
 }
 
+/**
+ * A resolved ramp as the numbers a shader takes, or null when this backend cannot draw it.
+ *
+ * NULL IS A REAL ANSWER and the caller falls back to the flat colour, which is the rule this
+ * backend already follows for a colour it cannot parse: skip, never guess. Three things reach it —
+ * more stops than the uniform arrays hold, a stop colour that is not a hex this engine can take
+ * apart, and a mapping with no inverse (a shape scaled to nothing, a zero gradientTransform).
+ *
+ * INVERTED HERE, not in the draw loop. `inv` maps a fragment's LOCAL position into the gradient's
+ * own space, which is the direction a shader needs and the opposite of the one the document
+ * stores; doing it per frame per draw would also put the arithmetic where no `node` test can see
+ * it. `objectBoundingBox` is folded in first, so the shader never learns what units are.
+ */
+export function gpuGradient(g: PaintGradient, box: { width: number; height: number } | undefined): Draw["gradient"] {
+    if (g.stops.length === 0 || g.stops.length > GPU_MAX_STOPS) return null;
+    const fold: Mat2D = g.units === "objectBoundingBox" && box
+        ? { a: box.width, b: 0, c: 0, d: box.height, e: 0, f: 0 }
+        : IDENTITY;
+    const inv = invert(multiply(fold, g.transform));
+    if (!inv) return null;
+    const offsets: number[] = [];
+    const colors: number[] = [];
+    for (const stop of g.stops) {
+        const c = parseColor(stop.color);
+        if (!c) return null;
+        offsets.push(stop.offset);
+        // The stop's own alpha TIMES its `stop-opacity` — SVG keeps the two apart and a shader
+        // has one alpha per stop, the same fold the canvas backend does into an rgba() string.
+        colors.push(c[0], c[1], c[2], c[3] * stop.opacity);
+    }
+    return {
+        kind: g.kind === "linear" ? 1 : 2,
+        inv,
+        axis: g.kind === "linear" ? [g.x1, g.y1, g.x2, g.y2] : [g.cx, g.cy, g.r, 0],
+        focus: [g.fx, g.fy],
+        offsets, colors
+    };
+}
+
 function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number | null,
               image?: Draw["image"],
               text?: TextShape | null,
@@ -895,7 +1054,8 @@ function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number |
                   cell: number;
                   /** Null when there is no relief; the shader is then told to skip the march. */
                   height: HeightTexture | null;
-              }): Draw | null {
+              },
+              gradient?: Draw["gradient"]): Draw | null {
     const color = parseColor(css);
     if (!color) return null;                      // not a colour it can parse: skip, never guess
     // Tessellated in LOCAL space, then each vertex transformed — the reverse of what this used to
@@ -922,7 +1082,8 @@ function draw(rings: Ring[], world: Mat2D | null, css: string, opacity: number |
         vertices[i + 1] = world ? world.b * lx + world.d * ly + world.f : ly;
     }
     if (opacity !== null) color[3] *= opacity;    // MULTIPLY — one blend, not two
-    return { vertices, normals, locals, height: surface?.height ?? null, image: image ?? null, text: text ?? null, color };
+    return { vertices, normals, locals, height: surface?.height ?? null, image: image ?? null,
+        text: text ?? null, color, gradient: gradient ?? null };
 }
 
 /**
@@ -982,14 +1143,17 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
         // become geometry here. And it makes the rings simple, which ear clipping requires: a
         // self-crossing path used to come out as overlapping triangles on this backend and as
         // the right shape on the other two.
-        // FLATTENED to the first stop (schema 56). One draw carries one colour uniform here, so
-        // a ramp needs a shader that walks the stops per fragment — with a constant loop bound
-        // and an early break, since GLSL ES 1.00 cannot size a loop from a uniform. That is a
-        // shader change, not a transcription, and it is listed as a gap alongside this backend
-        // skipping rasters. The colour is the model's `flat`, so all three backends agree.
+        // A GRADIENT (schema 56) is walked PER FRAGMENT by the shader. `gpuGradient` returns null
+        // for a ramp this backend cannot carry — too many stops, an unparsable stop colour, a
+        // mapping with no inverse — and then the flat colour is what paints, which is the same
+        // answer the other two backends' fallbacks show.
+        const ramp = typeof paint.fill === "string" ? null : gpuGradient(paint.fill, item.localBox);
+        // WHITE, not the flat colour, when a ramp is carried: the shader takes only the ALPHA of
+        // this uniform for a gradient, exactly as it does for an image, and a coloured one here
+        // would be a second tint nothing asked for. When there is no ramp it IS the fill.
+        const fillCss = typeof paint.fill === "string" ? paint.fill : ramp ? "#ffffff" : paint.fill.flat;
         const fill = draw(resolveRings(commandsToRings(local, tolerance), paint.fillRule ?? "nonzero"),
-            item.world, typeof paint.fill === "string" ? paint.fill : paint.fill.flat,
-            paint.opacity, null, null, surface);
+            item.world, fillCss, paint.opacity, null, null, surface, ramp);
         if (fill) out.push(fill);
     }
     // AN IMAGE has no fill and is drawn from its own pixels. Its rect is already the geometry that
@@ -1063,7 +1227,17 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
     gl.clearDepth(1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    // SEPARATE, and the alpha channel is the reason. `blendFunc(SRC_ALPHA, ONE_MINUS_SRC_ALPHA)`
+    // applies SRC_ALPHA to the ALPHA channel too, so a half-transparent fill over an opaque
+    // background leaves dst.a = 0.5·0.5 + 1·0.5 = 0.75 — the colour is right and the surface is no
+    // longer opaque. The canvas is then composited over the page with that alpha, so the shape
+    // comes out wrong by however dark the page behind it is.
+    //
+    // Found by comparing pixels with the other two backends, which is the only way it could be:
+    // the RGB is correct, `gl.getError()` is 0, and on a dark page the result looks plausible. It
+    // predates gradients — any translucent fill hit it — and a ramp fading to transparent is just
+    // the first thing that made a whole shape wrong instead of one shade off.
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(program);
     gl.uniformMatrix3fv(viewLoc, false, viewMatrix(width, height, vp.x * dpr, vp.y * dpr, vp.zoom * dpr));
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
@@ -1088,7 +1262,10 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
         gl.enableVertexAttribArray(posLoc);
         gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
         gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        // The same separate blend the frame set up — this restores state after an offscreen
+        // detour, so it has to restore the SAME state or an item with an effect would composite
+        // differently from one without.
+        gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         gl.enable(gl.DEPTH_TEST);
     };
 
@@ -1235,6 +1412,24 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
                 gl.uniform1f(state.hasImageLoc, 1);
             } else {
                 gl.uniform1f(state.hasImageLoc, 0);
+            }
+            // THE RAMP, or an explicit zero. `u_gradKind` is sticky uniform state like every
+            // other one here, so a draw that says nothing inherits the previous shape's gradient —
+            // the exact shape of the `setLineDash` bug the canvas backend already carries a note
+            // about, and it would paint the last gradient over every plain-coloured shape after it.
+            if (d.gradient) {
+                const g = d.gradient;
+                gl.uniform1i(state.gradKindLoc, g.kind);
+                // Column-major, like `u_view`: a Mat2D is the top two ROWS of a 3x3.
+                gl.uniformMatrix3fv(state.gradInvLoc, false,
+                    [g.inv.a, g.inv.b, 0, g.inv.c, g.inv.d, 0, g.inv.e, g.inv.f, 1]);
+                gl.uniform4f(state.gradAxisLoc, g.axis[0], g.axis[1], g.axis[2], g.axis[3]);
+                gl.uniform2f(state.gradFocusLoc, g.focus[0], g.focus[1]);
+                gl.uniform1i(state.gradStopsLoc, g.offsets.length);
+                gl.uniform1fv(state.gradOffsetLoc, g.offsets);
+                gl.uniform4fv(state.gradColorLoc, g.colors);
+            } else {
+                gl.uniform1i(state.gradKindLoc, 0);
             }
             gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
             gl.uniform1f(zLoc, depthToClipZ(item.depth ?? 0));

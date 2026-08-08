@@ -1818,6 +1818,13 @@ interface PaintGradient {
   x1; y1; x2; y2; cx; cy; r; fx; fy: number;
   flat: string;
 }
+// The GPU carries a ramp as uniforms; `gpuGradient` is the CPU half, and null is its refusal —
+// more stops than the arrays hold, a stop colour `parseColor` cannot take apart, or a mapping with
+// no inverse. The caller then paints `flat`. `inv` maps a fragment's LOCAL position into gradient
+// space (objectBoundingBox folded in), which is the direction a shader needs.
+//   GPU_MAX_STOPS: 16   — the shader's cap, not the schema's: WebGL 1 guarantees 16 fragment
+//                         uniform vectors and the document allows 64 (the corpus's worst case: 11)
+//   gpuGradient(g: PaintGradient, box): Draw["gradient"]
 function gradientDefId(g: Omit<PaintGradient, "id">): string;
 function resolvePaintGradient(g: Gradient, color: (raw: string) => string): PaintGradient;
 // `localBox` carries the box an objectBoundingBox ramp is a fraction of. It is NOT on

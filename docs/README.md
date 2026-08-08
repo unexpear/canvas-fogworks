@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1384 — `src/core/tests/document.test.ts` (1253) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (49) + `src/renderer/emitSVG.test.ts` (5).
+- **Tests:** 1391 — `src/core/tests/document.test.ts` (1260) + `src/renderer/RenderModel.test.ts` (77) + `src/renderer/emitCanvas.test.ts` (49) + `src/renderer/emitSVG.test.ts` (5).
 - **Verify the tests themselves:** `npm run mutate:dimensions` (18/18) — breaks the paint arithmetic
   on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
   and it refuses a dirty tree. See TESTING.md § Fixture design.

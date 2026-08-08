@@ -110,7 +110,7 @@ import { emitCanvas, setImageReadyCallback, CanvasTarget } from "../../renderer/
 import { resolveImage, imageGeneration, naturalSize, imageInkBounds } from "../../renderer/ImageCache";
 import { exportSVG, EXPORT_MARGIN, TextLines } from "../export/ExportSVG";
 import { TextShape, drawTextInto, wrapText, wrapTextWith, textLinesFor, textRasterKey, textRasterScale, TEXT_RASTER_MIN, TEXT_RASTER_MAX } from "../../renderer/TextRaster";
-import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, normalisedUV, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE } from "../../renderer/emitWebGL";
+import { emitWebGL, initGL, parseColor, shapeToLocalCommands, viewMatrix, itemDraws, itemTolerance, setLighting, normalisedUV, Draw, GLState, HeightTexture, heightTexture, decodeHeight, HEIGHT_TEX_SIZE, gpuGradient, GPU_MAX_STOPS } from "../../renderer/emitWebGL";
 import { CubicBezier, cubicBezierAt, cubicBezierError, solveForX, BEZIER_PRESETS } from "../document/Bezier";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { MotionPath, Point as MotionPoint, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
@@ -442,6 +442,9 @@ export function __apiSurfacePin(): void {
     expectType<GradientUnits>(paintRamp.units);
     expectType<readonly GradientStop[]>(paintRamp.stops);
     expectType<string>(gradientDefId(paintRamp));
+    // The GPU's half: a ramp as uniforms, or null when this backend must fall back to flat.
+    expectType<number>(GPU_MAX_STOPS);
+    expectType<ReturnType<typeof gpuGradient>>(gpuGradient(paintRamp, { width: 1, height: 1 }));
     expectType<(c: HTMLElement, m: DisplayList) => void>(emitSVG);
     expectType<(ctx: CanvasRenderingContext2D, m: DisplayList, dpr?: number) => void>(emitCanvas);
     expectType<(cb: (() => void) | null) => void>(setImageReadyCallback);
