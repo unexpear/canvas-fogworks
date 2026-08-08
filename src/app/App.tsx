@@ -34,7 +34,7 @@ import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { DetachInstanceAction } from "../core/actions/DetachInstanceAction";
 import { UpdateNodeTransformAction } from "../core/actions/UpdateNodeTransformAction";
 import { UpdateNodeLayoutAction } from "../core/actions/UpdateNodeLayoutAction";
-import { createEditorState, frameOnLoad, EditorState, zoomAt, viewportToFit, FIT_PADDING_PX, screenToWorld, overlayTransform } from "../editor/EditorState";
+import { createEditorState, frameOnLoad, pickedMeshPoint, EditorState, zoomAt, viewportToFit, FIT_PADDING_PX, screenToWorld, overlayTransform } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
@@ -54,7 +54,9 @@ import { applyParallax, DEPTH_MIN, DEPTH_MAX } from "../core/document/Depth";
 import { SetDepthAction } from "../core/actions/SetDepthAction";
 import { SetMeshAction } from "../core/actions/SetMeshAction";
 import { SetLightingAction } from "../core/actions/SetLightingAction";
-import { restMesh, MESH_MAX_DIVISIONS } from "../core/document/Mesh";
+import { restMesh, MESH_MAX_DIVISIONS, copyMeshPoint, Mesh, ReadonlyMesh } from "../core/document/Mesh";
+import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight } from "../core/document/MeshEdit";
+import { SKIN_MAX_BONES } from "../core/geometry/Skin";
 import { SetTrackAction } from "../core/actions/SetTrackAction";
 import { SetTimelineAction } from "../core/actions/SetTimelineAction";
 import { STROKE_ALIGNS, StrokeAlign } from "../core/geometry/StrokeOutline";
@@ -2327,10 +2329,15 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                 // the shape a bevel has — a grid raised uniformly is still flat, and
                                                 // flat is exactly what a light cannot find.
                                                 const { cols, rows } = stored.mesh;
+                                                // COPIED, not rebuilt field by field: writing
+                                                // { x, y, z } silently unbound every point this
+                                                // touched the moment bindings existed — the same way
+                                                // the mesh DRAG did, and the same way
+                                                // UpdateNodeContentAction dropped nine-slice.
                                                 const points = stored.mesh.points.map((p, i) => {
                                                     const col = i % (cols + 1), row = Math.floor(i / (cols + 1));
                                                     const edge = col === 0 || row === 0 || col === cols || row === rows;
-                                                    return { x: p.x, y: p.y, z: edge ? 0 : v };
+                                                    return { ...copyMeshPoint(p), z: edge ? 0 : v };
                                                 });
                                                 dispatcher.dispatchAction(new SetMeshAction(dispatcher.getDocument(), id, { cols, rows, points }));
                                                 refresh();
@@ -2349,6 +2356,84 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                             onChange={v => { editSelected({ style: { radius: Math.max(0, v) } }); refresh(); }}
                                         /></div>
                                 </div>
+                                {/* BONES (schema 58), for the control point last pressed on the
+                                    canvas. Only the SIBLINGS are offered, which is exactly the rule
+                                    Integrity enforces — so an illegal binding is unreachable here
+                                    rather than merely refused later. */}
+                                {(() => {
+                                    const pick = pickedMeshPoint(es, dispatcher.getDocument());
+                                    if (!pick) return null;
+                                    const mesh = dispatcher.getDocument().nodes.get(pick.nodeId)?.mesh;
+                                    if (!mesh) return null;
+                                    const bones = bonesAt(mesh, pick.index);
+                                    const choices = boneChoices(dispatcher.getDocument(), pick.nodeId)
+                                        .filter(id => !bones.some(b => b.node === id));
+                                    const full = bones.length >= SKIN_MAX_BONES;
+                                    // The LAYERS PANEL'S own label. A binding stores an id, but an
+                                    // id is not a thing anyone recognises in a list of siblings.
+                                    const label = (id: string) => {
+                                        const n = dispatcher.getDocument().nodes.get(id);
+                                        return n ? (n.name || nodeTypeLabels[n.type] || n.type) : id;
+                                    };
+                                    const setMesh = (next: ReadonlyMesh, coalesce = false) => {
+                                        if (next === mesh) return;
+                                        dispatcher.dispatchAction(
+                                            new SetMeshAction(dispatcher.getDocument(), pick.nodeId, next as Mesh),
+                                            { coalesce });
+                                        refresh();
+                                    };
+                                    return (
+                                        <div style={{ marginTop: 8 }}>
+                                            <label style={INSPECTOR_LABEL}>Bones · point {pick.index}</label>
+                                            {bones.length === 0 && (
+                                                <div style={{ color: "#777", fontSize: 11, marginTop: 2 }}>
+                                                    Not bound — this point stays where it is drawn.
+                                                </div>
+                                            )}
+                                            {bones.map(b => (
+                                                <div key={b.node} style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
+                                                    <span
+                                                        title={b.node}
+                                                        style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                                                    >{label(b.node)}</span>
+                                                    {/* Coalesced, so a whole drag is ONE undo — the
+                                                        bargain every slider in this panel makes. */}
+                                                    <input
+                                                        type="range" min={0} max={1} step={0.01} value={b.weight}
+                                                        title="How strongly this bone pulls the point. Weights are relative: one bone at 0.5 still carries it all the way, and it takes a second influence to split the difference."
+                                                        onChange={e => setMesh(withBoneWeight(mesh, pick.index, b.node, parseFloat(e.target.value)), true)}
+                                                        style={{ width: 72 }}
+                                                    />
+                                                    <span style={{ width: 28, textAlign: "right", color: "#888", fontSize: 11 }}>
+                                                        {b.weight.toFixed(2)}
+                                                    </span>
+                                                    <button
+                                                        title="Unbind this bone from the point"
+                                                        onClick={() => setMesh(withoutBone(mesh, pick.index, b.node))}
+                                                        style={{ ...SELECT_STYLE, padding: "0 6px" }}
+                                                    >×</button>
+                                                </div>
+                                            ))}
+                                            <select
+                                                value=""
+                                                disabled={full || choices.length === 0}
+                                                title={full
+                                                    ? "A point may name at most " + SKIN_MAX_BONES + " bones."
+                                                    : "Bind this point to a sibling node. Moving that node then carries the point with it."}
+                                                onChange={e => { if (e.target.value) setMesh(withBone(mesh, pick.index, e.target.value)); }}
+                                                style={{ ...SELECT_STYLE, width: "100%", marginTop: 4 }}
+                                            >
+                                                <option value="">
+                                                    {full ? "at most " + SKIN_MAX_BONES
+                                                        : choices.length === 0 ? "no siblings to bind to" : "bind to…"}
+                                                </option>
+                                                {!full && choices.map(id => (
+                                                    <option key={id} value={id}>{label(id)}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    );
+                                })()}
                                 {/* Corners and ends (schema 37). SVG's own vocabulary, so what is
                                     picked here is literally what reaches the attribute. */}
                                 <div style={INSPECTOR_GRID}>

@@ -75,7 +75,8 @@ import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/Sc
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode, contentBounds } from "../geometry/GeometryEngine";
 import { NineSliceInsets, Slice, nineSliceRects } from "../geometry/NineSlice";
-import { SKIN_MAX_BONES, boneWeightsError, skinnedPoint } from "../geometry/Skin";
+import { SKIN_MAX_BONES, BoneWeight, boneWeightsError, skinnedPoint } from "../geometry/Skin";
+import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, withoutMissingBones, DEFAULT_BONE_WEIGHT } from "../document/MeshEdit";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, GridCell, breakFlexLines, FlexLine, resolveMargin, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, parseSvgTransform, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
@@ -312,6 +313,15 @@ export function __apiSurfacePin(): void {
     expectType<ReadonlyMesh>(skinMesh(restMesh(1, 1), { box: { width: 1, height: 1 }, matrix: IDENTITY },
                                       { box: { width: 1, height: 1 }, matrix: IDENTITY }, () => oneBone));
     expectType<{ x: number; y: number }>(copyMeshPoint({ x: 0, y: 0 }));
+    // What an EDITOR does to a binding (schema 58). `boneChoices` is the sibling rule itself
+    // rather than a copy of it, so a panel built on this cannot offer an illegal bone.
+    expectType<string[]>(boneChoices(doc, "n"));
+    expectType<readonly BoneWeight[]>(bonesAt(restMesh(1, 1), 0));
+    expectType<ReadonlyMesh>(withBone(restMesh(1, 1), 0, "b"));
+    expectType<ReadonlyMesh>(withoutBone(restMesh(1, 1), 0, "b"));
+    expectType<ReadonlyMesh>(withBoneWeight(restMesh(1, 1), 0, "b", 0.5));
+    expectType<ReadonlyMesh>(withoutMissingBones(restMesh(1, 1), () => true));
+    expectType<number>(DEFAULT_BONE_WEIGHT);
     // The two answers the on-canvas text editor shares with the renderer.
     expectType<string>(overlayTransform(IDENTITY, { x: 0, y: 0, zoom: 1 }));
     expectType<ResolvedType>(resolveTypography({}, {} as VariableStore, "light"));

@@ -233,6 +233,17 @@ export class ToolController {
                     if (mi !== null) {
                         this.meshNodeId = hit.nodeId;
                         this.meshIndex = mi;
+                        // The pick OUTLIVES the gesture, so the inspector can offer to bind the
+                        // point the user just touched. A press is enough — binding a point one
+                        // has to drag first would move the artwork to reach the panel.
+                        //
+                        // AND IT REDRAWS, which the rest of this branch has never needed: every
+                        // other thing a press starts only becomes visible once the pointer moves,
+                        // so the panel appeared on the NEXT event instead of this one. Pressing a
+                        // control point and seeing nothing until you jiggled the mouse is what
+                        // driving the real app showed, and no test could have.
+                        this.editorState.meshPoint = { nodeId: hit.nodeId, index: mi };
+                        this.refresh();
                         this.meshStartX = w.x;
                         this.meshStartY = w.y;
                         this.editorState.isDragging = true;

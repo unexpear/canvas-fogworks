@@ -1893,6 +1893,20 @@ interface BoneMatrices { rest: Mat2D; posed: Mat2D }
 function skinMesh(mesh, rest: { box; matrix }, posed: { box; matrix },
                   bone: (id: string) => BoneMatrices | null): ReadonlyMesh;   // by reference if unbound
 function copyMeshPoint(p): Mesh["points"][number];            // a mutable copy, BINDINGS INCLUDED
+// What an editor does to a binding, in `document/MeshEdit`. Every one returns a WHOLE MESH, which
+// `SetMeshAction` already takes — binding a point needed no new action. `boneChoices` is the
+// sibling rule walked from the parent's own children, not a restatement of it, so a panel built on
+// it cannot offer an illegal bone: an invalid binding is unreachable rather than merely refused.
+function boneChoices(doc: ReadonlyDocument, nodeId: string): string[];
+function bonesAt(mesh, index): readonly BoneWeight[];        // never undefined — callers just map it
+function withBone(mesh, index, node): ReadonlyMesh;          // no-op (BY REFERENCE) if duplicate or full
+function withoutBone(mesh, index, node): ReadonlyMesh;       // the LAST one drops the field, not just its contents
+function withBoneWeight(mesh, index, node, w): ReadonlyMesh; // clamped at 0; zero mutes, it does not unbind
+function withoutMissingBones(mesh, exists): ReadonlyMesh;    // what DeleteNodeAction runs so the file still opens
+// The control point the inspector is editing. VALIDATED ON READ rather than cleared on write — a
+// pick goes stale four ways (another node selected, the node deleted, the warp turned off, a
+// coarser grid), and asking here means no site can forget.
+function pickedMeshPoint(es, doc): { nodeId: string; index: number } | null;
 // The rest pose is this chain without `applyFrame` and without `applyIk` — the only two steps that
 // move anything. A THUNK, so an unrigged document never builds it and a rigged one builds it once.
 function resolveMeshes(doc: ReadonlyDocument, restOf?: () => ReadonlyDocument): ReadonlyDocument;

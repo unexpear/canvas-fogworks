@@ -6,6 +6,8 @@
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
 import { MutationResult, ActionPayload, NodeDelta } from "./types";
+import { withoutMissingBones } from "../document/MeshEdit";
+import { Mesh } from "../document/Mesh";
 
 export class DeleteNodeAction extends Action {
     private nodeId: string;
@@ -56,6 +58,20 @@ export class DeleteNodeAction extends Action {
         const parentOfRoot = this.document.nodes.get(this.nodeId)?.parent ?? null;
         const updatedNodeIds = new Set(this.deletedNodeIds);
         if (parentOfRoot) updatedNodeIds.add(parentOfRoot);
+
+        // A DELETED BONE IS A REFERENCE SOMEBODY ELSE STILL HOLDS (schema 58). `Integrity` refuses
+        // a mesh point bound to a node that is not there, and it runs on LOAD rather than per
+        // action — so without this the deletion succeeds, the canvas looks right, and the file
+        // will not reopen. The delete is the operation that has to clean up, and it does it as
+        // ordinary patch deltas so undo puts the bindings back with the node.
+        const gone = new Set(this.deletedNodeIds);
+        this.document.nodes.forEach((node, id) => {
+            if (gone.has(id) || !node.mesh) return;
+            const cleaned = withoutMissingBones(node.mesh, boneId => !gone.has(boneId));
+            if (cleaned === node.mesh) return;   // by reference when nothing dangled
+            deltas.set(id, { kind: "patch", mesh: cleaned as Mesh });
+            updatedNodeIds.add(id);
+        });
 
         return {
             updatedNodeIds,

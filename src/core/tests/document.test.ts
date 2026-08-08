@@ -26,7 +26,8 @@ import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy , overrideTargetFor} from "../actions/nodeEdit";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { validateDocumentIntegrity } from "../document/Integrity";
-import { frameOnLoad } from "../../editor/EditorState";
+import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
+import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, withoutMissingBones } from "../document/MeshEdit";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
 import { AddNodeAction } from "../actions/AddNodeAction";
@@ -23430,5 +23431,249 @@ describe("The playhead a saved file remembers", () => {
         expect(frameOnLoad({ timeline: { frames: 1 }, frame: 5 })).toBe(0);
         // And a fractional frame lands on a real one — the slider's step is 1.
         expect(frameOnLoad({ timeline: { frames: 30 }, frame: 7.6 })).toBe(8);
+    });
+});
+
+describe("MeshEdit — binding a control point to a bone", () => {
+    const bound = (...bones: { node: string; weight: number }[]) => {
+        const m = restMesh(1, 1);
+        if (bones.length) m.points[0] = { ...m.points[0], bones };
+        return m;
+    };
+
+    test("the CHOICES are the siblings, which is the rule rather than a copy of it", () => {
+        // The property worth having: the UI cannot offer an illegal bone, so an invalid binding is
+        // unreachable rather than merely rejected. `boneChoices` walks the parent's own children,
+        // so it and `Integrity` cannot come to disagree.
+        const d = createEmptyDocument();
+        const mk = (id: string, parent: string | null, children: string[] = []) =>
+            d.nodes.set(id, { id, type: "core.rectangle", parent, children,
+                geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } as Node);
+        mk("G", null, ["M", "B1", "B2"]); mk("M", "G"); mk("B1", "G"); mk("B2", "G"); mk("OTHER", null);
+        d.rootNodeUuids = ["G", "OTHER"];
+        // Siblings, in the order they are drawn — and never the node itself.
+        expect(boneChoices(d, "M")).toEqual(["B1", "B2"]);
+        // A ROOT node's siblings are the other roots, the same relationship one level up.
+        expect(boneChoices(d, "G")).toEqual(["OTHER"]);
+        // Everything the rule excludes really is excluded: the parent, a cousin, and an unknown id.
+        expect(boneChoices(d, "M")).not.toContain("G");
+        expect(boneChoices(d, "M")).not.toContain("OTHER");
+        expect(boneChoices(d, "ghost")).toEqual([]);
+        // And what it offers is what `Integrity` accepts, asserted rather than assumed.
+        d.nodes.set("M", { ...(d.nodes.get("M") as Node), mesh: bound({ node: boneChoices(d, "M")[0], weight: 1 }) } as Node);
+        expect(() => validateDocumentIntegrity(d)).not.toThrow();
+    });
+
+    test("binding ADDS one influence, and refuses the ones that would deform wrongly", () => {
+        const one = withBone(bound(), 0, "B1");
+        expect(one.points[0].bones).toEqual([{ node: "B1", weight: 1 }]);
+        // Unbound points are untouched — binding is per point, which is the whole grammar.
+        expect(one.points[1].bones).toBeUndefined();
+        // The SAME bone twice is one influence written twice; it would count double in the
+        // normalisation and quietly outvote the others. A no-op, so a control can be pressed twice.
+        expect(withBone(one, 0, "B1")).toBe(one);
+        // A fifth is refused: four is what every measured rig uses, and the cap bounds a
+        // hand-editable list. By reference, so nothing downstream re-derives for a rejected press.
+        let full = bound();
+        for (const b of ["B1", "B2", "B3", "B4"]) full = withBone(full, 0, b) as Mesh;
+        expect(full.points[0].bones).toHaveLength(4);
+        expect(withBone(full, 0, "B5")).toBe(full);
+        // A point that does not exist is a no-op rather than a hole punched in the grid.
+        expect(withBone(bound(), 99, "B1").points).toHaveLength(4);
+    });
+
+    test("removing the LAST influence drops the field, not just its contents", () => {
+        // An empty `bones` and an absent one mean the same thing to `skinMesh`, but only the absent
+        // one lets the unskinned fast path see an unskinned mesh — and only the absent one saves to
+        // a file that looks like the unbound mesh it now is.
+        const two = withBone(withBone(bound(), 0, "B1"), 0, "B2");
+        const one = withoutBone(two, 0, "B1");
+        expect(one.points[0].bones).toEqual([{ node: "B2", weight: 1 }]);
+        const none = withoutBone(one, 0, "B2");
+        expect(none.points[0].bones).toBeUndefined();
+        expect("bones" in none.points[0]).toBe(false);
+        // Removing what was never there changes nothing, by reference.
+        expect(withoutBone(none, 0, "B2")).toBe(none);
+    });
+
+    test("a weight is CLAMPED at zero, and zero is a real value", () => {
+        const m = withBone(withBone(bound(), 0, "B1"), 0, "B2");
+        expect(withBoneWeight(m, 0, "B1", 0.25).points[0].bones).toEqual(
+            [{ node: "B1", weight: 0.25 }, { node: "B2", weight: 1 }]);
+        // A slider can produce a negative; a negative weight can shrink or flip the normalising sum
+        // and send the point to infinity, so it becomes zero rather than being refused mid-drag.
+        expect(withBoneWeight(m, 0, "B1", -5).points[0].bones![0].weight).toBe(0);
+        // Zero is KEPT rather than treated as a removal: it mutes a bone without losing which
+        // bones the point names, which is the difference between muting and unbinding.
+        expect(withBoneWeight(m, 0, "B1", 0).points[0].bones).toHaveLength(2);
+        // There is nothing sensible to clamp NaN to, and an unknown bone is not silently added.
+        expect(withBoneWeight(m, 0, "B1", NaN)).toBe(m);
+        expect(withBoneWeight(m, 0, "ghost", 1)).toBe(m);
+        // Whatever these produce, the LOAD path still has to accept it.
+        expect(meshError(withBoneWeight(m, 0, "B1", 0))).toBeNull();
+    });
+
+    test("an edit never shares a point with the mesh it came from", () => {
+        // A returned mesh that aliased the original would make the next edit mutate history, and
+        // `dispatchAction` compares by reference to decide whether anything changed.
+        const before = withBone(bound(), 0, "B1");
+        const after = withBoneWeight(before, 0, "B1", 0.5);
+        expect(before.points[0].bones![0].weight).toBe(1);
+        expect(after.points[0].bones).not.toBe(before.points[0].bones);
+        expect(after.points[1]).not.toBe(before.points[1]);
+    });
+});
+
+describe("Deleting a bone that a mesh still names", () => {
+    const rig = (): ProjectDocument => {
+        const d = createEmptyDocument();
+        const mesh = restMesh(1, 1);
+        mesh.points[0] = { ...mesh.points[0], bones: [{ node: "B", weight: 1 }, { node: "B2", weight: 1 }] };
+        d.nodes.set("G", { id: "G", type: "core.rectangle", parent: null, children: ["M", "B", "B2"],
+            geometry: { x: 0, y: 0, width: 200, height: 200 }, style: { fill: "none", opacity: 1 }, layout: {} } as Node);
+        d.nodes.set("M", { id: "M", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {}, mesh } as Node);
+        for (const b of ["B", "B2"]) d.nodes.set(b, { id: b, type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 10, y: 10, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["G"];
+        return d;
+    };
+
+    test("the delete CLEANS UP, because otherwise the file will not reopen", () => {
+        // Measured before it was fixed: the deletion succeeded, the canvas looked right, and
+        // `deserializeDocument` refused the result with "binds a mesh point to a missing bone".
+        // `Integrity` runs on load rather than per action, so nothing said so until far too late.
+        const dispatcher = new ActionDispatcher(rig());
+        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "B"));
+        const after = dispatcher.getDocument();
+        // The OTHER influence survives — this drops the dangling reference, not the binding.
+        expect(after.nodes.get("M")!.mesh!.points[0].bones).toEqual([{ node: "B2", weight: 1 }]);
+        expect(() => deserializeDocument(serializeDocument(after as ProjectDocument))).not.toThrow();
+    });
+
+    test("deleting the LAST bone leaves an unbound mesh, and UNDO puts it back", () => {
+        const dispatcher = new ActionDispatcher(rig());
+        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "B"));
+        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "B2"));
+        expect(dispatcher.getDocument().nodes.get("M")!.mesh!.points[0].bones).toBeUndefined();
+        expect(() => validateDocumentIntegrity(dispatcher.getDocument())).not.toThrow();
+        // Ordinary patch deltas, so history reverses them with the node they belonged to.
+        dispatcher.undo();
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.get("M")!.mesh!.points[0].bones)
+            .toEqual([{ node: "B", weight: 1 }, { node: "B2", weight: 1 }]);
+        expect(() => validateDocumentIntegrity(dispatcher.getDocument())).not.toThrow();
+    });
+
+    test("deleting something no mesh names touches no mesh at all", () => {
+        // The cost of this runs on every delete in the app, so an unrelated one must not rewrite a
+        // mesh: the cleanup returns by reference when nothing dangles, and no delta is emitted.
+        const d = rig();
+        d.nodes.set("SPARE", { id: "SPARE", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["G", "SPARE"];
+        const dispatcher = new ActionDispatcher(d);
+        const before = dispatcher.getDocument().nodes.get("M")!.mesh;
+        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "SPARE"));
+        expect(dispatcher.getDocument().nodes.get("M")!.mesh).toBe(before);
+    });
+
+    test("deleting a bone's PARENT takes the bone with it, and the binding too", () => {
+        // The reference that dangles is not always the node that was asked for — a descendant of
+        // the deleted subtree is just as gone, and the cleanup has to see the whole set.
+        const d = rig();
+        d.nodes.set("HOLDER", { id: "HOLDER", type: "core.rectangle", parent: "G", children: ["B3"],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } as Node);
+        d.nodes.set("B3", { id: "B3", type: "core.rectangle", parent: "HOLDER", children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } as Node);
+        d.nodes.set("G", { ...(d.nodes.get("G") as Node), children: ["M", "B", "B2", "HOLDER"] } as Node);
+        // THE BINDING MUST LIVE ON A NODE THAT SURVIVES. Putting it on `HOLDER` itself is the
+        // blind version of this fixture — the mesh holding it is deleted too, so there is nothing
+        // left to clean and the test passes against a cleanup that only ever looked at the id it
+        // was handed. It goes on `M`, which is still there afterwards to be wrong.
+        const m = restMesh(1, 1);
+        m.points[2] = { ...m.points[2], bones: [{ node: "B3", weight: 1 }] };
+        d.nodes.set("M", { ...(d.nodes.get("M") as Node), mesh: m } as Node);
+        const dispatcher = new ActionDispatcher(d);
+        // …and B3 really is only reachable through HOLDER, so the delete has to walk to find it.
+        expect(dispatcher.getDocument().nodes.get("B3")!.parent).toBe("HOLDER");
+        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "HOLDER"));
+        expect(dispatcher.getDocument().nodes.has("B3")).toBe(false);
+        expect(dispatcher.getDocument().nodes.get("M")!.mesh!.points[2].bones).toBeUndefined();
+        expect(() => validateDocumentIntegrity(dispatcher.getDocument())).not.toThrow();
+    });
+});
+
+describe("The control point the inspector is editing", () => {
+    const withMesh = (points: number) => ({
+        nodes: { get: (id: string) => id === "M" ? { mesh: { points: new Array(points).fill({}) } } : undefined },
+    });
+    const es = (meshPoint: { nodeId: string; index: number } | undefined, selected: string[]) =>
+        ({ meshPoint, selectedNodeIds: selected });
+
+    test("a pick outlives the drag that made it", () => {
+        // The whole reason this exists. `ToolController` knew which handle was moving and forgot it
+        // on release, which is all a drag needs; binding a point is a choice made in a panel about
+        // a point the user is looking at, so the pick has to survive the gesture.
+        expect(pickedMeshPoint(es({ nodeId: "M", index: 3 }, ["M"]), withMesh(9))).toEqual({ nodeId: "M", index: 3 });
+        expect(pickedMeshPoint(es(undefined, ["M"]), withMesh(9))).toBeNull();
+    });
+
+    test("every way a pick goes STALE is caught on read, not cleared on write", () => {
+        // Four sites would each have to remember, and a fifth arrives with the next feature.
+        // Selecting another node…
+        expect(pickedMeshPoint(es({ nodeId: "M", index: 3 }, ["OTHER"]), withMesh(9))).toBeNull();
+        // …selecting several, where there is no single node the panel is showing…
+        expect(pickedMeshPoint(es({ nodeId: "M", index: 3 }, ["M", "OTHER"]), withMesh(9))).toBeNull();
+        // …deleting the node, or turning its warp off…
+        expect(pickedMeshPoint(es({ nodeId: "M", index: 3 }, ["M"]),
+            { nodes: { get: () => undefined } })).toBeNull();
+        expect(pickedMeshPoint(es({ nodeId: "M", index: 3 }, ["M"]),
+            { nodes: { get: () => ({}) } })).toBeNull();
+        // …and choosing a COARSER grid that no longer reaches that index. A 1x1 mesh has 4 points,
+        // so index 3 is its last and index 4 is off the end.
+        expect(pickedMeshPoint(es({ nodeId: "M", index: 3 }, ["M"]), withMesh(4))).not.toBeNull();
+        expect(pickedMeshPoint(es({ nodeId: "M", index: 4 }, ["M"]), withMesh(4))).toBeNull();
+        expect(pickedMeshPoint(es({ nodeId: "M", index: -1 }, ["M"]), withMesh(4))).toBeNull();
+    });
+
+    test("the CANVAS records the pick and the INSPECTOR asks for it", () => {
+        // Two lines in two files, and the feature is dead if either is missing — the same gap
+        // `frameOnLoad` had, guarded the same way this repo already guards App wiring.
+        const tc = readFileSync(resolve(__dirname, "../../editor/tools/ToolController.ts"), "utf8");
+        expect(tc).toMatch(/this\.editorState\.meshPoint = \{ nodeId: hit\.nodeId, index: mi \}/);
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/pickedMeshPoint\(es, dispatcher\.getDocument\(\)\)/);
+        // The panel offers `boneChoices`, never its own idea of which nodes are legal — that is
+        // what makes an invalid binding unreachable rather than merely rejected.
+        expect(src).toMatch(/boneChoices\(dispatcher\.getDocument\(\), pick\.nodeId\)/);
+        // And every mesh rewrite in the App copies its points rather than rebuilding them, which
+        // is how the Height control silently unbound whatever it touched.
+        expect(src).not.toMatch(/return \{ x: p\.x, y: p\.y, z:/);
+    });
+
+    test("PRESSING a mesh handle is what records it, and the drag still works", () => {
+        // Behavioural, not structural: the press has to set the pick on the real controller, and
+        // it must be the point actually under the cursor rather than whichever was last dragged.
+        const d = createEmptyDocument();
+        const mesh = restMesh(2, 2);
+        d.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {}, mesh } as Node);
+        d.rootNodeUuids = ["M"];
+        const dispatcher = new ActionDispatcher(d);
+        const state = createEditorState();
+        state.selectedNodeIds = ["M"];
+        const tc = new ToolController(dispatcher, state, () => { });
+        const ev = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1,
+            preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+        const canvas = { left: 0, top: 0, width: 800, height: 600 } as DOMRect;
+        // The CENTRE point of the grid — every other point of a 2x2 mesh coincides with a resize
+        // handle, and the selection box is picked first.
+        tc.onMouseDown(ev(50, 50), canvas);
+        expect(state.meshPoint).toEqual({ nodeId: "M", index: 4 });
+        tc.onMouseUp(ev(50, 50));
+        // It SURVIVES the release, which a drag's own state does not.
+        expect(state.meshPoint).toEqual({ nodeId: "M", index: 4 });
+        expect(pickedMeshPoint(state, dispatcher.getDocument())).toEqual({ nodeId: "M", index: 4 });
     });
 });

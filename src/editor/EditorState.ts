@@ -37,6 +37,19 @@ export interface EditorState {
      */
     frame?: number;
     onion?: number;
+    /**
+     * The mesh control point most recently PRESSED, and on which node (schema 58).
+     *
+     * A point had no identity outside a drag until bones needed one: `ToolController` knew which
+     * handle was moving and forgot it on release, which is all a drag ever needs. Binding a point
+     * is not a drag — it is a choice made in a panel about a point the user is looking at — so the
+     * pick has to outlive the gesture that made it.
+     *
+     * Held as {node, index} rather than an index alone because a mesh belongs to a node and the
+     * selection can change underneath it; anything reading this re-checks that the node still has
+     * a mesh that reaches this far, rather than trusting a stale pair.
+     */
+    meshPoint?: { nodeId: string; index: number };
     /** Whether the TIMELINE is running (distinct from `playing`, which is the prototype). */
     playingTimeline?: boolean;
     /**
@@ -240,6 +253,32 @@ export function frameOnLoad(doc: { timeline?: { frames: number }; frame?: number
     return Math.min(last, Math.max(0, Math.round(doc.frame ?? 0)));
 }
 
+/**
+ * The mesh control point the inspector should be editing, or null.
+ *
+ * VALIDATED ON READ rather than cleared on write. A pick can be invalidated by selecting another
+ * node, by deleting the node it was on, by turning the warp off, or by choosing a coarser grid
+ * that no longer reaches that index — four sites that would each have to remember, and a fifth
+ * arriving with the next feature. Asking here instead means a stale pick is impossible to observe,
+ * whoever forgot.
+ *
+ * The STORED document: a resolved scene has already turned a warped node into a path and dropped
+ * the mesh, so a point picked on the canvas would stop existing the moment it started working.
+ */
+export function pickedMeshPoint(
+    es: Pick<EditorState, "meshPoint" | "selectedNodeIds">,
+    doc: { nodes: { get(id: string): { mesh?: { points: readonly unknown[] } } | undefined } }
+): { nodeId: string; index: number } | null {
+    const pick = es.meshPoint;
+    if (!pick) return null;
+    // Only for the node actually selected — otherwise the panel would edit something the canvas
+    // is not showing handles for.
+    if (es.selectedNodeIds.length !== 1 || es.selectedNodeIds[0] !== pick.nodeId) return null;
+    const mesh = doc.nodes.get(pick.nodeId)?.mesh;
+    if (!mesh || pick.index < 0 || pick.index >= mesh.points.length) return null;
+    return pick;
+}
+
 export function createEditorState(): EditorState {
     return {
         selectedNodeIds: [],
@@ -251,6 +290,7 @@ export function createEditorState(): EditorState {
         playState: null,
         frame: undefined,
         onion: undefined,
+        meshPoint: undefined,
         viewportTransition: null,
         playReturnViewport: null,
         transition: null,

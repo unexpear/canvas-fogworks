@@ -1173,8 +1173,21 @@ bone beside it rather than the master's.
 "candy wrapper" — and every 2D rigging tool ships with it anyway, because at the angles a limb
 actually bends the difference is invisible and the arithmetic is a quarter the size.
 
-**Not yet authored.** Nothing in the editor writes a binding; the field, the arithmetic, the
-validation and the derivation are what schema 58 adds.
+**Authored by picking a point and choosing a sibling.** Pressing a mesh handle records the pick in
+`EditorState.meshPoint`, which outlives the gesture — a drag forgets which handle it moved on
+release, and binding is a choice made in a panel about a point you are looking at. The inspector
+then lists that point's influences with a weight slider each, and offers `boneChoices` to add one.
+
+The offered list IS the sibling rule, walked from the parent's own children rather than restated —
+so an illegal binding is *unreachable* from the UI rather than merely refused by `Integrity`. The
+edits themselves are pure functions in `document/MeshEdit` (`withBone`, `withoutBone`,
+`withBoneWeight`), each returning a whole mesh, which `SetMeshAction` already takes: binding a point
+needed no new action.
+
+**Deleting a bone cleans up after itself.** `Integrity` refuses a point bound to a node that is not
+there, and it runs on LOAD rather than per action — so without this the deletion succeeds, the
+canvas looks right, and the file will not reopen. `DeleteNodeAction` drops the dangling references
+as ordinary patch deltas, so undo puts them back with the node.
 
 ## Gradient (a fill that changes across the shape — schema 56)
 
