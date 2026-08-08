@@ -98,6 +98,7 @@ import { nearestColour, colourDistance, quantizeToPalette } from "../paint/Quant
 import { worldToSurface, surfaceToWorld, surfacePixelSize, surfaceSpaceError } from "../paint/SurfaceSpace";
 import { defaultGradient, gradientError, normalizeStops, sampleGradient, GRADIENT_MAX_STOPS } from "../document/Gradient";
 import { copyNodes, remapForPaste, PASTE_OFFSET } from "../document/Clipboard";
+import { parseSvgGradients } from "../import/SvgGradient";
 import { PasteNodesAction } from "../actions/PasteNodesAction";
 import { RasterTool } from "../../editor/tools/RasterTool";
 import { SymmetryMode } from "../paint/Symmetry";
@@ -21785,5 +21786,89 @@ describe("Clipboard — copy, cut and paste", () => {
         // A root that is not among the nodes leaves the caller selecting something that does not exist.
         expect(new PasteNodesAction(doc, [node("N2")], ["other"]).validate()).toBe(false);
         expect(new PasteNodesAction(doc, [node("N3")], ["N3"]).validate()).toBe(true);
+    });
+});
+
+describe("Reading gradients out of an SVG", () => {
+    const svg = (defs: string) => `<svg xmlns="http://www.w3.org/2000/svg"><defs>${defs}</defs></svg>`;
+
+    test("a SELF-CLOSING gradient does not eat the one after it", () => {
+        // THE BUG THIS EXISTS FOR. One regex matching the open tag AND reaching for the closing
+        // tag swallows everything up to the NEXT gradient's close whenever the current tag is
+        // self-closing. 150 of the corpus's 3,127 gradients are self-closing, and the first
+        // version of this parser silently lost 151 of them — every gradient it DID return was
+        // well-formed, so nothing but a count could see it.
+        const map = parseSvgGradients(svg(
+            `<linearGradient id="a" href="#b"/>` +
+            `<linearGradient id="b"><stop offset="0" stop-color="#111"/><stop offset="1" stop-color="#222"/></linearGradient>` +
+            `<radialGradient id="c"><stop offset="0" stop-color="#333"/></radialGradient>`));
+        expect([...map.keys()].sort()).toEqual(["a", "b", "c"]);
+        // ...and the self-closing one inherited its stops, which is why it is written that way.
+        expect(map.get("a")!.stops.map(s => s.color)).toEqual(["#111", "#222"]);
+        expect(map.get("c")!.kind).toBe("radial");
+    });
+
+    test("inheritance is resolved in either declaration order, and a cycle stops", () => {
+        // SVG imposes no ordering and the corpus contains both directions, so this cannot be a
+        // single forward pass.
+        const forward = parseSvgGradients(svg(
+            `<linearGradient id="src"><stop offset="0" stop-color="#abc"/></linearGradient>` +
+            `<linearGradient id="dst" xlink:href="#src"/>`));
+        expect(forward.get("dst")!.stops[0].color).toBe("#abc");
+
+        // A CYCLE is a malformed file, not a hang.
+        const cyclic = parseSvgGradients(svg(
+            `<linearGradient id="x" href="#y"/><linearGradient id="y" href="#x"/>`));
+        expect(cyclic.get("x")!.stops).toEqual([]);
+        expect(cyclic.get("y")!.stops).toEqual([]);
+    });
+
+    test("percentages, style= spellings and defaults are all read", () => {
+        const map = parseSvgGradients(svg(
+            `<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="10" y1="20" x2="30" y2="40"` +
+            ` gradientTransform="translate(5,7)">` +
+            // A PERCENTAGE offset is a real spelling; read as the number 50 it lands fifty times
+            // past the end of the ramp.
+            `<stop offset="50%" stop-color="#0f0" stop-opacity="0.25"/>` +
+            // stop-color and stop-opacity also arrive inside `style=`, and a reader that knows
+            // only the attribute gives every such stop black at full opacity.
+            `<stop offset="100%" style="stop-color:#00f;stop-opacity:0.5"/>` +
+            `</linearGradient>`));
+        const g = map.get("g")!;
+        expect(g.units).toBe("userSpaceOnUse");
+        expect([g.x1, g.y1, g.x2, g.y2]).toEqual([10, 20, 30, 40]);
+        expect(g.transform).toMatchObject({ e: 5, f: 7 });
+        expect(g.stops[0]).toMatchObject({ offset: 0.5, color: "#0f0", opacity: 0.25 });
+        expect(g.stops[1]).toMatchObject({ offset: 1, color: "#00f", opacity: 0.5 });
+        expect(gradientError(g)).toBeNull();
+
+        // UNITS DEFAULT TO objectBoundingBox, which 150 files rely on — assuming the common
+        // `userSpaceOnUse` gets those wrong by an entire coordinate system.
+        const bare = parseSvgGradients(svg(`<linearGradient id="b"><stop offset="0" stop-color="#000"/></linearGradient>`));
+        expect(bare.get("b")!.units).toBe("objectBoundingBox");
+        expect(bare.get("b")!.stops[0].opacity).toBe(1);
+    });
+
+    test("a radial's FOCUS defaults to its own centre, not to the middle of the box", () => {
+        // `fx`/`fy` default to `cx`/`cy`. Defaulting them to a literal 0.5 drags the highlight to
+        // the centre of the box on every gradient that moves its circle — which is most of them.
+        const map = parseSvgGradients(svg(
+            `<radialGradient id="r" cx="0.2" cy="0.8" r="0.3"><stop offset="0" stop-color="#fff"/></radialGradient>`));
+        const r = map.get("r")!;
+        expect([r.cx, r.cy, r.r]).toEqual([0.2, 0.8, 0.3]);
+        expect([r.fx, r.fy]).toEqual([0.2, 0.8]);
+        // An explicitly stated focus still wins.
+        const stated = parseSvgGradients(svg(
+            `<radialGradient id="s" cx="0.2" cy="0.8" fx="0.9" fy="0.1"><stop offset="0" stop-color="#fff"/></radialGradient>`));
+        expect([stated.get("s")!.fx, stated.get("s")!.fy]).toEqual([0.9, 0.1]);
+    });
+
+    test("a duplicate id takes the FIRST, the way a browser does", () => {
+        // Invalid SVG, and 37 of them occur across 6 files in the corpus.
+        const map = parseSvgGradients(svg(
+            `<linearGradient id="dup"><stop offset="0" stop-color="#first"/></linearGradient>` +
+            `<linearGradient id="dup"><stop offset="0" stop-color="#second"/></linearGradient>`));
+        expect(map.size).toBe(1);
+        expect(map.get("dup")!.stops[0].color).toBe("#first");
     });
 });

@@ -1008,6 +1008,10 @@ migrate and nothing to bump.
 It is written down here because the file sits in `src/core/document` and a reader will find it and
 reasonably ask whether documents carry one. They do not.
 
+`core/import/SvgGradient.ts` now READS them — 3,090 of the corpus's 3,127 gradient tags (the other
+37 are duplicate ids, which a browser resolves to the first and so does this). Nothing consumes the
+result yet, for the same reason: there is nowhere in a document to put one.
+
 Making it a fill IS a schema change — `Style.fill` would become a colour **or** a gradient, which
 alters the interpretation of a persisted field and therefore demands a `SCHEMA_VERSION` bump, a
 `migrate_55_to_56` step, and this banner moving with it. That is the next commit's job, not a side

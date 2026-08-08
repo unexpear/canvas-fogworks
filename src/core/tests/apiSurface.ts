@@ -65,6 +65,7 @@ import { SurfaceSpace, surfaceSpaceError, worldToSurface, surfaceToWorld,
     surfacePixelSize } from "../paint/SurfaceSpace";
 import { RasterSurface, rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
 import { ClipboardContents, PasteResult, PASTE_OFFSET, copyNodes, remapForPaste } from "../document/Clipboard";
+import { parseSvgGradients } from "../import/SvgGradient";
 import { PasteNodesAction } from "../actions/PasteNodesAction";
 import { Gradient, GradientStop, GradientUnits, GradientSample, GRADIENT_MAX_STOPS,
     defaultGradient, gradientError, normalizeStops, sampleGradient } from "../document/Gradient";
@@ -1176,4 +1177,9 @@ function _clipboardSurface(): void {
     const paste = new PasteNodesAction(doc, [], []);
     expectType<Action>(paste);
     expectType<string[]>(paste.getCreatedRootIds());
+}
+
+/** `core/import/SvgGradient` — pinned on arrival, per the trigger. */
+function _svgGradientSurface(): void {
+    expectType<Map<string, Gradient>>(parseSvgGradients("<svg></svg>"));
 }
