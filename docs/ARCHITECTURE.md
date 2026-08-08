@@ -1295,15 +1295,21 @@ the payload changes, is the only version that does not leak while somebody paint
 Measured live: a stroke is visible after ONE animation frame (46 near-black pixels found with no
 settling delay, where the previous build found nothing).
 
-> **UNRESOLVED, found in the same session and not explained.** With two strokes on one surface, the
-> stored surface decodes to BOTH (rows 24 and 39 of a 70x50 canvas, 51 and 46 pixels) and the SVG
-> backend renders both — while the Canvas backend renders only the newer one, before and after a
-> forced repaint, at any threshold. Two consumers of ONE cache entry disagreeing should not be
-> possible, which means the assumption that they read the same entry is what to test first: log the
-> entry key each backend resolves for that node in the same frame. It may also be a fault in the
-> measurement rather than the renderer — the world-to-device mapping used for sampling is provably
-> not exact (a one-pixel line reads across two sampled rows). Recorded rather than glossed; the
-> synchronous decode is kept because its own benefit is independently measured.
+> **RESOLVED — and it was the implementation this replaced.** The open question here was that two
+> strokes on one surface left the stored surface holding BOTH (rows 24 and 39 of a 70x50) while the
+> Canvas backend drew only the newer one. Re-measured against the synchronous cache: Canvas draws
+> BOTH — surface rows 12 and 36 appear as device rows 11/12 and 35/36 at dpr 2.41, 128 dark pixels
+> each, which is a 53px stroke scaled. The divergence belonged to the `Image` + `onload` version,
+> where every stroke minted a NEW href-keyed entry and the load was asynchronous, so which entry a
+> frame drew from could depend on which had finished loading. Two consumers can no longer disagree
+> because `resolveSurface` and `surfaceUrl` both go through one `surfaceEntry`, keyed by node, and
+> the decode has no load to race.
+>
+> Two things that cost time and are worth not repeating. **Sampling with 3,500 separate
+> `getImageData` calls crashed Chromium's network service** — read the region ONCE and scan the
+> buffer in the page. And the backend switch is no longer a toolbar button (it moved to the View
+> menu, which CDP cannot click), so putting the Canvas backend under test now means flipping the
+> default in `App.tsx`, measuring, and reverting.
 
 **The superseded reasoning, for the record:** The cache is
 keyed on the href, the href folds in a checksum of the pixels, so EVERY STROKE IS A FRESH MISS —
