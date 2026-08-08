@@ -20,22 +20,37 @@
  * defined symbol, and skipping them would drop most of the drawing in the files that use them. A
  * symbol referencing its own ancestor is a loop rather than a picture, hence the bound.
  *
- * GRADIENTS FLATTEN TO THEIR FIRST STOP AND SAY SO. This engine has no gradient and 2,491 fills are
- * one — about three percent. Refusing those files would cost the other ninety-seven percent of their
- * shapes, and dropping the fill would produce an invisible one. Every approximation lands in `notes`
- * rather than being left for somebody to discover.
+ * A GRADIENT FILL ARRIVES WHOLE (schema 56), through `SvgGradient`. 2,491 fills reference one and
+ * every one of them used to arrive as its first stop; now only STROKES do, because `Style.stroke`
+ * is still a colour string and exactly one stroke in the measured corpus references a ramp.
+ *
+ * THE GRADIENT IS MOVED WITH THE SHAPE, which is the part that is easy to get silently wrong. This
+ * module BAKES the group transform into the coordinates, so a gradient left where the file put it
+ * would paint in a coordinate system the shape has already left. `placeGradient` premultiplies the
+ * same matrix, and turns `objectBoundingBox` into `userSpaceOnUse` by FOLDING the box into that
+ * matrix rather than multiplying the coordinates — a radial ramp in a non-square box is an ELLIPSE,
+ * which no cx/cy/r can state and a matrix states exactly.
+ *
+ * RESOLVED AT THE SHAPE, NOT WHERE THE FILL IS WRITTEN. An inherited `fill="url(#g)"` is resolved
+ * against the element that PAINTS — its box and its user space, not its parent’s — so the
+ * reference travels down the tree as a string and becomes a gradient only at the path that draws it.
+ *
+ * Every remaining approximation lands in `notes` rather than being left for somebody to discover.
  *
  * IT READS THE SHAPES THIS FORMAT DEFINES, NOT XML IN GENERAL — the same promise `TextureAtlas`
  * makes and for the same reason. What it cannot make sense of, it names.
  */
 
 import { PathCommand } from "../document/Node";
-import { Mat2D, IDENTITY, multiply } from "../geometry/Matrix";
+import { Mat2D, IDENTITY, multiply, parseSvgTransform } from "../geometry/Matrix";
 // The SAME function the shape layer already uses to push commands through a matrix. Written
 // again here first, which is the duplicate this codebase keeps designing out — one rule, one
 // place, and the compiler caught it the moment both names met in a test file.
 import { transformCommands } from "../geometry/ShapeToPath";
 import { parseSvgPath, svgPathError } from "./SvgPath";
+import { pathBounds } from "../geometry/PathBuilder";
+import { Gradient } from "../document/Gradient";
+import { parseSvgGradients } from "./SvgGradient";
 
 /** Shapes one file may yield, and how deep `<use>` may nest. Bounds on a hand-editable file. */
 export const SVG_MAX_SHAPES = 50_000;
@@ -45,8 +60,8 @@ export const SVG_MAX_USE_DEPTH = 16;
 export interface SvgShape {
     /** Absolute commands in the FILE's coordinate space — the group stack is already multiplied in. */
     commands: PathCommand[];
-    /** A hex colour, or null when the shape is not filled. */
-    fill: string | null;
+    /** A hex colour, a GRADIENT (schema 56), or null when the shape is not filled. */
+    fill: string | Gradient | null;
     stroke: string | null;
     strokeWidth: number | null;
     opacity: number;
@@ -91,34 +106,6 @@ function scanTags(xml: string): Tag[] {
     return out;
 }
 
-/** One `transform` attribute as a matrix. Unknown functions are skipped by the caller's note. */
-export function parseSvgTransform(text: string): Mat2D {
-    let m = IDENTITY;
-    for (const fn of text.matchAll(/([a-zA-Z]+)\s*\(([^)]*)\)/g)) {
-        const n = fn[2].trim().split(/[\s,]+/).filter(v => v.length > 0).map(Number);
-        if (n.some(v => !Number.isFinite(v))) continue;
-        const name = fn[1].toLowerCase();
-        let step: Mat2D | null = null;
-        if (name === "matrix" && n.length >= 6) step = { a: n[0], b: n[1], c: n[2], d: n[3], e: n[4], f: n[5] };
-        else if (name === "translate" && n.length >= 1) step = { a: 1, b: 0, c: 0, d: 1, e: n[0], f: n[1] ?? 0 };
-        else if (name === "scale" && n.length >= 1) step = { a: n[0], b: 0, c: 0, d: n[1] ?? n[0], e: 0, f: 0 };
-        else if (name === "rotate" && n.length >= 1) {
-            const r = (n[0] * Math.PI) / 180, cos = Math.cos(r), sin = Math.sin(r);
-            const rot: Mat2D = { a: cos, b: sin, c: -sin, d: cos, e: 0, f: 0 };
-            // A ROTATION ABOUT A POINT is three steps, and writing it as one is the usual way to get
-            // it subtly wrong — the centre has to be moved to the origin and back.
-            step = n.length >= 3
-                ? multiply(multiply({ a: 1, b: 0, c: 0, d: 1, e: n[1], f: n[2] }, rot),
-                    { a: 1, b: 0, c: 0, d: 1, e: -n[1], f: -n[2] })
-                : rot;
-        } else if (name === "skewx" && n.length >= 1) step = { a: 1, b: 0, c: Math.tan((n[0] * Math.PI) / 180), d: 1, e: 0, f: 0 };
-        else if (name === "skewy" && n.length >= 1) step = { a: 1, b: Math.tan((n[0] * Math.PI) / 180), c: 0, d: 1, e: 0, f: 0 };
-        // LEFT TO RIGHT: `transform="a b"` means a THEN b, which composes as a·b.
-        if (step) m = multiply(m, step);
-    }
-    return m;
-}
-
 /** What went wrong, or null. */
 export function svgDocumentError(xml: unknown): string | null {
     if (typeof xml !== "string") return "an SVG document must be a string";
@@ -135,26 +122,62 @@ function length(value: string | undefined): number | null {
     return Number.isFinite(n) ? n : null;
 }
 
-/** A colour this engine can hold, or null for none — flattening a gradient reference if asked. */
-function colour(
-    value: string | undefined, gradients: Map<string, string>, notes: string[]
-): string | null | undefined {
+/**
+ * A paint value as written, or null for none.
+ *
+ * A `url(#id)` IS RETURNED AS THE STRING IT IS, not resolved. SVG resolves a gradient against the
+ * element that PAINTS — its own bounding box and its own user space — and this value cascades, so
+ * resolving it here would give an inherited fill the wrong element’s geometry. The three
+ * functions below do the resolving, at the shape.
+ */
+function colour(value: string | undefined): string | null | undefined {
     if (value === undefined) return undefined;              // not stated: inherit
     const v = value.trim();
     if (v === "" || v.toLowerCase() === "none") return null;
-    const url = /^url\(\s*#([^)\s]+)\s*\)$/.exec(v);
-    if (url) {
-        const first = gradients.get(url[1]);
-        // FLATTENED TO THE FIRST STOP and reported. An unresolvable reference has no colour to fall
-        // back to, so the shape is left unfilled rather than painted a guess.
-        if (first) {
-            notes.push(`gradient "${url[1]}" flattened to ${first}`);
-            return first;
-        }
-        notes.push(`gradient "${url[1]}" could not be resolved`);
-        return null;
-    }
     return v;
+}
+
+/** Whether a paint value points at a paint server rather than naming a colour. */
+function isReference(value: string | null): boolean {
+    return value !== null && /^url\(/.test(value.trim());
+}
+
+/** The gradient a paint value references, or null when it references none — or none that resolves. */
+function referenced(
+    value: string | null, gradients: Map<string, Gradient>, notes: string[]
+): Gradient | null {
+    if (value === null) return null;
+    const url = /^url\(\s*#([^)\s]+)\s*\)$/.exec(value.trim());
+    if (!url) return null;
+    const g = gradients.get(url[1]);
+    // An unresolvable reference has no colour to fall back to, so the caller leaves the shape
+    // unfilled rather than painting a guess.
+    if (!g) { notes.push(`gradient "${url[1]}" could not be resolved`); return null; }
+    // A ramp with NO STOPS paints nothing in SVG, and `gradientError` refuses it — so it is treated
+    // as an unresolved reference rather than carried into a document that would then not load.
+    if (g.stops.length === 0) { notes.push(`gradient "${url[1]}" has no stops`); return null; }
+    return g;
+}
+
+/**
+ * A gradient moved into the space this module leaves its coordinates in.
+ *
+ * `own` is the group stack that has ALREADY been multiplied through the path’s coordinates, so
+ * the gradient has to travel with them or it paints in a system the shape has left. And
+ * `objectBoundingBox` is folded into the matrix rather than multiplied into the coordinates,
+ * because a radial ramp in a non-square box is an ellipse: `translate(box) · scale(size)` says that
+ * exactly, and `cx/cy/r` cannot say it at all.
+ */
+function placeGradient(g: Gradient, own: Mat2D, local: readonly PathCommand[]): Gradient {
+    let m = own;
+    if (g.units === "objectBoundingBox") {
+        const b = pathBounds(local);
+        // A ZERO-EXTENT axis would make the fold singular and collapse the whole ramp to one
+        // colour. SVG says such an element is not rendered at all; a unit box keeps it visible,
+        // which is the more useful of the two wrong answers for an importer.
+        m = multiply(m, { a: b.width || 1, b: 0, c: 0, d: b.height || 1, e: b.x, f: b.y });
+    }
+    return { ...g, units: "userSpaceOnUse", transform: multiply(m, g.transform) };
 }
 
 /**
@@ -171,18 +194,11 @@ export function parseSvgDocument(xml: string): SvgDocumentResult {
     const tags = scanTags(xml);
     const notes: string[] = [];
 
-    // Gradients first: a fill may reference one defined later in the file, so a single forward pass
-    // would resolve some and miss others depending only on where the author put them.
-    const gradients = new Map<string, string>();
-    for (let i = 0; i < tags.length; i++) {
-        const t = tags[i];
-        if (t.closing || !/^(linear|radial)Gradient$/i.test(t.name) || !t.attrs.id) continue;
-        for (let k = i + 1; k < tags.length; k++) {
-            if (tags[k].closing && /Gradient$/i.test(tags[k].name)) break;
-            const stop = tags[k].attrs["stop-color"];
-            if (tags[k].name === "stop" && stop) { gradients.set(t.attrs.id, stop.trim()); break; }
-        }
-    }
+    // Every gradient in the file, read in full by the module that owns them. This used to be a
+    // hand-rolled scan for the first `stop-color`, which is all a flattening importer needs;
+    // `parseSvgGradients` also handles `href` inheritance, a `style=` spelling of the stop colour,
+    // duplicate ids and self-closing tags — 3,090 ramps across the measured corpus.
+    const gradients = parseSvgGradients(xml);
 
     // Where each id's element begins, so `<use>` can replay it.
     const byId = new Map<string, number>();
@@ -210,8 +226,8 @@ export function parseSvgDocument(xml: string): SvgDocumentResult {
                 continue;
             }
             const own = t.attrs.transform ? multiply(current.matrix, parseSvgTransform(t.attrs.transform)) : current.matrix;
-            const fill = colour(t.attrs.fill, gradients, notes);
-            const stroke = colour(t.attrs.stroke, gradients, notes);
+            const fill = colour(t.attrs.fill);
+            const stroke = colour(t.attrs.stroke);
             const sw = length(t.attrs["stroke-width"]);
             const op = Number(t.attrs.opacity);
             const inherited: Inherited = {
@@ -225,9 +241,23 @@ export function parseSvgDocument(xml: string): SvgDocumentResult {
                 if (svgPathError(t.attrs.d) !== null) {
                     notes.push(`a path was skipped: ${svgPathError(t.attrs.d)}`);
                 } else {
+                    // Parsed ONCE and used twice: the untransformed commands are what this shape’s
+                    // own bounding box means, and that box is what `objectBoundingBox` is a
+                    // fraction of.
+                    const local = parseSvgPath(t.attrs.d);
+                    const ramp = referenced(inherited.fill, gradients, notes);
+                    // A STROKE still flattens: `Style.stroke` is a colour string, and exactly one
+                    // stroke in the 3,127 measured gradients references a ramp.
+                    const strokeRamp = referenced(inherited.stroke, gradients, notes);
+                    if (strokeRamp) notes.push(`a stroke gradient flattened to ${strokeRamp.stops[0].color}`);
                     shapes.push({
-                        commands: transformCommands(own, parseSvgPath(t.attrs.d)),
-                        fill: inherited.fill, stroke: inherited.stroke,
+                        commands: transformCommands(own, local),
+                        // A reference that did NOT resolve leaves the shape unfilled — never the
+                        // literal "url(#g)", which the renderer would take for a colour name.
+                        fill: ramp ? placeGradient(ramp, own, local)
+                            : isReference(inherited.fill) ? null : inherited.fill,
+                        stroke: strokeRamp ? strokeRamp.stops[0].color
+                            : isReference(inherited.stroke) ? null : inherited.stroke,
                         strokeWidth: inherited.strokeWidth, opacity: inherited.opacity
                     });
                 }

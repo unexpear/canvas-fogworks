@@ -70,7 +70,8 @@ import { parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../
 import { trimmedPlacement, inkUnion } from "../import/Trim";
 import { parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_ENTRIES } from "../import/TextureAtlas";
 import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/SvgPath";
-import { parseSvgDocument, svgDocumentError, parseSvgTransform, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
+import { parseSvgDocument, svgDocumentError, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
+import { parseSvgTransform } from "../geometry/Matrix";
 import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
@@ -96,7 +97,7 @@ import { paletteError, paletteAt, parseFloatColour, parsePaletteFile, PALETTE_MA
 import { symmetryPoints, isMirrored, NO_SYMMETRY } from "../paint/Symmetry";
 import { nearestColour, colourDistance, quantizeToPalette } from "../paint/Quantize";
 import { worldToSurface, surfaceToWorld, surfacePixelSize, surfaceSpaceError } from "../paint/SurfaceSpace";
-import { defaultGradient, gradientError, normalizeStops, sampleGradient, GRADIENT_MAX_STOPS } from "../document/Gradient";
+import { defaultGradient, gradientError, normalizeStops, sampleGradient, GRADIENT_MAX_STOPS, Gradient } from "../document/Gradient";
 import { copyNodes, remapForPaste, PASTE_OFFSET } from "../document/Clipboard";
 import { parseSvgGradients } from "../import/SvgGradient";
 import { PasteNodesAction } from "../actions/PasteNodesAction";
@@ -17093,7 +17094,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(siblings.shapes[0].commands[0]).toEqual({ c: "M", x: 1, y: 1 });
     });
 
-    test("style inherits down the tree, and a gradient flattens with a note", () => {
+    test("style inherits down the tree, and an unresolvable paint leaves the shape unfilled", () => {
         const doc = parseSvgDocument(
             '<svg><g fill="#aabbcc" opacity="0.5" stroke="#000000" stroke-width="3">' +
             '<path d="M0 0"/><path d="M1 1" fill="#ffffff" opacity="0.5"/></g></svg>');
@@ -17107,14 +17108,15 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // `none` is a real answer, distinct from "not stated".
         expect(parseSvgDocument('<svg><path d="M0 0" fill="none"/></svg>').shapes[0].fill).toBeNull();
 
-        // A GRADIENT flattens to its first stop and SAYS SO. This engine has no gradient and 2,491
-        // fills in the measured art are one; refusing them would cost the other 97% of those files.
+        // A GRADIENT arrives WHOLE since schema 56 — see the gradient-import block below for what
+        // it carries. Here only that it is no longer a colour, and no longer an approximation.
         const grad = parseSvgDocument(
             '<svg><defs><linearGradient id="g"><stop stop-color="#ff0000"/><stop stop-color="#0000ff"/>' +
             '</linearGradient></defs><path d="M0 0" fill="url(#g)"/></svg>');
-        expect(grad.shapes[0].fill).toBe("#ff0000");
-        expect(grad.notes.join(" ")).toMatch(/flattened/);
-        // An unresolvable one leaves the shape UNFILLED rather than painting a guess.
+        expect(typeof grad.shapes[0].fill).toBe("object");
+        expect(grad.notes.join(" ")).not.toMatch(/flattened/);
+        // An unresolvable one leaves the shape UNFILLED rather than painting a guess — and never
+        // the literal "url(#nope)", which the renderer would take for a colour name.
         const missing = parseSvgDocument('<svg><path d="M0 0" fill="url(#nope)"/></svg>');
         expect(missing.shapes[0].fill).toBeNull();
         expect(missing.notes.join(" ")).toMatch(/could not be resolved/);
@@ -22054,5 +22056,144 @@ describe("A gradient as a fill (schema 56)", () => {
         // The flat colour must NOT appear as a fill: that would mean the ramp was written into
         // defs and then ignored.
         expect(out).not.toContain('fill="#ff0000"');
+    });
+});
+
+// ─── Importing a gradient, and moving it with the shape (schema 56) ───
+//
+// MEASURED FIRST, and the measurement decided what has to be a hand-built fixture. Across the
+// 5,279-file corpus: 2,785 imported shapes now carry a real ramp, 99.78% of them landing on the
+// part of the ramp that paints them (the sweep maps each node's box back into gradient space and
+// reads the parameter t). But NOT ONE of the 2,491 gradient fill references in that corpus points
+// at an `objectBoundingBox` gradient — 150 exist and none is referenced by a fill. So the corpus
+// cannot see the box fold at all, and three mutations of it survived the sweep. Everything about
+// that fold is therefore asserted here, on exact arithmetic, and nowhere else.
+describe("Importing a gradient fill (schema 56)", () => {
+    const ramp = (attrs: string, extra = "") =>
+        `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0" ${attrs}>` +
+        `<stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/>` +
+        `</linearGradient>${extra}</defs>`;
+    // A box that is NOT square (8 x 20) and NOT at the origin (4, 5) — the two properties that make
+    // a swapped dimension and a dropped origin visible. `M 4 5 L 12 5 L 12 25 Z`.
+    const D = "M 4 5 L 12 5 L 12 25 Z";
+    const specOf = (xml: string) => svgNodeSpecs(parseSvgDocument(xml).shapes)[0];
+
+    test("a gradient survives the import instead of flattening to its first stop", () => {
+        const spec = specOf(`<svg>${ramp('gradientUnits="userSpaceOnUse"')}<path d="${D}" fill="url(#g)"/></svg>`);
+        const fill = spec.style.fill as Gradient;
+        expect(typeof fill).not.toBe("string");
+        expect(fill.stops.map(s => s.color)).toEqual(["#ff0000", "#0000ff"]);
+        // And what arrives is a LEGAL fill, so the document it lands in will actually load. This is
+        // the check that would have caught the load gate still demanding a string.
+        expect(styleError(spec.style)).toBeNull();
+    });
+
+    test("objectBoundingBox is FOLDED into the matrix, box and all", () => {
+        // Nothing in the corpus exercises this. The arithmetic, by hand:
+        //   bbox of the untransformed path = (4, 5, 8, 20)
+        //   fold                           = { a: 8, b: 0, c: 0, d: 20, e: 4, f: 5 }
+        //   own = translate(10, 20)        ⇒ own · fold = { 8, 0, 0, 20, 14, 25 }
+        //   the baked path's box is (14, 25, 8, 20), so normalising subtracts exactly that
+        //   ⇒ { a: 8, b: 0, c: 0, d: 20, e: 0, f: 0 }
+        const spec = specOf(`<svg>${ramp("")}<g transform="translate(10,20)"><path d="${D}" fill="url(#g)"/></g></svg>`);
+        const fill = spec.style.fill as Gradient;
+        // Converted, so nothing downstream has to know a second coordinate system exists.
+        expect(fill.units).toBe("userSpaceOnUse");
+        // The COORDINATES are untouched — the box went into the matrix, not into them.
+        expect([fill.x1, fill.y1, fill.x2, fill.y2]).toEqual([0, 0, 1, 0]);
+        expect(fill.transform).toEqual({ a: 8, b: 0, c: 0, d: 20, e: 0, f: 0 });
+        // Which means, read back: the ramp runs (0,0) → (8,0) across a node 8 wide. Left to right
+        // over the shape, which is what stating nothing means in SVG.
+        expect(applyToPoint(fill.transform, 0, 0)).toEqual({ x: 0, y: 0 });
+        expect(applyToPoint(fill.transform, 1, 0)).toEqual({ x: 8, y: 0 });
+        expect(spec.geometry).toEqual({ x: 14, y: 25, width: 8, height: 20 });
+    });
+
+    test("the gradientTransform composes INSIDE the fold, not outside it", () => {
+        // `translate(0.5,0)` in gradient space is half the box across once the fold scales it — 4
+        // units of a box 8 wide. Composed the other way round it would be half a USER unit, and
+        // the two are only equal when the fold is the identity, which is why the box is not square
+        // and the group is moved.
+        const spec = specOf(`<svg>${ramp('gradientTransform="translate(0.5,0)"')}` +
+            `<g transform="translate(10,20)"><path d="${D}" fill="url(#g)"/></g></svg>`);
+        const fill = spec.style.fill as Gradient;
+        expect(fill.transform).toEqual({ a: 8, b: 0, c: 0, d: 20, e: 4, f: 0 });
+    });
+
+    test("a RADIAL box fold makes the ellipse no cx/cy/r could state", () => {
+        const spec = specOf(
+            `<svg><defs><radialGradient id="g">` +
+            `<stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/>` +
+            `</radialGradient></defs><path d="${D}" fill="url(#g)"/></svg>`);
+        const fill = spec.style.fill as Gradient;
+        // The circle is left a circle and the box does the distorting. Baking it into `r` is the
+        // thing that CANNOT be done: one radius cannot describe 4 across and 10 down.
+        expect([fill.cx, fill.cy, fill.r]).toEqual([0.5, 0.5, 0.5]);
+        expect(fill.transform).toEqual({ a: 8, b: 0, c: 0, d: 20, e: 0, f: 0 });
+        // Read back: the circle's rim at (1, 0.5) is 4 across, and at (0.5, 1) it is 10 down.
+        expect(applyToPoint(fill.transform, 1, 0.5)).toEqual({ x: 8, y: 10 });
+        expect(applyToPoint(fill.transform, 0.5, 1)).toEqual({ x: 4, y: 20 });
+    });
+
+    test("a userSpaceOnUse ramp travels with the BAKED group transform", () => {
+        // This module multiplies the group stack through the coordinates, so a ramp left where the
+        // file put it would paint in a system the shape has already left. `scale(2)` doubles the
+        // path; the ramp has to double with it or it covers half the shape.
+        const spec = specOf(`<svg>${ramp('gradientUnits="userSpaceOnUse" x2="8"')}` +
+            `<g transform="scale(2)"><path d="${D}" fill="url(#g)"/></g></svg>`);
+        const fill = spec.style.fill as Gradient;
+        // own = scale(2); the baked box is (8, 10, 16, 40), so the fold is translate(-8, -10).
+        expect(fill.transform).toEqual({ a: 2, b: 0, c: 0, d: 2, e: -8, f: -10 });
+        expect(spec.geometry).toEqual({ x: 8, y: 10, width: 16, height: 40 });
+        // The stated axis 0 → 8 in FILE space becomes -8 → 8 in node space: the ramp starts half a
+        // box to the left of the ink, which is exactly where the file put it relative to the shape.
+        expect(applyToPoint(fill.transform, 0, 0)).toEqual({ x: -8, y: -10 });
+        expect(applyToPoint(fill.transform, 8, 0)).toEqual({ x: 8, y: -10 });
+    });
+
+    test("an inherited url() is resolved against the SHAPE, not the group that wrote it", () => {
+        // SVG resolves a paint server against the element that PAINTS — its box, its user space.
+        // Two siblings inheriting one fill from their parent get two different placements, and a
+        // resolver that ran where the attribute was written would give them the same one.
+        const doc = parseSvgDocument(
+            `<svg>${ramp("")}<g fill="url(#g)">` +
+            `<path d="M 0 0 L 10 0 L 10 10 Z"/><path d="M 100 0 L 140 0 L 140 20 Z"/></g></svg>`);
+        const specs = svgNodeSpecs(doc.shapes);
+        const a = specs[0].style.fill as Gradient, b = specs[1].style.fill as Gradient;
+        expect(a.transform).toEqual({ a: 10, b: 0, c: 0, d: 10, e: 0, f: 0 });
+        expect(b.transform).toEqual({ a: 40, b: 0, c: 0, d: 20, e: 0, f: 0 });
+    });
+
+    test("a STROKE gradient still flattens, and says so", () => {
+        // `Style.stroke` is a colour string and exactly ONE stroke in the 3,127 measured gradients
+        // references a ramp — widening it too would double the work in three backends for that one.
+        const doc = parseSvgDocument(
+            `<svg>${ramp("")}<path d="${D}" fill="none" stroke="url(#g)"/></svg>`);
+        expect(doc.shapes[0].stroke).toBe("#ff0000");
+        expect(doc.notes.join(" ")).toMatch(/stroke gradient flattened to #ff0000/);
+    });
+
+    test("a reference that resolves to nothing leaves the shape unfilled, never the url string", () => {
+        // "url(#g)" reaching `Style.fill` would be read as a colour name and render as the missing-
+        // colour magenta — a worse answer than no fill, and one that looks like a renderer bug.
+        const missing = specOf(`<svg><path d="${D}" fill="url(#nope)"/></svg>`);
+        expect(missing.style.fill).toBe(SVG_TRANSPARENT);
+        // A gradient with NO STOPS is refused the same way: `gradientError` would reject it, so a
+        // document holding one would save and then fail to load.
+        const empty = parseSvgDocument(
+            `<svg><defs><linearGradient id="g"/></defs><path d="${D}" fill="url(#g)"/></svg>`);
+        expect(empty.shapes[0].fill).toBeNull();
+        expect(empty.notes.join(" ")).toMatch(/has no stops/);
+    });
+
+    test("a zero-extent axis does not collapse the whole ramp to one colour", () => {
+        // An axis-aligned path has a zero-height box, and folding it in verbatim gives a SINGULAR
+        // matrix — every point maps onto one line and the ramp becomes a single colour. SVG says
+        // such an element is not rendered at all; a unit box keeps it visible, which is the more
+        // useful of the two wrong answers for an importer.
+        const spec = specOf(`<svg>${ramp("")}<path d="M 4 5 L 12 5" fill="url(#g)"/></svg>`);
+        const fill = spec.style.fill as Gradient;
+        expect(fill.transform.d).toBe(1);
+        expect(invert(fill.transform)).not.toBeNull();
     });
 });

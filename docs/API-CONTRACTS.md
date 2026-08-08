@@ -839,10 +839,10 @@ function parseSvgTransform(text: string): Mat2D;        // matrix/translate/scal
 - Coordinates go through `ShapeToPath.transformCommands`, the function the shape layer already uses.
 - `<use>` is EXPANDED (19,194 elements in the measured art) with a depth bound, since a symbol
   referencing its own ancestor is a loop.
-- Gradients flatten to their first stop and every approximation lands in `notes`. `SvgGradient`
-  reads the real thing separately (3,090 ramps across the corpus); wiring it into `SvgDocument`
-  so an imported shape arrives with its ramp is the remaining step, now that `Style.fill` can
-  hold one.
+- A gradient FILL arrives whole (schema 56): `SvgShape.fill` is `string | Gradient | null`, read
+  through `SvgGradient` and moved into the shape's space by `placeGradient` (the baked group
+  transform) and again by `svgNodeSpecs` (the path normalisation). Only STROKES flatten to a first
+  stop, and that lands in `notes` like every other approximation.
 - Verified against all 5,279 real files: 109,036 shapes, none empty, none rejected by `pathError`.
 
 ### `core/import/MeshData` — what every 3D reader produces

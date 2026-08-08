@@ -1136,6 +1136,18 @@ pre-distorted points.
 The flat colour is decided once, in the render model (`PaintGradient.flat`), so the three surfaces
 that flatten all show the same colour rather than each choosing.
 
+**Imported whole.** `SvgDocument` resolves a `url(#id)` fill through `SvgGradient` and hands the
+ramp to the node — 2,785 shapes across the 5,279-file corpus. Only STROKES still flatten. The
+gradient is MOVED with the shape at two points, and both are invisible to the type system: this
+importer bakes the group transform into the coordinates, so `placeGradient` premultiplies the same
+matrix; and `svgNodeSpecs` normalises the path onto the origin, so it premultiplies that
+translation too. `objectBoundingBox` becomes `userSpaceOnUse` by folding `translate(box) ·
+scale(size)` into the matrix rather than multiplying the coordinates — a radial ramp in a
+non-square box is an ellipse, which a matrix states exactly and `cx/cy/r` cannot state at all.
+A reference that does not resolve, or resolves to a stopless ramp, leaves the shape unfilled and
+says so in `notes`; the literal `url(#g)` never reaches `Style.fill`, where it would be read as a
+colour name.
+
 ## Persistence (localStorage convenience wrapper)
 
 ```ts

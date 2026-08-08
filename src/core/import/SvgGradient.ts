@@ -20,7 +20,7 @@
  */
 
 import { Gradient, GradientStop, defaultGradient, normalizeStops, GRADIENT_MAX_STOPS } from "../document/Gradient";
-import { parseSvgTransform } from "./SvgDocument";
+import { parseSvgTransform } from "../geometry/Matrix";
 
 /** Attributes of one tag, single or double quoted — the same loose reading the Tiled reader uses. */
 function attributes(tag: string): Record<string, string> {

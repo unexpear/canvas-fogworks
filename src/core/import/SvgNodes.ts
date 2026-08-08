@@ -12,14 +12,21 @@
  * module calls it rather than computing bounds again — the same reuse the last commit had to learn
  * the hard way, having written a second `transformCommands` before the compiler objected.
  *
- * SO WHAT IS LEFT HERE IS THE STYLE, which is where the two models genuinely differ. A node's
- * `fill` is a required string; SVG's may be absent, `none`, or a gradient already flattened
- * upstream. `none` becomes fully transparent black rather than being dropped, because a shape with
- * no fill and a stroke is a real drawing and a node has to hold some fill either way.
+ * SO WHAT IS LEFT HERE IS THE STYLE, which is where the two models genuinely differ. A node’s
+ * `fill` is required; SVG’s may be absent or `none`, which becomes fully transparent black rather
+ * than being dropped, because a shape with no fill and a stroke is a real drawing and a node has to
+ * hold some fill either way.
+ *
+ * AND A GRADIENT HAS TO MOVE WITH THE BOX (schema 56). `normalizePathNode` translates the commands
+ * onto the origin, so a gradient left alone would stay where the ink used to be — off the shape
+ * entirely for anything not already at (0,0), which is nearly everything. It is the SAME class of
+ * mistake `placeGradient` handles upstream for the group transform, one step further along, and it
+ * is invisible to the type system: a gradient that is never touched here still compiles and still
+ * loads. Only pixels or arithmetic can see it.
  */
 
 import { PathCommand, Style } from "../document/Node";
-import { Rect } from "../geometry/Matrix";
+import { Rect, multiply, translation } from "../geometry/Matrix";
 import { normalizePathNode } from "../geometry/PathBuilder";
 import { SvgShape } from "./SvgDocument";
 
@@ -60,7 +67,16 @@ export function svgNodeSpecs(shapes: readonly SvgShape[]): SvgNodeSpec[] {
         if (placed.geometry.width === 0 && placed.geometry.height === 0) continue;
 
         const style: Style = {
-            fill: shape.fill ?? SVG_TRANSPARENT,
+            fill: shape.fill === null ? SVG_TRANSPARENT
+                : typeof shape.fill === "string" ? shape.fill
+                    // The commands moved by (-x, -y); the ramp moves with them. Premultiplied,
+                    // because the translation happens AFTER everything the gradient already
+                    // carries — the group stack and the bounding-box fold.
+                    : {
+                        ...shape.fill,
+                        transform: multiply(translation(-placed.geometry.x, -placed.geometry.y),
+                            shape.fill.transform)
+                    },
             // CLAMPED, because `styleError` refuses anything outside [0,1] and a product of nested
             // opacities can land a hair outside it in floating point. Refusing the shape over a
             // rounding error would be a poor trade.

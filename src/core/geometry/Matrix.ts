@@ -135,6 +135,43 @@ export function toMatrixString(m: Mat2D): string {
     return `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})`;
 }
 
+/**
+ * The INVERSE of `toMatrixString`, and the whole SVG `transform` grammar rather than just
+ * `matrix()`.
+ *
+ * HERE, beside the serializer it undoes, and not in an import module — two of them need it now
+ * (`SvgDocument` for a group's transform, `SvgGradient` for a `gradientTransform`), and the second
+ * importing it from the first made the two files import each other. Matrix imports nothing, so the
+ * cycle cannot come back.
+ */
+/** One `transform` attribute as a matrix. Unknown functions are skipped by the caller's note. */
+export function parseSvgTransform(text: string): Mat2D {
+    let m = IDENTITY;
+    for (const fn of text.matchAll(/([a-zA-Z]+)\s*\(([^)]*)\)/g)) {
+        const n = fn[2].trim().split(/[\s,]+/).filter(v => v.length > 0).map(Number);
+        if (n.some(v => !Number.isFinite(v))) continue;
+        const name = fn[1].toLowerCase();
+        let step: Mat2D | null = null;
+        if (name === "matrix" && n.length >= 6) step = { a: n[0], b: n[1], c: n[2], d: n[3], e: n[4], f: n[5] };
+        else if (name === "translate" && n.length >= 1) step = { a: 1, b: 0, c: 0, d: 1, e: n[0], f: n[1] ?? 0 };
+        else if (name === "scale" && n.length >= 1) step = { a: n[0], b: 0, c: 0, d: n[1] ?? n[0], e: 0, f: 0 };
+        else if (name === "rotate" && n.length >= 1) {
+            const r = (n[0] * Math.PI) / 180, cos = Math.cos(r), sin = Math.sin(r);
+            const rot: Mat2D = { a: cos, b: sin, c: -sin, d: cos, e: 0, f: 0 };
+            // A ROTATION ABOUT A POINT is three steps, and writing it as one is the usual way to get
+            // it subtly wrong — the centre has to be moved to the origin and back.
+            step = n.length >= 3
+                ? multiply(multiply({ a: 1, b: 0, c: 0, d: 1, e: n[1], f: n[2] }, rot),
+                    { a: 1, b: 0, c: 0, d: 1, e: -n[1], f: -n[2] })
+                : rot;
+        } else if (name === "skewx" && n.length >= 1) step = { a: 1, b: 0, c: Math.tan((n[0] * Math.PI) / 180), d: 1, e: 0, f: 0 };
+        else if (name === "skewy" && n.length >= 1) step = { a: 1, b: Math.tan((n[0] * Math.PI) / 180), c: 0, d: 1, e: 0, f: 0 };
+        // LEFT TO RIGHT: `transform="a b"` means a THEN b, which composes as a·b.
+        if (step) m = multiply(m, step);
+    }
+    return m;
+}
+
 /** True when the matrix is a pure translation — lets the renderer skip transform emission. */
 export function isTranslationOnly(m: Mat2D): boolean {
     return m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1;

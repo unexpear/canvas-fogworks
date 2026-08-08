@@ -74,7 +74,7 @@ import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/Sc
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, GridCell, breakFlexLines, FlexLine, resolveMargin, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
-import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, isTranslationOnly } from "../geometry/Matrix";
+import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, parseSvgTransform, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
 import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot, DOCUMENT_DELTA_KEY } from "../actions/types";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
@@ -121,7 +121,7 @@ import { Sequence, SequenceFrame, parseFrameName, groupSequences, sequenceTrack,
 import { Trim, TrimBox, trimmedPlacement, inkUnion } from "../import/Trim";
 import { Atlas, AtlasEntry, parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_ENTRIES } from "../import/TextureAtlas";
 import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/SvgPath";
-import { SvgShape, SvgDocumentResult, parseSvgDocument, svgDocumentError, parseSvgTransform,
+import { SvgShape, SvgDocumentResult, parseSvgDocument, svgDocumentError,
     SVG_MAX_SHAPES, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
 import { SvgNodeSpec, svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { FontInfo, FontFlavour, parseFontFile, fontFileError, FONT_MAX_TABLES, FONT_MAX_NAMES } from "../import/FontFile";
@@ -749,7 +749,12 @@ export function __apiSurfacePin(): void {
     const svgDoc: SvgDocumentResult = parseSvgDocument('<svg><path d="M0 0"/></svg>');
     expectType<SvgDocumentResult>(svgDoc);
     expectType<SvgShape[]>(svgDoc.shapes);
+    // A colour, a GRADIENT (schema 56), or unfilled — the union is what stops a consumer quietly
+    // stringifying a ramp into a fill attribute.
+    expectType<string | Gradient | null>(svgDoc.shapes[0].fill);
     expectType<string[]>(svgDoc.notes);
+    // Beside `toMatrixString`, which it undoes — moved out of `SvgDocument` when a second import
+    // module needed it and the two started importing each other.
     expectType<Mat2D>(parseSvgTransform("translate(1,2)"));
     expectType<number>(SVG_MAX_SHAPES); expectType<number>(SVG_MAX_USE_DEPTH);
     // …and the shapes as NODES: a box where the ink is, commands relative to its corner. The
