@@ -54,56 +54,113 @@ function createWindow() {
         mainWindow = null;
     });
 
+    /**
+     * Send a command the renderer knows how to run.
+     *
+     * ONE CHANNEL, NOT ONE PER ITEM. The previous menu had a channel per entry (`menu-new`,
+     * `menu-save`), which meant every new item needed a preload export, a type in App.tsx and an
+     * effect — three files to add one line to a menu. A command string needs none of that, and the
+     * renderer ignores what it does not recognise, so an older build never breaks on a newer menu.
+     */
+    const send = (command) => () => mainWindow?.webContents.send("menu-command", command);
+
     const menuTemplate = [
         {
             label: "File",
             submenu: [
-                {
-                    label: "New Project",
-                    accelerator: "CmdOrCtrl+N",
-                    click: () => mainWindow?.webContents.send("menu-new")
-                },
-                {
-                    label: "Open...",
-                    accelerator: "CmdOrCtrl+O",
-                    click: () => openFileDialog()
-                },
-                {
-                    label: "Save",
-                    accelerator: "CmdOrCtrl+S",
-                    click: () => mainWindow?.webContents.send("menu-save")
-                },
-                {
-                    label: "Save As...",
-                    accelerator: "CmdOrCtrl+Shift+S",
-                    click: () => saveFileDialog()
-                },
+                { label: "New Project", accelerator: "CmdOrCtrl+N", click: send("file.new") },
+                { label: "Open...", accelerator: "CmdOrCtrl+O", click: () => openFileDialog() },
                 { type: "separator" },
-                { role: "quit" }
+                { label: "Save", accelerator: "CmdOrCtrl+S", click: send("file.save") },
+                { label: "Save As...", accelerator: "CmdOrCtrl+Shift+S", click: () => saveFileDialog() },
+                { type: "separator" },
+                // ONE HONEST ITEM, not a submenu promising "SVG..." and "Sprite Sheet...". Both
+                // exports live behind a folder the user picks, in one panel — so this opens that
+                // panel. A menu entry that names a format and then asks a different question is a
+                // worse lie than a plain one.
+                { label: "Export...", accelerator: "CmdOrCtrl+E", click: send("file.export") },
+                { type: "separator" },
+                { role: "quit", label: "Exit" }
             ]
         },
         {
+            /**
+             * DOCUMENT COMMANDS, not web-content ones.
+             *
+             * This menu used to hold `role: "selectAll"` and `role: "delete"` — Chromium roles that
+             * select the DOM and delete text in a focused field. On a canvas app they are simply
+             * the wrong verbs: "Select All" has to mean every NODE. The roles stay only where they
+             * are still right, on the clipboard items, which serve the inspector's text fields.
+             *
+             * NO ACCELERATORS ON THE ITEMS THE CANVAS ALREADY BINDS. `editor/shortcuts.ts` owns
+             * Ctrl+Z, Ctrl+D, Delete, Ctrl+A and Escape, and a menu accelerator on the same chord
+             * fires the command a SECOND time — one undo would jump two steps. The key is shown in
+             * the label so it is still discoverable, and there is exactly one thing binding it.
+             */
             label: "Edit",
             submenu: [
-                { role: "cut" },
-                { role: "copy" },
-                { role: "paste" },
-                { role: "delete" },
-                { role: "selectAll" }
+                { label: "Undo	Ctrl+Z", click: send("edit.undo") },
+                { label: "Redo	Ctrl+Shift+Z", click: send("edit.redo") },
+                { type: "separator" },
+                { label: "Duplicate	Ctrl+D", click: send("edit.duplicate") },
+                { label: "Delete	Del", click: send("edit.delete") },
+                { type: "separator" },
+                { label: "Select All	Ctrl+A", click: send("edit.selectAll") },
+                { label: "Deselect	Esc", click: send("edit.deselect") },
+                { label: "Frame Selection	Ctrl+G", click: send("edit.group") },
+                { type: "separator" },
+                // Still the right verbs: these serve the inspector's text fields, not the canvas.
+                { role: "cut" }, { role: "copy" }, { role: "paste" }
             ]
         },
         {
             label: "View",
             submenu: [
-                { role: "reload" },
-                { role: "toggleDevTools" },
+                { label: "Zoom In", accelerator: "CmdOrCtrl+=", click: send("view.zoomIn") },
+                { label: "Zoom Out", accelerator: "CmdOrCtrl+-", click: send("view.zoomOut") },
+                { label: "Zoom to 100%", accelerator: "CmdOrCtrl+0", click: send("view.zoomReset") },
+                { type: "separator" },
+                { label: "Timeline", accelerator: "CmdOrCtrl+T", click: send("view.timeline") },
+                { label: "Light / Dark Theme", click: send("view.theme") },
+                { type: "separator" },
+                {
+                    // NOT a radio group, deliberately. A checkmark has to be kept in step with the
+                    // renderer's state, and a menu that opens showing the WRONG mark is worse than
+                    // one that shows none — so these read as actions, which is what they are.
+                    label: "Renderer",
+                    submenu: [
+                        { label: "Use SVG", click: send("view.backend.svg") },
+                        { label: "Use Canvas", click: send("view.backend.canvas") },
+                        { label: "Use WebGL (preview)", click: send("view.backend.webgl") }
+                    ]
+                },
                 { type: "separator" },
                 { role: "togglefullscreen" }
             ]
         },
         {
+            /**
+             * OFF THE MAIN SURFACE. These were toolbar buttons sitting beside Save, at the same
+             * weight as the file actions — including a renderer switch, which is a debugging
+             * control that changes what a user sees for no reason they can name.
+             */
+            label: "Developer",
+            submenu: [
+                { label: "Script Console", click: send("dev.script") },
+                { label: "Design Tokens", click: send("dev.tokens") },
+                { label: "Asset Folders", click: send("dev.folders") },
+                { type: "separator" },
+                { label: "Demo Exercises", click: send("dev.exercises") },
+                { type: "separator" },
+                { role: "reload" },
+                { role: "toggleDevTools" }
+            ]
+        },
+        {
             label: "Help",
             submenu: [
+                { label: "Keyboard Shortcuts", click: send("help.shortcuts") },
+                { type: "separator" },
                 {
                     label: "About Visual Design Engine",
                     click: () => {

@@ -17,8 +17,10 @@ function subscribe(channel, callback, transform) {
 }
 
 contextBridge.exposeInMainWorld("electronAPI", {
-    onMenuNew: (callback) => subscribe("menu-new", callback),
-    onMenuSave: (callback) => subscribe("menu-save", callback),
+    // ONE channel for every menu entry, carrying a command string. A channel per item meant three
+    // files had to change to add one line to a menu; this way the menu grows on its own, and a
+    // renderer that does not know a command simply ignores it.
+    onMenuCommand: (callback) => subscribe("menu-command", callback, (command) => command),
     // Carries { filePath, content } so the renderer can remember where the
     // document came from and let Ctrl+S write back to that same file.
     onFileOpened: (callback) => subscribe("file-opened", callback, (payload) => payload),

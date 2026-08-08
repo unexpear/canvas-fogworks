@@ -272,8 +272,7 @@ const RULER = 18; // ruler bar thickness in px
 declare global {
     interface Window {
         electronAPI?: {
-            onMenuNew: (cb: () => void) => () => void;
-            onMenuSave: (cb: () => void) => () => void;
+            onMenuCommand: (cb: (command: string) => void) => () => void;
             onFileOpened: (cb: (payload: { filePath: string; content: string }) => void) => () => void;
             onRequestSave: (cb: (filePath: string) => void) => () => void;
             saveFile: (filePath: string, content: string) => Promise<boolean>;
@@ -974,11 +973,80 @@ export function App() {
         };
 
         const disposers = [
-            api.onMenuNew(() => {
-                dispatcher.loadDocument(createEmptyDocument());
-                currentFilePathRef.current = null;
-                es.selectedNodeIds = [];
-                refresh();
+            /**
+             * EVERY MENU ENTRY ARRIVES HERE, as a command string.
+             *
+             * The edit commands go through `runShortcut`, the SAME function the keyboard uses, so
+             * the menu and the keys cannot drift apart — and every one of them inherits undo,
+             * because `runShortcut` only ever goes through Actions.
+             *
+             * An unknown command is IGNORED rather than thrown on: the menu lives in the main
+             * process and the renderer is a separate build, so a newer menu meeting an older
+             * renderer is a real state, and it should degrade to a dead click, not a crash.
+             */
+            api.onMenuCommand((command: string) => {
+                switch (command) {
+                    case "file.new":
+                        dispatcher.loadDocument(createEmptyDocument());
+                        currentFilePathRef.current = null;
+                        es.selectedNodeIds = [];
+                        refresh();
+                        return;
+                    case "file.save": {
+                        const path = currentFilePathRef.current;
+                        if (path) saveTo(path);
+                        // No file yet: prompt for one rather than silently saving somewhere the
+                        // user did not choose.
+                        else api.requestSaveAs().catch(err => console.error("Save As failed:", err));
+                        return;
+                    }
+                    case "file.export": setShowFolders(true); return;
+
+                    case "edit.undo": runShortcut({ kind: "undo" }); return;
+                    case "edit.redo": runShortcut({ kind: "redo" }); return;
+                    case "edit.duplicate": runShortcut({ kind: "duplicate" }); return;
+                    case "edit.delete": runShortcut({ kind: "delete" }); return;
+                    case "edit.selectAll": runShortcut({ kind: "select-all" }); return;
+                    case "edit.deselect": runShortcut({ kind: "deselect" }); return;
+                    case "edit.group": runShortcut({ kind: "group" }); return;
+
+                    // ZOOM ABOUT THE CANVAS CENTRE, not the viewport origin. Scaling around the
+                    // origin slides whatever you were looking at off the edge, which is why every
+                    // editor zooms about the middle when the command came from a menu rather than
+                    // from a wheel over a point.
+                    case "view.zoomIn":
+                    case "view.zoomOut":
+                    case "view.zoomReset": {
+                        const host = document.querySelector("canvas, svg");
+                        const rect = host?.getBoundingClientRect();
+                        const cx = (rect?.width ?? 0) / 2, cy = (rect?.height ?? 0) / 2;
+                        if (command === "view.zoomReset") zoomAt(es.viewport, 1 / Math.max(0.01, es.viewport.zoom), cx, cy);
+                        else zoomAt(es.viewport, command === "view.zoomIn" ? 1.25 : 0.8, cx, cy);
+                        refresh();
+                        return;
+                    }
+                    case "view.timeline": {
+                        const d = dispatcher.getDocument();
+                        dispatcher.dispatchAction(new SetTimelineAction(d, d.timeline ? undefined : { frames: 24, fps: 12 }));
+                        es.frame = d.timeline ? undefined : 0;
+                        refresh();
+                        return;
+                    }
+                    case "view.theme": {
+                        const d = dispatcher.getDocument();
+                        dispatcher.dispatchAction(new SetActiveThemeAction(d, d.activeTheme === "light" ? "dark" : "light"));
+                        refresh();
+                        return;
+                    }
+                    case "view.backend.svg": setBackend("svg"); return;
+                    case "view.backend.canvas": setBackend("canvas"); return;
+                    case "view.backend.webgl": setBackend("webgl"); return;
+
+                    case "dev.script": setShowScript(v => !v); return;
+                    case "dev.tokens": setShowTokens(v => !v); return;
+                    case "dev.folders": setShowFolders(v => !v); return;
+                    default: return;
+                }
             }),
             api.onFileOpened(({ filePath, content }) => {
                 try {
@@ -995,13 +1063,6 @@ export function App() {
             api.onRequestSave((filePath) => {
                 currentFilePathRef.current = filePath;
                 saveTo(filePath);
-            }),
-            api.onMenuSave(() => {
-                const path = currentFilePathRef.current;
-                if (path) saveTo(path);
-                // No file yet: prompt for one rather than silently saving somewhere
-                // the user did not choose.
-                else api.requestSaveAs().catch(err => console.error("Save As failed:", err));
             })
         ];
         return () => disposers.forEach(dispose => dispose());
@@ -1212,7 +1273,22 @@ export function App() {
 
     return (
         <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: UI.bg, color: UI.text }}>
-            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", rowGap: 4, padding: "4px 8px", background: UI.panel, borderBottom: `1px solid ${UI.line}`, gap: 4 }}>
+            {/* THE BAR RESERVES ITS SPACE, and that one property is the whole fix.
+                    Choosing a tool adds its options — six of them for the brush — the row wraps,
+                    and until now the bar GREW and shoved the canvas and both panels 27px down.
+                    That is not cosmetic: a click computed before a tool switch lands 27px off
+                    afterwards, which is exactly how a brush test painted the wrong row of a
+                    canvas. Holding two rows' worth of height whether or not the second row is
+                    occupied costs a strip of empty chrome and buys a viewport that never moves.
+                    `alignContent: flex-start` keeps the first row pinned to the top instead of
+                    floating in the reserved space.
+                    86px is the WRAPPED height, measured — the unwrapped bar is 62px, so reserving
+                    62 changed nothing. It is a fixed number rather than a computed one, which is
+                    honest about its limit: squeeze the window narrow enough and the brush's
+                    options take a THIRD row and the jump returns. The real cure is a dedicated
+                    options row that owns its own height regardless of what the tool row does;
+                    this buys the common case now for one property. */}
+                <div style={{ display: "flex", alignItems: "center", alignContent: "flex-start", flexWrap: "wrap", rowGap: 4, padding: "4px 8px", background: UI.panel, borderBottom: `1px solid ${UI.line}`, gap: 4, minHeight: 86, boxSizing: "border-box" }}>
                 <span style={{ fontWeight: 700, marginRight: 8, color: "#00bfff", fontSize: 13 }}>VDE</span>
                 <ToolButton icon="↗" label="Select" active={toolName === "select"} onClick={() => setTool("select")} />
                 <ToolButton icon="↔" label="Move" active={toolName === "move"} onClick={() => setTool("move")} />
