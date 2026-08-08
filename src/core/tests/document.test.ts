@@ -39,6 +39,7 @@ import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, contentBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
 import { nineSliceRects } from "../geometry/NineSlice";
+import { skinnedPoint, boneWeightsError, SKIN_MAX_BONES } from "../geometry/Skin";
 import { flattenPath, hitsShape, isPaintBearing, FLATTEN_TOLERANCE, FLATTEN_MAX_DEPTH, hitShapeOf, displayTolerance, localScaleOf, DISPLAY_DEVIATION_PX, DISPLAY_TOLERANCE_MIN, DISPLAY_TOLERANCE_MAX } from "../geometry/ShapeHit";
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
@@ -72,7 +73,7 @@ import { trimmedPlacement, inkUnion } from "../import/Trim";
 import { parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_ENTRIES } from "../import/TextureAtlas";
 import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/SvgPath";
 import { parseSvgDocument, svgDocumentError, SVG_MAX_USE_DEPTH } from "../import/SvgDocument";
-import { parseSvgTransform, Rect } from "../geometry/Matrix";
+import { parseSvgTransform, Rect, Mat2D } from "../geometry/Matrix";
 import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
@@ -23096,5 +23097,90 @@ describe("A nine-slice on a node (schema 57)", () => {
                 computed: computeGeometry(imageDoc()) } as unknown as import("../../renderer/RendererState").RendererState)
             .content.find(i => i.nodeId === "I")!.shape as Extract<Shape, { kind: "image" }>;
         expect(plain.nineSlice).toBeNull();
+    });
+});
+
+// ─── Linear blend skinning: the join between a rig and a mesh ───
+describe("skinnedPoint", () => {
+    const I: Mat2D = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+    /** A bone that has moved by `posed · rest⁻¹`. Written out so the fixtures state both. */
+    const bone = (rest: Mat2D, posed: Mat2D, weight = 1) => ({ rest, posed, weight });
+    const rot = (deg: number): Mat2D => {
+        const r = (deg * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r);
+        return { a: c, b: s, c: -s, d: c, e: 0, f: 0 };
+    };
+    const near = (p: { x: number; y: number }, x: number, y: number) => {
+        expect(p.x).toBeCloseTo(x, 9);
+        expect(p.y).toBeCloseTo(y, 9);
+    };
+
+    test("one bone carries the point by how far it MOVED, not by where it is", () => {
+        // The whole idea, and the reason a rest pose exists. A bone drawn already rotated 30° and
+        // still at 30° has not moved, so its point must not budge — using the bone's matrix alone
+        // would snap the artwork onto the axis on the very first frame.
+        near(skinnedPoint({ x: 10, y: 0 }, [bone(rot(30), rot(30))]), 10, 0);
+        // …and a bone that turned 90° from ITS OWN rest turns the point 90°, whatever that rest was.
+        near(skinnedPoint({ x: 10, y: 0 }, [bone(I, rot(90))]), 0, 10);
+        near(skinnedPoint({ x: 10, y: 0 }, [bone(rot(30), rot(120))]), 0, 10);
+    });
+
+    test("a translation carries the point by the DIFFERENCE of the two poses", () => {
+        const at = (dx: number, dy: number): Mat2D => ({ a: 1, b: 0, c: 0, d: 1, e: dx, f: dy });
+        near(skinnedPoint({ x: 5, y: 7 }, [bone(at(100, 200), at(103, 195))]), 8, 2);
+    });
+
+    test("two bones AVERAGE, weighted — which is what makes a joint bend smoothly", () => {
+        // Half held still, half turned 90°: the point lands midway between (10,0) and (0,10).
+        near(skinnedPoint({ x: 10, y: 0 }, [bone(I, I, 1), bone(I, rot(90), 1)]), 5, 5);
+        // Three quarters on the moving bone pulls it three quarters of the way.
+        near(skinnedPoint({ x: 10, y: 0 }, [bone(I, I, 0.25), bone(I, rot(90), 0.75)]), 2.5, 7.5);
+    });
+
+    test("weights are NORMALISED, so a rig that misses 1.0 still deforms correctly", () => {
+        // Exported weights routinely miss by a rounding error. Trusting them would move the point
+        // by the surplus — outward along the bones — rather than deforming it.
+        near(skinnedPoint({ x: 10, y: 0 }, [bone(I, I, 5), bone(I, rot(90), 5)]), 5, 5);
+        near(skinnedPoint({ x: 10, y: 0 }, [bone(I, I, 0.6), bone(I, rot(90), 0.6)]), 5, 5);
+        // …and the ratio is what matters, not the magnitudes.
+        near(skinnedPoint({ x: 10, y: 0 }, [bone(I, I, 2), bone(I, rot(90), 6)]), 2.5, 7.5);
+    });
+
+    test("an UNBOUND point stays where it is rather than collapsing to the origin", () => {
+        near(skinnedPoint({ x: 3, y: 4 }, []), 3, 4);
+        near(skinnedPoint({ x: 3, y: 4 }, [bone(I, rot(90), 0)]), 3, 4);
+        // A degenerate REST cannot be undone, so that bone contributes nothing — and, crucially,
+        // does not poison the others with a NaN.
+        const dead: Mat2D = { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0 };
+        near(skinnedPoint({ x: 10, y: 0 }, [bone(dead, rot(90), 1), bone(I, I, 1)]), 10, 0);
+    });
+
+    test("a mismatched pose is a MOVE, not a scale of the point's distance from the origin", () => {
+        // A bone that doubled in size carries its point outward from the BONE, not from the world
+        // origin — which is what `posed · rest⁻¹` gives and what multiplying by `posed` alone would
+        // not. Rest is a translation to (10,0); posed is the same translation scaled 2x about it.
+        const rest: Mat2D = { a: 1, b: 0, c: 0, d: 1, e: 10, f: 0 };
+        const posed: Mat2D = { a: 2, b: 0, c: 0, d: 2, e: 10, f: 0 };
+        // A point ON the bone's origin does not move; one 4 to its right moves to 8 to its right.
+        near(skinnedPoint({ x: 10, y: 0 }, [bone(rest, posed)]), 10, 0);
+        near(skinnedPoint({ x: 14, y: 0 }, [bone(rest, posed)]), 18, 0);
+    });
+
+    test("boneWeightsError refuses what would deform wrongly rather than clamping it", () => {
+        expect(boneWeightsError(undefined)).toBeNull();
+        expect(boneWeightsError([{ node: "a", weight: 1 }])).toBeNull();
+        expect(boneWeightsError([])).toBeNull();
+        expect(boneWeightsError("a")).toMatch(/must be an array/);
+        // FOUR, measured: every one of the 52 real skins uses JOINTS_0 and never JOINTS_1.
+        const four = [0, 1, 2, 3].map(i => ({ node: `b${i}`, weight: 1 }));
+        expect(boneWeightsError(four)).toBeNull();
+        expect(boneWeightsError([...four, { node: "b4", weight: 1 }])).toMatch(/more than 4 bones/);
+        // The same bone twice counts double in the average and quietly outvotes the others.
+        expect(boneWeightsError([{ node: "a", weight: 1 }, { node: "a", weight: 1 }])).toMatch(/twice/);
+        // A negative weight can shrink or flip the normalising sum and send a point to infinity.
+        expect(boneWeightsError([{ node: "a", weight: -0.1 }])).toMatch(/must not be negative/);
+        expect(boneWeightsError([{ node: "a", weight: NaN }])).toMatch(/finite/);
+        expect(boneWeightsError([{ node: "", weight: 1 }])).toMatch(/must name a node/);
+        // Zero is LEGAL — it is how a bone is unbound without rewriting the list.
+        expect(boneWeightsError([{ node: "a", weight: 0 }])).toBeNull();
     });
 });

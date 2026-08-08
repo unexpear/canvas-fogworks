@@ -1869,6 +1869,15 @@ function layerTransition(prev: readonly string[], next: readonly string[]): { cl
 interface NineSliceInsets { left; top; right; bottom }        // SOURCE pixels, relative to sourceRect
 interface Slice { src: Rect; dst: Rect }
 function nineSliceRects(source: Rect, dest: Rect, insets: NineSliceInsets): Slice[];
+// Linear blend skinning — the join between `Rig` (which poses a skeleton) and `Mesh` (which bends
+// a shape). One bone's answer is `posed · rest⁻¹` applied to the point: where it moved TO, undoing
+// where it started FROM. Space-agnostic, so the caller decides the frame. NOTHING CONSUMES IT YET:
+// binding control points to bones is a schema change, and the arithmetic completes on its own.
+const SKIN_MAX_BONES = 4;   // measured — all 52 skins in 5,037 glTF models use JOINTS_0 only
+interface BoneWeight { node: string; weight: number }
+interface BonePose { rest: Mat2D; posed: Mat2D; weight: number }
+function boneWeightsError(weights: unknown): string | null;
+function skinnedPoint(point: { x; y }, bones: readonly BonePose[]): { x; y };
 // All three backends implement it: SVG nests `<g opacity>`, Canvas opens an offscreen canvas per
 // run, the GPU pushes a render target per nesting depth and fades it back through the composite
 // shader's `u_fade`. They are pixel-identical on a translucent group, a group whose child has a

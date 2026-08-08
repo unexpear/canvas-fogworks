@@ -75,6 +75,7 @@ import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/Sc
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode, contentBounds } from "../geometry/GeometryEngine";
 import { NineSliceInsets, Slice, nineSliceRects } from "../geometry/NineSlice";
+import { SKIN_MAX_BONES, boneWeightsError, skinnedPoint } from "../geometry/Skin";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, GridCell, breakFlexLines, FlexLine, resolveMargin, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, parseSvgTransform, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
@@ -301,6 +302,10 @@ export function __apiSurfacePin(): void {
     expectType<NineSliceInsets>(insets);
     expectType<Slice[]>(nineSliceRects({ x: 0, y: 0, width: 9, height: 9 }, { x: 0, y: 0, width: 90, height: 90 }, insets));
     expectType<string | null>(nineSliceError("core.image", insets));
+    // Linear blend skinning — the arithmetic that joins a posed rig to a bent mesh.
+    expectType<number>(SKIN_MAX_BONES);
+    expectType<string | null>(boneWeightsError([{ node: "b", weight: 1 }]));
+    expectType<{ x: number; y: number }>(skinnedPoint({ x: 0, y: 0 }, [{ rest: IDENTITY, posed: IDENTITY, weight: 1 }]));
     // The two answers the on-canvas text editor shares with the renderer.
     expectType<string>(overlayTransform(IDENTITY, { x: 0, y: 0, zoom: 1 }));
     expectType<ResolvedType>(resolveTypography({}, {} as VariableStore, "light"));

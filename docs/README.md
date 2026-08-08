@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1425 — `src/core/tests/document.test.ts` (1288) + `src/renderer/RenderModel.test.ts` (81) + `src/renderer/emitCanvas.test.ts` (51) + `src/renderer/emitSVG.test.ts` (5).
+- **Tests:** 1432 — `src/core/tests/document.test.ts` (1295) + `src/renderer/RenderModel.test.ts` (81) + `src/renderer/emitCanvas.test.ts` (51) + `src/renderer/emitSVG.test.ts` (5).
 - **Verify the tests themselves:** `npm run mutate:dimensions` (22/22) — breaks the paint arithmetic
   on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
   and it refuses a dirty tree. See TESTING.md § Fixture design.
@@ -77,7 +77,9 @@ src/
                 files), SvgNodes (shapes as nodes),
                 FontFile (a face's identity)
     geometry/   ...and NineSlice (a bitmap whose corners keep
-                their size — one arithmetic, three backends)
+                their size — one arithmetic, three backends) +
+                Skin (linear blend skinning: posed · rest⁻¹,
+                the join Rig and Mesh have been missing)
     document/   ...and Gradient (the fill that changes across
                 a shape — a Style.fill value at schema 56) +
                 GradientEdit (add/move/recolour a stop; what the
