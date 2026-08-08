@@ -1795,6 +1795,7 @@ interface DrawItem {
   nodeId: string | null;        // data-node-id; handle? → data-resize-handle
   handle?: string; role: DrawRole;
   depth?: number;               // schema 40 — absent = 0; the GPU needs it per vertex
+  localBox?: { width; height }; // schema 56 — the node's own box, ONLY for an objectBoundingBox ramp
   surface?: { mesh: ReadonlyMesh; box: {width, height} };   // schema 42 — the mesh that CAUSED the bend
   groups?: string[];            // schema 32 — opacity groups this item is inside, outermost first
 }
@@ -1819,6 +1820,11 @@ interface PaintGradient {
 }
 function gradientDefId(g: Omit<PaintGradient, "id">): string;
 function resolvePaintGradient(g: Gradient, color: (raw: string) => string): PaintGradient;
+// `localBox` carries the box an objectBoundingBox ramp is a fraction of. It is NOT on
+// `PaintGradient`: that is deduped by content into one <defs> entry per ramp, and a size on it
+// would split one ramp used on two differently-sized shapes into two. It is not derived in a
+// backend either — a `path` item carries commands, not an extent. Only the Canvas backend reads
+// it; SVG has `gradientUnits` and the GPU flattens.
 interface DisplayList {
   viewport: { x: number; y: number; zoom: number };
   grid: GridModel; content: DrawItem[]; overlay: DrawItem[];
