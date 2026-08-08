@@ -13,13 +13,14 @@ import { EditorState, panBy, screenToWorld, viewportToFit } from "../EditorState
 import { computeGeometry, ComputedState, hitTest, selectionBounds } from "../../core/geometry/GeometryEngine";
 import { interactionFor, Trigger } from "../../core/document/Prototype";
 import { PICK_RADIUS_PX } from "./SelectTool";
-import { handleAtPoint, groupHandleAtPoint, vertexIndexOf, vertexHandleAtPoint, meshIndexOf, meshHandleAtPoint } from "../../core/geometry/SelectionHandles";
+import { handleAtPoint, groupHandleAtPoint, vertexIndexOf, vertexHandleAtPoint, meshIndexOf, meshHandleAtPoint, gradientHandleAtPoint, gradientPointOf, isGradientHandle, GradientHandle } from "../../core/geometry/SelectionHandles";
+import { withHandleAt } from "../../core/document/GradientEdit";
 import { SetMeshAction } from "../../core/actions/SetMeshAction";
 import { movePathVertex, normalizePathNode } from "../../core/geometry/PathBuilder";
 import { UpdateNodePathAction } from "../../core/actions/UpdateNodePathAction";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupScaleInput } from "../../core/geometry/GroupTransform";
 import { resolveScene } from "../../core/document/Components";
-import { geometryActionFor, isHandleOffered, isEditableNode, transformActionFor } from "../../core/actions/nodeEdit";
+import { geometryActionFor, styleActionFor, isHandleOffered, isEditableNode, transformActionFor } from "../../core/actions/nodeEdit";
 import { snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
 import { Rect, Mat2D, IDENTITY } from "../../core/geometry/Matrix";
 import { localLinear, resizeBox, worldDeltaToLocal } from "../../core/geometry/OrientedBox";
@@ -73,6 +74,9 @@ export class ToolController {
     // Vertex drag — moving one on-curve point of a `core.path`. Live-committed and coalesced
     // like rotate, so a continuous drag is one undo step.
     private vertexNodeId: string | null = null;
+    /** The gradient handle being dragged (schema 56), or null. */
+    private gradNodeId: string | null = null;
+    private gradHandle: GradientHandle | null = null;
     private meshNodeId: string | null = null;
     private meshIndex = 0;
     private meshStartX = 0;
@@ -199,7 +203,11 @@ export class ToolController {
                 // MESH points are checked FIRST. A warped node resolves to a `core.path`, so it
                 // also grows vertex handles for the BENT outline — and dragging one of those
                 // would edit the result instead of the cause. The control points are the cause.
-                const hit = meshHandleAtPoint(doc, computed, roots, w.x, w.y, vp.zoom)
+                // GRADIENT handles are checked FIRST, above the vertices, for the same reason
+                // the vertices sit above the corners: they are drawn on top and they are inside
+                // the box, so anything checked before them would swallow the grab.
+                const hit = gradientHandleAtPoint(doc, computed, roots, w.x, w.y, vp.zoom)
+                    ?? meshHandleAtPoint(doc, computed, roots, w.x, w.y, vp.zoom)
                     ?? vertexHandleAtPoint(doc, computed, roots, w.x, w.y, vp.zoom)
                     ?? handleAtPoint(computed, roots, w.x, w.y, vp.zoom);
                 const c = hit ? computed.nodes.get(hit.nodeId) : undefined;
@@ -215,6 +223,13 @@ export class ToolController {
                         // draws exactly this set, so falling through to the tool is what the user
                         // sees — better than a control that silently does nothing.
                         this.activeTool?.onMouseDown?.(e, canvasRect, computed);
+                        return;
+                    }
+                    if (isGradientHandle(hit.handle)) {
+                        this.gradNodeId = hit.nodeId;
+                        this.gradHandle = hit.handle;
+                        this.editorState.isDragging = true;
+                        e.preventDefault();
                         return;
                     }
                     const mi = meshIndexOf(hit.handle);
@@ -381,6 +396,33 @@ export class ToolController {
             this.dispatcher.dispatchAction(
                 new SetMeshAction(doc, this.meshNodeId, { cols: node.mesh.cols, rows: node.mesh.rows, points }),
                 { coalesce: true });
+            this.refresh();
+            return;
+        }
+
+        if (this.gradNodeId !== null && this.gradHandle !== null) {
+            const doc = this.dispatcher.getDocument();
+            const node = resolveScene(doc).nodes.get(this.gradNodeId);
+            // RE-DERIVED each move rather than captured at pointer-down: the ramp lives in the
+            // node's own space, so a node that moves under the drag (a nudge, an undo) must move
+            // the mapping with it. `computeGeometry` is what every other gesture here re-runs too.
+            const c = computeGeometry(doc).nodes.get(this.gradNodeId);
+            const fill = node?.style.fill;
+            // The fill stopped being a gradient mid-drag (an undo, the inspector) — end the
+            // gesture rather than writing a ramp onto a colour.
+            if (!node || !c || fill === undefined || typeof fill === "string") {
+                this.resetGradient(); this.refresh(); return;
+            }
+            const w = screenToWorld(this.editorState.viewport, canvasRect, e.clientX, e.clientY);
+            // ABSOLUTE, not a delta. The pointer is mapped back through the SAME matrix the handle
+            // was drawn with, so the handle stays under the cursor however the node is rotated or
+            // scaled — a world-space delta would need that matrix anyway and would drift.
+            const p = gradientPointOf(fill, c.world, c.local, w.x, w.y);
+            if (!p) return;
+            const next = withHandleAt(fill, this.gradHandle, p.x, p.y);
+            if (!next) return;
+            const action = styleActionFor(doc, this.gradNodeId, { fill: next });
+            if (action) this.dispatcher.dispatchAction(action, { coalesce: true });
             this.refresh();
             return;
         }
@@ -665,6 +707,12 @@ export class ToolController {
         this.editorState.isDragging = false;
     }
 
+    private resetGradient(): void {
+        this.gradNodeId = null;
+        this.gradHandle = null;
+        this.editorState.isDragging = false;
+    }
+
     private resetVertex(): void {
         this.vertexNodeId = null;
         this.meshNodeId = null;
@@ -672,6 +720,7 @@ export class ToolController {
     }
 
     onMouseUp(e: MouseEvent): void {
+        if (this.gradNodeId !== null) this.resetGradient();
         if (this.meshNodeId !== null) { this.meshNodeId = null; this.editorState.isDragging = false; }
         if (this.vertexNodeId !== null) { this.resetVertex(); this.editorState.isDragging = false; }
         if (this.panMode) {

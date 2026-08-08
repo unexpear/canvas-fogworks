@@ -69,7 +69,7 @@ import { parseSvgGradients } from "../import/SvgGradient";
 import { PasteNodesAction } from "../actions/PasteNodesAction";
 import { Gradient, GradientStop, GradientUnits, GradientSample, GRADIENT_MAX_STOPS,
     defaultGradient, gradientError, normalizeStops, sampleGradient } from "../document/Gradient";
-import { gradientFromColor, colorAt, withStop, withoutStop, withStopColor, withStopOffset, withKind, GRADIENT_MIN_STOPS } from "../document/GradientEdit";
+import { gradientFromColor, colorAt, withStop, withoutStop, withStopColor, withStopOffset, withKind, withHandleAt, GRADIENT_MIN_STOPS } from "../document/GradientEdit";
 import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
@@ -97,7 +97,7 @@ import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction"
 import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
 import { createEditorState, clampViewport, panBy, zoomAt, screenToWorld, EditorState } from "../../editor/EditorState";
-import { selectionHandles, handleAtPoint, groupRotateHandle, groupHandleAtPoint, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX, ROTATE_OFFSET_PX } from "../geometry/SelectionHandles";
+import { selectionHandles, handleAtPoint, groupRotateHandle, groupHandleAtPoint, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX, ROTATE_OFFSET_PX, GRADIENT_HANDLES, GradientHandle, gradientPaintMatrix, gradientHandles, gradientHandleAtPoint, gradientPointOf, isGradientHandle } from "../geometry/SelectionHandles";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupRotateOutput, GroupScaleInput, GroupScaleOutput } from "../geometry/GroupTransform";
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain, SNAP_THRESHOLD_PX, SnapGuide, SnapResult } from "../geometry/Snapping";
 import { rulerTicks, niceStep, RulerTick } from "../geometry/Ruler";
@@ -1204,6 +1204,16 @@ function _gradientEditSurface(): void {
     expectType<Gradient | null>(withoutStop(g, 0));
     expectType<Gradient | null>(withStopColor(g, 0, "#fff", 0.5));
     expectType<Gradient>(withKind(g, "radial"));
+    expectType<Gradient | null>(withHandleAt(g, "grad:start", 0, 0));
+    // The handle names are a CLOSED union and part of HandleId, so a typo does not compile.
+    expectType<readonly GradientHandle[]>(GRADIENT_HANDLES);
+    expectType<Mat2D>(gradientPaintMatrix(g, IDENTITY, { width: 1, height: 1 }));
+    const handleDoc: ProjectDocument = createEmptyDocument();
+    const handleState = computeGeometry(handleDoc);
+    expectType<SelectionHandle[]>(gradientHandles(handleDoc, handleState, ["n"]));
+    expectType<SelectionHandle | null>(gradientHandleAtPoint(handleDoc, handleState, ["n"], 0, 0, 1));
+    expectType<{ x: number; y: number } | null>(gradientPointOf(g, IDENTITY, { width: 1, height: 1 }, 0, 0));
+    expectType<boolean>(isGradientHandle("grad:start"));
 }
 
 /** `core/document/Clipboard` and the action that lands a paste — pinned on arrival. */

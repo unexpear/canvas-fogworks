@@ -192,3 +192,38 @@ describe("emitSVG — a gradient reaches the screen as a def and a reference", (
         } finally { dom.restore(); }
     });
 });
+
+/**
+ * A dashed LINE, on the backend that forgot it.
+ *
+ * Every other shape here gets its paint from `applyRectPaint`; the line branch spells it out by
+ * hand, because a line has no fill and no corner radius — and that is how it became the one shape
+ * that dropped `strokeDash`. Canvas dashes it and the exporter dashes it, so the three disagreed
+ * about the same display list. It went unnoticed because nothing asked for a dashed line until the
+ * gradient axis (schema 56) did.
+ */
+describe("emitSVG — a dashed line is dashed", () => {
+    const lineItem = (dash: string | null): DrawItem => ({
+        world: null, nodeId: null, role: "outline",
+        shape: { kind: "line", x1: 0, y1: 0, x2: 10, y2: 4 },
+        paint: { fill: null, opacity: null, stroke: "#ffffff", strokeWidth: 1, strokeDash: dash,
+            radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null }
+    } as unknown as DrawItem);
+
+    test("stroke-dasharray reaches the element, and is ABSENT when there is no dash", () => {
+        const dom = fakeDom();
+        try {
+            emitSVG(dom.container, listOf([lineItem("3 3")]));
+            expect(walk(dom.container).find(e => e.tagName === "line").getAttribute("stroke-dasharray")).toBe("3 3");
+        } finally { dom.restore(); }
+        // The pairing matters: without it, "the attribute is there" could equally mean the
+        // emitter now writes a dash on every line.
+        const plain = fakeDom();
+        try {
+            emitSVG(plain.container, listOf([lineItem(null)]));
+            const el = walk(plain.container).find(e => e.tagName === "line");
+            expect(el.getAttribute("stroke-dasharray")).toBeNull();
+            expect(el.getAttribute("stroke")).toBe("#ffffff");
+        } finally { plain.restore(); }
+    });
+});

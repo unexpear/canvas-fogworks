@@ -768,13 +768,32 @@ withStopOffset(g, i, offset): { gradient; index } | null
 withoutStop(g, i): Gradient | null                           // null below GRADIENT_MIN_STOPS
 withStopColor(g, i, color, opacity?): Gradient | null
 withKind(g, kind): Gradient                                  // derived from the existing geometry
+withHandleAt(g, handle, x, y): Gradient | null               // an on-canvas drag, in GRADIENT space
 ```
 
 Every one returns a NEW gradient — the document is written through actions, and a mutating helper
 would edit behind the dispatcher and leave undo nothing to restore. The two that can REORDER return
 the moved stop's new index with it: stops are kept sorted, so a caller tracking "the selected stop"
 as its own number edits a different stop the moment a drag crosses a neighbour. Refusal is `null`
-and never a silent no-op, since a quiet decline is indistinguishable from a helper that worked. `trackError(t)` validates ONE grid
+and never a silent no-op, since a quiet decline is indistinguishable from a helper that worked.
+
+`core/geometry/SelectionHandles` places that ramp on the canvas:
+
+```ts
+GRADIENT_HANDLES: readonly ["grad:start","grad:end","grad:center","grad:radius","grad:focus"]
+type GradientHandle = typeof GRADIENT_HANDLES[number]        // part of HandleId — a typo will not compile
+gradientPaintMatrix(g, world, local): Mat2D                  // gradient space → world, box fold included
+gradientHandles(doc, state, selectedNodeIds): SelectionHandle[]
+gradientHandleAtPoint(doc, state, ids, x, y, zoom): SelectionHandle | null
+gradientPointOf(g, world, local, worldX, worldY): { x; y } | null   // the inverse; null if singular
+isGradientHandle(handle): handle is GradientHandle
+```
+
+The picker is built from the producer the renderer draws from — handles drawn from one list and
+picked from another appear on screen and do nothing when grabbed. Both directions go through
+`gradientPaintMatrix`, which is what keeps a dragged handle under the cursor. `objectBoundingBox`
+is applied HERE and not stored in `transform`: an authored ramp keeps its 0..1 coordinates exactly
+as SVG does, and the SVG backend gets the box for free from `gradientUnits`. `trackError(t)` validates ONE grid
 track (exactly one of px/fr/auto; `px ≥ 0`, `fr > 0`, `auto === true`) and is exported so the
 track-list parser can defer to it rather than restate it. `layoutExclusivity(patch)` is the ONE
 statement of grid ⊕ container exclusivity — it takes and returns a PATCH (the action's delta must

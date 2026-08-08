@@ -99,6 +99,8 @@ import { nearestColour, colourDistance, quantizeToPalette } from "../paint/Quant
 import { worldToSurface, surfaceToWorld, surfacePixelSize, surfaceSpaceError } from "../paint/SurfaceSpace";
 import { defaultGradient, gradientError, normalizeStops, sampleGradient, GRADIENT_MAX_STOPS, Gradient } from "../document/Gradient";
 import { gradientFromColor, colorAt, withStop, withoutStop, withStopColor, withStopOffset, withKind, GRADIENT_MIN_STOPS } from "../document/GradientEdit";
+import { withHandleAt } from "../document/GradientEdit";
+import { gradientHandles, gradientHandleAtPoint, gradientPointOf, isGradientHandle } from "../geometry/SelectionHandles";
 import { copyNodes, remapForPaste, PASTE_OFFSET } from "../document/Clipboard";
 import { parseSvgGradients } from "../import/SvgGradient";
 import { PasteNodesAction } from "../actions/PasteNodesAction";
@@ -19266,17 +19268,27 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(meshIndexOf("se")).toBeNull();
     });
 
-    test("the controller checks MESH handles before vertex handles", () => {
+    test("the controller asks the pickers in the order the handles are DRAWN", () => {
         // A structural assertion, because the ORDER is the whole point and no unit test of the
-        // pickers can see it: a warped node offers both kinds at once, and whichever is asked
-        // first wins. The same technique the vertex handling is pinned with.
+        // pickers can see it: one node can offer all four kinds at once, they overlap, and
+        // whichever is asked first wins. Innermost-drawn first, outermost last — gradient over
+        // mesh over vertex over the box corners, which is the reverse of the order they are
+        // painted in, so what is on top is what a press grabs.
         const src = readFileSync(resolve(__dirname, "../../editor/tools/ToolController.ts"), "utf8");
-        const press = src.indexOf("const hit = meshHandleAtPoint(");
+        const press = src.indexOf("const hit = gradientHandleAtPoint(");
         expect(press).toBeGreaterThan(-1);
-        // The vertex picker is the FALLBACK of that same expression, not a separate earlier one.
-        expect(src.slice(press, press + 400)).toContain("?? vertexHandleAtPoint(");
+        // The rest are FALLBACKS of that same expression, in order, not separate earlier ones.
+        const chain = src.slice(press, press + 500);
+        const order = ["?? meshHandleAtPoint(", "?? vertexHandleAtPoint(", "?? handleAtPoint("];
+        let at = 0;
+        for (const step of order) {
+            const found = chain.indexOf(step, at);
+            expect([step, found]).not.toEqual([step, -1]);
+            at = found;
+        }
         expect(src).toContain("const mi = meshIndexOf(hit.handle);");
-        // …and the mesh branch returns before the vertex branch is reached.
+        // …and each branch returns before the next is reached, or the order above buys nothing.
+        expect(src.indexOf("if (isGradientHandle(hit.handle))")).toBeLessThan(src.indexOf("const mi = meshIndexOf("));
         expect(src.indexOf("const mi = meshIndexOf(")).toBeLessThan(src.indexOf("const vi = vertexIndexOf("));
     });
 
@@ -22340,6 +22352,148 @@ describe("GradientEdit — what an editor does to a ramp", () => {
         g = withStop(g, 0.1)!.gradient;
         g = withoutStop(g, 0)!;
         expect(gradientError(g)).toBeNull();
+        expect(styleError({ fill: g })).toBeNull();
+    });
+});
+
+// ─── Gradient handles: where the ramp is, and moving it (schema 56) ───
+describe("Gradient handles on the canvas", () => {
+    // The node is NOT at the origin and NOT square, and the ramp is NOT the default: a handle that
+    // dropped the world placement, swapped the box axes, or ignored the gradient's own transform
+    // would land on the right answer for a 100x100 shape at (0,0) with an identity ramp.
+    const NODE = { x: 40, y: 70, width: 200, height: 50 };
+    const docWithFill = (fill: unknown): ProjectDocument => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [],
+            geometry: { ...NODE }, style: { fill: fill as never, opacity: 1 }, layout: {} });
+        doc.rootNodeUuids = ["R"];
+        return doc;
+    };
+    const handlesFor = (fill: unknown) => {
+        const doc = docWithFill(fill);
+        return { doc, handles: gradientHandles(doc, computeGeometry(doc), ["R"]) };
+    };
+    const byName = (hs: { handle: string; cx: number; cy: number }[], name: string) =>
+        hs.find(h => h.handle === name)!;
+
+    test("a LINEAR ramp shows its two ends, through the box and the node's placement", () => {
+        // The authored default: objectBoundingBox, axis (0, 0.5) → (1, 0.5). In world terms that is
+        // the shape's left edge to its right edge, halfway down: (40, 95) → (240, 95).
+        const { handles } = handlesFor(gradientFromColor("#3366cc"));
+        expect(handles.map(h => h.handle).sort()).toEqual(["grad:end", "grad:start"]);
+        expect(byName(handles, "grad:start")).toMatchObject({ nodeId: "R", cx: 40, cy: 95 });
+        expect(byName(handles, "grad:end")).toMatchObject({ nodeId: "R", cx: 240, cy: 95 });
+    });
+
+    test("a plain colour shows NO ramp handles, so the overlay says what the fill is", () => {
+        expect(handlesFor("#3366cc").handles).toEqual([]);
+        expect(handlesFor("none").handles).toEqual([]);
+    });
+
+    test("a RADIAL ramp shows its centre, its rim and its focus", () => {
+        const g = withKind(gradientFromColor("#3366cc"), "radial");
+        // withKind puts the circle at the axis midpoint: cx 0.5, cy 0.5, r 0.5 of the box.
+        const { handles } = handlesFor(g);
+        expect(byName(handles, "grad:center")).toMatchObject({ cx: 140, cy: 95 });
+        // The rim is r along +x IN GRADIENT SPACE, which the box then scales — so it lands at the
+        // shape's right edge, 100 world units away horizontally, NOT at a distance of r * height.
+        expect(byName(handles, "grad:radius")).toMatchObject({ cx: 240, cy: 95 });
+        // The focus starts on the centre; the two coincide until it is moved, which is why the
+        // handles are named and not found by position.
+        expect(byName(handles, "grad:focus")).toMatchObject({ cx: 140, cy: 95 });
+    });
+
+    test("userSpaceOnUse skips the box, and the gradient's OWN transform still applies", () => {
+        // An imported ramp: coordinates in the node's local units, with a matrix of its own. The
+        // box must NOT be applied on top, or every imported gradient's handles land 200x out.
+        const g: Gradient = { ...defaultGradient("linear"), units: "userSpaceOnUse",
+            transform: { a: 2, b: 0, c: 0, d: 1, e: 10, f: 5 },
+            x1: 0, y1: 0, x2: 30, y2: 0,
+            stops: [{ offset: 0, color: "#000", opacity: 1 }, { offset: 1, color: "#fff", opacity: 1 }] };
+        const { handles } = handlesFor(g);
+        // (0,0) → transform → (10,5) → world (+40,+70) → (50,75).
+        expect(byName(handles, "grad:start")).toMatchObject({ cx: 50, cy: 75 });
+        // (30,0) → transform → (70,5) → (110,75). The x scale of 2 is visible and the y is not,
+        // which a square fixture could not tell from no transform at all.
+        expect(byName(handles, "grad:end")).toMatchObject({ cx: 110, cy: 75 });
+    });
+
+    test("the picker uses the SAME producer the overlay draws from", () => {
+        // Drawn from one list and picked from another is how handles appear on screen and do
+        // nothing when you grab them — the drift `vertexHandleAtPoint` was written to avoid.
+        const { doc, handles } = handlesFor(gradientFromColor("#3366cc"));
+        const computed = computeGeometry(doc);
+        for (const h of handles) {
+            expect(gradientHandleAtPoint(doc, computed, ["R"], h.cx, h.cy, 1)?.handle).toBe(h.handle);
+        }
+        // …and a point well away from every one of them grabs nothing.
+        expect(gradientHandleAtPoint(doc, computed, ["R"], 140, 75, 1)).toBeNull();
+        expect(isGradientHandle("grad:start")).toBe(true);
+        expect(isGradientHandle("grad:elbow")).toBe(false);
+        expect(isGradientHandle("vertex:0")).toBe(false);
+    });
+
+    test("a world point maps back through the SAME matrix the handle was drawn with", () => {
+        // Which is what keeps a handle under the cursor: pick it up at its drawn position and the
+        // round trip must return the coordinate it was drawn from.
+        const g = gradientFromColor("#3366cc");
+        const doc = docWithFill(g);
+        const c = computeGeometry(doc).nodes.get("R")!;
+        expect(gradientPointOf(g, c.world, c.local, 240, 95)).toEqual({ x: 1, y: 0.5 });
+        expect(gradientPointOf(g, c.world, c.local, 40, 95)).toEqual({ x: 0, y: 0.5 });
+        // A SINGULAR mapping has no inverse — a zero gradientTransform, a shape scaled to nothing —
+        // and null is the honest answer. The drag does nothing rather than writing NaN.
+        const dead: Gradient = { ...g, transform: { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0 } };
+        expect(gradientPointOf(dead, c.world, c.local, 100, 100)).toBeNull();
+    });
+
+    test("dragging a handle moves the number that handle names, and nothing else", () => {
+        const g = gradientFromColor("#3366cc");
+        expect(withHandleAt(g, "grad:start", 0.25, 0.75)).toMatchObject({ x1: 0.25, y1: 0.75, x2: 1, y2: 0.5 });
+        expect(withHandleAt(g, "grad:end", 0.25, 0.75)).toMatchObject({ x1: 0, y1: 0.5, x2: 0.25, y2: 0.75 });
+        // A NaN from a degenerate mapping is refused rather than stored.
+        expect(withHandleAt(g, "grad:start", NaN, 0)).toBeNull();
+    });
+
+    test("the FOCUS travels with the centre, and never leaves the circle", () => {
+        const g = withKind(gradientFromColor("#3366cc"), "radial");   // cx .5 cy .5 r .5, focus on centre
+        const off = withHandleAt(g, "grad:focus", 0.6, 0.5)!;
+        expect([off.fx, off.fy]).toEqual([0.6, 0.5]);
+        // MOVING THE CIRCLE carries the focus with it. Leaving it behind would silently reshape the
+        // ramp inside the circle every time somebody repositioned it.
+        const moved = withHandleAt(off, "grad:center", 0.7, 0.9)!;
+        expect([moved.cx, moved.cy]).toEqual([0.7, 0.9]);
+        expect([moved.fx, moved.fy]).toBeDefined();
+        expect(moved.fx).toBeCloseTo(0.8, 9);
+        expect(moved.fy).toBeCloseTo(0.9, 9);
+        // SVG PULLS A FOCUS OUTSIDE THE CIRCLE ONTO ITS EDGE before painting, so storing one
+        // outside would mean the document said something no renderer draws.
+        const far = withHandleAt(g, "grad:focus", 3, 0.5)!;
+        expect(far.fx).toBeCloseTo(1, 9);      // cx 0.5 + r 0.5, along +x
+        expect(far.fy).toBeCloseTo(0.5, 9);
+        expect(Math.hypot(far.fx - far.cx, far.fy - far.cy)).toBeLessThanOrEqual(far.r + 1e-9);
+    });
+
+    test("the rim handle reads the DISTANCE from the centre, not the x offset", () => {
+        const g = withKind(gradientFromColor("#3366cc"), "radial");
+        // Dragged straight up from the centre: no x change at all, and the circle must still grow.
+        const taller = withHandleAt(g, "grad:radius", 0.5, 0.9)!;
+        expect(taller.r).toBeCloseTo(0.4, 9);
+        expect(withHandleAt(g, "grad:radius", 0.8, 0.5)!.r).toBeCloseTo(0.3, 9);
+        // SHRINKING the circle past the focus pulls the focus in with it, for the same reason.
+        const withFocus = withHandleAt(g, "grad:focus", 0.9, 0.5)!;
+        const tight = withHandleAt(withFocus, "grad:radius", 0.55, 0.5)!;
+        expect(tight.r).toBeCloseTo(0.05, 9);
+        expect(Math.hypot(tight.fx - tight.cx, tight.fy - tight.cy)).toBeCloseTo(0.05, 9);
+    });
+
+    test("every drag leaves a ramp the document would accept", () => {
+        let g: Gradient = withKind(gradientFromColor("#112233"), "radial");
+        for (const [h, x, y] of [["grad:center", 0.2, 0.8], ["grad:radius", 0.9, 0.1],
+            ["grad:focus", -2, 5]] as const) {
+            g = withHandleAt(g, h, x, y)!;
+            expect(gradientError(g)).toBeNull();
+        }
         expect(styleError({ fill: g })).toBeNull();
     });
 });

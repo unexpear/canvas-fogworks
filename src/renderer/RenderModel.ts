@@ -39,7 +39,7 @@ import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
 import { Mat2D } from "../core/geometry/Matrix";
-import { selectionHandles, selectionFrame, pathVertexHandles, meshHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
+import { selectionHandles, selectionFrame, pathVertexHandles, meshHandles, gradientHandles, groupRotateHandle, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX } from "../core/geometry/SelectionHandles";
 import { Quad } from "../core/geometry/OrientedBox";
 import { isGroupRotatable, isGroupResizable } from "../core/geometry/GroupTransform";
 import { isHandleOffered } from "../core/actions/nodeEdit";
@@ -893,6 +893,27 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
         [...pathVertexHandles(doc, computed, roots), ...meshHandles(doc, computed, roots)]
             .filter(h => isHandleOffered(doc, h.nodeId, h.handle))
             .forEach(h => items.push(handleItem(h, z)));
+        // A selected node with a GRADIENT fill shows where the ramp runs (schema 56). The AXIS is
+        // drawn first and underneath, because it is the thing being placed and the handles are how
+        // you place it — and without a line between them two dots say nothing about direction.
+        const ramp = gradientHandles(doc, computed, roots)
+            .filter(h => isHandleOffered(doc, h.nodeId, h.handle));
+        for (const nodeId of new Set(ramp.map(h => h.nodeId))) {
+            const own = ramp.filter(h => h.nodeId === nodeId);
+            const from = own.find(h => h.handle === "grad:start") ?? own.find(h => h.handle === "grad:center");
+            const to = own.find(h => h.handle === "grad:end") ?? own.find(h => h.handle === "grad:radius");
+            if (!from || !to) continue;
+            items.push({
+                shape: { kind: "line", x1: from.cx, y1: from.cy, x2: to.cx, y2: to.cy },
+                paint: {
+                    fill: null, opacity: null, stroke: "#ffffff", strokeWidth: 1 / z,
+                    strokeDash: `${3 / z} ${3 / z}`, radius: null, cursor: null,
+                    pointerEvents: false, shadow: null, blur: null
+                },
+                world: null, nodeId: null, role: "outline"
+            });
+        }
+        ramp.forEach(h => items.push(handleItem(h, z)));
     }
 
     // Rectangle-tool drag preview.

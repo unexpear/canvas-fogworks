@@ -24,6 +24,7 @@
 
 import { Gradient, GradientStop, defaultGradient, normalizeStops, sampleGradient, GRADIENT_MAX_STOPS } from "./Gradient";
 import { blendColor } from "./Prototype";
+import { GradientHandle } from "../geometry/SelectionHandles";
 
 /** Below this a ramp is a flat colour wearing a gradient's clothes; the editor converts instead. */
 export const GRADIENT_MIN_STOPS = 2;
@@ -176,4 +177,51 @@ function place(
         gradient: { ...gradient, stops: normalizeStops(tagged.map(t => t.s)) },
         index: tagged.findIndex(t => t.i === moved)
     };
+}
+
+/**
+ * The ramp moved by one of its on-canvas handles, in the gradient's OWN coordinates.
+ *
+ * The caller maps the pointer back to gradient space (`gradientPointOf`) and hands the result
+ * here, so the arithmetic that decides what a handle MEANS is testable without a matrix, a canvas
+ * or a pointer — and the tool composes nothing.
+ *
+ * `grad:radius` reads the DISTANCE from the centre, not the x offset. The rim handle is drawn on
+ * the +x side because a radius is a scalar and the direction has to be chosen, but dragging it
+ * upward is still dragging it away from the centre and must still grow the circle.
+ *
+ * THE FOCUS IS PULLED BACK INSIDE THE CIRCLE, because SVG does: a focal point outside the end
+ * circle is moved onto its edge before anything is painted. Storing one outside would mean the
+ * document said one thing and every renderer drew another.
+ */
+export function withHandleAt(
+    gradient: Gradient, handle: GradientHandle, x: number, y: number
+): Gradient | null {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    switch (handle) {
+        case "grad:start": return { ...gradient, x1: x, y1: y };
+        case "grad:end": return { ...gradient, x2: x, y2: y };
+        case "grad:center": {
+            // The focus travels with the centre, so dragging a circle does not silently reshape
+            // the ramp inside it — the offset between the two is what the author set.
+            const dx = x - gradient.cx, dy = y - gradient.cy;
+            return { ...gradient, cx: x, cy: y, fx: gradient.fx + dx, fy: gradient.fy + dy };
+        }
+        case "grad:radius": {
+            const r = Math.hypot(x - gradient.cx, y - gradient.cy);
+            return clampFocus({ ...gradient, r });
+        }
+        case "grad:focus": return clampFocus({ ...gradient, fx: x, fy: y });
+        default: return null;
+    }
+}
+
+/** SVG's rule: a focus outside the end circle is moved onto its edge. */
+function clampFocus(g: Gradient): Gradient {
+    const dx = g.fx - g.cx, dy = g.fy - g.cy;
+    const d = Math.hypot(dx, dy);
+    // ON the edge and not just inside it, which is what the specification says — and `d === 0`
+    // needs no move at all, so the division is never by zero.
+    if (d <= g.r || d === 0) return g;
+    return { ...g, fx: g.cx + (dx / d) * g.r, fy: g.cy + (dy / d) * g.r };
 }

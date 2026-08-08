@@ -192,6 +192,12 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         el.setAttribute("y2", String(shape.y2));
         if (paint.stroke !== null) el.setAttribute("stroke", paint.stroke);
         if (paint.strokeWidth !== null) el.setAttribute("stroke-width", String(paint.strokeWidth));
+        // THE DASH. This branch spells its paint out by hand instead of going through
+        // `applyRectPaint` — a line has no fill and no corner radius — and that is exactly how it
+        // came to be the one shape that ignored `strokeDash`. Canvas dashes it, the exporter
+        // dashes it, and this backend drew a solid line: two backends disagreeing about the same
+        // display list. Nothing asked for a dashed LINE until the gradient axis did.
+        if (paint.strokeDash !== null) el.setAttribute("stroke-dasharray", paint.strokeDash);
         applyStrokeCorners(el, paint);
         if (paint.opacity !== null) el.setAttribute("opacity", String(paint.opacity));
         applyTail(el, item);

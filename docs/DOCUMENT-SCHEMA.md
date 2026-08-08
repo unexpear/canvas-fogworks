@@ -1146,6 +1146,15 @@ Two of those operations RETURN AN INDEX with the gradient, and it is not a conve
 kept sorted, so inserting one or dragging one past its neighbour renumbers the list. A panel
 tracking "the selected stop" as a number of its own starts editing a different stop mid-drag.
 
+**Placed on the canvas.** A selected node with a gradient fill shows where the ramp runs: two ends
+for a linear one, centre/rim/focus for a radial, joined by a dashed axis. `gradientPaintMatrix`
+(in `geometry/SelectionHandles`) is the one mapping — gradient space → the box, when `units` says
+`objectBoundingBox` → the node's local space, via `transform` → world — and BOTH directions go
+through it, so a handle lands back exactly where it was picked up. `withHandleAt` then says what
+each handle means: the rim reads the DISTANCE from the centre rather than an x offset, the focus
+travels with the centre, and a focus dragged outside the circle is pulled onto its edge because
+SVG does that before painting.
+
 **Imported whole.** `SvgDocument` resolves a `url(#id)` fill through `SvgGradient` and hands the
 ramp to the node — 2,785 shapes across the 5,279-file corpus. Only STROKES still flatten. The
 gradient is MOVED with the shape at two points, and both are invisible to the type system: this

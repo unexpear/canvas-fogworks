@@ -17,7 +17,8 @@
 import { ComputedState, selectionBounds } from "./GeometryEngine";
 import { ReadonlyDocument } from "../document/Document";
 import { pathVertices } from "./PathBuilder";
-import { Rect , applyToPoint} from "./Matrix";
+import { Rect, applyToPoint, Mat2D, IDENTITY, multiply, invert } from "./Matrix";
+import { Gradient } from "../document/Gradient";
 import { boxQuad, cursorForDirection, quadCenter, Quad } from "./OrientedBox";
 
 /** Resize-handle square edge length in SCREEN pixels. */
@@ -29,7 +30,17 @@ export const ROTATE_OFFSET_PX = 22;
  *  is a template literal rather than a separate field so one `handle` string still
  *  identifies a grab completely — which is what lets the renderer, the picker and the
  *  hover cursor keep reading exactly one thing. */
-export type HandleId = "nw" | "ne" | "sw" | "se" | "rotate" | `vertex:${number}` | `mesh:${number}`;
+/**
+ * The handles that place a GRADIENT on the shape (schema 56).
+ *
+ * A closed list, not a `grad:${string}` template, so a misspelled name does not compile. There are
+ * exactly five and there will not be a sixth without a new field on `Gradient` — which is the same
+ * reason `STROKE_JOINS` is a list and not a string.
+ */
+export const GRADIENT_HANDLES = ["grad:start", "grad:end", "grad:center", "grad:radius", "grad:focus"] as const;
+export type GradientHandle = typeof GRADIENT_HANDLES[number];
+
+export type HandleId = "nw" | "ne" | "sw" | "se" | "rotate" | `vertex:${number}` | `mesh:${number}` | GradientHandle;
 
 export interface SelectionHandle {
     nodeId: string;
@@ -310,4 +321,121 @@ export function meshHandleAtPoint(
         if (Math.abs(x - h.cx) <= half && Math.abs(y - h.cy) <= half) return h;
     }
     return null;
+}
+
+/**
+ * Gradient space → WORLD, for the handles that place a ramp on the canvas (schema 56).
+ *
+ * THREE STEPS, and the middle one is the reason this is a function rather than a line at each call
+ * site. A gradient's coordinates live in its own space; `transform` maps that to the shape's local
+ * space; and `objectBoundingBox` puts a box scale between them that is NOT in the transform —
+ * an authored ramp keeps its 0..1 coordinates and says `objectBoundingBox`, exactly as SVG does,
+ * so the box is applied by whoever paints it. The SVG backend gets that for free from the
+ * `gradientUnits` attribute; a handle has to compute it.
+ *
+ * The box is `local`, not the stored geometry: that is the size the shape is DRAWN at, and under
+ * auto-layout the two differ — the same reason `meshHandles` reads `c.local`.
+ */
+export function gradientPaintMatrix(
+    gradient: Gradient, world: Mat2D, local: { width: number; height: number }
+): Mat2D {
+    const box: Mat2D = gradient.units === "objectBoundingBox"
+        ? { a: local.width, b: 0, c: 0, d: local.height, e: 0, f: 0 }
+        : IDENTITY;
+    return multiply(multiply(world, box), gradient.transform);
+}
+
+/** The gradient a node's fill holds, or null when it is a plain colour. */
+function gradientOf(node: { style: { fill: string | Gradient } } | undefined): Gradient | null {
+    const fill = node?.style.fill;
+    return fill === undefined || typeof fill === "string" ? null : fill;
+}
+
+/**
+ * Handles that place the RAMP on the shape, in world space (schema 56).
+ *
+ * The inspector edits which colours are in the ramp; these edit where it runs — and until they
+ * existed the axis was invisible and unreachable, so a gradient could only ever be the one the
+ * defaults produced. A linear ramp shows its two ends; a radial shows its centre, its rim and its
+ * focus, which are the three numbers a radial actually has.
+ *
+ * NAMED, not positional (`grad:start`, `grad:end`, …), for the reason a vertex handle is: the drag
+ * has to know which number it holds, and two of a radial's handles sit on the same point until the
+ * focus is moved.
+ */
+export function gradientHandles(
+    doc: ReadonlyDocument,
+    state: ComputedState,
+    selectedNodeIds: readonly string[]
+): SelectionHandle[] {
+    const handles: SelectionHandle[] = [];
+    for (const nodeId of selectedNodeIds) {
+        const g = gradientOf(doc.nodes.get(nodeId));
+        const c = state.nodes.get(nodeId);
+        if (!g || !c) continue;
+        const m = gradientPaintMatrix(g, c.world, c.local);
+        const at = (handle: GradientHandle, x: number, y: number, cursor: string): void => {
+            const w = applyToPoint(m, x, y);
+            if (!Number.isFinite(w.x) || !Number.isFinite(w.y)) return;
+            handles.push({ nodeId, handle, cx: w.x, cy: w.y, cursor });
+        };
+        if (g.kind === "linear") {
+            at("grad:start", g.x1, g.y1, "move");
+            at("grad:end", g.x2, g.y2, "move");
+        } else {
+            at("grad:center", g.cx, g.cy, "move");
+            // The rim on the +x side, which is the convention every tool draws — `r` is a scalar,
+            // so the direction is a choice and the drag reads the DISTANCE rather than the axis.
+            at("grad:radius", g.cx + g.r, g.cy, "ew-resize");
+            at("grad:focus", g.fx, g.fy, "crosshair");
+        }
+    }
+    return handles;
+}
+
+/** Whether a handle name is one of the gradient's — a membership test, not a prefix match. */
+export function isGradientHandle(handle: string): handle is GradientHandle {
+    return (GRADIENT_HANDLES as readonly string[]).includes(handle);
+}
+
+/**
+ * The GRADIENT handle under a world point, or null.
+ *
+ * Built from `gradientHandles`, the same producer the renderer draws from, for the reason written
+ * over `vertexHandleAtPoint`: handles that are drawn from one list and picked from another appear
+ * on screen and do nothing when you grab them.
+ */
+export function gradientHandleAtPoint(
+    doc: ReadonlyDocument,
+    state: ComputedState,
+    selectedNodeIds: readonly string[],
+    x: number,
+    y: number,
+    zoom: number
+): SelectionHandle | null {
+    const half = HANDLE_SIZE_PX / flooredZoom(zoom) / 2;
+    const handles = gradientHandles(doc, state, selectedNodeIds);
+    for (let i = handles.length - 1; i >= 0; i--) {
+        const h = handles[i];
+        if (Math.abs(x - h.cx) <= half && Math.abs(y - h.cy) <= half) return h;
+    }
+    return null;
+}
+
+/**
+ * A world point back in the gradient's own space, or null when the mapping cannot be undone.
+ *
+ * The INVERSE of `gradientPaintMatrix`, and it goes through that same function so a handle is
+ * dropped exactly where it was picked up. A singular matrix — a shape scaled to nothing, a
+ * `gradientTransform` of zero — has no inverse, and null is the honest answer: the drag does
+ * nothing rather than writing a NaN into the document.
+ */
+export function gradientPointOf(
+    gradient: Gradient, world: Mat2D, local: { width: number; height: number },
+    worldX: number, worldY: number
+): { x: number; y: number } | null {
+    const inv = invert(gradientPaintMatrix(gradient, world, local));
+    if (!inv) return null;
+    const p = applyToPoint(inv, worldX, worldY);
+    return Number.isFinite(p.x) && Number.isFinite(p.y) ? p : null;
 }
