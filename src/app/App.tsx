@@ -1461,6 +1461,12 @@ export function App() {
                     ⊘ Detach
                 </button>
                 <div style={{ flex: 1 }} />
+                {/* THE DEBUG CONTROLS ARE NOT HERE ANY MORE. Design tokens, the script console,
+                    asset folders, the renderer switch and the demo exercises all moved to the
+                    Developer menu — the renderer switch especially, which changes what a user sees
+                    for no reason they can name and sat at the same weight as Save.
+                    Theme, Timeline and Light stay because they are FEATURES, not debugging. They
+                    are in the View menu as well, which is where a newcomer looks first. */}
                 <button
                     title="Switch the document's theme mode — $token colors re-resolve against the variable store (undoable, persisted)"
                     onClick={() => {
@@ -1496,35 +1502,7 @@ export function App() {
                         </select>
                     );
                 })()}
-                                <button
-                    title="Design tokens — named colours and numbers, with per-theme values"
-                    onClick={() => setShowTokens(v => !v)}
-                    style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: showTokens ? UI.accentSoft : "transparent", color: "#ccc", border: `1px solid ${UI.line}`, borderRadius: 3, cursor: "pointer" }}
-                >
-                    ◈ Tokens
-                </button>
-                <button
-                    title="Scripts — run a small program against the document; it can only emit the same Actions you can"
-                    onClick={() => setShowScript(v => !v)}
-                    style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: showScript ? UI.accentSoft : "transparent", color: "#ccc", border: `1px solid ${UI.line}`, borderRadius: 3, cursor: "pointer" }}
-                >
-                    &gt;_ Script
-                </button>
-                <button
-                    title="Folders — scan a codebase for capabilities with no UI, or browse an image folder"
-                    onClick={() => setShowFolders(v => !v)}
-                    style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: showFolders ? UI.accentSoft : "transparent", color: "#ccc", border: `1px solid ${UI.line}`, borderRadius: 3, cursor: "pointer" }}
-                >
-                    🗀 Folders
-                </button>
-<button
-                    title="Switch the rendering backend — all three draw the same display list. WebGL is a PREVIEW: it fills and strokes shapes as triangles on the GPU, and does not yet draw text, images or effects."
-                    onClick={() => setBackend(b => (b === "svg" ? "canvas" : b === "canvas" ? "webgl" : "svg"))}
-                    style={{ fontSize: 11, padding: "3px 8px", marginRight: 8, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
-                >
-                    Backend: {backend === "svg" ? "SVG" : backend === "canvas" ? "Canvas" : "WebGL (preview)"}
-                </button>
-                {/* A document has no clock until somebody asks for one, so a still drawing carries
+                                                                                {/* A document has no clock until somebody asks for one, so a still drawing carries
                     no timeline strip and serialises exactly as it did before animation existed. */}
                 <button
                     title="Give this document a timeline (24 frames at 12fps), or take it away again"
@@ -1538,27 +1516,7 @@ export function App() {
                              color: dispatcher.getDocument().timeline ? UI.accent : "#ccc",
                              border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
                 >⏱ Timeline</button>
-                <select
-                    value=""
-                    title="Load a classic animation exercise. These are the things animators learn on — each stresses a different capability, and building them is how the engine's holes get found."
-                    onChange={e => {
-                        const hit = DEMOS.find(d => d.name === e.target.value);
-                        if (!hit) return;
-                        // LOADED like any other document, through the same path a file takes, so a
-                        // demo cannot pass by being special-cased. If one of these will not load,
-                        // neither will somebody's work.
-                        dispatcher.loadDocument(hit.build());
-                        es.selectedNodeIds = [];
-                        es.frame = 0;
-                        refresh();
-                    }}
-                    style={{ fontSize: 11, padding: "3px 6px", marginLeft: 4, background: "transparent",
-                             color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
-                >
-                    <option value="">Exercises…</option>
-                    {DEMOS.map(d => <option key={d.name} value={d.name}>{d.name}</option>)}
-                </select>
-                {/* A document is unlit until somebody asks, and an unlit one draws byte-for-byte
+                                {/* A document is unlit until somebody asks, and an unlit one draws byte-for-byte
                     as it did before lighting existed — ambient 1, no lights, colours times one. */}
                 <button
                     title="Light the scene from the top-left, or turn the lights off again. Raise a mesh control point's HEIGHT to give a shape something to shade."
