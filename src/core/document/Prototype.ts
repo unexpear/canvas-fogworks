@@ -210,9 +210,16 @@ export function blendNode(from: Node, to: Node, t: number, easeFor?: EaseFor, di
     };
     out.style = {
         ...(discrete === "step" ? from.style : to.style),
-        opacity: lerp(from.style.opacity, to.style.opacity, k("style.opacity")),
-        fill: blendColor(from.style.fill, to.style.fill, k("style.fill"))
+        opacity: lerp(from.style.opacity, to.style.opacity, k("style.opacity"))
     };
+    // A GRADIENT DOES NOT BLEND (schema 56): two ramps with different stop counts have no
+    // midpoint, and one end being a ramp and the other a colour has no midpoint either. Both ends
+    // must be strings for `fill` to interpolate — otherwise the spread above stands, which is the
+    // same `discrete` end a font family and a text string already take. Written as a guard rather
+    // than a case inside `blendColor`, so the numeric slots below and this read alike.
+    if (typeof from.style.fill === "string" && typeof to.style.fill === "string") {
+        out.style.fill = blendColor(from.style.fill, to.style.fill, k("style.fill"));
+    }
     if (from.style.stroke !== undefined && to.style.stroke !== undefined) {
         out.style.stroke = blendColor(from.style.stroke, to.style.stroke, k("style.stroke"));
     }

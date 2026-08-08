@@ -15,7 +15,7 @@
  */
 
 import { toMatrixString, isTranslationOnly } from "../core/geometry/Matrix";
-import { DisplayList, DrawItem, Paint, FilterDef, commandsToPathData, effectFilterId } from "./RenderModel";
+import { DisplayList, DrawItem, Paint, FilterDef, PaintGradient, commandsToPathData, effectFilterId } from "./RenderModel";
 import { naturalSize, surfaceUrl } from "./ImageCache";
 
 const svgNS = "http://www.w3.org/2000/svg";
@@ -55,6 +55,56 @@ function buildFilters(defs: SVGDefsElement, filterDefs: FilterDef[]): void {
         }
         defs.appendChild(filter);
     }
+}
+
+/**
+ * One `<linearGradient>` or `<radialGradient>` per def (schema 56).
+ *
+ * TRANSCRIPTION, not arithmetic — which is the whole reason `PaintGradient` carries `units` and
+ * the authored coordinates instead of a pre-multiplied matrix. SVG has `gradientUnits` and
+ * `gradientTransform` natively, so the backend that renders a gradient EXACTLY is the one that
+ * copies the numbers across. Anything folded together in the model would have to be unfolded here.
+ */
+function buildGradients(defs: SVGDefsElement, gradients: PaintGradient[]): void {
+    for (const g of gradients) {
+        const el = document.createElementNS(svgNS, `${g.kind}Gradient`);
+        el.setAttribute("id", g.id);
+        el.setAttribute("gradientUnits", g.units);
+        // Emitted only when it is not the identity, for the same reason the item transform picks
+        // `translate` over `matrix`: an attribute that says nothing is noise in the output.
+        const t = g.transform;
+        if (t.a !== 1 || t.b !== 0 || t.c !== 0 || t.d !== 1 || t.e !== 0 || t.f !== 0) {
+            el.setAttribute("gradientTransform", toMatrixString(t));
+        }
+        if (g.kind === "linear") {
+            el.setAttribute("x1", String(g.x1)); el.setAttribute("y1", String(g.y1));
+            el.setAttribute("x2", String(g.x2)); el.setAttribute("y2", String(g.y2));
+        } else {
+            el.setAttribute("cx", String(g.cx)); el.setAttribute("cy", String(g.cy));
+            el.setAttribute("r", String(g.r));
+            el.setAttribute("fx", String(g.fx)); el.setAttribute("fy", String(g.fy));
+        }
+        for (const stop of g.stops) {
+            const s = document.createElementNS(svgNS, "stop");
+            s.setAttribute("offset", String(stop.offset));
+            s.setAttribute("stop-color", stop.color);
+            // Written ONLY when it is not full: SVG's default is 1, and an explicit "1" on every
+            // stop of every gradient is bytes that say nothing.
+            if (stop.opacity !== 1) s.setAttribute("stop-opacity", String(stop.opacity));
+            el.appendChild(s);
+        }
+        defs.appendChild(el);
+    }
+}
+
+/**
+ * What goes in a `fill` attribute: a colour verbatim, or a reference to the def (schema 56).
+ *
+ * The def itself is built from `model.gradients`, which `buildRenderModel` deduped by the same id
+ * — so a hundred shapes sharing a ramp reference one element.
+ */
+function fillAttr(fill: string | PaintGradient): string {
+    return typeof fill === "string" ? fill : `url(#${fill.id})`;
 }
 
 function getOrCreateGroup(parent: Element, id: string): SVGGElement {
@@ -103,7 +153,7 @@ function applyStrokeCorners(el: SVGElement, paint: Paint): void {
 }
 
 function applyRectPaint(el: SVGElement, paint: Paint): void {
-    if (paint.fill !== null) el.setAttribute("fill", paint.fill);
+    if (paint.fill !== null) el.setAttribute("fill", fillAttr(paint.fill));
     if (paint.opacity !== null) el.setAttribute("opacity", String(paint.opacity));
     if (paint.radius !== null) el.setAttribute("rx", String(paint.radius));
     if (paint.stroke !== null) el.setAttribute("stroke", paint.stroke);
@@ -163,7 +213,11 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         const div = document.createElement("div");
         div.style.width = "100%";
         div.style.height = "100%";
-        if (paint.fill !== null) div.style.color = paint.fill;
+        // TEXT FLATTENS. This backend draws text through a `foreignObject` div, and CSS `color`
+        // takes no paint server — a gradient-filled label would need `background-clip: text`,
+        // which is a different mechanism with different clipping and no `gradientTransform`.
+        // The first stop is what the other backends flatten to as well, so all three agree.
+        if (paint.fill !== null) div.style.color = typeof paint.fill === "string" ? paint.fill : paint.fill.flat;
         div.style.fontSize = `${shape.fontSize}px`;
         // Typography (schema 34). The model resolved every one of these, so this is transcription:
         // family and weight as given, alignment as CSS, line height as a UNITLESS multiple (the
@@ -254,6 +308,7 @@ export function emitSVG(container: HTMLElement, model: DisplayList): void {
     const defs = getOrCreateDefs(svg);
     clearChildren(defs);
     buildFilters(defs, model.defs);
+    buildGradients(defs, model.gradients);
 
     const z = Math.max(0.01, model.viewport.zoom);
     const g = getOrCreateGroup(svg, "viewport-transform");

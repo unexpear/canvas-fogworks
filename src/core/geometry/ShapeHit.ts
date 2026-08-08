@@ -19,6 +19,7 @@
  */
 
 import { FillRule, PathCommand } from "../document/Node";
+import { Gradient } from "../document/Gradient";
 
 /** What a node's ink covers, in local space. Mirrors the render model's `shape` kinds. */
 export type HitShape =
@@ -33,8 +34,13 @@ export type HitShape =
  * document says "no fill" — and both backends honour that. Picking has to read the same rule:
  * the interior of an unfilled path is not ink, and the interior of a filled one is, whether or
  * not the path was ever closed.
+ *
+ * A GRADIENT ALWAYS PAINTS (schema 56). It is not asked about its first stop, because a ramp that
+ * starts transparent still covers the shape further along — flattening the question to one stop
+ * would make the top of such a shape unclickable while it is plainly visible.
  */
-export function isPaintBearing(fill: string): boolean {
+export function isPaintBearing(fill: string | Gradient): boolean {
+    if (typeof fill !== "string") return fill.stops.length > 0;
     const f = fill.trim().toLowerCase();
     return f !== "" && f !== "none" && f !== "transparent";
 }
@@ -48,7 +54,7 @@ export function isPaintBearing(fill: string): boolean {
  * the caller does the token lookup with the same `resolveNumber` the renderer uses.
  */
 export function hitShapeOf(
-    node: { type: string; path?: readonly PathCommand[]; style: { fill: string; fillRule?: FillRule } },
+    node: { type: string; path?: readonly PathCommand[]; style: { fill: string | Gradient; fillRule?: FillRule } },
     radius: number
 ): HitShape {
     if (node.type === "core.ellipse") return { kind: "ellipse" };

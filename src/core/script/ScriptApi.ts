@@ -29,7 +29,7 @@ import { UpdateNodeContentAction } from "../actions/UpdateNodeContentAction";
 import { UpdateNodeGeometryAction } from "../actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../actions/UpdateNodeStyleAction";
 import { ReadonlyDocument } from "../document/Document";
-import { isNodeType, NodeType, Style } from "../document/Node";
+import { isNodeType, NodeType, Style, flatFill } from "../document/Node";
 import { resolveScene } from "../document/Components";
 
 /** How many requests one run may produce — a script is a program, so it needs a bound. */
@@ -73,7 +73,9 @@ export function snapshotFor(doc: ReadonlyDocument): ScriptSnapshot {
             parent: n.parent ?? null,
             children: Object.freeze([...n.children]) as string[],
             x: n.geometry.x, y: n.geometry.y, width: n.geometry.width, height: n.geometry.height,
-            fill: n.style.fill, opacity: n.style.opacity,
+            // FLATTENED to one colour: `ScriptNode.fill` is a string, and a sandbox that suddenly
+            // handed out an object would break every script that concatenates it.
+            fill: flatFill(n.style.fill), opacity: n.style.opacity,
             text: n.text ?? null
         }));
     });

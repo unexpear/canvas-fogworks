@@ -33,7 +33,12 @@ function isValidNode(n: any): n is Node {
         typeof n.geometry.x === "number" && typeof n.geometry.y === "number" &&
         typeof n.geometry.width === "number" && typeof n.geometry.height === "number" &&
         isPlainObject(n.style) &&
-        typeof n.style.fill === "string" && typeof n.style.opacity === "number" &&
+        // fill: a colour/token string OR a gradient object (schema 56) — the shallow gate, like
+        // radius and the effects below. What makes an object a LEGAL gradient lives once in
+        // `gradientError`, reached through `styleError` in Integrity; duplicating the stop rules
+        // here is how the two would drift.
+        (typeof n.style.fill === "string" || isPlainObject(n.style.fill)) &&
+        typeof n.style.opacity === "number" &&
         isOptionalString(n.style.stroke) &&
         // radius/fontSize: number OR string (a "$token", schema 20) — the shallow gate; the
         // token-or-range semantic lives once in `styleError` (Integrity), like the effects.
@@ -346,6 +351,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "52") { raw = migrate_52_to_53(raw); version = "53"; }
     if (version === "53") { raw = migrate_53_to_54(raw); version = "54"; }
     if (version === "54") { raw = migrate_54_to_55(raw); version = "55"; }
+    if (version === "55") { raw = migrate_55_to_56(raw); version = "56"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -838,6 +844,19 @@ function migrate_21_to_22(raw: any): any {
  */
 function migrate_54_to_55(raw: any): any {
     return { ...raw, version: "55" };
+}
+
+/**
+ * Schema 56 — `Style.fill` may hold a GRADIENT, not only a colour string.
+ *
+ * Every schema-55 fill is a string and stays one, so nothing in an existing document is rewritten.
+ * The bump is for the OTHER direction, which is the direction the freeze rule actually asks about:
+ * a 56 document whose fill is an object reaches a 55 build's `styleError` as "must be a string" and
+ * fails to load. That is the gate working. Without the bump the same file would open in a 55 build
+ * and paint the object as a colour — every gradient-filled shape silently black.
+ */
+function migrate_55_to_56(raw: any): any {
+    return { ...raw, version: "56" };
 }
 
 function migrate_53_to_54(raw: any): any {

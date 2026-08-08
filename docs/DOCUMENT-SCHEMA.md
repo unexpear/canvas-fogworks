@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v55 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v56 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -328,7 +328,7 @@ interface Clip { name: string; from: number; to: number; loop?: boolean }   // b
 // document at a frame is an ORDINARY document and nothing below the display seam knows time exists.
 
 interface Style {
-  fill: string;             // color OR token id, e.g. "$color/primary" (resolved against variables, M5)
+  fill: string | Gradient;  // color, token id ("$color/primary", resolved against variables, M5), OR a gradient (schema 56)
   stroke?: string;
   strokeWidth?: number | string; // border thickness in WORLD units, >= 0, or a number-token (schema 25); absent = a 1-SCREEN-px hairline
   strokeJoin?: "miter" | "round" | "bevel";   // how a corner turns (schema 37); absent = "miter"
@@ -1083,6 +1083,58 @@ parameter so the future-bump case is testable today):
 - **When you bump `SCHEMA_VERSION`:** add the migration step in `migrateIfNeeded`,
   update this doc, and add a round-trip + migration test. (See the freeze rule.)
   Bumping the **app** version requires none of this.
+
+## Gradient (a fill that changes across the shape — schema 56)
+
+```ts
+interface GradientStop { offset: number; color: string; opacity: number }   // offset 0..1
+type GradientUnits = "objectBoundingBox" | "userSpaceOnUse";
+
+interface Gradient {
+  kind: "linear" | "radial";
+  stops: readonly GradientStop[];      // >= 1, non-decreasing offsets, <= GRADIENT_MAX_STOPS (64)
+  units: GradientUnits;                // SVG's own default is objectBoundingBox
+  transform: Mat2D;                    // `gradientTransform`, CARRIED and not baked
+  x1, y1, x2, y2: number;              // LINEAR: the axis. SVG's defaults are (0,0)-(1,0)
+  cx, cy, r, fx, fy: number;           // RADIAL: the end circle and the focal point
+}
+
+defaultGradient(kind): Gradient        // SVG's own defaults, so a gradient stating nothing is legal
+gradientError(g): string | null        // what makes a ramp unpaintable; reached through styleError
+normalizeStops(stops): GradientStop[]  // clamped, stably sorted, back-tracking offsets raised
+sampleGradient(g, t): GradientSample | null   // the STOP PAIR and the ratio, never a blended colour
+flatFill(fill): string                 // one colour: the string, or the FIRST stop
+```
+
+**Only `fill`.** `stroke` stays a string — SVG and Canvas can both stroke with a paint server, but
+exactly one stroke in the 3,127 gradients measured across the SVG corpus references one, and
+widening `stroke` too would double the work in three backends and the exporter to serve that one.
+
+**Measured before designed.** 97% of those gradients are linear; 2,860 of 2,969 have exactly two
+stops and the most any file uses is 11 (so a stop LIST, not a from/to pair — a two-colour model
+would have needed a schema migration the first time an 11-stop file arrived); 2,977 state
+`userSpaceOnUse`, which is *not* SVG's default, so a reader assuming the default is wrong by a
+whole coordinate system on the common case; and 72% carry a `gradientTransform`, which is why it
+is a field and not an optional extra.
+
+**The transform is carried, not baked.** It can be folded into the coordinates for a linear
+gradient and cannot for a radial one, where a non-uniform matrix turns the circle into an ellipse
+no `cx/cy/r` can express. Carrying it keeps one representation for both, and it is what every
+renderer wants: SVG has the attribute, Canvas and the GPU both want a matrix rather than
+pre-distorted points.
+
+**What paints it, today:**
+
+| Surface | A gradient fill |
+|---------|-----------------|
+| SVG backend (the default) | painted exactly — `<defs>` + `fill="url(#id)"`, with `gradientUnits` and `gradientTransform` verbatim |
+| `exportSVG` | painted exactly, including on TEXT (a real `<text>` element takes the paint server) |
+| SVG backend, TEXT | flattened to the first stop — text is drawn through a `foreignObject` div, and CSS `color` takes no paint server |
+| Canvas backend | flattened to the first stop — Canvas resolves a gradient in the space live at the fill, so honouring the transform means transforming the context and flooding a clip |
+| GPU backend | flattened to the first stop — one draw carries one colour uniform; a ramp needs a per-fragment shader walk |
+
+The flat colour is decided once, in the render model (`PaintGradient.flat`), so the three surfaces
+that flatten all show the same colour rather than each choosing.
 
 ## Persistence (localStorage convenience wrapper)
 

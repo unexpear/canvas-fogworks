@@ -74,8 +74,15 @@ function fillAndStroke(ctx: CanvasRenderingContext2D, paint: Paint): void {
     if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
     // `fill: "none"` (outline items) has no canvas colour equivalent — skip the fill,
     // exactly as SVG's fill="none" paints no interior.
-    if (paint.fill !== null && paint.fill !== "none") {
-        ctx.fillStyle = paint.fill;
+    // A GRADIENT FLATTENS TO ITS FIRST STOP HERE (schema 56), and this is a KNOWN GAP, not a
+    // decision. Canvas evaluates a gradient in the coordinate space live at the moment of the
+    // fill, so honouring `gradientTransform` and `objectBoundingBox` means transforming the
+    // CONTEXT and then flooding a clip — a real change to how this backend draws a shape, with
+    // its own answer needed for shadows and blur. The SVG backend (the default) paints the ramp
+    // exactly; this one paints `flat`, which the model decided so all three agree on the colour.
+    const fill = paint.fill === null ? null : typeof paint.fill === "string" ? paint.fill : paint.fill.flat;
+    if (fill !== null && fill !== "none") {
+        ctx.fillStyle = fill;
         // Canvas takes the rule as an argument to `fill` rather than as state, and its spelling
         // is the document's, so this is a pass-through and not a lookup.
         if (paint.fillRule !== undefined) ctx.fill(paint.fillRule); else ctx.fill();

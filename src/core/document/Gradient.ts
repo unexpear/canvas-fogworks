@@ -24,6 +24,10 @@
  * what every renderer wants anyway: SVG has the attribute, and Canvas and the GPU both want a
  * matrix rather than pre-distorted points.
  *
+ * A `Style.fill` VALUE SINCE SCHEMA 56. The SVG backend and the exporter paint the ramp exactly;
+ * the Canvas and GPU backends flatten it to `flatFill`'s first stop and say so. See
+ * docs/DOCUMENT-SCHEMA.md § Gradient for the table of what paints what.
+ *
  * OFFSETS ARE SORTED AND CLAMPED ON THE WAY IN. SVG requires non-decreasing offsets and browsers
  * silently repair files that break the rule, so a reader that trusts the file disagrees with every
  * browser about those files. Repairing here means the rest of the engine can index stops without
@@ -63,7 +67,12 @@ export type GradientUnits = "objectBoundingBox" | "userSpaceOnUse";
 /** A linear or radial ramp. */
 export interface Gradient {
     kind: "linear" | "radial";
-    stops: GradientStop[];
+    /**
+     * READONLY as an array, like `Node.path`'s commands and for the same reason: the document is
+     * handed out through `ReadonlyDocument`, and a mutable array field would make every gradient-
+     * bearing style fail to satisfy `Partial<Style>` on the way back in.
+     */
+    stops: readonly GradientStop[];
     units: GradientUnits;
     /**
      * `gradientTransform`. 72% of the corpus carries one, which is why it is not optional.

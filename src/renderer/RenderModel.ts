@@ -25,7 +25,8 @@
 
 import { SourceRect } from "../core/document/Node";
 import { ReadonlyDocument } from "../core/document/Document";
-import { FillRule, PathCommand, Shadow, StrokeCap, StrokeJoin, TextAlign } from "../core/document/Node";
+import { FillRule, PathCommand, Shadow, StrokeCap, StrokeJoin, TextAlign, flatFill } from "../core/document/Node";
+import { Gradient, GradientStop, GradientUnits } from "../core/document/Gradient";
 import { depthOf } from "../core/document/Depth";
 import { ReadonlyMesh, isFlatMesh } from "../core/document/Mesh";
 import { Light, shadowOffset } from "../core/document/Light";
@@ -134,8 +135,74 @@ export function textParagraphs(text: string): string[] {
  * (`strokeWidth: 1/z`, `strokeDash`) are resolved to world units here so the
  * backend does zero maths.
  */
+/**
+ * A gradient with its colours RESOLVED, ready for a backend to paint (schema 56).
+ *
+ * COORDINATES ARE CARRIED AS AUTHORED, with `units` alongside them — NOT multiplied out into the
+ * shape's local space. Two reasons, and the second is the load-bearing one:
+ *
+ *   - This module composes no coordinates. That is the renderer invariant at the top of the file,
+ *     and folding `objectBoundingBox` into local units is exactly the matrix arithmetic it forbids.
+ *   - SVG has `gradientUnits` and `gradientTransform` natively, so the backend that paints this
+ *     exactly is the one that does the least work. Multiplying out here would mean computing a
+ *     matrix so the SVG backend could hand it back.
+ *
+ * `flat` is the SINGLE colour a backend without gradient support paints, decided here so all three
+ * agree on what a flattened ramp looks like rather than each choosing.
+ */
+export interface PaintGradient {
+    kind: "linear" | "radial";
+    /** Content-derived and stable — `emitSVG` keys one `<defs>` entry per distinct ramp on it. */
+    id: string;
+    units: GradientUnits;
+    /** `$token` colours resolved; offsets already sorted and clamped by the document layer. */
+    stops: readonly GradientStop[];
+    transform: Mat2D;
+    x1: number; y1: number; x2: number; y2: number;
+    cx: number; cy: number; r: number; fx: number; fy: number;
+    /** The first stop, resolved — what a backend that cannot ramp paints instead. */
+    flat: string;
+}
+
+/**
+ * A stable `<defs>` id for one resolved ramp.
+ *
+ * The same reasoning as `rasterHref`: a cheap rolling sum, not a real hash, because a collision
+ * costs two identical-looking gradients sharing a def and never a wrong picture — and the
+ * descriptor's LENGTH travels in the id, so two ramps must agree on both to collide at all.
+ */
+export function gradientDefId(g: Omit<PaintGradient, "id">): string {
+    const s = JSON.stringify([g.kind, g.units, g.transform,
+        g.x1, g.y1, g.x2, g.y2, g.cx, g.cy, g.r, g.fx, g.fy, g.stops]);
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 0xffffffff;
+    return `grad_${g.kind[0]}${h.toString(36)}_${s.length}`;
+}
+
+/** A document gradient with every `$token` stop colour resolved under the active theme. */
+export function resolvePaintGradient(g: Gradient, color: (raw: string) => string): PaintGradient {
+    const stops = g.stops.map(s => ({ offset: s.offset, color: color(s.color), opacity: s.opacity }));
+    const body: Omit<PaintGradient, "id"> = {
+        kind: g.kind, units: g.units, stops, transform: g.transform,
+        x1: g.x1, y1: g.y1, x2: g.x2, y2: g.y2,
+        cx: g.cx, cy: g.cy, r: g.r, fx: g.fx, fy: g.fy,
+        // Resolved, so a token in the first stop flattens to a colour rather than to "$color/x".
+        flat: stops[0]?.color ?? "#000000"
+    };
+    return { ...body, id: gradientDefId(body) };
+}
+
 export interface Paint {
-    fill: string | null;
+    /**
+     * A colour, a resolved GRADIENT (schema 56), or null for "emit no fill at all".
+     *
+     * A UNION RATHER THAN A SECOND FIELD, deliberately. `fill` is read at four sites across the
+     * three backends and the exporter; a `fillGradient` sitting beside it would leave each of them
+     * compiling perfectly while painting the flat colour, which is the silently-plausible failure
+     * this codebase keeps being bitten by. As a union, a site that has not been taught about
+     * gradients does not build.
+     */
+    fill: string | PaintGradient | null;
     opacity: number | null;
     stroke: string | null;
     strokeWidth: number | null;
@@ -289,6 +356,14 @@ export interface DisplayList {
     ambient?: number;
     /** Deduped filter defs referenced by content items — emitSVG builds `<defs>` from these. */
     defs: FilterDef[];
+    /**
+     * Deduped GRADIENT defs referenced by content items (schema 56), in content order.
+     *
+     * Separate from `defs` because the two are unrelated things that happen to share an element:
+     * a filter is keyed on an effect and a gradient on a ramp, and merging them would mean one
+     * list whose entries are a union nothing iterates over as a whole.
+     */
+    gradients: PaintGradient[];
     /** The opacity groups `content` items refer to, outermost first. */
     groups: OpacityGroup[];
 }
@@ -429,6 +504,10 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
     const store = doc.variables as VariableStore;
     const theme = doc.activeTheme;
     const color = (raw: string): string => resolveColor(store, raw, theme);
+    // The FILL slot alone may hold a gradient (schema 56). One funnel, so every shape branch
+    // resolves it the same way and none of them has to know the union exists.
+    const fillOf = (raw: string | Gradient): string | PaintGradient =>
+        typeof raw === "string" ? color(raw) : resolvePaintGradient(raw, color);
     // NUMBER slots (schema 20): radius/fontSize may be "$token" strings. The RESOLVED value is
     // range-checked here (the store only guarantees a finite number — a negative "spacing" is a
     // legal variable but an illegal radius): out-of-range/broken → the slot's fallback (radius:
@@ -525,7 +604,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         if (node.type === "core.rectangle") {
             shape = { kind: "rect", x, y, width, height };
             paint = {
-                fill: color(sty.fill),
+                fill: fillOf(sty.fill),
                 opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
@@ -540,7 +619,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             // Fills its local box: centre + radii from the box (no corner radius).
             shape = { kind: "ellipse", cx: width / 2, cy: height / 2, rx: width / 2, ry: height / 2 };
             paint = {
-                fill: color(sty.fill),
+                fill: fillOf(sty.fill),
                 opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
@@ -563,7 +642,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 // is never invisible (a line's stroke IS its body, unlike a rect's border).
                 // The fallback picks the RAW winner first, THEN resolves — so a token stroke
                 // wins over a token fill exactly like concrete colors.
-                stroke: color(sty.stroke || sty.fill),
+                stroke: color(sty.stroke || flatFill(sty.fill)),
                 strokeWidth: strokeWidthOf(sty.strokeWidth),
                 strokeJoin: sty.strokeJoin, strokeCap: sty.strokeCap, strokeMiterLimit: sty.strokeMiterLimit,
                 fillRule: sty.fillRule,
@@ -585,7 +664,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 letterSpacing: numberSlot(sty.letterSpacing, 0, -1e6, 1e6)
             };
             paint = {
-                fill: color(sty.fill), opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
+                fill: fillOf(sty.fill), opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
                 strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
             };
         } else if (node.type === "core.image") {
@@ -635,7 +714,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             // node's box keeps its selection/handles/culling. Filled like a rect (no radius).
             shape = { kind: "path", commands: node.path ?? [] };
             paint = {
-                fill: color(sty.fill),
+                fill: fillOf(sty.fill),
                 opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
@@ -993,6 +1072,19 @@ function collectDefs(content: DrawItem[]): FilterDef[] {
     return defs;
 }
 
+/** Dedupe (by id) the gradient defs referenced by the visible content, in content order. */
+function collectGradients(content: DrawItem[]): PaintGradient[] {
+    const out: PaintGradient[] = [];
+    const seen = new Set<string>();
+    for (const item of content) {
+        const fill = item.paint.fill;
+        if (fill === null || typeof fill === "string" || seen.has(fill.id)) continue;
+        seen.add(fill.id);
+        out.push(fill);
+    }
+    return out;
+}
+
 /**
  * Pure function of `(size, doc, state, prev)` — no DOM, no `Date`/`Math.random`.
  * `prev` (the last frame's list for this container) lets an unchanged grid reuse
@@ -1050,6 +1142,7 @@ export function buildRenderModel(
         ...(doc.ambient !== undefined ? { ambient: doc.ambient } : {}),
         overlay: buildOverlay(state, z, doc),
         defs: collectDefs(content),
+        gradients: collectGradients(content),
         groups: collectGroups(doc, content)
     };
 }

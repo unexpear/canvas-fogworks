@@ -10,10 +10,9 @@
  * internals are load-bearing; a gradient parser is a self-contained pass over the same text, and
  * bolting it into the shape walk would put two jobs in one loop for no gain.
  *
- * NOTHING CONSUMES THIS YET, and that is deliberate. `Style.fill` is still a colour string, so
- * storing a gradient needs a SCHEMA BUMP with a migration — a change that ripples through `Paint`
- * into three backends and the exporter. Parsing is the prerequisite and completes on its own; a
- * half-landed schema is the one that saves a document it cannot reopen.
+ * `Style.fill` CAN NOW HOLD ONE (schema 56), so what these gradients need is a caller:
+ * `SvgDocument` still flattens each to its first stop on the way into a node. Wiring the two
+ * together is the next step and is a change to the shape walk, not to this file.
  *
  * `href` INHERITANCE IS REAL AND SMALL: 150 of 3,127 gradients state no stops and point at another
  * gradient for them. Ignoring it leaves those 150 with no stops at all — which `gradientError`

@@ -25,7 +25,7 @@ import { SetBooleanOpAction } from "./SetBooleanOpAction";
 import { ReparentNodeAction } from "./ReparentNodeAction";
 import { MoveNodeAction } from "./MoveNodeAction";
 import { ReadonlyDocument } from "../document/Document";
-import { PathCommand } from "../document/Node";
+import { PathCommand, flatFill } from "../document/Node";
 import { resolveScene } from "../document/Components";
 import { selectionRoots } from "../document/SceneGraph";
 import { ComputedState } from "../geometry/GeometryEngine";
@@ -98,7 +98,7 @@ export function booleanAction(
         new AddNodeAction(
             doc, "core.path",
             norm.geometry.x, norm.geometry.y, norm.geometry.width, norm.geometry.height,
-            base?.style.fill ?? "#cccccc", newId, null, undefined,
+            base ? flatFill(base.style.fill) : "#cccccc", newId, null, undefined,
             base?.style.stroke, base?.style.strokeWidth
         ),
         // The path itself needs its own action: `AddNodeAction` creates the node and its box,
@@ -155,7 +155,7 @@ export function makeBooleanNodeAction(
     const actions: Action[] = [
         new AddNodeAction(
             doc, "core.boolean", minX, minY, maxX - minX, maxY - minY,
-            nodes[0].style.fill, newId, parent, undefined, nodes[0].style.stroke, nodes[0].style.strokeWidth
+            flatFill(nodes[0].style.fill), newId, parent, undefined, nodes[0].style.stroke, nodes[0].style.strokeWidth
         ),
         new SetBooleanOpAction(doc, newId, op)
     ];

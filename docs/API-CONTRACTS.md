@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v55 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v56 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -749,7 +749,11 @@ load path. `dimensionError` is per-type (rect/ellipse/text/image need a positive
 `core.path` may collapse one axis, not both). `pathError` (+ `PathCommand`, `PATH_MAX_COMMANDS`)
 validates a `core.path`'s commands (present ⇒ non-empty, opens with `M`, finite coords, ≤ cap) and
 rejects path data on any other type. `styleError` validates every `Style` field including the
-schema-18 effects (`Shadow` = dx/dy/blur/color; `blur` ≥ 0). `trackError(t)` validates ONE grid
+schema-18 effects (`Shadow` = dx/dy/blur/color; `blur` ≥ 0). `style.fill` is `string | Gradient`
+(schema 56); the ramp’s own rules live in `gradientError` and are reached through `styleError`, so
+the edit path, the load path and the importer cannot disagree about what a legal ramp is.
+`flatFill(fill)` is the one-colour answer for the places that cannot hold a ramp — hit testing,
+the script sandbox, and the backends that flatten. `trackError(t)` validates ONE grid
 track (exactly one of px/fr/auto; `px ≥ 0`, `fr > 0`, `auto === true`) and is exported so the
 track-list parser can defer to it rather than restate it. `layoutExclusivity(patch)` is the ONE
 statement of grid ⊕ container exclusivity — it takes and returns a PATCH (the action's delta must
@@ -835,7 +839,10 @@ function parseSvgTransform(text: string): Mat2D;        // matrix/translate/scal
 - Coordinates go through `ShapeToPath.transformCommands`, the function the shape layer already uses.
 - `<use>` is EXPANDED (19,194 elements in the measured art) with a depth bound, since a symbol
   referencing its own ancestor is a loop.
-- Gradients flatten to their first stop and every approximation lands in `notes`.
+- Gradients flatten to their first stop and every approximation lands in `notes`. `SvgGradient`
+  reads the real thing separately (3,090 ramps across the corpus); wiring it into `SvgDocument`
+  so an imported shape arrives with its ramp is the remaining step, now that `Style.fill` can
+  hold one.
 - Verified against all 5,279 real files: 109,036 shapes, none empty, none rejected by `pathError`.
 
 ### `core/import/MeshData` — what every 3D reader produces
@@ -1733,7 +1740,8 @@ type Shape =
   | { kind: "image"; x; y; width; height; href: string | null };
 // A null Paint field = absent attribute; pointerEvents:false = pointer-events:none.
 interface Paint {
-  fill: string | null; opacity: number | null;
+  fill: string | PaintGradient | null;          // schema 56 — a colour, a resolved ramp, or absent
+  opacity: number | null;
   stroke: string | null; strokeWidth: number | null; strokeDash: string | null;
   radius: number | null; cursor: string | null; pointerEvents: boolean;
   shadow: Shadow | null; blur: number | null;   // schema-18 effects (world units), resolved from Style
@@ -1758,10 +1766,24 @@ interface DrawItem {
 // `style.shadow` still wins — somebody who set one meant it.
 interface GridModel { sig: string; lines: DrawItem[]; unchanged: boolean }
 interface FilterDef { id: string; shadow: Shadow | null; blur: number | null }  // one <filter> per entry
+// A gradient with its $token stop colours RESOLVED (schema 56). Coordinates are carried AS
+// AUTHORED with `units` beside them, NOT folded into the shape's local space: this model composes
+// no coordinates, and SVG has `gradientUnits`/`gradientTransform` natively — folding here would
+// only mean unfolding in the backend. `flat` is the single colour a backend that cannot ramp
+// paints, decided once so all three agree instead of each choosing.
+interface PaintGradient {
+  kind: "linear" | "radial"; id: string;        // id is content-derived → one <defs> entry per ramp
+  units: GradientUnits; stops: readonly GradientStop[]; transform: Mat2D;
+  x1; y1; x2; y2; cx; cy; r; fx; fy: number;
+  flat: string;
+}
+function gradientDefId(g: Omit<PaintGradient, "id">): string;
+function resolvePaintGradient(g: Gradient, color: (raw: string) => string): PaintGradient;
 interface DisplayList {
   viewport: { x: number; y: number; zoom: number };
   grid: GridModel; content: DrawItem[]; overlay: DrawItem[];
   defs: FilterDef[];            // deduped effect filters (by id); emitSVG builds <defs> from these
+  gradients: PaintGradient[];   // schema 56 — deduped gradient defs, in content order
   groups: OpacityGroup[];       // schema 32 — the groups `content` items refer to, outermost first
   lights?: readonly Light[]; ambient?: number;   // schema 42 — the DOCUMENT's, not a shape's
 }

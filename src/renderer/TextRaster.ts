@@ -98,7 +98,9 @@ export function drawTextInto(ctx: CanvasRenderingContext2D, shape: TextShape, pa
         (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = `${shape.letterSpacing}px`;
     }
     if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
-    if (paint.fill !== null) ctx.fillStyle = paint.fill;
+    // Glyphs take the FIRST STOP of a gradient (schema 56) — the same flattening the SVG
+    // backend applies to text, so the two agree about a gradient-filled label.
+    if (paint.fill !== null) ctx.fillStyle = typeof paint.fill === "string" ? paint.fill : paint.fill.flat;
     ctx.textBaseline = "top";
     ctx.beginPath();
     ctx.rect(shape.x, shape.y, shape.width, shape.height);

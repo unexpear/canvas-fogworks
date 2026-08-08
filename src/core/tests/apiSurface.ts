@@ -38,7 +38,7 @@ import {
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
 import { Variable, VariableStore, VariableType, VariableValue, ThemeMode, THEME_MODES, VARIABLES_MAX, VARIABLE_KEY_MAX, VARIABLE_FALLBACK_COLOR, isTokenRef, variableError, variableKeyError, variableStoreError, resolveVariable, resolveColor, resolveNumber } from "../document/Variables";
-import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, Shadow, Layout, RESERVED_NODE_ID, RESERVED_ID_SUBSTRING, nodeIdError, SourceRect, sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
+import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, flatFill, Shadow, Layout, RESERVED_NODE_ID, RESERVED_ID_SUBSTRING, nodeIdError, SourceRect, sourceRectError, SOURCE_RECT_MAX } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
@@ -103,7 +103,7 @@ import { rulerTicks, niceStep, RulerTick } from "../geometry/Ruler";
 import { renderSVG, clearRenderState, RendererState } from "../../renderer/SVGRenderer";
 import { renderCanvas } from "../../renderer/CanvasRenderer";
 import { renderScene, RenderBackend } from "../../renderer/renderScene";
-import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
+import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, PaintGradient, gradientDefId, resolvePaintGradient, commandsToPathData, effectFilterId } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
 import { emitCanvas, setImageReadyCallback, CanvasTarget } from "../../renderer/emitCanvas";
 import { resolveImage, imageGeneration, naturalSize, imageInkBounds } from "../../renderer/ImageCache";
@@ -202,6 +202,10 @@ export function __apiSurfacePin(): void {
     expectType<string | null>(dimensionError("core.line", 1, 0));
     expectType<string | null>(pathError("core.path", []));
     expectType<string | null>(styleError({}));
+    // A fill may be a colour OR a gradient (schema 56); `flatFill` is the one-colour answer for
+    // the places that cannot hold a ramp.
+    expectType<string>(flatFill("#fff"));
+    expectType<string>(flatFill(defaultGradient("linear")));
     const shadow: Shadow = { dx: 0, dy: 0, blur: 0, color: "#000" };
     expectType<Shadow>(shadow);
     expectType<number>(PATH_MAX_COMMANDS);
@@ -424,6 +428,16 @@ export function __apiSurfacePin(): void {
     expectType<Mat2D | null>(model.content[0].world);
     expectType<FilterDef[]>(model.defs);
     expectType<string | null>(effectFilterId(shadow, 4));
+    // Gradient defs (schema 56): resolved here, deduped by a content-derived id, so a hundred
+    // shapes sharing one ramp reference one `<defs>` entry.
+    expectType<PaintGradient[]>(model.gradients);
+    expectType<string | PaintGradient | null>(model.content[0].paint.fill);
+    const paintRamp: PaintGradient = resolvePaintGradient(defaultGradient("radial"), c => c);
+    expectType<PaintGradient>(paintRamp);
+    expectType<string>(paintRamp.flat);
+    expectType<GradientUnits>(paintRamp.units);
+    expectType<readonly GradientStop[]>(paintRamp.stops);
+    expectType<string>(gradientDefId(paintRamp));
     expectType<(c: HTMLElement, m: DisplayList) => void>(emitSVG);
     expectType<(ctx: CanvasRenderingContext2D, m: DisplayList, dpr?: number) => void>(emitCanvas);
     expectType<(cb: (() => void) | null) => void>(setImageReadyCallback);
@@ -1148,7 +1162,7 @@ function _paintSurface(): void {
 function _gradientSurface(): void {
     expectType<number>(GRADIENT_MAX_STOPS);
     const g: Gradient = defaultGradient("linear");
-    expectType<{ kind: "linear" | "radial"; stops: GradientStop[]; units: GradientUnits;
+    expectType<{ kind: "linear" | "radial"; stops: readonly GradientStop[]; units: GradientUnits;
         transform: { a: number; b: number; c: number; d: number; e: number; f: number };
         x1: number; y1: number; x2: number; y2: number;
         cx: number; cy: number; r: number; fx: number; fy: number }>(g);

@@ -982,8 +982,14 @@ export function itemDraws(item: DrawItem, tolerance: number = FLATTEN_TOLERANCE)
         // become geometry here. And it makes the rings simple, which ear clipping requires: a
         // self-crossing path used to come out as overlapping triangles on this backend and as
         // the right shape on the other two.
+        // FLATTENED to the first stop (schema 56). One draw carries one colour uniform here, so
+        // a ramp needs a shader that walks the stops per fragment — with a constant loop bound
+        // and an early break, since GLSL ES 1.00 cannot size a loop from a uniform. That is a
+        // shader change, not a transcription, and it is listed as a gap alongside this backend
+        // skipping rasters. The colour is the model's `flat`, so all three backends agree.
         const fill = draw(resolveRings(commandsToRings(local, tolerance), paint.fillRule ?? "nonzero"),
-            item.world, paint.fill, paint.opacity, null, null, surface);
+            item.world, typeof paint.fill === "string" ? paint.fill : paint.fill.flat,
+            paint.opacity, null, null, surface);
         if (fill) out.push(fill);
     }
     // AN IMAGE has no fill and is drawn from its own pixels. Its rect is already the geometry that

@@ -137,7 +137,7 @@ import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
 import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
-import { buildRenderModel } from "../../renderer/RenderModel";
+import { buildRenderModel, PaintGradient } from "../../renderer/RenderModel";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, polygonCommands, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../../editor/tools/ShapeTool";
 import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../geometry/Polygon";
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
@@ -151,7 +151,7 @@ import { alignAction, distributeAction } from "../actions/alignActions";
 import { UpdateNodeContentAction, NODE_NAME_MAX } from "../actions/UpdateNodeContentAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
-import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow, TrackSize, layoutError, newGridPatch, mergeLayout, transformError, Layout, variantError, variantSelectionError , slotError, slotContentError} from "../document/Node";
+import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow, TrackSize, layoutError, newGridPatch, mergeLayout, transformError, Layout, variantError, variantSelectionError , slotError, slotContentError, flatFill} from "../document/Node";
 import { parseTrackList, formatTrackList } from "../document/TrackList";
 
 /** A hand-built ComputedNode's ink: a plain square box (what every non-shape type gets). */
@@ -1270,7 +1270,7 @@ describe("Variable actions", () => {
         const after = dispatcher.getDocument();
         expect(after.nodes.get("n")!.style.fill).toBe("$color/primary");
         expect(after.variables["color/primary"].value).toBe("#ff0000");
-        expect(resolveColor(after.variables as VariableStore, after.nodes.get("n")!.style.fill, "dark")).toBe("#990000");
+        expect(resolveColor(after.variables as VariableStore, flatFill(after.nodes.get("n")!.style.fill), "dark")).toBe("#990000");
         dispatcher.undo(); // one undo reverts BOTH the style patch and the store
         expect(dispatcher.getDocument().nodes.get("n")!.style.fill).toBe("#000");
         expect(dispatcher.getDocument().variables["color/primary"]).toBeUndefined();
@@ -4511,14 +4511,14 @@ describe("Guards the suite did not previously protect", () => {
     test("a legacy file is normalised then run THROUGH the chain, not marked current", () => {
         const legacy = { version: "0.0.4", document: { metadata: {}, nodes: {}, rootNodeUuids: [], variables: {} } };
 
-        // Pretending the build has moved to a schema "26" that has no 25→26 step: the
+        // Pretending the build has moved to a schema one past the last real step: the
         // legacy file must be normalised to "1", carried through every real step
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 54→55 landed, adding `core.raster`,
-        // the first node type holding pixels the document itself owns.)
-        expect(() => migrateIfNeeded(legacy, "56")).toThrow('Migration not implemented for document schema "55"');
+        // time a real migration is added — most recently when 55→56 landed, widening
+        // `Style.fill` to hold a gradient and not only a colour string.)
+        expect(() => migrateIfNeeded(legacy, "57")).toThrow('Migration not implemented for document schema "56"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -21870,5 +21870,189 @@ describe("Reading gradients out of an SVG", () => {
             `<linearGradient id="dup"><stop offset="0" stop-color="#second"/></linearGradient>`));
         expect(map.size).toBe(1);
         expect(map.get("dup")!.stops[0].color).toBe("#first");
+    });
+});
+
+// ─── Schema 56: a gradient is a fill, not only a model ───
+//
+// The Gradient block above tests the MODEL in isolation. This one is about the fill slot actually
+// holding one: whether the document accepts it, whether it survives a save, what it derives to,
+// and which backends paint it. Fixture design (docs/TESTING.md § Fixture design) — every gradient
+// here has four DISTINCT coordinates and stops with distinct offsets, colours and opacities, so a
+// swapped axis or a dropped stop-opacity cannot hide behind a symmetric fixture.
+describe("A gradient as a fill (schema 56)", () => {
+    const RAMP = {
+        ...defaultGradient("linear"),
+        units: "userSpaceOnUse" as const,
+        transform: { a: 2, b: 0, c: 0, d: 3, e: 5, f: 7 },
+        x1: 0, y1: 0.25, x2: 0.75, y2: 1,
+        stops: [
+            { offset: 0, color: "#ff0000", opacity: 1 },
+            { offset: 0.4, color: "#00ff00", opacity: 0.5 },
+            { offset: 1, color: "#0000ff", opacity: 1 }
+        ]
+    };
+    const rect = (id: string, x: number, fill: unknown): Node => ({
+        id, type: "core.rectangle", parent: null, children: [],
+        geometry: { x, y: 20, width: 60, height: 40 },
+        style: { fill: fill as never, opacity: 1 }, layout: {}
+    });
+    const gradientDoc = (fill: unknown = RAMP): ProjectDocument => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("R", rect("R", 10, fill));
+        doc.rootNodeUuids = ["R"];
+        return doc;
+    };
+    const stateFor = (doc: ProjectDocument) =>
+        ({ viewport: { x: 0, y: 0, zoom: 1 }, selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(doc) }) as unknown as import("../../renderer/RendererState").RendererState;
+
+    test("the STYLE slot accepts a gradient and refuses a malformed one in the gradient's own words", () => {
+        expect(styleError({ fill: RAMP })).toBeNull();
+        expect(styleError({ fill: "#abcdef" })).toBeNull();
+        // The gradient's own rules, delegated — so the edit path, the load path and the importer
+        // cannot disagree about what a legal ramp is.
+        expect(styleError({ fill: { ...RAMP, stops: [] } })).toMatch(/at least one stop/);
+        expect(styleError({ fill: { ...RAMP, kind: "conic" } as never })).toMatch(/linear or radial/);
+        // The old message survives for the old mistake: a number in `fill` is still what it was.
+        expect(styleError({ fill: 5 as never })).toBe("style.fill must be a string");
+        expect(styleError({ fill: null as never })).toBe("style.fill must be a string");
+    });
+
+    test("a gradient fill is REACHABLE through the ordinary edit path, not only by construction", () => {
+        // Checklist item 0: a fixture the system cannot reach proves nothing. This is the state a
+        // real edit produces, and everything below is asserted on documents shaped like it.
+        const dispatcher = new ActionDispatcher(gradientDoc("#000000"));
+        dispatcher.dispatchAction(new UpdateNodeStyleAction(dispatcher.getDocument(), "R", { fill: RAMP }));
+        const stored = dispatcher.getDocument().nodes.get("R")!.style.fill;
+        expect(typeof stored).not.toBe("string");
+        expect((stored as typeof RAMP).stops).toHaveLength(3);
+    });
+
+    test("a gradient fill SURVIVES a save and a load", () => {
+        // The whole point of the version bump is that a file written with one comes back with one.
+        const text = serializeDocument(gradientDoc());
+        const back = deserializeDocument(text);
+        const fill = back.nodes.get("R")!.style.fill as typeof RAMP;
+        expect(typeof fill).not.toBe("string");
+        expect(fill.units).toBe("userSpaceOnUse");
+        // Every coordinate, not just one — a fixture whose axis endpoints matched would not notice
+        // an x/y swap on the way through.
+        expect([fill.x1, fill.y1, fill.x2, fill.y2]).toEqual([0, 0.25, 0.75, 1]);
+        expect(fill.transform).toEqual({ a: 2, b: 0, c: 0, d: 3, e: 5, f: 7 });
+        expect(fill.stops.map(s => [s.offset, s.color, s.opacity]))
+            .toEqual([[0, "#ff0000", 1], [0.4, "#00ff00", 0.5], [1, "#0000ff", 1]]);
+        expect(JSON.parse(text).version).toBe("56");
+    });
+
+    test("a MALFORMED gradient in a file is refused on load, not drawn as nothing", () => {
+        // The serializer's own gate is SHALLOW — it asks only "string or object", the same way it
+        // asks about radius and the effects — so this proves the semantic half actually runs.
+        // Without it a file could hold a stopless ramp, load cleanly, and paint nothing.
+        const withFill = (fill: unknown) => JSON.stringify({
+            version: "56",
+            document: {
+                metadata: { project_name: "p", created_by: "t", date: new Date().toISOString() },
+                nodes: { R: { id: "R", type: "core.rectangle", parent: null, children: [],
+                    geometry: { x: 0, y: 0, width: 10, height: 10 },
+                    style: { fill, opacity: 1 }, layout: {} } },
+                rootNodeUuids: ["R"], variables: {}
+            }
+        });
+        expect(() => deserializeDocument(withFill({ ...RAMP, stops: [] }))).toThrow(/at least one stop/);
+        expect(() => deserializeDocument(withFill({ ...RAMP, r: -1, kind: "radial" }))).toThrow(/radius/);
+        // A number is caught EARLIER, by the shallow gate, and says so in the older words.
+        expect(() => deserializeDocument(withFill(7))).toThrow(/malformed/);
+        // And the legal one still loads, so the refusals above are not simply "nothing loads".
+        expect(() => deserializeDocument(withFill(RAMP))).not.toThrow();
+    });
+
+    test("flatFill is the FIRST stop, and a string passes through untouched", () => {
+        expect(flatFill("#abcdef")).toBe("#abcdef");
+        expect(flatFill("$color/primary")).toBe("$color/primary");
+        // First, not last and not an average: averaging needs a colour space, and `Style.fill` may
+        // hold a token that cannot be blended at all without resolving it first.
+        expect(flatFill(RAMP)).toBe("#ff0000");
+    });
+
+    test("a gradient always PAINTS, whatever its first stop says", () => {
+        expect(isPaintBearing("none")).toBe(false);
+        expect(isPaintBearing("#ff0000")).toBe(true);
+        // A ramp that starts fully transparent still covers the shape further along. Asking about
+        // one stop would make the top of such a shape unclickable while it is plainly visible.
+        expect(isPaintBearing({ ...RAMP, stops: [{ offset: 0, color: "transparent", opacity: 0 }] })).toBe(true);
+        const hit = hitShapeOf({ type: "core.path", path: [], style: { fill: RAMP } }, 0);
+        expect(hit).toEqual({ kind: "path", commands: [], filled: true, fillRule: undefined });
+    });
+
+    test("the render model resolves the ramp's TOKENS and carries its units, not a folded matrix", () => {
+        const doc = gradientDoc({ ...RAMP, stops: [{ offset: 0, color: "$color/brand", opacity: 1 },
+            { offset: 1, color: "#0000ff", opacity: 1 }] });
+        doc.variables = { "color/brand": { type: "color", value: "#123456", modes: { light: "#123456", dark: "#654321" } } } as never;
+        doc.activeTheme = "dark";
+        const fill = buildRenderModel({ width: 400, height: 300 }, doc, stateFor(doc))
+            .content.find(i => i.nodeId === "R")!.paint.fill as PaintGradient;
+        expect(typeof fill).not.toBe("string");
+        // RESOLVED, and resolved under the ACTIVE THEME — the light value is also a legal hex
+        // string, so a one-theme fixture could not tell resolution from a lucky pass-through.
+        expect(fill.stops[0].color).toBe("#654321");
+        expect(fill.flat).toBe("#654321");
+        // Carried AS AUTHORED. The model composes no coordinates, and SVG has `gradientUnits`
+        // natively — folding the box in here would only mean unfolding it in the backend.
+        expect(fill.units).toBe("userSpaceOnUse");
+        expect([fill.x1, fill.y1, fill.x2, fill.y2]).toEqual([0, 0.25, 0.75, 1]);
+        expect(fill.transform).toEqual({ a: 2, b: 0, c: 0, d: 3, e: 5, f: 7 });
+    });
+
+    test("two shapes sharing a ramp share ONE def, and a different ramp gets a different id", () => {
+        const doc = gradientDoc();
+        doc.nodes.set("S", rect("S", 100, RAMP));
+        // ONE stop colour differs. If the id ignored the stops, this would collide with RAMP and
+        // the third shape would silently draw the first one's colours.
+        doc.nodes.set("T", rect("T", 200, { ...RAMP, stops: [{ offset: 0, color: "#ffff00", opacity: 1 },
+            { offset: 0.4, color: "#00ff00", opacity: 0.5 },
+            { offset: 1, color: "#0000ff", opacity: 1 }] }));
+        doc.rootNodeUuids = ["R", "S", "T"];
+        const model = buildRenderModel({ width: 800, height: 600 }, doc, stateFor(doc));
+        expect(model.gradients).toHaveLength(2);
+        const idOf = (n: string) => (model.content.find(i => i.nodeId === n)!.paint.fill as PaintGradient).id;
+        expect(idOf("R")).toBe(idOf("S"));
+        expect(idOf("R")).not.toBe(idOf("T"));
+        expect(new Set(model.gradients.map(g => g.id))).toEqual(new Set([idOf("R"), idOf("T")]));
+    });
+
+    test("a gradient END makes a blend STEP rather than inventing a midpoint", () => {
+        const node = (fill: unknown): Node => rect("n", 0, fill);
+        // Both ends strings: the ordinary colour blend, unchanged.
+        const blended = blendNode(node("#000000"), node("#ffffff"), 0.5, undefined, "switch" as DiscreteMode);
+        expect(blended.style.fill).not.toBe("#000000");
+        expect(blended.style.fill).not.toBe("#ffffff");
+        // One end a ramp: no midpoint exists, so the DISCRETE end stands — the same rule a text
+        // string and a font family already follow.
+        expect(blendNode(node("#000000"), node(RAMP), 0.5, undefined, "switch" as DiscreteMode).style.fill).toEqual(RAMP);
+        expect(blendNode(node("#000000"), node(RAMP), 0.5, undefined, "step" as DiscreteMode).style.fill).toBe("#000000");
+        // And the geometry still interpolates either way — stepping the fill must not step the box.
+        const a = { ...node(RAMP), geometry: { x: 0, y: 0, width: 10, height: 10 } };
+        const b = { ...node(RAMP), geometry: { x: 100, y: 0, width: 10, height: 10 } };
+        expect(blendNode(a, b, 0.5, undefined, "step" as DiscreteMode).geometry.x).toBe(50);
+    });
+
+    test("the exported SVG carries the ramp itself, not a flattened colour", () => {
+        const out = exportSVG(gradientDoc());
+        // The def, with every authored number and the units it was authored in.
+        expect(out).toContain("<linearGradient ");
+        expect(out).toMatch(/gradientUnits="userSpaceOnUse"/);
+        expect(out).toMatch(/gradientTransform="matrix\(2 0 0 3 5 7\)"/);
+        expect(out).toMatch(/x1="0" y1="0.25" x2="0.75" y2="1"/);
+        expect(out).toContain('stop-color="#00ff00" stop-opacity="0.5"');
+        // Full opacity is SVG's default and is NOT written — an explicit "1" on every stop of
+        // every gradient is bytes that say nothing.
+        expect(out).toContain('<stop offset="0" stop-color="#ff0000"/>');
+        // And the shape REFERENCES it. Asserting only the def would pass on a file where the
+        // gradient is defined and nothing uses it — which renders as no fill at all.
+        const id = /<linearGradient id="([^"]+)"/.exec(out)![1];
+        expect(out).toContain('fill="url(#' + id + ')"');
+        // The flat colour must NOT appear as a fill: that would mean the ramp was written into
+        // defs and then ignored.
+        expect(out).not.toContain('fill="#ff0000"');
     });
 });

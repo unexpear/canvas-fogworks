@@ -7,7 +7,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { ActionDispatcher } from "../core/actions/ActionDispatcher";
 import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document";
-import { Node, Shadow } from "../core/document/Node";
+import { Node, Shadow, flatFill } from "../core/document/Node";
 import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
@@ -1331,7 +1331,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             const id = generateUUID();
             ids.push(id);
             actions.push(new AddNodeAction(doc, "core.path", spec.geometry.x, spec.geometry.y,
-                spec.geometry.width, spec.geometry.height, spec.style.fill, id));
+                spec.geometry.width, spec.geometry.height, flatFill(spec.style.fill), id));
             actions.push(new UpdateNodePathAction(doc, id, spec.path));
         }
         dispatcher.dispatchAction(new TransactionAction(doc, "import-svg", actions));
@@ -2131,15 +2131,21 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
 
                             <InspectorSection title="Appearance">
                                 <label style={INSPECTOR_LABEL}>Fill</label>
+                                {/* FLATTENED to the first stop when the fill is a gradient
+                                    (schema 56). There is no gradient editor yet, and a swatch
+                                    showing "[object Object]" would be worse than one showing the
+                                    colour the ramp starts at — but picking a colour here REPLACES
+                                    the ramp, which is why the ramp cannot be authored from this
+                                    panel and is left to import until the editor exists. */}
                                 <ColorInput
-                                    value={node.style.fill}
+                                    value={flatFill(node.style.fill)}
                                     onChange={v => { editSelected({ style: { fill: v } }); refresh(); }}
                                     onClear={() => { editSelected({ style: { fill: "none" } }); refresh(); }}
                                     clearLabel="No fill"
                                 />
                                 <TokenSelect
                                     store={dispatcher.getDocument().variables as VariableStore}
-                                    value={node.style.fill}
+                                    value={flatFill(node.style.fill)}
                                     onPick={v => { editSelected({ style: { fill: v || "#4a90d9" } }); refresh(); }}
                                 />
                                 {/* Which points a closed outline encloses (schema 38). It only

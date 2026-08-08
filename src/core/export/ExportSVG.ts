@@ -17,7 +17,7 @@ import { ReadonlyDocument } from "../document/Document";
 import { computeGeometry } from "../geometry/GeometryEngine";
 import { Rect } from "../geometry/Matrix";
 import { toMatrixString } from "../geometry/Matrix";
-import { buildRenderModel, commandsToPathData, textParagraphs, effectFilterId as effectId, DrawItem, FilterDef, Shape } from "../../renderer/RenderModel";
+import { buildRenderModel, commandsToPathData, textParagraphs, effectFilterId as effectId, DrawItem, FilterDef, PaintGradient, Shape } from "../../renderer/RenderModel";
 import { RendererState } from "../../renderer/RendererState";
 
 /** Padding around the content, in world units, so strokes and shadows are not clipped. */
@@ -75,7 +75,10 @@ function contentBounds(doc: ReadonlyDocument): Rect | null {
 function paintAttrs(item: DrawItem): string {
     const p = item.paint;
     const parts: string[] = [];
-    if (p.fill !== null) parts.push(`fill="${esc(p.fill)}"`);
+    // A GRADIENT becomes a reference to the def this exporter also writes (schema 56). The id is
+    // the model's own, so content and `<defs>` cannot name different things — the same discipline
+    // `filterIdOf` follows.
+    if (p.fill !== null) parts.push(`fill="${esc(typeof p.fill === "string" ? p.fill : `url(#${p.fill.id})`)}"`);
     else parts.push(`fill="none"`);
     if (p.stroke !== null) parts.push(`stroke="${esc(p.stroke)}"`);
     if (p.strokeWidth !== null) parts.push(`stroke-width="${num(p.strokeWidth)}"`);
@@ -194,6 +197,31 @@ function defMarkup(def: FilterDef): string {
 }
 
 /**
+ * A gradient `<defs>` entry, matching what `emitSVG` builds for the same def.
+ *
+ * DELIBERATELY THE SAME ATTRIBUTES IN THE SAME ORDER as the live backend's `buildGradients`. The
+ * two are separate code because one writes DOM and one writes text, and the last four silent
+ * export losses were all a case of this file quietly saying less than the screen did.
+ */
+function gradientMarkup(g: PaintGradient): string {
+    const parts: string[] = [`id="${esc(g.id)}"`, `gradientUnits="${esc(g.units)}"`];
+    const t = g.transform;
+    if (t.a !== 1 || t.b !== 0 || t.c !== 0 || t.d !== 1 || t.e !== 0 || t.f !== 0) {
+        parts.push(`gradientTransform="${esc(toMatrixString(t))}"`);
+    }
+    if (g.kind === "linear") {
+        parts.push(`x1="${num(g.x1)}"`, `y1="${num(g.y1)}"`, `x2="${num(g.x2)}"`, `y2="${num(g.y2)}"`);
+    } else {
+        parts.push(`cx="${num(g.cx)}"`, `cy="${num(g.cy)}"`, `r="${num(g.r)}"`,
+            `fx="${num(g.fx)}"`, `fy="${num(g.fy)}"`);
+    }
+    const stops = g.stops.map(st =>
+        `<stop offset="${num(st.offset)}" stop-color="${esc(st.color)}"`
+        + (st.opacity !== 1 ? ` stop-opacity="${num(st.opacity)}"` : "") + `/>`).join("");
+    return `<${g.kind}Gradient ${parts.join(" ")}>${stops}</${g.kind}Gradient>`;
+}
+
+/**
  * The document as standalone SVG text. Returns an empty `<svg/>` for an empty document rather
  * than null, so a caller always has something valid to write.
  */
@@ -214,7 +242,8 @@ export function exportSVG(doc: ReadonlyDocument, linesOf: TextLines = HARD_BREAK
     } as unknown as RendererState;
     const model = buildRenderModel({ width: bounds.width, height: bounds.height }, doc, state);
 
-    const defs = model.defs.length > 0 ? `<defs>${model.defs.map(defMarkup).join("")}</defs>` : "";
+    const defBody = model.defs.map(defMarkup).join("") + model.gradients.map(gradientMarkup).join("");
+    const defs = defBody.length > 0 ? `<defs>${defBody}</defs>` : "";
     // OPACITY GROUPS (schema 32). A node with children and opacity < 1 composites as ONE, so the
     // model sets each child's own opacity to 1 and lists the group separately — and this exporter
     // read `content` and never `groups`, so every such group exported at FULL strength with its

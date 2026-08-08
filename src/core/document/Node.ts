@@ -5,6 +5,7 @@
  */
 
 import { isTokenRef } from "./Variables";
+import { Gradient, gradientError } from "./Gradient";
 import { Interaction } from "./Prototype";
 import { IkConstraint } from "./Rig";
 
@@ -606,7 +607,19 @@ export const FONT_FAMILY_MAX = 200;
 
 /** Style holds the visual attributes that define appearance. */
 export interface Style {
-    fill: string;      // Color value or token ID (e.g., "$color/primary")
+    /**
+     * A colour value, a token ID (`"$color/primary"`), or a GRADIENT (schema 56).
+     *
+     * THE STRING CASE IS UNCHANGED, which is why every schema-55 document loads untouched. The
+     * union is what moves the version: a 56 document holding a gradient reaches a 55 build as an
+     * object where it expects a string, and `styleError` there refuses it — the gate is what makes
+     * that a clear failure rather than a shape drawn in black.
+     *
+     * ONLY THE FILL. `stroke` stays a string: SVG and Canvas can both stroke with a gradient, but
+     * exactly ONE stroke in the 3,127 measured gradients references one, and widening `stroke` too
+     * would double the work in three backends and the exporter to serve that one.
+     */
+    fill: string | Gradient;
     stroke?: string;   // Optional border color
     /**
      * Border thickness in WORLD units — a number, or a NUMBER-token reference (schema 25).
@@ -660,6 +673,23 @@ export interface Style {
 }
 
 /**
+ * A fill as ONE colour — the string itself, or a gradient's FIRST stop (schema 56).
+ *
+ * For the places that genuinely cannot hold a ramp: hit-testing asks only whether a fill paints
+ * anything, the script sandbox hands out a plain string, and the GPU backend has one colour per
+ * draw. FIRST rather than an average because averaging needs a colour space and `Style.fill` may
+ * hold a design TOKEN, which cannot be blended without resolving it — the same reason
+ * `sampleGradient` returns the stop pair instead of a colour.
+ *
+ * A gradient always has at least one stop (`gradientError` refuses an empty one), so the fallback
+ * here is for a malformed value that never passed validation, not for a legal document.
+ */
+export function flatFill(fill: string | Gradient): string {
+    if (typeof fill === "string") return fill;
+    return fill.stops[0]?.color ?? "#000000";
+}
+
+/**
  * Validity check for a style patch, SHARED by the edit path (`UpdateNodeStyleAction`) and the
  * load path (`Integrity.checkNodeRanges`) so the two cannot drift — the same discipline
  * `layoutError`/`transformError` use, and it also closes the pre-existing inline duplication of
@@ -667,7 +697,15 @@ export interface Style {
  * load-bearing (tests assert "opacity must be within"). Returns an error string, or null.
  */
 export function styleError(s: Partial<Style>): string | null {
-    if ("fill" in s && typeof s.fill !== "string") return "style.fill must be a string";
+    // fill (schema 56): a colour/token string, or a gradient — whose own rules live in
+    // `gradientError` so the edit path, the load path and the importer cannot disagree about what
+    // a legal ramp is. The old message is kept verbatim for the non-object case: tests assert the
+    // substring, and a document holding a number in `fill` is still exactly the old mistake.
+    if ("fill" in s && typeof s.fill !== "string") {
+        if (s.fill === null || typeof s.fill !== "object") return "style.fill must be a string";
+        const bad = gradientError(s.fill);
+        if (bad) return `style.fill: ${bad}`;
+    }
     if ("stroke" in s && s.stroke !== undefined && typeof s.stroke !== "string") return "style.stroke must be a string";
     if ("opacity" in s && (!Number.isFinite(s.opacity) || (s.opacity as number) < 0 || (s.opacity as number) > 1)) return "style.opacity must be within [0, 1]";
     // radius/fontSize (schema 20): a concrete number under the old range rules, OR a "$token"
