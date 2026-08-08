@@ -1281,16 +1281,6 @@ export function App() {
                     to their own row below, so nothing this row does can push the canvas around. */}
                 <div style={{ display: "flex", alignItems: "center", alignContent: "flex-start", flexWrap: "wrap", rowGap: 4, padding: "4px 8px", background: UI.panel, borderBottom: `1px solid ${UI.line}`, gap: 4 }}>
                 <span style={{ fontWeight: 700, marginRight: 8, color: "#00bfff", fontSize: 13 }}>VDE</span>
-                <ToolButton icon="↗" label="Select" active={toolName === "select"} onClick={() => setTool("select")} />
-                <ToolButton icon="↔" label="Move" active={toolName === "move"} onClick={() => setTool("move")} />
-                <ShapeFlyout
-                    current={lastShape}
-                    active={(SHAPE_KINDS as readonly string[]).includes(toolName)}
-                    icons={SHAPE_ICONS}
-                    onPick={kind => { setLastShape(kind); setTool(kind); }}
-                />
-                <ToolButton icon="✒" label="Pen" active={toolName === "pen"} onClick={() => setTool("pen")} />
-                <ToolButton icon="✏" label="Paint" active={toolName === "paint"} onClick={() => setTool("paint")} />
                 {es.selectedNodeIds.length === 1
                     && dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.type === "core.boolean" && (
                     // A LIVE boolean is selected: offer the operation itself. This is the whole
@@ -1694,6 +1684,29 @@ export function App() {
                 </div>
 
             <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+                {/* THE TOOL STRIP. Every editor a person arrives from puts the tools in a narrow
+                    column beside the canvas — Photoshop, Illustrator, Aseprite, Krita, Blender,
+                    Figma's cluster — and they are not all copying each other by accident. A tool is
+                    reached constantly and reached BY POSITION, so it wants a place that never moves
+                    and never competes with the document's own commands for room.
+                    Five slots, because the eight shapes already collapsed into one. */}
+                <div style={{
+                    display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                    padding: "4px 3px", flexShrink: 0,
+                    background: UI.panel, borderRight: `1px solid ${UI.line}`
+                }}>
+                    <ToolButton icon="↗" label="Select" compact active={toolName === "select"} onClick={() => setTool("select")} />
+                    <ToolButton icon="↔" label="Move" compact active={toolName === "move"} onClick={() => setTool("move")} />
+                    <ShapeFlyout
+                        current={lastShape}
+                        active={(SHAPE_KINDS as readonly string[]).includes(toolName)}
+                        icons={SHAPE_ICONS}
+                        compact
+                        onPick={kind => { setLastShape(kind); setTool(kind); }}
+                    />
+                    <ToolButton icon="✒" label="Pen" compact active={toolName === "pen"} onClick={() => setTool("pen")} />
+                    <ToolButton icon="✏" label="Paint" compact active={toolName === "paint"} onClick={() => setTool("paint")} />
+                </div>
                 <div style={{ width: 180, background: UI.panel, borderRight: `1px solid ${UI.line}`, overflow: "auto", padding: 8 }}>
                     <div style={PANEL_HEADING}>Layers</div>
                     <input
@@ -2557,9 +2570,12 @@ function Divider() {
  * THE CARET IS A SEPARATE BUTTON, not a long-press. A long-press hides the only affordance that
  * says more is here, and it cannot be reached from a keyboard at all.
  */
-function ShapeFlyout({ current, active, icons, onPick }: {
+function ShapeFlyout({ current, active, icons, compact, onPick }: {
     current: ShapeKind; active: boolean;
-    icons: Record<ShapeKind, string>; onPick: (kind: ShapeKind) => void;
+    icons: Record<ShapeKind, string>;
+    /** In the vertical strip the menu opens to the SIDE — below would cover the tools under it. */
+    compact?: boolean;
+    onPick: (kind: ShapeKind) => void;
 }) {
     const [open, setOpen] = useState(false);
     // Escape closes, and so does a click anywhere else — a popover that can only be dismissed by
@@ -2580,7 +2596,7 @@ function ShapeFlyout({ current, active, icons, onPick }: {
     return (
         <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
             <ToolButton icon={icons[current]} label={name(current)} active={active}
-                onClick={() => onPick(current)} />
+                compact={compact} onClick={() => onPick(current)} />
             <button
                 title="Choose a shape"
                 aria-label="Choose a shape"
@@ -2595,7 +2611,8 @@ function ShapeFlyout({ current, active, icons, onPick }: {
             >&#9662;</button>
             {open && (
                 <div role="menu" onMouseDown={e => e.stopPropagation()} style={{
-                    position: "absolute", top: "100%", left: 0, zIndex: 60, marginTop: 2,
+                    position: "absolute", zIndex: 60,
+                    ...(compact ? { left: "100%", top: 0, marginLeft: 2 } : { top: "100%", left: 0, marginTop: 2 }),
                     display: "flex", flexDirection: "column", minWidth: 132,
                     background: UI.panel, border: `1px solid ${UI.line}`, borderRadius: 3,
                     boxShadow: "0 6px 18px rgba(0,0,0,.45)", padding: 3
@@ -2622,21 +2639,34 @@ function ShapeFlyout({ current, active, icons, onPick }: {
     );
 }
 
-function ToolButton({ icon, label, active, disabled, onClick }: {
-    icon: string; label: string; active?: boolean; disabled?: boolean; onClick: () => void;
+function ToolButton({ icon, label, active, disabled, compact, onClick }: {
+    icon: string; label: string; active?: boolean; disabled?: boolean;
+    /** Icon only, sized for the vertical strip. The name still reaches a screen reader and a tooltip. */
+    compact?: boolean;
+    onClick: () => void;
 }) {
     return (
         <button
             title={label}
+            // THE NAME IS NOT OPTIONAL when the label is hidden. `title` alone is a hover
+            // affordance; without this the compact strip is a column of unlabelled glyphs to
+            // anything that is not a mouse.
+            aria-label={label}
+            aria-pressed={active}
             onClick={onClick}
             disabled={disabled}
-            style={{
+            style={compact ? {
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 30, height: 28, fontSize: 15, lineHeight: 1,
+                background: active ? "#2a4a6a" : "transparent", color: disabled ? "#444" : "#ccc",
+                border: "none", borderRadius: 3, cursor: disabled ? "default" : "pointer"
+            } : {
                 display: "flex", alignItems: "center", gap: 3, padding: "3px 7px", fontSize: 11,
                 background: active ? "#2a4a6a" : "transparent", color: disabled ? "#444" : "#ccc",
                 border: "none", borderRadius: 3, cursor: disabled ? "default" : "pointer"
             }}
         >
-            <span>{icon}</span><span>{label}</span>
+            <span>{icon}</span>{!compact && <span>{label}</span>}
         </button>
     );
 }
