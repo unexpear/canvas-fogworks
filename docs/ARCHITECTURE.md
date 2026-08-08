@@ -941,6 +941,23 @@ while its bitmap loads, so that path needs the generation to notice the arrival;
 at once and its href already carries the size, length and checksum of the payload. The href
 changing IS the pixels changing.
 
+### Editing text where it is
+
+**A real `<textarea>` laid over the node by `overlayTransform`** — the same relationship
+`screenToWorld` inverts, so the field lands on the letters under any rotation, scale or zoom
+rather than square over the AABB. Its typography comes from `resolveTypography`, which the render
+model itself now calls: a field whose metrics disagree with the render puts the caret beside the
+letters and makes the text jump the moment editing ends. Five defaults written twice is five
+chances for one to drift, unseen until somebody types into a node that uses that slot.
+
+**There is no buffer to commit.** Every keystroke goes through the ordinary coalesced content
+action, so an in-place edit undoes exactly like one made in the inspector and nothing can be lost
+by closing the field. Escape and blur both leave, and neither is a cancel — a cancel would have to
+undo an unknown number of coalesced steps, which is what Ctrl+Z already means everywhere else.
+
+**Keys stop at the field.** Without that, Delete reaches the canvas handler and removes the node
+being typed into, and every letter switches tools.
+
 ### Framing the view — and which layer owns a chord
 
 **`viewportToFit` had existed, tested, since the prototype NAVIGATE interaction**, and nothing in

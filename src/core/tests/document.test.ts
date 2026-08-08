@@ -130,7 +130,7 @@ import { TEXT_ALIGNS, FONT_FAMILY_MAX } from "../document/Node";
 import { blendColor, blendStates, easingAt, interactionFor, interactionsError, Interaction, Trigger, TRANSITION_MAX_MS, INTERACTIONS_MAX } from "../document/Prototype";
 import { applyActiveState } from "../document/Components";
 import { SetInteractionsAction } from "../actions/SetInteractionsAction";
-import { viewportToFit, lerpViewport, FIT_PADDING_PX } from "../../editor/EditorState";
+import { viewportToFit, lerpViewport, FIT_PADDING_PX, overlayTransform } from "../../editor/EditorState";
 import { compileScript, snapshotFor, actionRequestError, SCRIPT_MAX_REQUESTS } from "../script/ScriptApi";
 import { WORKER_BOOTSTRAP } from "../../editor/ScriptRunner";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
@@ -141,7 +141,7 @@ import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
 import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
-import { buildRenderModel, PaintGradient, resolvePaintGradient } from "../../renderer/RenderModel";
+import { buildRenderModel, PaintGradient, resolvePaintGradient, resolveTypography, Shape } from "../../renderer/RenderModel";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, polygonCommands, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../../editor/tools/ShapeTool";
 import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../geometry/Polygon";
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
@@ -22797,5 +22797,84 @@ describe("A menu accelerator never collides with a canvas shortcut", () => {
         // …and that the ones the menu really uses are genuinely free.
         expect(resolveShortcut(chordOf("Shift+1"))).toBeNull();
         expect(resolveShortcut(chordOf("CmdOrCtrl+T"))).toBeNull();
+    });
+});
+
+// ─── Editing text where it is ───
+describe("The on-canvas text editor's two shared answers", () => {
+    test("overlayTransform puts a DOM element exactly where the renderer draws the node", () => {
+        // The render transform is `screen = z·world − vp`, so a rotated or scaled node needs the
+        // whole matrix and not just its box: an overlay placed from bounds alone sits square over
+        // a rotated label and drifts the moment the node is scaled.
+        const vp = { x: 40, y: 25, zoom: 2 };
+        // A world matrix that is NOT a pure translation and NOT symmetric — every term distinct,
+        // so a transposed or dropped one is visible.
+        const world = { a: 3, b: 5, c: 7, d: 11, e: 13, f: 17 };
+        expect(overlayTransform(world, vp)).toBe("matrix(6, 10, 14, 22, -14, 9)");
+        // Read back: the linear part is scaled by the zoom and the translation also has the pan
+        // subtracted — 2·13 − 40 = −14, 2·17 − 25 = 9.
+        expect(overlayTransform({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, { x: 0, y: 0, zoom: 1 }))
+            .toBe("matrix(1, 0, 0, 1, 0, 0)");
+    });
+
+    test("resolveTypography is the ONE statement of the defaults", () => {
+        // The renderer and the editor's text field both ask it. Five defaults written twice is
+        // five chances for one to drift, and the drift is invisible until somebody types into a
+        // node that uses that slot.
+        const store = {} as VariableStore;
+        expect(resolveTypography({}, store, "light")).toEqual({
+            fontSize: 14, fontFamily: "sans-serif", fontWeight: 400,
+            textAlign: "left", lineHeight: 1.2, letterSpacing: 0
+        });
+        // Every slot distinct, so a helper reading the wrong one is visible.
+        expect(resolveTypography({ fontSize: 30, fontFamily: "Inter", fontWeight: 700,
+            textAlign: "center", lineHeight: 1.75, letterSpacing: 3 }, store, "light"))
+            .toEqual({ fontSize: 30, fontFamily: "Inter", fontWeight: 700,
+                textAlign: "center", lineHeight: 1.75, letterSpacing: 3 });
+    });
+
+    test("a token RESOLVES, and one out of range falls back rather than reaching a backend", () => {
+        const store = {
+            "size/body": { type: "number", value: 22 },
+            "size/silly": { type: "number", value: -5 }
+        } as unknown as VariableStore;
+        expect(resolveTypography({ fontSize: "$size/body" }, store, "light").fontSize).toBe(22);
+        // A negative number is a legal variable and an illegal font size: the documented default,
+        // visible-but-harmless, never a throw into a renderer.
+        expect(resolveTypography({ fontSize: "$size/silly" }, store, "light").fontSize).toBe(14);
+        expect(resolveTypography({ fontSize: "$size/missing" }, store, "light").fontSize).toBe(14);
+        // The RANGED slots have their own bounds — a weight of 22 is fine, one of 5000 is not.
+        expect(resolveTypography({ fontWeight: "$size/body" }, store, "light").fontWeight).toBe(22);
+        expect(resolveTypography({ fontWeight: 5000 }, store, "light").fontWeight).toBe(400);
+        expect(resolveTypography({ lineHeight: 0 }, store, "light").lineHeight).toBe(1.2);
+        // …and letter spacing is the one that may be NEGATIVE, which a shared range would forbid.
+        expect(resolveTypography({ letterSpacing: -2 }, store, "light").letterSpacing).toBe(-2);
+    });
+
+    test("an EMPTY font family is not a font family", () => {
+        // A cleared inspector field leaves "" behind, and CSS given an empty family inherits
+        // whatever the panel happens to use rather than the document's default.
+        const store = {} as VariableStore;
+        expect(resolveTypography({ fontFamily: "   " }, store, "light").fontFamily).toBe("sans-serif");
+        expect(resolveTypography({ fontFamily: "" }, store, "light").fontFamily).toBe("sans-serif");
+    });
+
+    test("the renderer's text shape and the editor's field agree, because they ask the same thing", () => {
+        // The claim the extraction exists to make, asserted end to end: what `buildRenderModel`
+        // puts on the text shape IS what `resolveTypography` answers for that style.
+        const doc = createEmptyDocument();
+        doc.nodes.set("T", { id: "T", type: "core.text", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 120, height: 40 }, text: "hi",
+            style: { fill: "#ffffff", opacity: 1, fontSize: 21, fontWeight: 600, letterSpacing: 2 },
+            layout: {} } as never);
+        doc.rootNodeUuids = ["T"];
+        const state = { viewport: { x: 0, y: 0, zoom: 1 }, selectedNodeIds: [], hoveredNodeId: null,
+            computed: computeGeometry(doc) } as unknown as import("../../renderer/RendererState").RendererState;
+        const shape = buildRenderModel({ width: 400, height: 300 }, doc, state)
+            .content.find(i => i.nodeId === "T")!.shape as Extract<Shape, { kind: "text" }>;
+        const type = resolveTypography(doc.nodes.get("T")!.style, doc.variables as VariableStore, doc.activeTheme);
+        expect({ fontSize: shape.fontSize, fontFamily: shape.fontFamily, fontWeight: shape.fontWeight,
+            textAlign: shape.textAlign, lineHeight: shape.lineHeight, letterSpacing: shape.letterSpacing })
+            .toEqual(type);
     });
 });

@@ -9,10 +9,11 @@ import { ActionDispatcher } from "../core/actions/ActionDispatcher";
 import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document";
 import { Node, Shadow, flatFill } from "../core/document/Node";
 import { Gradient, GradientStop } from "../core/document/Gradient";
+import { resolveTypography } from "../renderer/RenderModel";
 import { gradientFromColor, withStop, withoutStop, withStopColor, withStopOffset, withKind, GRADIENT_MIN_STOPS } from "../core/document/GradientEdit";
 import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
-import { computeGeometry, ComputedState, contentBounds, selectionBounds } from "../core/geometry/GeometryEngine";
+import { computeGeometry, ComputedState, contentBounds, selectionBounds, hitTest } from "../core/geometry/GeometryEngine";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor } from "../core/actions/nodeEdit";
 import { ContentPatch, UpdateNodeContentAction } from "../core/actions/UpdateNodeContentAction";
 import { resolveScene, isVirtualId } from "../core/document/Components";
@@ -33,7 +34,7 @@ import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { DetachInstanceAction } from "../core/actions/DetachInstanceAction";
 import { UpdateNodeTransformAction } from "../core/actions/UpdateNodeTransformAction";
 import { UpdateNodeLayoutAction } from "../core/actions/UpdateNodeLayoutAction";
-import { createEditorState, EditorState, zoomAt, viewportToFit, FIT_PADDING_PX } from "../editor/EditorState";
+import { createEditorState, EditorState, zoomAt, viewportToFit, FIT_PADDING_PX, screenToWorld, overlayTransform } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
@@ -445,6 +446,14 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
 
     const [lastShape, setLastShape] = useState<ShapeKind>("rectangle");
     const [workspace, setWorkspace] = useState<Workspace>("design");
+    /**
+     * The `core.text` node being edited ON THE CANVAS, or null.
+     *
+     * A NODE ID, not the text: the value lives in the document and every keystroke goes through
+     * the ordinary content action, so an in-place edit undoes exactly like one made in the
+     * inspector and a second view of the same node cannot disagree with this one.
+     */
+    const [editingTextId, setEditingTextId] = useState<string | null>(null);
     const workspaceDef = WORKSPACES.find(w => w.id === workspace) ?? WORKSPACES[0];
     // READ THROUGH A REF INSIDE THE KEY HANDLER. That handler is registered once in an effect, so
     // it closes over whatever workspace was current when it was registered — and a stale one means
@@ -941,6 +950,26 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             const rect = target.getBoundingClientRect();
             toolController.onMouseDown(e, rect);
         };
+        /**
+         * DOUBLE-CLICK A LABEL TO EDIT IT — what every canvas tool does, and what this one made
+         * you go and find a panel for.
+         *
+         * Hit-tested through the same `hitTest` the selection uses, so what a double-click opens
+         * is what a single click would have selected. A double-click on anything else is left
+         * alone rather than swallowed.
+         */
+        const handleDoubleClick = (e: MouseEvent) => {
+            const rect = target.getBoundingClientRect();
+            const w = screenToWorld(es.viewport, rect, e.clientX, e.clientY);
+            const doc = resolveScene(dispatcher.getDocument());
+            const hit = hitTest(computeGeometry(doc), w.x, w.y);
+            const node = hit ? doc.nodes.get(hit) : undefined;
+            if (!node || node.type !== "core.text" || isVirtualId(hit!)) return;
+            es.selectedNodeIds = [hit!];
+            setEditingTextId(hit!);
+            e.preventDefault();
+            refresh();
+        };
         const handleMouseMove = (e: MouseEvent) => {
             const rect = target.getBoundingClientRect();
             toolController.onMouseMove(e, rect);
@@ -990,6 +1019,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         };
 
         target.addEventListener("mousedown", handleMouseDown);
+        target.addEventListener("dblclick", handleDoubleClick);
         window.addEventListener("mousemove", handleMouseMove);
         window.addEventListener("mouseup", handleMouseUp);
         window.addEventListener("keydown", handleKeyDown);
@@ -998,6 +1028,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
 
         return () => {
             target.removeEventListener("mousedown", handleMouseDown);
+            target.removeEventListener("dblclick", handleDoubleClick);
             window.removeEventListener("mousemove", handleMouseMove);
             window.removeEventListener("mouseup", handleMouseUp);
             window.removeEventListener("keydown", handleKeyDown);
@@ -2014,6 +2045,16 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     <div
                         ref={canvasRef}
                         style={{ position: "absolute", inset: 0, cursor: canvasCursor }}
+                    />
+                    {/* IN-PLACE TEXT EDITING. A real textarea laid over the node by the same
+                        transform the renderer places it with, so the caret is in the letters
+                        rather than beside them. */}
+                    <CanvasTextEditor
+                        nodeId={editingTextId}
+                        doc={dispatcher.getDocument()}
+                        viewport={vp}
+                        onChange={text => { editContent({ text }); refresh(); }}
+                        onDone={() => { setEditingTextId(null); refresh(); }}
                     />
                     {/* Rulers overlay the top/left edges (pointer-events off, so clicks pass through). */}
                     <Ruler axis="x" length={canvasRef.current?.clientWidth ?? 0} vp={vp} />
@@ -3184,6 +3225,96 @@ function GradientEditor({ gradient, onChange }: {
     );
 }
 
+
+/**
+ * A text node edited WHERE IT IS, rather than in a panel across the window.
+ *
+ * A real `<textarea>` placed over the node by `overlayTransform` — the same relationship the
+ * renderer draws with, so the field lands on the letters under any rotation, scale or zoom. Its
+ * typography comes from `resolveTypography`, the function the render model itself uses, because a
+ * field whose metrics disagree with the render puts the caret in the wrong place and makes the
+ * text jump the moment editing ends.
+ *
+ * THE NODE IS HIDDEN WHILE IT IS EDITED — via the field's own opaque backdrop rather than a change
+ * to the document, which would be an undoable edit for something that is not one. What is on
+ * screen is the textarea; what is in the document is whatever has been typed so far, because every
+ * keystroke goes through the ordinary coalesced content action. There is no separate buffer to
+ * commit and therefore nothing to lose.
+ *
+ * ESCAPE AND BLUR both leave, and neither is a cancel. A cancel would have to undo an unknown
+ * number of coalesced steps; Ctrl+Z already does exactly that and means the same thing everywhere
+ * else in the app.
+ */
+function CanvasTextEditor({ nodeId, doc, viewport, onChange, onDone }: {
+    nodeId: string | null;
+    doc: ReadonlyDocument;
+    viewport: EditorState["viewport"];
+    onChange: (text: string) => void;
+    onDone: () => void;
+}) {
+    const ref = React.useRef<HTMLTextAreaElement | null>(null);
+    React.useEffect(() => {
+        // FOCUSED AND SELECTED on open: double-clicking a label in any other tool leaves you
+        // able to type over it immediately, and a placeholder "Text" you have to select by hand
+        // is the most common thing anybody replaces.
+        const el = ref.current;
+        if (!el) return;
+        el.focus();
+        el.select();
+    }, [nodeId]);
+
+    if (!nodeId) return null;
+    const scene = resolveScene(doc);
+    const node = scene.nodes.get(nodeId);
+    const computed = computeGeometry(scene).nodes.get(nodeId);
+    // The node went away under the editor (an undo, a delete): close rather than float over
+    // nothing. Rendering null is enough — `onDone` here would set state during a render.
+    if (!node || node.type !== "core.text" || !computed) return null;
+
+    const type = resolveTypography(node.style, doc.variables as VariableStore, doc.activeTheme);
+    return (
+        <textarea
+            ref={ref}
+            value={node.text ?? ""}
+            spellCheck={false}
+            onChange={e => onChange(e.target.value)}
+            onBlur={onDone}
+            onKeyDown={e => {
+                // ESCAPE LEAVES. Enter does NOT: a text node holds real newlines (schema 34) and
+                // every backend draws them, so Enter has to type one.
+                if (e.key === "Escape") { e.stopPropagation(); onDone(); }
+                // Everything else stays in the field. Without this a Delete reaches the canvas
+                // handler and removes the node being typed into.
+                else e.stopPropagation();
+            }}
+            style={{
+                position: "absolute", top: 0, left: 0, margin: 0,
+                width: computed.local.width, height: computed.local.height,
+                // PLACED BY THE SAME MATRIX THE RENDERER USES, from the element's own origin.
+                transform: overlayTransform(computed.world, viewport),
+                transformOrigin: "0 0",
+                // The typography the renderer resolved, so the text does not move when the field
+                // closes. `fontSize` is in WORLD units and the matrix carries the zoom, exactly as
+                // it does for the node itself.
+                fontSize: type.fontSize,
+                fontFamily: type.fontFamily,
+                fontWeight: type.fontWeight,
+                textAlign: type.textAlign === "justify" ? "justify" : type.textAlign,
+                lineHeight: type.lineHeight,
+                letterSpacing: type.letterSpacing,
+                // OPAQUE, so the node underneath does not show through as a second copy — the
+                // canvas background rather than a panel colour, because it stands in for the
+                // canvas here.
+                background: "#1a1a2e",
+                color: typeof node.style.fill === "string" ? node.style.fill : flatFill(node.style.fill),
+                caretColor: UI.accent,
+                border: `1px solid ${UI.accent}`,
+                outline: "none", padding: 0, resize: "none", overflow: "hidden",
+                boxSizing: "border-box"
+            }}
+        />
+    );
+}
 
 /** A plain dropdown for an enum field — the schema's own union, so the options cannot drift. */
 function SelectInput({ value, options, onChange }: { value: string; options: readonly string[]; onChange: (v: string) => void }) {

@@ -6,6 +6,7 @@
 import { Easing } from "../core/document/Prototype";
 import { Geometry, PathCommand } from "../core/document/Node";
 import { SnapGuide } from "../core/geometry/Snapping";
+import { Mat2D } from "../core/geometry/Matrix";
 
 export interface EditorState {
     selectedNodeIds: string[];
@@ -183,6 +184,23 @@ export function zoomAt(vp: EditorState["viewport"], factor: number, cursorX: num
     vp.x = f * vp.x + (f - 1) * cursorX;
     vp.y = f * vp.y + (f - 1) * cursorY;
     clampViewport(vp);
+}
+
+/**
+ * A node's world matrix as the CSS transform that puts a DOM overlay exactly on it.
+ *
+ * The render transform is `screen = z·world − vp`, so an element placed at the canvas's top-left
+ * and given this matrix lands on the node — rotation, scale and all. The on-canvas text editor is
+ * the caller: a text field that only matched the node's AABB would sit square over a rotated
+ * label, and one placed from the bounds alone would drift the moment the node was scaled.
+ *
+ * THE SAME RELATIONSHIP `screenToWorld` INVERTS, which is why it lives here. A second idea of
+ * where the canvas thinks a node is would put the caret next to the letters rather than in them.
+ */
+export function overlayTransform(world: Mat2D, vp: EditorState["viewport"]): string {
+    const z = Math.max(0.01, vp.zoom);
+    return `matrix(${z * world.a}, ${z * world.b}, ${z * world.c}, ${z * world.d}, `
+        + `${z * world.e - vp.x}, ${z * world.f - vp.y})`;
 }
 
 /**

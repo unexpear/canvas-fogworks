@@ -1442,7 +1442,11 @@ function zoomAt(vp, factor: number, cursorX: number, cursorY: number): void; // 
 // PROTOTYPE NAVIGATION (schema 36) — pure, and RETURNING a viewport rather than mutating one,
 // because a navigation needs both ends to interpolate between.
 function viewportToFit(bounds: Rect, size: Size, padding: number, fallbackZoom: number): EditorState["viewport"]; // "zoom to this frame": the tighter axis wins, the rect is centred, the result is CLAMPED; a degenerate rect keeps the current zoom rather than dividing by zero
-const FIT_PADDING_PX = 24;   // shared by the editor's Zoom to Fit and a prototype NAVIGATE — one
+const FIT_PADDING_PX = 24;
+function overlayTransform(world: Mat2D, vp): string;   // a node's world matrix as the CSS transform
+                             // that puts a DOM overlay exactly on it — the on-canvas text field.
+                             // Same relationship `screenToWorld` inverts, so the caret lands in
+                             // the letters under any rotation, scale or zoom   // shared by the editor's Zoom to Fit and a prototype NAVIGATE — one
                              // gesture with two triggers, so one number for the breathing room
 function lerpViewport(a, b, t: number): EditorState["viewport"];  // offsets LINEARLY, zoom GEOMETRICALLY (a linear zoom over a wide range barely moves, then lurches); t clamped to [0,1]
 function screenToWorld(vp, canvasRect: { left: number; top: number }, clientX: number, clientY: number): { x: number; y: number }; // the one sanctioned screen→world inverse, shared by all tools
@@ -1853,6 +1857,11 @@ function effectFilterId(shadow: Shadow | null, blur: number | null): string | nu
 // a `<g opacity>`, an offscreen canvas, a render target. Only the SEQUENCING is shared, so it is
 // stated once. A RUN, not a lookup by id — creating a layer on first mention and reusing it would
 // pull a group's items back together in draw order and change what is in front of what.
+// Typography with $tokens looked up, ranges checked and defaults applied (schema 34). Shared with
+// the on-canvas text editor's field: a field whose metrics disagree with the render puts the caret
+// in the wrong place and makes the text jump when editing ends.
+interface ResolvedType { fontSize; fontFamily; fontWeight; textAlign; lineHeight; letterSpacing }
+function resolveTypography(style, store: VariableStore, theme: string): ResolvedType;
 function layerTransition(prev: readonly string[], next: readonly string[]): { close: number; open: string[] };
 // All three backends implement it: SVG nests `<g opacity>`, Canvas opens an offscreen canvas per
 // run, the GPU pushes a render target per nesting depth and fades it back through the composite

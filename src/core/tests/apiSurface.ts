@@ -96,7 +96,7 @@ import { UpdateNodeStyleAction } from "../actions/UpdateNodeStyleAction";
 import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction";
 import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { TransactionAction } from "../actions/TransactionAction";
-import { createEditorState, clampViewport, panBy, zoomAt, screenToWorld, EditorState } from "../../editor/EditorState";
+import { createEditorState, clampViewport, panBy, zoomAt, screenToWorld, EditorState, overlayTransform } from "../../editor/EditorState";
 import { selectionHandles, handleAtPoint, groupRotateHandle, groupHandleAtPoint, groupCornerHandles, SelectionHandle, HANDLE_SIZE_PX, ROTATE_OFFSET_PX, GRADIENT_HANDLES, GradientHandle, gradientPaintMatrix, gradientHandles, gradientHandleAtPoint, gradientPointOf, isGradientHandle } from "../geometry/SelectionHandles";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupRotateOutput, GroupScaleInput, GroupScaleOutput } from "../geometry/GroupTransform";
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain, SNAP_THRESHOLD_PX, SnapGuide, SnapResult } from "../geometry/Snapping";
@@ -104,7 +104,7 @@ import { rulerTicks, niceStep, RulerTick } from "../geometry/Ruler";
 import { renderSVG, clearRenderState, RendererState } from "../../renderer/SVGRenderer";
 import { renderCanvas } from "../../renderer/CanvasRenderer";
 import { renderScene, RenderBackend } from "../../renderer/renderScene";
-import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, PaintGradient, gradientDefId, resolvePaintGradient, commandsToPathData, effectFilterId, layerTransition } from "../../renderer/RenderModel";
+import { buildRenderModel, DisplayList, DrawItem, Shape, Paint, FilterDef, PaintGradient, gradientDefId, resolvePaintGradient, commandsToPathData, effectFilterId, layerTransition, resolveTypography, ResolvedType } from "../../renderer/RenderModel";
 import { emitSVG } from "../../renderer/emitSVG";
 import { emitCanvas, setImageReadyCallback, CanvasTarget } from "../../renderer/emitCanvas";
 import { resolveImage, imageGeneration, naturalSize, imageInkBounds } from "../../renderer/ImageCache";
@@ -295,8 +295,9 @@ export function __apiSurfacePin(): void {
     // The union of EVERY node — what an export is cropped to and what zoom-to-fit frames, shared
     // so the two cannot disagree about what "all the content" is.
     expectType<Rect | null>(contentBounds(computed));
-    // The union of EVERY node — the exporter's frame and zoom-to-fit ask the same question.
-    expectType<Rect | null>(contentBounds(computed));
+    // The two answers the on-canvas text editor shares with the renderer.
+    expectType<string>(overlayTransform(IDENTITY, { x: 0, y: 0, zoom: 1 }));
+    expectType<ResolvedType>(resolveTypography({}, {} as VariableStore, "light"));
 
     // --- M2 layout engine ---------------------------------------------------
     const container: LayoutContainer = { direction: "row", gap: 0, padding: 0, alignItems: "start", wrap: true, alignContent: "space-between", wrapReverse: true };

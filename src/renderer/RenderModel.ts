@@ -123,6 +123,60 @@ export function commandsToPathData(commands: readonly PathCommand[]): string {
  * Whitespace WITHIN a paragraph is collapsed to single separators, matching `white-space:
  * pre-wrap`'s treatment of runs of spaces and tabs.
  */
+/** Every typography value a text shape needs, resolved — the shape of what `resolveTypography` answers. */
+export interface ResolvedType {
+    fontSize: number;
+    fontFamily: string;
+    fontWeight: number;
+    textAlign: TextAlign;
+    lineHeight: number;
+    letterSpacing: number;
+}
+
+/**
+ * A style's typography with `$token`s looked up, ranges checked and defaults applied (schema 34).
+ *
+ * EXPORTED because the render model is no longer the only thing that needs it: the on-canvas text
+ * editor puts a real text field over the node, and a field whose metrics disagree with the render
+ * puts the caret in the wrong place and makes the text jump the moment editing ends. Re-deriving
+ * the defaults there would be five numbers written twice — and the ONE that drifted would be
+ * invisible until somebody typed into a node that used it.
+ *
+ * A broken or out-of-range token falls back to the documented default rather than throwing: a
+ * negative `spacing` variable is a legal variable and an illegal line height, and the answer to
+ * that is the value the renderer already drew.
+ */
+export function resolveTypography(
+    style: {
+        fontSize?: number | string; fontFamily?: string; fontWeight?: number | string;
+        textAlign?: TextAlign; lineHeight?: number | string; letterSpacing?: number | string;
+    },
+    store: VariableStore,
+    theme: string
+): ResolvedType {
+    const slot = (raw: number | string | undefined, fallback: number, min: number, max: number): number => {
+        if (raw === undefined) return fallback;
+        const n = typeof raw === "number" ? raw : resolveNumber(store, raw, theme as never);
+        return n !== null && n >= min && n <= max ? n : fallback;
+    };
+    return {
+        // `fontSize` has no upper bound of its own — only "positive" — which is why it is not just
+        // another `slot` call.
+        fontSize: (() => {
+            if (style.fontSize === undefined) return 14;
+            const r = typeof style.fontSize === "number" ? style.fontSize : resolveNumber(store, style.fontSize, theme as never);
+            return r !== null && r > 0 ? r : 14;
+        })(),
+        fontFamily: style.fontFamily && style.fontFamily.trim() !== "" ? style.fontFamily : "sans-serif",
+        fontWeight: slot(style.fontWeight, 400, 1, 1000),
+        textAlign: style.textAlign ?? "left",
+        // `normal` in a browser is ~1.2, which is what the Canvas backend already used to break
+        // lines — so an absent line height keeps every backend where it was.
+        lineHeight: slot(style.lineHeight, 1.2, 0.01, 100),
+        letterSpacing: slot(style.letterSpacing, 0, -1e6, 1e6)
+    };
+}
+
 export function textParagraphs(text: string): string[] {
     return text.split("\n").map(p => p.split(/[^\S\n]+/).filter(w => w.length > 0).join(" "));
 }
@@ -529,24 +583,9 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         const r = typeof raw === "number" ? raw : resolveNumber(store, raw, theme);
         return r !== null && r > 0 ? r : null; // 0/negative/broken → no corner radius (matches the old `sty.radius ? …` truthiness)
     };
-    /**
-     * A resolved NUMBER slot with a range and a fallback (schema 34 typography).
-     *
-     * The same rule `radiusOf`/`fontSizeOf` follow, generalised because there are now five of
-     * them: resolve a token, range-check the RESULT (the store only promises a finite number —
-     * a legal `spacing` variable is an illegal font weight), and fall back visibly-but-harmlessly
-     * rather than letting a broken token reach a backend.
-     */
-    const numberSlot = (raw: number | string | undefined, fallback: number, min: number, max: number): number => {
-        if (raw === undefined) return fallback;
-        const n = typeof raw === "number" ? raw : resolveNumber(store, raw, theme);
-        return n !== null && n >= min && n <= max ? n : fallback;
-    };
-    const fontSizeOf = (raw: number | string | undefined): number => {
-        if (raw === undefined) return 14;
-        const r = typeof raw === "number" ? raw : resolveNumber(store, raw, theme);
-        return r !== null && r > 0 ? r : 14;   // broken/non-positive token → the documented default
-    };
+    // The typography slots used to be two more closures here. They moved to `resolveTypography`
+    // when the on-canvas text editor needed the same answers — see the note there on why five
+    // defaults written twice is five chances for one of them to drift unseen.
     /**
      * A stroke's width in WORLD units (schema 25). Absent — or a broken/negative token — falls
      * back to `1 / z`, i.e. a 1-SCREEN-pixel hairline, which is exactly what every stroke was
@@ -670,14 +709,8 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
         } else if (node.type === "core.text") {
             shape = {
                 kind: "text", x, y, width, height, text: node.text ?? "Text",
-                fontSize: fontSizeOf(sty.fontSize),
-                fontFamily: sty.fontFamily && sty.fontFamily.trim() !== "" ? sty.fontFamily : "sans-serif",
-                fontWeight: numberSlot(sty.fontWeight, 400, 1, 1000),
-                textAlign: sty.textAlign ?? "left",
-                // `normal` in a browser is ~1.2, which is what the Canvas backend already used to
-                // break lines — so an absent line height keeps the two backends where they were.
-                lineHeight: numberSlot(sty.lineHeight, 1.2, 0.01, 100),
-                letterSpacing: numberSlot(sty.letterSpacing, 0, -1e6, 1e6)
+                // ONE statement of the defaults, shared with the on-canvas editor's text field.
+                ...resolveTypography(sty, store, theme)
             };
             paint = {
                 fill: fillOf(sty.fill), opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
