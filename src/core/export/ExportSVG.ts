@@ -23,6 +23,26 @@ import { RendererState } from "../../renderer/RendererState";
 /** Padding around the content, in world units, so strokes and shadows are not clipped. */
 export const EXPORT_MARGIN = 8;
 
+/**
+ * The two things an export needs that a PURE function cannot know, injected the same way
+ * `TextLines` already is.
+ *
+ * A SOURCE RECT needs the image's NATURAL SIZE. SVG's `<image>` has no attribute for "draw this
+ * rectangle of the file", so the only way to say it is a nested `<svg viewBox>` over an image
+ * placed at its natural size — which means knowing that size, which means having decoded the
+ * picture. The exporter has not.
+ *
+ * A RASTER needs its pixels ENCODED. Its href is `raster:<id>:...`, an identity key rather than a
+ * URL, so writing it into a standalone file produces an `<image>` that will never load anywhere.
+ *
+ * Both are optional. Absent, the exporter OMITS what it cannot express rather than writing
+ * something wrong — see `itemMarkup`.
+ */
+export interface ExportImages {
+    naturalSize?(href: string): { width: number; height: number } | null;
+    surfaceUrl?(href: string, surface: { data: string; width: number; height: number }): string | null;
+}
+
 /** XML-escape a string used as an attribute value or text node. */
 function esc(s: string): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -84,7 +104,7 @@ export type TextLines = (shape: Extract<Shape, { kind: "text" }>) => string[];
 const HARD_BREAKS_ONLY: TextLines = shape => textParagraphs(shape.text);
 
 /** One shape as SVG markup, placed by its world matrix. */
-function itemMarkup(item: DrawItem, linesOf: TextLines): string {
+function itemMarkup(item: DrawItem, linesOf: TextLines, images: ExportImages): string {
     const t = item.world ? ` transform="${toMatrixString(item.world)}"` : "";
     const paint = paintAttrs(item);
     const s = item.shape;
@@ -126,9 +146,38 @@ function itemMarkup(item: DrawItem, linesOf: TextLines): string {
                 + ` text-anchor="${anchor}"` + (s.letterSpacing !== 0 ? ` letter-spacing="${num(s.letterSpacing)}"` : "");
             return `<text${font} ${paint}${t}>${tspans}</text>`;
         }
-        case "image":
-            return s.href === null ? "" :
-                `<image x="${num(s.x)}" y="${num(s.y)}" width="${num(s.width)}" height="${num(s.height)}" href="${esc(s.href)}"${t}/>`;
+        case "image": {
+            if (s.href === null) return "";
+            // A RASTER'S HREF IS A CACHE KEY, not a URL. Written verbatim it is an image that
+            // loads nowhere — so the pixels are encoded, or the node is omitted. Omitting loses
+            // the node; writing the key loses it too AND leaves a broken-image glyph behind.
+            const href = s.surface ? (images.surfaceUrl?.(s.href, s.surface) ?? null) : s.href;
+            if (href === null) return "";
+            // PIXEL ART, said the way SVG says it — and set BOTH ways for the reason the live
+            // backend sets it both ways: writing it only when true leaves the reader guessing at
+            // the default, and an exported sprite smoothed into mush is the failure this prevents.
+            const rendering = ` image-rendering="${s.pixelated ? "pixelated" : "auto"}"`;
+            const src = s.source;
+            const natural = src ? (images.naturalSize?.(s.href) ?? null) : null;
+            if (src && natural) {
+                // A SOURCE RECT has no `<image>` attribute. A nested `<svg viewBox>` does the job:
+                // the viewBox maps the source rectangle onto the destination box and the nested
+                // element clips what falls outside, with the inner image at its NATURAL size so
+                // the viewBox's units are source pixels. The same construction `emitSVG` uses.
+                return `<svg x="${num(s.x)}" y="${num(s.y)}" width="${num(s.width)}" height="${num(s.height)}"`
+                    + ` viewBox="${num(src.x)} ${num(src.y)} ${num(src.width)} ${num(src.height)}"`
+                    + ` preserveAspectRatio="none"${t}>`
+                    + `<image x="0" y="0" width="${num(natural.width)}" height="${num(natural.height)}"`
+                    + ` href="${esc(href)}" preserveAspectRatio="none"${rendering}/>`
+                    + `</svg>`;
+            }
+            // A SOURCE RECT WITH NO SIZE TO RESOLVE IT draws nothing, rather than the whole sheet.
+            // One cell of a tileset and the entire tileset are not a near miss — the second is a
+            // different picture, and a silent one.
+            if (src && !natural) return "";
+            return `<image x="${num(s.x)}" y="${num(s.y)}" width="${num(s.width)}" height="${num(s.height)}"`
+                + ` href="${esc(href)}" preserveAspectRatio="none"${rendering}${t}/>`;
+        }
         default:
             return "";
     }
@@ -148,7 +197,8 @@ function defMarkup(def: FilterDef): string {
  * The document as standalone SVG text. Returns an empty `<svg/>` for an empty document rather
  * than null, so a caller always has something valid to write.
  */
-export function exportSVG(doc: ReadonlyDocument, linesOf: TextLines = HARD_BREAKS_ONLY): string {
+export function exportSVG(doc: ReadonlyDocument, linesOf: TextLines = HARD_BREAKS_ONLY,
+    images: ExportImages = {}): string {
     const bounds = contentBounds(doc);
     if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
         return `<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"></svg>`;
@@ -165,7 +215,30 @@ export function exportSVG(doc: ReadonlyDocument, linesOf: TextLines = HARD_BREAK
     const model = buildRenderModel({ width: bounds.width, height: bounds.height }, doc, state);
 
     const defs = model.defs.length > 0 ? `<defs>${model.defs.map(defMarkup).join("")}</defs>` : "";
-    const body = model.content.map(item => itemMarkup(item, linesOf)).filter(Boolean).join("\n  ");
+    // OPACITY GROUPS (schema 32). A node with children and opacity < 1 composites as ONE, so the
+    // model sets each child's own opacity to 1 and lists the group separately — and this exporter
+    // read `content` and never `groups`, so every such group exported at FULL strength with its
+    // children individually opaque. Both live backends compensate; this one silently did not.
+    //
+    // The model lists an item's enclosing groups outermost-first, so nesting is a lookup: open
+    // each `<g opacity>` the first time it is named and close them when the run ends.
+    const alpha = new Map(model.groups.map(g => [g.id, g.opacity]));
+    const parts: string[] = [];
+    let open: string[] = [];
+    for (const item of model.content) {
+        const want = item.groups ?? [];
+        let shared = 0;
+        while (shared < open.length && shared < want.length && open[shared] === want[shared]) shared++;
+        // Close every group this item is NOT inside, innermost first...
+        for (let i = open.length; i > shared; i--) parts.push("</g>");
+        // ...then open the ones it is.
+        for (let i = shared; i < want.length; i++) parts.push(`<g opacity="${num(alpha.get(want[i]) ?? 1)}">`);
+        open = [...want];
+        const markup = itemMarkup(item, linesOf, images);
+        if (markup) parts.push(markup);
+    }
+    for (let i = open.length; i > 0; i--) parts.push("</g>");
+    const body = parts.filter(Boolean).join("\n  ");
     // The viewBox carries the content's own origin, so shapes keep their document coordinates
     // instead of being translated — a diff between two exports then shows real changes only.
     return [

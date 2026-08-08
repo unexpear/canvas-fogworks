@@ -86,7 +86,7 @@ import { parseTiledMap, parseTiledTileset, tiledMapError, tilesetFor, tileSource
 import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
-import { naturalSize } from "../../src/renderer/ImageCache";
+import { naturalSize, surfaceUrl } from "../../src/renderer/ImageCache";
 import { SourceRect } from "../core/document/Node";
 import { Action } from "../core/actions/Action";
 import { textLinesFor } from "../renderer/TextRaster";
@@ -199,6 +199,20 @@ function hexToRgba(hex: string): Rgba {
     const n = parseInt(m[1], 16);
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 255];
 }
+
+/**
+ * What the pure exporter cannot know, supplied from the DOM side.
+ *
+ * `ExportSVG` is deliberately pure — it is node-testable and runs where `emitSVG` cannot. That
+ * purity is exactly why it cannot measure an image or encode a surface, and why it used to write
+ * a tileset's WHOLE sheet in place of one cell and a `raster:` key that loads nowhere. Handing it
+ * the two answers is the same injection the text wrapper already uses.
+ */
+const EXPORT_IMAGES = {
+    naturalSize: (href: string) => naturalSize(href),
+    surfaceUrl: (href: string, surface: { data: string; width: number; height: number }) =>
+        surfaceUrl(href, surface)
+};
 
 const SHAPE_ICONS: Record<ShapeKind, string> = {
     rectangle: "□", ellipse: "○", line: "╱", text: "T", triangle: "△", polygon: "⬟", image: "▣",
@@ -3284,7 +3298,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                             setBusy(true);
                             try {
                                 // The SAME pure exporter the tests exercise; the main process only writes.
-                                const written = await api.writeIntoFolder(folder, "design.svg", exportSVG(getDocument(), exportTextLines));
+                                const written = await api.writeIntoFolder(folder, "design.svg", exportSVG(getDocument(), exportTextLines, EXPORT_IMAGES));
                                 setExported(written);
                             } finally { setBusy(false); }
                         }}
@@ -3299,7 +3313,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                             const folder = (e.target as HTMLInputElement).value.trim();
                             if (!folder) return;
                             setBusy(true);
-                            try { setExported(await api.writeIntoFolder(folder, "design.svg", exportSVG(getDocument(), exportTextLines))); }
+                            try { setExported(await api.writeIntoFolder(folder, "design.svg", exportSVG(getDocument(), exportTextLines, EXPORT_IMAGES))); }
                             finally { setBusy(false); }
                         }}
                         style={{ width: "100%", boxSizing: "border-box", fontSize: 11, padding: "3px 5px", background: UI.raised, color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3, marginBottom: 6 }}
@@ -3308,7 +3322,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                     {/* PREVIEW: the same `exportSVG` output, without writing a file. Worth having
                         on its own — you can read what you are about to hand someone — and it is
                         the only way to see the export without a native dialog in the way. */}
-                    <button onClick={() => setPreview(exportSVG(getDocument(), exportTextLines))} style={DRAWER_BUTTON}>
+                    <button onClick={() => setPreview(exportSVG(getDocument(), exportTextLines, EXPORT_IMAGES))} style={DRAWER_BUTTON}>
                         Preview the SVG
                     </button>
                     {/* SPRITE SHEET — the game-facing export. Two files, because an engine needs

@@ -24,7 +24,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1316;
+const EXPECTED_TESTS = 1320;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",

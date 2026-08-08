@@ -8636,9 +8636,15 @@ describe("exportSVG typography and line breaks", () => {
         // Every export site passes the MEASURER. The exporter is pure and falls back to hard
         // breaks without one, so a site that forgot it would export text that does not wrap —
         // silently, and only in the file somebody else opens.
-        expect(src).toMatch(/setPreview\(exportSVG\(getDocument\(\), exportTextLines\)\)/);
-        expect(src.match(/exportSVG\(getDocument\(\)/g)!.length)
-            .toBe(src.match(/exportSVG\(getDocument\(\), exportTextLines\)/g)!.length);
+        // The preview and the WRITE must call it the same way, or what you look at is not what
+        // lands in the file. Both now pass EXPORT_IMAGES too — the resolvers that let a source
+        // rect and a painted canvas survive the export.
+        expect(src).toMatch(/setPreview\(exportSVG\(getDocument\(\), exportTextLines, EXPORT_IMAGES\)\)/);
+        expect(src.split("exportSVG(getDocument(), exportTextLines, EXPORT_IMAGES)").length - 1).toBe(3);
+        // EVERY call passes both — a preview built without the resolvers would show a tileset's
+        // whole sheet where the written file shows one cell, which is the divergence this asserts
+        // against. The count above already pins three; this pins that there are no others.
+        expect(src.match(/exportSVG\(getDocument\(\)/g)!.length).toBe(3);
         expect(src).toMatch(/data-svg-preview="1"/);
     });
 
@@ -21384,5 +21390,118 @@ describe("Tiled, against files Tiled actually wrote", () => {
         // `<tileoffset>` is read: these tiles hang off their cell so a tall building can stand
         // over the squares behind it.
         expect([set.offsetX, set.offsetY]).toEqual([-12, 6]);
+    });
+});
+
+describe("exportSVG keeps what the editor draws", () => {
+    /** A document with one image node, optionally cut to a source rect. */
+    const docWithImage = (source?: { x: number; y: number; width: number; height: number }) => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("I", {
+            id: "I", type: "core.image", parent: null, children: [],
+            geometry: { x: 10, y: 20, width: 64, height: 32 },
+            style: { fill: "none", opacity: 1 },
+            layout: {}, src: "https://example.test/sheet.png", pixelated: true,
+            ...(source ? { sourceRect: source } : {})
+        } as never);
+        doc.rootNodeUuids = ["I"];
+        return doc;
+    };
+
+    test("a SOURCE RECT survives, or the node is omitted — never the whole sheet", () => {
+        // The bug: the exporter wrote `<image href=sheet.png>` at the node's box and dropped the
+        // rect, so one cell of a tileset exported as the ENTIRE tileset. Not a near miss — a
+        // different picture, silently.
+        const doc = docWithImage({ x: 96, y: 32, width: 16, height: 16 });
+        const measured = exportSVG(doc, undefined, { naturalSize: () => ({ width: 256, height: 128 }) });
+        // A nested <svg viewBox> is the only way SVG can say "this rectangle of that file".
+        expect(measured).toContain('viewBox="96 32 16 16"');
+        // The inner image sits at its NATURAL size, which is what makes the viewBox's units
+        // source pixels rather than anything else.
+        expect(measured).toContain('width="256"');
+        expect(measured).toContain('height="128"');
+
+        // WITHOUT a way to measure the image there is no honest export of one cell, so the node
+        // is omitted. Writing the whole sheet would be worse: it looks like a successful export.
+        const unmeasured = exportSVG(doc);
+        expect(unmeasured).not.toContain("sheet.png");
+
+        // An image with NO source rect is unaffected either way — the plain path still works.
+        expect(exportSVG(docWithImage())).toContain("sheet.png");
+    });
+
+    test("PIXELATED survives, and is stated both ways", () => {
+        // Exported pixel art used to come out smoothed: the attribute was simply never written.
+        expect(exportSVG(docWithImage())).toContain('image-rendering="pixelated"');
+
+        // STATED BOTH WAYS, like the live backend. Writing it only when true leaves a reader
+        // guessing at the default, and the two backends would then disagree about it.
+        const doc = docWithImage();
+        doc.nodes.get("I")!.pixelated = false;
+        expect(exportSVG(doc)).toContain('image-rendering="auto"');
+    });
+
+    test("a RASTER exports its pixels, or nothing — never its cache key", () => {
+        const doc = createEmptyDocument();
+        const encoded = encodeSurface(createPixelBuffer(4, 3));
+        doc.nodes.set("R", {
+            id: "R", type: "core.raster", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 8, height: 6 },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            surface: { data: encoded.data, width: 4, height: 3 }
+        } as never);
+        doc.rootNodeUuids = ["R"];
+
+        // A raster's href is `raster:<id>:...` — an identity key. Written into a standalone file
+        // it is an <image> that loads nowhere, so with no encoder the node is omitted.
+        const bare = exportSVG(doc);
+        expect(bare).not.toContain("raster:");
+        expect(bare).not.toContain("<image");
+
+        // Given one, the pixels travel.
+        const withPixels = exportSVG(doc, undefined, { surfaceUrl: () => "data:image/png;base64,AAAA" });
+        expect(withPixels).toContain("data:image/png;base64,AAAA");
+        expect(withPixels).not.toContain("raster:");
+    });
+
+    test("GROUP OPACITY survives, because the exporter reads groups at all", () => {
+        // A node with children and opacity < 1 composites as ONE: the model sets each child's own
+        // opacity to 1 and lists the group separately. The exporter read `content` and never
+        // `groups`, so such a group exported at full strength with its children opaque — every
+        // number in the file individually right and the picture wrong.
+        const doc = createEmptyDocument();
+        doc.nodes.set("G", {
+            id: "G", type: "core.rectangle", parent: null, children: ["A", "B"],
+            geometry: { x: 0, y: 0, width: 100, height: 100 },
+            style: { fill: "none", opacity: 0.4 }, layout: {}
+        } as never);
+        for (const [id, x] of [["A", 0], ["B", 40]] as const) {
+            doc.nodes.set(id, {
+                id, type: "core.rectangle", parent: "G", children: [],
+                geometry: { x, y: 0, width: 60, height: 60 },
+                style: { fill: "#ff0000", opacity: 1 }, layout: {}
+            } as never);
+        }
+        doc.rootNodeUuids = ["G"];
+
+        const svg = exportSVG(doc);
+        // The group's own alpha is written ONCE, around both children...
+        expect(svg).toContain('<g opacity="0.4">');
+        expect((svg.match(/<g opacity="0.4">/g) || []).length).toBe(1);
+        expect((svg.match(/<\/g>/g) || []).length).toBe(1);
+        // ...and the children are still individually opaque, which is the whole point of a group:
+        // folding the alpha into each of them instead makes overlapping children show through.
+        expect(svg).not.toContain('opacity="0.4"></rect>');
+
+        // A document with NO opacity group opens no group element at all — an exporter that
+        // wrapped everything unconditionally would pass the assertions above and change nothing.
+        const plain = createEmptyDocument();
+        plain.nodes.set("P", {
+            id: "P", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 },
+            style: { fill: "#00ff00", opacity: 1 }, layout: {}
+        } as never);
+        plain.rootNodeUuids = ["P"];
+        expect(exportSVG(plain)).not.toContain("<g ");
     });
 });
