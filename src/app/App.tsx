@@ -398,6 +398,10 @@ export function App() {
     strokeWidthRef.current = strokeWidth;
     // THE BRUSH. Same getter pattern again, and for the same reason: `RasterTool` is constructed
     // once, so a captured colour would freeze whatever was chosen when the toolbar first rendered.
+    // WHICH SHAPE THE ONE SLOT OFFERS. Remembered rather than reset, because somebody drawing a
+    // storyboard draws twenty rectangles, not one of each — a slot that snapped back to Rectangle
+    // would cost them a second click every single time.
+    const [lastShape, setLastShape] = useState<ShapeKind>("rectangle");
     const [paintColour, setPaintColour] = useState<string>("#000000");
     const paintColourRef = useRef<string>("#000000");
     paintColourRef.current = paintColour;
@@ -1279,15 +1283,12 @@ export function App() {
                 <span style={{ fontWeight: 700, marginRight: 8, color: "#00bfff", fontSize: 13 }}>VDE</span>
                 <ToolButton icon="↗" label="Select" active={toolName === "select"} onClick={() => setTool("select")} />
                 <ToolButton icon="↔" label="Move" active={toolName === "move"} onClick={() => setTool("move")} />
-                {SHAPE_KINDS.map(kind => (
-                    <ToolButton
-                        key={kind}
-                        icon={SHAPE_ICONS[kind]}
-                        label={kind[0].toUpperCase() + kind.slice(1)}
-                        active={toolName === kind}
-                        onClick={() => setTool(kind)}
-                    />
-                ))}
+                <ShapeFlyout
+                    current={lastShape}
+                    active={(SHAPE_KINDS as readonly string[]).includes(toolName)}
+                    icons={SHAPE_ICONS}
+                    onPick={kind => { setLastShape(kind); setTool(kind); }}
+                />
                 <ToolButton icon="✒" label="Pen" active={toolName === "pen"} onClick={() => setTool("pen")} />
                 <ToolButton icon="✏" label="Paint" active={toolName === "paint"} onClick={() => setTool("paint")} />
                 {es.selectedNodeIds.length === 1
@@ -2543,6 +2544,82 @@ function Ruler({ axis, length, vp }: { axis: "x" | "y"; length: number; vp: { x:
 /** A hairline group separator — the toolbar reads as clusters, not one long row. */
 function Divider() {
     return <div style={{ width: 1, height: 20, background: UI.line, margin: "0 4px" }} />;
+}
+
+/**
+ * The eight shape tools behind ONE slot.
+ *
+ * Eight of the twelve tools on the bar were shapes, which is eight decisions to make a rectangle —
+ * and every editor a person arrives from (Photoshop, Illustrator, Aseprite, Krita) has nested them
+ * for decades. The slot SHOWS THE LAST SHAPE USED and selects it on click, so the common case is
+ * still one click; the caret opens the rest.
+ *
+ * THE CARET IS A SEPARATE BUTTON, not a long-press. A long-press hides the only affordance that
+ * says more is here, and it cannot be reached from a keyboard at all.
+ */
+function ShapeFlyout({ current, active, icons, onPick }: {
+    current: ShapeKind; active: boolean;
+    icons: Record<ShapeKind, string>; onPick: (kind: ShapeKind) => void;
+}) {
+    const [open, setOpen] = useState(false);
+    // Escape closes, and so does a click anywhere else — a popover that can only be dismissed by
+    // choosing something is a trap, and this one covers the canvas.
+    useEffect(() => {
+        if (!open) return;
+        const away = () => setOpen(false);
+        const key = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+        // Captured, so a click on the canvas closes it before the tool sees a stray press.
+        document.addEventListener("mousedown", away, true);
+        document.addEventListener("keydown", key);
+        return () => {
+            document.removeEventListener("mousedown", away, true);
+            document.removeEventListener("keydown", key);
+        };
+    }, [open]);
+    const name = (k: ShapeKind) => k[0].toUpperCase() + k.slice(1);
+    return (
+        <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+            <ToolButton icon={icons[current]} label={name(current)} active={active}
+                onClick={() => onPick(current)} />
+            <button
+                title="Choose a shape"
+                aria-label="Choose a shape"
+                aria-expanded={open}
+                aria-haspopup="menu"
+                onMouseDown={e => e.stopPropagation()}
+                onClick={() => setOpen(o => !o)}
+                style={{
+                    padding: "3px 2px", fontSize: 9, lineHeight: 1, background: "transparent",
+                    color: "#ccc", border: "none", borderRadius: 3, cursor: "pointer"
+                }}
+            >&#9662;</button>
+            {open && (
+                <div role="menu" onMouseDown={e => e.stopPropagation()} style={{
+                    position: "absolute", top: "100%", left: 0, zIndex: 60, marginTop: 2,
+                    display: "flex", flexDirection: "column", minWidth: 132,
+                    background: UI.panel, border: `1px solid ${UI.line}`, borderRadius: 3,
+                    boxShadow: "0 6px 18px rgba(0,0,0,.45)", padding: 3
+                }}>
+                    {SHAPE_KINDS.map(kind => (
+                        <button
+                            key={kind}
+                            role="menuitem"
+                            onClick={() => { onPick(kind); setOpen(false); }}
+                            style={{
+                                display: "flex", alignItems: "center", gap: 7, padding: "4px 8px",
+                                fontSize: 11, textAlign: "left", cursor: "pointer",
+                                background: kind === current ? "#2a4a6a" : "transparent",
+                                color: "#ccc", border: "none", borderRadius: 2
+                            }}
+                        >
+                            <span style={{ width: 14, display: "inline-block" }}>{icons[kind]}</span>
+                            <span>{name(kind)}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
 }
 
 function ToolButton({ icon, label, active, disabled, onClick }: {
