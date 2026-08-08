@@ -2796,6 +2796,33 @@ describe("Components: detach instance", () => {
         expect(() => deserializeDocument(serializeDocument(d))).not.toThrow();
     });
 
+    test("the WebGL effects path unbinds textures before drawing into a blur target", () => {
+        // A SOURCE PIN, and it is honest about being one: this path needs a GL context, which the
+        // node suite has no way to give it. What it catches is the fix being DELETED, which is the
+        // realistic regression — the bug it replaced lived for weeks looking like a rendering
+        // problem rather than a state one.
+        //
+        // The bug: blur and composite passes bind their source to texture unit 0, and the scene
+        // program samples the height field on unit 0. Drawing an item into `targets[0]` while
+        // `targets[0]`'s own texture was still bound there is a FEEDBACK LOOP, which WebGL
+        // discards with INVALID_OPERATION — so nothing reached the target, the blur filtered an
+        // empty image, and the shape came out as a hole exactly its own size.
+        const src = readFileSync(resolve(__dirname, "../../renderer/emitWebGL.ts"), "utf8");
+        const bind = src.indexOf("gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);");
+        expect(bind).toBeGreaterThan(-1);
+        const after = src.slice(bind, bind + 2600);
+        // Both units the scene program samples are cleared...
+        expect(after).toContain("gl.activeTexture(gl.TEXTURE0);");
+        expect(after).toContain("gl.activeTexture(gl.TEXTURE1);");
+        // Two units cleared, so neither the height nor the image sampler can hold the
+        // target being drawn into.
+        const nulls = after.split("bindTexture(gl.TEXTURE_2D, null)").length - 1;
+        expect(nulls).toBeGreaterThanOrEqual(2);
+        // ...and it happens BEFORE the item's draws, which is the whole point.
+        expect(after.indexOf("gl.bindTexture(gl.TEXTURE_2D, null)"))
+            .toBeLessThan(after.indexOf("for (const d of itemDraws("));
+    });
+
     test("Detach asks the action whether it would succeed, rather than re-deriving the rule", () => {
         // This used to pin a DISABLED toolbar button. The button is gone — the command moved to
         // the Edit menu, and a menu item has no disabled state to lean on — so the guard moved

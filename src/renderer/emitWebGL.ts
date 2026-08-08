@@ -1106,6 +1106,27 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
                 gl.disable(gl.DEPTH_TEST);
                 restoreSceneState();
                 gl.disable(gl.DEPTH_TEST);
+                // THE FEEDBACK LOOP, and the whole reason a blurred shape came out as a HOLE.
+                //
+                // The blur and composite passes bind their SOURCE texture to unit 0, and the scene
+                // program samples the height field on unit 0 too. So the moment an item is drawn
+                // into `targets[0]` while `targets[0]`'s own texture is still bound to unit 0 —
+                // which it is, left over from the previous item's blur — the active program
+                // references a texture attached to the bound framebuffer. WebGL calls that a
+                // feedback loop and DISCARDS THE DRAW with INVALID_OPERATION.
+                //
+                // Nothing reached the target, so the blur filtered an empty image and composited
+                // nothing back: a hole exactly the size of the shape. Every piece measured
+                // correctly on its own because every piece WAS correct.
+                //
+                // Unbinding is enough: a draw that actually needs the height or image texture
+                // binds it immediately before drawing, a few lines below. A sampler left pointing
+                // at no texture reads as opaque black and raises nothing, which is why this is
+                // safe for the shapes that sample neither.
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, null);
+                gl.activeTexture(gl.TEXTURE1);
+                gl.bindTexture(gl.TEXTURE_2D, null);
             }
         }
         for (const d of itemDraws(item, itemTolerance(item, viewScale))) {

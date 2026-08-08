@@ -1203,24 +1203,40 @@ because the clamp alone is a COLLAPSE rather than a taper: past sigma 21.3 every
 same width, and a 20px blur at 1:1 on a Retina display already reaches that, since device sigma is
 `blur * zoom * dpr`. Sigma 320 now renders where 21.3 was the ceiling.
 
-### THE EFFECTS PATH IS CURRENTLY BROKEN, and knowing that came from one measurement
+### The effects path was broken by a FEEDBACK LOOP, and the cause was state, not maths
 
-**A shape carrying a blur renders as a HOLE on the WebGL backend.** Measured by diffing the same
-document across backends: the centre pixel is `[74,144,217]` on Canvas and `[26,26,46]` on WebGL —
-the clear colour. 59.7% of the shape's region differs. `gl.getError()` is 0 and the console is
-clean, so no error check finds it.
+A shape carrying a blur rendered as a HOLE on the WebGL backend — the centre pixel `[74,144,217]`
+on Canvas and `[26,26,46]`, the clear colour, on WebGL, with 59.7% of the shape's region differing.
 
-**This is worse than the gap it was closing.** Before the loop wrap the backend drew shapes
-correctly and merely ignored their effects; now a blurred shape vanishes. It is knowingly left in
-place while other work proceeds, not overlooked.
+Every component had been verified on its own — the kernel to 0.0027 against `ctx.filter`, the
+shader to 0.0018 against a CPU convolution, the composite's tint and offset against hand-computed
+values, `blurPlan`'s invariant across seven sigmas. The assembly was still wrong, because every
+piece WAS correct.
 
-**Every component was independently verified and the assembly is still wrong** — the kernel to
-0.0027 against `ctx.filter`, the shader to 0.0018 against a CPU convolution, the composite's tint
-and offset against hand-computed values, `blurPlan`'s invariant across seven sigmas. Six commits of
-piece-wise checking could not see it. That is the whole lesson: **the cross-backend pixel diff is
-the oracle this work needed from the start**, and every piece-wise check is a weaker proxy for it.
-The next diagnostic is to read back the target's own pixels straight after the item draws into it
-and before any blur — one reading that splits "never drawn" from "lost in compositing".
+**The blur and composite passes bind their SOURCE texture to unit 0, and the scene program samples
+the height field on unit 0.** So drawing an item into `targets[0]` while `targets[0]`'s own texture
+was still bound there — left over from the previous item's blur — made the active program reference
+a texture attached to the bound framebuffer. WebGL calls that a feedback loop and DISCARDS THE DRAW
+with `INVALID_OPERATION`. Nothing reached the target, the blur filtered an empty image, and the
+composite brought back nothing: a hole exactly the size of the shape.
+
+Fixed by unbinding units 0 and 1 straight after binding the target. A draw that needs either
+texture binds it immediately before drawing, so nothing else had to change. `emitWebGL.ts` has no
+GL context in the node suite, so the fix is held by a SOURCE PIN that was proven to fail when the
+unbinds are deleted — it catches removal, which is the realistic regression.
+
+**The diagnostic was the one this section already said to take**: read the target's own pixels after
+the item draws and before any blur. `drawnPixels` came back 0 with `errorsFromDraws: [1282]`; after
+the fix, 360,996 with no errors, and a band across the shape shows 647 pixels of fill plus the
+blur's intermediate edge values.
+
+**Two measurement traps it walked into first, both worth remembering.** `gl.getError()` read AFTER
+the probe's own `readPixels` conflates the two — drain the error before reading. And reading the
+DEFAULT framebuffer outside the frame that drew it returns black, because WebGL clears the drawing
+buffer once it is presented; the long-standing note that "gl.getError() is 0, so diff pixels not
+errors" came from exactly that kind of reading taken at the wrong moment, and it sent the
+investigation away from the error that was there all along.
+
 ### Pixels — the one thing no import can add
 
 **A `core.raster` NODE IS NAMED, RESOLVED AND DRAWN — on the Canvas backend.** `buildRenderModel`
