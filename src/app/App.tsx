@@ -1273,22 +1273,9 @@ export function App() {
 
     return (
         <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: UI.bg, color: UI.text }}>
-            {/* THE BAR RESERVES ITS SPACE, and that one property is the whole fix.
-                    Choosing a tool adds its options — six of them for the brush — the row wraps,
-                    and until now the bar GREW and shoved the canvas and both panels 27px down.
-                    That is not cosmetic: a click computed before a tool switch lands 27px off
-                    afterwards, which is exactly how a brush test painted the wrong row of a
-                    canvas. Holding two rows' worth of height whether or not the second row is
-                    occupied costs a strip of empty chrome and buys a viewport that never moves.
-                    `alignContent: flex-start` keeps the first row pinned to the top instead of
-                    floating in the reserved space.
-                    86px is the WRAPPED height, measured — the unwrapped bar is 62px, so reserving
-                    62 changed nothing. It is a fixed number rather than a computed one, which is
-                    honest about its limit: squeeze the window narrow enough and the brush's
-                    options take a THIRD row and the jump returns. The real cure is a dedicated
-                    options row that owns its own height regardless of what the tool row does;
-                    this buys the common case now for one property. */}
-                <div style={{ display: "flex", alignItems: "center", alignContent: "flex-start", flexWrap: "wrap", rowGap: 4, padding: "4px 8px", background: UI.panel, borderBottom: `1px solid ${UI.line}`, gap: 4, minHeight: 86, boxSizing: "border-box" }}>
+            {/* Tools and document commands. Its height is its own again: the tool options moved
+                    to their own row below, so nothing this row does can push the canvas around. */}
+                <div style={{ display: "flex", alignItems: "center", alignContent: "flex-start", flexWrap: "wrap", rowGap: 4, padding: "4px 8px", background: UI.panel, borderBottom: `1px solid ${UI.line}`, gap: 4 }}>
                 <span style={{ fontWeight: 700, marginRight: 8, color: "#00bfff", fontSize: 13 }}>VDE</span>
                 <ToolButton icon="↗" label="Select" active={toolName === "select"} onClick={() => setTool("select")} />
                 <ToolButton icon="↔" label="Move" active={toolName === "move"} onClick={() => setTool("move")} />
@@ -1303,106 +1290,6 @@ export function App() {
                 ))}
                 <ToolButton icon="✒" label="Pen" active={toolName === "pen"} onClick={() => setTool("pen")} />
                 <ToolButton icon="✏" label="Paint" active={toolName === "paint"} onClick={() => setTool("paint")} />
-                {toolName === "paint" && (
-                    <>
-                        {/* THE TARGET IS THE SELECTION, so say so when there isn't one. A brush
-                            that silently does nothing reads as a broken tool. */}
-                        {!selectedRasterId && (
-                            <span style={{ fontSize: 10, color: UI.textFaint, marginRight: 8 }}>
-                                select a ▦ canvas to paint on
-                            </span>
-                        )}
-                        <input
-                            type="color"
-                            aria-label="Paint colour"
-                            data-testid="paint-colour"
-                            value={paintColour}
-                            disabled={erasing}
-                            onChange={e => setPaintColour(e.target.value)}
-                            style={{ width: 28, height: 22, padding: 0, background: "none",
-                                border: `1px solid ${UI.line}`, opacity: erasing ? 0.4 : 1 }}
-                        />
-                        <ToolButton icon="⌫" label="Erase" active={erasing}
-                            onClick={() => setErasing(v => !v)} />
-                        <label style={{ fontSize: 10, color: UI.textFaint, display: "flex", alignItems: "center", gap: 3 }}>
-                            size
-                            <input
-                                type="number" min={1} max={BRUSH_MAX_SIZE} step={1}
-                                aria-label="Brush size"
-                                data-testid="brush-size"
-                                value={brushSize}
-                                onChange={e => setBrushSize(Math.max(1, Math.min(BRUSH_MAX_SIZE,
-                                    Math.round(Number(e.target.value) || 1))))}
-                                style={{ width: 44, background: UI.bg, color: UI.text,
-                                    border: `1px solid ${UI.line}` }}
-                            />
-                        </label>
-                        <ToolButton icon="●" label="Round" active={brushRound}
-                            onClick={() => setBrushRound(v => !v)} />
-                        {/* Mirrored drawing: one stroke paints two, four, or one. */}
-                        <ToolButton icon="⇋" label="Mirror H" active={symmetry.horizontal}
-                            onClick={() => setSymmetry(m => ({ ...m, horizontal: !m.horizontal }))} />
-                        <ToolButton icon="⇵" label="Mirror V" active={symmetry.vertical}
-                            onClick={() => setSymmetry(m => ({ ...m, vertical: !m.vertical }))} />
-                    </>
-                )}
-                {toolName === "pen" && (
-                    <span style={{ fontSize: 10, color: UI.textFaint, marginRight: 8 }}>
-                        click to add · drag to curve · click the first point to close · Enter to finish
-                    </span>
-                )}
-                {supportsPaintMode(toolName) && (
-                    // Shown only for shapes the choice means something for — a line is already
-                    // nothing but a stroke, and an image draws its own pixels.
-                    <button
-                        title="Draw new shapes as a solid fill, or as just their outline"
-                        onClick={() => setPaintMode(m => (m === "filled" ? "outline" : "filled"))}
-                        style={{ fontSize: 11, padding: "3px 8px", marginLeft: 4, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
-                    >
-                        {paintMode === "filled" ? "◆ Filled" : "◇ Outline"}
-                    </button>
-                )}
-                {supportsPaintMode(toolName) && paintMode === "outline" && (
-                    // Only in outline mode: a border width means nothing for a shape drawn as a
-                    // solid fill, and a control whose value is ignored is worse than no control.
-                    <label style={{ fontSize: 11, color: "#ccc", display: "flex", alignItems: "center", gap: 4, marginLeft: 4 }}>
-                        width
-                        <input
-                            type="number"
-                            min={0}
-                            max={STROKE_WIDTH_MAX}
-                            step={1}
-                            value={strokeWidth}
-                            title="Border thickness for new outline shapes, in WORLD units — it scales with zoom, like the shape itself"
-                            onChange={e => {
-                                const raw = Number(e.target.value);
-                                setStrokeWidth(Number.isFinite(raw) ? clampStrokeWidth(raw) : DEFAULT_STROKE_WIDTH);
-                            }}
-                            style={{ width: 44, fontSize: 11, padding: "2px 4px", background: UI.bg, color: UI.text, border: "1px solid #2a2a4a", borderRadius: 3 }}
-                        />
-                    </label>
-                )}
-                {toolName === "polygon" && (
-                    // Only while the polygon tool is active — a control for a tool you are not
-                    // using is noise, and its value is meaningless for every other shape.
-                    <label style={{ fontSize: 11, color: "#ccc", display: "flex", alignItems: "center", gap: 4, marginLeft: 4 }}>
-                        sides
-                        <input
-                            type="number"
-                            min={POLYGON_MIN_SIDES}
-                            max={POLYGON_MAX_SIDES}
-                            value={polygonSides}
-                            title={`Number of sides for the polygon tool (${POLYGON_MIN_SIDES}–${POLYGON_MAX_SIDES}); 5 = pentagon, 6 = hexagon, 8 = octagon`}
-                            onChange={e => {
-                                // Clamped through the SAME shared rule the generator uses, so the
-                                // number shown is always the number that will be drawn.
-                                const raw = Number(e.target.value);
-                                setPolygonSides(Number.isFinite(raw) ? clampSides(raw) : POLYGON_DEFAULT_SIDES);
-                            }}
-                            style={{ width: 44, fontSize: 11, padding: "2px 4px", background: UI.bg, color: UI.text, border: "1px solid #2a2a4a", borderRadius: 3 }}
-                        />
-                    </label>
-                )}
                 {es.selectedNodeIds.length === 1
                     && dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.type === "core.boolean" && (
                     // A LIVE boolean is selected: offer the operation itself. This is the whole
@@ -1716,6 +1603,136 @@ export function App() {
                     Save
                 </button>
             </div>
+                {/* THE TOOL OPTIONS BAR — its own row, its own fixed height.
+                    Every control here belongs to the ACTIVE TOOL, and they used to sit in the row
+                    above, sharing it with twelve tools and the document commands. Adding six brush
+                    options wrapped that row and pushed the canvas and both panels down 27px, which
+                    is how a click computed a moment earlier lands on the wrong pixel.
+                    The previous fix reserved 86px on the row above — measured, and honest that a
+                    narrow window would take a third row and bring the jump back. This removes the
+                    guess: a fixed 30px that never wraps (`nowrap` + `overflow-x`) is stable at
+                    EVERY window width, and it is the shape Photoshop's options bar has always had.
+                    It is always rendered, empty or not, because a row that appears and disappears
+                    moves things exactly as wrapping did. */}
+                <div style={{
+                    display: "flex", alignItems: "center", gap: 4, flexWrap: "nowrap",
+                    overflowX: "auto", height: 30, boxSizing: "border-box", padding: "0 8px",
+                    background: UI.panel, borderBottom: `1px solid ${UI.line}`
+                }}>
+                {toolName === "paint" && (
+                    <>
+                        {/* WHY THE TOOL CANNOT ACT, said where the tool's own controls are.
+                            The brush paints the SELECTION, so with nothing selected — or a
+                            rectangle selected — it silently does nothing, and a tool you can pick
+                            but that never marks the canvas reads as broken software. This was a
+                            10px grey aside lost among twenty-seven other controls; on its own row
+                            it can be read, and it says what to DO rather than what is wrong.
+                            The other controls hide while it shows: offering a colour and a brush
+                            size for a stroke that cannot land is an invitation to a dead click. */}
+                        {!selectedRasterId && (
+                            <span style={{
+                                fontSize: 11, color: UI.accent, display: "flex", alignItems: "center",
+                                gap: 6, whiteSpace: "nowrap"
+                            }}>
+                                <span aria-hidden="true">▦</span>
+                                Select a canvas to paint on — or draw one with the Raster tool
+                            </span>
+                        )}
+                        {selectedRasterId && (<>
+                        <input
+                            type="color"
+                            aria-label="Paint colour"
+                            data-testid="paint-colour"
+                            value={paintColour}
+                            disabled={erasing}
+                            onChange={e => setPaintColour(e.target.value)}
+                            style={{ width: 28, height: 22, padding: 0, background: "none",
+                                border: `1px solid ${UI.line}`, opacity: erasing ? 0.4 : 1 }}
+                        />
+                        <ToolButton icon="⌫" label="Erase" active={erasing}
+                            onClick={() => setErasing(v => !v)} />
+                        <label style={{ fontSize: 10, color: UI.textFaint, display: "flex", alignItems: "center", gap: 3 }}>
+                            size
+                            <input
+                                type="number" min={1} max={BRUSH_MAX_SIZE} step={1}
+                                aria-label="Brush size"
+                                data-testid="brush-size"
+                                value={brushSize}
+                                onChange={e => setBrushSize(Math.max(1, Math.min(BRUSH_MAX_SIZE,
+                                    Math.round(Number(e.target.value) || 1))))}
+                                style={{ width: 44, background: UI.bg, color: UI.text,
+                                    border: `1px solid ${UI.line}` }}
+                            />
+                        </label>
+                        <ToolButton icon="●" label="Round" active={brushRound}
+                            onClick={() => setBrushRound(v => !v)} />
+                        {/* Mirrored drawing: one stroke paints two, four, or one. */}
+                        <ToolButton icon="⇋" label="Mirror H" active={symmetry.horizontal}
+                            onClick={() => setSymmetry(m => ({ ...m, horizontal: !m.horizontal }))} />
+                        <ToolButton icon="⇵" label="Mirror V" active={symmetry.vertical}
+                            onClick={() => setSymmetry(m => ({ ...m, vertical: !m.vertical }))} />
+                        </>
+                        )}
+                    </>
+                )}
+                {toolName === "pen" && (
+                    <span style={{ fontSize: 10, color: UI.textFaint, marginRight: 8 }}>
+                        click to add · drag to curve · click the first point to close · Enter to finish
+                    </span>
+                )}
+                {supportsPaintMode(toolName) && (
+                    // Shown only for shapes the choice means something for — a line is already
+                    // nothing but a stroke, and an image draws its own pixels.
+                    <button
+                        title="Draw new shapes as a solid fill, or as just their outline"
+                        onClick={() => setPaintMode(m => (m === "filled" ? "outline" : "filled"))}
+                        style={{ fontSize: 11, padding: "3px 8px", marginLeft: 4, background: "transparent", color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
+                    >
+                        {paintMode === "filled" ? "◆ Filled" : "◇ Outline"}
+                    </button>
+                )}
+                {supportsPaintMode(toolName) && paintMode === "outline" && (
+                    // Only in outline mode: a border width means nothing for a shape drawn as a
+                    // solid fill, and a control whose value is ignored is worse than no control.
+                    <label style={{ fontSize: 11, color: "#ccc", display: "flex", alignItems: "center", gap: 4, marginLeft: 4 }}>
+                        width
+                        <input
+                            type="number"
+                            min={0}
+                            max={STROKE_WIDTH_MAX}
+                            step={1}
+                            value={strokeWidth}
+                            title="Border thickness for new outline shapes, in WORLD units — it scales with zoom, like the shape itself"
+                            onChange={e => {
+                                const raw = Number(e.target.value);
+                                setStrokeWidth(Number.isFinite(raw) ? clampStrokeWidth(raw) : DEFAULT_STROKE_WIDTH);
+                            }}
+                            style={{ width: 44, fontSize: 11, padding: "2px 4px", background: UI.bg, color: UI.text, border: "1px solid #2a2a4a", borderRadius: 3 }}
+                        />
+                    </label>
+                )}
+                {toolName === "polygon" && (
+                    // Only while the polygon tool is active — a control for a tool you are not
+                    // using is noise, and its value is meaningless for every other shape.
+                    <label style={{ fontSize: 11, color: "#ccc", display: "flex", alignItems: "center", gap: 4, marginLeft: 4 }}>
+                        sides
+                        <input
+                            type="number"
+                            min={POLYGON_MIN_SIDES}
+                            max={POLYGON_MAX_SIDES}
+                            value={polygonSides}
+                            title={`Number of sides for the polygon tool (${POLYGON_MIN_SIDES}–${POLYGON_MAX_SIDES}); 5 = pentagon, 6 = hexagon, 8 = octagon`}
+                            onChange={e => {
+                                // Clamped through the SAME shared rule the generator uses, so the
+                                // number shown is always the number that will be drawn.
+                                const raw = Number(e.target.value);
+                                setPolygonSides(Number.isFinite(raw) ? clampSides(raw) : POLYGON_DEFAULT_SIDES);
+                            }}
+                            style={{ width: 44, fontSize: 11, padding: "2px 4px", background: UI.bg, color: UI.text, border: "1px solid #2a2a4a", borderRadius: 3 }}
+                        />
+                    </label>
+                )}
+                </div>
 
             <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
                 <div style={{ width: 180, background: UI.panel, borderRight: `1px solid ${UI.line}`, overflow: "auto", padding: 8 }}>
