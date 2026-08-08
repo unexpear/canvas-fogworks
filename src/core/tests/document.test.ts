@@ -142,7 +142,7 @@ import { alignBoxes, distributeBoxes, AlignEdge } from "../geometry/Alignment";
 import { scanCapabilities } from "../scan/CapabilityScan";
 import { exportSVG, EXPORT_MARGIN, TextLines } from "../export/ExportSVG";
 import { textParagraphs } from "../../renderer/RenderModel";
-import { resolveShortcut, isTypingTarget, NUDGE_STEP, NUDGE_STEP_LARGE } from "../../editor/shortcuts";
+import { resolveShortcut, isTypingTarget, NUDGE_STEP, NUDGE_STEP_LARGE, SHORTCUT_HELP } from "../../editor/shortcuts";
 import { DuplicateNodesAction, DUPLICATE_OFFSET } from "../actions/DuplicateNodesAction";
 import { alignAction, distributeAction } from "../actions/alignActions";
 import { UpdateNodeContentAction, NODE_NAME_MAX } from "../actions/UpdateNodeContentAction";
@@ -21616,5 +21616,48 @@ describe("Gradient — the fill that changes across a shape", () => {
         expect(sampleGradient(fade, 0)!.opacity).toBe(1);
         expect(sampleGradient(fade, 1)!.opacity).toBe(0);
         expect(sampleGradient(fade, 0)!.color).toBe(sampleGradient(fade, 1)!.color);
+    });
+});
+
+describe("Keyboard shortcuts match the apps people arrive from", () => {
+    const press = (key: string, mod = false, shift = false) =>
+        resolveShortcut({ key, ctrlKey: mod, metaKey: false, shiftKey: shift, altKey: false } as never);
+
+    test("one key switches tool, the way every editor does it", () => {
+        // V, M, R, P, B are not arbitrary — Figma, Illustrator, Photoshop and Aseprite agree
+        // closely enough that muscle memory transfers, and this engine had NO tool key at all.
+        expect(press("v")).toEqual({ kind: "tool", name: "select" });
+        expect(press("m")).toEqual({ kind: "tool", name: "move" });
+        expect(press("r")).toEqual({ kind: "tool", name: "rectangle" });
+        expect(press("p")).toEqual({ kind: "tool", name: "pen" });
+        expect(press("b")).toEqual({ kind: "tool", name: "paint" });
+        // UPPER CASE is the same tool: somebody holding shift out of habit still gets it.
+        expect(press("V")).toEqual({ kind: "tool", name: "select" });
+
+        // WITH A MODIFIER IT IS NOT A TOOL. Ctrl+V is paste on every platform, and reading it as
+        // "the move tool" would make the most reflexive chord on the keyboard do the wrong thing.
+        expect(press("v", true)).toBeNull();
+        expect(press("b", true)).toBeNull();
+        // ...and the modified letters that ARE bound still win.
+        expect(press("d", true)).toEqual({ kind: "duplicate" });
+        expect(press("z", true)).toEqual({ kind: "undo" });
+        expect(press("z", true, true)).toEqual({ kind: "redo" });
+        // A letter nothing claims stays unclaimed, rather than falling through to some default.
+        expect(press("q")).toBeNull();
+    });
+
+    test("the help sheet cannot drift from the bindings", () => {
+        // A shortcut sheet that lies is worse than none: it teaches a key that does nothing. So
+        // every KIND the resolver can return must appear in the table the panel renders.
+        const kinds = new Set(SHORTCUT_HELP.map(r => r.kind));
+        for (const k of ["tool", "nudge", "duplicate", "group", "select-all", "undo", "redo", "delete", "deselect"]) {
+            expect(kinds.has(k as never)).toBe(true);
+        }
+        // And every row says something — an empty cell renders as a blank line that looks like a
+        // missing binding rather than a missing description.
+        for (const row of SHORTCUT_HELP) {
+            expect(row.keys.length).toBeGreaterThan(0);
+            expect(row.does.length).toBeGreaterThan(0);
+        }
     });
 });

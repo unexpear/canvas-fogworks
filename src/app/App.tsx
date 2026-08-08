@@ -69,7 +69,7 @@ import { DuplicateNodesAction } from "../core/actions/DuplicateNodesAction";
 import { DeleteNodeAction } from "../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../core/actions/TransactionAction";
 import { selectionRoots } from "../core/document/SceneGraph";
-import { resolveShortcut, isTypingTarget, Shortcut } from "../editor/shortcuts";
+import { resolveShortcut, isTypingTarget, Shortcut, SHORTCUT_HELP } from "../editor/shortcuts";
 import { AlignEdge, DistributeAxis } from "../core/geometry/Alignment";
 import { IMAGE_SRC_MAX, srcError, sourceRectError } from "../core/document/Node";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
@@ -442,6 +442,14 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const [lastShape, setLastShape] = useState<ShapeKind>("rectangle");
     const [workspace, setWorkspace] = useState<Workspace>("design");
     const workspaceDef = WORKSPACES.find(w => w.id === workspace) ?? WORKSPACES[0];
+    // READ THROUGH A REF INSIDE THE KEY HANDLER. That handler is registered once in an effect, so
+    // it closes over whatever workspace was current when it was registered — and a stale one means
+    // the tool keys ask the WRONG workspace whether it shows a tool. Measured: after B moved to
+    // Paint, pressing R checked Design's tool list, decided no switch was needed, and left the
+    // rectangle tool active in a workspace with no button for it. That is precisely the invisible
+    // live tool the workspaces exist to prevent.
+    const workspaceRef = useRef(workspaceDef);
+    workspaceRef.current = workspaceDef;
     const [paintColour, setPaintColour] = useState<string>("#000000");
     const paintColourRef = useRef<string>("#000000");
     paintColourRef.current = paintColour;
@@ -467,6 +475,14 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const [showFolders, setShowFolders] = useState(false);
     const [showTokens, setShowTokens] = useState(false);
     const [showScript, setShowScript] = useState(false);
+    // THE DEMO EXERCISES. Their dropdown left the toolbar with the other developer controls, and
+    // the menu item that replaced it sent a command NOTHING HANDLED — so for two commits the
+    // exercises were unreachable. That is the exact failure I had written down one commit earlier:
+    // removing a control whose only other home does not exist yet is how a feature disappears.
+    const [showExercises, setShowExercises] = useState(false);
+    // Help ▸ Keyboard Shortcuts. The menu item existed from the moment the menu did and sent a
+    // command NOTHING HANDLED — a dead entry, which is the thing I removed a Tiled submenu for.
+    const [showShortcuts, setShowShortcuts] = useState(false);
     // The layer drag in flight: what is being dragged, and where the pointer currently is.
     // Kept in React state (not a ref) because the row that is being hovered has to REDRAW to
     // show the indicator — a ref would move the data without moving the picture.
@@ -786,6 +802,9 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         const doc = dispatcher.getDocument();
         const sel = es.selectedNodeIds;
         switch (s.kind) {
+            // A TOOL SWITCH IS NOT AN ACTION, so it is not handled here: it changes no document
+            // and it needs `setTool`, which is declared after this. The key handler takes it.
+            case "tool": return false;
             case "undo": dispatcher.undo(); refresh(); return true;
             case "redo": dispatcher.redo(); refresh(); return true;
             case "select-all": {
@@ -888,6 +907,25 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             // instead of the caret.
             if (!isTypingTarget(e.target as HTMLElement)) {
                 const shortcut = resolveShortcut(e);
+                if (shortcut?.kind === "tool") {
+                    // A TOOL THE CURRENT WORKSPACE DOES NOT SHOW would otherwise become active
+                    // with no button to say so — a live gesture whose state is invisible, which is
+                    // the one thing the workspaces were meant to prevent. So the workspace follows
+                    // the tool: the first one that lists it wins.
+                    const slot = (SHAPE_KINDS as readonly string[]).includes(shortcut.name)
+                        ? "shapes" : shortcut.name;
+                    const current = workspaceRef.current;
+                    if (!current.tools.includes(slot) && !current.tools.includes(shortcut.name)) {
+                        const home = WORKSPACES.find(w => w.tools.includes(slot) || w.tools.includes(shortcut.name));
+                        if (home) setWorkspace(home.id);
+                    }
+                    if ((SHAPE_KINDS as readonly string[]).includes(shortcut.name)) {
+                        setLastShape(shortcut.name as ShapeKind);
+                    }
+                    setTool(shortcut.name);
+                    e.preventDefault();
+                    return;
+                }
                 if (shortcut && runShortcut(shortcut)) {
                     e.preventDefault();
                     return;   // handled — don't also hand it to the active tool
@@ -1147,6 +1185,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     case "dev.script": setShowScript(v => !v); return;
                     case "dev.tokens": setShowTokens(v => !v); return;
                     case "dev.folders": setShowFolders(v => !v); return;
+                    case "dev.exercises": setShowExercises(v => !v); return;
+                    case "help.shortcuts": setShowShortcuts(v => !v); return;
                     default: return;
                 }
             }),
@@ -1924,6 +1964,54 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     <div style={{ width: 230, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
                         <div style={PANEL_HEADING}>Tokens</div>
                         <TokensPanel dispatcher={dispatcher} refresh={refresh} />
+                    </div>
+                )}
+                {showShortcuts && (
+                    <div style={{ width: 230, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
+                        <div style={PANEL_HEADING}>Keyboard shortcuts</div>
+                        {/* BUILT FROM `SHORTCUT_HELP`, which lives beside the bindings themselves.
+                            A sheet assembled anywhere else drifts the first time a binding changes,
+                            and a shortcut sheet that lies is worse than none — it teaches a key
+                            that does nothing. A test holds the two together. */}
+                        <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                            <tbody>
+                                {SHORTCUT_HELP.map(row => (
+                                    <tr key={row.keys}>
+                                        <td style={{ padding: "3px 6px 3px 0", color: UI.accent,
+                                            whiteSpace: "nowrap", verticalAlign: "top",
+                                            fontFamily: "ui-monospace, Consolas, monospace" }}>{row.keys}</td>
+                                        <td style={{ padding: "3px 0", color: "#ccc" }}>{row.does}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+                {showExercises && (
+                    <div style={{ width: 200, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
+                        <div style={PANEL_HEADING}>Exercises</div>
+                        <p style={{ fontSize: 10, color: UI.textFaint, margin: "0 0 8px", lineHeight: 1.5 }}>
+                            The classics animators learn on. Each stresses a different capability, and
+                            building them is how the engine&apos;s holes get found.
+                        </p>
+                        {DEMOS.map(d => (
+                            <button
+                                key={d.name}
+                                onClick={() => {
+                                    // LOADED like any other document, through the same path a file
+                                    // takes, so a demo cannot pass by being special-cased. If one of
+                                    // these will not load, neither will somebody's work.
+                                    dispatcher.loadDocument(d.build());
+                                    es.selectedNodeIds = [];
+                                    es.frame = 0;
+                                    refresh();
+                                }}
+                                style={{ display: "block", width: "100%", textAlign: "left", fontSize: 11,
+                                    padding: "4px 6px", marginBottom: 2, background: "transparent",
+                                    color: "#ccc", border: `1px solid ${UI.line}`, borderRadius: 3,
+                                    cursor: "pointer" }}
+                            >{d.name}</button>
+                        ))}
                     </div>
                 )}
                 {showFolders && (
