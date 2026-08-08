@@ -2366,8 +2366,9 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                     const mesh = dispatcher.getDocument().nodes.get(pick.nodeId)?.mesh;
                                     if (!mesh) return null;
                                     const bones = bonesAt(mesh, pick.index);
-                                    const choices = boneChoices(dispatcher.getDocument(), pick.nodeId)
-                                        .filter(id => !bones.some(b => b.node === id));
+                                    const siblings = boneChoices(dispatcher.getDocument(), pick.nodeId);
+                                    const live = new Set(siblings);
+                                    const choices = siblings.filter(id => !bones.some(b => b.node === id));
                                     const full = bones.length >= SKIN_MAX_BONES;
                                     // The LAYERS PANEL'S own label. A binding stores an id, but an
                                     // id is not a thing anyone recognises in a list of siblings.
@@ -2390,12 +2391,23 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                     Not bound — this point stays where it is drawn.
                                                 </div>
                                             )}
-                                            {bones.map(b => (
+                                            {bones.map(b => {
+                                                // A BINDING CAN BE INERT and still be worth keeping: move the
+                                                // shape into a group and its bones stop being siblings, so the
+                                                // deform stops while the binding survives, ready to work again
+                                                // when they are reunited. Saying so is the whole cost of not
+                                                // silently deleting it — otherwise the rig just stops and the
+                                                // panel looks exactly as it did when it worked.
+                                                const inert = !live.has(b.node);
+                                                return (
                                                 <div key={b.node} style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
                                                     <span
-                                                        title={b.node}
-                                                        style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                                                    >{label(b.node)}</span>
+                                                        title={inert
+                                                            ? `${b.node} — not a sibling of this node right now, so it moves nothing. Put the two back under the same parent and this works again.`
+                                                            : b.node}
+                                                        style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                                                                 color: inert ? "#a06a4a" : undefined }}
+                                                    >{label(b.node)}{inert ? " (inert)" : ""}</span>
                                                     {/* Coalesced, so a whole drag is ONE undo — the
                                                         bargain every slider in this panel makes. */}
                                                     <input
@@ -2413,7 +2425,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                         style={{ ...SELECT_STYLE, padding: "0 6px" }}
                                                     >×</button>
                                                 </div>
-                                            ))}
+                                                );
+                                            })}
                                             <select
                                                 value=""
                                                 disabled={full || choices.length === 0}

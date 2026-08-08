@@ -1136,11 +1136,23 @@ FROM. Without the inverse a bone drawn already rotated would snap its artwork on
 first frame, which is the same delta-from-rest reasoning `Rig` states for its own directions.
 
 **A bone is an ordinary node**, because the skeleton in this engine IS the node tree — there is no
-bone type and `Rig` already assumes this. It must **share the mesh node's parent**, which
-`Integrity` enforces. That single rule is what makes the whole feature need no world matrices: the
-bone and the artwork are placed by matrices in one shared space, so the deform composes there and
-nowhere else. A node may not be its own bone — that cancels exactly and moves nothing, which is a
-harder bug to see than an error.
+bone type and `Rig` already assumes this. It must **share the mesh node's parent**. That single rule
+is what makes the whole feature need no world matrices: the bone and the artwork are placed by
+matrices in one shared space, so the deform composes there and nowhere else.
+
+**A binding that is not a live sibling is INERT, not invalid** — enforced in `resolveMeshes`, and
+deliberately nowhere else. It threw in `Integrity` first, and that was wrong: of the five operations
+that can move or remove a node, **three left a document that would not reload**. Dragging the rigged
+shape into a group did it; so did dragging the bone out of one. Every other reference in this schema
+already says as much — `Interaction.navigate` states it outright, and `componentId`, `slotContent`
+and `$token` all resolve to nothing rather than to an error.
+
+So a binding survives a regrouping, contributes nothing while it is foreign, and starts working
+again the moment the two are siblings once more. Nothing strips it on the way out: a binding is
+something the author wrote, and no gesture can produce a file that will not open. The inspector
+marks such a binding *(inert)*, which is the whole cost of keeping it — otherwise the rig simply
+stops and the panel looks exactly as it did when it worked. A node bound to itself is inert for the
+same reason (it cancels exactly); `boneChoices` never offers it.
 
 **Four influences, measured.** Every one of the 52 skins in the 5,037 glTF models in `freeassets`
 carries `JOINTS_0`/`WEIGHTS_0` and never a `JOINTS_1`, and 47 of the 52 have six or seven joints.
@@ -1184,10 +1196,11 @@ edits themselves are pure functions in `document/MeshEdit` (`withBone`, `without
 `withBoneWeight`), each returning a whole mesh, which `SetMeshAction` already takes: binding a point
 needed no new action.
 
-**Deleting a bone cleans up after itself.** `Integrity` refuses a point bound to a node that is not
-there, and it runs on LOAD rather than per action — so without this the deletion succeeds, the
-canvas looks right, and the file will not reopen. `DeleteNodeAction` drops the dangling references
-as ordinary patch deltas, so undo puts them back with the node.
+**Deleting a bone changes nothing about the binding.** It becomes inert like any other reference
+that stopped resolving. `DeleteNodeAction` did strip them, back when a dangling one was invalid;
+once reparenting showed the sibling half of the rule breaking far more easily than existence, the
+rule moved and the stripping went with it — preserving on reparent but destroying on delete would
+be two answers to one question, and the destructive one would win.
 
 ## Gradient (a fill that changes across the shape — schema 56)
 

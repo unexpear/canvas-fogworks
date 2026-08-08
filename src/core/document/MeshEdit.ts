@@ -106,27 +106,3 @@ export function withBoneWeight(mesh: ReadonlyMesh, index: number, node: string, 
     next.points[index].bones = existing.map(b => ({ ...b, weight: b.node === node ? Math.max(0, weight) : b.weight }));
     return next;
 }
-
-/**
- * Every binding naming a node that no longer exists, dropped.
- *
- * Deleting a bone leaves the points that named it pointing at nothing, which `Integrity` refuses —
- * so a document that was valid before a delete would be invalid after it, and the delete is the
- * thing that has to clean up. Returns the mesh by reference when nothing dangles, so this can sit
- * on a path that runs whether or not any mesh was involved.
- */
-export function withoutMissingBones(mesh: ReadonlyMesh, exists: (id: string) => boolean): ReadonlyMesh {
-    let dangling = false;
-    for (const p of mesh.points) {
-        if (p.bones?.some(b => !exists(b.node))) { dangling = true; break; }
-    }
-    if (!dangling) return mesh;
-    const next = copyMesh(mesh);
-    for (const p of next.points) {
-        if (!p.bones) continue;
-        const kept = p.bones.filter(b => exists(b.node));
-        if (kept.length === 0) delete p.bones;
-        else p.bones = kept;
-    }
-    return next;
-}

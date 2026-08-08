@@ -6,8 +6,6 @@
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
 import { MutationResult, ActionPayload, NodeDelta } from "./types";
-import { withoutMissingBones } from "../document/MeshEdit";
-import { Mesh } from "../document/Mesh";
 
 export class DeleteNodeAction extends Action {
     private nodeId: string;
@@ -59,19 +57,14 @@ export class DeleteNodeAction extends Action {
         const updatedNodeIds = new Set(this.deletedNodeIds);
         if (parentOfRoot) updatedNodeIds.add(parentOfRoot);
 
-        // A DELETED BONE IS A REFERENCE SOMEBODY ELSE STILL HOLDS (schema 58). `Integrity` refuses
-        // a mesh point bound to a node that is not there, and it runs on LOAD rather than per
-        // action — so without this the deletion succeeds, the canvas looks right, and the file
-        // will not reopen. The delete is the operation that has to clean up, and it does it as
-        // ordinary patch deltas so undo puts the bindings back with the node.
-        const gone = new Set(this.deletedNodeIds);
-        this.document.nodes.forEach((node, id) => {
-            if (gone.has(id) || !node.mesh) return;
-            const cleaned = withoutMissingBones(node.mesh, boneId => !gone.has(boneId));
-            if (cleaned === node.mesh) return;   // by reference when nothing dangled
-            deltas.set(id, { kind: "patch", mesh: cleaned as Mesh });
-            updatedNodeIds.add(id);
-        });
+        // A DELETED BONE IS NOT CLEANED UP HERE, and that is a decision rather than an omission.
+        // This did strip the bindings that named the deleted nodes, back when `Integrity` refused
+        // a dangling one — and then the same measurement that justified it showed reparenting
+        // breaking the sibling half of the rule far more easily than deleting breaks existence.
+        // The rule moved to `resolveMeshes`, where a binding can be INERT instead of invalid, and
+        // once it is inert there is nothing here to rescue: stripping on delete but preserving on
+        // reparent would be two answers to one question, and the destructive one would win.
+        // A binding is something the author wrote; nothing but the author takes it away.
 
         return {
             updatedNodeIds,

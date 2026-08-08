@@ -186,34 +186,29 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
         }
     });
 
-    // 2b. Mesh bone bindings name a node, and one that SHARES THIS NODE'S PARENT (schema 58).
+    // 2b. A BONE REFERENCE IS INERT WHEN IT IS NOT A LIVE SIBLING — checked nowhere, on purpose.
     //
-    // The sibling rule is the whole reason skinning needs no world matrices: both the bone and the
-    // artwork are placed by matrices in one shared space, so `posed · rest⁻¹` composes there and
-    // nowhere else. A bone two levels up would need each intervening transform to say where the
-    // two frames meet, and every one of those is itself animatable. Checked HERE, once, because
-    // it is a fact about the document rather than about a mesh — `meshError` cannot see the tree.
-    doc.nodes.forEach(node => {
-        if (!node.mesh) return;
-        for (const point of node.mesh.points) {
-            for (const bone of point.bones ?? []) {
-                const target = doc.nodes.get(bone.node);
-                if (!target) {
-                    throw new Error(`Invalid document: node "${node.id}" binds a mesh point to a missing bone "${bone.node}".`);
-                }
-                if ((target.parent ?? null) !== (node.parent ?? null)) {
-                    throw new Error(`Invalid document: node "${node.id}" binds a mesh point to bone "${bone.node}", which is not a sibling.`);
-                }
-                // A NODE IS NOT ITS OWN BONE. Its own matrix is what carries the point out to the
-                // bones and back again, so binding to itself cancels exactly — `posed⁻¹ · posed ·
-                // rest⁻¹ · rest` — and the point never moves however far the node is dragged.
-                // Refused rather than allowed as a silent no-op, which is the harder bug to see.
-                if (bone.node === node.id) {
-                    throw new Error(`Invalid document: node "${node.id}" binds a mesh point to itself as a bone.`);
-                }
-            }
-        }
-    });
+    // This threw twice, and it was wrong twice. The sibling rule is real: both the bone and the
+    // artwork are placed by matrices in ONE shared space, which is exactly why skinning needs no
+    // world matrices, and a bone two levels up would need every intervening transform to say where
+    // the two frames meet. But making a violation INVALID rather than inert put an unopenable file
+    // one ordinary gesture away — measured, not guessed: of the five operations that can move or
+    // remove a node, THREE produced a document that would not reload. Dragging the rigged shape
+    // into a group did it. So did dragging the bone out of one.
+    //
+    // Every other reference in this schema already says so. `Interaction.navigate` states it
+    // outright ("a node id, dangling allowed — deleting a frame must not make a document
+    // unloadable"), and `componentId`, `slotContent` and `$token` all resolve to nothing rather
+    // than to an error. Skinning was the single exception, and the exception is what broke.
+    //
+    // The rule now lives where it can be true without destroying anything: `resolveMeshes` skips a
+    // bone that is not a live sibling, so a binding survives a regrouping, does nothing while it is
+    // foreign, and starts working again the moment the two are siblings once more. Nothing is
+    // silently rewritten, and no gesture can produce a file that will not open.
+    //
+    // The document-free rules — at most four influences, no duplicates, no negative weight —
+    // still hold, in `meshError`, because those cannot be made inert: they say what a WEIGHT LIST
+    // is, not what it happens to point at today.
 
     // 3. Children resolve, are claimed exactly once, and back-point correctly.
     const claimedBy = new Map<string, string>();

@@ -27,7 +27,7 @@ import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, t
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
-import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, withoutMissingBones } from "../document/MeshEdit";
+import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight } from "../document/MeshEdit";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
 import { AddNodeAction } from "../actions/AddNodeAction";
@@ -23247,14 +23247,23 @@ describe("Skinning a mesh (schema 58)", () => {
         const one = rigged([{ node: "B", weight: 0.5 }]);
         one.frame = 10;
         expect(topLeftX(resolveScene(one).nodes.get("M")!.path!)).toBeCloseTo(20, 9);
-        // `G` has not moved, so it contributes its own rest position — half of +20 and half of 0.
-        const two = rigged([{ node: "B", weight: 1 }, { node: "G", weight: 1 }]);
-        two.nodes.set("G", { ...(two.nodes.get("G") as Node), parent: null });
+        // A SECOND SIBLING that has not moved contributes its own rest position, so the point
+        // lands halfway: (+20 and 0) averaged is +10. Hand-computed, and the case `skinnedPoint`
+        // covers against bare matrices is here checked against a real document.
+        const two = rigged([{ node: "B", weight: 1 }, { node: "S", weight: 1 }]);
+        two.nodes.set("S", { id: "S", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 60, y: 10, width: 20, height: 20 },
+            style: { fill: "#0f0", opacity: 1 }, layout: {} } as Node);
+        two.nodes.set("G", { ...(two.nodes.get("G") as Node), children: ["M", "B", "S"] } as Node);
         two.frame = 10;
-        // …but `G` is the mesh node's PARENT, not its sibling, so the document is refused before
-        // it can average anything. The averaging itself is covered against matrices in
-        // `skinnedPoint`; here the point is that the rule is enforced on a real document.
-        expect(() => validateDocumentIntegrity(two)).toThrow(/not a sibling/);
+        expect(() => validateDocumentIntegrity(two)).not.toThrow();
+        expect(topLeftX(resolveScene(two).nodes.get("M")!.path!)).toBeCloseTo(10, 9);
+        // And a bone at ZERO weight is not an influence at all, so the other one carries it fully.
+        const muted = rigged([{ node: "B", weight: 1 }, { node: "S", weight: 0 }]);
+        muted.nodes.set("S", two.nodes.get("S") as Node);
+        muted.nodes.set("G", { ...(muted.nodes.get("G") as Node), children: ["M", "B", "S"] } as Node);
+        muted.frame = 10;
+        expect(topLeftX(resolveScene(muted).nodes.get("M")!.path!)).toBeCloseTo(20, 9);
     });
 
     test("a point bound to a bone that moved exactly as its OWN node did stays put", () => {
@@ -23293,20 +23302,62 @@ describe("Skinning a mesh (schema 58)", () => {
         expect(() => resolveMeshes(bound)).not.toThrow();
     });
 
-    test("a binding is refused unless it names a SIBLING that exists and is not the node itself", () => {
+    test("a binding that is not a live sibling is INERT, and the file still opens", () => {
+        // This threw, twice, and it was wrong twice. The sibling rule is real \u2014 both matrices are
+        // local to their parent, so `posed \u00b7 rest\u207b\u00b9` only composes in one shared space \u2014 but
+        // making a violation INVALID put an unopenable file one ordinary gesture away. Measured:
+        // of the five operations that can move or remove a node, three produced a document that
+        // would not reload. The rule moved to `resolveMeshes`, where it can be true without
+        // destroying anything.
         const missing = rigged([{ node: "ghost", weight: 1 }]);
-        expect(() => validateDocumentIntegrity(missing)).toThrow(/missing bone "ghost"/);
+        expect(() => validateDocumentIntegrity(missing)).not.toThrow();
+        missing.frame = 10;
+        // Inert, not garbage: the node is still the rectangle it was drawn as.
+        expect(resolveScene(missing).nodes.get("M")!.type).toBe("core.rectangle");
+
+        // A NODE'S OWN PARENT is not a sibling, so it contributes nothing however far it moves \u2014
+        // where before this was refused outright.
+        const parent = rigged([{ node: "G", weight: 1 }]);
+        parent.frame = 10;
+        expect(() => validateDocumentIntegrity(parent)).not.toThrow();
+        expect(resolveScene(parent).nodes.get("M")!.type).toBe("core.rectangle");
+
+        // Binding to ITSELF cancels exactly \u2014 `posed\u207b\u00b9 \u00b7 posed \u00b7 rest\u207b\u00b9 \u00b7 rest` \u2014 so it moves
+        // nothing either. `boneChoices` never offers it, which is where that is prevented.
         const itself = rigged([{ node: "M", weight: 1 }]);
-        // Binding to itself cancels exactly and the point never moves however far the node is
-        // dragged — refused rather than allowed as a silent no-op.
-        expect(() => validateDocumentIntegrity(itself)).toThrow(/to itself as a bone/);
-        const ok = rigged([{ node: "B", weight: 1 }]);
-        expect(() => validateDocumentIntegrity(ok)).not.toThrow();
-        // The document-free half is `meshError`, reached from the same place every other mesh
-        // rule is — so a fifth influence is refused on the LOAD path, not only by the editor.
+        expect(() => validateDocumentIntegrity(itself)).not.toThrow();
+
+        // The document-FREE rules still hold, because they say what a weight list IS rather than
+        // what it happens to point at today. A fifth influence is refused on the LOAD path.
         const five = restMesh(1, 1);
         five.points[0] = { ...five.points[0], bones: [1, 2, 3, 4, 5].map(i => ({ node: `b${i}`, weight: 1 })) };
         expect(meshError(five)).toMatch(/more than 4 bones/);
+    });
+
+    test("an inert binding COMES BACK when the two are siblings again", () => {
+        // What inertness buys over cleaning up: the author's work survives the regrouping. A
+        // binding stripped on the way out could not do this, and stripping is what the first two
+        // attempts at this rule did.
+        const d = rigged([{ node: "B", weight: 1 }]);
+        d.frame = 10;
+        expect(resolveScene(d).nodes.get("M")!.type).toBe("core.path");     // working
+
+        const moved = rigged([{ node: "B", weight: 1 }]);
+        moved.frame = 10;
+        moved.nodes.set("ELSEWHERE", { id: "ELSEWHERE", type: "core.rectangle", parent: null, children: ["M"],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } as Node);
+        moved.nodes.set("M", { ...(moved.nodes.get("M") as Node), parent: "ELSEWHERE" } as Node);
+        moved.nodes.set("G", { ...(moved.nodes.get("G") as Node), children: ["B"] } as Node);
+        moved.rootNodeUuids = ["G", "ELSEWHERE"];
+        expect(() => validateDocumentIntegrity(moved)).not.toThrow();
+        expect(resolveScene(moved).nodes.get("M")!.type).toBe("core.rectangle");   // inert
+        // …and the binding is still IN the document, which is the whole point.
+        expect(moved.nodes.get("M")!.mesh!.points[0].bones).toEqual([{ node: "B", weight: 1 }]);
+        // Put it back beside its bone and the rig works again, with no re-authoring.
+        moved.nodes.set("M", { ...(moved.nodes.get("M") as Node), parent: "G" } as Node);
+        moved.nodes.set("G", { ...(moved.nodes.get("G") as Node), children: ["M", "B"] } as Node);
+        moved.nodes.set("ELSEWHERE", { ...(moved.nodes.get("ELSEWHERE") as Node), children: [] } as Node);
+        expect(resolveScene(moved).nodes.get("M")!.type).toBe("core.path");
     });
 
     test("bindings survive a save and a load", () => {
@@ -23524,83 +23575,60 @@ describe("MeshEdit — binding a control point to a bone", () => {
     });
 });
 
-describe("Deleting a bone that a mesh still names", () => {
-    const rig = (): ProjectDocument => {
+describe("No gesture can produce a file that will not open", () => {
+    // THE ORACLE IS THE RELOAD, not "did the action succeed". That distinction is the whole test:
+    // the first version of the sibling rule let every one of these actions report success while
+    // leaving a document `deserializeDocument` refuses \u2014 the canvas looked right and the file was
+    // already broken. Three of the five below failed when this was written.
+    const rigged = (): ProjectDocument => {
         const d = createEmptyDocument();
         const mesh = restMesh(1, 1);
-        mesh.points[0] = { ...mesh.points[0], bones: [{ node: "B", weight: 1 }, { node: "B2", weight: 1 }] };
-        d.nodes.set("G", { id: "G", type: "core.rectangle", parent: null, children: ["M", "B", "B2"],
-            geometry: { x: 0, y: 0, width: 200, height: 200 }, style: { fill: "none", opacity: 1 }, layout: {} } as Node);
-        d.nodes.set("M", { id: "M", type: "core.rectangle", parent: "G", children: [],
-            geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {}, mesh } as Node);
-        for (const b of ["B", "B2"]) d.nodes.set(b, { id: b, type: "core.rectangle", parent: "G", children: [],
-            geometry: { x: 10, y: 10, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {} } as Node);
-        d.rootNodeUuids = ["G"];
+        mesh.points[0] = { ...mesh.points[0], bones: [{ node: "B", weight: 1 }] };
+        const mk = (id: string, parent: string | null, children: string[], extra: object = {}) =>
+            d.nodes.set(id, { id, type: "core.rectangle", parent, children,
+                geometry: { x: 0, y: 0, width: 50, height: 50 },
+                style: { fill: "#000", opacity: 1 }, layout: {}, ...extra } as Node);
+        mk("G", null, ["M", "B"]);
+        mk("M", "G", [], { mesh });
+        mk("B", "G", []);
+        mk("ELSEWHERE", null, []);
+        d.rootNodeUuids = ["G", "ELSEWHERE"];
         return d;
     };
 
-    test("the delete CLEANS UP, because otherwise the file will not reopen", () => {
-        // Measured before it was fixed: the deletion succeeded, the canvas looked right, and
-        // `deserializeDocument` refused the result with "binds a mesh point to a missing bone".
-        // `Integrity` runs on load rather than per action, so nothing said so until far too late.
-        const dispatcher = new ActionDispatcher(rig());
-        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "B"));
-        const after = dispatcher.getDocument();
-        // The OTHER influence survives — this drops the dangling reference, not the binding.
-        expect(after.nodes.get("M")!.mesh!.points[0].bones).toEqual([{ node: "B2", weight: 1 }]);
-        expect(() => deserializeDocument(serializeDocument(after as ProjectDocument))).not.toThrow();
-    });
+    const gestures: [string, (d: ActionDispatcher) => void][] = [
+        ["delete the bone", d => { d.dispatchAction(new DeleteNodeAction(d.getDocument(), "B")); }],
+        ["delete the whole group", d => { d.dispatchAction(new DeleteNodeAction(d.getDocument(), "G")); }],
+        ["drag the rigged shape into another group",
+            d => { d.dispatchAction(new ReparentNodeAction(d.getDocument(), "M", "ELSEWHERE", 0)); }],
+        ["drag the bone out of the group",
+            d => { d.dispatchAction(new ReparentNodeAction(d.getDocument(), "B", "ELSEWHERE", 0)); }],
+        ["move the rigged shape to the root",
+            d => { d.dispatchAction(new ReparentNodeAction(d.getDocument(), "M", null, 0)); }],
+        ["reorder it within its own parent",
+            d => { d.dispatchAction(new ReparentNodeAction(d.getDocument(), "M", "G", 1)); }],
+    ];
 
-    test("deleting the LAST bone leaves an unbound mesh, and UNDO puts it back", () => {
-        const dispatcher = new ActionDispatcher(rig());
-        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "B"));
-        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "B2"));
-        expect(dispatcher.getDocument().nodes.get("M")!.mesh!.points[0].bones).toBeUndefined();
-        expect(() => validateDocumentIntegrity(dispatcher.getDocument())).not.toThrow();
-        // Ordinary patch deltas, so history reverses them with the node they belonged to.
-        dispatcher.undo();
-        dispatcher.undo();
-        expect(dispatcher.getDocument().nodes.get("M")!.mesh!.points[0].bones)
-            .toEqual([{ node: "B", weight: 1 }, { node: "B2", weight: 1 }]);
-        expect(() => validateDocumentIntegrity(dispatcher.getDocument())).not.toThrow();
-    });
+    for (const [name, run] of gestures) {
+        test(`${name} \u2014 the document still reloads`, () => {
+            const dispatcher = new ActionDispatcher(rigged());
+            run(dispatcher);
+            const after = dispatcher.getDocument() as ProjectDocument;
+            expect(() => validateDocumentIntegrity(after)).not.toThrow();
+            expect(() => deserializeDocument(serializeDocument(after))).not.toThrow();
+        });
+    }
 
-    test("deleting something no mesh names touches no mesh at all", () => {
-        // The cost of this runs on every delete in the app, so an unrelated one must not rewrite a
-        // mesh: the cleanup returns by reference when nothing dangles, and no delta is emitted.
-        const d = rig();
-        d.nodes.set("SPARE", { id: "SPARE", type: "core.rectangle", parent: null, children: [],
-            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } as Node);
-        d.rootNodeUuids = ["G", "SPARE"];
-        const dispatcher = new ActionDispatcher(d);
-        const before = dispatcher.getDocument().nodes.get("M")!.mesh;
-        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "SPARE"));
-        expect(dispatcher.getDocument().nodes.get("M")!.mesh).toBe(before);
-    });
-
-    test("deleting a bone's PARENT takes the bone with it, and the binding too", () => {
-        // The reference that dangles is not always the node that was asked for — a descendant of
-        // the deleted subtree is just as gone, and the cleanup has to see the whole set.
-        const d = rig();
-        d.nodes.set("HOLDER", { id: "HOLDER", type: "core.rectangle", parent: "G", children: ["B3"],
-            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } as Node);
-        d.nodes.set("B3", { id: "B3", type: "core.rectangle", parent: "HOLDER", children: [],
-            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {} } as Node);
-        d.nodes.set("G", { ...(d.nodes.get("G") as Node), children: ["M", "B", "B2", "HOLDER"] } as Node);
-        // THE BINDING MUST LIVE ON A NODE THAT SURVIVES. Putting it on `HOLDER` itself is the
-        // blind version of this fixture — the mesh holding it is deleted too, so there is nothing
-        // left to clean and the test passes against a cleanup that only ever looked at the id it
-        // was handed. It goes on `M`, which is still there afterwards to be wrong.
-        const m = restMesh(1, 1);
-        m.points[2] = { ...m.points[2], bones: [{ node: "B3", weight: 1 }] };
-        d.nodes.set("M", { ...(d.nodes.get("M") as Node), mesh: m } as Node);
-        const dispatcher = new ActionDispatcher(d);
-        // …and B3 really is only reachable through HOLDER, so the delete has to walk to find it.
-        expect(dispatcher.getDocument().nodes.get("B3")!.parent).toBe("HOLDER");
-        dispatcher.dispatchAction(new DeleteNodeAction(dispatcher.getDocument(), "HOLDER"));
-        expect(dispatcher.getDocument().nodes.has("B3")).toBe(false);
-        expect(dispatcher.getDocument().nodes.get("M")!.mesh!.points[2].bones).toBeUndefined();
-        expect(() => validateDocumentIntegrity(dispatcher.getDocument())).not.toThrow();
+    test("and the binding SURVIVES every one of them that leaves the mesh standing", () => {
+        // The other half, and the reason nothing strips a binding on the way out: a regrouping
+        // must not cost the author their weights. Only deleting the mesh itself takes them.
+        for (const [name, run] of gestures) {
+            const dispatcher = new ActionDispatcher(rigged());
+            run(dispatcher);
+            const mesh = dispatcher.getDocument().nodes.get("M")?.mesh;
+            if (!mesh) { expect(name).toBe("delete the whole group"); continue; }
+            expect(mesh.points[0].bones).toEqual([{ node: "B", weight: 1 }]);
+        }
     });
 });
 
@@ -23647,6 +23675,13 @@ describe("The control point the inspector is editing", () => {
         // The panel offers `boneChoices`, never its own idea of which nodes are legal — that is
         // what makes an invalid binding unreachable rather than merely rejected.
         expect(src).toMatch(/boneChoices\(dispatcher\.getDocument\(\), pick\.nodeId\)/);
+        // …and it SAYS SO when a binding has gone inert. That is the whole cost of preserving one
+        // through a regrouping instead of deleting it: without the marker the rig simply stops and
+        // the panel looks exactly as it did when it worked. The same `boneChoices` decides, so the
+        // marker cannot come to disagree with the derivation.
+        expect(src).toMatch(/const inert = !live\.has\(b\.node\)/);
+        expect(src).toMatch(/const live = new Set\(siblings\)/);
+        expect(src).toMatch(/\(inert\)/);
         // And every mesh rewrite in the App copies its points rather than rebuilding them, which
         // is how the Height control silently unbound whatever it touched.
         expect(src).not.toMatch(/return \{ x: p\.x, y: p\.y, z:/);

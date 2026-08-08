@@ -794,9 +794,13 @@ function idScope(id: string): string {
 /**
  * One node's mesh with its rig applied, or the stored mesh when nothing is bound.
  *
- * The sibling rule is NOT re-checked here. `Integrity` refuses a binding that crosses parents on
- * the way in, and repeating the test at derivation time would make a foreign bone silently inert
- * instead of rejected — two answers to one question, and the quieter one wins by accident.
+ * THE SIBLING RULE IS ENFORCED HERE, and only here. It began in `Integrity` as a refusal, which
+ * made an unopenable file one drag away — regrouping a rigged shape, or dragging its bone out,
+ * both left a document that would not reload. Enforcing it at DERIVATION instead is what lets a
+ * binding be inert rather than invalid: it survives the regrouping, contributes nothing while the
+ * two are in different spaces, and starts working again when they are siblings once more.
+ *
+ * A bone that no longer exists is skipped by the same lookup, for the same reason.
  */
 function poseMesh(
     mesh: ReadonlyMesh,
@@ -827,6 +831,11 @@ function poseMesh(
                 const posed = doc.nodes.get(candidate);
                 const drawn = restDoc.nodes.get(candidate);
                 if (!posed || !drawn) continue;
+                // ONE SHARED SPACE, or nothing. Both matrices are local to their parent, so
+                // `posed · rest⁻¹` only composes with this node's own pair when the two hang off
+                // the same parent. Anywhere else the arithmetic would still produce numbers, and
+                // they would be numbers about a different frame.
+                if ((posed.parent ?? null) !== (node.parent ?? null)) continue;
                 return {
                     rest: localMatrix(drawn.geometry, drawn.transform),
                     posed: localMatrix(posed.geometry, posed.transform),

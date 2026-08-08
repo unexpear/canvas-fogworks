@@ -1887,7 +1887,8 @@ function skinnedPoint(point: { x; y }, bones: readonly BonePose[]): { x; y };
 // conversion, hit testing and all three backends need no knowledge that a skeleton exists — which
 // is also why a skinned limb is clickable where it is drawn. Out through the node's REST matrix and
 // back through its POSED one, so a point bound to a bone that moved exactly as its node did stays
-// put. A bone must SHARE the mesh node's parent (`Integrity`): one space, so no world matrices.
+// put. A bone must SHARE the mesh node's parent — enforced in `resolveMeshes` and NOWHERE else,
+// so a binding that stops being a sibling goes INERT rather than making the file unopenable.
 Mesh.points[i].bones?: BoneWeight[];                          // absent = not skinned
 interface BoneMatrices { rest: Mat2D; posed: Mat2D }
 function skinMesh(mesh, rest: { box; matrix }, posed: { box; matrix },
@@ -1902,7 +1903,6 @@ function bonesAt(mesh, index): readonly BoneWeight[];        // never undefined 
 function withBone(mesh, index, node): ReadonlyMesh;          // no-op (BY REFERENCE) if duplicate or full
 function withoutBone(mesh, index, node): ReadonlyMesh;       // the LAST one drops the field, not just its contents
 function withBoneWeight(mesh, index, node, w): ReadonlyMesh; // clamped at 0; zero mutes, it does not unbind
-function withoutMissingBones(mesh, exists): ReadonlyMesh;    // what DeleteNodeAction runs so the file still opens
 // The control point the inspector is editing. VALIDATED ON READ rather than cleared on write — a
 // pick goes stale four ways (another node selected, the node deleted, the warp turned off, a
 // coarser grid), and asking here means no site can forget.
