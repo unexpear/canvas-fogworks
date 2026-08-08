@@ -9,7 +9,7 @@ import { UpdateNodeGeometryAction } from "../../core/actions/UpdateNodeGeometryA
 import { UpdateNodeTransformAction } from "../../core/actions/UpdateNodeTransformAction";
 import { DeleteNodeAction } from "../../core/actions/DeleteNodeAction";
 import { TransactionAction } from "../../core/actions/TransactionAction";
-import { EditorState, panBy, screenToWorld, viewportToFit } from "../EditorState";
+import { EditorState, panBy, screenToWorld, viewportToFit, FIT_PADDING_PX } from "../EditorState";
 import { computeGeometry, ComputedState, hitTest, selectionBounds } from "../../core/geometry/GeometryEngine";
 import { interactionFor, Trigger } from "../../core/document/Prototype";
 import { PICK_RADIUS_PX } from "./SelectTool";
@@ -40,10 +40,6 @@ export interface Tool {
 
 /** Middle mouse button (per the MouseEvent.button spec). */
 const MIDDLE_BUTTON = 1;
-
-/** Margin left around a navigated-to frame, in SCREEN px — a prototype screen that touches
- *  every edge reads as clipped rather than framed. */
-const NAVIGATE_PADDING_PX = 24;
 
 export class ToolController {
     private activeTool: Tool | null = null;
@@ -342,7 +338,7 @@ export class ToolController {
         // a frame degrades the prototype rather than breaking the document.
         const targetBounds = interaction.target ? computed.nodes.get(interaction.target)?.bounds : undefined;
         if (targetBounds) {
-            const to = viewportToFit(targetBounds, { width: canvasRect.width, height: canvasRect.height }, NAVIGATE_PADDING_PX, vp.zoom);
+            const to = viewportToFit(targetBounds, { width: canvasRect.width, height: canvasRect.height }, FIT_PADDING_PX, vp.zoom);
             if (duration > 0) {
                 this.editorState.viewportTransition = { from: { ...vp }, to, startedAt: Date.now(), duration, easing };
             } else {

@@ -73,7 +73,7 @@ import { gradientFromColor, colorAt, withStop, withoutStop, withStopColor, withS
 import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
-import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
+import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode, contentBounds } from "../geometry/GeometryEngine";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, GridCell, breakFlexLines, FlexLine, resolveMargin, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, parseSvgTransform, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
@@ -292,6 +292,11 @@ export function __apiSurfacePin(): void {
     expectType<{ x: number; y: number } | null>(toWorld(computed, "id", 0, 0));
     expectType<Rect | null>(subtreeBounds(doc, computed, "id"));
     expectType<Rect | null>(selectionBounds(computed, ["id"]));
+    // The union of EVERY node — what an export is cropped to and what zoom-to-fit frames, shared
+    // so the two cannot disagree about what "all the content" is.
+    expectType<Rect | null>(contentBounds(computed));
+    // The union of EVERY node — the exporter's frame and zoom-to-fit ask the same question.
+    expectType<Rect | null>(contentBounds(computed));
 
     // --- M2 layout engine ---------------------------------------------------
     const container: LayoutContainer = { direction: "row", gap: 0, padding: 0, alignItems: "start", wrap: true, alignContent: "space-between", wrapReverse: true };

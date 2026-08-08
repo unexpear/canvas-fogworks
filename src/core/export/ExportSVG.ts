@@ -14,7 +14,7 @@
  */
 
 import { ReadonlyDocument } from "../document/Document";
-import { computeGeometry } from "../geometry/GeometryEngine";
+import { computeGeometry, contentBounds } from "../geometry/GeometryEngine";
 import { Rect } from "../geometry/Matrix";
 import { toMatrixString } from "../geometry/Matrix";
 import { buildRenderModel, commandsToPathData, textParagraphs, effectFilterId as effectId, DrawItem, FilterDef, PaintGradient, Shape } from "../../renderer/RenderModel";
@@ -53,20 +53,20 @@ function num(n: number): string {
     return String(Math.round(n * 1000) / 1000);
 }
 
-/** The union of every node's world AABB — the frame an export is cropped to. */
-function contentBounds(doc: ReadonlyDocument): Rect | null {
-    const computed = computeGeometry(doc);
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    computed.nodes.forEach(c => {
-        const b = c.bounds;
-        if (![b.x, b.y, b.width, b.height].every(Number.isFinite)) return;
-        minX = Math.min(minX, b.x); minY = Math.min(minY, b.y);
-        maxX = Math.max(maxX, b.x + b.width); maxY = Math.max(maxY, b.y + b.height);
-    });
-    if (!Number.isFinite(minX)) return null;
+/**
+ * The union of every node's world AABB, plus the export margin — the frame an export is cropped to.
+ *
+ * The union itself is `geometry/contentBounds`, which the editor's zoom-to-fit also asks. Written
+ * twice they would agree until one of them learned something — that a non-finite box is skipped,
+ * say — and then quietly disagree about what "all the content" means. The MARGIN stays here,
+ * because it belongs to exporting and not to the geometry.
+ */
+function framedBounds(doc: ReadonlyDocument): Rect | null {
+    const box = contentBounds(computeGeometry(doc));
+    if (!box) return null;
     return {
-        x: minX - EXPORT_MARGIN, y: minY - EXPORT_MARGIN,
-        width: (maxX - minX) + EXPORT_MARGIN * 2, height: (maxY - minY) + EXPORT_MARGIN * 2
+        x: box.x - EXPORT_MARGIN, y: box.y - EXPORT_MARGIN,
+        width: box.width + EXPORT_MARGIN * 2, height: box.height + EXPORT_MARGIN * 2
     };
 }
 
@@ -227,7 +227,7 @@ function gradientMarkup(g: PaintGradient): string {
  */
 export function exportSVG(doc: ReadonlyDocument, linesOf: TextLines = HARD_BREAKS_ONLY,
     images: ExportImages = {}): string {
-    const bounds = contentBounds(doc);
+    const bounds = framedBounds(doc);
     if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
         return `<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"></svg>`;
     }

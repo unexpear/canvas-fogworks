@@ -124,6 +124,14 @@ function createWindow() {
                 { label: "Zoom In", accelerator: "CmdOrCtrl+=", click: send("view.zoomIn") },
                 { label: "Zoom Out", accelerator: "CmdOrCtrl+-", click: send("view.zoomOut") },
                 { label: "Zoom to 100%", accelerator: "CmdOrCtrl+0", click: send("view.zoomReset") },
+                // FRAMING. Shift+1 and Shift+2 are Figma's, and Sketch and Illustrator put
+                // fit-all and fit-selection on the same pair — a person arriving from any of them
+                // is right on the first press. The ACCELERATORS live here and not in
+                // `shortcuts.ts`, which is the same split the Edit menu makes in reverse: a chord
+                // claimed by the native menu never reaches the renderer's key handler, so binding
+                // it in both places would leave one of them dead and both of them authoritative.
+                { label: "Zoom to Fit", accelerator: "Shift+1", click: send("view.zoomFit") },
+                { label: "Zoom to Selection", accelerator: "Shift+2", click: send("view.zoomSelection") },
                 { type: "separator" },
                 { label: "Timeline", accelerator: "CmdOrCtrl+T", click: send("view.timeline") },
                 { label: "Light / Dark Theme", click: send("view.theme") },

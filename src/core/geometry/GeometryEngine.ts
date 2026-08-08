@@ -366,6 +366,25 @@ export function selectionBounds(state: ComputedState, ids: readonly string[]): R
     return acc;
 }
 
+/**
+ * World-space AABB enclosing EVERY computed node. Null for an empty document.
+ *
+ * The same question `selectionBounds` answers, over everything — and it is shared rather than
+ * written twice because two callers want it for the same reason and would drift on the detail that
+ * matters: a node whose box is not finite is SKIPPED, not folded in. One NaN width from a
+ * half-typed field would otherwise poison the union and send an export, or a zoom-to-fit, to
+ * nowhere at all.
+ */
+export function contentBounds(state: ComputedState): Rect | null {
+    let acc: Rect | null = null;
+    state.nodes.forEach(c => {
+        const b = c.bounds;
+        if (![b.x, b.y, b.width, b.height].every(Number.isFinite)) return;
+        acc = acc ? unionRect(acc, b) : b;
+    });
+    return acc;
+}
+
 /** World point → a node's local space. Null if the node is unknown or non-invertible. */
 export function toLocal(state: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null {
     const c = state.nodes.get(nodeId);

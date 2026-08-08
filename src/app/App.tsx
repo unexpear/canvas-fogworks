@@ -12,7 +12,7 @@ import { Gradient, GradientStop } from "../core/document/Gradient";
 import { gradientFromColor, withStop, withoutStop, withStopColor, withStopOffset, withKind, GRADIENT_MIN_STOPS } from "../core/document/GradientEdit";
 import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
-import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
+import { computeGeometry, ComputedState, contentBounds, selectionBounds } from "../core/geometry/GeometryEngine";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor } from "../core/actions/nodeEdit";
 import { ContentPatch, UpdateNodeContentAction } from "../core/actions/UpdateNodeContentAction";
 import { resolveScene, isVirtualId } from "../core/document/Components";
@@ -33,7 +33,7 @@ import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { DetachInstanceAction } from "../core/actions/DetachInstanceAction";
 import { UpdateNodeTransformAction } from "../core/actions/UpdateNodeTransformAction";
 import { UpdateNodeLayoutAction } from "../core/actions/UpdateNodeLayoutAction";
-import { createEditorState, EditorState, zoomAt } from "../editor/EditorState";
+import { createEditorState, EditorState, zoomAt, viewportToFit, FIT_PADDING_PX } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
@@ -1220,6 +1220,28 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     case "view.theme": {
                         const d = dispatcher.getDocument();
                         dispatcher.dispatchAction(new SetActiveThemeAction(d, d.activeTheme === "light" ? "dark" : "light"));
+                        refresh();
+                        return;
+                    }
+                    case "view.zoomFit":
+                    case "view.zoomSelection": {
+                        // A FRAME, not an action: the viewport is editor state, so this changes no
+                        // document and takes no history step. `viewportToFit` is the same
+                        // arithmetic a prototype NAVIGATE uses — it existed, tested, with nothing
+                        // in the editor able to reach it.
+                        const el = canvasRef.current;
+                        if (!el) return;
+                        const d = dispatcher.getDocument();
+                        const computed = computeGeometry(resolveScene(d));
+                        // SELECTION FALLS BACK TO EVERYTHING. "Fit the selection" with nothing
+                        // selected doing nothing at all reads as a broken menu item; framing the
+                        // document is close enough to what was meant, and is what every tool does.
+                        const box = (command === "view.zoomSelection"
+                            ? selectionBounds(computed, es.selectedNodeIds) : null) ?? contentBounds(computed);
+                        if (!box) return;                 // an empty document has nothing to frame
+                        es.viewport = viewportToFit(box,
+                            { width: el.clientWidth, height: el.clientHeight },
+                            FIT_PADDING_PX, es.viewport.zoom);
                         refresh();
                         return;
                     }

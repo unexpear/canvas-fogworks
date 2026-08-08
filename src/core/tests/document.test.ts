@@ -37,7 +37,7 @@ import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction"
 import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
 import { traverseSceneGraph, selectionRoots } from "../document/SceneGraph";
-import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
+import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, contentBounds, ComputedState, ComputedNode } from "../geometry/GeometryEngine";
 import { flattenPath, hitsShape, isPaintBearing, FLATTEN_TOLERANCE, FLATTEN_MAX_DEPTH, hitShapeOf, displayTolerance, localScaleOf, DISPLAY_DEVIATION_PX, DISPLAY_TOLERANCE_MIN, DISPLAY_TOLERANCE_MAX } from "../geometry/ShapeHit";
 import { cursorForDirection, localLinear, worldDeltaToLocal } from "../geometry/OrientedBox";
 import { booleanRings, booleanPaths, commandsToRings, ringsToCommands, insideRings } from "../geometry/PathBoolean";
@@ -130,7 +130,7 @@ import { TEXT_ALIGNS, FONT_FAMILY_MAX } from "../document/Node";
 import { blendColor, blendStates, easingAt, interactionFor, interactionsError, Interaction, Trigger, TRANSITION_MAX_MS, INTERACTIONS_MAX } from "../document/Prototype";
 import { applyActiveState } from "../document/Components";
 import { SetInteractionsAction } from "../actions/SetInteractionsAction";
-import { viewportToFit, lerpViewport } from "../../editor/EditorState";
+import { viewportToFit, lerpViewport, FIT_PADDING_PX } from "../../editor/EditorState";
 import { compileScript, snapshotFor, actionRequestError, SCRIPT_MAX_REQUESTS } from "../script/ScriptApi";
 import { WORKER_BOOTSTRAP } from "../../editor/ScriptRunner";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
@@ -22651,5 +22651,89 @@ describe("itemDraws carries a raster's pixels, not just its key", () => {
         const picture = itemDraws(itemFor(doc)).find(d => d.image !== null)!;
         expect(picture.image!.surface).toBeNull();
         expect(picture.image!.href).toBe("https://example.test/a.png");
+    });
+});
+
+// ─── Framing the view, and the menu that reaches it ───
+describe("Zoom to fit", () => {
+    const docWith = (...boxes: { x: number; y: number; width: number; height: number }[]): ProjectDocument => {
+        const doc = createEmptyDocument();
+        doc.nodes.clear();
+        boxes.forEach((b, i) => doc.nodes.set(`n${i}`, {
+            id: `n${i}`, type: "core.rectangle", parent: null, children: [],
+            geometry: b, style: { fill: "#000000", opacity: 1 }, layout: {}
+        } as never));
+        doc.rootNodeUuids = boxes.map((_, i) => `n${i}`);
+        return doc;
+    };
+
+    test("contentBounds is the UNION of every node, and null for an empty document", () => {
+        // Two boxes that do not touch, so a bounds that returned only one of them is visible —
+        // and neither is at the origin, so one that started its accumulator at (0,0) is too.
+        const box = contentBounds(computeGeometry(docWith(
+            { x: 100, y: 50, width: 40, height: 20 },
+            { x: 300, y: 200, width: 60, height: 30 })))!;
+        expect(box).toEqual({ x: 100, y: 50, width: 260, height: 180 });
+        expect(contentBounds(computeGeometry(createEmptyDocument().nodes.size === 0
+            ? createEmptyDocument() : docWith()))).toBeNull();
+    });
+
+    test("a node whose computed box is non-finite is SKIPPED, not folded in", () => {
+        // THE BAD BOX HAS TO BE REACHABLE. A NaN in `geometry` is not: `computeGeometry` drops the
+        // node entirely, so a fixture built that way never touches the guard at all and the
+        // mutation that deletes the guard survives — which is exactly what happened first time.
+        // A NaN in the TRANSFORM does reach it: the node is computed, and its bounds come out NaN.
+        const doc = docWith({ x: 10, y: 10, width: 30, height: 30 });
+        doc.nodes.set("bad", { id: "bad", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, transform: { scaleX: NaN },
+            style: { fill: "#000000", opacity: 1 }, layout: {} } as never);
+        doc.rootNodeUuids = ["n0", "bad"];
+        // Reachability, asserted rather than assumed — if this ever stops being true the test
+        // below goes quietly blind again.
+        const computed = computeGeometry(doc);
+        expect(computed.nodes.has("bad")).toBe(true);
+        expect(Number.isFinite(computed.nodes.get("bad")!.bounds.x)).toBe(false);
+        // One NaN would otherwise poison the union and send both an export and a zoom-to-fit
+        // nowhere at all. The finite neighbour proves the answer is the union of what survived
+        // rather than simply null.
+        expect(contentBounds(computed)).toEqual({ x: 10, y: 10, width: 30, height: 30 });
+    });
+
+    test("the exporter and a fit ask the SAME question about what the content is", () => {
+        // They differ only by the export margin. Two separate unions would agree until one of
+        // them learned something — which is how this was written before it was shared.
+        const doc = docWith({ x: 5, y: 7, width: 100, height: 50 });
+        const box = contentBounds(computeGeometry(doc))!;
+        const svg = exportSVG(doc);
+        const viewBox = /viewBox="([^"]+)"/.exec(svg)![1].split(" ").map(Number);
+        expect(viewBox).toEqual([
+            box.x - EXPORT_MARGIN, box.y - EXPORT_MARGIN,
+            box.width + EXPORT_MARGIN * 2, box.height + EXPORT_MARGIN * 2
+        ]);
+    });
+
+    test("fitting frames the content with the SHARED padding, centred", () => {
+        const box = { x: 100, y: 100, width: 200, height: 100 };
+        const size = { width: 800, height: 600 };
+        const vp = viewportToFit(box, size, FIT_PADDING_PX, 1);
+        // The tighter axis wins: (200 + 48) across 800 is 3.22, (100 + 48) into 600 is 4.05.
+        expect(vp.zoom).toBeCloseTo(800 / (200 + FIT_PADDING_PX * 2), 9);
+        // …and the box's centre lands at the view's centre, which is what "framed" means.
+        const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+        expect(centre.x * vp.zoom - vp.x).toBeCloseTo(size.width / 2, 9);
+        expect(centre.y * vp.zoom - vp.y).toBeCloseTo(size.height / 2, 9);
+    });
+
+    test("every menu command has a handler — no item that does nothing when clicked", () => {
+        // A structural assertion over two files, because this codebase has already shipped TWO
+        // dead menu items: the command string was sent and nothing matched it, so the item looked
+        // live, clicked cleanly, and did nothing. Neither a unit test of either side could see it —
+        // the gap is BETWEEN them.
+        const main = readFileSync(resolve(__dirname, "../../electron/main.js"), "utf8");
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const sent = [...main.matchAll(/send\("([^"]+)"\)/g)].map(m => m[1]);
+        // The sweep is only meaningful if it found the menu at all.
+        expect(sent.length).toBeGreaterThan(20);
+        expect(sent.filter(c => !app.includes(`case "${c}"`))).toEqual([]);
     });
 });

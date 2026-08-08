@@ -107,6 +107,15 @@ export function clampViewport(vp: EditorState["viewport"]): void {
 }
 
 /**
+ * Margin left around a framed rect, in SCREEN px.
+ *
+ * Shared by the editor's zoom-to-fit and a prototype NAVIGATE, because they are the same gesture
+ * with different triggers — content that touches every edge reads as clipped rather than framed,
+ * and two numbers for that would be two answers to one question.
+ */
+export const FIT_PADDING_PX = 24;
+
+/**
  * The viewport that FITS a world rect into a canvas, with a margin — "zoom to this frame".
  *
  * From `screen = z·world − vp`: the zoom is whichever axis is tighter, and the offset places the
