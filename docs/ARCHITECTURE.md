@@ -941,6 +941,22 @@ while its bitmap loads, so that path needs the generation to notice the arrival;
 at once and its href already carries the size, length and checksum of the payload. The href
 changing IS the pixels changing.
 
+### Framing the view — and which layer owns a chord
+
+**`viewportToFit` had existed, tested, since the prototype NAVIGATE interaction**, and nothing in
+the editor could reach it. The View menu's Zoom to Fit and Zoom to Selection are that same
+arithmetic with a trigger; the padding is shared for the same reason, since a navigate and a fit
+are one gesture.
+
+**A chord belongs to exactly one layer.** `shortcuts.ts` owns the editor's chords and the Edit menu
+deliberately carries no accelerators for them; the View menu owns its own, because a chord the
+native menu claims is handled before the renderer ever sees the key. Binding one in both places
+leaves the renderer's copy dead and both of them looking authoritative.
+
+**A menu command is a string crossing a process boundary**, which is a seam no unit test on either
+side can watch — this codebase has shipped two items that sent a command nothing handled. A
+structural test now checks every `send()` in the menu against a `case` in the renderer.
+
 ### An opacity group is a LAYER, not an alpha folded into its parts
 
 **A node with children and opacity below 1 composites as one and is then faded.** SVG nests a real

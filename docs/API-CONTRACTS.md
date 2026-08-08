@@ -1442,6 +1442,8 @@ function zoomAt(vp, factor: number, cursorX: number, cursorY: number): void; // 
 // PROTOTYPE NAVIGATION (schema 36) — pure, and RETURNING a viewport rather than mutating one,
 // because a navigation needs both ends to interpolate between.
 function viewportToFit(bounds: Rect, size: Size, padding: number, fallbackZoom: number): EditorState["viewport"]; // "zoom to this frame": the tighter axis wins, the rect is centred, the result is CLAMPED; a degenerate rect keeps the current zoom rather than dividing by zero
+const FIT_PADDING_PX = 24;   // shared by the editor's Zoom to Fit and a prototype NAVIGATE — one
+                             // gesture with two triggers, so one number for the breathing room
 function lerpViewport(a, b, t: number): EditorState["viewport"];  // offsets LINEARLY, zoom GEOMETRICALLY (a linear zoom over a wide range barely moves, then lurches); t clamped to [0,1]
 function screenToWorld(vp, canvasRect: { left: number; top: number }, clientX: number, clientY: number): { x: number; y: number }; // the one sanctioned screen→world inverse, shared by all tools
 
