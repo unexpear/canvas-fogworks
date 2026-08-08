@@ -401,7 +401,33 @@ export function App() {
     // WHICH SHAPE THE ONE SLOT OFFERS. Remembered rather than reset, because somebody drawing a
     // storyboard draws twenty rectangles, not one of each — a slot that snapped back to Rectangle
     // would cost them a second click every single time.
+/**
+ * WHICH JOB THE WINDOW IS SET UP FOR.
+ *
+ * VDE is not one app: it is a vector editor, a pixel editor and an animation system sharing a
+ * document, with a 3D layer to come. That is Blender's problem exactly, and workspaces are how
+ * Blender avoids offering sculpting tools to somebody editing video.
+ *
+ * The trade is deliberate and worth stating: a brush is not reachable while you are in Design.
+ * Switching is one click, and the alternative — every tool for every job, always — is the twelve
+ * flat slots this replaced.
+ */
+type Workspace = "design" | "paint" | "animate";
+
+const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[]; defaultTool: string }[] = [
+    // `tools` is the ORDER of the strip as well as its contents, so the two cannot disagree.
+    { id: "design", label: "Design", icon: "◱", tools: ["select", "move", "shapes", "pen"], defaultTool: "select" },
+    // Paint puts the CANVAS-maker beside the brush, out of the shape flyout: drawing a surface and
+    // painting on it are one job, and burying the first behind a menu made the second look broken.
+    { id: "paint", label: "Paint", icon: "✏", tools: ["select", "move", "raster", "paint"], defaultTool: "paint" },
+    // Animation is done by SELECTING and MOVING things over time; a shape tool in this workspace is
+    // a way to draw a rectangle by accident while scrubbing.
+    { id: "animate", label: "Animate", icon: "⏱", tools: ["select", "move"], defaultTool: "select" }
+];
+
     const [lastShape, setLastShape] = useState<ShapeKind>("rectangle");
+    const [workspace, setWorkspace] = useState<Workspace>("design");
+    const workspaceDef = WORKSPACES.find(w => w.id === workspace) ?? WORKSPACES[0];
     const [paintColour, setPaintColour] = useState<string>("#000000");
     const paintColourRef = useRef<string>("#000000");
     paintColourRef.current = paintColour;
@@ -814,6 +840,20 @@ export function App() {
         es.activeTool = name;
         setToolName(name);
     }, [toolController]);
+
+    /**
+     * Switch the window's job.
+     *
+     * SELECTS THE WORKSPACE'S DEFAULT TOOL, because leaving the old one active can leave a tool
+     * selected that this workspace does not show — a live tool with no button is a gesture the
+     * user cannot see the state of, which is worse than any amount of clutter.
+     */
+    const pickWorkspace = useCallback((id: Workspace) => {
+        const def = WORKSPACES.find(w => w.id === id);
+        if (!def) return;
+        setWorkspace(id);
+        setTool(def.defaultTool);
+    }, [setTool]);
 
     useEffect(() => {
         const target = canvasRef.current;
@@ -1325,6 +1365,27 @@ export function App() {
                     to their own row below, so nothing this row does can push the canvas around. */}
                 <div style={{ display: "flex", alignItems: "center", alignContent: "flex-start", flexWrap: "wrap", rowGap: 4, padding: "4px 8px", background: UI.panel, borderBottom: `1px solid ${UI.line}`, gap: 4 }}>
                 <span style={{ fontWeight: 700, marginRight: 8, color: "#00bfff", fontSize: 13 }}>VDE</span>
+                {/* WORKSPACE TABS. Top-left and first in the reading order, because this is the
+                    widest-scope choice on screen: it decides what every control below it means. */}
+                <div role="tablist" aria-label="Workspace" style={{ display: "flex", gap: 2, marginRight: 10 }}>
+                    {WORKSPACES.map(w => (
+                        <button
+                            key={w.id}
+                            role="tab"
+                            aria-selected={workspace === w.id}
+                            title={`${w.label} workspace`}
+                            onClick={() => pickWorkspace(w.id)}
+                            style={{
+                                display: "flex", alignItems: "center", gap: 4, padding: "3px 9px", fontSize: 11,
+                                background: workspace === w.id ? "#2a4a6a" : "transparent",
+                                color: workspace === w.id ? "#fff" : "#aaa",
+                                border: "none", borderRadius: 3, cursor: "pointer"
+                            }}
+                        >
+                            <span aria-hidden="true">{w.icon}</span><span>{w.label}</span>
+                        </button>
+                    ))}
+                </div>
                 {es.selectedNodeIds.length === 1
                     && dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.type === "core.boolean" && (
                     // A LIVE boolean is selected: offer the operation itself. This is the whole
@@ -1672,19 +1733,43 @@ export function App() {
                 <div style={{
                     display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
                     padding: "4px 3px", flexShrink: 0,
+                    // FIXED WIDTH, for the reason the options row has a fixed height: the Design
+                    // workspace's shape slot carries a caret and the others do not, so a strip
+                    // sized to its contents was 48px in one workspace and 37px in the next — and
+                    // the canvas slid sideways every time you switched jobs.
+                    width: 48, boxSizing: "border-box",
                     background: UI.panel, borderRight: `1px solid ${UI.line}`
                 }}>
-                    <ToolButton icon="↗" label="Select" compact active={toolName === "select"} onClick={() => setTool("select")} />
-                    <ToolButton icon="↔" label="Move" compact active={toolName === "move"} onClick={() => setTool("move")} />
-                    <ShapeFlyout
-                        current={lastShape}
-                        active={(SHAPE_KINDS as readonly string[]).includes(toolName)}
-                        icons={SHAPE_ICONS}
-                        compact
-                        onPick={kind => { setLastShape(kind); setTool(kind); }}
-                    />
-                    <ToolButton icon="✒" label="Pen" compact active={toolName === "pen"} onClick={() => setTool("pen")} />
-                    <ToolButton icon="✏" label="Paint" compact active={toolName === "paint"} onClick={() => setTool("paint")} />
+                    {/* THE WORKSPACE DECIDES WHAT IS HERE. Driven off `workspaceDef.tools`, which
+                        is also the order, so the list and the layout cannot disagree. */}
+                    {workspaceDef.tools.map(slot => {
+                        if (slot === "shapes") return (
+                            <ShapeFlyout
+                                key="shapes"
+                                current={lastShape}
+                                active={(SHAPE_KINDS as readonly string[]).includes(toolName)}
+                                icons={SHAPE_ICONS}
+                                compact
+                                onPick={kind => { setLastShape(kind); setTool(kind); }}
+                            />
+                        );
+                        // `raster` is a SHAPE kind promoted to its own slot in the Paint
+                        // workspace: drawing a canvas and painting on it are one job, and burying
+                        // the first behind a flyout is what made the second look broken.
+                        const spec: Record<string, { icon: string; label: string }> = {
+                            select: { icon: "↗", label: "Select" },
+                            move: { icon: "↔", label: "Move" },
+                            pen: { icon: "✒", label: "Pen" },
+                            paint: { icon: "✏", label: "Paint" },
+                            raster: { icon: SHAPE_ICONS.raster, label: "Canvas" }
+                        };
+                        const t = spec[slot];
+                        if (!t) return null;
+                        return (
+                            <ToolButton key={slot} icon={t.icon} label={t.label} compact
+                                active={toolName === slot} onClick={() => setTool(slot)} />
+                        );
+                    })}
                 </div>
                 <div style={{ width: 180, background: UI.panel, borderRight: `1px solid ${UI.line}`, overflow: "auto", padding: 8 }}>
                     <div style={PANEL_HEADING}>Layers</div>
