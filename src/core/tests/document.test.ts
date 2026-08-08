@@ -98,6 +98,7 @@ import { symmetryPoints, isMirrored, NO_SYMMETRY } from "../paint/Symmetry";
 import { nearestColour, colourDistance, quantizeToPalette } from "../paint/Quantize";
 import { worldToSurface, surfaceToWorld, surfacePixelSize, surfaceSpaceError } from "../paint/SurfaceSpace";
 import { defaultGradient, gradientError, normalizeStops, sampleGradient, GRADIENT_MAX_STOPS, Gradient } from "../document/Gradient";
+import { gradientFromColor, colorAt, withStop, withoutStop, withStopColor, withStopOffset, withKind, GRADIENT_MIN_STOPS } from "../document/GradientEdit";
 import { copyNodes, remapForPaste, PASTE_OFFSET } from "../document/Clipboard";
 import { parseSvgGradients } from "../import/SvgGradient";
 import { PasteNodesAction } from "../actions/PasteNodesAction";
@@ -22195,5 +22196,150 @@ describe("Importing a gradient fill (schema 56)", () => {
         const fill = spec.style.fill as Gradient;
         expect(fill.transform.d).toBe(1);
         expect(invert(fill.transform)).not.toBeNull();
+    });
+});
+
+// ─── Editing a gradient: the operations before the panel ───
+describe("GradientEdit — what an editor does to a ramp", () => {
+    // Stops at THREE distinct offsets with THREE distinct colours and two distinct opacities. A
+    // two-stop fixture cannot see a helper that edits the wrong end, and equal opacities cannot see
+    // one that drops the opacity while carrying the colour.
+    const RAMP: Gradient = {
+        ...defaultGradient("linear"),
+        stops: [
+            { offset: 0, color: "#000000", opacity: 1 },
+            { offset: 0.5, color: "#808080", opacity: 0.5 },
+            { offset: 1, color: "#ffffff", opacity: 0.25 }
+        ]
+    };
+
+    test("making a gradient from a colour does not change what the shape looks like", () => {
+        const g = gradientFromColor("#3366cc");
+        // The SAME colour at both ends. A second, invented colour would be the tool deciding
+        // something the author did not — and the shape would jump the instant the button was hit.
+        expect(g.stops.map(s => s.color)).toEqual(["#3366cc", "#3366cc"]);
+        expect(g.stops.map(s => s.opacity)).toEqual([1, 0]);
+        // objectBoundingBox, because a NEW ramp belongs to the shape and has to follow it when the
+        // box is resized. An imported ramp keeps whatever its file said.
+        expect(g.units).toBe("objectBoundingBox");
+        expect(gradientError(g)).toBeNull();
+        expect(gradientFromColor("#3366cc", "radial").kind).toBe("radial");
+        // THE AXIS RUNS DOWN THE MIDDLE, not along SVG's own y = 0. It paints identically either
+        // way — a linear ramp is parallel lines, so where the axis sits perpendicular to itself is
+        // not part of the picture — and it decides where the circle lands the moment somebody
+        // presses "radial". Found in the running app: the highlight was pinned to the top edge.
+        expect([g.x1, g.y1, g.x2, g.y2]).toEqual([0, 0.5, 1, 0.5]);
+        expect(withKind(g, "radial")).toMatchObject({ cx: 0.5, cy: 0.5, r: 0.5, fx: 0.5, fy: 0.5 });
+        // SVG's own defaults are NOT touched: the importer needs them to mean what the spec says.
+        expect(defaultGradient("linear").y1).toBe(0);
+    });
+
+    test("the colour at a point is BLENDED, and steps when a token cannot be", () => {
+        // Halfway between #000000 and #808080 is #404040, and halfway between opacity 1 and 0.5
+        // is 0.75 — the two interpolate separately, which is the whole reason `opacity` is its own
+        // field rather than an alpha inside the colour string.
+        expect(colorAt(RAMP, 0.25)).toEqual({ color: "#404040", opacity: 0.75 });
+        // Landing ON a stop is that stop, with no arithmetic at all.
+        expect(colorAt(RAMP, 0.5)).toEqual({ color: "#808080", opacity: 0.5 });
+        // Past the end pads, which is SVG's default and the only spread any measured file uses.
+        expect(colorAt(RAMP, 2)).toEqual({ color: "#ffffff", opacity: 0.25 });
+        // A TOKEN cannot be blended without resolving it, so it steps at the halfway point — the
+        // same answer a keyframed token gets, and the reason `sampleGradient` hands back the pair.
+        const tokened = { ...RAMP, stops: [{ offset: 0, color: "$color/brand", opacity: 1 },
+            { offset: 1, color: "#ffffff", opacity: 1 }] };
+        expect(colorAt(tokened, 0.25)!.color).toBe("$color/brand");
+        expect(colorAt(tokened, 0.75)!.color).toBe("#ffffff");
+    });
+
+    test("adding a stop takes the colour already there, so the shape does not repaint", () => {
+        const added = withStop(RAMP, 0.25)!;
+        expect(added.gradient.stops.map(s => s.offset)).toEqual([0, 0.25, 0.5, 1]);
+        expect(added.gradient.stops[1]).toEqual({ offset: 0.25, color: "#404040", opacity: 0.75 });
+        // The INDEX comes back, and it is not the last one — the list is sorted, so an editor
+        // holding "the stop I just made" as a number would otherwise be pointing at #ffffff.
+        expect(added.index).toBe(1);
+        // Which means the ramp still shows the same colour there as it did before.
+        expect(colorAt(added.gradient, 0.25)).toEqual(colorAt(RAMP, 0.25));
+        // Bounded like everything else hand-editable.
+        const full = { ...RAMP, stops: Array.from({ length: GRADIENT_MAX_STOPS },
+            (_, i) => ({ offset: i / GRADIENT_MAX_STOPS, color: "#000000", opacity: 1 })) };
+        expect(withStop(full, 0.5)).toBeNull();
+    });
+
+    test("removing a stop REFUSES rather than leaving something the document would not load", () => {
+        const gone = withoutStop(RAMP, 1)!;
+        expect(gone.stops.map(s => s.color)).toEqual(["#000000", "#ffffff"]);
+        expect(gradientError(gone)).toBeNull();
+        // Below two it is a flat colour wearing a gradient's clothes, and one stop is what
+        // `gradientError` is right at the edge of refusing. Null, so the editor converts instead —
+        // a silent no-op would look exactly like a helper that worked.
+        expect(gone.stops.length).toBe(GRADIENT_MIN_STOPS);
+        expect(withoutStop(gone, 0)).toBeNull();
+        expect(withoutStop(RAMP, 9)).toBeNull();
+        expect(withoutStop(RAMP, -1)).toBeNull();
+    });
+
+    test("recolouring one stop leaves the others alone, opacity included", () => {
+        const lit = withStopColor(RAMP, 1, "#ff0000")!;
+        expect(lit.stops[1]).toEqual({ offset: 0.5, color: "#ff0000", opacity: 0.5 });
+        expect(lit.stops[0]).toEqual(RAMP.stops[0]);
+        expect(lit.stops[2]).toEqual(RAMP.stops[2]);
+        // Opacity is settable in the same call, and clamped — the alpha slider is right beside the
+        // swatch in every tool anybody arrives from.
+        expect(withStopColor(RAMP, 1, "#ff0000", 0.125)!.stops[1].opacity).toBe(0.125);
+        expect(withStopColor(RAMP, 1, "#ff0000", 4)!.stops[1].opacity).toBe(1);
+        expect(withStopColor(RAMP, 5, "#ff0000")).toBeNull();
+    });
+
+    test("dragging a stop PAST its neighbour renumbers, and the index follows the pointer", () => {
+        // The ordinary way to reverse a two-stop ramp, not an edge case. Stop 2 (#ffffff) is
+        // dragged to the front.
+        const moved = withStopOffset(RAMP, 2, 0.1)!;
+        expect(moved.gradient.stops.map(s => s.color)).toEqual(["#000000", "#ffffff", "#808080"]);
+        expect(moved.gradient.stops.map(s => s.offset)).toEqual([0, 0.1, 0.5]);
+        // THE POINT OF THE RETURN: the stop the pointer is holding is now index 1. An editor that
+        // kept its own 2 would be dragging #808080 for the rest of the gesture.
+        expect(moved.index).toBe(1);
+        expect(moved.gradient.stops[moved.index].color).toBe("#ffffff");
+        // A TIE keeps document order, which is how a file states a hard colour break — and the
+        // dragged stop is the one that moved, so it goes after the one already there.
+        const tied = withStopOffset(RAMP, 2, 0.5)!;
+        expect(tied.gradient.stops.map(s => s.color)).toEqual(["#000000", "#808080", "#ffffff"]);
+        expect(tied.index).toBe(2);
+        // Clamped, and out of range refused.
+        expect(withStopOffset(RAMP, 0, 5)!.gradient.stops.map(s => s.offset)).toEqual([0.5, 1, 1]);
+        expect(withStopOffset(RAMP, 7, 0.5)).toBeNull();
+    });
+
+    test("switching kind KEEPS the ramp's place instead of resetting it to a unit square", () => {
+        // An imported ramp is `userSpaceOnUse` at whatever scale the file used. Resetting to the
+        // defaults would collapse it to a dot at the origin — visible only as the fill vanishing.
+        const wide: Gradient = { ...defaultGradient("linear"), units: "userSpaceOnUse",
+            x1: 100, y1: 40, x2: 300, y2: 40, stops: RAMP.stops };
+        const round = withKind(wide, "radial");
+        expect([round.cx, round.cy, round.r]).toEqual([200, 40, 100]);   // midpoint, half the length
+        expect([round.fx, round.fy]).toEqual([200, 40]);                  // focus at the centre
+        expect(round.stops).toEqual(RAMP.stops);
+        // And back: the diameter through the centre, so a round trip returns the axis it started
+        // from rather than a unit one.
+        const flat = withKind(round, "linear");
+        expect([flat.x1, flat.y1, flat.x2, flat.y2]).toEqual([100, 40, 300, 40]);
+        // Asking for the kind it already is changes nothing at all.
+        expect(withKind(wide, "linear")).toBe(wide);
+    });
+
+    test("every operation leaves a ramp the document would accept", () => {
+        // The operations compose, and the composition is what an editing session is. Any one of
+        // them producing something `gradientError` refuses would mean a document that saves and
+        // then will not reopen.
+        let g: Gradient = gradientFromColor("#112233");
+        g = withStop(g, 0.3)!.gradient;
+        g = withStopColor(g, 1, "#445566", 0.4)!;
+        g = withStopOffset(g, 1, 0.9)!.gradient;
+        g = withKind(g, "radial");
+        g = withStop(g, 0.1)!.gradient;
+        g = withoutStop(g, 0)!;
+        expect(gradientError(g)).toBeNull();
+        expect(styleError({ fill: g })).toBeNull();
     });
 });

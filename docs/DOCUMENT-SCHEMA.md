@@ -1136,6 +1136,16 @@ pre-distorted points.
 The flat colour is decided once, in the render model (`PaintGradient.flat`), so the three surfaces
 that flatten all show the same colour rather than each choosing.
 
+**Authored in the inspector.** The Fill row is a solid/gradient pair; `gradientFromColor` makes the
+ramp from the colour already there — the SAME colour at both ends, opaque to transparent — so the
+shape does not jump when you press it. `GradientEdit` holds the operations (`withStop`, `withoutStop`,
+`withStopColor`, `withStopOffset`, `withKind`); the panel holds only which stop is selected and
+dispatches an ordinary `UpdateNodeStyleAction`, so a drag is one undo like every slider.
+
+Two of those operations RETURN AN INDEX with the gradient, and it is not a convenience: stops are
+kept sorted, so inserting one or dragging one past its neighbour renumbers the list. A panel
+tracking "the selected stop" as a number of its own starts editing a different stop mid-drag.
+
 **Imported whole.** `SvgDocument` resolves a `url(#id)` fill through `SvgGradient` and hands the
 ramp to the node — 2,785 shapes across the 5,279-file corpus. Only STROKES still flatten. The
 gradient is MOVED with the shape at two points, and both are invisible to the type system: this

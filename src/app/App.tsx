@@ -8,6 +8,8 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { ActionDispatcher } from "../core/actions/ActionDispatcher";
 import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document";
 import { Node, Shadow, flatFill } from "../core/document/Node";
+import { Gradient, GradientStop } from "../core/document/Gradient";
+import { gradientFromColor, withStop, withoutStop, withStopColor, withStopOffset, withKind, GRADIENT_MIN_STOPS } from "../core/document/GradientEdit";
 import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
@@ -2131,23 +2133,63 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
 
                             <InspectorSection title="Appearance">
                                 <label style={INSPECTOR_LABEL}>Fill</label>
-                                {/* FLATTENED to the first stop when the fill is a gradient
-                                    (schema 56). There is no gradient editor yet, and a swatch
-                                    showing "[object Object]" would be worse than one showing the
-                                    colour the ramp starts at — but picking a colour here REPLACES
-                                    the ramp, which is why the ramp cannot be authored from this
-                                    panel and is left to import until the editor exists. */}
-                                <ColorInput
-                                    value={flatFill(node.style.fill)}
-                                    onChange={v => { editSelected({ style: { fill: v } }); refresh(); }}
-                                    onClear={() => { editSelected({ style: { fill: "none" } }); refresh(); }}
-                                    clearLabel="No fill"
-                                />
-                                <TokenSelect
-                                    store={dispatcher.getDocument().variables as VariableStore}
-                                    value={flatFill(node.style.fill)}
-                                    onPick={v => { editSelected({ style: { fill: v || "#4a90d9" } }); refresh(); }}
-                                />
+                                {/* SOLID or GRADIENT (schema 56). Two buttons rather than a
+                                    checkbox, because the two states have different controls under
+                                    them and a checkbox reads as a modifier of one set. Going to a
+                                    gradient keeps the colour at both ends — see
+                                    `gradientFromColor` — so the shape does not jump; coming back
+                                    takes the first stop, which is what every surface that cannot
+                                    paint a ramp already shows. */}
+                                <div style={{ display: "flex", gap: 4, marginTop: 2 }}>
+                                    {(["solid", "gradient"] as const).map(mode => {
+                                        const isGradient = typeof node.style.fill !== "string";
+                                        const on = mode === (isGradient ? "gradient" : "solid");
+                                        return (
+                                            <button
+                                                key={mode}
+                                                onClick={() => {
+                                                    if (on) return;
+                                                    editSelected({ style: { fill: mode === "gradient"
+                                                        ? gradientFromColor(flatFill(node.style.fill))
+                                                        : flatFill(node.style.fill) } });
+                                                    refresh();
+                                                }}
+                                                style={{
+                                                    flex: 1, fontSize: 10, padding: "2px 0", borderRadius: 2, cursor: "pointer",
+                                                    background: on ? UI.accentSoft : "transparent",
+                                                    color: on ? UI.text : UI.textDim,
+                                                    border: `1px solid ${on ? UI.accent : UI.line}`
+                                                }}
+                                            >{mode}</button>
+                                        );
+                                    })}
+                                </div>
+                                {typeof node.style.fill !== "string" ? (
+                                    <GradientEditor
+                                        gradient={node.style.fill as Gradient}
+                                        onChange={(next, coalesce) => {
+                                            // The SAME dispatch path a colour takes; `coalesce`
+                                            // is what makes a whole drag one undo and a click on
+                                            // the ramp its own.
+                                            const d = dispatcher.getDocument();
+                                            const action = styleActionFor(d, selectedNodeId!, { fill: next });
+                                            if (action) dispatcher.dispatchAction(action, { coalesce });
+                                            refresh();
+                                        }}
+                                    />
+                                ) : (<>
+                                    <ColorInput
+                                        value={node.style.fill}
+                                        onChange={v => { editSelected({ style: { fill: v } }); refresh(); }}
+                                        onClear={() => { editSelected({ style: { fill: "none" } }); refresh(); }}
+                                        clearLabel="No fill"
+                                    />
+                                    <TokenSelect
+                                        store={dispatcher.getDocument().variables as VariableStore}
+                                        value={node.style.fill}
+                                        onPick={v => { editSelected({ style: { fill: v || "#4a90d9" } }); refresh(); }}
+                                    />
+                                </>)}
                                 {/* Which points a closed outline encloses (schema 38). It only
                                     ever matters for a path that crosses itself or has more than
                                     one contour, which is why it sits with the fill. */}
@@ -2938,6 +2980,183 @@ function ColorInput({ value, onChange, muted, onClear, clearLabel }: {
             />
             {onClear && (
                 <button onClick={onClear} title={clearLabel} style={{ fontSize: 10, padding: "1px 5px", background: "transparent", color: "#888", border: "1px solid #2a2a4a", borderRadius: 2, cursor: "pointer" }}>∅</button>
+            )}
+        </div>
+    );
+}
+
+
+/**
+ * The CSS spelling of a ramp, for the preview bar and the stop handles.
+ *
+ * ALWAYS LEFT-TO-RIGHT, whatever the gradient's own axis says, and that is the point: this bar is
+ * the RAMP — which colour sits at which offset — not a picture of the fill. Where the ramp runs on
+ * the shape is the canvas's job. Every tool anybody arrives from draws this control the same way,
+ * because a radial gradient has no left and right to preview.
+ */
+function rampCss(stops: readonly GradientStop[]): string {
+    const parts = stops.map(s => `${cssColorOf(s)} ${(s.offset * 100).toFixed(2)}%`);
+    // ONE stop is not a legal CSS gradient — it needs two positions — and a ramp mid-edit can
+    // briefly have one. Doubling it paints the flat colour, which is what one stop means.
+    if (parts.length === 1) parts.push(parts[0].replace(/[\d.]+%$/, "100%"));
+    return `linear-gradient(to right, ${parts.join(", ")})`;
+}
+
+/**
+ * One stop as a CSS colour, opacity folded in.
+ *
+ * A `$token` has no value here — the inspector has no variable store in scope and resolving one
+ * would duplicate what the render model already does — so it previews as the missing-colour grey
+ * the swatch already uses for a token. The CANVAS shows the resolved colour; this is a handle.
+ */
+/**
+ * The alpha checkerboard every colour tool draws behind a ramp.
+ *
+ * WITHOUT IT A FADE TO TRANSPARENT READS AS A FADE TO THE PANEL. The default new gradient goes
+ * from the shape's colour to nothing, and against a dark panel that looked like a fade to black —
+ * indistinguishable from a ramp somebody actually authored that way. Found by looking at it.
+ */
+const ALPHA_CHECKER = "conic-gradient(#33334d 0 25%, #1b1b2e 0 50%, #33334d 0 75%, #1b1b2e 0)";
+
+function cssColorOf(stop: GradientStop): string {
+    const hex = /^#[0-9a-fA-F]{6}$/.test(stop.color) ? stop.color : "#888888";
+    return `${hex}${Math.round(Math.min(1, Math.max(0, stop.opacity)) * 255).toString(16).padStart(2, "0")}`;
+}
+
+/**
+ * The gradient stop editor.
+ *
+ * HOLDS NO GRADIENT OF ITS OWN — only which stop is selected. The ramp lives in the document and
+ * every change goes out as an action, so undo has something to restore and a second view of the
+ * same node cannot disagree with this one. A local copy is how an editor ends up fighting its own
+ * document the first time anything else writes to the node.
+ *
+ * AND THE SELECTED INDEX COMES BACK FROM THE OPERATION, never from arithmetic here: dragging one
+ * stop past another renumbers the list, and `withStopOffset` is what knows where the stop landed.
+ */
+function GradientEditor({ gradient, onChange }: {
+    gradient: Gradient; onChange: (next: Gradient, coalesce: boolean) => void;
+}) {
+    const [selected, setSelected] = React.useState(0);
+    const barRef = React.useRef<HTMLDivElement | null>(null);
+    // CLAMPED on read rather than corrected in an effect: a stop can disappear from under this
+    // component (an undo, another view), and a render that indexes past the end would throw before
+    // any effect could run.
+    const index = Math.min(selected, gradient.stops.length - 1);
+    const stop = gradient.stops[index];
+
+    /** Where along the bar a pointer is, 0..1. */
+    const offsetAt = (clientX: number): number => {
+        const box = barRef.current?.getBoundingClientRect();
+        if (!box || box.width === 0) return 0;
+        return Math.min(1, Math.max(0, (clientX - box.left) / box.width));
+    };
+
+    /** A drag on one handle. Coalesced, so the whole gesture is ONE undo like every slider here. */
+    const dragStop = (i: number) => (e: React.PointerEvent) => {
+        e.stopPropagation();
+        setSelected(i);
+        // THE GESTURE CARRIES ITS OWN GRADIENT, and it has to. The `gradient` prop is the one from
+        // the render that installed this handler, and a re-render mid-drag does not reach a closure
+        // already running. Advancing `at` against the NEW list while re-reading the OLD one is
+        // exactly the mismatch the returned index exists to prevent: the moment a drag reorders the
+        // stops, the next move edits whichever stop now happens to hold that number. Found by
+        // dragging one in the running app, not by any test — a component has no fixture.
+        let current = gradient;
+        let at = i;
+        const move = (ev: PointerEvent) => {
+            const moved = withStopOffset(current, at, offsetAt(ev.clientX));
+            if (!moved) return;
+            current = moved.gradient;
+            at = moved.index;
+            setSelected(moved.index);
+            onChange(moved.gradient, true);
+        };
+        const up = () => {
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", up);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+    };
+
+    return (
+        <div>
+            <div
+                ref={barRef}
+                title="Click the ramp to add a stop; drag a handle to move it"
+                onPointerDown={e => {
+                    const added = withStop(gradient, offsetAt(e.clientX));
+                    if (!added) return;
+                    setSelected(added.index);
+                    onChange(added.gradient, false);
+                }}
+                style={{
+                    position: "relative", height: 18, marginTop: 4, borderRadius: 3, cursor: "copy",
+                    border: `1px solid ${UI.line}`,
+                    // The ramp OVER the checker, so a transparent end shows the squares through it.
+                    backgroundImage: `${rampCss(gradient.stops)}, ${ALPHA_CHECKER}`,
+                    backgroundSize: "auto, 8px 8px"
+                }}
+            >
+                {gradient.stops.map((s, i) => (
+                    <div
+                        key={i}
+                        onPointerDown={dragStop(i)}
+                        style={{
+                            position: "absolute", top: -3, left: `${s.offset * 100}%`, width: 8, height: 22,
+                            marginLeft: -4, borderRadius: 2, cursor: "ew-resize",
+                            // Over the checker for the same reason the bar is: a fully transparent
+                            // stop's handle was all but invisible, and it is the one you most need
+                            // to find again.
+                            backgroundImage: `linear-gradient(${cssColorOf(s)}, ${cssColorOf(s)}), ${ALPHA_CHECKER}`,
+                            backgroundSize: "auto, 6px 6px",
+                            border: `2px solid ${i === index ? UI.accent : "#0e0e18"}`, boxSizing: "border-box"
+                        }}
+                    />
+                ))}
+            </div>
+            <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 6 }}>
+                <select
+                    value={gradient.kind}
+                    onChange={e => onChange(withKind(gradient, e.target.value as "linear" | "radial"), false)}
+                    style={{ ...SELECT_STYLE, flex: 1 }}
+                    title="Switching keeps the ramp where it is — a radial takes the linear axis's midpoint and half its length, and back again."
+                >
+                    <option value="linear">linear</option>
+                    <option value="radial">radial</option>
+                </select>
+                <button
+                    onClick={() => { const g = withoutStop(gradient, index); if (g) onChange(g, false); }}
+                    disabled={gradient.stops.length <= GRADIENT_MIN_STOPS}
+                    title={gradient.stops.length <= GRADIENT_MIN_STOPS
+                        ? `A gradient needs at least ${GRADIENT_MIN_STOPS} stops — use Solid to go back to one colour`
+                        : "Remove the selected stop"}
+                    style={{
+                        fontSize: 10, padding: "2px 6px", background: "transparent", color: UI.textDim,
+                        border: `1px solid ${UI.line}`, borderRadius: 2,
+                        cursor: gradient.stops.length <= GRADIENT_MIN_STOPS ? "default" : "pointer",
+                        opacity: gradient.stops.length <= GRADIENT_MIN_STOPS ? 0.4 : 1
+                    }}
+                >Remove stop</button>
+            </div>
+            {stop && (
+                <div style={INSPECTOR_GRID}>
+                    <div>
+                        <label style={INSPECTOR_LABEL}>Stop colour</label>
+                        <ColorInput
+                            value={stop.color}
+                            onChange={v => { const g = withStopColor(gradient, index, v); if (g) onChange(g, true); }}
+                        />
+                    </div>
+                    <div>
+                        <label style={INSPECTOR_LABEL}>Stop opacity</label>
+                        <NumInput
+                            value={Math.round(stop.opacity * 100) / 100}
+                            onChange={v => { const g = withStopColor(gradient, index, stop.color, v); if (g) onChange(g, true); }}
+                        />
+                    </div>
+                </div>
             )}
         </div>
     );

@@ -69,6 +69,7 @@ import { parseSvgGradients } from "../import/SvgGradient";
 import { PasteNodesAction } from "../actions/PasteNodesAction";
 import { Gradient, GradientStop, GradientUnits, GradientSample, GRADIENT_MAX_STOPS,
     defaultGradient, gradientError, normalizeStops, sampleGradient } from "../document/Gradient";
+import { gradientFromColor, colorAt, withStop, withoutStop, withStopColor, withStopOffset, withKind, GRADIENT_MIN_STOPS } from "../document/GradientEdit";
 import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
 import { traverseSceneGraph, selectionRoots, ReadonlyNode } from "../document/SceneGraph";
 import { validateDocumentIntegrity } from "../document/Integrity";
@@ -1180,6 +1181,29 @@ function _gradientSurface(): void {
     expectType<GradientSample | null>(sampleGradient(g, 0.5));
     expectType<{ color: string; opacity: number; mix: number | null; from: number; to: number } | null>(
         sampleGradient(g, 0.5));
+}
+
+/**
+ * `core/document/GradientEdit` — what an editor does to a ramp.
+ *
+ * Pinned on arrival, per the trigger in this file's header: a new file under `src/core` is the
+ * moment the pin is cheapest to add and the moment it is always forgotten.
+ */
+function _gradientEditSurface(): void {
+    expectType<number>(GRADIENT_MIN_STOPS);
+    const g: Gradient = gradientFromColor("#3366cc");
+    expectType<Gradient>(g);
+    expectType<Gradient>(gradientFromColor("#3366cc", "radial"));
+    expectType<{ color: string; opacity: number } | null>(colorAt(g, 0.5));
+    // THE INDEX COMES BACK WITH THE GRADIENT on the two that reorder — a sorted list renumbers,
+    // and an editor holding "the selected stop" as a number would silently start editing another.
+    expectType<{ gradient: Gradient; index: number } | null>(withStop(g, 0.5));
+    expectType<{ gradient: Gradient; index: number } | null>(withStopOffset(g, 0, 0.5));
+    // NULL IS THE REFUSAL, never a silent no-op: removing below two stops leaves something
+    // `gradientError` rejects, and a quiet decline looks exactly like a helper that worked.
+    expectType<Gradient | null>(withoutStop(g, 0));
+    expectType<Gradient | null>(withStopColor(g, 0, "#fff", 0.5));
+    expectType<Gradient>(withKind(g, "radial"));
 }
 
 /** `core/document/Clipboard` and the action that lands a paste — pinned on arrival. */

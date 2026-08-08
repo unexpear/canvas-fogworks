@@ -1422,11 +1422,22 @@ symbol, and a reader that skipped them would silently drop most of the drawing i
 them. It is expanded with a depth bound, since a symbol that references its own ancestor is a loop
 rather than a picture.
 
-**Gradients flatten to their first stop, and SAY SO.** VDE has no gradient, and 2,491 fills are
-one — about three percent. Refusing those files would cost the other ninety-seven percent of their
-shapes; silently dropping the fill would produce an invisible shape. Taking the first stop keeps the
-drawing recognisable, and every approximation is reported in a `notes` list rather than left for
+**A gradient fill arrives WHOLE (schema 56).** 2,491 fills reference one and every one of them used
+to arrive as its first stop; `Style.fill` can hold a ramp now, so `SvgDocument` reads it through
+`SvgGradient` and hands it to the node — 2,785 shapes across the corpus. Only STROKES still flatten,
+because `Style.stroke` is a colour string and exactly one stroke in 3,127 measured gradients
+references a ramp. Every remaining approximation is reported in a `notes` list rather than left for
 someone to notice.
+
+**And the ramp is MOVED with the shape, at two points that no type can check.** This importer bakes
+the group transform into the coordinates, so a gradient left where the file put it would paint in a
+system the shape has already left; `placeGradient` premultiplies the same matrix. `svgNodeSpecs`
+then normalises the path onto the origin, so it premultiplies that translation too — and skipping
+that one puts every ramp where the ink used to be. `objectBoundingBox` is turned into
+`userSpaceOnUse` by folding `translate(box) · scale(size)` into the matrix rather than multiplying
+the coordinates, because a radial ramp in a non-square box is an ellipse that no `cx/cy/r` states.
+The corpus cannot check that fold at all: not one of its 2,491 references uses `objectBoundingBox`,
+which is why the fold is pinned on hand-computed fixtures instead.
 
 **It reads the shapes this format defines, not XML in general** — the same promise `TextureAtlas`
 makes, and for the same reason: core is pure and has no DOM, and a regex that claims to parse XML
