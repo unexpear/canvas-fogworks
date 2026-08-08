@@ -34,7 +34,7 @@ import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { DetachInstanceAction } from "../core/actions/DetachInstanceAction";
 import { UpdateNodeTransformAction } from "../core/actions/UpdateNodeTransformAction";
 import { UpdateNodeLayoutAction } from "../core/actions/UpdateNodeLayoutAction";
-import { createEditorState, EditorState, zoomAt, viewportToFit, FIT_PADDING_PX, screenToWorld, overlayTransform } from "../editor/EditorState";
+import { createEditorState, frameOnLoad, EditorState, zoomAt, viewportToFit, FIT_PADDING_PX, screenToWorld, overlayTransform } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
@@ -534,7 +534,11 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
      */
     const prevFrameRef = useRef<number | undefined>(undefined);
     const editorStateRef = useRef<EditorState | null>(null);
-    if (!editorStateRef.current) editorStateRef.current = createEditorState();
+    if (!editorStateRef.current) {
+        editorStateRef.current = createEditorState();
+        // The autosave's own playhead, so the scrubber and the canvas start out agreeing.
+        editorStateRef.current.frame = frameOnLoad(initialDocument ?? {});
+    }
     const es = editorStateRef.current;
 
     const dispatcherRef = useRef<ActionDispatcher | null>(null);
@@ -1291,11 +1295,13 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             }),
             api.onFileOpened(({ filePath, content }) => {
                 try {
-                    dispatcher.loadDocument(deserializeDocument(content));
+                    const opened = deserializeDocument(content);
+                    dispatcher.loadDocument(opened);
                     // Remember where it came from so Ctrl+S writes back to the
                     // same file instead of diverting to localStorage.
                     currentFilePathRef.current = filePath;
                     es.selectedNodeIds = [];
+                    es.frame = frameOnLoad(opened);
                     refresh();
                 } catch (err) {
                     console.error("Failed to open file:", err);

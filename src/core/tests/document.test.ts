@@ -26,6 +26,7 @@ import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy , overrideTargetFor} from "../actions/nodeEdit";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { validateDocumentIntegrity } from "../document/Integrity";
+import { frameOnLoad } from "../../editor/EditorState";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
 import { AddNodeAction } from "../actions/AddNodeAction";
@@ -23386,5 +23387,48 @@ describe("Skinning a mesh (schema 58)", () => {
         // The instance's does not, because ITS bone is pinned. Reading the master's bone would
         // have bent this one by the same 20.
         expect(scene.nodes.get("I::M")!.type).toBe("core.rectangle");
+    });
+});
+
+describe("The playhead a saved file remembers", () => {
+    // `doc.frame` was written on every save and read back nowhere, so opening an animation put the
+    // scrubber at 0 while the canvas drew the frame the file stored. Both halves were individually
+    // right — an undefined `es.frame` falls through to the document's own frame, and the widget
+    // shows `es.frame ?? 0` — which is exactly why nothing caught it. Found by loading a rigged
+    // document into the running app and reading the two against each other.
+    test("a loaded document's frame becomes the playhead", () => {
+        expect(frameOnLoad({ timeline: { frames: 30 }, frame: 10 })).toBe(10);
+        // …and a file saved at rest still starts at rest.
+        expect(frameOnLoad({ timeline: { frames: 30 } })).toBe(0);
+    });
+
+    test("no timeline is no playhead, not frame zero", () => {
+        // The distinction the render depends on: `undefined` means "the document decides", and
+        // writing 0 into a document that has no timeline would stamp a frame onto every derivation.
+        expect(frameOnLoad({})).toBeUndefined();
+        expect(frameOnLoad({ frame: 4 })).toBeUndefined();
+    });
+
+    test("BOTH load paths ask for it — the helper is not the fix on its own", () => {
+        // A pure helper with perfect tests and a call site nobody checks is the same gap
+        // `UpdateNodeContentAction` had with nine-slice, and it survives a mutation of either
+        // assignment. There are exactly two ways a document arrives — the autosave at startup and
+        // File > Open — and a third would need this line too.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const asks = src.match(/frameOnLoad\(/g) ?? [];
+        expect(asks).toHaveLength(2);
+        expect(src).toMatch(/editorStateRef\.current\.frame = frameOnLoad\(initialDocument/);
+        expect(src).toMatch(/es\.frame = frameOnLoad\(opened\)/);
+    });
+
+    test("a frame past the END of the timeline is clamped back onto the scrubber", () => {
+        // Reachable: shorten a timeline and the stored frame outlives it. A playhead outside the
+        // range the slider offers is one the user cannot drag back.
+        expect(frameOnLoad({ timeline: { frames: 12 }, frame: 40 })).toBe(11);
+        expect(frameOnLoad({ timeline: { frames: 12 }, frame: -3 })).toBe(0);
+        // A single-frame timeline has exactly one legal playhead, not zero of them.
+        expect(frameOnLoad({ timeline: { frames: 1 }, frame: 5 })).toBe(0);
+        // And a fractional frame lands on a real one — the slider's step is 1.
+        expect(frameOnLoad({ timeline: { frames: 30 }, frame: 7.6 })).toBe(8);
     });
 });

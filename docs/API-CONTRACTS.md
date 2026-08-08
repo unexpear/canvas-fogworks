@@ -1435,6 +1435,12 @@ interface EditorState {
   viewport: { x: number; y: number; zoom: number };
 }
 function createEditorState(): EditorState;
+// The playhead a loaded document should start on. `doc.frame` was written on every save and read
+// back nowhere, so opening an animation put the scrubber at 0 while the canvas drew the stored
+// frame — both halves self-consistent, disagreeing with each other. Clamped, because a timeline
+// can be shortened under a saved frame; undefined without a timeline, which means "the document
+// decides" rather than "frame 0".
+function frameOnLoad(doc): number | undefined;
 function clampViewport(vp): void;            // zoom ∈ [0.05, 20]; pan ±10000 WORLD units (scaled by zoom)
 // Pure viewport math (node-tested); each mutates vp then re-clamps.
 function panBy(vp, dx: number, dy: number): void;                 // SCREEN-px pan (zoom-independent)

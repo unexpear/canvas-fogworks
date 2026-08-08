@@ -221,6 +221,25 @@ export function screenToWorld(
     };
 }
 
+/**
+ * Where the playhead should sit for a document that has just been LOADED.
+ *
+ * `doc.frame` was always written — it is what "records where the playhead was SAVED" means — and
+ * never read back, so opening an animation put the scrubber at 0 while the canvas drew whatever
+ * frame the file stored. Both halves were self-consistent and they disagreed with each other: the
+ * render is right because an undefined `es.frame` falls through to the document's own, and the
+ * widget is right because it shows `es.frame ?? 0`. The first scrub then jumped.
+ *
+ * CLAMPED, because a file may hold a frame past a timeline that has since been shortened, and a
+ * playhead outside the scrubber's range is one the user cannot get back. Undefined when there is
+ * no timeline at all — there is no playhead to place.
+ */
+export function frameOnLoad(doc: { timeline?: { frames: number }; frame?: number }): number | undefined {
+    if (!doc.timeline) return undefined;
+    const last = Math.max(0, doc.timeline.frames - 1);
+    return Math.min(last, Math.max(0, Math.round(doc.frame ?? 0)));
+}
+
 export function createEditorState(): EditorState {
     return {
         selectedNodeIds: [],
