@@ -753,7 +753,28 @@ schema-18 effects (`Shadow` = dx/dy/blur/color; `blur` ≥ 0). `style.fill` is `
 (schema 56); the ramp’s own rules live in `gradientError` and are reached through `styleError`, so
 the edit path, the load path and the importer cannot disagree about what a legal ramp is.
 `flatFill(fill)` is the one-colour answer for the places that cannot hold a ramp — hit testing,
-the script sandbox, and the backends that flatten. `trackError(t)` validates ONE grid
+the script sandbox, and the backends that flatten.
+
+`core/document/GradientEdit` is what an EDITOR does to a ramp, kept apart from `Gradient` (which
+says what one is) because it needs `blendColor` — and that lives with the transition code, which
+imports `Node`, which imports `Gradient`:
+
+```ts
+GRADIENT_MIN_STOPS: number                                   // below this it is a flat colour
+gradientFromColor(color, kind?): Gradient                    // same colour both ends, opaque → clear
+colorAt(g, t): { color; opacity } | null                     // what the ramp already shows there
+withStop(g, t): { gradient; index } | null                   // takes the colour already at t
+withStopOffset(g, i, offset): { gradient; index } | null
+withoutStop(g, i): Gradient | null                           // null below GRADIENT_MIN_STOPS
+withStopColor(g, i, color, opacity?): Gradient | null
+withKind(g, kind): Gradient                                  // derived from the existing geometry
+```
+
+Every one returns a NEW gradient — the document is written through actions, and a mutating helper
+would edit behind the dispatcher and leave undo nothing to restore. The two that can REORDER return
+the moved stop's new index with it: stops are kept sorted, so a caller tracking "the selected stop"
+as its own number edits a different stop the moment a drag crosses a neighbour. Refusal is `null`
+and never a silent no-op, since a quiet decline is indistinguishable from a helper that worked. `trackError(t)` validates ONE grid
 track (exactly one of px/fr/auto; `px ≥ 0`, `fr > 0`, `auto === true`) and is exported so the
 track-list parser can defer to it rather than restate it. `layoutExclusivity(patch)` is the ONE
 statement of grid ⊕ container exclusivity — it takes and returns a PATCH (the action's delta must
