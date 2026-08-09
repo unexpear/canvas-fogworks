@@ -154,7 +154,7 @@ import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, sna
 import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
 import { buildRenderModel, PaintGradient, resolvePaintGradient, resolveTypography, Shape } from "../../renderer/RenderModel";
-import { BLEND_CODE } from "../../renderer/emitWebGL";
+import { BLEND_CODE, packTileIndices } from "../../renderer/emitWebGL";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, polygonCommands, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../../editor/tools/ShapeTool";
 import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../geometry/Polygon";
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
@@ -24914,6 +24914,28 @@ describe("core.tilemap — a grid instead of ten thousand nodes (schema 61)", ()
             null, { tilemap: mine }));
         mine.tiles[0] = 99;
         expect([...d2.getDocument().nodes.values()][0].tilemap!.tiles).toEqual([3]);
+    });
+
+    test("an index is PACKED into two bytes, with alpha saying whether there is a tile", () => {
+        // WebGL 1 has no integer textures, so an index travels as R + G*256. Alpha is the presence
+        // flag rather than a reserved index, because every index in range is a real tile somebody
+        // drew and stealing one would silently blank whichever tile got the short straw.
+        const packed = packTileIndices([0, 1, 255, 256, 257, TILE_EMPTY]);
+        expect([...packed.slice(0, 4)]).toEqual([0, 0, 0, 255]);        // tile 0 IS a tile
+        expect([...packed.slice(4, 8)]).toEqual([1, 0, 0, 255]);
+        expect([...packed.slice(8, 12)]).toEqual([255, 0, 0, 255]);     // the last single byte
+        expect([...packed.slice(12, 16)]).toEqual([0, 1, 0, 255]);      // 256 carries into G
+        expect([...packed.slice(16, 20)]).toEqual([1, 1, 0, 255]);
+        // EMPTY is alpha 0, and its colour bytes are irrelevant — the shader discards first.
+        expect(packed[23]).toBe(0);
+        // OUT OF RANGE is dropped to empty rather than WRAPPED. A wrapped index is a confidently
+        // wrong tile, which is worse to look at than a hole and much harder to trace.
+        const over = packTileIndices([0x10000, -5, 1.5]);
+        expect(over[3]).toBe(0);
+        expect(over[7]).toBe(0);
+        expect(over[11]).toBe(0);
+        // One texel per cell, four bytes each — the size the upload assumes.
+        expect(packTileIndices(new Array(12).fill(0)).length).toBe(48);
     });
 
     test("the MODEL emits one item and culls the cells itself", () => {

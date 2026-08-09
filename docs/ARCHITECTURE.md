@@ -1067,6 +1067,17 @@ leaves the scene's own texture bound to unit 0, so the next frame bound that tar
 it — a feedback loop, every draw discarded, the backdrop simply absent. This time the console said
 so in as many words.
 
+**A TILEMAP IS ONE QUAD ON THE GPU (schema 61)**, and it is the one shape where this backend does
+less work than the other two rather than more. SVG emits an element per visible cell and Canvas a
+blit per cell, because that is all either can do; here the whole grid is a single rectangle and the
+FRAGMENT stage does the work — floor the local position into a cell, read that cell's index out of
+an index texture, and sample the sheet at the tile it names. Ten thousand cells, one draw call.
+
+WebGL 1 has no integer textures, so an index arrives as two bytes with alpha as the presence flag,
+and the index texture is sampled NEAREST because an interpolated tile index is not a tile. The
+sample into the sheet is inset by half a texel on each side, which is the standard atlas-bleeding
+fix — `CLAMP_TO_EDGE` guards the sheet's outer edge and does nothing for a rect inside it.
+
 **Depth is off inside a layer**, which is correct rather than a compromise: `content` is already
 sorted far-to-near by the model, so painter's order gives what the depth test would have. The call
 is redundant — GL says a depth test against a framebuffer with no depth attachment always passes —

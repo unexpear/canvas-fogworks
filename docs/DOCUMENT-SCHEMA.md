@@ -1153,9 +1153,16 @@ test.
 `core.tilemap` without one, so a node created without one could be made and never saved. The
 default is 16×16 because 21 of the corpus's 40 Tiled maps use that size and no other comes close.
 
-**Not drawn by the WebGL backend yet.** Every shape that backend draws is one outline textured by
-one source rect; a grid is N rects from one sheet, so it needs the one-quad shader that resolves a
-tile per fragment — which is exactly what storing indices makes possible, and its own piece of work.
+**All three backends draw it, and the GPU does the LEAST work of the three.** SVG emits an
+`<image>` per visible cell inside a cropping `<svg>` viewport and Canvas makes a nine-argument
+`drawImage` per cell, because each has a blit and no other way. The GPU draws **one quad** and lets
+each fragment work out which cell it is in, read that cell out of an index texture and sample the
+sheet — ten thousand cells, one draw call, which is the whole reason the node stores indices.
+
+WebGL 1 has no integer textures, so an index travels as two bytes (R low, G high) with **alpha as
+the presence flag** rather than a reserved index — every index in range is a real tile somebody
+drew. The shader insets its sample by **half a texel** on each side of the tile, which is the
+standard atlas-bleeding fix: clamping only helps at the sheet's outer edge, not at a rect inside it.
 
 ## The eyedropper (no schema change)
 

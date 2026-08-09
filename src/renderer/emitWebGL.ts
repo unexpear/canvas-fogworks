@@ -61,18 +61,22 @@
  *     target becomes the next scratch. One extra full-screen pass per blended item, and nothing at
  *     all for a frame that does not blend.
  *
- * THE GAP TODAY IS `core.tilemap` (schema 61). Every shape this backend draws is one outline
- * textured by one source rect, and a grid is N rects from a single sheet — so it needs either
- * per-vertex UVs or, better, the one-quad shader that resolves a tile per FRAGMENT, which is
- * exactly what storing indices rather than nodes makes possible. SVG and Canvas draw a cell each
- * because both have a nine-argument blit; this one has to be built. Until then a tilemap is absent
- * on this backend rather than wrong, and the app labels it a preview.
+ *   - A TILEMAP (schema 61), and this is the one shape where the GPU does LESS work than the other
+ *     two rather than more. SVG and Canvas draw a cell each, because each has a blit and no other
+ *     way; here the whole grid is ONE quad and each fragment works out which cell it is in, reads
+ *     that cell out of an index texture and samples the sheet. Ten thousand cells, one draw call.
+ *     WebGL 1 has no integer textures, so an index travels as two bytes in R and G with A as the
+ *     presence flag — a reserved index would steal a tile somebody drew.
+ *
+ * WHAT THIS FILE HAS NO KNOWN GAP FOR, as of schema 61 — a sentence with a shelf life, and
+ * `npm run header-claims` lists it on purpose so whoever finds the next one comes back here.
  *
  * The app still offers this backend as a preview, because a backend that quietly drops content is
  * worse than one that admits what it cannot do.
  */
 
 import { ClipRegion, DisplayList, DrawItem, PaintGradient, Shape, layerTransition } from "./RenderModel";
+import { sheetWidth, sheetHeight } from "../core/document/Tilemap";
 import { gaussianKernel, blurPlan, GAUSSIAN_MAX_RADIUS } from "./Gaussian";
 import { Mat2D, translation, multiply, invert, IDENTITY } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
@@ -306,6 +310,22 @@ uniform float u_hMax;
 uniform float u_hasHeight;
 uniform sampler2D u_image;
 uniform vec4 u_imgRect;
+// A TILEMAP (schema 61). One quad covers the whole grid and each FRAGMENT works out which tile it
+// is in, which is the only way this backend can draw a map in one draw: every other shape here is
+// one outline textured by one source rect, and a grid is N rects from a single sheet.
+//
+// u_tileIndex holds the grid itself, one texel per cell, sampled NEAREST — an interpolated tile
+// index is not a tile. WebGL 1 has no integer textures, so the index arrives as two bytes in R and
+// G, and A carries "there is a tile here" rather than a reserved index, because every index in
+// range is a real tile somebody drew.
+uniform sampler2D u_tileIndex;
+uniform float u_isTilemap;
+// cols, rows of the grid, then one cell's size in LOCAL units.
+uniform vec4 u_tileGrid;
+// The sheet: columns, tile width, tile height, spacing — all in sheet PIXELS.
+uniform vec4 u_tileSheet;
+// margin (sheet pixels), then the sheet's own width and height in pixels.
+uniform vec3 u_tileMargin;
 // The SOURCE sub-rectangle, already normalised into texture coordinates: xy is its origin and zw
 // its size. Whole-image draws pass 0,0,1,1, so the arithmetic below is one multiply-add that
 // changes nothing for them rather than a branch that has to be kept in step with the other case.
@@ -441,7 +461,31 @@ void main() {
         base = rampColor(v_local);
         base.a *= u_color.a;
     }
-    if (u_hasImage > 0.5) {
+    if (u_isTilemap > 0.5) {
+        vec2 cell = floor(v_local / u_tileGrid.zw);
+        // OFF THE GRID IS NOTHING. Discarded rather than drawn transparent: a transparent fragment
+        // still writes depth and would occlude whatever is behind the map.
+        if (cell.x < 0.0 || cell.y < 0.0 || cell.x >= u_tileGrid.x || cell.y >= u_tileGrid.y) discard;
+        // The texel CENTRE, which is what makes NEAREST sampling land on the cell meant rather than
+        // on whichever side of the boundary a rounding error falls.
+        vec4 packed = texture2D(u_tileIndex, (cell + 0.5) / u_tileGrid.xy);
+        if (packed.a < 0.5) discard;
+        float index = floor(packed.r * 255.0 + 0.5) + floor(packed.g * 255.0 + 0.5) * 256.0;
+        float scol = mod(index, u_tileSheet.x);
+        float srow = floor(index / u_tileSheet.x);
+        vec2 origin = vec2(u_tileMargin.x, u_tileMargin.x)
+            + vec2(scol, srow) * (u_tileSheet.yz + vec2(u_tileSheet.w));
+        // WHERE IN THE CELL this fragment is, 0..1. Computed from the cell rather than with fract,
+        // which is exact at the boundary and cheaper than trusting the periodicity.
+        vec2 within = (v_local - cell * u_tileGrid.zw) / u_tileGrid.zw;
+        // HALF A TEXEL IN FROM EACH EDGE. Sampling a tile at its exact boundary picks up the
+        // NEIGHBOURING tile once filtering is linear, because clamping only helps at the sheet's
+        // outer edge and not at a rect inside it. This is the atlas-bleeding inset every 2D
+        // renderer needs and the one thing a NEAREST-filtered fixture would never reveal.
+        vec2 px = origin + clamp(within * u_tileSheet.yz, vec2(0.5), u_tileSheet.yz - 0.5);
+        base = texture2D(u_image, px / u_tileMargin.yz);
+        base.a *= u_color.a;
+    } else if (u_hasImage > 0.5) {
         vec2 uv01 = (v_local - u_imgRect.xy) / u_imgRect.zw;
         base = texture2D(u_image, u_imgUV.xy + uv01 * u_imgUV.zw);
         // The image's own alpha, times the item's opacity — which is what u_color.a carries for an
@@ -542,6 +586,13 @@ export interface GLState {
     heightTex: WebGLTexture;
     imageTex: WebGLTexture;
     imgUVLoc: WebGLUniformLocation | null;
+    /** The grid texture for a `core.tilemap` (schema 61), and the uniforms that read it. */
+    tileIndexTex: WebGLTexture;
+    tileIndexLoc: WebGLUniformLocation | null;
+    isTilemapLoc: WebGLUniformLocation | null;
+    tileGridLoc: WebGLUniformLocation | null;
+    tileSheetLoc: WebGLUniformLocation | null;
+    tileMarginLoc: WebGLUniformLocation | null;
     /** What currently lives in `imageTex` — an image's href+generation, or a text raster's key. */
     imageKey: string | null;
     /**
@@ -913,7 +964,8 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
     const localBuffer = gl.createBuffer();
     const heightTex = gl.createTexture();
     const imageTex = gl.createTexture();
-    if (!vs || !fs || !program || !buffer || !normalBuffer || !localBuffer || !heightTex || !imageTex) return null;
+    const tileIndexTex = gl.createTexture();
+    if (!vs || !fs || !program || !buffer || !normalBuffer || !localBuffer || !heightTex || !imageTex || !tileIndexTex) return null;
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
     gl.linkProgram(program);
@@ -940,6 +992,12 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
         imageLoc: gl.getUniformLocation(program, "u_image"),
         imgRectLoc: gl.getUniformLocation(program, "u_imgRect"),
         imgUVLoc: gl.getUniformLocation(program, "u_imgUV"),
+        tileIndexTex,
+        tileIndexLoc: gl.getUniformLocation(program, "u_tileIndex"),
+        isTilemapLoc: gl.getUniformLocation(program, "u_isTilemap"),
+        tileGridLoc: gl.getUniformLocation(program, "u_tileGrid"),
+        tileSheetLoc: gl.getUniformLocation(program, "u_tileSheet"),
+        tileMarginLoc: gl.getUniformLocation(program, "u_tileMargin"),
         hasImageLoc: gl.getUniformLocation(program, "u_hasImage"),
         gradKindLoc: gl.getUniformLocation(program, "u_gradKind"),
         gradInvLoc: gl.getUniformLocation(program, "u_gradInv"),
@@ -1014,13 +1072,12 @@ export function shapeToLocalCommands(shape: Shape, radius: number | null): PathC
         // instead of each having an opinion about where a line breaks.
         case "text": return transformCommands(translation(shape.x, shape.y),
             rectCommands(shape.width, shape.height, 0));
-        // A TILEMAP DRAWS NOTHING HERE YET (schema 61), and it is the one shape this backend
-        // cannot express by adding a case. Every other kind is ONE outline textured by ONE source
-        // rect; a grid is N rects from one sheet, so it needs either per-vertex UVs or the
-        // single-quad shader that looks the tile up per fragment — the approach that renders a
-        // 512-cube map in 300 microseconds, and the reason the node stores indices at all.
-        // Recorded rather than discovered; `npm run header-claims` lists the header sentence.
-        case "tilemap": return null;
+        // A TILEMAP IS ONE RECTANGLE, like an image — and unlike an image, what makes it a grid
+        // is entirely in the fragment stage: each fragment works out which cell it is in, reads
+        // that cell's index out of a texture, and samples the sheet. One quad for the whole map,
+        // which is the reason the node stores indices rather than nodes.
+        case "tilemap": return transformCommands(translation(shape.x, shape.y),
+            rectCommands(shape.width, shape.height, 0));
         default: return null;
     }
 }
@@ -1382,7 +1439,11 @@ export function itemDraws(
     // somebody's PNG with a soft edge. For text it is not a subtlety at all — `paint.fill` on a
     // text node is the GLYPH colour, so filling its box would paint a solid rectangle over
     // whatever is behind it.
-    const isRaster = item.shape.kind === "image" || item.shape.kind === "text";
+    // A TILEMAP IS A TEXTURED SHAPE TOO, and saying so here is what stops the fill path from
+    // painting a flat rectangle underneath it: `paint.fill` is null for a map, but the guard below
+    // is about which pipeline the item belongs to, not about whether a colour happens to be set.
+    const isRaster = item.shape.kind === "image" || item.shape.kind === "text"
+        || item.shape.kind === "tilemap";
     if (paint.fill !== null && !isRaster) {
         // RESOLVED first, which does two jobs at once. It applies the document's fill rule — the
         // GPU has no `fill-rule` to hand to, unlike the other two backends, so the rule has to
@@ -1448,6 +1509,19 @@ export function itemDraws(
     // because that is what a bitmap goes on; everything that makes it text happened in
     // `TextRaster`, which the Canvas backend runs too — so a line breaks in the same place on
     // both, which a second typesetter in here could never promise.
+    // A TILEMAP is its box with the SHEET bound over it. It goes through the same `draw` as a
+    // single picture — one quad, one texture — and everything that makes it a grid happens in the
+    // fragment stage, which is the only way this backend can draw ten thousand cells in one call.
+    // The `source` is the WHOLE sheet: the shader picks each tile out of it per fragment, so a
+    // source rect here would crop the sheet before the grid ever saw it.
+    if (item.shape.kind === "tilemap" && item.shape.href !== null && item.shape.cells) {
+        const map = item.shape;
+        const picture = draw(resolveRings(commandsToRings(local, tolerance), "nonzero"),
+            item.world, "#ffffff", paint.opacity,
+            { href: map.href!, x: map.x, y: map.y, width: map.width, height: map.height,
+              source: null, pixelated: map.pixelated, surface: null }, null, surface);
+        if (picture) out.push(picture);
+    }
     if (isRaster && item.shape.kind === "text" && item.shape.text.length > 0) {
         const typeset = draw(resolveRings(commandsToRings(local, tolerance), "nonzero"),
             item.world, "#ffffff", null, null, item.shape, surface);
@@ -1897,6 +1971,39 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
             } else {
                 gl.uniform1f(state.hasImageLoc, 0);
             }
+            // THE GRID (schema 61). Sticky uniform state like every other one here, so it is set
+            // BOTH ways: a draw that said nothing would inherit the previous item's map and turn
+            // the next plain rectangle into a tilemap.
+            const tm = item.shape.kind === "tilemap" ? item.shape : null;
+            if (tm && tm.href !== null && d.image) {
+                const map = tm.map;
+                gl.activeTexture(gl.TEXTURE2);
+                gl.bindTexture(gl.TEXTURE_2D, state.tileIndexTex);
+                // RE-UPLOADED PER DRAW, like the heightfield and for the same reason: the grid is
+                // what a person is editing when this matters, so a cache keyed on it would be
+                // invalidated on exactly the frames it would have paid for. The corpus's largest
+                // map is 100x100, which is 40KB — twice the heightfield's 16KB and in the same
+                // league. A map near the million-cell cap would want dirty tracking instead.
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, map.cols, map.rows, 0,
+                    gl.RGBA, gl.UNSIGNED_BYTE, packTileIndices(map.tiles));
+                // NEAREST, ALWAYS. An interpolated tile index is not a tile — halfway between
+                // grass and stone is whatever tile happens to sit at that number. CLAMP so a
+                // fragment at the very edge reads the edge cell rather than wrapping to the far
+                // side of the map.
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                gl.uniform1i(state.tileIndexLoc, 2);
+                gl.uniform4f(state.tileGridLoc, map.cols, map.rows, map.tileWidth, map.tileHeight);
+                gl.uniform4f(state.tileSheetLoc, map.sheet.columns, map.sheet.tileWidth,
+                    map.sheet.tileHeight, map.sheet.spacing);
+                gl.uniform3f(state.tileMarginLoc, map.sheet.margin,
+                    sheetWidth(map.sheet), sheetHeight(map.sheet, map.tiles));
+                gl.uniform1f(state.isTilemapLoc, 1);
+            } else {
+                gl.uniform1f(state.isTilemapLoc, 0);
+            }
             // THE RAMP, or an explicit zero. `u_gradKind` is sticky uniform state like every
             // other one here, so a draw that says nothing inherits the previous shape's gradient —
             // the exact shape of the `setLineDash` bug the canvas backend already carries a note
@@ -2042,6 +2149,35 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
         applyDepth();
     }
     return true;
+}
+
+/**
+ * A tile grid as RGBA bytes — one texel per cell, ready to upload.
+ *
+ * WEBGL 1 HAS NO INTEGER TEXTURES, so an index travels as two bytes: R is the low 8 bits and G the
+ * high 8, giving 65,536 tiles, which is 65,000 more than any sheet in the corpus. A is the
+ * PRESENCE flag rather than a reserved index, because every index in range is a real tile somebody
+ * drew and stealing one would silently blank whichever tile got the short straw.
+ *
+ * Pure and exported for the reason every decision here is pulled out of the draw loop: the loop
+ * needs a GPU and this does not, so the arithmetic that can be wrong lives where a test reaches it.
+ * An index too large to fit is dropped to EMPTY rather than wrapped — a wrapped index is a
+ * confidently wrong tile, which is worse to look at than a hole.
+ */
+export function packTileIndices(tiles: readonly number[]): Uint8Array {
+    const out = new Uint8Array(tiles.length * 4);
+    for (let i = 0; i < tiles.length; i++) {
+        const t = tiles[i];
+        if (!Number.isInteger(t) || t < 0 || t > 0xffff) continue;   // leaves alpha 0: no tile
+        // THE MASK IS A NO-OP AND IS KEPT ANYWAY, which a mutation of it demonstrated: assigning
+        // to a Uint8Array already truncates, so `t & 0xff` and `t` store the same byte. It stays
+        // because it says LOW BYTE next to the `>> 8` that says high byte, and a reader should not
+        // have to know a typed array's coercion rules to see that the pair is a 16-bit split.
+        out[i * 4] = t & 0xff;
+        out[i * 4 + 1] = (t >> 8) & 0xff;
+        out[i * 4 + 3] = 255;
+    }
+    return out;
 }
 
 /**
