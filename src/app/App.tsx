@@ -55,6 +55,11 @@ import { applyParallax, DEPTH_MIN, DEPTH_MAX } from "../core/document/Depth";
 import { SetDepthAction } from "../core/actions/SetDepthAction";
 import { SetMeshAction } from "../core/actions/SetMeshAction";
 import { WeightTool, WeightBrush } from "../editor/tools/WeightTool";
+import { TileTool, TileBrush } from "../editor/tools/TileTool";
+import { SetTilemapAction } from "../core/actions/SetTilemapAction";
+import { resizeTilemap } from "../core/document/TilemapEdit";
+import { Tilemap, tileSourceRect as sheetTileRect, tileIndexAt,
+    FLIP_H, FLIP_V, FLIP_D } from "../core/document/Tilemap";
 import { EyedropperTool } from "../editor/tools/EyedropperTool";
 import { SetLightingAction } from "../core/actions/SetLightingAction";
 import { restMesh, MESH_MAX_DIVISIONS, copyMeshPoint, Mesh, ReadonlyMesh } from "../core/document/Mesh";
@@ -450,7 +455,7 @@ export function App() {
  * Switching is one click, and the alternative — every tool for every job, always — is the twelve
  * flat slots this replaced.
  */
-type Workspace = "design" | "paint" | "animate";
+type Workspace = "design" | "paint" | "animate" | "map";
 
 const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[]; defaultTool: string }[] = [
     // `tools` is the ORDER of the strip as well as its contents, so the two cannot disagree.
@@ -463,7 +468,13 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     // Rigging is ANIMATION work, so the weight brush lives here rather than beside the pixel brush
     // it resembles: the two paint different things, and sharing a strip would put "which brush is
     // this" between the author and every stroke.
-    { id: "animate", label: "Animate", icon: "⏱", tools: ["select", "move", "weights"], defaultTool: "select" }
+    { id: "animate", label: "Animate", icon: "⏱", tools: ["select", "move", "weights"], defaultTool: "select" },
+    // MAPS ARE THEIR OWN JOB, by the same rule that keeps the weight brush out of the paint strip:
+    // the tile brush and the pixel brush are the same gesture over different material, and sharing a
+    // strip would put "which brush is this" between the author and every stroke. This is also where
+    // terrain and autotiling go next, so it is a strip with somewhere to grow rather than one tool
+    // in a coat of paint.
+    { id: "map", label: "Map", icon: "▦", tools: ["select", "move", "tiles"], defaultTool: "tiles" }
 ];
 
     const [lastShape, setLastShape] = useState<ShapeKind>("rectangle");
@@ -505,6 +516,15 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const [weightErasing, setWeightErasing] = useState(false);
     const weightBrushRef = useRef<WeightBrush>({ bone: null, radius: 40, strength: PAINT_STRENGTH, erasing: false });
     weightBrushRef.current = { bone: weightBone, radius: weightRadius, strength: weightStrength, erasing: weightErasing };
+    // THE TILE BRUSH (schema 61). `index` starts at 0 rather than at nothing, because tile zero is a
+    // real tile and a map's first stroke should not need a visit to a panel first — unlike a bone,
+    // where a wrong guess is silent and a stroke without one is the honest refusal.
+    const [tileIndex, setTileIndex] = useState(0);
+    const [tileFlip, setTileFlip] = useState(0);
+    const [tileMode, setTileMode] = useState<"paint" | "fill">("paint");
+    const [tileErasing, setTileErasing] = useState(false);
+    const tileBrushRef = useRef<TileBrush>({ index: 0, flip: 0, mode: "paint", erasing: false });
+    tileBrushRef.current = { index: tileIndex, flip: tileFlip, mode: tileMode, erasing: tileErasing };
     const [brushRound, setBrushRound] = useState(false);
     const brushRoundRef = useRef(false);
     brushRoundRef.current = brushRound;
@@ -618,6 +638,11 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             // over different material: one moves pixels, the other moves how much a bone owns a
             // control point.
             weights: new WeightTool(dispatcher, es, refresh, () => weightBrushRef.current),
+            // THE TILE BRUSH. Alt-click SAMPLES rather than paints, and it writes to the brush the
+            // way the eyedropper writes to the swatch — it changes what the next stroke will be, so
+            // it needs no action and leaves no history entry.
+            tiles: new TileTool(dispatcher, es, refresh, () => tileBrushRef.current,
+                (index, flip) => { setTileIndex(index); setTileFlip(flip); setTileErasing(index < 0); }),
             // THE EYEDROPPER writes to the SWATCH, not to the document — it changes what the next
             // stroke will be, which is why it needs no action and leaves no history entry.
             eyedropper: new EyedropperTool(dispatcher, es, refresh, setPaintColour),
@@ -1952,7 +1977,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                             paint: { icon: "✏", label: "Paint" },
                             raster: { icon: SHAPE_ICONS.raster, label: "Canvas" },
                             weights: { icon: "◑", label: "Weights" },
-                            eyedropper: { icon: "⌖", label: "Eyedropper" }
+                            eyedropper: { icon: "⌖", label: "Eyedropper" },
+                            tiles: { icon: "▦", label: "Tiles" }
                         };
                         const t = spec[slot];
                         if (!t) return null;
@@ -2472,6 +2498,127 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                        onChange={e => setWeightErasing(e.target.checked)} />
                                                 erase (paint the bone away)
                                             </label>
+                                        </div>
+                                    );
+                                })()}
+                                {/* THE TILE BRUSH (schema 61). Shown for any selected tilemap, and
+                                    it is the whole reason the node became editable: a map could be
+                                    imported and drawn with no way to choose a tile, which is a
+                                    picture rather than a document.
+
+                                    THE PICKER IS THE SHEET ITSELF, at 1:1 in a scrolling box, with
+                                    the chosen tile ringed. A list of index numbers would be exactly
+                                    as correct and useless — an author picks a tile by looking at it.
+                                    Where each tile sits comes from `tileSourceRect`, the same
+                                    function the renderer slices with, so the ring cannot land
+                                    somewhere the paint does not. */}
+                                {(() => {
+                                    const stored = dispatcher.getDocument().nodes.get(node.id);
+                                    const map = stored?.tilemap;
+                                    if (!stored || stored.type !== "core.tilemap" || !map) return null;
+                                    const ring = sheetTileRect(map.sheet, tileIndex);
+                                    /** Replace the grid, keeping the node's box in step, as ONE step. */
+                                    const setMap = (next: Tilemap | null) => {
+                                        if (!next) return;
+                                        const doc = dispatcher.getDocument();
+                                        const actions: Action[] = [new SetTilemapAction(doc, node.id, next)];
+                                        // THE BOX FOLLOWS THE GRID, in the same transaction. A resize
+                                        // that moved one and not the other would leave the node
+                                        // selectable over cells it no longer has — and undoing it
+                                        // would take two presses for one gesture.
+                                        const box = geometryActionFor(doc, node.id, {
+                                            width: next.cols * next.tileWidth,
+                                            height: next.rows * next.tileHeight
+                                        });
+                                        if (box) actions.push(box);
+                                        dispatcher.dispatchAction(new TransactionAction(doc, "tilemap-size", actions));
+                                        refresh();
+                                    };
+                                    return (
+                                        <div style={{ marginTop: 8 }}>
+                                            <label style={INSPECTOR_LABEL}>Tile brush</label>
+                                            <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
+                                                <ToolButton icon="✏" label="Paint" active={tileMode === "paint" && !tileErasing}
+                                                    onClick={() => { setTileMode("paint"); setTileErasing(false); }} />
+                                                <ToolButton icon="◍" label="Fill" active={tileMode === "fill" && !tileErasing}
+                                                    onClick={() => { setTileMode("fill"); setTileErasing(false); }} />
+                                                <ToolButton icon="⌫" label="Erase" active={tileErasing}
+                                                    onClick={() => setTileErasing(v => !v)} />
+                                                <span style={{ color: "#888", fontSize: 11, marginLeft: 4 }}>
+                                                    {tileErasing ? "clearing cells" : `tile ${tileIndex}`}
+                                                </span>
+                                            </div>
+                                            {/* THE THREE FLIP BITS, as three toggles rather than a
+                                                number: 0..7 is exactly what the document stores and
+                                                exactly what nobody can read. The diagonal is named
+                                                "turn" because that is what it does to a viewer —
+                                                it is a transpose, and it is what makes all eight
+                                                orientations reachable from three switches. */}
+                                            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, color: "#aaa", fontSize: 11 }}>
+                                                {([["flip X", FLIP_H], ["flip Y", FLIP_V], ["turn", FLIP_D]] as const).map(([label, bit]) => (
+                                                    <label key={label} style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                                                        <input type="checkbox" checked={(tileFlip & bit) !== 0}
+                                                               onChange={e => setTileFlip(f => e.target.checked ? (f | bit) : (f & ~bit))} />
+                                                        {label}
+                                                    </label>
+                                                ))}
+                                            </div>
+                                            {/* ALT-CLICK ON THE CANVAS SAMPLES a tile, and this says
+                                                so where the brush is: a gesture nothing mentions is
+                                                a gesture nobody finds. */}
+                                            <div style={{ color: "#666", fontSize: 10, marginTop: 3 }}>
+                                                alt-click the map to pick up the tile under the cursor
+                                            </div>
+                                            {stored.src && (
+                                                <div
+                                                    data-tile-picker="1"
+                                                    style={{
+                                                        marginTop: 4, maxHeight: 180, overflow: "auto",
+                                                        border: `1px solid ${UI.line}`, background: "#111", position: "relative"
+                                                    }}
+                                                >
+                                                    <div style={{ position: "relative", display: "inline-block" }}>
+                                                        <img
+                                                            src={stored.src}
+                                                            alt="tile sheet"
+                                                            draggable={false}
+                                                            style={{ display: "block", imageRendering: "pixelated", cursor: "crosshair" }}
+                                                            onClick={e => {
+                                                                // SHEET PIXELS, measured against the
+                                                                // IMAGE's own box so the container's
+                                                                // scroll needs no arithmetic here.
+                                                                const r = (e.target as HTMLImageElement).getBoundingClientRect();
+                                                                const picked = tileIndexAt(map.sheet,
+                                                                    e.clientX - r.left, e.clientY - r.top);
+                                                                // NULL IS THE GUTTER, and it selects
+                                                                // nothing rather than the neighbour:
+                                                                // the gap between tiles is not a tile.
+                                                                if (picked === null) return;
+                                                                setTileIndex(picked);
+                                                                setTileErasing(false);
+                                                            }}
+                                                        />
+                                                        {ring && (
+                                                            <div style={{
+                                                                position: "absolute", pointerEvents: "none",
+                                                                left: ring.x, top: ring.y,
+                                                                width: ring.width, height: ring.height,
+                                                                outline: `1px solid ${UI.accent}`,
+                                                                boxShadow: "0 0 0 1px #000"
+                                                            }} />
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )}
+                                            <label style={INSPECTOR_LABEL}>Grid</label>
+                                            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                                <NumInput value={map.cols}
+                                                    onChange={v => setMap(resizeTilemap(map, Math.round(v), map.rows))} />
+                                                <span style={{ color: "#666", fontSize: 11 }}>×</span>
+                                                <NumInput value={map.rows}
+                                                    onChange={v => setMap(resizeTilemap(map, map.cols, Math.round(v)))} />
+                                                <span style={{ color: "#666", fontSize: 10 }}>cells</span>
+                                            </div>
                                         </div>
                                     );
                                 })()}

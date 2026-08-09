@@ -24,7 +24,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1556;
+const EXPECTED_TESTS = 1565;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -219,6 +219,45 @@ const MUTANTS = [
       from: "        if (tiles[at] !== edit.index) { tiles[at] = edit.index; changed = true; }",
       to: "        tiles[at] = edit.index; changed = true;",
       note: "writing what is already there counts as a change" },
+
+    // The tile BRUSH, and picking a tile out of a sheet. A square tile and a tight sheet hide the
+    // pitch confusions here exactly as a square buffer hides a stride one.
+    { id: "TT1", file: "src/editor/tools/TileTool.ts",
+      from: "        this.write(nodeId, linePoints(from.col, from.row, cell.col, cell.row)",
+      to: "        this.write(nodeId, [cell].map(c => [c.col, c.row] as [number, number])",
+      note: "the gaps between pointer samples are NOT filled — a stroke comes out as beads" },
+    { id: "TT2", file: "src/editor/tools/TileTool.ts",
+      from: "        return cellAt(map, local.x, local.y);",
+      to: "        return cellAt(map, w.x, w.y);",
+      note: "the cell is picked in WORLD space — a moved or nested map paints the wrong cell" },
+    { id: "TT3", file: "src/editor/tools/TileTool.ts",
+      from: "        if (e.altKey) {",
+      to: "        if (e.altKey && this.brush().mode !== \"fill\") {",
+      note: "alt stops sampling in fill mode — the pick becomes a bucket" },
+    { id: "TT4", file: "src/editor/tools/TileTool.ts",
+      from: "        const flip = brush.erasing ? 0 : brush.flip;",
+      to: "        const flip = brush.flip;",
+      note: "an erased cell keeps its orientation, holding the flips array alive forever" },
+    { id: "TT5", file: "src/editor/tools/TileTool.ts",
+      from: "        if (!cell) { this.last = null; return; }",
+      to: "        if (!cell) { return; }",
+      note: "leaving the grid keeps the anchor — returning stripes a line across the map" },
+    { id: "TI1", file: "src/core/document/Tilemap.ts",
+      from: "    if (px - col * pitchX >= sheet.tileWidth) return null;",
+      to: "    if (false) return null;",
+      note: "a click in the horizontal gutter selects the tile before it — invisible on a tight sheet" },
+    { id: "TI2", file: "src/core/document/Tilemap.ts",
+      from: "    if (py - row * pitchY >= sheet.tileHeight) return null;",
+      to: "    if (false) return null;",
+      note: "a click in the vertical gutter selects the row above — invisible on a tight sheet" },
+    { id: "TI3", file: "src/core/document/Tilemap.ts",
+      from: "    if (col >= sheet.columns) return null;                   // past the right edge of the grid",
+      to: "    if (false) return null;                   // past the right edge of the grid",
+      note: "past the right edge wraps into the next row" },
+    { id: "TI4", file: "src/core/document/Tilemap.ts",
+      from: "    const col = Math.floor(px / pitchX);",
+      to: "    const col = Math.floor(px / pitchY);",
+      note: "the column divides by the VERTICAL pitch — invisible on square tiles" },
 ];
 
 function runSuite() {

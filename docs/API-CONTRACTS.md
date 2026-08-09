@@ -1525,8 +1525,42 @@ class ToolController {
 }
 ```
 
-Tools: `SelectTool`, `MoveTool`, `ShapeTool`, `PenTool`, `RasterTool` (all implement `Tool`).
+Tools: `SelectTool`, `MoveTool`, `ShapeTool`, `PenTool`, `RasterTool`, `WeightTool`,
+`EyedropperTool`, `TileTool` (all implement `Tool`).
 Tools construct Actions and dispatch them; they mutate only `EditorState`, never the document.
+
+```ts
+class TileTool implements Tool {
+    constructor(dispatcher, editorState, refresh,
+        brush: () => TileBrush, onPick: (index: number, flip: number) => void);
+}
+interface TileBrush { index: number; flip: number; mode: "paint" | "fill"; erasing: boolean }
+```
+
+`TileTool` is the only caller of `SetTilemapAction`. **THE DOCUMENT IS THE PREVIEW**, as for the
+raster and weight brushes: every move commits, coalesced, so the map updates under the cursor and
+one Ctrl+Z takes the stroke.
+
+**IT FILLS THE GAPS BETWEEN SAMPLES**, unlike the weight brush, and the difference is the size of
+the thing painted: a mesh has a few dozen points under a brush wider than the gap between two mouse
+events, while a CELL is one tile wide, so a pointer at 60Hz crossing a map skips several and a
+stroke would come out as beads. It walks `PixelBuffer.linePoints` — the same Bresenham the pixel
+brush interpolates with — because a tile grid is an integer grid and a second implementation would
+disagree with the first by a cell at some angles.
+
+**Which cell** is `toLocal` then `Tilemap.cellAt`, which is how the RENDERER finds cells too; that
+pair is why a rotated, scaled or nested tilemap paints the cell under the cursor with nothing in the
+tool knowing it is transformed. **ALT SAMPLES** the tile under the cursor into the brush, orientation
+included, and writes to the BRUSH rather than the document — the same shape as the eyedropper
+writing to the swatch, so it leaves no history entry. It is checked BEFORE the mode, so picking works
+in fill mode rather than being a trap. **ERASING also straightens the cell**, or an emptied cell
+would keep an orientation nothing can see and hold the whole `flips` array alive.
+
+**Leaving the grid mid-stroke drops the anchor**, so coming back paints where the pointer is rather
+than striping a line across the map from where it left. **A press off the grid starts nothing.**
+
+`tileIndexAt` is the picker's half of the same arithmetic — the exact inverse of `tileSourceRect`,
+answering **null in the gutter and the margin** rather than the neighbouring tile.
 
 ```ts
 class RasterTool implements Tool {

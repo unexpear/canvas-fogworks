@@ -252,6 +252,35 @@ export function tileSourceRect(
     };
 }
 
+/**
+ * Which tile a point in SHEET pixels falls on — the exact inverse of `tileSourceRect`, for picking a
+ * tile out of a sheet by clicking it.
+ *
+ * NULL IN THE GUTTER, and that is the whole reason this is not a division. With spacing, part of the
+ * sheet is not any tile at all; answering with the preceding tile would mean a click one pixel wide
+ * of a boundary silently selects its neighbour, and answering with a wrapped index would select a
+ * tile from the next row. The margin is the same: a click in the border round the grid is not a tile.
+ *
+ * The inverse being a separate function rather than a search is deliberate — a picker that scanned
+ * `tileSourceRect` over every index would be O(tiles) per click and would still need this arithmetic
+ * to know where to stop.
+ */
+export function tileIndexAt(sheet: Readonly<TileSheet>, x: number, y: number): number | null {
+    if (!(sheet.columns > 0) || !(sheet.tileWidth > 0) || !(sheet.tileHeight > 0)) return null;
+    const px = x - sheet.margin, py = y - sheet.margin;
+    if (px < 0 || py < 0) return null;                       // inside the margin, which is not a tile
+    const pitchX = sheet.tileWidth + sheet.spacing;
+    const pitchY = sheet.tileHeight + sheet.spacing;
+    const col = Math.floor(px / pitchX);
+    const row = Math.floor(py / pitchY);
+    // PAST THE TILE AND INTO THE GAP AFTER IT. With spacing 1 and 16px tiles the pitch is 17, so an
+    // offset of 16 within a cell is the gutter — not a tile, and not the next one either.
+    if (px - col * pitchX >= sheet.tileWidth) return null;
+    if (py - row * pitchY >= sheet.tileHeight) return null;
+    if (col >= sheet.columns) return null;                   // past the right edge of the grid
+    return row * sheet.columns + col;
+}
+
 /*
  * THERE IS NO `sheetWidth` OR `sheetHeight` HERE, AND THERE WAS. Both derived the sheet's pixel size
  * from the grid description, so a backend needing "how big is the sheet" could ask without decoding

@@ -28,9 +28,11 @@ import { serializeDocument, deserializeDocument, compareDocuments, Serializer, m
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { clipsContentError, BLEND_MODES, blendModeError } from "../document/Node";
 import { pickColorAt, rampT } from "../geometry/Eyedropper";
-import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, visibleCells, cellAt, TILE_EMPTY,
+import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, tileSourceRect as sheetTileRect, tileIndexAt,
+         visibleCells, cellAt, TILE_EMPTY,
          flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D } from "../document/Tilemap";
 import { withTiles, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
+import { TileTool, TileBrush } from "../../editor/tools/TileTool";
 import { SetTilemapAction } from "../actions/SetTilemapAction";
 import { EyedropperTool } from "../../editor/tools/EyedropperTool";
 import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
@@ -25466,5 +25468,242 @@ describe("TilemapEdit — painting a grid, and the invariants an edit must not b
         const t = dispatcher.getDocument().nodes.get("T")!;
         expect(t.tilemap!.tiles[0]).toBe(7);
         expect(t.geometry).toMatchObject({ x: 30, y: 40 });
+    });
+});
+
+describe("Picking a tile OUT of a sheet — the inverse of the slicing rule", () => {
+    const sheet = (over: Partial<TileSheet> = {}): TileSheet =>
+        ({ columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0, ...over });
+
+    test("every tile's own rectangle maps back to its own index", () => {
+        // THE DIFFERENTIAL ORACLE, and the only one that means anything here: `tileIndexAt` is the
+        // inverse of `tileSourceRect`, so the check is the round trip over every index rather than
+        // hand-computed coordinates that could repeat the same mistake twice.
+        const s = sheet({ columns: 5, tileWidth: 16, tileHeight: 24, spacing: 3, margin: 7 });
+        for (let index = 0; index < 5 * 4; index++) {
+            const r = sheetTileRect(s, index)!;
+            // Each of the four corners INSIDE the tile, so a rectangle off by one in any direction
+            // would map at least one of them somewhere else.
+            expect(tileIndexAt(s, r.x, r.y)).toBe(index);
+            expect(tileIndexAt(s, r.x + r.width - 1, r.y)).toBe(index);
+            expect(tileIndexAt(s, r.x, r.y + r.height - 1)).toBe(index);
+            expect(tileIndexAt(s, r.x + r.width - 1, r.y + r.height - 1)).toBe(index);
+        }
+        // NON-SQUARE TILES on purpose: with 16x16 the two pitches are equal and a swapped axis maps
+        // every point to a plausible wrong index that the round trip would still accept.
+        expect(tileIndexAt(s, 7, 7)).toBe(0);
+        expect(tileIndexAt(s, 7 + 19, 7)).toBe(1);          // one pitch across: 16 + 3
+        expect(tileIndexAt(s, 7, 7 + 27)).toBe(5);          // one pitch down: 24 + 3, and 5 columns
+    });
+
+    test("the GUTTER and the MARGIN are not tiles", () => {
+        const s = sheet({ spacing: 1, margin: 2 });
+        // Inside the border round the grid.
+        expect(tileIndexAt(s, 0, 0)).toBeNull();
+        expect(tileIndexAt(s, 1, 5)).toBeNull();
+        expect(tileIndexAt(s, 5, 1)).toBeNull();
+        // The one-pixel gap AFTER tile 0: pitch is 17, so offset 16 within the cell is the gutter.
+        // Answering "tile 0" would mean a click a pixel wide of a boundary silently picks its
+        // neighbour; answering "tile 1" would be worse.
+        expect(tileIndexAt(s, 2 + 16, 2)).toBeNull();
+        expect(tileIndexAt(s, 2, 2 + 16)).toBeNull();
+        expect(tileIndexAt(s, 2 + 17, 2)).toBe(1);          // and the next tile really does start there
+        // PAST THE RIGHT EDGE is nothing, not the first tile of the next row — the wrap that would
+        // make a click in the empty space beside a short row select a tile from below it.
+        expect(tileIndexAt(s, 2 + 4 * 17, 2)).toBeNull();
+        // A degenerate sheet has no tiles to hit and divides by nothing.
+        expect(tileIndexAt(sheet({ columns: 0 }), 5, 5)).toBeNull();
+        expect(tileIndexAt(sheet({ tileHeight: 0 }), 5, 5)).toBeNull();
+    });
+});
+
+describe("The tile brush, as a gesture", () => {
+    const SHEET: TileSheet = { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 };
+    /** An 8x5 map of empty cells at the world origin — NON-SQUARE, so a transposed cell shows. */
+    const mapped = () => {
+        const d = createEmptyDocument();
+        d.nodes.set("T", { id: "T", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 128, height: 80 }, style: { fill: "none", opacity: 1 }, layout: {},
+            src: "sheet.png",
+            tilemap: { cols: 8, rows: 5, tileWidth: 16, tileHeight: 16, sheet: SHEET,
+                tiles: new Array(40).fill(TILE_EMPTY) } } as Node);
+        d.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["T", "R"];
+        return d;
+    };
+    const CANVAS = { left: 0, top: 0, width: 800, height: 600 } as DOMRect;
+    /** A click at the CENTRE of cell (col,row) — zoom 1, viewport at the origin. */
+    const at = (col: number, row: number, over: Partial<MouseEvent> = {}) => ({
+        clientX: col * 16 + 8, clientY: row * 16 + 8, button: 0, buttons: 1, altKey: false,
+        preventDefault() { }, target: { getAttribute: () => null }, ...over
+    } as unknown as MouseEvent);
+    const harness = (brush: Partial<TileBrush> = {}) => {
+        const dispatcher = new ActionDispatcher(mapped());
+        const es = createEditorState();
+        es.selectedNodeIds = ["T"];
+        const picked: { index: number; flip: number }[] = [];
+        const tool = new TileTool(dispatcher, es, () => { },
+            () => ({ index: 3, flip: 0, mode: "paint", erasing: false, ...brush }),
+            (index, flip) => picked.push({ index, flip }));
+        return { dispatcher, es, tool, picked, cells: () => dispatcher.getDocument().nodes.get("T")!.tilemap!.tiles };
+    };
+    const filled = (tiles: readonly number[]) => tiles
+        .map((t, i) => (t >= 0 ? `${i % 8},${Math.floor(i / 8)}=${t}` : null))
+        .filter(Boolean) as string[];
+
+    test("a press paints the cell under the cursor and nothing else", () => {
+        const h = harness();
+        h.tool.onMouseDown(at(5, 3), CANVAS);
+        h.tool.onMouseUp();
+        expect(filled(h.cells())).toEqual(["5,3=3"]);
+        // …and it is ONE history entry, which undo takes whole.
+        h.dispatcher.undo();
+        expect(filled(h.cells())).toEqual([]);
+    });
+
+    test("a DRAG fills the gaps between samples — a stroke, not beads", () => {
+        // The difference between this and the weight brush: a cell is one tile wide, so a pointer at
+        // 60Hz crossing a map skips several between events. Two samples five columns apart must
+        // paint the whole run.
+        const h = harness();
+        h.tool.onMouseDown(at(0, 0), CANVAS);
+        h.tool.onMouseMove(at(5, 0), CANVAS);
+        h.tool.onMouseUp();
+        expect(filled(h.cells())).toEqual(["0,0=3", "1,0=3", "2,0=3", "3,0=3", "4,0=3", "5,0=3"]);
+
+        // A DIAGONAL run is Bresenham's, the same walk the pixel brush uses — six cells for a
+        // 5-across, 3-down move, not two.
+        const dia = harness();
+        dia.tool.onMouseDown(at(0, 0), CANVAS);
+        dia.tool.onMouseMove(at(5, 3), CANVAS);
+        dia.tool.onMouseUp();
+        expect(filled(dia.cells())).toHaveLength(6);
+        expect(filled(dia.cells())[0]).toBe("0,0=3");
+        const run = filled(dia.cells());
+        expect(run[run.length - 1]).toBe("5,3=3");
+        // Every step is a neighbour of the last — a run with a hole in it is what a naive
+        // interpolation produces.
+        const path = dia.cells().map((t, i) => (t >= 0 ? { col: i % 8, row: Math.floor(i / 8) } : null))
+            .filter(Boolean) as { col: number; row: number }[];
+        path.sort((a, b) => (a.col - b.col) || (a.row - b.row));
+        for (let i = 1; i < path.length; i++) {
+            expect(Math.abs(path[i].col - path[i - 1].col)).toBeLessThanOrEqual(1);
+            expect(Math.abs(path[i].row - path[i - 1].row)).toBeLessThanOrEqual(1);
+        }
+
+        // ONE UNDO for the whole stroke, which is what coalescing is for.
+        dia.dispatcher.undo();
+        expect(filled(dia.cells())).toEqual([]);
+    });
+
+    test("leaving the grid mid-stroke paints nothing and does not draw a line back", () => {
+        const h = harness();
+        h.tool.onMouseDown(at(1, 1), CANVAS);
+        h.tool.onMouseMove(at(40, 1), CANVAS);        // far off the right edge
+        h.tool.onMouseMove(at(6, 4), CANVAS);         // back on, somewhere else
+        h.tool.onMouseUp();
+        // The two cells that were really under the cursor, and NOT the run between them: the anchor
+        // is dropped when the pointer leaves, so returning does not stripe the map.
+        expect(filled(h.cells())).toEqual(["1,1=3", "6,4=3"]);
+    });
+
+    test("FILL takes the connected run, and ERASE clears cells rather than painting one", () => {
+        // A bucket on an empty 8x5 map fills all forty cells — one click, one history entry.
+        const bucket = harness({ mode: "fill" });
+        bucket.tool.onMouseDown(at(0, 0), CANVAS);
+        bucket.tool.onMouseUp();
+        expect(bucket.cells().every(t => t === 3)).toBe(true);
+        bucket.dispatcher.undo();
+        expect(bucket.cells().every(t => t === TILE_EMPTY)).toBe(true);
+
+        // ERASING writes TILE_EMPTY, not the brush — and it STRAIGHTENS the cell, so a map whose
+        // last turned tile is erased loses its `flips` array rather than carrying zeros forever.
+        const h = harness();
+        h.tool.onMouseDown(at(2, 2), CANVAS);
+        h.tool.onMouseUp();
+        const turned = harness({ flip: FLIP_D });
+        turned.tool.onMouseDown(at(2, 2), CANVAS);
+        turned.tool.onMouseUp();
+        expect(turned.dispatcher.getDocument().nodes.get("T")!.tilemap!.flips).toBeDefined();
+        // A second tool over the same document, now erasing.
+        const es = createEditorState();
+        es.selectedNodeIds = ["T"];
+        const eraser = new TileTool(turned.dispatcher, es, () => { },
+            () => ({ index: 3, flip: FLIP_D, mode: "paint", erasing: true }), () => { });
+        eraser.onMouseDown(at(2, 2), CANVAS);
+        eraser.onMouseUp();
+        const after = turned.dispatcher.getDocument().nodes.get("T")!.tilemap!;
+        expect(after.tiles[2 * 8 + 2]).toBe(TILE_EMPTY);
+        expect(after.flips).toBeUndefined();
+    });
+
+    test("ALT samples the tile under the cursor instead of painting it", () => {
+        const h = harness();
+        h.tool.onMouseDown(at(4, 2), CANVAS);          // paint tile 3 somewhere
+        h.tool.onMouseUp();
+        const before = h.cells().slice();
+        h.tool.onMouseDown(at(4, 2, { altKey: true }), CANVAS);
+        h.tool.onMouseUp();
+        expect(h.picked).toEqual([{ index: 3, flip: 0 }]);
+        // NOTHING WAS PAINTED, which is the point: a pick that also laid a tile would make the
+        // gesture unusable for its one purpose.
+        expect(h.cells()).toEqual(before);
+        // An EMPTY cell samples as empty, which is how alt-click on a hole gives you an eraser.
+        h.tool.onMouseDown(at(7, 4, { altKey: true }), CANVAS);
+        h.tool.onMouseUp();
+        expect(h.picked[h.picked.length - 1]).toEqual({ index: TILE_EMPTY, flip: 0 });
+        // …and it works in FILL mode too, rather than making the author switch back first.
+        const bucket = harness({ mode: "fill" });
+        bucket.tool.onMouseDown(at(1, 1, { altKey: true }), CANVAS);
+        bucket.tool.onMouseUp();
+        expect(bucket.picked).toHaveLength(1);
+        expect(bucket.cells().every(t => t === TILE_EMPTY)).toBe(true);
+    });
+
+    test("the brush refuses what it cannot paint, and leaves no undo step behind", () => {
+        // OFF THE GRID: a press outside the map starts nothing at all, so the next drag cannot
+        // suddenly begin painting from wherever the pointer happens to be.
+        const off = harness();
+        off.tool.onMouseDown(at(20, 20), CANVAS);
+        off.tool.onMouseMove(at(1, 1), CANVAS);
+        off.tool.onMouseUp();
+        expect(filled(off.cells())).toEqual([]);
+
+        // NOT A TILEMAP, two nodes at once, and nothing selected — the same three refusals the
+        // weight brush makes, for the same reason: which map would the stroke be for?
+        for (const selection of [["R"], ["T", "R"], []]) {
+            const h = harness();
+            h.es.selectedNodeIds = selection;
+            h.tool.onMouseDown(at(1, 1), CANVAS);
+            h.tool.onMouseUp();
+            expect(filled(h.cells())).toEqual([]);
+        }
+
+        // PAINTING WHAT IS ALREADY THERE dispatches nothing, so a stroke back over its own path
+        // does not fill the history with steps that undo nothing. Twelve presses, one entry.
+        const same = harness();
+        for (let i = 0; i < 12; i++) { same.tool.onMouseDown(at(3, 3), CANVAS); same.tool.onMouseUp(); }
+        expect(filled(same.cells())).toEqual(["3,3=3"]);
+        same.dispatcher.undo();
+        expect(filled(same.cells())).toEqual([]);
+    });
+
+    test("the map is painted in the NODE's own space, not the screen's", () => {
+        // A tilemap inside a moved parent is still a grid. The tool asks `toLocal` rather than
+        // subtracting the node's x/y itself, which is what makes a translated — or rotated, or
+        // scaled — map paint the cell under the cursor instead of one offset by the parent.
+        const dispatcher = new ActionDispatcher(mapped());
+        dispatcher.dispatchAction(new MoveNodeAction(dispatcher.getDocument(), "T", 48, 32));
+        const es = createEditorState();
+        es.selectedNodeIds = ["T"];
+        const tool = new TileTool(dispatcher, es, () => { },
+            () => ({ index: 5, flip: 0, mode: "paint", erasing: false }), () => { });
+        // A click at world (48,32) is the node's ORIGIN, so it is cell 0,0 — not cell 3,2.
+        tool.onMouseDown(at(3, 2), CANVAS);
+        tool.onMouseUp();
+        const tiles = dispatcher.getDocument().nodes.get("T")!.tilemap!.tiles;
+        expect(tiles[0]).toBe(5);
+        expect(tiles[2 * 8 + 3]).toBe(TILE_EMPTY);
     });
 });
