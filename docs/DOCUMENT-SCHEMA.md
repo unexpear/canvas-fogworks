@@ -1202,6 +1202,23 @@ world delta to it. Those are the same thing only while nothing in between turns:
 existed, and skinning only widened it. The map from a stored fraction to a drawn position is
 exactly affine, so probing it three times recovers it and one solve lands on the answer.
 
+**Or with the WEIGHT BRUSH**, which is the one an author reaches for most: the places a guess gets
+wrong are a *region* — a shoulder, the inside of an elbow — and correcting a region is a stroke
+rather than a dozen visits to a panel. Pick a bone, set a size and a flow, and drag.
+
+A dab LERPS each covered point toward the bone (or toward zero, erasing) by `falloff × strength`,
+so a stroke held in one place converges instead of overshooting and going back over an area does
+what it looks like it should. The profile is `(1 − t²)²` rather than linear, because a linear one
+has a corner at the rim that repeated strokes accumulate into a visible ring. The point's other
+influences are rescaled to fill what is left, so its weights still sum to 1 — `skinnedPoint`
+normalises anyway, so this changes no geometry; it makes the stored number mean what it says. A
+point already at `SKIN_MAX_BONES` gives up its *smallest* influence, which is by definition the one
+contributing least.
+
+The brush acts on where the points are **drawn**, asking `meshHandles` for their positions with the
+posed scene — so on an animated rig you paint over the handles you can see, and the brush and the
+overlay cannot disagree about where a point is.
+
 **Or by pressing Auto-bind**, which binds every control point to the sibling nodes nearest it. That
 is what makes a rig a starting point rather than an afternoon: by hand it is one point and one
 dropdown at a time.

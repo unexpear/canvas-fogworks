@@ -1907,6 +1907,12 @@ function withBoneWeight(mesh, index, node, w): ReadonlyMesh; // clamped at 0; ze
 // (`Rig.jointOffset`, the point IK rotates about). At most two influences and normalised weights
 // are MEASURED from 91,290 skinned vertices in the corpus; the falloff is a choice. Replaces.
 function autoBindMesh(doc: ReadonlyDocument, nodeId: string): ReadonlyMesh | null;
+// ONE DAB of a weight brush. `at[i]` is where point i is DRAWN (posed, from `meshHandles`), so
+// the brush covers the handles the author can see. A lerp toward the target, not an addition:
+// strokes converge. Others rescaled to keep the point at 1; a full point sheds its smallest.
+// BY REFERENCE when nothing was covered — this runs on every pointer move of a drag.
+function paintWeights(mesh, at, brush: { x; y; radius }, bone, strength): ReadonlyMesh;
+const PAINT_STRENGTH = 0.35;   // the tool’s default, applied by the CALLER, not inside
 // The control point the inspector is editing. VALIDATED ON READ rather than cleared on write — a
 // pick goes stale four ways (another node selected, the node deleted, the warp turned off, a
 // coarser grid), and asking here means no site can forget.

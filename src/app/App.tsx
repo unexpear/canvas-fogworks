@@ -53,9 +53,10 @@ import { DEMOS } from "../core/document/Demos";
 import { applyParallax, DEPTH_MIN, DEPTH_MAX } from "../core/document/Depth";
 import { SetDepthAction } from "../core/actions/SetDepthAction";
 import { SetMeshAction } from "../core/actions/SetMeshAction";
+import { WeightTool, WeightBrush } from "../editor/tools/WeightTool";
 import { SetLightingAction } from "../core/actions/SetLightingAction";
 import { restMesh, MESH_MAX_DIVISIONS, copyMeshPoint, Mesh, ReadonlyMesh } from "../core/document/Mesh";
-import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh } from "../core/document/MeshEdit";
+import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, PAINT_STRENGTH } from "../core/document/MeshEdit";
 import { SKIN_MAX_BONES } from "../core/geometry/Skin";
 import { SetTrackAction } from "../core/actions/SetTrackAction";
 import { SetTimelineAction } from "../core/actions/SetTimelineAction";
@@ -444,7 +445,10 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     { id: "paint", label: "Paint", icon: "✏", tools: ["select", "move", "raster", "paint"], defaultTool: "paint" },
     // Animation is done by SELECTING and MOVING things over time; a shape tool in this workspace is
     // a way to draw a rectangle by accident while scrubbing.
-    { id: "animate", label: "Animate", icon: "⏱", tools: ["select", "move"], defaultTool: "select" }
+    // Rigging is ANIMATION work, so the weight brush lives here rather than beside the pixel brush
+    // it resembles: the two paint different things, and sharing a strip would put "which brush is
+    // this" between the author and every stroke.
+    { id: "animate", label: "Animate", icon: "⏱", tools: ["select", "move", "weights"], defaultTool: "select" }
 ];
 
     const [lastShape, setLastShape] = useState<ShapeKind>("rectangle");
@@ -477,6 +481,15 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const [brushSize, setBrushSize] = useState<number>(1);
     const brushSizeRef = useRef(1);
     brushSizeRef.current = brushSize;
+    // THE WEIGHT BRUSH (schema 58). `bone` is null until the author picks one, and the tool
+    // refuses to paint without it — a stroke that silently chose a bone for you would be worse
+    // than one that does nothing.
+    const [weightBone, setWeightBone] = useState<string | null>(null);
+    const [weightRadius, setWeightRadius] = useState(40);
+    const [weightStrength, setWeightStrength] = useState(PAINT_STRENGTH);
+    const [weightErasing, setWeightErasing] = useState(false);
+    const weightBrushRef = useRef<WeightBrush>({ bone: null, radius: 40, strength: PAINT_STRENGTH, erasing: false });
+    weightBrushRef.current = { bone: weightBone, radius: weightRadius, strength: weightStrength, erasing: weightErasing };
     const [brushRound, setBrushRound] = useState(false);
     const brushRoundRef = useRef(false);
     brushRoundRef.current = brushRound;
@@ -586,6 +599,10 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             // The PEN — the first way to create a `core.path`, which has been renderable since
             // schema 17 with no way to author one.
             pen: new PenTool(dispatcher, es, refresh, () => paintModeRef.current === "outline" ? "none" : "#4a90d9"),
+            // THE WEIGHT BRUSH. Keyed "weights" beside "paint" because they are the same gesture
+            // over different material: one moves pixels, the other moves how much a bone owns a
+            // control point.
+            weights: new WeightTool(dispatcher, es, refresh, () => weightBrushRef.current),
             // THE BRUSH. Keyed "paint", not "raster": the `raster` SHAPE creates a surface, this
             // paints on one that exists. Two gestures, two tools — a single tool that did both
             // could not tell "start a new canvas here" from "start a stroke here".
@@ -1922,7 +1939,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                             move: { icon: "↔", label: "Move" },
                             pen: { icon: "✒", label: "Pen" },
                             paint: { icon: "✏", label: "Paint" },
-                            raster: { icon: SHAPE_ICONS.raster, label: "Canvas" }
+                            raster: { icon: SHAPE_ICONS.raster, label: "Canvas" },
+                            weights: { icon: "◑", label: "Weights" }
                         };
                         const t = spec[slot];
                         if (!t) return null;
@@ -2356,6 +2374,55 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                             onChange={v => { editSelected({ style: { radius: Math.max(0, v) } }); refresh(); }}
                                         /></div>
                                 </div>
+                                {/* THE WEIGHT BRUSH (schema 58). Shown for any selected mesh, with
+                                    NO control point picked first: a brush acts on a region, and
+                                    making the author choose a point before painting over several
+                                    would be asking for the thing the brush exists to avoid. */}
+                                {(() => {
+                                    const stored = dispatcher.getDocument().nodes.get(node.id);
+                                    if (!stored?.mesh) return null;
+                                    const siblings = boneChoices(dispatcher.getDocument(), node.id);
+                                    if (siblings.length === 0) return null;
+                                    const label = (id: string) => {
+                                        const n = dispatcher.getDocument().nodes.get(id);
+                                        return n ? (n.name || nodeTypeLabels[n.type] || n.type) : id;
+                                    };
+                                    return (
+                                        <div style={{ marginTop: 8 }}>
+                                            <label style={INSPECTOR_LABEL}>Weight brush</label>
+                                            <select
+                                                value={weightBone && siblings.includes(weightBone) ? weightBone : ""}
+                                                title="Which bone the brush paints. Nothing is painted until one is chosen."
+                                                onChange={e => setWeightBone(e.target.value || null)}
+                                                style={{ ...SELECT_STYLE, width: "100%", marginTop: 4 }}
+                                            >
+                                                <option value="">pick a bone to paint…</option>
+                                                {siblings.map(id => <option key={id} value={id}>{label(id)}</option>)}
+                                            </select>
+                                            <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
+                                                <span style={{ color: "#888", fontSize: 11, width: 34 }}>size</span>
+                                                <input type="range" min={4} max={400} step={1} value={weightRadius}
+                                                       title="Brush radius, in world units — the same ruler the canvas is measured in, so it does not change meaning when you zoom."
+                                                       onChange={e => setWeightRadius(parseInt(e.target.value, 10))}
+                                                       style={{ flex: 1 }} />
+                                                <span style={{ width: 30, textAlign: "right", color: "#888", fontSize: 11 }}>{weightRadius}</span>
+                                            </div>
+                                            <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
+                                                <span style={{ color: "#888", fontSize: 11, width: 34 }}>flow</span>
+                                                <input type="range" min={0.02} max={1} step={0.01} value={weightStrength}
+                                                       title="How far one dab moves a point toward the bone. Strokes build up, so a low value is a finer instrument rather than a slower one."
+                                                       onChange={e => setWeightStrength(parseFloat(e.target.value))}
+                                                       style={{ flex: 1 }} />
+                                                <span style={{ width: 30, textAlign: "right", color: "#888", fontSize: 11 }}>{weightStrength.toFixed(2)}</span>
+                                            </div>
+                                            <label style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4, color: "#aaa" }}>
+                                                <input type="checkbox" checked={weightErasing}
+                                                       onChange={e => setWeightErasing(e.target.checked)} />
+                                                erase (paint the bone away)
+                                            </label>
+                                        </div>
+                                    );
+                                })()}
                                 {/* BONES (schema 58), for the control point last pressed on the
                                     canvas. Only the SIBLINGS are offered, which is exactly the rule
                                     Integrity enforces — so an illegal binding is unreachable here

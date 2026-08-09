@@ -27,7 +27,7 @@ import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, t
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
-import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, AUTO_BIND_MAX_BONES } from "../document/MeshEdit";
+import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, AUTO_BIND_MAX_BONES, paintWeights, PAINT_STRENGTH } from "../document/MeshEdit";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
 import { AddNodeAction } from "../actions/AddNodeAction";
@@ -57,6 +57,8 @@ import { Mesh, meshError, restMesh, warpPoint, isIdentityMesh, MESH_MAX_DIVISION
 import { meshHandles, meshHandleAtPoint, meshIndexOf, meshPointFromWorld } from "../geometry/SelectionHandles";
 import { normalAt, surfaceNormal, warpHeight, isFlatMesh, heightRange } from "../document/Mesh";
 import { skinMesh, ReadonlyMesh } from "../document/Mesh";
+import { WeightTool, WeightBrush } from "../../editor/tools/WeightTool";
+import { SetMeshAction } from "../actions/SetMeshAction";
 import { Light, lightsError, ambientError, lambert, shadowOffset, heightAbovePage, LIGHTS_MAX } from "../document/Light";
 import { resolveMeshes } from "../document/Components";
 import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry/CastShadow";
@@ -23996,5 +23998,327 @@ describe("A mesh handle sits on the ink, and follows the pointer", () => {
             transform: { scaleX: 0 }, mesh: restMesh(1, 1) } as Node);
         flat.rootNodeUuids = ["M"];
         expect(meshPointFromWorld(flat, computeGeometry(flat), "M", flat.nodes.get("M")!.mesh!, 0, 5, 5)).toBeNull();
+    });
+});
+
+describe("Painting weights with a brush", () => {
+    /** A 1x1 mesh whose four points sit on a 100-unit square, so every distance is countable. */
+    const square = () => restMesh(1, 1);
+    const AT = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 0, y: 100 }, { x: 100, y: 100 }];
+    const w = (m: ReadonlyMesh, i: number, node: string) =>
+        Number(((m.points[i].bones ?? []).find(b => b.node === node)?.weight ?? 0).toFixed(6));
+    const sum = (m: ReadonlyMesh, i: number) =>
+        Number((m.points[i].bones ?? []).reduce((t, b) => t + b.weight, 0).toFixed(6));
+
+    test("a dab moves a point PART of the way, not all of it", () => {
+        // The whole reason to paint rather than type a number: the hand does the interpolating, so
+        // one touch must leave somewhere to go. Point 0 is dead centre of the brush, so its falloff
+        // is 1 and it moves exactly the stroke's strength of the way from 0 to 1.
+        const m = paintWeights(square(), AT, { x: 0, y: 0, radius: 50 }, "B", PAINT_STRENGTH);
+        expect(w(m, 0, "B")).toBeCloseTo(PAINT_STRENGTH, 6);
+        // …and a second dab moves it the same FRACTION of what remains, converging on 1 rather
+        // than overshooting it.
+        const twice = paintWeights(m, AT, { x: 0, y: 0, radius: 50 }, "B", PAINT_STRENGTH);
+        expect(w(twice, 0, "B")).toBeCloseTo(PAINT_STRENGTH + (1 - PAINT_STRENGTH) * PAINT_STRENGTH, 6);
+        expect(w(twice, 0, "B")).toBeLessThan(1);
+    });
+
+    test("the brush FALLS OFF, and stops dead at its rim", () => {
+        // Hand-computed against `(1 - t^2)^2`. Point 1 is 100 away; with a radius of 200 that is
+        // t = 0.5, so the profile is (1 - 0.25)^2 = 0.5625 and the step is that times the strength.
+        const m = paintWeights(square(), AT, { x: 0, y: 0, radius: 200 }, "B", PAINT_STRENGTH);
+        expect(w(m, 1, "B")).toBeCloseTo(0.5625 * PAINT_STRENGTH, 6);
+        // Point 3 is 141.42 away — t = 0.7071, profile (1 - 0.5)^2 = 0.25.
+        expect(w(m, 3, "B")).toBeCloseTo(0.25 * PAINT_STRENGTH, 6);
+        // OUTSIDE is untouched, and the boundary is exact rather than nearly: a point exactly at
+        // the radius takes nothing, so a stroke has no fringe of almost-zero weights.
+        const rim = paintWeights(square(), AT, { x: 0, y: 0, radius: 100 }, "B", PAINT_STRENGTH);
+        expect(rim.points[1].bones).toBeUndefined();
+        expect(rim.points[2].bones).toBeUndefined();
+    });
+
+    test("the OTHER influences are rescaled, so a point still sums to 1", () => {
+        // `skinnedPoint` normalises anyway, so this changes no geometry — it makes the stored
+        // number mean what it says. "0.7" should be seven tenths of this point.
+        let m = withBone(withBone(square(), 0, "A"), 0, "C");            // 1 and 1
+        m = paintWeights(m, AT, { x: 0, y: 0, radius: 50 }, "B", PAINT_STRENGTH);
+        expect(w(m, 0, "B")).toBeCloseTo(PAINT_STRENGTH, 6);
+        expect(sum(m, 0)).toBeCloseTo(1, 6);
+        // …and the two it displaced keep their RATIO, which was even, so they stay even.
+        expect(w(m, 0, "A")).toBeCloseTo(w(m, 0, "C"), 6);
+        expect(w(m, 0, "A")).toBeCloseTo((1 - PAINT_STRENGTH) / 2, 6);
+    });
+
+    test("an uneven pair keeps its PROPORTIONS when something is painted over it", () => {
+        // The falsifiable half of the test above: two equal weights stay equal under any rule that
+        // touches them at all, so the rescale is only really tested by a pair that is not equal.
+        let m = withBone(withBone(square(), 0, "A"), 0, "C");
+        m = withBoneWeight(m, 0, "A", 0.75) as Mesh;
+        m = withBoneWeight(m, 0, "C", 0.25) as Mesh;
+        m = paintWeights(m, AT, { x: 0, y: 0, radius: 50 }, "B", PAINT_STRENGTH);
+        expect(w(m, 0, "A") / w(m, 0, "C")).toBeCloseTo(3, 6);
+        expect(sum(m, 0)).toBeCloseTo(1, 6);
+    });
+
+    test("ERASING takes a bone back out, and never puts one in", () => {
+        let m = paintWeights(square(), AT, { x: 0, y: 0, radius: 50 }, "B", PAINT_STRENGTH);
+        // Erasing moves toward zero by the same fraction.
+        const less = paintWeights(m, AT, { x: 0, y: 0, radius: 50 }, "B", -PAINT_STRENGTH);
+        expect(w(less, 0, "B")).toBeCloseTo(PAINT_STRENGTH * (1 - PAINT_STRENGTH), 6);
+        // Erased CLEAN, the binding is gone rather than kept at zero — the same rule `withoutBone`
+        // follows, so a point painted away looks like one that was never painted.
+        for (let i = 0; i < 40; i++) m = paintWeights(m, AT, { x: 0, y: 0, radius: 50 }, "B", -PAINT_STRENGTH);
+        expect(m.points[0].bones).toBeUndefined();
+        // And erasing a bone a point does not have writes nothing at all — by reference, so the
+        // stroke that finds nothing to erase costs nothing either.
+        const untouched = square();
+        expect(paintWeights(untouched, AT, { x: 0, y: 0, radius: 50 }, "Z", -PAINT_STRENGTH)).toBe(untouched);
+    });
+
+    test("a FULL point gives up its weakest influence, not an arbitrary one", () => {
+        // Four is the cap, and the weight being dropped is by definition the one contributing
+        // least — the least destructive choice available, and what every painting tool does.
+        let m = square();
+        for (const [b, weight] of [["A", 0.4], ["C", 0.3], ["D", 0.2], ["E", 0.1]] as const) {
+            m = withBone(m, 0, b) as Mesh;
+            m = withBoneWeight(m, 0, b, weight) as Mesh;
+        }
+        expect(m.points[0].bones).toHaveLength(4);
+        const painted = paintWeights(m, AT, { x: 0, y: 0, radius: 50 }, "B", PAINT_STRENGTH);
+        const names = (painted.points[0].bones ?? []).map(b => b.node);
+        expect(names).toHaveLength(4);
+        expect(names).toContain("B");
+        expect(names).not.toContain("E");          // the 0.1 made way
+        expect(names).toEqual(expect.arrayContaining(["A", "C", "D"]));
+        expect(meshError(painted)).toBeNull();
+    });
+
+    test("a stroke that touches nothing returns the SAME mesh, by reference", () => {
+        // This runs on every pointer move of a drag. A mesh nobody painted must not be rebuilt,
+        // and `dispatchAction` compares by reference to decide whether anything changed.
+        const m = square();
+        expect(paintWeights(m, AT, { x: 9000, y: 9000, radius: 10 }, "B", 1)).toBe(m);
+        expect(paintWeights(m, AT, { x: 0, y: 0, radius: 0 }, "B", 1)).toBe(m);
+        expect(paintWeights(m, AT, { x: 0, y: 0, radius: 50 }, "B", 0)).toBe(m);
+        expect(paintWeights(m, AT, { x: 0, y: 0, radius: 50 }, "B", NaN)).toBe(m);
+        // A point with no position given is skipped rather than treated as the origin, which would
+        // paint the whole mesh whenever the caller's arrays fell out of step.
+        expect(paintWeights(m, [], { x: 0, y: 0, radius: 50 }, "B", 1)).toBe(m);
+    });
+
+    test("what it paints is what the DERIVATION then uses", () => {
+        // The end-to-end half. Paint one corner toward a bone, move the bone, and only that corner
+        // follows — a weight the renderer ignored would be a very quiet failure.
+        const d = createEmptyDocument();
+        d.timeline = { frames: 30, fps: 24 };
+        d.nodes.set("G", { id: "G", type: "core.rectangle", parent: null, children: ["M", "B"],
+            geometry: { x: 0, y: 0, width: 400, height: 400 }, style: { fill: "none", opacity: 1 }, layout: {} } as Node);
+        d.nodes.set("M", { id: "M", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {},
+            mesh: paintWeights(square(), AT, { x: 0, y: 0, radius: 50 }, "B", 1) as Mesh } as Node);
+        d.nodes.set("B", { id: "B", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 200, y: 200, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {},
+            track: [{ frame: 0, values: { geometry: { x: 200 } } }, { frame: 10, values: { geometry: { x: 300 } } }] } as Node);
+        d.rootNodeUuids = ["G"];
+        d.frame = 10;
+        const out = resolveScene(d).nodes.get("M")!;
+        expect(out.type).toBe("core.path");
+        // The painted corner is the ONLY influence on point 0, whatever its stored weight, because
+        // it is the only one — so it follows the bone's whole +100.
+        const topLeft = Math.min(...out.path!.filter(c => c.c !== "Z" && Math.abs((c as { y: number }).y) < 1e-9)
+                                             .map(c => (c as { x: number }).x));
+        expect(topLeft).toBeCloseTo(100, 6);
+        // …and the far corner, which the brush never reached, has not moved.
+        expect(Math.max(...out.path!.filter(c => c.c !== "Z").map(c => (c as { x: number }).x))).toBeCloseTo(100, 6);
+    });
+});
+
+describe("The weight brush, as a gesture", () => {
+    const rigged = () => {
+        const d = createEmptyDocument();
+        d.nodes.set("G", { id: "G", type: "core.rectangle", parent: null, children: ["M", "B"],
+            geometry: { x: 0, y: 0, width: 400, height: 400 }, style: { fill: "none", opacity: 1 }, layout: {} } as Node);
+        d.nodes.set("M", { id: "M", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {},
+            mesh: restMesh(1, 1) } as Node);
+        d.nodes.set("B", { id: "B", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 200, y: 200, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["G"];
+        return d;
+    };
+    const CANVAS = { left: 0, top: 0, width: 800, height: 600 } as DOMRect;
+    const ev = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1,
+        preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+    const harness = (brush: Partial<WeightBrush> = {}) => {
+        const dispatcher = new ActionDispatcher(rigged());
+        const es = createEditorState();
+        es.selectedNodeIds = ["M"];
+        const tool = new WeightTool(dispatcher, es, () => { },
+            () => ({ bone: "B", radius: 40, strength: PAINT_STRENGTH, erasing: false, ...brush }));
+        return { dispatcher, es, tool };
+    };
+    const boneAt = (d: ReadonlyDocument, i: number) =>
+        (d.nodes.get("M")!.mesh!.points[i].bones ?? []).map(b => b.node);
+
+    test("a stroke paints the points it covers and leaves the rest alone", () => {
+        // The brush is 40 wide at the mesh's top-left corner; the other three corners are 100 away.
+        const { dispatcher, tool } = harness();
+        tool.onMouseDown(ev(0, 0), CANVAS);
+        tool.onMouseUp();
+        const d = dispatcher.getDocument();
+        expect(boneAt(d, 0)).toEqual(["B"]);
+        expect(boneAt(d, 1)).toEqual([]);
+        expect(boneAt(d, 3)).toEqual([]);
+    });
+
+    test("the whole drag is ONE undo, and undo removes all of it", () => {
+        // The bargain every live-committing gesture here makes. A stroke that pushed an entry per
+        // mouse event would bury the previous edit under a flick of the wrist.
+        const { dispatcher, tool } = harness();
+        tool.onMouseDown(ev(0, 0), CANVAS);
+        tool.onMouseMove(ev(4, 0), CANVAS);
+        tool.onMouseMove(ev(8, 0), CANVAS);
+        tool.onMouseUp();
+        expect(boneAt(dispatcher.getDocument(), 0)).toEqual(["B"]);
+        dispatcher.undo();
+        expect(boneAt(dispatcher.getDocument(), 0)).toEqual([]);
+    });
+
+    test("it BUILDS UP: three dabs weigh more than one", () => {
+        // What makes a brush an instrument rather than a switch.
+        const one = harness();
+        one.tool.onMouseDown(ev(0, 0), CANVAS);
+        one.tool.onMouseUp();
+        const after1 = one.dispatcher.getDocument().nodes.get("M")!.mesh!.points[0].bones![0].weight;
+        const many = harness();
+        many.tool.onMouseDown(ev(0, 0), CANVAS);
+        many.tool.onMouseMove(ev(0, 0), CANVAS);
+        many.tool.onMouseMove(ev(0, 0), CANVAS);
+        many.tool.onMouseUp();
+        const after3 = many.dispatcher.getDocument().nodes.get("M")!.mesh!.points[0].bones![0].weight;
+        expect(after3).toBeGreaterThan(after1);
+        expect(after3).toBeLessThan(1);
+    });
+
+    test("NO BONE CHOSEN paints nothing at all", () => {
+        // A stroke that silently picked a bone would be worse than one that does nothing, so the
+        // panel opens with none chosen and the tool declines until there is one.
+        const { dispatcher, tool } = harness({ bone: null });
+        tool.onMouseDown(ev(0, 0), CANVAS);
+        tool.onMouseMove(ev(4, 0), CANVAS);
+        tool.onMouseUp();
+        expect(boneAt(dispatcher.getDocument(), 0)).toEqual([]);
+    });
+
+    test("a MOVE without a press paints nothing — the stroke has to start", () => {
+        // Otherwise merely crossing the canvas with the tool selected would rewrite the rig.
+        const { dispatcher, tool } = harness();
+        tool.onMouseMove(ev(0, 0), CANVAS);
+        expect(boneAt(dispatcher.getDocument(), 0)).toEqual([]);
+    });
+
+    test("it refuses anything that is not a single selected MESH", () => {
+        const none = harness();
+        none.es.selectedNodeIds = [];
+        none.tool.onMouseDown(ev(0, 0), CANVAS);
+        none.tool.onMouseUp();
+        expect(boneAt(none.dispatcher.getDocument(), 0)).toEqual([]);
+        // A node with no mesh has no control points to weigh.
+        const bone = harness();
+        bone.es.selectedNodeIds = ["B"];
+        bone.tool.onMouseDown(ev(0, 0), CANVAS);
+        bone.tool.onMouseUp();
+        expect(boneAt(bone.dispatcher.getDocument(), 0)).toEqual([]);
+        // And two nodes at once: which mesh would the stroke be for?
+        const two = harness();
+        two.es.selectedNodeIds = ["M", "B"];
+        two.tool.onMouseDown(ev(0, 0), CANVAS);
+        two.tool.onMouseUp();
+        expect(boneAt(two.dispatcher.getDocument(), 0)).toEqual([]);
+    });
+
+    test("ERASING takes weight away and does not put any on", () => {
+        const { dispatcher, tool } = harness();
+        for (let i = 0; i < 12; i++) { tool.onMouseDown(ev(0, 0), CANVAS); tool.onMouseUp(); }
+        const painted = dispatcher.getDocument().nodes.get("M")!.mesh!.points[0].bones![0].weight;
+        expect(painted).toBeGreaterThan(0.9);
+
+        const es = createEditorState();
+        es.selectedNodeIds = ["M"];
+        const eraser = new WeightTool(dispatcher, es, () => { },
+            () => ({ bone: "B", radius: 40, strength: PAINT_STRENGTH, erasing: true }));
+        eraser.onMouseDown(ev(0, 0), CANVAS);
+        eraser.onMouseUp();
+        expect(dispatcher.getDocument().nodes.get("M")!.mesh!.points[0].bones![0].weight).toBeLessThan(painted);
+        // …and a point the eraser never reaches is untouched, so erasing is not a global reset.
+        expect(boneAt(dispatcher.getDocument(), 3)).toEqual([]);
+    });
+
+    test("the stroke does not swallow the EDIT BEFORE IT", () => {
+        // Coalescing is what makes a drag one undo, and opening the drag with a coalescing dab
+        // makes it one undo WITH whatever came before. The previous edit has to be one this could
+        // actually merge with to prove anything: history keys by `ActionId:nodeId`, so a geometry
+        // edit is not a probe at all — it was the first version of this test and it passed against
+        // a first dab that coalesced. A MESH edit on the same node is the reachable case, and
+        // dragging a control point is exactly how an author arrives here.
+        const { dispatcher, tool } = harness();
+        // Choosing a finer grid is a `SetMeshAction` on this very node — the same key history
+        // coalesces by, and something an author does immediately before painting.
+        dispatcher.dispatchAction(new SetMeshAction(dispatcher.getDocument(), "M", restMesh(2, 2)));
+        expect(dispatcher.getDocument().nodes.get("M")!.mesh!.cols).toBe(2);
+
+        tool.onMouseDown(ev(0, 0), CANVAS);
+        tool.onMouseMove(ev(2, 0), CANVAS);
+        tool.onMouseUp();
+        dispatcher.undo();
+        expect(boneAt(dispatcher.getDocument(), 0)).toEqual([]);              // the stroke is gone…
+        expect(dispatcher.getDocument().nodes.get("M")!.mesh!.cols).toBe(2);  // …and only the stroke
+    });
+
+    test("a stroke that touches nothing writes no history", () => {
+        // Painting off the side of the mesh must cost nothing. `paintWeights` says so by handing
+        // back the mesh it was given, and the tool has to notice rather than dispatch it anyway.
+        const { dispatcher, tool } = harness();
+        dispatcher.dispatchAction(new UpdateNodeGeometryAction(dispatcher.getDocument(), "M", { x: 40 }));
+        tool.onMouseDown(ev(9000, 9000), CANVAS);
+        tool.onMouseMove(ev(9004, 9000), CANVAS);
+        tool.onMouseUp();
+        dispatcher.undo();
+        // One undo reaches past the empty stroke to the geometry edit, because the stroke pushed
+        // nothing. If it had, this would still be 40.
+        expect(dispatcher.getDocument().nodes.get("M")!.geometry.x).toBe(0);
+    });
+
+    test("a press it cannot act on is not SWALLOWED", () => {
+        // With no bone chosen, or nothing meshed selected, the tool declines the press instead of
+        // consuming it — a gesture that is both inert and eaten is the worst of the two.
+        const press = (brush: Partial<WeightBrush>, selection: string[]) => {
+            const dispatcher = new ActionDispatcher(rigged());
+            const es = createEditorState();
+            es.selectedNodeIds = selection;
+            const tool = new WeightTool(dispatcher, es, () => { },
+                () => ({ bone: "B", radius: 40, strength: PAINT_STRENGTH, erasing: false, ...brush }));
+            let prevented = false;
+            tool.onMouseDown({ clientX: 0, clientY: 0, button: 0, buttons: 1,
+                preventDefault() { prevented = true; }, target: { getAttribute: () => null } } as unknown as MouseEvent, CANVAS);
+            return prevented;
+        };
+        expect(press({}, ["M"])).toBe(true);              // a stroke it CAN paint is consumed
+        expect(press({ bone: null }, ["M"])).toBe(false);  // no bone
+        expect(press({}, ["B"])).toBe(false);              // nothing meshed
+        expect(press({}, [])).toBe(false);                 // nothing selected
+    });
+
+    test("the brush is aimed at the POSED points, not the stored ones", () => {
+        // The property that makes it usable on an animated rig: the author paints over the handles
+        // they can see. `meshHandles` is asked for the positions, so the brush and the overlay were
+        // handed the same answer rather than each working it out.
+        const src = readFileSync(resolve(__dirname, "../../editor/tools/WeightTool.ts"), "utf8");
+        expect(src).toMatch(/meshHandles\(doc, computeGeometry\(doc\), \[nodeId\], posed\)/);
+        expect(src).toMatch(/const posed = resolveScene\(doc\)/);
+        // And the App hands the tool the panel's brush rather than a copy of the defaults.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/weights: new WeightTool\(dispatcher, es, refresh, \(\) => weightBrushRef\.current\)/);
+        expect(app).toMatch(/tools: \["select", "move", "weights"\]/);
     });
 });

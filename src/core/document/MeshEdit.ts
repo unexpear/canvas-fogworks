@@ -202,3 +202,107 @@ export function autoBindMesh(doc: ReadonlyDocument, nodeId: string): ReadonlyMes
     }
     return next;
 }
+
+/**
+ * The strength a stroke uses unless the author says otherwise — applied BY THE CALLER, not here.
+ *
+ * `paintWeights` takes whatever strength it is given; this is the tool's default. Not 1, because a
+ * brush that reached its target in one touch would have no way to say "a bit more", and the whole
+ * reason to paint rather than type a number is that the hand does the interpolating.
+ */
+export const PAINT_STRENGTH = 0.35;
+
+/**
+ * The brush profile — 1 at the centre, 0 at the rim, and FLAT at both ends.
+ *
+ * `(1 - t^2)^2` rather than `1 - t`, because a linear profile has a corner at the rim: repeated
+ * strokes over the same area accumulate that corner into a visible ring at the brush's edge. This
+ * one meets zero with zero slope, so overlapping dabs blend into each other the way the hand
+ * expects. A choice, like the auto-bind falloff, and named as one.
+ */
+function brushFalloff(distance: number, radius: number): number {
+    if (!(radius > 0)) return 0;
+    const t = distance / radius;
+    if (t >= 1) return 0;
+    const u = 1 - t * t;
+    return u * u;
+}
+
+/**
+ * One dab of weight for one bone, over every control point the brush covers.
+ *
+ * PAINTED IN WORLD SPACE, against where the points are DRAWN — `at[i]` is the position of point
+ * `i` on the canvas, which for a rigged mesh is the posed position, not the stored one. Passing
+ * them in rather than deriving them keeps this a function of numbers, and means the brush and the
+ * handles agree about where a point is because they were handed the same answer.
+ *
+ * A LERP TOWARD A TARGET, not an addition. Painting adds `falloff * strength` of the way to 1 and
+ * erasing the same fraction of the way to 0, so a stroke held in one place converges instead of
+ * overshooting, and going back over an area does what going back over it looks like it should.
+ *
+ * THE OTHER INFLUENCES ARE RESCALED to fill what is left, keeping the point's weights summing to
+ * 1. `skinnedPoint` normalises anyway, so this changes no geometry — it makes the stored numbers
+ * mean what they say. "0.7" should be seven tenths of this point, not seven tenths of some total
+ * the author has to work out.
+ *
+ * A POINT ALREADY AT `SKIN_MAX_BONES` gives up its SMALLEST influence to make room, which is what
+ * every weight-painting tool does and is the least destructive choice available: the weight being
+ * dropped is by definition the one contributing least. Erasing never adds a bone.
+ */
+export function paintWeights(
+    mesh: ReadonlyMesh,
+    at: readonly { x: number; y: number }[],
+    brush: { x: number; y: number; radius: number },
+    bone: string,
+    strength: number
+): ReadonlyMesh {
+    if (!Number.isFinite(strength) || strength === 0) return mesh;
+    if (!(brush.radius > 0)) return mesh;
+    const erasing = strength < 0;
+    const target = erasing ? 0 : 1;
+
+    let touched = false;
+    const next = copyMesh(mesh);
+    next.points.forEach((point, i) => {
+        const where = at[i];
+        if (!where) return;
+        const f = brushFalloff(Math.hypot(where.x - brush.x, where.y - brush.y), brush.radius);
+        if (f <= 0) return;
+        const step = Math.min(1, f * Math.abs(strength));
+
+        const bones = (point.bones ?? []).map(b => ({ ...b }));
+        let mine = bones.find(b => b.node === bone);
+        if (!mine) {
+            // NO SPECIAL CASE FOR ERASING a bone the point does not have, and there was one until
+            // a mutant showed it changed nothing: the weight lerps from 0 toward 0, the
+            // unchanged-weight check below returns before anything is written, and the point is
+            // left alone. Deleting it beats keeping a branch no test can reach.
+            if (bones.length >= SKIN_MAX_BONES) {
+                let weakest = 0;
+                for (let k = 1; k < bones.length; k++) if (bones[k].weight < bones[weakest].weight) weakest = k;
+                bones.splice(weakest, 1);
+            }
+            mine = { node: bone, weight: 0 };
+            bones.push(mine);
+        }
+        const before = mine.weight;
+        mine.weight = before + (target - before) * step;
+        if (mine.weight === before) return;
+
+        // WHAT IS LEFT, shared out in the proportions the others already had. When they were all
+        // zero there is no proportion to keep, so it is split evenly rather than left at zero —
+        // otherwise the point would silently become single-bound the first time it was painted.
+        const others = bones.filter(b => b !== mine);
+        const rest = Math.max(0, 1 - mine.weight);
+        const sum = others.reduce((t, b) => t + b.weight, 0);
+        for (const other of others) other.weight = sum > 0 ? (other.weight / sum) * rest : rest / others.length;
+
+        // A bone painted away to nothing is UNBOUND, not kept at zero — the same rule `withoutBone`
+        // follows, so a point that has been erased clean looks like one that was never painted.
+        const kept = bones.filter(b => b.weight > 1e-6);
+        if (kept.length === 0) delete point.bones;
+        else point.bones = kept;
+        touched = true;
+    });
+    return touched ? next : mesh;
+}
