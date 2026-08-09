@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v58 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v59 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -1032,6 +1032,20 @@ shadowed item, which would jump that item out of its own group and onto the scre
 composites into the current destination. And a layer's own texture is still bound to unit 0 from the
 composite that closed it last frame, so opening one unbinds units 0 and 1 — the same feedback loop
 that once made a blurred shape come out as a hole.
+
+**A CLIP IS A LAYER TOO (schema 59).** A container that cuts its children to its own box is the
+same sequencing problem as a fade — which layers just ended, which just began — so it joins the
+chain `layerTransition` already walks rather than getting a parallel one, which would be two
+orderings to keep consistent and one wrong nesting away from a bug nobody could see. What differs
+is what each backend does at the seam: SVG a `<clipPath>` on the group, Canvas a `save`/`clip`/
+`restore` instead of an offscreen (a fade must composite before it can fade; a clip need not), and
+the GPU a coverage test in the COMPOSITE shader — the one place that already sees the finished
+pixels and knows which frame they belong to. Teaching every scene shader instead would mean the
+same uniforms in each, and the next shader anybody added would quietly not clip.
+
+The clip travels as a box plus the frame's world matrix rather than a world-space rectangle,
+because a rotated frame's clip is not axis-aligned and flattening it would throw away the only form
+in which it is still exactly a rounded rect.
 
 **Depth is off inside a layer**, which is correct rather than a compromise: `content` is already
 sorted far-to-near by the model, so painter's order gives what the depth test would have. The call

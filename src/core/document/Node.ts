@@ -411,6 +411,27 @@ export interface Node {
      * `sourceRect` when there is one, so a sliced button can live inside an atlas.
      */
     nineSlice?: NineSliceInsets;
+
+    /**
+     * Whether this node's CHILDREN are clipped to its own box (schema 59).
+     *
+     * MEASURED BEFORE BUILDING, and the measurement cut the feature down: of the 5,279 SVG files
+     * in `freeassets`, **zero** use `<mask>` and eight use clipping at all — 72 clip paths between
+     * them, and every single one is a plain `<rect>` in user space. They are icon sets clipping
+     * each glyph to its own viewBox, which is this exact feature. A general path clip and a soft
+     * alpha mask both have no demand here, and `core.boolean` intersect already covers "cut this
+     * shape to that one" destructively.
+     *
+     * THE CLIP IS THE NODE'S OWN SHAPE, radius included, not a separate region. That is what makes
+     * it a boolean rather than a subtree: there is nothing to keep in sync, nothing to place, and a
+     * node that is resized clips to where it now is. It is also what Figma and Sketch offer, which
+     * is worth matching where the meaning is identical.
+     *
+     * IT AFFECTS PICKING, not only drawing — `computeGeometry` records the clipping ancestors on
+     * every descendant and `hitTest` refuses a point outside them. A thing you cannot see must not
+     * be a thing you can click, or the canvas grows invisible targets.
+     */
+    clipsContent?: boolean;
     /**
      * A surface this document OWNS, for `core.raster` (schema 55).
      *
@@ -576,6 +597,19 @@ export function slotError(slot: unknown): string | null {
  * keys are slot names and values are node ids, both bounded and non-empty. Neither is required
  * to RESOLVE — an unfilled or dangling entry falls back to the slot's own children.
  */
+/**
+ * What is wrong with a `clipsContent` flag, or null (schema 59).
+ *
+ * A BOOLEAN OR ABSENT, nothing else. It is checked at all because the loader accepts hand-edited
+ * files, and a truthy string would clip on the edit path and then round-trip into something a
+ * stricter reader refuses — the same reason every other one-field flag here has a validator.
+ */
+export function clipsContentError(clipsContent: unknown): string | null {
+    if (clipsContent === undefined) return null;
+    if (typeof clipsContent !== "boolean") return "clipsContent must be a boolean";
+    return null;
+}
+
 export function slotContentError(type: string, slotContent: unknown): string | null {
     if (slotContent === undefined) return null;
     if (type !== "core.instance") return "only a core.instance node may carry slot content";

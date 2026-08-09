@@ -931,3 +931,102 @@ describe("emitCanvas — a gradient fill", () => {
         expect(c.slice(from).find(x => x.op === "set fillStyle")!.args).toEqual(["#0000ff"]);
     });
 });
+
+describe("Clipping a frame's content (schema 59)", () => {
+    /** A frame whose child hangs a long way out of it. */
+    const clipped = (radius = 8) => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["C"],
+            geometry: { x: 0, y: 0, width: 100, height: 100 },
+            style: { fill: "#222", opacity: 1, radius }, layout: {}, clipsContent: true } as Node);
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "F", children: [],
+            geometry: { x: 20, y: 40, width: 160, height: 20 }, style: { fill: "#0f0", opacity: 1 }, layout: {} } as Node);
+        doc.rootNodeUuids = ["F"];
+        return doc;
+    };
+    const modelFor = (doc: ProjectDocument) => buildRenderModel({ width: 400, height: 300 }, doc,
+        { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(doc), viewport: { x: 0, y: 0, zoom: 1 } } as never);
+
+    test("a clip is a save/clip/restore, NOT an offscreen canvas", () => {
+        // A fade has to composite the subtree before it can fade it; a clip does not. Paying for
+        // an offscreen either way would make clipping cost what fading does, on the feature people
+        // reach for most — so this asserts the cheap path is the one taken.
+        const ctx = new MockCtx();
+        emitCanvas(ctx as unknown as CanvasRenderingContext2D, modelFor(clipped()), 1);
+        const ops = ctx.calls.map(c => c.op);
+        expect(ops).toContain("clip");
+        expect(ops).not.toContain("drawImage");      // an offscreen layer would composite with one
+        // The corners are cut where the frame's own are drawn: `roundRect` with the frame's radius.
+        const round = ctx.calls.find(c => c.op === "roundRect" && c.args[4] === 8);
+        expect(round).toBeDefined();
+        expect(round!.args.slice(0, 4)).toEqual([0, 0, 100, 100]);
+    });
+
+    test("the clip is set BEFORE the content it cuts, and save/restore BALANCES", () => {
+        // An unbalanced restore does not look wrong here — it looks wrong on whatever is drawn
+        // next with a transform it never set. Frame-wide balance is the assertion that catches it.
+        const ctx = new MockCtx();
+        emitCanvas(ctx as unknown as CanvasRenderingContext2D, modelFor(clipped()), 1);
+        const ops = ctx.calls.map(c => c.op);
+        expect(ops.filter(o => o === "save").length).toBe(ops.filter(o => o === "restore").length);
+        expect(ops.indexOf("clip")).toBeGreaterThan(-1);
+        expect(ops.indexOf("clip")).toBeLessThan(ops.lastIndexOf("fill"));
+    });
+
+    test("the frame's OWN ink is not cut by its own clip", () => {
+        // Drawing and picking have to agree: `hitTest` records clipping ANCESTORS only, so the
+        // renderer must not put the frame's own item inside its own clip. Caught because
+        // `opacityGroupsFor` includes a node in its own chain — right for a fade, since a group's
+        // fill fades with the group, and wrong for a clip.
+        const ctx = new MockCtx();
+        emitCanvas(ctx as unknown as CanvasRenderingContext2D, modelFor(clipped()), 1);
+        const ops = ctx.calls.map(c => c.op);
+        // The FRAME is filled before any clip is set; the CHILD after it.
+        expect(ops.indexOf("fill")).toBeLessThan(ops.indexOf("clip"));
+        expect(ops.lastIndexOf("fill")).toBeGreaterThan(ops.indexOf("clip"));
+    });
+
+    test("a clip left open at the end of the frame is CLOSED", () => {
+        // A leaked `save` would carry into the overlay, which is drawn straight onto the context —
+        // selection handles disappearing behind a frame, a long way from the line that caused it.
+        const ctx = new MockCtx();
+        emitCanvas(ctx as unknown as CanvasRenderingContext2D, modelFor(clipped()), 1);
+        const ops = ctx.calls.map(c => c.op);
+        expect(ops.filter(o => o === "save").length).toBe(ops.filter(o => o === "restore").length);
+        // …and the LAST clipped content really is followed by a restore, not merely balanced by
+        // some other pair earlier in the frame.
+        expect(ops.lastIndexOf("restore")).toBeGreaterThan(ops.lastIndexOf("fill"));
+    });
+
+    test("a sibling drawn AFTER the frame is not clipped by it", () => {
+        // The case every other fixture here misses: with one clipping frame and nothing after it,
+        // the end-of-frame cleanup closes the clip and the save/restore counts balance either way.
+        // Removing the restore from the layer TRANSITION survives all of them. A sibling drawn
+        // afterwards is what makes the transition matter — and getting it wrong would clip the
+        // rest of the document to the last frame anybody used.
+        const doc = clipped();
+        doc.nodes.set("S", { id: "S", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 200, y: 0, width: 50, height: 50 }, style: { fill: "#00f", opacity: 1 }, layout: {} } as Node);
+        doc.rootNodeUuids = ["F", "S"];
+        const ctx = new MockCtx();
+        emitCanvas(ctx as unknown as CanvasRenderingContext2D, modelFor(doc), 1);
+        const ops = ctx.calls.map(c => c.op);
+        // BALANCE IS THE ORACLE, not position. Every item draws inside its own save/restore, so
+        // the last restore in the frame belongs to the sibling and says nothing about the clip;
+        // the counts are what move when the transition forgets to let a clip go. Measured: with
+        // that restore removed this reads 41 saves against 42 restores.
+        expect(ops.filter(o => o === "save").length).toBe(ops.filter(o => o === "restore").length);
+        // …and exactly ONE clip was set — the sibling did not acquire one of its own.
+        expect(ops.filter(o => o === "clip").length).toBe(1);
+    });
+
+    test("no clip is emitted for a frame that does not ask for one", () => {
+        // The falsifiable half. Without it, a test that only ever sees a clipping frame could not
+        // tell the feature from a backend that clips everything.
+        const doc = clipped();
+        doc.nodes.set("F", { ...(doc.nodes.get("F") as Node), clipsContent: undefined } as Node);
+        const ctx = new MockCtx();
+        emitCanvas(ctx as unknown as CanvasRenderingContext2D, modelFor(doc), 1);
+        expect(ctx.calls.map(c => c.op)).not.toContain("clip");
+    });
+});

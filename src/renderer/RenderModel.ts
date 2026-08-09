@@ -445,10 +445,41 @@ export interface DisplayList {
     groups: OpacityGroup[];
 }
 
-/** A node whose subtree composites as one before being faded. */
+/**
+ * A node whose subtree a backend must open a LAYER for — to fade it, to clip it, or both.
+ *
+ * The name is narrower than the type now: a clip is not an opacity, but it is the same SEQUENCING
+ * problem — which layers just ended, which just began — and `layerTransition` is the answer to
+ * that question rather than to "what is a fade". A second parallel chain would mean two orderings
+ * to keep consistent, and the first time a clip and a fade nested the wrong way round would be the
+ * first time anyone noticed.
+ *
+ * `opacity` is 1 and `clip` absent for a layer that only does the other thing, so a backend can
+ * take the cheap path: Canvas needs an offscreen canvas to fade a group, but a plain `ctx.clip()`
+ * for a clip, and paying for the offscreen either way would make clipping cost what fading does.
+ */
 export interface OpacityGroup {
     id: string;
     opacity: number;
+    /** The region this layer clips to, in WORLD space, or absent (schema 59). */
+    clip?: ClipRegion;
+}
+
+/**
+ * A clip, as the backends need it: a box, its corner radius, and the matrix that places it.
+ *
+ * THE NODE'S OWN BOX, because that is what `clipsContent` means — there is no separate region to
+ * place or keep in sync. Carried as local box + world matrix rather than as a world-space
+ * rectangle, because a rotated frame's clip is not axis-aligned and flattening it here would throw
+ * away the only form in which it is still exactly a rounded rectangle. Every backend can express
+ * that: SVG a `<clipPath>` with a transform, Canvas a `roundRect` under `setTransform`, the GPU a
+ * test in the fragment shader against the inverse.
+ */
+export interface ClipRegion {
+    width: number;
+    height: number;
+    radius: number;
+    world: Mat2D;
 }
 
 type Box = { x: number; y: number; width: number; height: number };
@@ -553,7 +584,13 @@ function opacityGroupsFor(doc: ReadonlyDocument, id: string, memo: Map<string, s
         seen.add(cur);
         const node = doc.nodes.get(cur);
         if (!node) break;
-        if (isOpacityGroup(node)) chain.push(cur);
+        // THE NODE'S OWN LAYER IS NOT ITS OWN CLIP. A group's fill fades WITH the group — that is
+        // what fading a subtree means, and the node is part of its subtree. A frame's fill and
+        // stroke are NOT cut by its own clip: `clipsContent` says what happens to what is inside
+        // it, and `hitTest` already agreed by only recording clipping ANCESTORS. Without this the
+        // renderer clipped the frame's own ink while picking did not, which is the disagreement
+        // this whole module is arranged to prevent.
+        if (cur === id ? fadesAsGroup(node) : isOpacityGroup(node)) chain.push(cur);
         cur = node.parent ?? null;
     }
     chain.reverse();                                   // outermost first, the order a backend nests in
@@ -561,8 +598,21 @@ function opacityGroupsFor(doc: ReadonlyDocument, id: string, memo: Map<string, s
     return chain;
 }
 
-/** A node whose subtree must composite before being faded. */
-function isOpacityGroup(node: { children: readonly string[]; style: { opacity: number } }): boolean {
+/**
+ * A node whose subtree needs a layer — because it fades, because it clips, or both.
+ *
+ * CHILDREN ARE REQUIRED for either. A leaf has no subtree to composite and nothing to clip but
+ * itself, and a node does not clip its OWN ink: `clipsContent` says what happens to what is
+ * inside it, which is the same thing the name says and the same thing Figma and Sketch mean.
+ */
+function isOpacityGroup(node: { children: readonly string[]; style: { opacity: number }; clipsContent?: boolean }): boolean {
+    if (node.children.length === 0) return false;
+    if (node.clipsContent === true) return true;
+    return fadesAsGroup(node);
+}
+
+/** The half of the test that applies to a node's OWN item: a fade takes it, a clip does not. */
+function fadesAsGroup(node: { children: readonly string[]; style: { opacity: number } }): boolean {
     return node.children.length > 0 && typeof node.style.opacity === "number" && node.style.opacity < 1;
 }
 
@@ -1134,15 +1184,42 @@ function withCastShadows(content: DrawItem[], computed: ComputedState, light: Li
     return out;
 }
 
-function collectGroups(doc: ReadonlyDocument, content: DrawItem[]): OpacityGroup[] {
+/**
+ * A clipping frame's corner radius, resolved the way the HIT SHAPE resolves it.
+ *
+ * `shapeOf` in the geometry engine looks a `$token` up and range-checks the result, so a clip that
+ * only accepted a literal number would round the corners for picking and square them for drawing —
+ * the disagreement this codebase keeps finding, in a new place. One rule, stated twice, is one
+ * rule too many; this asks the same question of the same store.
+ */
+function clipRadius(doc: ReadonlyDocument, node: { style: { radius?: number | string } }): number {
+    const raw = node.style.radius;
+    if (raw === undefined) return 0;
+    const r = typeof raw === "number" ? raw : resolveNumber(doc.variables, raw, doc.activeTheme);
+    return r !== null && r > 0 ? r : 0;
+}
+
+function collectGroups(doc: ReadonlyDocument, computed: ComputedState, content: DrawItem[]): OpacityGroup[] {
     const out: OpacityGroup[] = [];
     const seen = new Set<string>();
     for (const item of content) {
         for (const id of item.groups ?? []) {
             if (seen.has(id)) continue;
             seen.add(id);
-            const opacity = doc.nodes.get(id)?.style.opacity;
-            out.push({ id, opacity: typeof opacity === "number" ? opacity : 1 });
+            const node = doc.nodes.get(id);
+            const opacity = node?.style.opacity;
+            // THE COMPUTED WORLD MATRIX, not one rebuilt from stored geometry: under auto-layout
+            // the two differ, and a clip placed by the stored box would cut in the wrong place on
+            // exactly the containers people clip most.
+            const c = computed.nodes.get(id);
+            const clip: ClipRegion | undefined = node?.clipsContent && c
+                ? { width: c.local.width, height: c.local.height, radius: clipRadius(doc, node), world: c.world }
+                : undefined;
+            out.push({
+                id,
+                opacity: typeof opacity === "number" ? opacity : 1,
+                ...(clip ? { clip } : {})
+            });
         }
     }
     return out;
@@ -1257,6 +1334,8 @@ export function buildRenderModel(
         overlay: buildOverlay(state, z, doc, effective),
         defs: collectDefs(content),
         gradients: collectGradients(content),
-        groups: collectGroups(doc, content)
+        // THE EXPANDED document and its computed geometry: a clip's placement comes from the walk
+        // that laid the frame out, not from stored numbers an auto-layout container overrides.
+        groups: collectGroups(effective, state.computed, content)
     };
 }

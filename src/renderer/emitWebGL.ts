@@ -55,7 +55,7 @@
  * worse than one that admits what it cannot do — but the effects gap is no longer why.
  */
 
-import { DisplayList, DrawItem, PaintGradient, Shape, layerTransition } from "./RenderModel";
+import { ClipRegion, DisplayList, DrawItem, PaintGradient, Shape, layerTransition } from "./RenderModel";
 import { gaussianKernel, blurPlan, GAUSSIAN_MAX_RADIUS } from "./Gaussian";
 import { Mat2D, translation, multiply, invert, IDENTITY } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
@@ -170,7 +170,30 @@ uniform vec2 u_offset;
 // PREMULTIPLIED, so scaling the whole vec4 by one number is exactly what fading it means — which
 // is the reason a group can be composited at all rather than needing its alpha folded into parts.
 uniform float u_fade;
+// CLIPPING (schema 59), applied where the LAYER LANDS rather than in every scene shader.
+//
+// A clip is a property of a subtree, and the subtree is already composited through here for a
+// fade — so this is the one place that sees the finished pixels and knows which frame they belong
+// to. Teaching each scene shader instead would mean the same uniforms and the same test in every
+// one of them, and the first shader anybody added would quietly not clip.
+//
+// u_clipInv maps a DEVICE pixel back into the frame's own units, so a rotated frame is a
+// rotated clip and needs no special case. The radius test is the standard rounded-box distance:
+// clamp the point into the inner rectangle and measure how far outside the corner it fell.
+uniform float u_clipOn;
+uniform mat3 u_clipInv;
+uniform vec2 u_clipSize;
+uniform float u_clipRadius;
 varying vec2 v_uv;
+
+float outsideClip(vec2 device) {
+    vec2 p = (u_clipInv * vec3(device, 1.0)).xy;
+    float r = min(u_clipRadius, min(u_clipSize.x, u_clipSize.y) * 0.5);
+    vec2 mid = u_clipSize * 0.5;
+    vec2 d = abs(p - mid) - (mid - vec2(r));
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+}
+
 void main() {
     // SUBTRACTED, not added. Moving the sample point back is what moves the IMAGE forward — a
     // shadow with dx of +4 must land four pixels to the right, and adding here would put it four
@@ -179,7 +202,14 @@ void main() {
     // A tinted draw keeps only the COVERAGE. Reusing the source's colour would give a shadow the
     // shape's own hue, which looks like a badly-offset duplicate rather than a shadow.
     vec4 tinted = vec4(u_tint.rgb * src.a * u_tint.a, src.a * u_tint.a);
-    gl_FragColor = mix(src, tinted, u_useTint) * u_fade;
+    vec4 out_ = mix(src, tinted, u_useTint) * u_fade;
+    // ONE-PIXEL FEATHER rather than a hard discard: the layer is composited at device resolution,
+    // so a binary test leaves the stair-stepped edge the rest of this renderer spends its
+    // adaptive tessellation avoiding. Smoothstep over a pixel is what the shape shaders already
+    // hand back for their own coverage.
+    float d = outsideClip(gl_FragCoord.xy);
+    float inside = 1.0 - smoothstep(-0.5, 0.5, d);
+    gl_FragColor = out_ * mix(1.0, inside, u_clipOn);
 }`;
 
 /**
@@ -398,6 +428,10 @@ export interface BlurState {
     compositeUseTintLoc: WebGLUniformLocation | null;
     compositeOffsetLoc: WebGLUniformLocation | null;
     compositeFadeLoc: WebGLUniformLocation | null;
+    compositeClipOnLoc: WebGLUniformLocation | null;
+    compositeClipInvLoc: WebGLUniformLocation | null;
+    compositeClipSizeLoc: WebGLUniformLocation | null;
+    compositeClipRadiusLoc: WebGLUniformLocation | null;
     /**
      * THREE targets, not two.
      *
@@ -532,6 +566,10 @@ export function initBlur(gl: WebGLRenderingContext): BlurState | null {
         compositeUseTintLoc: gl.getUniformLocation(composite, "u_useTint"),
         compositeOffsetLoc: gl.getUniformLocation(composite, "u_offset"),
         compositeFadeLoc: gl.getUniformLocation(composite, "u_fade"),
+        compositeClipOnLoc: gl.getUniformLocation(composite, "u_clipOn"),
+        compositeClipInvLoc: gl.getUniformLocation(composite, "u_clipInv"),
+        compositeClipSizeLoc: gl.getUniformLocation(composite, "u_clipSize"),
+        compositeClipRadiusLoc: gl.getUniformLocation(composite, "u_clipRadius"),
         targets: [null, null, null]
     };
 }
@@ -582,7 +620,9 @@ export function resampleTo(
 export function compositeTarget(
     gl: WebGLRenderingContext, blur: BlurState, from: BlurTarget,
     offsetX: number, offsetY: number, tint: [number, number, number, number] | null,
-    fade: number = 1
+    fade: number = 1,
+    /** The clip this layer lands through, already in DEVICE space, or null (schema 59). */
+    clip: { inv: Mat2D; width: number; height: number; radius: number } | null = null
 ): void {
     gl.useProgram(blur.composite);
     gl.bindBuffer(gl.ARRAY_BUFFER, blur.quad);
@@ -598,6 +638,17 @@ export function compositeTarget(
     // often larger than the canvas and dividing by the canvas would drift as the window resized.
     gl.uniform2f(blur.compositeOffsetLoc, offsetX / from.width, -offsetY / from.height);
     gl.uniform1f(blur.compositeFadeLoc, fade);
+    gl.uniform1f(blur.compositeClipOnLoc, clip ? 1 : 0);
+    if (clip) {
+        const m = clip.inv;
+        // COLUMN-MAJOR, which is the only order `uniformMatrix3fv` accepts (the `transpose`
+        // argument must be false in WebGL 1). A `Mat2D` is a b c d e f by columns already —
+        // [a b], [c d], [e f] — so each pair becomes a column with 0, 0, 1 down the third.
+        gl.uniformMatrix3fv(blur.compositeClipInvLoc, false,
+            [m.a, m.b, 0, m.c, m.d, 0, m.e, m.f, 1]);
+        gl.uniform2f(blur.compositeClipSizeLoc, clip.width, clip.height);
+        gl.uniform1f(blur.compositeClipRadiusLoc, clip.radius);
+    }
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     // PREMULTIPLIED source: the target's RGB is already scaled by its alpha.
@@ -1361,7 +1412,28 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
      * screen, which would jump it out of its own group.
      */
     const groupAlpha = new Map(list.groups.map(gr => [gr.id, gr.opacity]));
-    const layerStack: { target: BlurTarget; parent: WebGLFramebuffer | null; opacity: number }[] = [];
+    const layerStack: {
+        target: BlurTarget; parent: WebGLFramebuffer | null; opacity: number;
+        clip: { inv: Mat2D; width: number; height: number; radius: number } | null;
+    }[] = [];
+    const groupClip = new Map(list.groups.filter(gr => gr.clip).map(gr => [gr.id, gr.clip!]));
+    /**
+     * A clip region, turned into the one thing the composite shader can use: device pixel back to
+     * the frame's own units.
+     *
+     * TWO FLIPS AND A SCALE, all of which have to be right at once. `gl_FragCoord` counts from the
+     * BOTTOM while the document counts down from the top, so the y axis is mirrored about the
+     * canvas height first; then device space is the world scaled by zoom x dpr and shifted by the
+     * viewport; then the frame's own matrix places the box inside that. Inverting the composition
+     * once here beats three partial inverses in a shader that runs per pixel.
+     */
+    const deviceClip = (clip: ClipRegion) => {
+        const flip: Mat2D = { a: 1, b: 0, c: 0, d: -1, e: 0, f: height };
+        const deviceFromWorld: Mat2D = { a: viewScale, b: 0, c: 0, d: viewScale, e: -vp.x * dpr, f: -vp.y * dpr };
+        const inv = invert(multiply(deviceFromWorld, clip.world));
+        if (!inv) return null;
+        return { inv: multiply(inv, flip), width: clip.width, height: clip.height, radius: clip.radius };
+    };
     let destination: WebGLFramebuffer | null = null;
 
     /**
@@ -1379,14 +1451,14 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
         if (layerStack.length > 0) gl.disable(gl.DEPTH_TEST); else gl.enable(gl.DEPTH_TEST);
     };
 
-    const openLayer = (opacity: number): void => {
+    const openLayer = (opacity: number, clip: ClipRegion | undefined): void => {
         const depth = layerStack.length;
         const t = ensureTarget(gl, state.layerTargets[depth] ?? null, width, height);
         state.layerTargets[depth] = t;
         // No target: the group is drawn WITHOUT its fade rather than not at all. Losing the alpha
         // is visible; losing the subtree is not — the same choice the canvas backend makes.
         if (!t) return;
-        layerStack.push({ target: t, parent: destination, opacity });
+        layerStack.push({ target: t, parent: destination, opacity, clip: clip ? deviceClip(clip) : null });
         destination = t.framebuffer;
         gl.bindFramebuffer(gl.FRAMEBUFFER, destination);
         gl.viewport(0, 0, t.width, t.height);
@@ -1410,9 +1482,10 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
         destination = top.parent;
         gl.bindFramebuffer(gl.FRAMEBUFFER, destination);
         gl.viewport(0, 0, width, height);
-        // Untinted and unmoved — only faded. The target is premultiplied, so the fade is one
-        // multiply in the composite shader.
-        compositeTarget(gl, state.blur, top.target, 0, 0, null, top.opacity);
+        // Untinted and unmoved — only faded, and CLIPPED where the layer lands (schema 59). The
+        // target is premultiplied, so the fade is one multiply in the composite shader, and the
+        // clip is a coverage test against the same pixels.
+        compositeTarget(gl, state.blur, top.target, 0, 0, null, top.opacity, top.clip);
         restoreSceneState();
         applyDepth();
     };
@@ -1422,7 +1495,7 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
         const nextPath = item.groups ?? [];
         const step = layerTransition(openPath, nextPath);
         for (let i = 0; i < step.close; i++) closeLayer();
-        for (const id of step.open) openLayer(groupAlpha.get(id) ?? 1);
+        for (const id of step.open) openLayer(groupAlpha.get(id) ?? 1, groupClip.get(id));
         openPath = nextPath;
         // EFFECTS ARE AN OFFSCREEN DETOUR. An item with a shadow or a blur is drawn into a target
         // first, filtered, and composited back — because both are per-fragment work over a

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v58 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v59 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -1925,6 +1925,14 @@ function meshHandleAtPoint(doc, state, selected, x, y, zoom, posed?): SelectionH
 // The stored fraction that puts a control point UNDER a world point — the INVERSE of the map the
 // overlay draws with, probed three times because it is exactly affine. Null when degenerate.
 function meshPointFromWorld(doc, state, nodeId, mesh, index, worldX, worldY, posed?): { x, y } | null;
+// CLIPPING (schema 59). A container cuts its children to its own box, radius included — measured:
+// of 5,279 SVGs in the corpus, ZERO use <mask> and every one of the 72 clip paths is a plain rect.
+Node.clipsContent?: boolean;
+ComputedNode.clips?: readonly string[];   // clipping ANCESTORS, outermost first — a frame is not
+                                          // in its own chain, so its own ink is never cut
+interface ClipRegion { width; height; radius; world: Mat2D }   // box + matrix, so a ROTATED frame
+                                                               // is still exactly a rounded rect
+OpacityGroup.clip?: ClipRegion;           // a clip is a LAYER, sequenced by `layerTransition`
 // The rest pose is this chain without `applyFrame` and without `applyIk` — the only two steps that
 // move anything. A THUNK, so an unrigged document never builds it and a rigged one builds it once.
 function resolveMeshes(doc: ReadonlyDocument, restOf?: () => ReadonlyDocument): ReadonlyDocument;

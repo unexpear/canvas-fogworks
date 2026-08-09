@@ -26,6 +26,7 @@ import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy , overrideTargetFor} from "../actions/nodeEdit";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { validateDocumentIntegrity } from "../document/Integrity";
+import { clipsContentError } from "../document/Node";
 import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
 import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, AUTO_BIND_MAX_BONES, paintWeights, PAINT_STRENGTH } from "../document/MeshEdit";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
@@ -156,7 +157,7 @@ import { FrameSelectionAction } from "../actions/FrameSelectionAction";
 import { alignBoxes, distributeBoxes, AlignEdge } from "../geometry/Alignment";
 import { scanCapabilities } from "../scan/CapabilityScan";
 import { exportSVG, EXPORT_MARGIN, TextLines } from "../export/ExportSVG";
-import { textParagraphs } from "../../renderer/RenderModel";
+import { textParagraphs, OpacityGroup } from "../../renderer/RenderModel";
 import { resolveShortcut, isTypingTarget, NUDGE_STEP, NUDGE_STEP_LARGE, SHORTCUT_HELP } from "../../editor/shortcuts";
 import { DuplicateNodesAction, DUPLICATE_OFFSET } from "../actions/DuplicateNodesAction";
 import { alignAction, distributeAction } from "../actions/alignActions";
@@ -4528,9 +4529,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 57→58 landed, adding
-        // `Mesh.points[i].bones`, the join between the skeleton and the artwork.)
-        expect(() => migrateIfNeeded(legacy, "59")).toThrow('Migration not implemented for document schema "58"');
+        // time a real migration is added — most recently when 58→59 landed, adding
+        // `Node.clipsContent`, a container that cuts its children to its own box.)
+        expect(() => migrateIfNeeded(legacy, "60")).toThrow('Migration not implemented for document schema "59"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -23376,7 +23377,7 @@ describe("Skinning a mesh (schema 58)", () => {
         // schema-57 point names a bone.
         const raw = JSON.parse(serializeDocument(d));
         raw.version = "57";
-        expect(migrateIfNeeded(raw).version).toBe("58");
+        expect(migrateIfNeeded(raw).version).toBe(SCHEMA_VERSION);
     });
 
     test("DRAGGING a control point keeps its bindings", () => {
@@ -24320,5 +24321,197 @@ describe("The weight brush, as a gesture", () => {
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         expect(app).toMatch(/weights: new WeightTool\(dispatcher, es, refresh, \(\) => weightBrushRef\.current\)/);
         expect(app).toMatch(/tools: \["select", "move", "weights"\]/);
+    });
+});
+
+describe("Clipping content to a frame (schema 59)", () => {
+    /** A frame at (0,0,100,100) with one child that HANGS OUT to x = 180. */
+    const scene = (opts: { clip?: boolean; radius?: number; rotate?: number } = {}) => {
+        const d = createEmptyDocument();
+        d.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["C"],
+            geometry: { x: 0, y: 0, width: 100, height: 100 },
+            style: { fill: "#222", opacity: 1, ...(opts.radius ? { radius: opts.radius } : {}) }, layout: {},
+            ...(opts.clip ? { clipsContent: true } : {}),
+            ...(opts.rotate ? { transform: { rotation: opts.rotate } } : {}) } as Node);
+        d.nodes.set("C", { id: "C", type: "core.rectangle", parent: "F", children: [],
+            geometry: { x: 20, y: 40, width: 160, height: 20 }, style: { fill: "#0f0", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["F"];
+        return d;
+    };
+
+    test("a click on the part that HANGS OUT misses — a thing you cannot see is not clickable", () => {
+        // The cardinal rule of this engine, and the reason clipping is not only a drawing change:
+        // the child runs to x = 180, the frame ends at 100, so world (150, 50) is over the child
+        // but outside the frame.
+        const open = computeGeometry(scene());
+        expect(hitTest(open, 150, 50)).toBe("C");           // unclipped: the overhang is the child
+
+        const shut = computeGeometry(scene({ clip: true }));
+        expect(hitTest(shut, 150, 50)).toBeNull();          // clipped: nothing there at all
+        // …and the part INSIDE still picks, or the clip would have eaten the whole child.
+        expect(hitTest(shut, 50, 50)).toBe("C");
+    });
+
+    test("the frame's own ink is NOT clipped by its own flag", () => {
+        // `clipsContent` says what happens to what is INSIDE, which is what the name says and what
+        // Figma and Sketch mean. A node that clipped itself would be a node that could never be
+        // seen at its own edges.
+        const shut = computeGeometry(scene({ clip: true }));
+        expect(hitTest(shut, 5, 5)).toBe("F");
+    });
+
+    test("the clip follows the frame's CORNERS, not its bounding box", () => {
+        // A rounded frame cuts at the round, which is only visible in a corner: at (2,2) a 40-unit
+        // radius has already curved away, while the same point is solidly inside a square frame.
+        const square = computeGeometry(scene({ clip: true }));
+        expect(hitTest(square, 3, 3)).toBe("F");
+        const round = computeGeometry(scene({ clip: true, radius: 40 }));
+        expect(hitTest(round, 3, 3)).toBeNull();
+        // The child is clipped by that same rounded shape rather than by the box.
+        expect(hitTest(round, 50, 50)).toBe("C");
+    });
+
+    test("a ROTATED frame clips where it is drawn, not where its box was", () => {
+        // The clip is the frame's own shape under the frame's own matrix, so it turns with it.
+        // Unrotated, (95, 50) is inside the frame; turned 45 degrees about its centre it is not.
+        const flat = computeGeometry(scene({ clip: true }));
+        expect(hitTest(flat, 95, 50)).toBe("C");
+        const turned = computeGeometry(scene({ clip: true, rotate: 45 }));
+        // NOT `toBeNull`: clipping the child uncovers the FRAME behind it, which is still there to
+        // be hit. What matters is that the child is no longer what is under the pointer.
+        expect(hitTest(turned, 95, 50)).not.toBe("C");
+        // …and the frame's centre is still the frame's centre, whatever it did.
+        expect(hitTest(turned, 50, 50)).toBe("C");
+    });
+
+    test("clipping NESTS, and the innermost frame wins", () => {
+        // Two frames, the inner one narrower. A point inside the outer but outside the inner must
+        // miss the grandchild, or nesting would only ever apply the first clip found.
+        const d = createEmptyDocument();
+        d.nodes.set("OUT", { id: "OUT", type: "core.rectangle", parent: null, children: ["IN"],
+            geometry: { x: 0, y: 0, width: 200, height: 200 }, style: { fill: "none", opacity: 1 }, layout: {},
+            clipsContent: true } as Node);
+        d.nodes.set("IN", { id: "IN", type: "core.rectangle", parent: "OUT", children: ["C"],
+            geometry: { x: 0, y: 0, width: 60, height: 200 }, style: { fill: "none", opacity: 1 }, layout: {},
+            clipsContent: true } as Node);
+        d.nodes.set("C", { id: "C", type: "core.rectangle", parent: "IN", children: [],
+            geometry: { x: 0, y: 0, width: 300, height: 100 }, style: { fill: "#0f0", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["OUT"];
+        const g = computeGeometry(d);
+        expect(g.nodes.get("C")!.clips).toEqual(["OUT", "IN"]);     // outermost first
+        expect(hitTest(g, 30, 50)).toBe("C");        // inside both
+        expect(hitTest(g, 100, 50)).not.toBe("C");   // inside OUT, outside IN — the child is gone
+        expect(hitTest(g, 250, 50)).toBeNull();      // outside both, and OUT ends at 200
+    });
+
+    test("an unclipped document records NO chain and allocates nothing", () => {
+        // This runs for every node on every derivation, so the feature must cost nothing when it
+        // is not used — and a shared empty array is how a subtree under one clip stays one array.
+        const plain = computeGeometry(scene());
+        expect(plain.nodes.get("C")!.clips).toBeUndefined();
+        expect(plain.nodes.get("F")!.clips).toBeUndefined();
+        // The FRAME is not in its own chain; only what is inside it is.
+        const shut = computeGeometry(scene({ clip: true }));
+        expect(shut.nodes.get("F")!.clips).toBeUndefined();
+        expect(shut.nodes.get("C")!.clips).toEqual(["F"]);
+    });
+
+    test("the flag is a boolean on the way in, and it round-trips", () => {
+        const d = scene({ clip: true });
+        expect(deserializeDocument(serializeDocument(d)).nodes.get("F")!.clipsContent).toBe(true);
+        expect(clipsContentError(undefined)).toBeNull();
+        expect(clipsContentError(true)).toBeNull();
+        expect(clipsContentError("yes")).toMatch(/must be a boolean/);
+        expect(clipsContentError(1)).toMatch(/must be a boolean/);
+        // …and the LOAD path refuses it, not only the editor: a truthy string would clip on one
+        // path and be refused on the other.
+        const bad = JSON.parse(serializeDocument(d));
+        bad.document.nodes.F.clipsContent = "yes";
+        expect(() => deserializeDocument(JSON.stringify(bad))).toThrow(/clipsContent must be a boolean/);
+    });
+
+    test("the RENDER MODEL gives every backend the region, in the frame's own units", () => {
+        // Carried as box + matrix rather than a world rectangle, because a rotated frame's clip is
+        // not axis-aligned and flattening it here would throw away the only form in which it is
+        // still exactly a rounded rect.
+        const model = buildRenderModel({ width: 800, height: 600 }, scene({ clip: true, radius: 12 }),
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(scene({ clip: true, radius: 12 })), viewport: { x: 0, y: 0, zoom: 1 } } as never);
+        const group = model.groups.find((g: OpacityGroup) => g.id === "F");
+        expect(group).toBeDefined();
+        expect(group!.clip).toMatchObject({ width: 100, height: 100, radius: 12 });
+        // A clipping frame is a LAYER even at full opacity, which is what puts it in the chain at
+        // all — the fade is 1 and the backend takes its cheap path.
+        expect(group!.opacity).toBe(1);
+        // A LEAF DOES NOT CLIP, whatever its flag says: there is nothing inside it, and a node
+        // does not clip its own ink. Without this it would open a layer — an offscreen target on
+        // the GPU — for every flagged shape in the document.
+        const leafDoc = scene({ clip: true });
+        leafDoc.nodes.set("L", { id: "L", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 300, y: 0, width: 40, height: 40 }, style: { fill: "#f00", opacity: 1 }, layout: {},
+            clipsContent: true } as Node);
+        leafDoc.rootNodeUuids = ["F", "L"];
+        const withLeaf = buildRenderModel({ width: 800, height: 600 }, leafDoc,
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(leafDoc), viewport: { x: 0, y: 0, zoom: 1 } } as never);
+        expect(withLeaf.groups.find((g: OpacityGroup) => g.id === "L")).toBeUndefined();
+
+        // THE REGION COMES FROM THE COMPUTED BOX, not the stored one. They are the same number
+        // until something moves the frame without writing to it — a drag preview is the reachable
+        // case, and auto-layout is the everyday one. A clip placed by the stored box would cut in
+        // the wrong place on exactly the containers people clip most.
+        const dragged = scene({ clip: true });
+        const previewed = buildRenderModel({ width: 800, height: 600 }, dragged,
+            { selectedNodeIds: [], hoveredNodeId: null,
+              computed: computeGeometry(dragged, new Map([["F", { width: 250, height: 100 }]])),
+              viewport: { x: 0, y: 0, zoom: 1 } } as never);
+        expect(previewed.groups.find((g: OpacityGroup) => g.id === "F")!.clip!.width).toBe(250);
+        expect(dragged.nodes.get("F")!.geometry.width).toBe(100);   // …and the document is untouched
+
+        // …and an unclipped frame with full opacity is not a layer, so nothing pays for it.
+        const plain = buildRenderModel({ width: 800, height: 600 }, scene(),
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(scene()), viewport: { x: 0, y: 0, zoom: 1 } } as never);
+        expect(plain.groups.find((g: OpacityGroup) => g.id === "F")).toBeUndefined();
+    });
+});
+
+describe("Turning clipping on, through the ordinary edit path", () => {
+    const frame = () => {
+        const d = createEmptyDocument();
+        d.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["C"],
+            geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#222", opacity: 1, radius: 8 }, layout: {} } as Node);
+        d.nodes.set("C", { id: "C", type: "core.rectangle", parent: "F", children: [],
+            geometry: { x: 20, y: 40, width: 160, height: 20 }, style: { fill: "#0f0", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["F"];
+        return d;
+    };
+
+    test("the EDIT stores it, and unticking removes the field rather than writing false", () => {
+        // `UpdateNodeContentAction` is the action that once validated `nineSlice` and then built
+        // its delta field by field, dropping it. So this asks the DOCUMENT what it holds after an
+        // ordinary edit, which is the only question that would have caught that.
+        const dispatcher = new ActionDispatcher(frame());
+        dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), "F", { clipsContent: true }));
+        expect(dispatcher.getDocument().nodes.get("F")!.clipsContent).toBe(true);
+        // …and it really clips afterwards, rather than merely being stored.
+        expect(hitTest(computeGeometry(dispatcher.getDocument()), 150, 50)).toBeNull();
+
+        // Absent and false mean the same thing to every reader, and a file full of
+        // `clipsContent: false` says nothing.
+        dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), "F", { clipsContent: false }));
+        expect("clipsContent" in dispatcher.getDocument().nodes.get("F")!).toBe(false);
+        expect(hitTest(computeGeometry(dispatcher.getDocument()), 150, 50)).toBe("C");
+        // UNDO puts it back, because it went through an ordinary delta.
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.get("F")!.clipsContent).toBe(true);
+    });
+
+    test("the inspector offers it only where it can MEAN something", () => {
+        // A leaf has nothing inside to cut, and the flag would buy an offscreen target on the GPU
+        // for nothing. Guarded the way this repo guards App wiring.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).toMatch(/checked=\{node\.clipsContent === true\}/);
+        expect(src).toMatch(/\{ clipsContent: e\.target\.checked \}/);
+        // It routes through the CONTENT action; the geometry/style patch cannot carry it, and a
+        // second path would be a second place to forget.
+        expect(src).toMatch(/new UpdateNodeContentAction\([\s\S]{0,200}\{ clipsContent/);
     });
 });

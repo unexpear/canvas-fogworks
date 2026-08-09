@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v58 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v59 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -1116,6 +1116,39 @@ source rect, and a panel whose middle has collapsed genuinely has four pieces.
 
 **Stretched, not tiled.** Tiling needs a repeat count, a rule for partial tiles and a per-axis
 choice; it is not pretended to exist.
+
+## Clipping content to a frame (schema 59)
+
+```ts
+Node.clipsContent?: boolean            // a container cuts its CHILDREN to its own box
+ComputedNode.clips?: readonly string[] // the ancestors clipping this node, outermost first
+ClipRegion { width, height, radius, world }   // what the backends get
+```
+
+**MEASURED FIRST, and the measurement cut the feature down.** Of the 5,279 SVG files in
+`freeassets`, **zero** use `<mask>` and eight use clipping at all — 72 clip paths between them, and
+every single one is a plain `<rect>` in user space. They are icon sets clipping each glyph to its
+own viewBox, which is exactly this feature. A general path clip and a soft alpha mask have no
+demand here, and `core.boolean` intersect already covers "cut this shape to that one" destructively.
+
+**The clip is the node's OWN shape**, corner radius included. That is what makes it a boolean rather
+than a subtree: nothing to place, nothing to keep in sync, and a resized frame clips to where it now
+is. It is also what Figma and Sketch mean by the same words.
+
+**It affects PICKING, not only drawing.** `computeGeometry` records each node's clipping ancestors
+and `hitTest` refuses a point outside them — a thing you cannot see must not be a thing you can
+click. The chain is inherited by reference, so a document that never clips allocates nothing.
+
+**A frame does not clip its own ink.** `clipsContent` says what happens to what is *inside* it, so
+the frame's own fill and stroke are drawn whole. Picking agreed from the start (it only ever
+recorded ancestors); the renderer did not, because a node is in its own layer chain — right for a
+fade, since a group's fill fades with the group, and wrong for a clip.
+
+**One layer mechanism, not two.** A clip and a fade are the same *sequencing* problem — which
+layers just ended, which just began — so a clipping node joins the same chain `layerTransition`
+already walks. Each backend then takes its own cheap path: SVG a `<clipPath>`, Canvas a
+`save`/`clip`/`restore` rather than an offscreen, and the GPU a coverage test in the **composite
+shader**, where the layer already lands, rather than in every scene shader.
 
 ## Skinning (bones that deform the artwork — schema 58)
 

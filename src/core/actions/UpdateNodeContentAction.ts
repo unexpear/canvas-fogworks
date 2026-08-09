@@ -21,7 +21,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { srcError, sourceRectError, nineSliceError, SourceRect } from "../document/Node";
+import { srcError, sourceRectError, nineSliceError, clipsContentError, SourceRect } from "../document/Node";
 import { NineSliceInsets } from "../geometry/NineSlice";
 import { MutationResult, ActionPayload, NodeDelta } from "./types";
 
@@ -38,6 +38,15 @@ export interface ContentPatch {
     pixelated?: boolean;
     /** A bitmap's nine-slice insets (schema 57). `null` clears it back to one stretched picture. */
     nineSlice?: NineSliceInsets | null;
+    /**
+     * Whether this node's children are cut to its box (schema 59). `null` clears the flag.
+     *
+     * Here rather than in `editSelected`'s geometry/style patch because it is neither: it is a
+     * fact about the node, like `src` and `nineSlice`. It also lands in the same `execute` that
+     * once VALIDATED `nineSlice` and then forgot to copy it into the delta — so the test for this
+     * one asks the document what it holds afterwards rather than asking the action what it did.
+     */
+    clipsContent?: boolean | null;
 }
 
 /** Longest display name a node may carry — an OOM guard on a hand-editable field. */
@@ -73,6 +82,8 @@ export class UpdateNodeContentAction extends Action {
         // not reopen — and `null` is the clear rather than a value to check.
         if (this.patch.nineSlice !== undefined && this.patch.nineSlice !== null
             && nineSliceError(node.type, this.patch.nineSlice) !== null) return false;
+        if (this.patch.clipsContent !== undefined && this.patch.clipsContent !== null
+            && clipsContentError(this.patch.clipsContent) !== null) return false;
         return true;
     }
 
@@ -95,6 +106,7 @@ export class UpdateNodeContentAction extends Action {
         if (this.patch.pixelated !== undefined) delta.pixelated = this.patch.pixelated;
         // `null` survives here too, for the same reason the region's does: it is the clear.
         if (this.patch.nineSlice !== undefined) delta.nineSlice = this.patch.nineSlice;
+        if (this.patch.clipsContent !== undefined) delta.clipsContent = this.patch.clipsContent;
 
         return {
             updatedNodeIds: new Set([this.nodeId]),

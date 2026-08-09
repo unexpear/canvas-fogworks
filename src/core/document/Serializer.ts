@@ -357,6 +357,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "55") { raw = migrate_55_to_56(raw); version = "56"; }
     if (version === "56") { raw = migrate_56_to_57(raw); version = "57"; }
     if (version === "57") { raw = migrate_57_to_58(raw); version = "58"; }
+    if (version === "58") { raw = migrate_58_to_59(raw); version = "59"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -871,6 +872,20 @@ function migrate_56_to_57(raw: any): any {
  */
 function migrate_57_to_58(raw: any): any {
     return { ...raw, version: "58" };
+}
+
+/**
+ * Schema 59 — `Node.clipsContent`, a container that cuts its children to its own box.
+ *
+ * A pass-through: no schema-58 node clips, and absent means "does not", which is what every
+ * existing document meant. The bump is for the other direction, and here it is the picking that
+ * makes it matter rather than the drawing. A 59 document in a 58 build shows every clipped child
+ * in full — content spilling out of the frame it was tucked into — and, worse, that spill is
+ * CLICKABLE, because the 58 build has no clip chain to refuse it. Silently wrong in two ways at
+ * once, which is exactly what the version gate is for.
+ */
+function migrate_58_to_59(raw: any): any {
+    return { ...raw, version: "59" };
 }
 
 function migrate_54_to_55(raw: any): any {

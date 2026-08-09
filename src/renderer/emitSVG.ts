@@ -372,6 +372,7 @@ export function emitSVG(container: HTMLElement, model: DisplayList): void {
     // The model lists each item's enclosing groups outermost-first, so nesting is a lookup:
     // create each `<g>` the first time it is named, then append into the innermost.
     const groupAlpha = new Map(model.groups.map(gr => [gr.id, gr.opacity]));
+    const groupClip = new Map(model.groups.filter(gr => gr.clip).map(gr => [gr.id, gr.clip!]));
     const groupEls = new Map<string, SVGGElement>();
     for (const item of model.content) {
         let parent: SVGGElement = contentGroup;
@@ -380,6 +381,26 @@ export function emitSVG(container: HTMLElement, model: DisplayList): void {
             if (!el) {
                 el = document.createElementNS(svgNS, "g") as SVGGElement;
                 el.setAttribute("opacity", String(groupAlpha.get(id) ?? 1));
+                // CLIPPING (schema 59). A `<clipPath>` holding the frame's own rounded box, with
+                // the frame's world matrix ON THE RECT rather than on the group: putting it on the
+                // group would move the CONTENT too, and the content already carries its own.
+                const clip = groupClip.get(id);
+                if (clip) {
+                    const path = document.createElementNS(svgNS, "clipPath") as SVGClipPathElement;
+                    const clipId = `clip-${id}`;
+                    path.setAttribute("id", clipId);
+                    const rect = document.createElementNS(svgNS, "rect");
+                    rect.setAttribute("width", String(Math.max(0, clip.width)));
+                    rect.setAttribute("height", String(Math.max(0, clip.height)));
+                    if (clip.radius > 0) {
+                        rect.setAttribute("rx", String(clip.radius));
+                        rect.setAttribute("ry", String(clip.radius));
+                    }
+                    rect.setAttribute("transform", toMatrixString(clip.world));
+                    path.appendChild(rect);
+                    defs.appendChild(path);
+                    el.setAttribute("clip-path", `url(#${clipId})`);
+                }
                 parent.appendChild(el);
                 groupEls.set(id, el);
             }

@@ -2368,6 +2368,28 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                 if (id) dispatcher.dispatchAction(new SetDepthAction(dispatcher.getDocument(), id, Math.max(DEPTH_MIN, Math.min(DEPTH_MAX, v))));
                                                 refresh(); }}
                                         /></div>
+                                    {/* CLIP CONTENT (schema 59). Only offered where it can mean
+                                        something: a node with no children has nothing inside to
+                                        cut, and the flag would be an offscreen target on the GPU
+                                        bought for nothing. */}
+                                    {node.children.length > 0 && (
+                                        <div style={{ gridColumn: "1 / -1" }}>
+                                            <label style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4, color: "#aaa" }}
+                                                   title="Cut this frame's children to its own box, corner radius included. What is hidden also stops being clickable.">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={node.clipsContent === true}
+                                                    onChange={e => {
+                                                        const id = es.selectedNodeIds[0];
+                                                        if (id) dispatcher.dispatchAction(new UpdateNodeContentAction(
+                                                            dispatcher.getDocument(), id, { clipsContent: e.target.checked }));
+                                                        refresh();
+                                                    }}
+                                                />
+                                                Clip content
+                                            </label>
+                                        </div>
+                                    )}
                                     <div><label style={INSPECTOR_LABEL}>Radius</label>
                                         <NumInput
                                             value={typeof node.style.radius === "number" ? node.style.radius : 0}

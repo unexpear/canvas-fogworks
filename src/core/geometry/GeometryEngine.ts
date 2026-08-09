@@ -58,6 +58,16 @@ export interface ComputedNode {
      * each re-deriving it from the node, and it cannot drift from the walk that placed the box.
      */
     shape: HitShape;
+    /**
+     * The ancestors that CLIP this node, outermost first — absent when none do (schema 59).
+     *
+     * Recorded here because `hitTest` reads a `ComputedState` and nothing else: giving it the
+     * document so it could walk parents would make the picker re-derive what this walk already
+     * knows, and the two would disagree the first time layout moved something. The walk visits
+     * parents before children, so a chain is its parent's chain plus the parent, and unclipped
+     * subtrees share ONE empty array rather than allocating per node.
+     */
+    clips?: readonly string[];
 }
 
 export interface ComputedState {
@@ -254,8 +264,19 @@ export function computeGeometry(
         // matrix, so composing it again here would double-apply the translation.
         const boxAtOrigin: Rect = { x: 0, y: 0, width: local.width, height: local.height };
 
+        // Inherited by reference when this parent does not clip, so a document that never clips
+        // allocates nothing at all — this runs for every node on every derivation.
+        const outerClips = parentComputed?.clips;
+        const clipParent = parentId != null ? doc.nodes.get(parentId) : undefined;
+        const clips = clipParent?.clipsContent && parentId != null
+            ? [...(outerClips ?? []), parentId]
+            : outerClips;
+
         order.push(id);
-        nodes.set(id, { world, local, bounds: transformRectToAABB(world, boxAtOrigin), shape: shapeOf(node, doc) });
+        nodes.set(id, {
+            world, local, bounds: transformRectToAABB(world, boxAtOrigin), shape: shapeOf(node, doc),
+            ...(clips && clips.length > 0 ? { clips } : {})
+        });
         layoutContainerPass(doc, node, local, laidOut, measured);
     }
 
@@ -410,6 +431,23 @@ export function toWorld(state: ComputedState, nodeId: string, x: number, y: numb
  * Applied to the local box directly — approximate under a node scale, which is
  * acceptable for a fuzzy affordance, and exact for the common unscaled case.
  */
+/**
+ * Whether a world point is inside every ancestor that clips this node (schema 59).
+ *
+ * Cheap when nothing clips, which is every document that does not use the feature: the chain is
+ * absent and this returns on the first line.
+ */
+function withinClips(state: ComputedState, c: ComputedNode, x: number, y: number): boolean {
+    if (!c.clips) return true;
+    for (const clipId of c.clips) {
+        const owner = state.nodes.get(clipId);
+        if (!owner) continue;
+        const q = toLocal(state, clipId, x, y);
+        if (!q || !hitsShape(owner.shape, owner.local.width, owner.local.height, q.x, q.y, 0)) return false;
+    }
+    return true;
+}
+
 export function hitTest(
     state: ComputedState,
     x: number,
@@ -426,6 +464,13 @@ export function hitTest(
         if (x < b.x - tolerance || y < b.y - tolerance || x > b.x + b.width + tolerance || y > b.y + b.height + tolerance) continue;
         const p = toLocal(state, id, x, y);
         if (!p) continue;
+        // OUTSIDE A CLIPPING ANCESTOR IS OUTSIDE (schema 59). A thing you cannot see must not be a
+        // thing you can click, or the canvas grows invisible targets — and this is the same rule
+        // the warp obeys, that a shape is grabbable exactly where it is drawn. Checked against the
+        // ancestor's own SHAPE rather than its bounds, so a rounded frame clips at its corners.
+        // NO TOLERANCE on the clip: the halo exists to make a thin line easier to hit, and
+        // widening the clip would let it hand back the pixels the clip just took away.
+        if (!withinClips(state, c, x, y)) continue;
         if (hitsShape(c.shape, c.local.width, c.local.height, p.x, p.y, tolerance)) {
             // A VIRTUAL node (an instance's materialized copy, M6) RESOLVES to its instance by
             // DEFAULT, so a plain click on instance content selects the INSTANCE — the thing you

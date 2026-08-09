@@ -140,6 +140,13 @@ export function applyMutationsToDocument(
                     if (delta.surface === null) delete node.surface;
                     else node.surface = delta.surface;
                 }
+                if (delta.clipsContent !== undefined) {
+                    // FALSE CLEARS IT, not just null. Absent and false mean the same thing to
+                    // every reader, and storing `clipsContent: false` on every node anybody ever
+                    // unticked would put a field in the file that says nothing.
+                    if (!delta.clipsContent) delete node.clipsContent;
+                    else node.clipsContent = true;
+                }
                 if (delta.nineSlice !== undefined) {
                     if (delta.nineSlice === null) delete node.nineSlice;
                     else node.nineSlice = delta.nineSlice;

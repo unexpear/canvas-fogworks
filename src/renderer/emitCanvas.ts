@@ -39,7 +39,7 @@
  */
 
 import { isTranslationOnly } from "../core/geometry/Matrix";
-import { DisplayList, DrawItem, Paint, PaintGradient, Shape, layerTransition, textParagraphs } from "./RenderModel";
+import { ClipRegion, DisplayList, DrawItem, Paint, PaintGradient, Shape, layerTransition, textParagraphs } from "./RenderModel";
 import { GradientStop } from "../core/document/Gradient";
 import { nineSliceRects } from "../core/geometry/NineSlice";
 import { parseColor } from "./emitWebGL";
@@ -389,14 +389,53 @@ export function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dp
         layers.push({ into: target, canvas, opacity });
         target = into;
     };
+    /**
+     * CLIPPING (schema 59) costs a `save`/`clip`, not an offscreen canvas.
+     *
+     * A fade has to composite the subtree before it can be faded, which is what the layer stack
+     * above is for. A clip does not — Canvas can intersect the current path into the clip region
+     * and every later draw obeys it. Paying for an offscreen either way would make clipping cost
+     * what fading does, on the feature people reach for most.
+     *
+     * PAIRED BY THE SAME `layerTransition` the fades use, so a `save` cannot outlive its layer: a
+     * `restore()` that unwound one step too far would take the transform of whatever came next
+     * with it, and the damage would show up somewhere else entirely.
+     */
+    const groupClip = new Map(model.groups.filter(gr => gr.clip).map(gr => [gr.id, gr.clip!]));
+    const openClip = (region: ClipRegion): void => {
+        target.save();
+        const m = target.getTransform();
+        target.transform(region.world.a, region.world.b, region.world.c, region.world.d, region.world.e, region.world.f);
+        target.beginPath();
+        // `roundRect` with radius 0 IS `rect`, and it is the same call `drawItem` makes for a
+        // rounded box — so the clip's corners are cut exactly where the frame's own are drawn.
+        target.roundRect(0, 0, Math.max(0, region.width), Math.max(0, region.height), Math.max(0, region.radius));
+        target.clip();
+        target.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+    };
     let openPath: readonly string[] = [];
     for (const item of model.content) {
         const next = item.groups ?? [];
         const step = layerTransition(openPath, next);
-        for (let i = 0; i < step.close; i++) closeLayer();
-        for (const id of step.open) openLayer(groupAlpha.get(id) ?? 1);
+        for (let i = 0; i < step.close; i++) {
+            const closing = openPath[openPath.length - 1 - i];
+            if (groupClip.has(closing)) target.restore();
+            if ((groupAlpha.get(closing) ?? 1) < 1) closeLayer();
+        }
+        for (const id of step.open) {
+            if ((groupAlpha.get(id) ?? 1) < 1) openLayer(groupAlpha.get(id) ?? 1);
+            const region = groupClip.get(id);
+            if (region) openClip(region);
+        }
         drawItem(target, item, scale);
         openPath = next;
+    }
+    // EVERYTHING STILL OPEN, closed in the order it was opened. A clip left open would leak its
+    // `save` into the overlay, which is drawn straight onto `ctx` — selection handles vanishing
+    // behind a frame is how that shows up, a long way from the line that caused it.
+    for (let i = openPath.length - 1; i >= 0; i--) {
+        if (groupClip.has(openPath[i])) target.restore();
+        if ((groupAlpha.get(openPath[i]) ?? 1) < 1) closeLayer();
     }
     while (layers.length > 0) closeLayer();
     model.overlay.forEach(item => drawItem(ctx, item, scale));

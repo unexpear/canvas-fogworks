@@ -66,6 +66,8 @@ export type NodeDelta =
         pixelated?: boolean;
         /** A bitmap's nine-slice insets (schema 57). `null` REMOVES them, like a region's. */
         nineSlice?: NineSliceInsets | null;
+        /** Cut children to this node's box (schema 59); null clears it. */
+        clipsContent?: boolean | null;
         src?: string;
         name?: string;
         /** Whole-map replace of a `core.instance`'s per-instance overrides (M6 slice 2). Whole-map

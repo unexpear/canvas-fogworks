@@ -17,6 +17,7 @@ import { interactionsError } from "./Prototype";
 import { timelineError, trackError, channelsError } from "./Timeline";
 import { clipsError } from "./Clips";
 import { ikError } from "./Rig";
+import { clipsContentError } from "./Node";
 import { depthError } from "./Depth";
 import { meshError } from "./Mesh";
 import { ambientError, lightsError } from "./Light";
@@ -92,6 +93,8 @@ function checkNodeRanges(node: ReadonlyNode): void {
     if (rectErr) throw new Error(`Invalid document: node "${node.id}" ${rectErr}.`);
     const sliceErr = nineSliceError(node.type, node.nineSlice);
     if (sliceErr) throw new Error(`Invalid document: node "${node.id}" ${sliceErr}.`);
+    const clipErr = clipsContentError(node.clipsContent);
+    if (clipErr) throw new Error(`Invalid document: node "${node.id}" ${clipErr}.`);
     const srcErr = srcError(node.type, node.src);
     if (srcErr) throw new Error(`Invalid document: node "${node.id}" ${srcErr}.`);
     // `componentId` (M6): only an instance may carry one; a DANGLING reference is deliberately
