@@ -153,6 +153,7 @@ import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, sna
 import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
 import { buildRenderModel, PaintGradient, resolvePaintGradient, resolveTypography, Shape } from "../../renderer/RenderModel";
+import { BLEND_CODE } from "../../renderer/emitWebGL";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, polygonCommands, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../../editor/tools/ShapeTool";
 import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../geometry/Polygon";
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
@@ -24578,10 +24579,16 @@ describe("Blend modes (schema 60)", () => {
         const canvas = readFileSync(resolve(__dirname, "../../renderer/emitCanvas.ts"), "utf8");
         expect(svg).toMatch(/el\.style\.mixBlendMode = paint\.blendMode/);
         expect(canvas).toMatch(/ctx\.globalCompositeOperation = paint\.blendMode/);
-        // …and the GPU says, in its own header, that it does not do this yet — recorded rather
-        // than discovered, and surfaced by `npm run header-claims`.
+        // The GPU cannot use a name — it has no `mix-blend-mode` to hand a string to — so it maps
+        // each to a number ONCE, and the map must cover exactly the modes that exist. A mode added
+        // to `BLEND_MODES` without a code would silently render as multiply.
+        expect(Object.keys(BLEND_CODE).sort()).toEqual([...BLEND_MODES].sort());
+        expect(new Set(Object.values(BLEND_CODE)).size).toBe(BLEND_MODES.length);
+        // …and its shader implements all three rather than falling through to one of them.
         const gpu = readFileSync(resolve(__dirname, "../../renderer/emitWebGL.ts"), "utf8");
-        expect(gpu).toMatch(/THE GAP TODAY IS BLEND MODES/);
+        expect(gpu).toMatch(/return cb \* cs;/);                       // multiply
+        expect(gpu).toMatch(/return cb \+ cs - cb \* cs;/);            // screen
+        expect(gpu).toMatch(/mix\(lo, hi, step\(0\.5, cb\)\)/);        // overlay, branching on the BACKDROP
     });
 });
 

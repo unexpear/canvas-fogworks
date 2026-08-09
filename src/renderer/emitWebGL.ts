@@ -51,20 +51,21 @@
  * be the only one, and `npm run header-claims` is what found it — advisory, because the judgement
  * is a read. A sentence describing an ABSENCE has a shelf life; write it expecting to come back.
  *
- * THE GAP TODAY IS BLEND MODES (schema 60). `multiply`, `screen` and `overlay` all combine a
- * shape with what is BEHIND it, and this backend renders to the default framebuffer, which cannot
- * be sampled. Fixed-function blending is not a way out: it can approximate multiply and screen
- * only while the backdrop is opaque, and it cannot express overlay at all, because overlay
- * branches on the destination and `blendFunc` has no branch. Doing it exactly means rendering the
- * scene into a target and ping-ponging a blend pass per blended item — which is a real change to
- * the most feedback-prone file here, not a flag.
+ *   - BLEND MODES (schema 60), which needed the one thing this backend did not have: a backdrop it
+ *     can READ. `multiply`, `screen` and `overlay` all combine a shape with what is behind it, and
+ *     fixed-function blending is no way out — it approximates the first two only while the
+ *     backdrop is opaque, and cannot express overlay at all, because overlay branches on the
+ *     DESTINATION and `blendFunc` has no branch. So a frame containing a blended item renders into
+ *     a target instead of the default framebuffer, each blended shape is drawn into a scratch one,
+ *     and `blendTargets` combines the two; the result becomes the new backdrop and the consumed
+ *     target becomes the next scratch. One extra full-screen pass per blended item, and nothing at
+ *     all for a frame that does not blend.
  *
- * So a blended node draws NORMALLY on this backend, which is a divergence from the other two and
- * is written down rather than discovered: `npm run header-claims` lists this sentence precisely so
- * somebody comes back to it.
+ * WHAT THIS FILE HAS NO KNOWN GAP FOR, as of schema 60 — which is a sentence with a shelf life, and
+ * `npm run header-claims` lists it on purpose so the next person to find one comes back here.
  *
  * The app still offers this backend as a preview, because a backend that quietly drops content is
- * worse than one that admits what it cannot do — and this is now why.
+ * worse than one that admits what it cannot do.
  */
 
 import { ClipRegion, DisplayList, DrawItem, PaintGradient, Shape, layerTransition } from "./RenderModel";
@@ -172,6 +173,55 @@ void main() {
  * src-alpha blending, which leaves its RGB already multiplied by its own alpha — so it composites
  * with `ONE, ONE_MINUS_SRC_ALPHA`, and the tint multiplies by alpha here to stay in that space.
  */
+/**
+ * BLENDING TWO RENDERED IMAGES (schema 60) — the pass that fixed-function blending cannot be.
+ *
+ * multiply and screen are separable and a blendFunc can ALMOST do them: almost, because it is only
+ * exact while the backdrop is opaque. overlay cannot be done at all that way, because it branches
+ * on the DESTINATION and there is no branch in fixed-function blending. All three need the backdrop
+ * as something readable, so both images arrive here as textures and the arithmetic is ordinary.
+ *
+ * BOTH ARE PREMULTIPLIED, which the blend formulas are not defined on — they take straight colour.
+ * So each is divided by its own alpha first, blended, and composited back with the W3C rule:
+ *
+ *     co = as(1-ab)Cs + as*ab*B(Cb,Cs) + (1-as)Cb'
+ *     ao = as + ab(1-as)
+ *
+ * where Cb' is the already-premultiplied backdrop. Dropping the first and third terms is the easy
+ * mistake and it looks right over an opaque backdrop, which is every fixture that does not think
+ * to make one translucent.
+ */
+const BLEND_FRAGMENT_SHADER = `
+precision mediump float;
+uniform sampler2D u_backdrop;
+uniform sampler2D u_src;
+// 1 multiply, 2 screen, 3 overlay. A float rather than an int because WebGL 1 has no integer
+// uniforms worth relying on, and a step function reads no worse than a switch.
+uniform float u_mode;
+varying vec2 v_uv;
+
+vec3 blendOf(vec3 cb, vec3 cs) {
+    if (u_mode < 1.5) return cb * cs;
+    if (u_mode < 2.5) return cb + cs - cb * cs;
+    // OVERLAY is hard-light with the operands swapped: it branches on the BACKDROP, which is the
+    // whole reason this pass exists rather than a blendFunc.
+    vec3 lo = 2.0 * cb * cs;
+    vec3 hi = 1.0 - 2.0 * (1.0 - cb) * (1.0 - cs);
+    return mix(lo, hi, step(0.5, cb));
+}
+
+void main() {
+    vec4 b = texture2D(u_backdrop, v_uv);
+    vec4 s = texture2D(u_src, v_uv);
+    vec3 cb = b.a > 0.0 ? b.rgb / b.a : vec3(0.0);
+    vec3 cs = s.a > 0.0 ? s.rgb / s.a : vec3(0.0);
+    vec3 blended = blendOf(cb, cs);
+    gl_FragColor = vec4(
+        s.a * (1.0 - b.a) * cs + s.a * b.a * blended + (1.0 - s.a) * b.rgb,
+        s.a + b.a * (1.0 - s.a)
+    );
+}`;
+
 const COMPOSITE_FRAGMENT_SHADER = `
 precision mediump float;
 uniform sampler2D u_tex;
@@ -452,6 +502,12 @@ export interface BlurState {
      * which is still needed sharp. Blurring in place would consume the very thing being shadowed.
      */
     targets: [BlurTarget | null, BlurTarget | null, BlurTarget | null];
+    /** The blend program (schema 60) — two textures in, the composited result out. */
+    blend: WebGLProgram;
+    blendPosLoc: number;
+    blendBackdropLoc: WebGLUniformLocation | null;
+    blendSrcLoc: WebGLUniformLocation | null;
+    blendModeLoc: WebGLUniformLocation | null;
 }
 
 export interface GLState {
@@ -465,6 +521,16 @@ export interface GLState {
      * levels of translucent group allocates three and reuses them.
      */
     layerTargets: (BlurTarget | null)[];
+    /**
+     * The two targets a blended frame ping-pongs between, and the scratch one item is drawn into
+     * (schema 60).
+     *
+     * ONLY ALLOCATED WHEN SOMETHING BLENDS. A frame with no blend mode renders straight to the
+     * default framebuffer exactly as it always did, which matters because that is every frame in
+     * every document that does not use the feature.
+     */
+    sceneTargets: [BlurTarget | null, BlurTarget | null];
+    blendSource: BlurTarget | null;
     program: WebGLProgram;
     buffer: WebGLBuffer;
     normalBuffer: WebGLBuffer;
@@ -537,10 +603,12 @@ export function initBlur(gl: WebGLRenderingContext): BlurState | null {
     const vs = compile(gl, gl.VERTEX_SHADER, BLUR_VERTEX_SHADER);
     const fs = compile(gl, gl.FRAGMENT_SHADER, BLUR_FRAGMENT_SHADER);
     const cfs = compile(gl, gl.FRAGMENT_SHADER, COMPOSITE_FRAGMENT_SHADER);
+    const bfs = compile(gl, gl.FRAGMENT_SHADER, BLEND_FRAGMENT_SHADER);
     const program = gl.createProgram();
     const composite = gl.createProgram();
+    const blend = gl.createProgram();
     const quad = gl.createBuffer();
-    if (!vs || !fs || !cfs || !program || !composite || !quad) return null;
+    if (!vs || !fs || !cfs || !bfs || !program || !composite || !blend || !quad) return null;
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
     gl.linkProgram(program);
@@ -551,6 +619,12 @@ export function initBlur(gl: WebGLRenderingContext): BlurState | null {
     gl.attachShader(composite, cfs);
     gl.linkProgram(composite);
     if (!gl.getProgramParameter(composite, gl.LINK_STATUS)) return null;
+    // The blend shares that same vertex shader, for the same reason: three programs drawing one
+    // quad must agree about which corner is which texel, and one source is how they cannot differ.
+    gl.attachShader(blend, vs);
+    gl.attachShader(blend, bfs);
+    gl.linkProgram(blend);
+    if (!gl.getProgramParameter(blend, gl.LINK_STATUS)) return null;
     // TWO TRIANGLES covering clip space. `v_uv` is derived from the position rather than sent as a
     // second attribute, so the quad is four numbers per corner and nothing can disagree about
     // which corner maps to which texel.
@@ -582,6 +656,11 @@ export function initBlur(gl: WebGLRenderingContext): BlurState | null {
         compositeClipInvLoc: gl.getUniformLocation(composite, "u_clipInv"),
         compositeClipSizeLoc: gl.getUniformLocation(composite, "u_clipSize"),
         compositeClipRadiusLoc: gl.getUniformLocation(composite, "u_clipRadius"),
+        blend,
+        blendPosLoc: gl.getAttribLocation(blend, "a_pos"),
+        blendBackdropLoc: gl.getUniformLocation(blend, "u_backdrop"),
+        blendSrcLoc: gl.getUniformLocation(blend, "u_src"),
+        blendModeLoc: gl.getUniformLocation(blend, "u_mode"),
         targets: [null, null, null]
     };
 }
@@ -667,6 +746,47 @@ export function compositeTarget(
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     gl.disable(gl.BLEND);
+}
+
+/** Which number the shader reads for each mode. Order fixed here, not spelled out in GLSL. */
+export const BLEND_CODE: Record<string, number> = { multiply: 1, screen: 2, overlay: 3 };
+
+/**
+ * Combine a source image over a backdrop image with a blend mode, into the bound framebuffer.
+ *
+ * NOT A `blendFunc`. Fixed-function blending reads the destination but cannot BRANCH on it, which
+ * overlay requires, and its multiply and screen are only exact over an opaque backdrop. Both
+ * images are textures here, so the arithmetic is ordinary and the alpha is handled properly.
+ *
+ * BLENDING IS DISABLED for this draw. The shader already composites the source over the backdrop —
+ * that is what the W3C rule in it does — so leaving GL blending on would composite the result a
+ * second time, against whatever the target happened to hold.
+ */
+export function blendTargets(
+    gl: WebGLRenderingContext, blur: BlurState,
+    backdrop: BlurTarget, source: BlurTarget, mode: string
+): void {
+    gl.useProgram(blur.blend);
+    gl.bindBuffer(gl.ARRAY_BUFFER, blur.quad);
+    gl.enableVertexAttribArray(blur.blendPosLoc);
+    gl.vertexAttribPointer(blur.blendPosLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, backdrop.texture);
+    gl.uniform1i(blur.blendBackdropLoc, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, source.texture);
+    gl.uniform1i(blur.blendSrcLoc, 1);
+    gl.uniform1f(blur.blendModeLoc, BLEND_CODE[mode] ?? 1);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    // UNIT 1 RELEASED, and unit 0 with it. The scene program samples unit 0, and a texture left
+    // bound to a unit while its own framebuffer is bound again is the feedback loop that made a
+    // blurred shape come out as a hole. Two units now, two to let go of.
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, null);
 }
 
 /**
@@ -826,7 +946,10 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
         // carry a note about: `getUniformLocation(p, "u_gradOffset")` returns null on some drivers.
         gradOffsetLoc: gl.getUniformLocation(program, "u_gradOffset[0]"),
         gradColorLoc: gl.getUniformLocation(program, "u_gradColor[0]"),
-        layerTargets: []
+        layerTargets: [],
+        // Allocated on the first frame that actually blends, and never otherwise.
+        sceneTargets: [null, null],
+        blendSource: null
     };
 }
 
@@ -1502,6 +1625,65 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
         applyDepth();
     };
 
+    /**
+     * THE WHOLE FRAME GOES INTO A TARGET when anything in it blends (schema 60).
+     *
+     * A blend needs the backdrop as a TEXTURE, and the default framebuffer is not one. So a frame
+     * containing a blended item renders into `scene` instead and is composited to the screen once
+     * at the end — one extra full-screen pass, paid only by frames that need it. A frame with no
+     * blend mode touches none of this and renders exactly where it always did.
+     */
+    const blended = list.content.some(i => i.paint.blendMode !== null);
+    let scene: BlurTarget | null = null;
+    if (blended && state.blur) {
+        scene = ensureTarget(gl, state.sceneTargets[0], width, height);
+        state.sceneTargets[0] = scene;
+        if (scene) {
+            destination = scene.framebuffer;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, destination);
+            gl.viewport(0, 0, scene.width, scene.height);
+            gl.clearColor(0, 0, 0, 0);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            // THE FEEDBACK LOOP, a third time and in a new place. LAST FRAME ended by compositing
+            // this very target to the screen, and `compositeTarget` leaves its source bound to
+            // unit 0 — which the scene program samples. Binding the same target as the destination
+            // now and drawing into it is a loop, and WebGL discards every such draw with
+            // INVALID_OPERATION. The symptom was the whole backdrop missing and the blends never
+            // happening; the console said so in as many words, which is why this one took minutes
+            // rather than the hours the blur-hole did.
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, null);
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, null);
+            restoreSceneState();
+            applyDepth();
+        }
+    }
+
+    /**
+     * Swap a fresh target in as the thing being drawn into, and hand back the old one.
+     *
+     * A BLEND CONSUMES ITS BACKDROP: the pass reads the current target and cannot also write to it,
+     * so the result lands in a spare and the spare becomes current. Which target is "current"
+     * depends on whether an opacity group is open — a blended item inside a faded group blends
+     * against THAT group's contents, not against the page behind it, which is what the group means.
+     */
+    const swapCurrent = (fresh: BlurTarget): BlurTarget | null => {
+        if (layerStack.length > 0) {
+            const top = layerStack[layerStack.length - 1];
+            const old = top.target;
+            top.target = fresh;
+            state.layerTargets[layerStack.length - 1] = fresh;
+            destination = fresh.framebuffer;
+            return old;
+        }
+        const old = scene;
+        scene = fresh;
+        state.sceneTargets[0] = fresh;
+        destination = fresh.framebuffer;
+        return old;
+    };
+
     let openPath: readonly string[] = [];
     for (const item of [...list.grid.lines, ...list.content, ...list.overlay]) {
         const nextPath = item.groups ?? [];
@@ -1512,6 +1694,36 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
         // EFFECTS ARE AN OFFSCREEN DETOUR. An item with a shadow or a blur is drawn into a target
         // first, filtered, and composited back — because both are per-fragment work over a
         // RENDERED IMAGE and there is no such image while the item is still being drawn.
+        // A BLENDED ITEM IS DRAWN SOMEWHERE ELSE FIRST (schema 60), and the trick is that it needs
+        // no new drawing path: `destination` is simply pointed at a scratch target for the length
+        // of this item. Everything below — the effect detour included — already writes to
+        // `destination`, so a blended shape with a shadow gets its shadow first and is blended
+        // afterwards, which is the order both features mean.
+        const blendMode = item.paint.blendMode;
+        let blendBackdrop: BlurTarget | null = null;
+        if (blendMode && state.blur) {
+            const behind = layerStack.length > 0 ? layerStack[layerStack.length - 1].target : scene;
+            const src = ensureTarget(gl, state.blendSource, width, height);
+            state.blendSource = src;
+            // NO BACKDROP, NO BLEND: the item draws normally rather than not at all. Losing the
+            // blend is visible; losing the shape is not.
+            if (behind && src) {
+                blendBackdrop = behind;
+                destination = src.framebuffer;
+                gl.bindFramebuffer(gl.FRAMEBUFFER, destination);
+                gl.viewport(0, 0, src.width, src.height);
+                gl.clearColor(0, 0, 0, 0);
+                gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+                // THE FEEDBACK LOOP, again: this target's own texture is still bound to a unit
+                // from the pass that last read it, and the scene program samples unit 0.
+                gl.activeTexture(gl.TEXTURE1);
+                gl.bindTexture(gl.TEXTURE_2D, null);
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, null);
+                restoreSceneState();
+                applyDepth();
+            }
+        }
         const plan = state.blur ? effectPlan(item.paint, viewScale) : null;
         let target: BlurTarget | null = null;
         if (plan && state.blur) {
@@ -1776,11 +1988,48 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
             restoreSceneState();
             applyDepth();
         }
+
+        // THE BLEND ITSELF, once the item is fully drawn — effects and all. It reads the backdrop
+        // and cannot also write to it, so the result lands in a spare and the spare becomes what
+        // everything after this draws on; the target just consumed becomes the next spare.
+        if (blendBackdrop && blendMode && state.blur) {
+            const spare = ensureTarget(gl, state.sceneTargets[1], width, height);
+            state.sceneTargets[1] = spare;
+            if (spare && state.blendSource) {
+                gl.bindFramebuffer(gl.FRAMEBUFFER, spare.framebuffer);
+                gl.viewport(0, 0, spare.width, spare.height);
+                gl.clearColor(0, 0, 0, 0);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+                blendTargets(gl, state.blur, blendBackdrop, state.blendSource, blendMode);
+                state.sceneTargets[1] = swapCurrent(spare);
+            } else {
+                // Nothing to blend into: put the destination back so the rest of the frame lands
+                // where it should, and lose only this item's blend.
+                destination = blendBackdrop.framebuffer;
+            }
+            gl.bindFramebuffer(gl.FRAMEBUFFER, destination);
+            gl.viewport(0, 0, width, height);
+            restoreSceneState();
+            applyDepth();
+        }
     }
     // Anything still open at the end of the frame is composited now — an overlay closes the
     // content's groups on the way past, but a document that ends inside one would otherwise leave
     // its last group on a target nobody ever drew.
     while (layerStack.length > 0) closeLayer();
+
+    // AND THE FRAME LANDS ON SCREEN. A blended frame was rendered into a target so its backdrop
+    // could be read; one full-screen composite puts it where the user can see it. `scene` is the
+    // target the ping-pong ENDED on, which is why this reads the variable rather than
+    // `sceneTargets[0]` from before the loop.
+    if (scene && state.blur) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, width, height);
+        gl.disable(gl.DEPTH_TEST);
+        compositeTarget(gl, state.blur, scene, 0, 0, null);
+        restoreSceneState();
+        applyDepth();
+    }
     return true;
 }
 

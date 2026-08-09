@@ -1160,13 +1160,17 @@ value travels end to end with no translation table anywhere to disagree with its
 handle tinted by the art beneath it is unreadable, and a grid multiplied into the page vanishes
 over dark artwork.
 
-**NOT DRAWN BY THE WebGL BACKEND YET**, which is a divergence recorded rather than discovered. All
-three modes combine a shape with what is *behind* it, and that backend renders to the default
-framebuffer, which cannot be sampled. Fixed-function blending is not a way out: it approximates
-multiply and screen only while the backdrop is opaque, and cannot express overlay at all, because
-overlay branches on the destination and `blendFunc` has no branch. Doing it exactly means rendering
-the scene into a target and ping-ponging a blend pass per blended item. `npm run header-claims`
-lists the sentence in `emitWebGL` that says so.
+**All three backends agree to the channel.** SVG and Canvas each need one line, because both have
+these modes natively. The GPU needed the one thing it did not have — a backdrop it can READ — since
+fixed-function blending approximates multiply and screen only over an opaque backdrop and cannot
+express overlay at all (overlay branches on the *destination*, and `blendFunc` has no branch). So a
+frame containing a blended item renders into a target, each blended shape is drawn into a scratch
+one, and a blend pass combines them; the result becomes the new backdrop and the consumed target
+becomes the next scratch. One extra full-screen pass per blended item, nothing for a frame that
+does not blend.
+
+Verified by sampling the same four pixels on all three: over a `#4477cc` backdrop with `#ffcc00`
+ink, every backend returns `68,95,0` / `255,228,204` / `136,190,153` — the W3C formulas exactly.
 
 ## Clipping content to a frame (schema 59)
 

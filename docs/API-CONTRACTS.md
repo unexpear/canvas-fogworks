@@ -1939,7 +1939,10 @@ function pickColorAt(doc, state, x, y): string | null;
 function rampT(gradient, gx, gy): number;   // the same rule the GPU states in GLSL
 Style.blendMode?: BlendMode;      Paint.blendMode: BlendMode | null;   // null on all chrome
 function blendModeError(mode: unknown): string | null;
-// NOT drawn by emitWebGL: it renders to the default framebuffer and cannot sample its backdrop.
+// All three backends. The GPU renders a blended frame into a TARGET so the backdrop is readable,
+// then `blendTargets` combines scratch over backdrop — fixed-function cannot branch on the
+// destination, which overlay needs. Verified pixel-identical across the three.
+function blendTargets(gl, blur, backdrop, source, mode): void;
 Node.clipsContent?: boolean;
 ComputedNode.clips?: readonly string[];   // clipping ANCESTORS, outermost first — a frame is not
                                           // in its own chain, so its own ink is never cut

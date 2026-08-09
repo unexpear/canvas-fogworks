@@ -2390,7 +2390,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                     <div><label style={INSPECTOR_LABEL}>Blend</label>
                                         <select
                                             value={node.style.blendMode ?? ""}
-                                            title="How this shape's colour combines with what is behind it. Not drawn by the WebGL preview backend, which cannot sample its own backdrop yet."
+                                            title="How this shape's colour combines with what is behind it."
                                             onChange={e => {
                                                 const v = e.target.value;
                                                 editSelected({ style: { blendMode: v === "" ? undefined : v as BlendMode } });

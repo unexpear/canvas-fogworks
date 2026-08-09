@@ -1047,6 +1047,26 @@ The clip travels as a box plus the frame's world matrix rather than a world-spac
 because a rotated frame's clip is not axis-aligned and flattening it would throw away the only form
 in which it is still exactly a rounded rect.
 
+**BLENDING NEEDED A BACKDROP THE GPU COULD READ (schema 60).** `multiply` and `screen` are almost
+expressible with a `blendFunc` — almost, because that is only exact while the backdrop is opaque —
+and `overlay` is not expressible at all, because it branches on the DESTINATION and fixed-function
+blending has no branch. So a frame containing a blended item renders into a target instead of the
+default framebuffer; each blended shape is drawn into a scratch target (through the ordinary path,
+effects and all, by pointing `destination` at it for the length of the item); and a blend pass
+combines the two with the W3C rule. The result becomes the new backdrop and the target just
+consumed becomes the next scratch, so a frame with N blended items costs N extra full-screen passes
+and a frame with none costs nothing.
+
+Both images arrive PREMULTIPLIED and the blend formulas are not defined on that, so each is divided
+by its own alpha before blending and composited back with `co = as(1-ab)Cs + as·ab·B + (1-as)Cb'`.
+Dropping the first and third terms looks right over an opaque backdrop, which is every fixture that
+does not think to make one translucent.
+
+The one bug in getting there was the hazard this file already documents twice: the final composite
+leaves the scene's own texture bound to unit 0, so the next frame bound that target and drew into
+it — a feedback loop, every draw discarded, the backdrop simply absent. This time the console said
+so in as many words.
+
 **Depth is off inside a layer**, which is correct rather than a compromise: `content` is already
 sorted far-to-near by the model, so painter's order gives what the depth test would have. The call
 is redundant — GL says a depth test against a framebuffer with no depth attachment always passes —
