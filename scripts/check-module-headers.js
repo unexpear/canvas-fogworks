@@ -62,6 +62,32 @@ for (const root of ROOTS) {
     }
 }
 
+// A .js FILE UNDER `scripts/` MUST PARSE, and nothing else in the gate ever finds out. `npm run
+// check` typechecks `src` and runs jest; it never loads a tool script, so a syntax error in one sits
+// there looking fine until somebody runs that tool. That is exactly what happened: a mutation's
+// `from` was written with a REAL newline inside a JS string literal instead of an escape, the file
+// stopped parsing, `npm run check` and `npm run lint` both passed, and it was COMMITTED — the
+// mutation battery then died on load, which is a tool reporting nothing rather than a tool reporting
+// a problem. `vm.compileFunction` compiles WITHOUT executing, which matters: requiring these scripts
+// would run them.
+const parseOffenders = [];
+for (const file of walk(path.join(rootDir, "scripts"))) {
+    if (path.extname(file) !== ".js") continue;
+    try {
+        require("vm").compileFunction(fs.readFileSync(file, "utf-8"), [], { filename: file });
+    } catch (e) {
+        parseOffenders.push(`${path.relative(rootDir, file).split(path.sep).join("/")}: ${e.message}`);
+    }
+}
+if (parseOffenders.length > 0) {
+    console.error(
+        `A script under scripts/ does not parse (${parseOffenders.length}):\n`
+        + parseOffenders.map(f => "  " + f).join("\n")
+        + "\n\nNothing else in the gate loads these, so this is the only thing that would notice."
+    );
+    process.exit(1);
+}
+
 if (shaderOffenders.length > 0) {
     console.error(
         "A backtick inside a shader template literal in " + shaderOffenders.length + " file(s):\n" +

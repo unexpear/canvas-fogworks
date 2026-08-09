@@ -303,16 +303,12 @@ const MUTANTS = [
     // subject of AT8 — transpose-then-mirror is not commutative, and no single-line edit expresses
     // getting it backwards.
     { id: "AT8", file: "src/core/document/Autotile.ts",
-      from: "    if (flip & FLIP_D) swap(CORNER_TR, CORNER_BL);
-    if (flip & FLIP_H) { swap(CORNER_TL, CORNER_TR); swap(CORNER_BL, CORNER_BR); }",
-      to: "    if (flip & FLIP_H) { swap(CORNER_TL, CORNER_TR); swap(CORNER_BL, CORNER_BR); }
-    if (flip & FLIP_D) swap(CORNER_TR, CORNER_BL);",
+      from: "    if (flip & FLIP_D) swap(CORNER_TR, CORNER_BL);\n    if (flip & FLIP_H) { swap(CORNER_TL, CORNER_TR); swap(CORNER_BL, CORNER_BR); }",
+      to: "    if (flip & FLIP_H) { swap(CORNER_TL, CORNER_TR); swap(CORNER_BL, CORNER_BR); }\n    if (flip & FLIP_D) swap(CORNER_TR, CORNER_BL);",
       note: "mirror BEFORE transpose — the order `flipMatrix` does not use, and not commutative" },
     { id: "AT9", file: "src/core/document/Autotile.ts",
-      from: "            for (let flip = 0; flip <= FLIP_MAX; flip++) {
-                if (flipMask(flip, classMask) !== mask) continue;",
-      to: "            for (let flip = FLIP_MAX; flip >= 0; flip--) {
-                if (flipMask(flip, classMask) !== mask) continue;",
+      from: "            for (let flip = 0; flip <= FLIP_MAX; flip++) {\n                if (flipMask(flip, classMask) !== mask) continue;",
+      to: "            for (let flip = FLIP_MAX; flip >= 0; flip--) {\n                if (flipMask(flip, classMask) !== mask) continue;",
       note: "flips tried DESCENDING — a class's own mask gets a turned tile that only looks the same" },
 ];
 
