@@ -15303,6 +15303,34 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(holed.layer!.tilemap.tiles).toEqual([0, 1, 2, TILE_EMPTY]);
     });
 
+    test("a NON-SQUARE cell measures the node on the right axes, in both directions", () => {
+        // WHAT A SQUARE CELL CANNOT SEE, and the mutation battery is what said so: with 16x16 tiles
+        // the node's box comes out the same whichever dimension each side multiplies by. So the cell
+        // is 16x24 and the layer is 2x3 — chosen so the box is 32x72 rather than the 48x48 that both
+        // 2x3 and 16x24 would otherwise conspire to produce, which would be blind all over again.
+        const m = parseTiledMap('<?xml version="1.0"?><map version="1.2" orientation="orthogonal" '
+            + 'width="2" height="3" tilewidth="16" tileheight="24">'
+            + '<tileset firstgid="1" name="t" tilewidth="16" tileheight="24" columns="4" tilecount="16">'
+            + '<image source="t.png" width="64" height="96"/></tileset>'
+            + '<layer id="1" name="L" width="2" height="3"><data encoding="csv">1,2,3,4,5,6</data></layer></map>');
+        const got = tilemapForLayer(m, m.layers[0], m.tilesets).layer!;
+        expect({ width: got.width, height: got.height }).toEqual({ width: 32, height: 72 });
+        expect({ tw: got.tilemap.tileWidth, th: got.tilemap.tileHeight }).toEqual({ tw: 16, th: 24 });
+        expect({ cols: got.tilemap.cols, rows: got.tilemap.rows }).toEqual({ cols: 2, rows: 3 });
+
+        // AND A MISMATCH IN HEIGHT ALONE is still refused. The corpus's five oversized layers differ
+        // in BOTH axes (64x64 on 60x60, 24x24 on 18x18), so a fixture built from them proves only
+        // that one of the two comparisons runs.
+        const tall = parseTiledMap('<?xml version="1.0"?><map version="1.2" orientation="orthogonal" '
+            + 'width="2" height="2" tilewidth="16" tileheight="16">'
+            + '<tileset firstgid="1" name="t" tilewidth="16" tileheight="24" columns="4" tilecount="16">'
+            + '<image source="t.png" width="64" height="96"/></tileset>'
+            + '<layer id="1" name="Tall" width="2" height="2"><data encoding="csv">1,2,3,4</data></layer></map>');
+        const fit = tilemapForLayer(tall, tall.layers[0], tall.tilesets);
+        expect(fit.layer).toBeNull();
+        expect(fit.why).toMatch(/16x24 tiles on a 16x16 grid/);
+    });
+
     test("an imported map is a document that reopens — grids and loose tiles in layer order", () => {
         // THE END-TO-END CHECK, and the one that would have caught a deleted bone leaving an
         // unopenable file: place both kinds, then SAVE AND RELOAD. An importer that mints a node

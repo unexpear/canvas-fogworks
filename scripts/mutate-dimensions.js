@@ -24,7 +24,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1547;
+const EXPECTED_TESTS = 1548;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -146,13 +146,16 @@ const MUTANTS = [
       from: "        cols: layer.width, rows: layer.height,",
       to: "        cols: layer.height, rows: layer.width,",
       note: "the grid transposed — invisible on a square layer" },
+    // ONE LINE EACH, and that is a repair rather than a style choice: these two were written with a
+    // two-line `from` and matched NOTHING, which the harness reported as NOT APPLIED — the state
+    // that is neither a kill nor a survivor and is the only reason it was noticed.
     { id: "TG3", file: "src/core/import/TiledMap.ts",
-      from: "            x: layer.offsetX + set.offsetX,\n            y: layer.offsetY + set.offsetY,",
-      to: "            x: layer.offsetY + set.offsetY,\n            y: layer.offsetX + set.offsetX,",
-      note: "the two offsets swapped — invisible unless x and y differ" },
+      from: "            x: layer.offsetX + set.offsetX,",
+      to: "            x: layer.offsetY + set.offsetY,",
+      note: "the node's x takes the y offsets — invisible unless the two axes differ" },
     { id: "TG4", file: "src/core/import/TiledMap.ts",
-      from: "            width: layer.width * map.tileWidth,\n            height: layer.height * map.tileHeight,",
-      to: "            width: layer.width * map.tileHeight,\n            height: layer.height * map.tileWidth,",
+      from: "            width: layer.width * map.tileWidth,",
+      to: "            width: layer.width * map.tileHeight,",
       note: "the node's box measured on the wrong axis — invisible on a square cell" },
     { id: "TG5", file: "src/core/import/TiledMap.ts",
       from: "            tiles.push(TILE_EMPTY);",
@@ -164,15 +167,18 @@ const MUTANTS = [
       note: "orientation dropped — a fifth of the art in fourteen of twenty maps turns the wrong way" },
     { id: "TG7", file: "src/core/import/TiledMap.ts",
       from: "    if (set.tileWidth !== map.tileWidth || set.tileHeight !== map.tileHeight) {",
-      to: "    if (false) {",
-      note: "oversized tiles accepted into a cell that squashes them — five real layers" },
+      // `if (false)` did not COMPILE, which the harness reported as UNVERIFIED on 149 tests rather
+      // than as a kill — and dropping the height clause is the better mutant regardless: it is the
+      // dimension-confusion one, and it needs a fixture whose tiles differ in HEIGHT alone.
+      to: "    if (set.tileWidth !== map.tileWidth) {",
+      note: "only the WIDTH is checked against the cell — invisible unless a fixture differs in height alone" },
     { id: "TG8", file: "src/core/import/TiledMap.ts",
       from: "        else if (found.firstGid !== set.firstGid) return no(\"draws from more than one tileset\");",
       to: "        else if (false) return no(\"draws from more than one tileset\");",
       note: "a two-tileset layer drawn from whichever set came first" },
     { id: "TG9", file: "src/core/import/TiledMap.ts",
-      from: "    const bad = tilemapError(tilemap);\n    if (bad) return no(bad);",
-      to: "    const bad = null;\n    if (bad) return no(bad);",
+      from: "    const bad = tilemapError(tilemap);",
+      to: "    const bad: string | null = null;",
       note: "the document's own validator skipped — the importer can mint an unopenable node" },
     { id: "TG10", file: "src/core/import/TiledMap.ts",
       from: "            hidden: !layer.visible,",
