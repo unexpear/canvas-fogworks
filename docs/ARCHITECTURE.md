@@ -4,7 +4,7 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 
 
-> 🔒 Frozen contract · schema v61 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v62 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
 
 ## 1. The five invariants
 
@@ -1077,6 +1077,14 @@ WebGL 1 has no integer textures, so an index arrives as two bytes with alpha as 
 and the index texture is sampled NEAREST because an interpolated tile index is not a tile. The
 sample into the sheet is inset by half a texel on each side, which is the standard atlas-bleeding
 fix — `CLAMP_TO_EDGE` guards the sheet's outer edge and does nothing for a rect inside it.
+
+**A CELL CAN BE TURNED (schema 62)**, three bits per cell — horizontal, vertical, and a diagonal
+that is a transpose. Measured before building: 820 of the corpus's 22,808 non-empty cells are
+flipped across 14 of its 20 maps, all eight combinations appear, and the node-per-cell importer
+already honoured them — so a grid without orientation would have been a regression rather than a
+gap. Transpose first, then mirror: Tiled's order, not commutative, stated once in `flipMatrix`.
+The GPU cannot take a matrix per cell, so it turns the within-cell coordinate instead and reads the
+three bits from the index texture's otherwise-unused blue byte.
 
 **Depth is off inside a layer**, which is correct rather than a compromise: `content` is already
 sorted far-to-near by the model, so painter's order gives what the depth test would have. The call

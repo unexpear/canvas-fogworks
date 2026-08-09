@@ -15,7 +15,7 @@
  */
 
 import { toMatrixString, isTranslationOnly } from "../core/geometry/Matrix";
-import { tileAt, tileSourceRect, sheetWidth, sheetHeight } from "../core/document/Tilemap";
+import { tileAt, tileSourceRect, sheetWidth, sheetHeight, flipAt, flipMatrix } from "../core/document/Tilemap";
 import { DisplayList, DrawItem, Paint, FilterDef, PaintGradient, commandsToPathData, effectFilterId } from "./RenderModel";
 import { naturalSize, surfaceUrl } from "./ImageCache";
 import { nineSliceRects } from "../core/geometry/NineSlice";
@@ -274,6 +274,21 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
                     // size of one tile, offset so the wanted tile lands in it.
                     cell.setAttribute("viewBox", `${src.x} ${src.y} ${src.width} ${src.height}`);
                     cell.setAttribute("preserveAspectRatio", "none");
+                    // A TURNED CELL (schema 62), by the same shared matrix the other two use.
+                    // On the nested `<svg>` rather than on the image inside it: the inner element
+                    // is positioned by the viewBox, so turning it would move the crop instead of
+                    // the tile.
+                    const flip = flipAt(map, col, row);
+                    if (flip !== 0) {
+                        const m = flipMatrix(flip, map.tileWidth, map.tileHeight);
+                        // Composed with the cell's own placement, because an `<svg>` takes x/y OR
+                        // a transform and the two do not stack the way they would on a `<g>`.
+                        cell.setAttribute("x", "0");
+                        cell.setAttribute("y", "0");
+                        cell.setAttribute("transform",
+                            `translate(${shape.x + col * map.tileWidth}, ${shape.y + row * map.tileHeight}) ` +
+                            `matrix(${m[0]} ${m[1]} ${m[2]} ${m[3]} ${m[4]} ${m[5]})`);
+                    }
                     const img = document.createElementNS(svgNS, "image");
                     img.setAttribute("href", shape.href);
                     img.setAttribute("x", "0");

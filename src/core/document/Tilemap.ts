@@ -36,6 +36,23 @@ export const TILEMAP_MAX_CELLS = 1_048_576;
 export const TILE_EMPTY = -1;
 
 /**
+ * How a cell is turned, as three bits — the same three Tiled stores in the top of a gid.
+ *
+ * MEASURED, and the measurement is why all three exist rather than just the mirrors: of the 22,808
+ * non-empty cells in the corpus's 20 maps, 820 are flipped and every one of the eight combinations
+ * appears, including 351 with the diagonal bit. Fourteen of the twenty maps use them. Dropping
+ * orientation would have quietly rotated a fifth of the art in most maps here.
+ *
+ * THE DIAGONAL IS A TRANSPOSE, applied FIRST — reflect across the main diagonal, then mirror
+ * horizontally, then vertically. That order is Tiled's and it is not commutative, so the three
+ * backends each apply it in exactly this sequence.
+ */
+export const FLIP_H = 1;
+export const FLIP_V = 2;
+export const FLIP_D = 4;
+export const FLIP_MAX = FLIP_H | FLIP_V | FLIP_D;
+
+/**
  * How a sheet is cut into tiles.
  *
  * SPACING AND MARGIN ARE HERE because real sheets have them: Tiled writes both, and a reader that
@@ -68,6 +85,14 @@ export interface Tilemap {
      * row plus a count.
      */
     tiles: number[];
+    /**
+     * How each cell is turned, `cols * rows` of them, or absent when nothing is turned.
+     *
+     * A PARALLEL ARRAY rather than bits packed into `tiles`, so an index stays an index: every
+     * reader, every test and every eye scanning a saved file sees the tile number it expects
+     * instead of one with three invisible bits on top. Absent is the common case and costs nothing.
+     */
+    flips?: number[];
 }
 
 export interface ReadonlyTilemap {
@@ -77,6 +102,7 @@ export interface ReadonlyTilemap {
     readonly tileHeight: number;
     readonly sheet: Readonly<TileSheet>;
     readonly tiles: readonly number[];
+    readonly flips?: readonly number[];
 }
 
 /** What is wrong with a tilemap, or null. */
@@ -105,6 +131,19 @@ export function tilemapError(map: unknown): string | null {
     }
     for (const t of m.tiles as unknown[]) {
         if (!Number.isInteger(t) || (t as number) < TILE_EMPTY) return "tilemap.tiles must be whole numbers >= -1";
+    }
+    if (m.flips !== undefined) {
+        if (!Array.isArray(m.flips)) return "tilemap.flips must be an array";
+        // THE SAME LENGTH RULE, for the same reason: a shorter list turns the wrong cells from the
+        // first mismatch onward, which reads as art placed by hand rather than as a bad file.
+        if (m.flips.length !== cells) {
+            return `tilemap.flips must hold exactly cols * rows (${cells}) entries, got ${m.flips.length}`;
+        }
+        for (const f of m.flips as unknown[]) {
+            if (!Number.isInteger(f) || (f as number) < 0 || (f as number) > FLIP_MAX) {
+                return `tilemap.flips must be whole numbers 0..${FLIP_MAX}`;
+            }
+        }
     }
     return null;
 }
@@ -146,6 +185,33 @@ export function emptyTilemap(): Tilemap {
 export function tileAt(map: ReadonlyTilemap, col: number, row: number): number {
     if (col < 0 || row < 0 || col >= map.cols || row >= map.rows) return TILE_EMPTY;
     return map.tiles[row * map.cols + col] ?? TILE_EMPTY;
+}
+
+/** How the cell at `col`,`row` is turned — 0 when nothing is, or the cell is off the grid. */
+export function flipAt(map: ReadonlyTilemap, col: number, row: number): number {
+    if (!map.flips || col < 0 || row < 0 || col >= map.cols || row >= map.rows) return 0;
+    return map.flips[row * map.cols + col] ?? 0;
+}
+
+/**
+ * The matrix that turns one cell, about its own centre, in a box `w` by `h`.
+ *
+ * ONE STATEMENT OF THE ORDER, shared by every backend that can take a matrix. Transpose first,
+ * then mirror — Tiled's order, and not commutative, so three separate transcriptions of it would
+ * be three chances for one of them to turn a tile the wrong way in a case nobody has a fixture for.
+ *
+ * Returned as the six numbers of a 2D affine, ready for `ctx.transform` or an SVG `matrix()`.
+ */
+export function flipMatrix(flip: number, w: number, h: number): [number, number, number, number, number, number] {
+    // Work about the centre so a flip does not also move the tile out of its cell.
+    let a = 1, b = 0, c = 0, d = 1;
+    if (flip & FLIP_D) { a = 0; b = 1; c = 1; d = 0; }          // transpose: (x,y) -> (y,x)
+    if (flip & FLIP_H) { a = -a; c = -c; }
+    if (flip & FLIP_V) { b = -b; d = -d; }
+    // The translation that puts the centre back where it was.
+    const e = w / 2 - (a * w / 2 + c * h / 2);
+    const f = h / 2 - (b * w / 2 + d * h / 2);
+    return [a, b, c, d, e, f];
 }
 
 /**

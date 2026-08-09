@@ -360,6 +360,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "58") { raw = migrate_58_to_59(raw); version = "59"; }
     if (version === "59") { raw = migrate_59_to_60(raw); version = "60"; }
     if (version === "60") { raw = migrate_60_to_61(raw); version = "61"; }
+    if (version === "61") { raw = migrate_61_to_62(raw); version = "62"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -914,6 +915,19 @@ function migrate_59_to_60(raw: any): any {
  */
 function migrate_60_to_61(raw: any): any {
     return { ...raw, version: "61" };
+}
+
+/**
+ * Schema 62 — `Tilemap.flips`, how each cell is turned.
+ *
+ * A pass-through, and the bump is the QUIET kind. A 62 document in a 61 build keeps every tile —
+ * the array is simply a key its `tilemapError` never heard of, and validators here ignore what
+ * they do not know — but draws all of them unturned. Measured, that is 820 of the corpus's 22,808
+ * cells, spread across 14 of its 20 maps: a fifth of the files would come back subtly rearranged
+ * with nothing to say why.
+ */
+function migrate_61_to_62(raw: any): any {
+    return { ...raw, version: "62" };
 }
 
 function migrate_54_to_55(raw: any): any {

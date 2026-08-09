@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v61 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v62 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -1148,6 +1148,19 @@ the viewport; three backends each deriving the range would be three chances to d
 which row is the last. The visible rect is *asked of* `localVisibleRect` in the geometry engine
 rather than derived, since the render model may not compose coordinates — an invariant with its own
 test.
+
+**A cell can be TURNED (schema 62)** — `flips`, a parallel array of three bits per cell: horizontal,
+vertical, and the diagonal, which is a transpose. **Measured**: 820 of the corpus's 22,808 non-empty
+cells are flipped, in **14 of its 20 maps**, and every one of the eight combinations appears
+including 351 with the diagonal bit. The node-per-cell importer already honoured these, so a grid
+without them would have been a regression, not a gap.
+
+A parallel array rather than bits packed into `tiles`, so an index stays an index — every reader and
+every saved file shows the tile number expected rather than one with three invisible bits on top.
+Absent is the common case and costs nothing. **Transpose first, then mirror**: Tiled's order, which
+is not commutative, stated once in `flipMatrix` and shared by every backend that takes a matrix. The
+GPU cannot take one, so it turns the within-cell coordinate instead — reading the three bits out of
+the index texture's otherwise-unused **blue byte**, which costs no second texture or upload.
 
 **A tilemap is born with a grid**, as a raster is born with its surface: `Integrity` refuses a
 `core.tilemap` without one, so a node created without one could be made and never saved. The

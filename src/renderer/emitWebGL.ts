@@ -478,6 +478,13 @@ void main() {
         // WHERE IN THE CELL this fragment is, 0..1. Computed from the cell rather than with fract,
         // which is exact at the boundary and cheaper than trusting the periodicity.
         vec2 within = (v_local - cell * u_tileGrid.zw) / u_tileGrid.zw;
+        // ORIENTATION, from the blue byte. TRANSPOSE FIRST, then mirror — Tiled's order, which is
+        // not commutative, and the same order flipMatrix states for the backends that can take a
+        // matrix. Turning the coordinate rather than the tile is what keeps this one draw call.
+        float flags = floor(packed.b * 255.0 + 0.5);
+        if (mod(floor(flags / 4.0), 2.0) > 0.5) within = within.yx;
+        if (mod(flags, 2.0) > 0.5) within.x = 1.0 - within.x;
+        if (mod(floor(flags / 2.0), 2.0) > 0.5) within.y = 1.0 - within.y;
         // HALF A TEXEL IN FROM EACH EDGE. Sampling a tile at its exact boundary picks up the
         // NEIGHBOURING tile once filtering is linear, because clamping only helps at the sheet's
         // outer edge and not at a rect inside it. This is the atlas-bleeding inset every 2D
@@ -1985,7 +1992,7 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
                 // map is 100x100, which is 40KB — twice the heightfield's 16KB and in the same
                 // league. A map near the million-cell cap would want dirty tracking instead.
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, map.cols, map.rows, 0,
-                    gl.RGBA, gl.UNSIGNED_BYTE, packTileIndices(map.tiles));
+                    gl.RGBA, gl.UNSIGNED_BYTE, packTileIndices(map.tiles, map.flips));
                 // NEAREST, ALWAYS. An interpolated tile index is not a tile — halfway between
                 // grass and stone is whatever tile happens to sit at that number. CLAMP so a
                 // fragment at the very edge reads the edge cell rather than wrapping to the far
@@ -2164,7 +2171,7 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
  * An index too large to fit is dropped to EMPTY rather than wrapped — a wrapped index is a
  * confidently wrong tile, which is worse to look at than a hole.
  */
-export function packTileIndices(tiles: readonly number[]): Uint8Array {
+export function packTileIndices(tiles: readonly number[], flips?: readonly number[]): Uint8Array {
     const out = new Uint8Array(tiles.length * 4);
     for (let i = 0; i < tiles.length; i++) {
         const t = tiles[i];
@@ -2175,6 +2182,11 @@ export function packTileIndices(tiles: readonly number[]): Uint8Array {
         // have to know a typed array's coercion rules to see that the pair is a 16-bit split.
         out[i * 4] = t & 0xff;
         out[i * 4 + 1] = (t >> 8) & 0xff;
+        // ORIENTATION RIDES IN THE FREE BYTE (schema 62). R and G carry the index and A the
+        // presence flag, which left B doing nothing — so three bits of turn cost no second
+        // texture, no second upload and no second sampler.
+        const f = flips ? flips[i] : 0;
+        out[i * 4 + 2] = Number.isInteger(f) && f >= 0 && f <= 7 ? f : 0;
         out[i * 4 + 3] = 255;
     }
     return out;

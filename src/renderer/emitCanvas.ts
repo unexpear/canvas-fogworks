@@ -42,7 +42,7 @@ import { isTranslationOnly } from "../core/geometry/Matrix";
 import { ClipRegion, DisplayList, DrawItem, Paint, PaintGradient, Shape, layerTransition, textParagraphs } from "./RenderModel";
 import { GradientStop } from "../core/document/Gradient";
 import { nineSliceRects } from "../core/geometry/NineSlice";
-import { tileAt, tileSourceRect } from "../core/document/Tilemap";
+import { tileAt, tileSourceRect, flipAt, flipMatrix } from "../core/document/Tilemap";
 import { parseColor } from "./emitWebGL";
 import { resolveSurface, resolveImage, setImageReadyCallback } from "./ImageCache";
 import { drawTextInto } from "./TextRaster";
@@ -281,9 +281,23 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint,
                 for (let col = cells.col0; col <= cells.col1; col++) {
                     const src = tileSourceRect(map.sheet, tileAt(map, col, row));
                     if (!src) continue;               // an empty cell draws nothing at all
+                    const dx = shape.x + col * map.tileWidth, dy = shape.y + row * map.tileHeight;
+                    const flip = flipAt(map, col, row);
+                    // A TURNED CELL costs a save/restore; an unturned one costs nothing, which is
+                    // 96% of them. The matrix is `flipMatrix`, shared with the other backends so
+                    // the transpose-then-mirror order is stated once.
+                    if (flip !== 0) {
+                        const m = flipMatrix(flip, map.tileWidth, map.tileHeight);
+                        ctx.save();
+                        ctx.translate(dx, dy);
+                        ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+                        ctx.drawImage(img, src.x, src.y, src.width, src.height,
+                            0, 0, map.tileWidth, map.tileHeight);
+                        ctx.restore();
+                        continue;
+                    }
                     ctx.drawImage(img, src.x, src.y, src.width, src.height,
-                        shape.x + col * map.tileWidth, shape.y + row * map.tileHeight,
-                        map.tileWidth, map.tileHeight);
+                        dx, dy, map.tileWidth, map.tileHeight);
                 }
             }
             return;

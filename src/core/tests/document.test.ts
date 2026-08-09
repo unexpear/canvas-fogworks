@@ -28,7 +28,8 @@ import { serializeDocument, deserializeDocument, compareDocuments, Serializer, m
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { clipsContentError, BLEND_MODES, blendModeError } from "../document/Node";
 import { pickColorAt, rampT } from "../geometry/Eyedropper";
-import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, visibleCells, TILE_EMPTY } from "../document/Tilemap";
+import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, visibleCells, TILE_EMPTY,
+         flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D } from "../document/Tilemap";
 import { EyedropperTool } from "../../editor/tools/EyedropperTool";
 import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
 import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, AUTO_BIND_MAX_BONES, paintWeights, PAINT_STRENGTH } from "../document/MeshEdit";
@@ -4533,9 +4534,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 60→61 landed, adding
-        // `core.tilemap`, a grid of tile indices instead of a node per cell.)
-        expect(() => migrateIfNeeded(legacy, "62")).toThrow('Migration not implemented for document schema "61"');
+        // time a real migration is added — most recently when 61→62 landed, adding
+        // `Tilemap.flips`, how each cell of a map is turned.)
+        expect(() => migrateIfNeeded(legacy, "63")).toThrow('Migration not implemented for document schema "62"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -24916,6 +24917,46 @@ describe("core.tilemap — a grid instead of ten thousand nodes (schema 61)", ()
         expect([...d2.getDocument().nodes.values()][0].tilemap!.tiles).toEqual([3]);
     });
 
+    test("a cell can be TURNED, and the transpose comes first", () => {
+        // MEASURED: 820 of the corpus's 22,808 non-empty cells are flipped, in 14 of its 20 maps,
+        // and every one of the eight combinations appears — 351 of them with the diagonal bit. A
+        // grid without orientation would have quietly rearranged most of the maps here.
+        //
+        // The order is Tiled's and is NOT commutative: transpose, then mirror. Each matrix below is
+        // hand-checked by where it sends the corner (0,0) of a 10x10 cell.
+        const at = (flip: number, x: number, y: number) => {
+            const [a, b, c, d, e, f] = flipMatrix(flip, 10, 10);
+            return [a * x + c * y + e, b * x + d * y + f].map(n => Math.round(n * 1e9) / 1e9);
+        };
+        expect(at(0, 0, 0)).toEqual([0, 0]);                     // identity leaves it
+        expect(at(FLIP_H, 0, 0)).toEqual([10, 0]);               // mirrored across
+        expect(at(FLIP_V, 0, 0)).toEqual([0, 10]);               // mirrored down
+        expect(at(FLIP_H | FLIP_V, 0, 0)).toEqual([10, 10]);     // both: a half turn
+        // THE TRANSPOSE sends (0,0) to itself but (10,0) to (0,10) — which is the only thing that
+        // distinguishes it from the identity, and the reason a one-corner check is not enough.
+        expect(at(FLIP_D, 0, 0)).toEqual([0, 0]);
+        expect(at(FLIP_D, 10, 0)).toEqual([0, 10]);
+        expect(at(0, 10, 0)).toEqual([10, 0]);
+        // EVERY ORIENTATION IS DISTINCT, which is the property the whole feature rests on: eight
+        // combinations must give eight different arrangements, or two of them are the same tile.
+        const seen = new Set([0, 1, 2, 3, 4, 5, 6, 7].map(f => JSON.stringify([at(f, 0, 0), at(f, 10, 0)])));
+        expect(seen.size).toBe(8);
+
+        // A cell's own flag, and OFF THE GRID is unturned rather than undefined.
+        const m = grid(2, 1, [0, 0], { flips: [FLIP_H, 0] });
+        expect(flipAt(m, 0, 0)).toBe(FLIP_H);
+        expect(flipAt(m, 1, 0)).toBe(0);
+        expect(flipAt(m, 5, 0)).toBe(0);
+        // A map with no flips at all answers 0 everywhere, so the common case needs no array.
+        expect(flipAt(grid(2, 1, [0, 0]), 0, 0)).toBe(0);
+
+        // The SAME length rule as the tiles, and the same range check.
+        expect(tilemapError(grid(2, 1, [0, 0], { flips: [0] }))).toMatch(/flips must hold exactly/);
+        expect(tilemapError(grid(2, 1, [0, 0], { flips: [0, 8] }))).toMatch(/flips must be whole numbers 0..7/);
+        expect(tilemapError(grid(2, 1, [0, 0], { flips: [0, -1] }))).toMatch(/flips must be whole numbers/);
+        expect(tilemapError(grid(2, 1, [0, 0], { flips: [0, 7] }))).toBeNull();
+    });
+
     test("an index is PACKED into two bytes, with alpha saying whether there is a tile", () => {
         // WebGL 1 has no integer textures, so an index travels as R + G*256. Alpha is the presence
         // flag rather than a reserved index, because every index in range is a real tile somebody
@@ -24934,6 +24975,14 @@ describe("core.tilemap — a grid instead of ten thousand nodes (schema 61)", ()
         expect(over[3]).toBe(0);
         expect(over[7]).toBe(0);
         expect(over[11]).toBe(0);
+        // ORIENTATION RIDES IN THE FREE BLUE BYTE — R and G are the index and A the presence flag,
+        // so three bits of turn cost no second texture and no second upload.
+        const turned = packTileIndices([5, 5, 5], [0, FLIP_D, 7]);
+        expect([...turned.slice(0, 4)]).toEqual([5, 0, 0, 255]);
+        expect([...turned.slice(4, 8)]).toEqual([5, 0, FLIP_D, 255]);
+        expect([...turned.slice(8, 12)]).toEqual([5, 0, 7, 255]);
+        // A nonsense flag is dropped to unturned rather than reinterpreted.
+        expect(packTileIndices([1], [99])[2]).toBe(0);
         // One texel per cell, four bytes each — the size the upload assumes.
         expect(packTileIndices(new Array(12).fill(0)).length).toBe(48);
     });
