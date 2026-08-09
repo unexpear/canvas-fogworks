@@ -13,6 +13,13 @@
  * COMPILE, and is reported as UNVERIFIED rather than as a kill. A false *survived* prompts
  * investigation; a false *killed* is silent, and leaves a guard unprotected while looking green.
  *
+ * AND THE THIRD VERDICT, NOT APPLIED, is the one that has actually cost guards here — five of them
+ * across two sittings. It means the `from` matched nothing, so the mutant tested NOTHING while the
+ * summary line still read as a pass. Twice the cause was a mutation the author had "simplified" into
+ * a shape that no longer appeared in the source, and three times it was line endings; the matcher
+ * now normalises those (see below), so what remains is genuine drift. Read every NOT APPLIED as a
+ * missing guard, not as noise.
+ *
  * REFUSES TO RUN ON A DIRTY TREE. It edits real source files and restores them; if it is
  * interrupted between the two, `git checkout` is the recovery, and that is only safe when there
  * was nothing uncommitted to lose.
@@ -290,6 +297,23 @@ const MUTANTS = [
       from: "        return terrain.cells[r * terrain.cols + c] === material;",
       to: "        return terrain.cells[r * terrain.cols + c] !== 0;",
       note: "any material counts as this one — two materials collapse into one layer" },
+
+    // TWO-LINE MUTATIONS, which is the point of them being here: both were proved to kill and then
+    // could not be added until the matcher stopped caring about line endings. ORDER is the whole
+    // subject of AT8 — transpose-then-mirror is not commutative, and no single-line edit expresses
+    // getting it backwards.
+    { id: "AT8", file: "src/core/document/Autotile.ts",
+      from: "    if (flip & FLIP_D) swap(CORNER_TR, CORNER_BL);
+    if (flip & FLIP_H) { swap(CORNER_TL, CORNER_TR); swap(CORNER_BL, CORNER_BR); }",
+      to: "    if (flip & FLIP_H) { swap(CORNER_TL, CORNER_TR); swap(CORNER_BL, CORNER_BR); }
+    if (flip & FLIP_D) swap(CORNER_TR, CORNER_BL);",
+      note: "mirror BEFORE transpose — the order `flipMatrix` does not use, and not commutative" },
+    { id: "AT9", file: "src/core/document/Autotile.ts",
+      from: "            for (let flip = 0; flip <= FLIP_MAX; flip++) {
+                if (flipMask(flip, classMask) !== mask) continue;",
+      to: "            for (let flip = FLIP_MAX; flip >= 0; flip--) {
+                if (flipMask(flip, classMask) !== mask) continue;",
+      note: "flips tried DESCENDING — a class's own mask gets a turned tile that only looks the same" },
 ];
 
 function runSuite() {
@@ -318,14 +342,22 @@ let survivors = 0;
 for (const mut of MUTANTS) {
     const file = path.join(ROOT, mut.file);
     const original = fs.readFileSync(file, "utf8");
-    if (!original.includes(mut.from)) {
+    // LINE ENDINGS ARE NOT PART OF A MUTATION, and this is subtler than it looks. Every `from`
+    // below is written with `\n`; a file NEWLY WRITTEN in the working tree is LF and matches, and
+    // the same file after a clone or checkout is CRLF and does not. So a two-line mutation works
+    // the day it is added and silently stops working later — reported as NOT APPLIED, the verdict
+    // that is neither a kill nor a survivor. That has already cost five guards across two sittings.
+    // Matching a normalised copy is the fix; the file is restored from `original`, so the
+    // normalisation never outlives the run.
+    const source = original.replace(/\r\n/g, "\n");
+    if (!source.includes(mut.from)) {
         // NOT a survivor and NOT a kill: the code moved out from under the mutation, so the
         // battery is testing nothing. Re-author it against the code as it now stands.
         console.log(`${mut.id}  NOT APPLIED — 'from' no longer matches ${mut.file}`);
         survivors++;
         continue;
     }
-    fs.writeFileSync(file, original.replace(mut.from, mut.to), "utf8");
+    fs.writeFileSync(file, source.replace(mut.from, mut.to), "utf8");
     let res;
     try { res = verdict(runSuite()); } finally { fs.writeFileSync(file, original, "utf8"); }
     if (!res.ok) survivors++;
