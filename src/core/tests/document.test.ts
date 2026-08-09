@@ -41,6 +41,7 @@ import { ResizeNodeAction } from "../actions/ResizeNodeAction";
 import { UpdateNodeGeometryAction } from "../actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../actions/UpdateNodeStyleAction";
 import { TransactionAction } from "../actions/TransactionAction";
+import { tileImportActions } from "../actions/tileImport";
 import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction";
 import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
@@ -88,7 +89,7 @@ import { parseSvgTransform, Rect, Mat2D } from "../geometry/Matrix";
 import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
-    tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow,
+    tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer,
     TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
 import { parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GltfJson, GLTF_IGNORABLE_REQUIRED, GLTF_MAX_NODE_DEPTH,
@@ -2609,6 +2610,11 @@ describe("Components: instance overrides", () => {
         const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         expect(src).not.toMatch(/new UpdateNodeGeometryAction\(/); // inspector routes via geometryActionFor
         expect(src).not.toMatch(/new UpdateNodeStyleAction\(/);    // …and styleActionFor
+        // THE ONE CASE THE ROUTER CANNOT SERVE is a node created in the same transaction: it exists
+        // in no document yet, so `styleActionFor` answers null for it. The map import needs exactly
+        // that, and it went to `tileImportActions` rather than being written raw here — asserted so
+        // the construction is recorded as MOVED rather than looking like it went away.
+        expect(src).toMatch(/tileImportActions\(/);
         const move = readFileSync(resolve(__dirname, "../../editor/tools/MoveTool.ts"), "utf8");
         expect(move).not.toMatch(/new UpdateNodeGeometryAction\(/);
         const tc = readFileSync(resolve(__dirname, "../../editor/tools/ToolController.ts"), "utf8");
@@ -15139,6 +15145,225 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const noData = parseTiledMap(tmxMap({ layers: '<layer id="1" name="L" width="2" height="2"></layer>' }));
         expect(noData.notes.join(" ")).toMatch(/no data/);
         expect(noData.tilesets).toHaveLength(1);
+    });
+
+    test("a whole tile layer becomes ONE grid of indices", () => {
+        // THE FIXTURE IS DELIBERATELY AWKWARD, because a tidy one cannot fail:
+        //   * 3x2, not square      — a cols/rows swap survives a square grid untouched.
+        //   * firstgid 9, not 1    — using the gid as the index is then off by eight, not by zero.
+        //   * spacing 1, margin 2  — a tight sheet cannot tell a slicer that reads them from one
+        //                            that ignores them.
+        //   * offsetx 5, offsety -7 — different, and one negative, so a swap or a sign is visible.
+        //   * one empty cell and one flipped cell, in different places.
+        const m = parseTiledMap(tmxMap({
+            tileset: '<tileset firstgid="9" name="t" tilewidth="16" tileheight="16" columns="4" '
+                + 'tilecount="16" spacing="1" margin="2"><image source="sheet.png" width="70" height="70"/></tileset>',
+            // 2,684,354,572 is gid 12 with the horizontal and diagonal flags set — a raw id a
+            // reader that trusted the top bits would take as tile 2.6 billion.
+            layers: '<layer id="1" name="Ground" width="3" height="2" offsetx="5" offsety="-7">'
+                + '<data encoding="csv">9,10,0,13,14,2684354572</data></layer>'
+        }));
+        const fit = tilemapForLayer(m, m.layers[0], m.tilesets);
+        expect(fit.why).toBeNull();
+        const got = fit.layer!;
+        expect(got.tilemap.cols).toBe(3);
+        expect(got.tilemap.rows).toBe(2);
+        // INDICES, not gids — and the blank is TILE_EMPTY (-1), not 0, which is a real tile.
+        expect(got.tilemap.tiles).toEqual([0, 1, TILE_EMPTY, 4, 5, 3]);
+        expect(got.tilemap.flips).toEqual([0, 0, 0, 0, 0, FLIP_H | FLIP_D]);
+        expect(got.tilemap.sheet).toEqual({ columns: 4, tileWidth: 16, tileHeight: 16, spacing: 1, margin: 2 });
+        expect(got.image).toBe("sheet.png");
+        expect({ x: got.x, y: got.y, width: got.width, height: got.height })
+            .toEqual({ x: 5, y: -7, width: 48, height: 32 });
+        expect(got.dropped).toBe(0);
+        expect(got.opacity).toBe(1);
+        expect(got.hidden).toBe(false);
+
+        // THE TWO PATHS MUST CUT THE SHEET IN THE SAME PLACE. This is the regression that would
+        // never look like arithmetic: the grid path resolves gid -> index once and slices by index,
+        // the node path slices by gid, and a one-off between them draws a map of neighbouring tiles.
+        const set = m.tilesets[0];
+        const gids = [9, 10, 0, 13, 14, 2684354572];
+        for (let i = 0; i < gids.length; i++) {
+            const viaGrid = sheetRect(got.tilemap.sheet, got.tilemap.tiles[i]);
+            const viaNode = tileSourceRect(set, decodeGid(gids[i]).gid);
+            expect(viaGrid).toEqual(viaNode);
+        }
+        // ...and the fixture really does exercise the margin and the spacing in BOTH axes, rather
+        // than agreeing at the origin where every slicer agrees.
+        expect(sheetRect(got.tilemap.sheet, 5)).toEqual({ x: 19, y: 19, width: 16, height: 16 });
+        expect(sheetRect(got.tilemap.sheet, 1)).toEqual({ x: 19, y: 2, width: 16, height: 16 });
+    });
+
+    test("a grid turns a cell exactly as one node per cell did — all eight, all six entries", () => {
+        // THE EQUIVALENCE THAT MADE THE GRID SAFE TO SWITCH TO. `tileTransform` turns a cell by
+        // giving a NODE a rotation and a scale; `flipMatrix` turns it inside a grid by handing a
+        // backend six numbers. They are separate derivations of the same eight symmetries, so they
+        // are compared entry for entry — including the translation, which is what keeps a turned
+        // tile inside its own cell instead of a quarter of the map away.
+        for (let flip = 0; flip <= (FLIP_H | FLIP_V | FLIP_D); flip++) {
+            const cell = { gid: 1, flipH: !!(flip & FLIP_H), flipV: !!(flip & FLIP_V), flipD: !!(flip & FLIP_D) };
+            const t = tileTransform(cell);
+            // `compose` is what the node path's transform actually becomes, pivoted at the tile's
+            // centre — the same recentring `flipMatrix` does for itself.
+            const node = compose(0, 0, t.rotation, t.scaleX, t.scaleY, 8, 8);
+            const grid = flipMatrix(flip, 16, 16);
+            for (const [i, v] of [node.a, node.b, node.c, node.d, node.e, node.f].entries()) {
+                expect(v).toBeCloseTo(grid[i], 9);
+            }
+        }
+    });
+
+    test("a layer a grid cannot express says which one and why", () => {
+        const fitOf = (opts: Parameters<typeof tmxMap>[0]) => {
+            const m = parseTiledMap(tmxMap(opts));
+            return tilemapForLayer(m, m.layers[0], m.tilesets);
+        };
+        const refused = (opts: Parameters<typeof tmxMap>[0]) => {
+            const fit = fitOf(opts);
+            expect(fit.layer).toBeNull();
+            // THE LAYER IS NAMED, always. A map of five layers reporting "cannot be a grid" five
+            // times says nothing about which one to go and look at.
+            expect(fit.why).toMatch(/^layer "/);
+            return fit.why!;
+        };
+
+        // A DIAMOND IS NOT A GRID. Three real maps are isometric; every one of them has an empty
+        // tile layer, so this branch is reached by nothing but this line.
+        expect(refused({ orientation: "isometric" })).toMatch(/isometric/);
+
+        // TWO TILESETS, ONE LAYER — which no layer in the corpus does, and which a node naming one
+        // sheet cannot hold. Checked rather than assumed, because "measured zero" and "impossible"
+        // are different claims.
+        expect(refused({
+            tileset: '<tileset firstgid="1" name="a" tilewidth="16" tileheight="16" columns="4" tilecount="16">'
+                + '<image source="a.png" width="64" height="64"/></tileset>'
+                + '<tileset firstgid="17" name="b" tilewidth="16" tileheight="16" columns="4" tilecount="16">'
+                + '<image source="b.png" width="64" height="64"/></tileset>',
+            data: "1,17,2,18"
+        })).toMatch(/more than one tileset/);
+
+        // A COLLECTION gives each tile its own file at its own size, so there is no sheet to index.
+        expect(refused({
+            tileset: '<tileset firstgid="1" name="c" tilewidth="16" tileheight="16">'
+                + '<tile id="0"><image source="one.png" width="16" height="16"/></tile></tileset>'
+        })).toMatch(/its own file/);
+
+        // AN UNRESOLVED EXTERNAL SET has no sheet yet. The caller resolves those first; a layer that
+        // reaches here with one is drawn per cell rather than as a grid of nothing.
+        expect(refused({ tileset: '<tileset firstgid="1" source="s.tsx"/>' })).toMatch(/names no sheet/);
+
+        // BIGGER ART THAN CELLS is the real-world case: five corpus layers, 368 cells — 64x64 tiles
+        // on a 60x60 grid and 24x24 on 18x18. Tiled overhangs; a cell would squash.
+        expect(refused({
+            tileset: '<tileset firstgid="1" name="big" tilewidth="24" tileheight="24" columns="4" '
+                + 'tilecount="16"><image source="big.png" width="96" height="96"/></tileset>'
+        })).toMatch(/24x24 tiles on a 16x16 grid/);
+
+        // A GID BELOW EVERY `firstgid` belongs to no set. Handed back rather than drawn as a hole,
+        // so it stays counted where the per-cell path already counted it.
+        expect(refused({
+            tileset: '<tileset firstgid="5" name="t" tilewidth="16" tileheight="16" columns="4" '
+                + 'tilecount="16"><image source="t.png" width="64" height="64"/></tileset>',
+            data: "5,6,2,7"
+        })).toMatch(/name no tileset/);
+
+        // NOTHING TO DRAW. Three corpus layers are empty; making an empty node for them would mean
+        // inventing a sheet nothing named.
+        expect(refused({ data: "0,0,0,0" })).toMatch(/has no tiles/);
+
+        // A LAYER WHOSE DATA DISAGREES WITH ITS OWN SIZE reads every row after the first from the
+        // wrong place. No corpus layer does this; the check costs one multiplication.
+        expect(refused({
+            layers: '<layer id="1" name="L" width="3" height="2"><data encoding="csv">1,2,3,4</data></layer>'
+        })).toMatch(/4 cells for a 3x2 grid/);
+
+        // THE DOCUMENT'S OWN VALIDATOR HAS THE LAST WORD, and this is what reaches it: a file
+        // declaring zero-sized tiles gets past every check above, since the cell and the art agree
+        // at 0x0. `tilemapError` refuses the grid rather than letting the importer mint a node that
+        // could never be reopened — the failure a deleted bone once caused.
+        const zero = parseTiledMap('<?xml version="1.0"?><map version="1.2" orientation="orthogonal" '
+            + 'width="2" height="2" tilewidth="0" tileheight="0">'
+            + '<tileset firstgid="1" name="z" tilewidth="0" tileheight="0" columns="4" tilecount="16">'
+            + '<image source="z.png" width="64" height="64"/></tileset>'
+            + '<layer id="1" name="Z" width="2" height="2"><data encoding="csv">1,2,3,4</data></layer></map>');
+        const zeroFit = tilemapForLayer(zero, zero.layers[0], zero.tilesets);
+        expect(zeroFit.layer).toBeNull();
+        expect(zeroFit.why).toMatch(/tilemap\.(tileWidth|sheet\.tileWidth)/);
+
+        // A CELL NAMING A TILE ITS SET HAS NOT is a HOLE, counted — not a refusal. One bad cell in
+        // ten thousand must not send the whole layer back to ten thousand nodes.
+        const holed = fitOf({
+            tileset: '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="2" '
+                + 'tilecount="4"><image source="t.png" width="32" height="32"/></tileset>',
+            data: "1,2,3,99"
+        });
+        expect(holed.why).toBeNull();
+        expect(holed.layer!.dropped).toBe(1);
+        expect(holed.layer!.tilemap.tiles).toEqual([0, 1, 2, TILE_EMPTY]);
+    });
+
+    test("an imported map is a document that reopens — grids and loose tiles in layer order", () => {
+        // THE END-TO-END CHECK, and the one that would have caught a deleted bone leaving an
+        // unopenable file: place both kinds, then SAVE AND RELOAD. An importer that mints a node
+        // `Integrity` refuses produces a document that looks perfect until the next launch.
+        const map = parseTiledMap(tmxMap({
+            layers: '<layer id="1" name="Ground" width="2" height="2" opacity="0.5" visible="0">'
+                + '<data encoding="csv">1,2,5,6</data></layer>'
+        }));
+        const grid = tilemapForLayer(map, map.layers[0], map.tilesets).layer!;
+        const doc = createEmptyDocument();
+        const { actions, ids } = tileImportActions(doc, [
+            { kind: "tilemap", x: grid.x, y: grid.y, width: grid.width, height: grid.height,
+              src: "sheet.png", map: grid.tilemap, name: "Ground",
+              opacity: grid.opacity, hidden: grid.hidden },
+            // A LOOSE TILE AFTER IT, which is the ordering that matters: layer order is z-order, so
+            // a leftover cell from a later layer must land ABOVE the grid from an earlier one.
+            { kind: "image", x: 32, y: 0, width: 24, height: 24, src: "big.png",
+              sourceRect: { x: 0, y: 0, width: 24, height: 24 }, name: "Characters 7",
+              transform: { rotation: Math.PI / 2, scaleX: -1, scaleY: 1 } }
+        ]);
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new TransactionAction(doc, "import-tiles", actions));
+        const after = dispatcher.getDocument();
+
+        expect(after.rootNodeUuids).toEqual(ids);          // layer order, kept
+        const tilemapNode = after.nodes.get(ids[0])!;
+        expect(tilemapNode.type).toBe("core.tilemap");
+        expect(tilemapNode.tilemap!.tiles).toEqual([0, 1, 4, 5]);
+        expect(tilemapNode.src).toBe("sheet.png");
+        expect(tilemapNode.pixelated).toBe(true);
+        // The layer flags, which only ONE node per layer could ever carry.
+        expect(tilemapNode.style.opacity).toBeCloseTo(0.5, 9);
+        expect(tilemapNode.hidden).toBe(true);
+        const imageNode = after.nodes.get(ids[1])!;
+        expect(imageNode.type).toBe("core.image");
+        expect(imageNode.transform?.scaleX).toBe(-1);
+
+        // AND IT REOPENS. `deserializeDocument` runs `Integrity`, which is the check no amount of
+        // "the canvas looked right" can stand in for.
+        const reloaded = deserializeDocument(serializeDocument(after));
+        expect(reloaded.nodes.get(ids[0])!.tilemap!.tiles).toEqual([0, 1, 4, 5]);
+        expect(reloaded.nodes.get(ids[0])!.hidden).toBe(true);
+    });
+
+    test("a layer's opacity and visibility survive the grid, and an unturned layer carries no flips", () => {
+        // NEITHER SURVIVED THE NODE-PER-CELL PATH, which is the honest reason they are only being
+        // carried now: fading ten thousand nodes one by one composites differently from fading the
+        // layer, so the old importer dropped both in silence. One node per layer makes each a field.
+        // No `freeassets` map uses either — Tiled's own automapping examples hide three layers of
+        // six, which is why the reader picked them up in the first place.
+        const m = parseTiledMap(tmxMap({
+            layers: '<layer id="1" name="Faded" width="2" height="2" opacity="0.4" visible="0">'
+                + '<data encoding="csv">1,2,5,6</data></layer>'
+        }));
+        const got = tilemapForLayer(m, m.layers[0], m.tilesets).layer!;
+        expect(got.opacity).toBeCloseTo(0.4, 9);
+        expect(got.hidden).toBe(true);
+        // ABSENT, not an array of zeros: 27 of the 45 corpus layers that fit turn nothing, and a
+        // zero per cell is pure weight in every one of their saved files.
+        expect(got.tilemap.flips).toBeUndefined();
+        expect("flips" in got.tilemap).toBe(false);
     });
 
     // -- glTF fixtures --------------------------------------------------------

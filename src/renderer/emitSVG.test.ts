@@ -227,3 +227,106 @@ describe("emitSVG — a dashed line is dashed", () => {
         } finally { plain.restore(); }
     });
 });
+
+/**
+ * A TILEMAP'S SHEET IS SIZED FROM THE BITMAP, not from the grid description.
+ *
+ * THE BUG, which shipped and drew whole maps from the wrong rows: the inner `<image>` is placed at
+ * NATURAL size so the nested `viewBox` measures source pixels, and it was sized by a `sheetHeight`
+ * that took the row count from the highest index the map happened to use. A real 968x526 sheet whose
+ * map reaches row 18 was called 305 tall, so every tile was sampled 1.7x too far down.
+ *
+ * IT WAS FOUND BY IMPORTING A REAL MAP and putting it beside the node-per-cell import of the same
+ * file — 0 of 1,552,386 content pixels differ now, and the whole picture differed before. This test
+ * is the cheap guard that keeps it fixed, and it needs a fixture that CANNOT pass by accident: a
+ * sheet whose real height (526) differs from the implied one, and a map using only low indices.
+ */
+describe("emitSVG — a tilemap samples its sheet at the sheet's real size", () => {
+    /** An `Image` that reports a decoded 968x526 sheet the moment a src is assigned. */
+    function fakeImages(width: number, height: number) {
+        const g = globalThis as unknown as { Image?: unknown };
+        const saved = g.Image;
+        g.Image = class {
+            naturalWidth = width;
+            naturalHeight = height;
+            onload: (() => void) | null = null;
+            set src(_v: string) { this.onload?.(); }
+        };
+        return () => { g.Image = saved; };
+    }
+
+    const tilemapItem = (href: string): DrawItem => ({
+        world: null,
+        nodeId: "t1",
+        shape: {
+            kind: "tilemap", x: 0, y: 0, width: 32, height: 16, href, pixelated: true,
+            // A 57-column sheet of 16px tiles with a 1px gutter — the real Roguelike sheet, whose
+            // 968x526 image holds 31 rows. The map uses indices in row 0 and row 1 ONLY, so the
+            // implied height is 33 and the real one is 526: a fixture whose highest tile sat in the
+            // last row could not tell the two apart.
+            map: { cols: 2, rows: 1, tileWidth: 16, tileHeight: 16,
+                   sheet: { columns: 57, tileWidth: 16, tileHeight: 16, spacing: 1, margin: 0 },
+                   tiles: [0, 58] },
+            cells: { col0: 0, row0: 0, col1: 1, row1: 0 }
+        },
+        paint: { opacity: null }
+    } as unknown as DrawItem);
+
+    test("the inner <image> is the BITMAP's size, and the viewBox still measures source pixels", () => {
+        const restoreImages = fakeImages(968, 526);
+        const dom = fakeDom();
+        try {
+            emitSVG(dom.container, listOf([tilemapItem("https://example.test/sheet-real.png")]));
+            const images = walk(dom.container).filter(e => e.tagName === "image");
+            expect(images).toHaveLength(2);                       // one per visible cell
+            for (const img of images) {
+                expect(img.getAttribute("width")).toBe("968");
+                // 526, NOT the 33 the two used rows imply.
+                expect(img.getAttribute("height")).toBe("526");
+            }
+            // The viewBoxes are the two tiles' source rects, in the sheet's own pixels: index 0 at
+            // the origin and index 58 one row down and one column across, gutter included.
+            const boxes = walk(dom.container).filter(e => e.tagName === "svg")
+                .map(e => e.getAttribute("viewBox"))
+                // The ROOT svg has none; it is in the walk because the emitter creates it too.
+                .filter(v => v !== null);
+            expect(boxes).toEqual(["0 0 16 16", "17 17 16 16"]);
+        } finally { dom.restore(); restoreImages(); }
+    });
+
+    test("an undecoded sheet draws NOTHING, rather than guessing a size", () => {
+        // No `Image` at all — which is what a fresh cache looks like on the first frame. The Canvas
+        // backend already returns early here, and the two must agree about when a sheet is ready.
+        const dom = fakeDom();
+        try {
+            emitSVG(dom.container, listOf([tilemapItem("https://example.test/sheet-undecoded.png")]));
+            expect(walk(dom.container).filter(e => e.tagName === "image")).toHaveLength(0);
+        } finally { dom.restore(); }
+    });
+});
+
+/**
+ * …and neither backend may go back to deriving that size.
+ *
+ * A TEXT GUARD, deliberately: the WebGL half of this fix cannot be exercised here at all (there is
+ * no GL context in a unit test, and none in this machine's Electron either — `renderWebGL` falls
+ * back to Canvas), so the alternative to reading the source is no check whatsoever. What it pins is
+ * exactly the thing that was wrong: a sheet size computed from the grid rather than read from the
+ * decoded bitmap.
+ */
+describe("no backend derives a tilemap sheet's pixel size", () => {
+    test("`sheetWidth`/`sheetHeight` are gone, and both backends read `naturalSize`", () => {
+        const fs = require("fs") as typeof import("fs");
+        const path = require("path") as typeof import("path");
+        const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, rel), "utf8");
+        for (const rel of ["./emitSVG.ts", "./emitWebGL.ts", "../core/document/Tilemap.ts"]) {
+            const src = read(rel);
+            // Mentioned in the comments that explain the bug; what must not come back is a CALL.
+            expect(src).not.toMatch(/\bsheetWidth\s*\(/);
+            expect(src).not.toMatch(/\bsheetHeight\s*\(/);
+        }
+        // The pairing that makes the absence mean something: both backends ask the shared cache.
+        expect(read("./emitSVG.ts")).toMatch(/naturalSize\(shape\.href\)/);
+        expect(read("./emitWebGL.ts")).toMatch(/naturalSize\(tm\.href\)/);
+    });
+});

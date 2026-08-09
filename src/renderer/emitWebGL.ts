@@ -66,9 +66,12 @@
  *     way; here the whole grid is ONE quad and each fragment works out which cell it is in, reads
  *     that cell out of an index texture and samples the sheet. Ten thousand cells, one draw call.
  *     WebGL 1 has no integer textures, so an index travels as two bytes in R and G with A as the
- *     presence flag — a reserved index would steal a tile somebody drew.
+ *     presence flag — a reserved index would steal a tile somebody drew. A CELL'S ORIENTATION
+ *     (schema 62) rides in the same texel's otherwise-unused BLUE byte, so all three flip bits cost
+ *     no second texture, upload or sampler: the other backends turn a cell with a matrix, and this
+ *     one turns the within-cell coordinate instead, which is the same eight symmetries read backwards.
  *
- * WHAT THIS FILE HAS NO KNOWN GAP FOR, as of schema 61 — a sentence with a shelf life, and
+ * WHAT THIS FILE HAS NO KNOWN GAP FOR, as of schema 62 — a sentence with a shelf life, and
  * `npm run header-claims` lists it on purpose so whoever finds the next one comes back here.
  *
  * The app still offers this backend as a preview, because a backend that quietly drops content is
@@ -76,7 +79,7 @@
  */
 
 import { ClipRegion, DisplayList, DrawItem, PaintGradient, Shape, layerTransition } from "./RenderModel";
-import { sheetWidth, sheetHeight } from "../core/document/Tilemap";
+
 import { gaussianKernel, blurPlan, GAUSSIAN_MAX_RADIUS } from "./Gaussian";
 import { Mat2D, translation, multiply, invert, IDENTITY } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
@@ -1982,7 +1985,12 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
             // BOTH ways: a draw that said nothing would inherit the previous item's map and turn
             // the next plain rectangle into a tilemap.
             const tm = item.shape.kind === "tilemap" ? item.shape : null;
-            if (tm && tm.href !== null && d.image) {
+            // THE SHEET'S REAL SIZE, read from the same cache the SVG backend reads it from. NOT
+            // `d.image.width`, which is the DESTINATION box the model computed — a tilemap's is the
+            // whole map — and not a size derived from the grid description either. See the uniform
+            // below for what the derived one did.
+            const sheetSize = tm && tm.href !== null ? naturalSize(tm.href) : null;
+            if (tm && tm.href !== null && d.image && sheetSize) {
                 const map = tm.map;
                 gl.activeTexture(gl.TEXTURE2);
                 gl.bindTexture(gl.TEXTURE_2D, state.tileIndexTex);
@@ -2005,8 +2013,14 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
                 gl.uniform4f(state.tileGridLoc, map.cols, map.rows, map.tileWidth, map.tileHeight);
                 gl.uniform4f(state.tileSheetLoc, map.sheet.columns, map.sheet.tileWidth,
                     map.sheet.tileHeight, map.sheet.spacing);
-                gl.uniform3f(state.tileMarginLoc, map.sheet.margin,
-                    sheetWidth(map.sheet), sheetHeight(map.sheet, map.tiles));
+                // THE SHEET'S REAL SIZE. It was a DERIVED one, and the derived HEIGHT came from the
+                // highest index the map happened to use: a real 968x526 sheet whose map only reaches
+                // row 18 was called 305 tall, so every fragment sampled 1.7x too far down and the
+                // whole map drew from the wrong rows. Canvas never had the bug — `drawImage` takes
+                // the bitmap itself — and SVG had exactly this one, which is why a two-backend
+                // comparison can agree on a wrong answer. Found by importing a real map and putting
+                // it beside the node-per-cell import of the same file.
+                gl.uniform3f(state.tileMarginLoc, map.sheet.margin, sheetSize.width, sheetSize.height);
                 gl.uniform1f(state.isTilemapLoc, 1);
             } else {
                 gl.uniform1f(state.isTilemapLoc, 0);

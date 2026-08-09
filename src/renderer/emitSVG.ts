@@ -15,7 +15,7 @@
  */
 
 import { toMatrixString, isTranslationOnly } from "../core/geometry/Matrix";
-import { tileAt, tileSourceRect, sheetWidth, sheetHeight, flipAt, flipMatrix } from "../core/document/Tilemap";
+import { tileAt, tileSourceRect, flipAt, flipMatrix } from "../core/document/Tilemap";
 import { DisplayList, DrawItem, Paint, FilterDef, PaintGradient, commandsToPathData, effectFilterId } from "./RenderModel";
 import { naturalSize, surfaceUrl } from "./ImageCache";
 import { nineSliceRects } from "../core/geometry/NineSlice";
@@ -260,7 +260,23 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         const g = document.createElementNS(svgNS, "g") as SVGGElement;
         const map = shape.map;
         const cells = shape.cells;
-        if (cells && shape.href) {
+        // THE SHEET'S REAL SIZE, from the same cache the other two backends draw from — NOT a size
+        // derived from the grid description, which is what this did and what drew a whole map from
+        // the wrong rows.
+        //
+        // THE BUG, in full, because the shape of it is worth keeping: the inner `<image>` is placed
+        // at natural size so the `viewBox` above measures in SOURCE PIXELS, and it was being sized
+        // to a size DERIVED from the grid description instead, whose height was the one implied by
+        // the HIGHEST INDEX THE MAP HAPPENS TO USE. A real 968x526 sheet whose map only reaches row 18 was
+        // declared 305 tall, so every tile was sampled 1.7x too far down and stretched to match.
+        // Canvas was right all along (`drawImage` takes the bitmap itself) and the GPU was wrong the
+        // same way, so a two-backend comparison would have called it agreement. It was found by
+        // importing a real map and looking at it beside the node-per-cell import of the same file.
+        //
+        // NULL MEANS NOT DECODED YET, and then nothing is drawn — exactly what the Canvas backend
+        // does. `ImageCache` bumps its generation on load and asks for the repaint.
+        const sheetSize = shape.href === null ? null : naturalSize(shape.href);
+        if (cells && shape.href && sheetSize) {
             for (let row = cells.row0; row <= cells.row1; row++) {
                 for (let col = cells.col0; col <= cells.col1; col++) {
                     const src = tileSourceRect(map.sheet, tileAt(map, col, row));
@@ -293,9 +309,11 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
                     img.setAttribute("href", shape.href);
                     img.setAttribute("x", "0");
                     img.setAttribute("y", "0");
-                    // Sized to the SHEET, not the tile: the viewBox above does the cropping.
-                    img.setAttribute("width", String(sheetWidth(map.sheet)));
-                    img.setAttribute("height", String(sheetHeight(map.sheet, map.tiles)));
+                    // Sized to the SHEET's own pixels, not the tile: the viewBox above does the
+                    // cropping and measures in source pixels, which only holds if this is the
+                    // bitmap's real size.
+                    img.setAttribute("width", String(sheetSize.width));
+                    img.setAttribute("height", String(sheetSize.height));
                     if (shape.pixelated) img.setAttribute("image-rendering", "pixelated");
                     cell.appendChild(img);
                     g.appendChild(cell);

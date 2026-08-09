@@ -132,7 +132,9 @@ import { SvgNodeSpec, svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { FontInfo, FontFlavour, parseFontFile, fontFileError, FONT_MAX_TABLES, FONT_MAX_NAMES } from "../import/FontFile";
 import { TiledMapResult, TiledTileset, TiledTileImage, TiledLayer, TiledCell, parseTiledMap, parseTiledTileset,
     tiledMapError, decodeGid, tilesetFor, tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow,
+    tilemapForLayer, TiledTilemapLayer, TiledTilemapFit,
     TILED_MAX_CELLS, TILED_MAX_LAYERS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
+import { Tilemap, emptyTilemap } from "../document/Tilemap";
 import { GlbContainer, GltfJson, GltfNode, GltfResult, GltfMeshInstance, GltfPrimitive,
     parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GLTF_IGNORABLE_REQUIRED, GLTF_MAX_VERTICES, GLTF_MAX_PRIMITIVES, GLTF_MAX_NODE_DEPTH,
@@ -874,6 +876,23 @@ export function __apiSurfacePin(): void {
     expectType<string | null>(tilesetOverflow(tset));
     // The draw offset lets a tall tile hang ABOVE its own cell; zero when the file omits it.
     expectType<number>(tset.offsetX); expectType<number>(tset.offsetY);
+    // A WHOLE LAYER AS ONE NODE — 45 of the corpus's 53 tile layers, 98.4% of their cells. The
+    // CONTRACT is the pair: a caller must be able to tell "not a grid" from "a grid", and be told
+    // WHY, because the fallback costs one node per cell and the reason is what says whether that is
+    // a file to fix or a feature we do not have.
+    const fit: TiledTilemapFit = tilemapForLayer(tmap, tlayer, tmap.tilesets);
+    expectType<TiledTilemapLayer | null>(fit.layer);
+    expectType<string | null>(fit.why);
+    const asGrid: TiledTilemapLayer = fit.layer ?? { image: "", x: 0, y: 0, width: 0, height: 0,
+        tilemap: emptyTilemap(), opacity: 1, hidden: false, dropped: 0 };
+    // The sheet as NAMED, not as loaded: resolving it needs a filesystem, which is what keeps this
+    // module pure — the same contract `TiledTileset.source` carries.
+    expectType<string>(asGrid.image);
+    expectType<Tilemap>(asGrid.tilemap);
+    // A HOLE IS COUNTED, not hidden: one cell naming a tile its set has not must not send the whole
+    // layer back to ten thousand nodes, and must not go unmentioned either.
+    expectType<number>(asGrid.dropped);
+    expectType<number>(asGrid.opacity); expectType<boolean>(asGrid.hidden);
     expectType<number>(TILED_MAX_CELLS); expectType<number>(TILED_MAX_LAYERS);
     expectType<number>(TILED_MAX_TILE_IMAGES);
 

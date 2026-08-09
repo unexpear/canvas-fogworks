@@ -24,6 +24,7 @@ import { SetVariantAction, SetInstanceVariantAction } from "../core/actions/Vari
 import { SetSlotAction, SetSlotContentAction } from "../core/actions/SlotActions";
 import { SetNodeStateAction, SetActiveStateAction } from "../core/actions/StateActions";
 import { SetNodeFlagsAction } from "../core/actions/SetNodeFlagsAction";
+import { tileImportActions, TilePlacement } from "../core/actions/tileImport";
 import { resolveLayerDrop, DropPosition } from "../editor/layerDrop";
 import { selectionForRowClick, ClickModifiers } from "../editor/layerSelection";
 import { filterLayers } from "../editor/layerFilter";
@@ -93,7 +94,8 @@ import { parseSvgDocument, svgDocumentError } from "../core/import/SvgDocument";
 import { svgNodeSpecs, SvgNodeSpec } from "../core/import/SvgNodes";
 import { parseFontFile, fontFileError, FontInfo } from "../core/import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, tilesetFor, tileSourceRect,
-    tilePosition, tileTransform, tileImageFor, tilesetOverflow, TiledTileset } from "../core/import/TiledMap";
+    tilePosition, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer,
+    TiledTileset } from "../core/import/TiledMap";
 import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
@@ -135,12 +137,23 @@ const UI = {
  */
 const SVG_PLACE_MAX = 2000;
 /**
- * How many tiles one map may place.
+ * How many NODES one map may place.
  *
  * The largest map measured is 10,618 non-empty cells across five layers, and the whole tree is
  * 22,808. This clears the largest by a wide margin and still refuses a map that would lock the
  * editor up — and it REPORTS rather than truncating, because half a map placed silently looks like
  * a broken importer rather than a refused one.
+ *
+ * MOSTLY MOOT NOW that a layer arrives as one `core.tilemap`: that same map is five nodes. It still
+ * guards the fallback path, which is the one that can produce thousands.
+ *
+ * AND THERE IS A HARDER LIMIT BEHIND IT, measured rather than reasoned: every node placed cell by
+ * cell carries the sheet's whole data URL, so `cloneDocument`'s `JSON.stringify` throws
+ * `RangeError: Invalid string length` — V8's cap is ~512MB of string — at the FIRST revision commit.
+ * The Roguelike sheet is 61KB of base64, so 10,618 cells is ~650MB and that map could never actually
+ * be imported the old way; the transaction rolled back and placed nothing. The corpus's largest
+ * fallback layer is 348 cells (~21MB), so nothing here reaches it any more. Fixing it properly means
+ * the serializer sharing one copy of a repeated `src`, which is a change to the file format.
  */
 const TILE_PLACE_MAX = 20000;
 
@@ -1426,35 +1439,19 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     }, [dispatcher, es, refresh]);
 
     /**
-     * Tiles as image nodes, one per non-empty cell.
+     * A map as nodes: a whole layer as ONE grid where it fits, and one image per cell where it does
+     * not.
      *
-     * Every tile is the SAME sheet with a different `sourceRect` — the region field schema 51
-     * added — so a whole map costs one decoded image no matter how many cells reference it. The
-     * flips arrive as a rotation and a scale, applied only to the cells that carry one.
+     * The actions themselves are `tileImportActions`, which is not a stylistic split — a node created
+     * inside a transaction cannot be reached through `nodeEdit`'s router (it exists in no document
+     * yet), and this file is guarded against constructing those actions raw. That guard is about
+     * VIRTUAL ids, which an import never has; moving the construction to a module that can be tested
+     * satisfies it honestly instead of by exemption.
      */
-    const importTiles = useCallback((tiles: {
-        x: number; y: number; width: number; height: number; src: string;
-        sourceRect: SourceRect | null; name: string;
-        transform: { rotation: number; scaleX: number; scaleY: number } | null;
-    }[]) => {
-        if (tiles.length === 0) return;
+    const importTiles = useCallback((placements: TilePlacement[]) => {
+        if (placements.length === 0) return;
         const doc = dispatcher.getDocument();
-        const actions: Action[] = [];
-        const ids: string[] = [];
-        for (const t of tiles) {
-            // Minted HERE so both halves can name it, the same reason the pen tool and the SVG
-            // importer do — the node does not exist yet to be looked up.
-            const id = generateUUID();
-            ids.push(id);
-            actions.push(new AddNodeAction(doc, "core.image", t.x, t.y, t.width, t.height, "none", id,
-                null, { src: t.src }));
-            // The REGION and the pixel-art hint are content PATCHES rather than creation fields, so
-            // they go through the same door the region inputs use. `pixelated` is what stops a 16px
-            // tile being smoothed into its neighbours when the map is zoomed.
-            actions.push(new UpdateNodeContentAction(doc, id,
-                { sourceRect: t.sourceRect, pixelated: true, name: t.name }));
-            if (t.transform) actions.push(new UpdateNodeTransformAction(doc, id, t.transform));
-        }
+        const { actions, ids } = tileImportActions(doc, placements);
         dispatcher.dispatchAction(new TransactionAction(doc, "import-tiles", actions));
         es.selectedNodeIds = ids.slice(0, 1);
         refresh();
@@ -3654,11 +3651,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     onImportSvg: (specs: SvgNodeSpec[]) => void;
     /** Apply a registered family to the selected node — the point of loading one. */
     editContentFont: (family: string) => void;
-    onImportTiles: (tiles: {
-        x: number; y: number; width: number; height: number; src: string;
-        sourceRect: SourceRect | null; name: string;
-        transform: { rotation: number; scaleX: number; scaleY: number } | null;
-    }[]) => void;
+    onImportTiles: (placements: TilePlacement[]) => void;
 }) {
     const [tab, setTab] = useState<"source" | "assets" | "export" | "import">("source");
     /** Grid inputs. Strings, because a half-typed number is a state a number input has to hold. */
@@ -4022,9 +4015,36 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                         }
                                     }
 
-                                    const tiles = [];
+                                    const tiles: TilePlacement[] = [];
                                     let unresolved = 0;
                                     for (const layer of map.layers) {
+                                        // THE GRID IS TRIED FIRST, LAYER BY LAYER. 45 of the
+                                        // corpus's 53 tile layers become one `core.tilemap` each,
+                                        // which is what turns a 10,618-node import into a 5-node
+                                        // one; the rest fall through to the loop below, which is
+                                        // the only thing that can draw them.
+                                        const fit = tilemapForLayer(map, layer, sets);
+                                        const sheet = fit.layer ? sheets.get(fit.layer.image) : undefined;
+                                        if (fit.layer && sheet) {
+                                            tiles.push({
+                                                kind: "tilemap",
+                                                x: fit.layer.x, y: fit.layer.y,
+                                                width: fit.layer.width, height: fit.layer.height,
+                                                src: sheet, map: fit.layer.tilemap,
+                                                name: layer.name || "Tile layer",
+                                                opacity: fit.layer.opacity, hidden: fit.layer.hidden
+                                            });
+                                            // A HOLE COUNTS WHERE EVERY OTHER UNPLACEABLE CELL
+                                            // COUNTS, so the same map reports the same number
+                                            // whichever path drew it.
+                                            unresolved += fit.layer.dropped;
+                                            continue;
+                                        }
+                                        // WHY, not merely "not a grid": a layer that fell back is a
+                                        // layer costing a thousand nodes, and the reason is the
+                                        // difference between a file to fix and a feature we lack.
+                                        problems.push(fit.why
+                                            ?? `layer "${layer.name}" fits a grid but its sheet did not load`);
                                         for (let i = 0; i < layer.cells.length; i++) {
                                             const cell = layer.cells[i];
                                             if (cell.gid === 0) continue;   // EMPTY is most of a map
@@ -4041,10 +4061,19 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                             const at = tilePosition(map, i % layer.width, Math.floor(i / layer.width));
                                             const t = tileTransform(cell);
                                             tiles.push({
-                                                // The set's OFFSET is what lets a tall tile hang
-                                                // above its own cell — a building rooted in one
-                                                // square standing over the three behind it.
-                                                x: at.x + set.offsetX, y: at.y + set.offsetY,
+                                                kind: "image",
+                                                // TWO OFFSETS, both of which the reader had been
+                                                // reading and this had been dropping. The SET's
+                                                // lets a tall tile hang above its own cell — a
+                                                // building rooted in one square standing over the
+                                                // three behind it. The LAYER's shifts the whole
+                                                // layer, and one corpus map moves one 30 pixels up;
+                                                // ignoring it drew that art 30 pixels low, which
+                                                // reads as a badly aligned pack rather than as an
+                                                // attribute nobody applied. The grid path folds
+                                                // both into the node's own position.
+                                                x: at.x + set.offsetX + layer.offsetX,
+                                                y: at.y + set.offsetY + layer.offsetY,
                                                 // The TILE's size, not the map's: a collection tile
                                                 // states its own, and a sheet tile may be taller
                                                 // than the grid it sits on.
@@ -4059,14 +4088,21 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                         }
                                     }
 
+                                    // NODES, NOT CELLS, which is what the cap was always about: a
+                                    // grid holding ten thousand tiles is one node, so the map that
+                                    // used to sit just under this limit now costs five.
                                     if (tiles.length > TILE_PLACE_MAX) {
-                                        setImportNote(`${tiles.length} tiles is more than the `
+                                        setImportNote(`${tiles.length} nodes is more than the `
                                             + `${TILE_PLACE_MAX} this will place at once.`);
                                         return;
                                     }
                                     onImportTiles(tiles);
-                                    setImportNote(`${tiles.length} tiles from ${map.layers.length} layer`
-                                        + `${map.layers.length === 1 ? "" : "s"} · ${map.orientation}`
+                                    const grids = tiles.filter(t => t.kind === "tilemap").length;
+                                    const loose = tiles.length - grids;
+                                    setImportNote(`${grids} grid${grids === 1 ? "" : "s"} from `
+                                        + `${map.layers.length} layer${map.layers.length === 1 ? "" : "s"}`
+                                        + (loose > 0 ? ` · ${loose} loose tile${loose === 1 ? "" : "s"}` : "")
+                                        + ` · ${map.orientation}`
                                         + (unresolved > 0 ? ` · ${unresolved} unresolved` : "")
                                         + (problems.length > 0 ? ` · ${problems[0]}` : ""));
                                 } catch (err) {

@@ -24,7 +24,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1539;
+const EXPECTED_TESTS = 1547;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -135,6 +135,49 @@ const MUTANTS = [
       from: "opacity: Math.min(1, Math.max(0, num(a.opacity, 1))),",
       to: "opacity: num(a.opacity, 1),",
       note: "opacity is not clamped — invisible unless a map states one outside 0..1" },
+
+    // `tilemapForLayer` — a whole layer as one grid. Every mutation here is one a SQUARE layer, a
+    // firstgid of 1, a tight sheet or a symmetric offset cannot see.
+    { id: "TG1", file: "src/core/import/TiledMap.ts",
+      from: "        tiles.push(cell.gid - set.firstGid);",
+      to: "        tiles.push(cell.gid);",
+      note: "a gid stored as if it were an index — invisible when firstGid is 1" },
+    { id: "TG2", file: "src/core/import/TiledMap.ts",
+      from: "        cols: layer.width, rows: layer.height,",
+      to: "        cols: layer.height, rows: layer.width,",
+      note: "the grid transposed — invisible on a square layer" },
+    { id: "TG3", file: "src/core/import/TiledMap.ts",
+      from: "            x: layer.offsetX + set.offsetX,\n            y: layer.offsetY + set.offsetY,",
+      to: "            x: layer.offsetY + set.offsetY,\n            y: layer.offsetX + set.offsetX,",
+      note: "the two offsets swapped — invisible unless x and y differ" },
+    { id: "TG4", file: "src/core/import/TiledMap.ts",
+      from: "            width: layer.width * map.tileWidth,\n            height: layer.height * map.tileHeight,",
+      to: "            width: layer.width * map.tileHeight,\n            height: layer.height * map.tileWidth,",
+      note: "the node's box measured on the wrong axis — invisible on a square cell" },
+    { id: "TG5", file: "src/core/import/TiledMap.ts",
+      from: "            tiles.push(TILE_EMPTY);",
+      to: "            tiles.push(0);",
+      note: "an empty cell stored as TILE ZERO, which is a real tile somebody drew" },
+    { id: "TG6", file: "src/core/import/TiledMap.ts",
+      from: "        ...(turned ? { flips } : {})",
+      to: "        ...(false ? { flips } : {})",
+      note: "orientation dropped — a fifth of the art in fourteen of twenty maps turns the wrong way" },
+    { id: "TG7", file: "src/core/import/TiledMap.ts",
+      from: "    if (set.tileWidth !== map.tileWidth || set.tileHeight !== map.tileHeight) {",
+      to: "    if (false) {",
+      note: "oversized tiles accepted into a cell that squashes them — five real layers" },
+    { id: "TG8", file: "src/core/import/TiledMap.ts",
+      from: "        else if (found.firstGid !== set.firstGid) return no(\"draws from more than one tileset\");",
+      to: "        else if (false) return no(\"draws from more than one tileset\");",
+      note: "a two-tileset layer drawn from whichever set came first" },
+    { id: "TG9", file: "src/core/import/TiledMap.ts",
+      from: "    const bad = tilemapError(tilemap);\n    if (bad) return no(bad);",
+      to: "    const bad = null;\n    if (bad) return no(bad);",
+      note: "the document's own validator skipped — the importer can mint an unopenable node" },
+    { id: "TG10", file: "src/core/import/TiledMap.ts",
+      from: "            hidden: !layer.visible,",
+      to: "            hidden: layer.visible,",
+      note: "visibility inverted — every shown layer hidden and every hidden one shown" },
 ];
 
 function runSuite() {

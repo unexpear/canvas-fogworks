@@ -11,6 +11,17 @@
  * This is one node per LAYER instead, holding a flat array of indices. The same map becomes five
  * nodes and 50,000 small integers.
  *
+ * AND MEASURED AFTER, both halves in one run now that `tilemapForLayer` exists — the same map
+ * imported both ways, then the frame derived over the whole map:
+ *
+ *     one core.image per cell    10,618 nodes   7.80MB   32.3ms first frame, 12.1ms warm
+ *     one core.tilemap per layer      5 nodes   0.77MB    0.8ms first frame,  0.1ms warm
+ *
+ * Placing it went from 1,244ms to 4ms as well, which is the part a person notices first. The figures
+ * above differ from the ones recorded when this was designed and are not corrections of them: 22ms
+ * was a single cold derivation, and the 32.3ms here is the same kind of measurement on a machine and
+ * a schema several versions apart. What has not changed is the shape of the answer.
+ *
  * IT IS ALSO WHAT AUTOTILING NEEDS, and that is the deeper reason. Autotiling is a function from
  * TERRAIN to tile, and the node-per-cell document stored only the answer — the rendered tile — with
  * nowhere to put the question. The same shape of mistake as flattening a gradient to its midpoint
@@ -241,25 +252,23 @@ export function tileSourceRect(
     };
 }
 
-/**
- * How wide the sheet must be to hold `columns` tiles, in image pixels.
+/*
+ * THERE IS NO `sheetWidth` OR `sheetHeight` HERE, AND THERE WAS. Both derived the sheet's pixel size
+ * from the grid description, so a backend needing "how big is the sheet" could ask without decoding
+ * it. `sheetHeight` took the row count from THE HIGHEST INDEX THE MAP HAPPENED TO USE, which is only
+ * the sheet's height when the map reaches the last row.
  *
- * DERIVED RATHER THAN STORED, because the sheet's real size is a property of the FILE and the pure
- * core never decodes it. What the grid description implies is enough for SVG, which needs a number
- * to size an `<image>` it is cropping — and if the implied size and the file disagree, the file is
- * not the sheet the document describes.
+ * A real 968x526 sheet whose map reaches row 18 was therefore called 305 tall. SVG places its inner
+ * `<image>` at that size so its `viewBox` measures source pixels, and the GPU divides by it, so both
+ * sampled 1.7x too far down and drew the whole map from the wrong rows. Canvas was right throughout,
+ * because `drawImage` takes the bitmap and never asks. The two wrong backends were wrong the SAME
+ * way, so cross-backend comparison would have called it agreement, and no fixture noticed because a
+ * small test sheet's last row is the one the fixture uses.
+ *
+ * The lesson is narrower than "don't derive": a derived value that MUST equal a fact about a file is
+ * not a derivation, it is an assumption with arithmetic around it. Both backends now read the size
+ * from the decoded bitmap, through the one cache all three share.
  */
-export function sheetWidth(sheet: Readonly<TileSheet>): number {
-    return sheet.margin * 2 + sheet.columns * sheet.tileWidth + Math.max(0, sheet.columns - 1) * sheet.spacing;
-}
-
-/** The same, downward — the row count comes from the highest index the map actually uses. */
-export function sheetHeight(sheet: Readonly<TileSheet>, tiles: readonly number[]): number {
-    let highest = 0;
-    for (const t of tiles) if (t > highest) highest = t;
-    const rows = Math.floor(highest / sheet.columns) + 1;
-    return sheet.margin * 2 + rows * sheet.tileHeight + Math.max(0, rows - 1) * sheet.spacing;
-}
 
 /**
  * The cells of `map` that overlap a rectangle in the node's LOCAL space, clamped to the grid.

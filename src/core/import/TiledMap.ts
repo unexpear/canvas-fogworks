@@ -7,6 +7,12 @@
  * Tiled writes is the gutter that slicer already takes. So the work here is resolving a GID to a
  * tileset and a cell; everything downstream already exists.
  *
+ * A LAYER ARRIVES AS ONE NODE WHERE IT CAN. `tilemapForLayer` turns a whole tile layer into a single
+ * `core.tilemap` (schema 61) holding indices, which is 45 of the 53 layers here and 98.4% of their
+ * cells; the rest keep the node-per-cell path, and each is told why. The per-cell functions
+ * (`tileSourceRect`, `tileTransform`, `tilePosition`) are therefore not legacy — they are what draws
+ * the layers a grid cannot express, and both paths cut a sheet with the same shared arithmetic.
+ *
  * THE TOP THREE BITS OF A GID ARE FLIP FLAGS. A raw id of 2,684,354,697 in the measured maps is
  * tile 137 with two flips set — a reader taking that at face value would index a million tiles past
  * the end of every tileset it met. Masking them off is not optional, and neither is reporting them:
@@ -24,7 +30,8 @@
  * diamond rather than a grid, so the placement formula lives here and the orientation is reported
  * rather than assumed. (It was recorded here as four: a fourth file carries `orientation="isometric"`
  * on a tileset's `<grid>`, not on its `<map>`. Counting a string rather than the element it sits on
- * is how a corpus measurement goes quietly wrong.)
+ * is how a corpus measurement goes quietly wrong. Re-measured since: all three of those maps have an
+ * EMPTY tile layer, so no isometric cell in this corpus has ever been placed by anything.)
  *
  * WHAT THE SPEC SAYS IS NOT A GAP. `<grid>` appears in three tilesets here and is deliberately
  * ignored: it "is only used in case of isometric orientation, and determines how tile overlays for
@@ -51,7 +58,13 @@
  */
 
 import { SourceRect } from "../document/Node";
-import { tileSourceRect as sheetSourceRect } from "../document/Tilemap";
+// THE SAME THREE FLAGS IN A SECOND ENCODING. Tiled packs them into the top bits of a 32-bit gid;
+// a `Tilemap` cell holds them as 1/2/4 in a parallel array. Aliased rather than renamed either
+// side, so the two names cannot be confused at a glance the way `FLIP_H` twice over would be.
+import {
+    Tilemap, TileSheet, TILE_EMPTY, tilemapError, tileSourceRect as sheetSourceRect,
+    FLIP_H as CELL_FLIP_H, FLIP_V as CELL_FLIP_V, FLIP_D as CELL_FLIP_D
+} from "../document/Tilemap";
 
 /** Bounds on a hand-editable file. A corrupt size should fail, not allocate. */
 export const TILED_MAX_CELLS = 1_000_000;
@@ -542,10 +555,16 @@ export function tileImageFor(set: TiledTileset, gid: number): TiledTileImage | n
 /**
  * Where a cell sits on screen.
  *
- * ORTHOGONAL is a plain grid. ISOMETRIC is a diamond — four of the measured maps — where moving one
+ * ORTHOGONAL is a plain grid. ISOMETRIC is a diamond — three of the measured maps — where moving one
  * column goes half a tile right and half a tile DOWN, and moving one row goes half a tile left and
  * half down. Treating an isometric map as a grid produces a rectangle of tiles that overlap
  * nothing, which looks like a broken tileset rather than a misread orientation.
+ *
+ * NOTHING HERE HAS EVER PLACED A REAL ISOMETRIC CELL, which is worth knowing before trusting the
+ * formula: all three of those maps carry one 60x60 tile layer and every cell in it is empty. The
+ * diamond is covered by unit tests and by the spec, not by the corpus. (It was recorded as four
+ * maps until the count was re-run against the `<map>` element itself — the fourth file carries
+ * `orientation="isometric"` on a tileset's `<grid>`, which is an editor overlay hint.)
  */
 export function tilePosition(
     map: { orientation: string; tileWidth: number; tileHeight: number }, col: number, row: number
@@ -557,4 +576,173 @@ export function tilePosition(
         };
     }
     return { x: col * map.tileWidth, y: row * map.tileHeight };
+}
+
+/** One Tiled layer as the single `core.tilemap` node it can become. */
+export interface TiledTilemapLayer {
+    /**
+     * The sheet, exactly as the map NAMED it — a relative path, not something loadable.
+     *
+     * Resolving it needs a filesystem, which is what keeps this module pure and testable, so the
+     * caller does that and puts the result in the node's `src`.
+     */
+    image: string;
+    /** Where the node goes, in map pixels, and how big it is. */
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    tilemap: Tilemap;
+    /** The layer's own opacity and visibility, which one node per layer can finally carry. */
+    opacity: number;
+    hidden: boolean;
+    /**
+     * Cells whose gid named a tile the tileset does not have — holes, COUNTED rather than hidden.
+     *
+     * A layer is not refused for these: one bad cell in ten thousand should not send the whole
+     * layer back to ten thousand nodes. But it must not go unmentioned either, which is the same
+     * rule `notes` follows.
+     */
+    dropped: number;
+}
+
+/** Whether a layer fits one grid, and if not, what stopped it. */
+export interface TiledTilemapFit {
+    layer: TiledTilemapLayer | null;
+    /** Why not — non-null exactly when `layer` is null. */
+    why: string | null;
+}
+
+/**
+ * A whole tile layer as ONE `core.tilemap`, or the reason it cannot be.
+ *
+ * THIS IS WHY THE NODE EXISTS. The measured import of `Roguelike Base Pack/Map/sample_map.tmx` made
+ * one `core.image` per non-empty cell — 10,618 nodes, 22ms of derivation before anything was drawn.
+ * A `Tilemap` holds the same map as five arrays of small integers, so this function is the whole
+ * distance between the two.
+ *
+ * A GRID CANNOT EXPRESS EVERY LAYER, and the honest answer is to say so per layer rather than to
+ * approximate. Measured over the 53 tile layers in `freeassets`: 45 of them fit, carrying 22,440 of
+ * the 22,808 non-empty cells — 98.4%. What stops the other eight is not exotic:
+ *
+ *   * 5 layers whose TILES ARE BIGGER THAN THEIR CELLS — 64x64 art on a 60x60 grid, and 24x24 on
+ *     18x18. Tiled draws such a tile at its own size, overhanging its neighbours; every backend
+ *     here draws a tilemap cell INTO its cell, so the grid would squash it. That is a wrong picture
+ *     rather than a missing one, so those layers keep the node-per-cell path they already had.
+ *   * 3 layers with no tiles at all. There is no sheet to name and nothing to draw, so nothing is
+ *     made — the same as today.
+ *
+ * Two conditions that would have needed handling turned out not to arise, and both were checked
+ * rather than assumed: NO layer in the corpus draws from two tilesets (which a single-sheet node
+ * could not hold), and no layer's data length disagrees with its own width and height.
+ *
+ * THE LAST WORD IS `tilemapError`'s. Whatever is built here is offered to the document's own
+ * validator before being returned, so this cannot mint a node that would fail to reopen — the
+ * failure that made a deleted bone leave an unopenable file.
+ */
+export function tilemapForLayer(
+    map: { orientation: string; tileWidth: number; tileHeight: number },
+    layer: TiledLayer,
+    tilesets: readonly TiledTileset[]
+): TiledTilemapFit {
+    const no = (why: string): TiledTilemapFit => ({ layer: null, why: `layer "${layer.name}" ${why}` });
+
+    // ORIENTATION FIRST, because it is the one condition about the MAP: an isometric cell sits on a
+    // diamond and a `Tilemap` is a plain grid, so those maps stay with `tilePosition` and one node
+    // per cell. UNEXERCISED BY THE CORPUS, and said plainly rather than left to be assumed: all
+    // three isometric maps here have a tile layer holding zero tiles, so this branch is reached only
+    // by its unit test. It is written anyway, because the alternative is laying a diamond flat.
+    if (map.orientation !== "orthogonal") return no(`is ${map.orientation}, which a grid cannot place`);
+    if (layer.cells.length !== layer.width * layer.height) {
+        return no(`holds ${layer.cells.length} cells for a ${layer.width}x${layer.height} grid`);
+    }
+
+    // ONE SHEET PER NODE is the constraint the whole fit turns on. Compared by `firstGid` rather
+    // than by object identity, so a caller that rebuilt its tilesets — which the app does, to merge
+    // in the external `.tsx` files — is not told its layer spans two sets.
+    let set: TiledTileset | null = null;
+    let filled = 0, missing = 0;
+    for (const cell of layer.cells) {
+        if (cell.gid === 0) continue;
+        filled++;
+        const found = tilesetFor(tilesets, cell.gid);
+        if (!found) { missing++; continue; }
+        if (!set) set = found;
+        else if (found.firstGid !== set.firstGid) return no("draws from more than one tileset");
+    }
+    if (filled === 0 || !set) return no("has no tiles");
+    // A gid below every `firstGid` belongs to no set at all. Never seen in the corpus, and handed
+    // back to the per-cell path rather than drawn as a hole, so it stays counted as `unresolved`
+    // wherever it was counted before.
+    if (missing > 0) return no(`has ${missing} cell(s) that name no tileset`);
+    if (set.tiles.length > 0) return no("draws from a tileset that gives each tile its own file");
+    if (!set.image) return no("draws from a tileset that names no sheet");
+    // THE CELL AND THE ART MUST BE THE SAME SIZE. Five layers in the corpus fail this and it is not
+    // a rounding matter: a 64x64 tile on a 60x60 grid overhangs in Tiled and would be squashed here.
+    if (set.tileWidth !== map.tileWidth || set.tileHeight !== map.tileHeight) {
+        return no(`draws ${set.tileWidth}x${set.tileHeight} tiles on a `
+            + `${map.tileWidth}x${map.tileHeight} grid, which a cell cannot hold`);
+    }
+
+    const sheet: TileSheet = {
+        columns: set.columns, tileWidth: set.tileWidth, tileHeight: set.tileHeight,
+        spacing: set.spacing, margin: set.margin
+    };
+    const tiles: number[] = [];
+    const flips: number[] = [];
+    let turned = false, dropped = 0;
+    for (const cell of layer.cells) {
+        // GID TO INDEX, once, here — the reason a `Tilemap` holds indices at all. A gid means
+        // something only beside the map's tileset table; an index means the same thing wherever
+        // the layer is pasted.
+        const rect = cell.gid === 0 ? null : tileSourceRect(set, cell.gid);
+        if (!rect) {
+            if (cell.gid !== 0) dropped++;
+            tiles.push(TILE_EMPTY);
+            flips.push(0);
+            continue;
+        }
+        tiles.push(cell.gid - set.firstGid);
+        const flip = (cell.flipH ? CELL_FLIP_H : 0) | (cell.flipV ? CELL_FLIP_V : 0)
+            | (cell.flipD ? CELL_FLIP_D : 0);
+        flips.push(flip);
+        if (flip !== 0) turned = true;
+    }
+
+    const tilemap: Tilemap = {
+        cols: layer.width, rows: layer.height,
+        // THE MAP's cell size, not the sheet's tile size. They are equal by the check above, and
+        // they are still two different fields: one is how far apart cells sit on the canvas, the
+        // other is how the sheet is cut.
+        tileWidth: map.tileWidth, tileHeight: map.tileHeight,
+        sheet, tiles,
+        // OMITTED WHEN NOTHING IS TURNED, which is most layers — 27 of the 45 that fit carry no
+        // flip at all, and an array of zeros per cell would be pure weight in the saved file.
+        ...(turned ? { flips } : {})
+    };
+    const bad = tilemapError(tilemap);
+    if (bad) return no(bad);
+
+    return {
+        layer: {
+            image: set.image,
+            // BOTH OFFSETS FOLD INTO THE NODE, which is only sound because exactly one tileset
+            // reaches this point: a `<tileoffset>` shifts every tile drawn from that set, and here
+            // that is every tile in the layer. The node-per-cell path had to add it per tile.
+            x: layer.offsetX + set.offsetX,
+            y: layer.offsetY + set.offsetY,
+            width: layer.width * map.tileWidth,
+            height: layer.height * map.tileHeight,
+            tilemap,
+            // READ RATHER THAN DROPPED. The node-per-cell path had nowhere to put a layer's opacity
+            // — it would have meant fading ten thousand nodes independently, which composites
+            // differently — so it silently ignored both. One node per layer makes them a field
+            // each. No layer in `freeassets` uses either, and Tiled's own automapping examples hide
+            // three layers of six, which is why the parser reads them in the first place.
+            opacity: layer.opacity,
+            hidden: !layer.visible,
+            dropped
+        },
+        why: null
+    };
 }

@@ -1101,7 +1101,44 @@ function tilePosition(map: { orientation: string; tileWidth: number; tileHeight:
 function tileTransform(cell: TiledCell): { rotation: number; scaleX: number; scaleY: number };
 function tileImageFor(set: TiledTileset, gid: number): TiledTileImage | null;
 function tilesetOverflow(set: TiledTileset): string | null;
+
+interface TiledTilemapLayer {
+    image: string;                                  // the sheet as NAMED; the caller resolves it
+    x: number; y: number; width: number; height: number;
+    tilemap: Tilemap; opacity: number; hidden: boolean;
+    dropped: number;                                // cells the set has no tile for — holes, counted
+}
+interface TiledTilemapFit { layer: TiledTilemapLayer | null; why: string | null }
+function tilemapForLayer(map: { orientation: string; tileWidth: number; tileHeight: number },
+                         layer: TiledLayer, tilesets: readonly TiledTileset[]): TiledTilemapFit;
 ```
+
+**`tilemapForLayer` is why `core.tilemap` exists.** A whole tile layer becomes ONE node holding
+indices. Measured on `Roguelike Base Pack/Map/sample_map.tmx` (100x100, five layers, 10,618 non-empty
+cells), importing both ways and then deriving the frame over the whole map:
+
+| | nodes | saved JSON | first frame | warm frame | to place |
+|---|---|---|---|---|---|
+| one `core.image` per cell | 10,618 | 7.80 MB | 32.3 ms | 12.1 ms | 1,244 ms |
+| one `core.tilemap` per layer | 5 | 0.77 MB | 0.8 ms | 0.1 ms | 4 ms |
+
+**A grid cannot express every layer, so it is decided PER LAYER and the reason is reported.** 45 of
+the 53 tile layers in `freeassets` fit, carrying 22,440 of the 22,808 non-empty cells (98.4%). What
+stops the other eight: **five layers whose tiles are bigger than their cells** (64x64 art on a 60x60
+grid, 24x24 on 18x18 — Tiled overhangs, a cell would squash), and **three layers with no tiles at
+all** (no sheet to name). Those keep the node-per-cell path, which is therefore not legacy code.
+Two conditions that would have needed handling were checked and do not arise: no layer draws from two
+tilesets, and no layer's data length disagrees with its own width and height.
+
+**`tilemapError` has the last word.** Whatever grid is built is offered to the document's own
+validator before being returned, so the importer cannot mint a node that fails to reopen. The
+reachable case is a file declaring zero-sized tiles, which passes every earlier check because the
+cell and the art agree at 0x0.
+
+**A layer's `opacity` and `visible` survive only on this path.** The node-per-cell import dropped
+both in silence — fading ten thousand nodes one at a time composites differently from fading the
+layer — and one node per layer makes each a field. No `freeassets` map uses either; Tiled's own
+automapping examples hide three layers of six.
 
 **`tileTransform` is DERIVED, not tabulated.** The three bits are three reflections — transpose,
 then negate x, then negate y — which together generate all eight symmetries of a square, exactly
@@ -1133,7 +1170,9 @@ reader trusting `columns="0"` drops silently as empty. The arithmetic is the gut
 inverted, and it comes out at exactly 57x31 for both.
 
 **Orientation changes placement, not parsing.** `tilePosition` lays orthogonal on a grid and
-isometric on a diamond; the cells read identically either way.
+isometric on a diamond; the cells read identically either way. **No isometric cell in the corpus has
+ever been placed**: all three isometric maps carry one 60x60 tile layer whose every cell is empty, so
+the diamond is covered by unit tests and the spec, not by a file.
 
 **A TILESET IS NOT ALWAYS A SHEET.** Tiled allows a set whose tiles are separate files, and three
 in the measured tree are built that way — 244, 348 and 236 tiles. Such a set has no sheet to cut:
@@ -1947,12 +1986,22 @@ function blendTargets(gl, blur, backdrop, source, mode): void;
 // alternative measured 10,618 nodes and 22ms a frame for one 100x100 map. Only a `core.tilemap`
 // may carry one, and it MUST: `AddNodeAction` gives it the empty default so it can be saved.
 Node.tilemap?: Tilemap;
-interface Tilemap { cols; rows; tileWidth; tileHeight; sheet: TileSheet; tiles: number[] }
+interface Tilemap { cols; rows; tileWidth; tileHeight; sheet: TileSheet; tiles: number[];
+                   flips?: number[] }                       // 3 bits a cell (schema 62), or absent
 interface TileSheet { columns; tileWidth; tileHeight; spacing; margin }   // sheet PIXELS
 function tilemapError(map): string | null;      function tileAt(map, col, row): number;
+function flipAt(map, col, row): number;         function flipMatrix(flip, w, h): [a,b,c,d,e,f];
 function tileSourceRect(sheet, index): Rect | null;   // the ONE slicing rule; TiledMap delegates
 function visibleCells(map, localRect): { col0; row0; col1; row1 } | null;   // inclusive, clamped
-function sheetWidth(sheet) / sheetHeight(sheet, tiles): number;   // implied, for SVG's viewBox
+// THE SHEET'S PIXEL SIZE IS NOT DERIVED, and `sheetWidth`/`sheetHeight` are gone because they were.
+// `sheetHeight` took the row count from the HIGHEST INDEX THE MAP USED, so a real 968x526 sheet
+// whose map reached row 18 was called 305 tall: SVG places its inner `<image>` at that size so its
+// viewBox measures source pixels, and the GPU divides by it, so both drew the whole map from the
+// wrong rows 1.7x too far down. Canvas was right throughout — `drawImage` takes the bitmap and never
+// asks — so the two wrong backends were wrong the SAME way and comparing them would have called it
+// agreement. Both now read `naturalSize(href)` from the one cache all three share, and an undecoded
+// sheet draws NOTHING rather than a guess. Found by importing a real map beside the node-per-cell
+// import of the same file; a derived value that must equal a fact about a file is an assumption.
 // A world rect in a node's LOCAL space. In the geometry engine because the render model may not
 // compose coordinates — it needed this to cull a grid, and asking is allowed where deriving is not.
 function localVisibleRect(state, nodeId, world: Rect): Rect | null;
