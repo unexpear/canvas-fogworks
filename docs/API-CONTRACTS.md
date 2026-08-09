@@ -1930,6 +1930,13 @@ function meshPointFromWorld(doc, state, nodeId, mesh, index, worldX, worldY, pos
 // BLENDING (schema 60). Three modes, measured: 65 of 5,279 corpus SVGs blend and name only these.
 // Absent IS normal. The names match CSS and Canvas exactly, so nothing translates anywhere.
 const BLEND_MODES = ["multiply", "screen", "overlay"];
+// THE EYEDROPPER, in `core/geometry/Eyedropper` — asks the DOCUMENT, not the framebuffer: the
+// SVG backend has no pixels, and the other two would answer with whatever the zoom resampled.
+// Exact for a fill, a token, a gradient (sampled at the point) and a painted texel. Null for a
+// miss, `fill: "none"`, a transparent pixel and a `core.image`. Reports the SHAPE’S colour, not
+// the composited pixel — over a blended or faded shape those differ, and that is a decision.
+function pickColorAt(doc, state, x, y): string | null;
+function rampT(gradient, gx, gy): number;   // the same rule the GPU states in GLSL
 Style.blendMode?: BlendMode;      Paint.blendMode: BlendMode | null;   // null on all chrome
 function blendModeError(mode: unknown): string | null;
 // NOT drawn by emitWebGL: it renders to the default framebuffer and cannot sample its backdrop.

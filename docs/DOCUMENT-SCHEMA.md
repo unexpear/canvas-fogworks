@@ -1117,6 +1117,23 @@ source rect, and a panel whose middle has collapsed genuinely has four pieces.
 **Stretched, not tiled.** Tiling needs a repeat count, a rule for partial tiles and a per-axis
 choice; it is not pretended to exist.
 
+## The eyedropper (no schema change)
+
+Picking a colour reads the **document**, not the framebuffer. The SVG backend has no pixels to
+read, Canvas and the GPU read them differently, and all three would answer with whatever the
+display did to the colour on the way out — the zoom's resampling, the device pixel ratio. So
+`pickColorAt` uses `hitTest` (which already honours clipping) and evaluates the node's own fill *at
+that point*: a token resolved, a gradient sampled along its ramp, a painted surface sampled at its
+texel. Exact, identical on every backend, and testable without a browser.
+
+It answers **null** — and the tool then does nothing — for a miss, `fill: "none"`, a fully
+transparent pixel, and a `core.image` whose pixels the pure core never decoded. An eyedropper that
+quietly sets black when it misses is worse than one that misses visibly.
+
+**It reports the shape's own colour, not the composited pixel.** Over a blended or faded shape those
+differ, and most tools would say the blend. Compositing here would mean a second renderer, in the
+core, free to disagree with the three real ones.
+
 ## Blend modes (schema 60)
 
 ```ts

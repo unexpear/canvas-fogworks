@@ -27,6 +27,8 @@ import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, t
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { clipsContentError, BLEND_MODES, blendModeError } from "../document/Node";
+import { pickColorAt, rampT } from "../geometry/Eyedropper";
+import { EyedropperTool } from "../../editor/tools/EyedropperTool";
 import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
 import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, AUTO_BIND_MAX_BONES, paintWeights, PAINT_STRENGTH } from "../document/MeshEdit";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
@@ -24580,5 +24582,202 @@ describe("Blend modes (schema 60)", () => {
         // than discovered, and surfaced by `npm run header-claims`.
         const gpu = readFileSync(resolve(__dirname, "../../renderer/emitWebGL.ts"), "utf8");
         expect(gpu).toMatch(/THE GAP TODAY IS BLEND MODES/);
+    });
+});
+
+describe("The eyedropper asks the DOCUMENT, not the screen", () => {
+    const solid = (fill: unknown, extra: object = {}) => {
+        const d = createEmptyDocument();
+        d.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 },
+            style: { fill, opacity: 1 }, layout: {}, ...extra } as unknown as Node);
+        d.rootNodeUuids = ["A"];
+        return d;
+    };
+    const pick = (d: ProjectDocument, x: number, y: number) => pickColorAt(d, computeGeometry(d), x, y);
+
+    test("a plain fill comes back as itself, and a TOKEN comes back resolved", () => {
+        expect(pick(solid("#ff8800"), 50, 50)).toBe("#ff8800");
+        const tokened = solid("$brand/primary");
+        tokened.variables = { "brand/primary": { type: "color", value: "#123456" } } as never;
+        // The RESOLVED colour, because that is what is on screen — handing back "$brand/primary"
+        // would put a token into a swatch that paints pixels.
+        expect(pick(tokened, 50, 50)).toBe("#123456");
+    });
+
+    test("a MISS picks nothing, and nothing is not black", () => {
+        // Every one of these returns null, and the tool does nothing with it. Substituting a
+        // default is worse than missing: the author finds out two strokes later.
+        expect(pick(solid("#ff8800"), 500, 500)).toBeNull();      // empty canvas
+        expect(pick(solid("none"), 50, 50)).toBeNull();           // an outline-only shape
+        // A `core.image`'s pixels live in a file the pure core never decodes.
+        const img = solid("#ff8800", { type: "core.image", src: "data:image/png;base64,iVBORw0KGgo=" });
+        expect(pick(img, 50, 50)).toBeNull();
+    });
+
+    test("it picks what is IN FRONT, and honours a clip", () => {
+        const d = solid("#ff0000");
+        d.nodes.set("B", { id: "B", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 40, y: 40, width: 100, height: 100 }, style: { fill: "#00ff00", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["A", "B"];
+        expect(pick(d, 50, 50)).toBe("#00ff00");                  // B is drawn later, so B wins
+        expect(pick(d, 10, 10)).toBe("#ff0000");                  // …and A where B is not
+
+        // CLIPPING (schema 59) already decides what is visible, and `hitTest` already knows: a pick
+        // over clipped-away content passes through to what is really there.
+        const clipped = createEmptyDocument();
+        clipped.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["C"],
+            geometry: { x: 0, y: 0, width: 60, height: 200 }, style: { fill: "#111111", opacity: 1 }, layout: {},
+            clipsContent: true } as Node);
+        clipped.nodes.set("C", { id: "C", type: "core.rectangle", parent: "F", children: [],
+            geometry: { x: 0, y: 0, width: 300, height: 100 }, style: { fill: "#00ff00", opacity: 1 }, layout: {} } as Node);
+        clipped.rootNodeUuids = ["F"];
+        expect(pick(clipped, 30, 50)).toBe("#00ff00");            // inside the frame: the child
+        expect(pick(clipped, 100, 50)).toBeNull();                // clipped away: nothing at all
+    });
+
+    test("it reports the SHAPE'S colour, not the composited pixel", () => {
+        // The price of asking the document. Over a blended or faded shape the answer is that
+        // shape's own fill, which is not what is on screen — most tools read the framebuffer and
+        // would say the blend. Written down as a decision rather than left to be discovered:
+        // compositing the stack here would mean a second renderer, in the core, free to disagree
+        // with the three real ones. Found while driving the app, where three squares blended over
+        // a blue backdrop all picked as their own yellow.
+        const d = solid("#4477cc");
+        d.nodes.set("B", { id: "B", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 20, y: 20, width: 40, height: 40 },
+            style: { fill: "#ffcc00", opacity: 1, blendMode: "multiply" }, layout: {} } as unknown as Node);
+        d.rootNodeUuids = ["A", "B"];
+        expect(pick(d, 40, 40)).toBe("#ffcc00");
+        // Opacity has the same property, and for the same reason.
+        d.nodes.set("B", { ...(d.nodes.get("B") as Node), style: { fill: "#ffcc00", opacity: 0.5 } } as Node);
+        expect(pick(d, 40, 40)).toBe("#ffcc00");
+    });
+
+    test("a GRADIENT is sampled where the pointer is", () => {
+        // A ramp from black to white running left to right across the box, in the box's own units.
+        // At the far left the pick is the first stop, at the far right the last, and the middle is
+        // the blend — which is what "the colour under the cursor" has to mean for a gradient.
+        const d = solid({
+            kind: "linear", units: "objectBoundingBox", transform: IDENTITY,
+            x1: 0, y1: 0.5, x2: 1, y2: 0.5,
+            stops: [{ offset: 0, color: "#000000", opacity: 1 }, { offset: 1, color: "#ffffff", opacity: 1 }]
+        });
+        // AT THE EDGES, not near them: at x = 1 the ramp is already 1% along and answers #030303,
+        // which is correct and was the first version of this assertion being wrong.
+        expect(pick(d, 0, 50)).toBe("#000000");
+        expect(pick(d, 100, 50)).toBe("#ffffff");
+        // Halfway is halfway, hand-computed: 0.5 of the way from 0 to 255 is 127.5, and the blend
+        // rounds it UP to 128 = 0x80. (Down was the first guess, and wrong by one.)
+        expect(pick(d, 50, 50)).toBe("#808080");
+        // …and it really tracks the pointer rather than returning one fixed blend: a quarter along
+        // is 63.75, rounded to 64 = 0x40.
+        expect(pick(d, 25, 50)).toBe("#404040");
+    });
+
+    test("rampT is the SAME rule the shader states, checked by hand", () => {
+        // The GPU has this in GLSL and cannot share it; SVG and Canvas never compute it at all,
+        // because they hand the gradient to the browser. So the two copies are checked against
+        // numbers worked out on paper rather than against each other.
+        const linear = { kind: "linear", units: "userSpaceOnUse", transform: IDENTITY,
+            x1: 10, y1: 0, x2: 30, y2: 0, stops: [] } as unknown as Gradient;
+        expect(rampT(linear, 10, 0)).toBeCloseTo(0, 9);       // at the start
+        expect(rampT(linear, 30, 0)).toBeCloseTo(1, 9);       // at the end
+        expect(rampT(linear, 20, 0)).toBeCloseTo(0.5, 9);     // halfway
+        expect(rampT(linear, 40, 0)).toBeCloseTo(1.5, 9);     // BEYOND the end, before clamping
+        // Off-axis projects onto the axis rather than measuring distance.
+        expect(rampT(linear, 20, 999)).toBeCloseTo(0.5, 9);
+        // A DIAGONAL AXIS, because every case above is axis-aligned and cannot tell a projection
+        // from a plain distance ratio — measuring `(gx - x1) / |d|` instead passes all of them.
+        // From (0,0) to (10,10): the far end is t = 1, and the point (10, 0) projects to the
+        // MIDDLE of the axis (100/200) even though it is nowhere near it.
+        const diagonal = { ...linear, x1: 0, y1: 0, x2: 10, y2: 10 } as Gradient;
+        expect(rampT(diagonal, 10, 10)).toBeCloseTo(1, 9);
+        expect(rampT(diagonal, 10, 0)).toBeCloseTo(0.5, 9);
+        expect(rampT(diagonal, 0, 10)).toBeCloseTo(0.5, 9);
+        // A zero-length axis has no direction to project onto, and answers 0 rather than dividing.
+        const degenerate = { ...linear, x2: 10 } as Gradient;
+        expect(rampT(degenerate, 50, 0)).toBe(0);
+
+        // RADIAL with the focus at the centre collapses to the plain distance ratio, which is the
+        // case the shader's own comment says a fixture cannot tell from the general one.
+        const radial = { kind: "radial", units: "userSpaceOnUse", transform: IDENTITY,
+            cx: 0, cy: 0, r: 10, stops: [] } as unknown as Gradient;
+        expect(rampT(radial, 5, 0)).toBeCloseTo(0.5, 9);
+        expect(rampT(radial, 10, 0)).toBeCloseTo(1, 9);
+        expect(rampT(radial, 0, 0)).toBe(1);                  // at the focus itself
+        // A MOVED FOCUS gives a different answer for the same point, which is the only thing that
+        // distinguishes the two formulas. Both hand-computed at (7.5, 0) with r = 10: centred is
+        // the plain ratio 7.5/10; with the focus at (5,0) the ray crosses the rim at s = 2, so
+        // t = 1/2. The first version of this test asserted the moved case merely was NOT 0.5 —
+        // and it is EXACTLY 0.5, so the assertion was both wrong and backwards.
+        expect(rampT(radial, 7.5, 0)).toBeCloseTo(0.75, 9);
+        const moved = { ...radial, fx: 5, fy: 0 } as Gradient;
+        expect(rampT(moved, 7.5, 0)).toBeCloseTo(0.5, 9);
+    });
+
+    test("a PAINTED SURFACE answers with its own pixel", () => {
+        // The whole point of an eyedropper in a pixel workspace: the texel you are pointing at,
+        // not the average of the node. A 2x2 surface over a 100x100 box means each pixel is a
+        // 50-unit quadrant, so the corners are four different answers.
+        const buf = createPixelBuffer(2, 2);
+        setPixel(buf, 0, 0, [255, 0, 0, 255]);
+        setPixel(buf, 1, 0, [0, 255, 0, 255]);
+        setPixel(buf, 0, 1, [0, 0, 255, 255]);
+        setPixel(buf, 1, 1, [0, 0, 0, 0]);          // transparent
+        const d = solid("#000000", {
+            type: "core.raster",
+            surface: { width: 2, height: 2, data: encodeSurface(buf).data }
+        });
+        expect(pick(d, 25, 25)).toBe("#ff0000");
+        expect(pick(d, 75, 25)).toBe("#00ff00");
+        expect(pick(d, 25, 75)).toBe("#0000ff");
+        // A FULLY TRANSPARENT pixel is nothing to pick, not black — the surface is there but the
+        // paint is not.
+        expect(pick(d, 75, 75)).toBeNull();
+    });
+});
+
+describe("The eyedropper as a gesture", () => {
+    const harness = () => {
+        const d = createEmptyDocument();
+        d.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#3d7de8", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["A"];
+        const dispatcher = new ActionDispatcher(d);
+        const es = createEditorState();
+        const picked: string[] = [];
+        const tool = new EyedropperTool(dispatcher, es, () => { }, hex => picked.push(hex));
+        return { dispatcher, tool, picked };
+    };
+    const ev = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1,
+        preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+    const CANVAS = { left: 0, top: 0, width: 800, height: 600 } as DOMRect;
+
+    test("a press takes the colour, and writes NOTHING to the document", () => {
+        const { dispatcher, tool, picked } = harness();
+        const before = serializeDocument(dispatcher.getDocument() as ProjectDocument);
+        tool.onMouseDown(ev(50, 50), CANVAS);
+        expect(picked).toEqual(["#3d7de8"]);
+        // No action, no history entry: the picked colour changes what a future stroke will be, not
+        // what the picture is, so undo would have nothing to reverse.
+        expect(serializeDocument(dispatcher.getDocument() as ProjectDocument)).toBe(before);
+    });
+
+    test("a MISS leaves the colour alone rather than setting a default", () => {
+        const { tool, picked } = harness();
+        tool.onMouseDown(ev(500, 500), CANVAS);
+        expect(picked).toEqual([]);
+    });
+
+    test("it reads the RESOLVED scene, so instance copies can be picked from", () => {
+        // An instance's copies exist only in the resolved scene, and a warped node is a path by
+        // then. Picking from the stored document would miss every one of those, silently.
+        const src = readFileSync(resolve(__dirname, "../../editor/tools/EyedropperTool.ts"), "utf8");
+        expect(src).toMatch(/resolveScene\(this\.dispatcher\.getDocument\(\)\)/);
+        // …and the App hands it the SWATCH setter, not a document action.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/new EyedropperTool\(dispatcher, es, refresh, setPaintColour\)/);
+        expect(app).toMatch(/"raster", "paint", "eyedropper"/);
     });
 });

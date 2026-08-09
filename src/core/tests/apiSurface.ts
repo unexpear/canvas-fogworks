@@ -76,6 +76,7 @@ import { validateDocumentIntegrity } from "../document/Integrity";
 import { computeGeometry, hitTest, nodesInRect, toLocal, toWorld, subtreeBounds, selectionBounds, ComputedState, ComputedNode, contentBounds } from "../geometry/GeometryEngine";
 import { NineSliceInsets, Slice, nineSliceRects } from "../geometry/NineSlice";
 import { SKIN_MAX_BONES, BoneWeight, boneWeightsError, skinnedPoint } from "../geometry/Skin";
+import { pickColorAt, rampT } from "../geometry/Eyedropper";
 import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, DEFAULT_BONE_WEIGHT, autoBindMesh, AUTO_BIND_MAX_BONES, AUTO_BIND_BLEND_RATIO } from "../document/MeshEdit";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, GridCell, breakFlexLines, FlexLine, resolveMargin, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, parseSvgTransform, isTranslationOnly } from "../geometry/Matrix";
@@ -327,6 +328,11 @@ export function __apiSurfacePin(): void {
     expectType<ReadonlyMesh | null>(autoBindMesh(doc, "n"));
     expectType<number>(AUTO_BIND_MAX_BONES);
     expectType<number>(AUTO_BIND_BLEND_RATIO);
+    // THE EYEDROPPER asks the document, not the screen: the SVG backend has no pixels to read, and
+    // the other two would answer with whatever the display did to the colour on the way out.
+    expectType<string | null>(pickColorAt(doc, computeGeometry(doc), 0, 0));
+    expectType<number>(rampT({ kind: "linear", units: "userSpaceOnUse", transform: IDENTITY,
+        x1: 0, y1: 0, x2: 1, y2: 0, stops: [] } as unknown as Gradient, 0, 0));
     // The two answers the on-canvas text editor shares with the renderer.
     expectType<string>(overlayTransform(IDENTITY, { x: 0, y: 0, zoom: 1 }));
     expectType<ResolvedType>(resolveTypography({}, {} as VariableStore, "light"));

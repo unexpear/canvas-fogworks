@@ -54,6 +54,7 @@ import { applyParallax, DEPTH_MIN, DEPTH_MAX } from "../core/document/Depth";
 import { SetDepthAction } from "../core/actions/SetDepthAction";
 import { SetMeshAction } from "../core/actions/SetMeshAction";
 import { WeightTool, WeightBrush } from "../editor/tools/WeightTool";
+import { EyedropperTool } from "../editor/tools/EyedropperTool";
 import { SetLightingAction } from "../core/actions/SetLightingAction";
 import { restMesh, MESH_MAX_DIVISIONS, copyMeshPoint, Mesh, ReadonlyMesh } from "../core/document/Mesh";
 import { BLEND_MODES, BlendMode } from "../core/document/Node";
@@ -443,7 +444,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     { id: "design", label: "Design", icon: "◱", tools: ["select", "move", "shapes", "pen"], defaultTool: "select" },
     // Paint puts the CANVAS-maker beside the brush, out of the shape flyout: drawing a surface and
     // painting on it are one job, and burying the first behind a menu made the second look broken.
-    { id: "paint", label: "Paint", icon: "✏", tools: ["select", "move", "raster", "paint"], defaultTool: "paint" },
+    { id: "paint", label: "Paint", icon: "✏", tools: ["select", "move", "raster", "paint", "eyedropper"], defaultTool: "paint" },
     // Animation is done by SELECTING and MOVING things over time; a shape tool in this workspace is
     // a way to draw a rectangle by accident while scrubbing.
     // Rigging is ANIMATION work, so the weight brush lives here rather than beside the pixel brush
@@ -604,6 +605,9 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             // over different material: one moves pixels, the other moves how much a bone owns a
             // control point.
             weights: new WeightTool(dispatcher, es, refresh, () => weightBrushRef.current),
+            // THE EYEDROPPER writes to the SWATCH, not to the document — it changes what the next
+            // stroke will be, which is why it needs no action and leaves no history entry.
+            eyedropper: new EyedropperTool(dispatcher, es, refresh, setPaintColour),
             // THE BRUSH. Keyed "paint", not "raster": the `raster` SHAPE creates a surface, this
             // paints on one that exists. Two gestures, two tools — a single tool that did both
             // could not tell "start a new canvas here" from "start a stroke here".
@@ -1787,7 +1791,11 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     overflowX: "auto", height: 30, boxSizing: "border-box", padding: "0 8px",
                     background: UI.panel, borderBottom: `1px solid ${UI.line}`
                 }}>
-                {toolName === "paint" && (
+                {/* THE EYEDROPPER SHARES THIS ROW, because it shares the swatch. Picking a colour
+                    you cannot then see is picking nothing you can act on — the tool sets the brush
+                    colour, so the brush colour has to be on screen while it is selected. Found by
+                    driving it: choosing the eyedropper hid the very control it writes to. */}
+                {(toolName === "paint" || toolName === "eyedropper") && (
                     <>
                         {/* WHY THE TOOL CANNOT ACT, said where the tool's own controls are.
                             The brush paints the SELECTION, so with nothing selected — or a
@@ -1806,7 +1814,12 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                 Select a canvas to paint on — or draw one with the Raster tool
                             </span>
                         )}
-                        {selectedRasterId && (<>
+                        {/* THE SWATCH IS VISIBLE TO THE EYEDROPPER even with no canvas selected.
+                            Everything else on this row acts on a raster and is rightly hidden
+                            without one — but the eyedropper's whole output is this colour, and a
+                            tool whose result you cannot see is a tool you cannot trust. Found by
+                            driving it: the pick worked and there was nowhere for it to show. */}
+                        {(selectedRasterId || toolName === "eyedropper") && (<>
                         <input
                             type="color"
                             aria-label="Paint colour"
@@ -1941,7 +1954,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                             pen: { icon: "✒", label: "Pen" },
                             paint: { icon: "✏", label: "Paint" },
                             raster: { icon: SHAPE_ICONS.raster, label: "Canvas" },
-                            weights: { icon: "◑", label: "Weights" }
+                            weights: { icon: "◑", label: "Weights" },
+                            eyedropper: { icon: "⌖", label: "Eyedropper" }
                         };
                         const t = spec[slot];
                         if (!t) return null;
