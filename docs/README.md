@@ -101,7 +101,8 @@ src/
                 channel carrying a command string.
   renderer/     RenderModel (pure display list) + emitSVG /  (read-only)
                 emitCanvas / emitWebGL backends + ImageCache/TextRaster +
-                renderScene selector (SVG/Canvas/WebGL)
+                renderScene selector (SVG/Canvas/WebGL — all three agree pixel-for-pixel
+                on gradients, nine-slice, clipping and blend modes)
   app/          App.tsx + React bootstrap
   electron/     main.js (main process), preload.js (contextBridge)
 scripts/build.js   three esbuild builds -> dist/{app,electron}
