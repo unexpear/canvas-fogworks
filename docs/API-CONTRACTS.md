@@ -1903,10 +1903,22 @@ function bonesAt(mesh, index): readonly BoneWeight[];        // never undefined 
 function withBone(mesh, index, node): ReadonlyMesh;          // no-op (BY REFERENCE) if duplicate or full
 function withoutBone(mesh, index, node): ReadonlyMesh;       // the LAST one drops the field, not just its contents
 function withBoneWeight(mesh, index, node, w): ReadonlyMesh; // clamped at 0; zero mutes, it does not unbind
+// Bind EVERY point to the siblings nearest it, weighted by inverse distance to the bone’s JOINT
+// (`Rig.jointOffset`, the point IK rotates about). At most two influences and normalised weights
+// are MEASURED from 91,290 skinned vertices in the corpus; the falloff is a choice. Replaces.
+function autoBindMesh(doc: ReadonlyDocument, nodeId: string): ReadonlyMesh | null;
 // The control point the inspector is editing. VALIDATED ON READ rather than cleared on write — a
 // pick goes stale four ways (another node selected, the node deleted, the warp turned off, a
 // coarser grid), and asking here means no site can forget.
 function pickedMeshPoint(es, doc): { nodeId: string; index: number } | null;
+// Handles for a mesh a rig has MOVED. `posed` is the resolved scene; without it the handles are
+// drawn at the rest pose while the ink is elsewhere. The picker takes it for the same reason —
+// this module exists so picking cannot drift from drawing.
+function meshHandles(doc, state, selectedNodeIds, posed?): SelectionHandle[];
+function meshHandleAtPoint(doc, state, selected, x, y, zoom, posed?): SelectionHandle | null;
+// The stored fraction that puts a control point UNDER a world point — the INVERSE of the map the
+// overlay draws with, probed three times because it is exactly affine. Null when degenerate.
+function meshPointFromWorld(doc, state, nodeId, mesh, index, worldX, worldY, posed?): { x, y } | null;
 // The rest pose is this chain without `applyFrame` and without `applyIk` — the only two steps that
 // move anything. A THUNK, so an unrigged document never builds it and a rigged one builds it once.
 function resolveMeshes(doc: ReadonlyDocument, restOf?: () => ReadonlyDocument): ReadonlyDocument;

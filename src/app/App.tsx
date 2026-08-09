@@ -55,7 +55,7 @@ import { SetDepthAction } from "../core/actions/SetDepthAction";
 import { SetMeshAction } from "../core/actions/SetMeshAction";
 import { SetLightingAction } from "../core/actions/SetLightingAction";
 import { restMesh, MESH_MAX_DIVISIONS, copyMeshPoint, Mesh, ReadonlyMesh } from "../core/document/Mesh";
-import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight } from "../core/document/MeshEdit";
+import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh } from "../core/document/MeshEdit";
 import { SKIN_MAX_BONES } from "../core/geometry/Skin";
 import { SetTrackAction } from "../core/actions/SetTrackAction";
 import { SetTimelineAction } from "../core/actions/SetTimelineAction";
@@ -2427,6 +2427,21 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                 </div>
                                                 );
                                             })}
+                                            {/* AUTO-BIND is the pass that makes a rig a starting
+                                                point rather than an afternoon: binding by hand is
+                                                one point and one dropdown at a time. It replaces
+                                                every point's bindings, which undo covers. */}
+                                            <button
+                                                disabled={siblings.length === 0}
+                                                title={siblings.length === 0
+                                                    ? "Nothing beside this node to bind to."
+                                                    : "Bind EVERY control point to the sibling nodes nearest it, weighted by distance. Replaces the bindings on all of them — auto-bind first, then correct the few it gets wrong."}
+                                                onClick={() => {
+                                                    const next = autoBindMesh(dispatcher.getDocument(), pick.nodeId);
+                                                    if (next) setMesh(next);
+                                                }}
+                                                style={{ ...SELECT_STYLE, width: "100%", marginTop: 4 }}
+                                            >Auto-bind all points</button>
                                             <select
                                                 value=""
                                                 disabled={full || choices.length === 0}

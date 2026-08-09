@@ -794,6 +794,12 @@ function idScope(id: string): string {
 /**
  * One node's mesh with its rig applied, or the stored mesh when nothing is bound.
  *
+ * EXPORTED because the SELECTION HANDLES need the same answer. `resolveMeshes` folds the pose into
+ * the outline and then drops the mesh, so the overlay has to read the STORED points — and those
+ * are the rest pose. A handle drawn there while the artwork is somewhere else breaks the rule this
+ * whole engine is arranged around, that a thing is grabbable exactly where it is drawn. One
+ * function, called from both, is the only way the two cannot drift.
+ *
  * THE SIBLING RULE IS ENFORCED HERE, and only here. It began in `Integrity` as a refusal, which
  * made an unopenable file one drag away — regrouping a rigged shape, or dragging its bone out,
  * both left a document that would not reload. Enforcing it at DERIVATION instead is what lets a
@@ -802,7 +808,7 @@ function idScope(id: string): string {
  *
  * A bone that no longer exists is skipped by the same lookup, for the same reason.
  */
-function poseMesh(
+export function posedMesh(
     mesh: ReadonlyMesh,
     id: string,
     node: Node,
@@ -863,7 +869,7 @@ export function resolveMeshes(doc: ReadonlyDocument, restOf?: () => ReadonlyDocu
     doc.nodes.forEach((n, id) => {
         const stored = n.mesh;
         const box = { width: n.geometry.width, height: n.geometry.height };
-        const mesh = stored ? poseMesh(stored, id, n as Node, doc, rest) : undefined;
+        const mesh = stored ? posedMesh(stored, id, n as Node, doc, rest) : undefined;
         // Converted when the mesh moves the outline (`isIdentityMesh`) OR when it has HEIGHT.
         // Height changes no coordinate, so it looked like nothing to do — but a rectangle
         // tessellates to two triangles whose vertices are only its four CORNERS, and at the rim

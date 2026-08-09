@@ -1190,6 +1190,38 @@ actually bends the difference is invisible and the arithmetic is a quarter the s
 release, and binding is a choice made in a panel about a point you are looking at. The inspector
 then lists that point's influences with a weight slider each, and offers `boneChoices` to add one.
 
+**A handle is drawn where the artwork WENT**, not where the point is stored. The overlay has to
+read the stored mesh — the resolved scene folded the bend into a path and dropped it — and stored
+points are the rest pose, so a rigged shape used to deform and leave its control points behind in a
+neat grid. `meshHandles` and `meshHandleAtPoint` both take the resolved scene and run the same
+`posedMesh` the derivation does, so drawing and picking cannot drift apart.
+
+And the drag SOLVES for the fraction that puts the point under the pointer, rather than adding a
+world delta to it. Those are the same thing only while nothing in between turns: on a 90° node a
++10 drag used to move the handle (−4.5, +8.9), *away* from the pointer — already wrong before rigs
+existed, and skinning only widened it. The map from a stored fraction to a drawn position is
+exactly affine, so probing it three times recovers it and one solve lands on the answer.
+
+**Or by pressing Auto-bind**, which binds every control point to the sibling nodes nearest it. That
+is what makes a rig a starting point rather than an afternoon: by hand it is one point and one
+dropdown at a time.
+
+Two numbers in it are MEASURED, from the 52 skins and 91,290 skinned vertices in `freeassets`.
+**63.4% of vertices name exactly one bone and 28.3% name two** — 92% at two or fewer — so an
+automatic pass produces at most two, which is a different limit from the four a rig may contain.
+And **every weight in the corpus sums to 1.0** (worst deviation 0.0000), so the pass normalises.
+Split by file the picture is bimodal rather than average: 26 of the 31 skinned files are 100%
+single-bone, because low-poly characters are rigidly bound, and all the twos, threes and fours live
+in the smooth-skinned five.
+
+The falloff itself is a CHOICE, not a measurement, and the distinction is worth keeping: the corpus
+says how many bones a vertex uses, not how weight decays with distance. Weight is inverse distance
+to the bone's joint — `Rig.jointOffset`, the same point IK rotates *about*, so the weights and the
+pose cannot disagree about where a bone is — and a second bone takes a share only within
+`AUTO_BIND_BLEND_RATIO` of the nearest. Smooth rather than rigid, which departs from the corpus
+majority on purpose: a dense 3D mesh tolerates a hard seam where the artist put one, but a warp grid
+is a few points across and would move in blocks and tear between them.
+
 The offered list IS the sibling rule, walked from the parent's own children rather than restated —
 so an illegal binding is *unreachable* from the UI rather than merely refused by `Integrity`. The
 edits themselves are pure functions in `document/MeshEdit` (`withBone`, `withoutBone`,

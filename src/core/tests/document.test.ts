@@ -27,7 +27,7 @@ import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, t
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
-import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight } from "../document/MeshEdit";
+import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, AUTO_BIND_MAX_BONES } from "../document/MeshEdit";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
 import { AddNodeAction } from "../actions/AddNodeAction";
@@ -54,9 +54,9 @@ import { SetTrackAction } from "../actions/SetTrackAction";
 import { SetTimelineAction } from "../actions/SetTimelineAction";
 import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyParallax, DEPTH_MIN, DEPTH_MAX } from "../document/Depth";
 import { Mesh, meshError, restMesh, warpPoint, isIdentityMesh, MESH_MAX_DIVISIONS } from "../document/Mesh";
-import { meshHandles, meshHandleAtPoint, meshIndexOf } from "../geometry/SelectionHandles";
+import { meshHandles, meshHandleAtPoint, meshIndexOf, meshPointFromWorld } from "../geometry/SelectionHandles";
 import { normalAt, surfaceNormal, warpHeight, isFlatMesh, heightRange } from "../document/Mesh";
-import { skinMesh } from "../document/Mesh";
+import { skinMesh, ReadonlyMesh } from "../document/Mesh";
 import { Light, lightsError, ambientError, lambert, shadowOffset, heightAbovePage, LIGHTS_MAX } from "../document/Light";
 import { resolveMeshes } from "../document/Components";
 import { castShadows, shadowPatch, ShadowShape, SHADOW_ALPHA } from "../geometry/CastShadow";
@@ -19284,7 +19284,13 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const press = src.indexOf("const hit = gradientHandleAtPoint(");
         expect(press).toBeGreaterThan(-1);
         // The rest are FALLBACKS of that same expression, in order, not separate earlier ones.
-        const chain = src.slice(press, press + 500);
+        // COMMENTS STRIPPED FIRST, then bounded by the statement's own end. Both halves were
+        // learned the hard way in one sitting: the window used to be 500 characters and four lines
+        // of new comment pushed the last step outside it, and the obvious fix — read to the next
+        // semicolon — landed inside a comment that happened to contain one. A guard that fails
+        // when somebody explains the code is a guard that gets deleted, so it reads only CODE.
+        const region = src.slice(press, press + 3000).replace(/\/\/[^\n]*/g, "");
+        const chain = region.slice(0, region.indexOf(";"));
         const order = ["?? meshHandleAtPoint(", "?? vertexHandleAtPoint(", "?? handleAtPoint("];
         let at = 0;
         for (const step of order) {
@@ -23680,6 +23686,9 @@ describe("The control point the inspector is editing", () => {
         // the panel looks exactly as it did when it worked. The same `boneChoices` decides, so the
         // marker cannot come to disagree with the derivation.
         expect(src).toMatch(/const inert = !live\.has\(b\.node\)/);
+        // The auto-bind button calls the shared pass rather than rolling its own nearest-bone
+        // rule — a second implementation would drift from the one the tests hold to.
+        expect(src).toMatch(/autoBindMesh\(dispatcher\.getDocument\(\), pick\.nodeId\)/);
         expect(src).toMatch(/const live = new Set\(siblings\)/);
         expect(src).toMatch(/\(inert\)/);
         // And every mesh rewrite in the App copies its points rather than rebuilding them, which
@@ -23710,5 +23719,282 @@ describe("The control point the inspector is editing", () => {
         // It SURVIVES the release, which a drag's own state does not.
         expect(state.meshPoint).toEqual({ nodeId: "M", index: 4 });
         expect(pickedMeshPoint(state, dispatcher.getDocument())).toEqual({ nodeId: "M", index: 4 });
+    });
+});
+
+describe("Auto-binding a mesh to the bones nearest each point", () => {
+    /**
+     * A 100x100 mesh at the group's origin with bones placed by hand, so every distance below is
+     * one anybody can check on paper. Bone boxes are 0x0 so the joint IS the stated position: the
+     * transform origin defaults to the centre, and the centre of a zero-sized box is its corner.
+     */
+    const rig = (cols: number, rows: number, bones: [string, number, number][]): ProjectDocument => {
+        const d = createEmptyDocument();
+        d.nodes.set("G", { id: "G", type: "core.rectangle", parent: null, children: ["M", ...bones.map(b => b[0])],
+            geometry: { x: 0, y: 0, width: 400, height: 400 }, style: { fill: "none", opacity: 1 }, layout: {} } as Node);
+        d.nodes.set("M", { id: "M", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {},
+            mesh: restMesh(cols, rows) } as Node);
+        for (const [id, x, y] of bones) {
+            d.nodes.set(id, { id, type: "core.rectangle", parent: "G", children: [],
+                geometry: { x, y, width: 0, height: 0 }, style: { fill: "#f00", opacity: 1 }, layout: {} } as Node);
+        }
+        d.rootNodeUuids = ["G"];
+        return d;
+    };
+    const at = (m: ReadonlyMesh, i: number): [string, number][] =>
+        (m.points[i].bones ?? []).map(b => [b.node, Number(b.weight.toFixed(4))]);
+
+    test("ONE bone takes every point whole, however far away it is", () => {
+        // Nothing to blend with, so there is no falloff to apply: distance only matters relative to
+        // another candidate. A single-bone rig is the corpus majority — 26 of its 31 skinned files.
+        const m = autoBindMesh(rig(1, 1, [["B", 500, 500]]), "M")!;
+        for (let i = 0; i < 4; i++) expect(at(m, i)).toEqual([["B", 1]]);
+    });
+
+    test("a point EQUIDISTANT from two bones splits evenly", () => {
+        // Hand-computed. A 1x1 mesh on a 100x100 box has its corners at (0,0), (100,0), (0,100),
+        // (100,100). Bones at (-50,50) and (150,50) are 70.71 from the two left corners and
+        // 158.11 from the two right ones... so take the MIDPOINTS instead: a 2x2 grid's point 4 is
+        // the centre (50,50), exactly 100 from each. 1/100 against 1/100 is a half each.
+        const m = autoBindMesh(rig(2, 2, [["L", -50, 50], ["R", 150, 50]]), "M")!;
+        expect(at(m, 4)).toEqual([["L", 0.5], ["R", 0.5]]);
+    });
+
+    test("INVERSE DISTANCE, and the ratio is checkable on paper", () => {
+        // Point (0,0) of a 1x1 mesh. `N` sits at (0,-50) so d = 50; `F` at (0,-100) so d = 100.
+        // 100 is exactly 2x50, which is the blend ratio, so F is kept — at 1/100 against 1/50,
+        // which normalises to one third and two thirds.
+        const m = autoBindMesh(rig(1, 1, [["N", 0, -50], ["F", 0, -100]]), "M")!;
+        expect(at(m, 0)).toEqual([["N", 0.6667], ["F", 0.3333]]);
+    });
+
+    test("past the blend ratio a point binds RIGIDLY to one bone", () => {
+        // The same rig with `F` moved one unit further: 101 > 2 x 50, so it takes nothing at all
+        // rather than a vanishing share. The pair with the test above is what makes the boundary
+        // real — a rule that always kept two would pass that one and fail this.
+        const m = autoBindMesh(rig(1, 1, [["N", 0, -50], ["F", 0, -101]]), "M")!;
+        expect(at(m, 0)).toEqual([["N", 1]]);
+    });
+
+    test("at most TWO, however many bones are within reach", () => {
+        // 92% of real skinned vertices use two or fewer, so that is the cap on what GUESSING may
+        // produce — a different question from what a rig may hold, which is four.
+        const m = autoBindMesh(rig(1, 1, [["A", 0, -50], ["B", 0, -51], ["C", 0, -52], ["D", 0, -53]]), "M")!;
+        expect(m.points[0].bones).toHaveLength(AUTO_BIND_MAX_BONES);
+        expect(at(m, 0).map(b => b[0])).toEqual(["A", "B"]);
+        // …and what it produces is something the LOAD path accepts, cap and all.
+        expect(meshError(m)).toBeNull();
+    });
+
+    test("a point sitting exactly ON a joint takes it whole", () => {
+        // Inverse distance would divide by zero, and there is nothing to blend with: nothing can be
+        // nearer than zero away. Point 0 of the mesh is at the group origin, and so is `Z`.
+        const m = autoBindMesh(rig(1, 1, [["Z", 0, 0], ["Q", 10, 0]]), "M")!;
+        expect(at(m, 0)).toEqual([["Z", 1]]);
+        expect(m.points[0].bones![0].weight).toBe(1);
+    });
+
+    test("the node's OWN transform carries the point out before anything is measured", () => {
+        // The distances live in the PARENT's space, which is the one frame a bone's stored geometry
+        // and this node's are both in — and the same frame the deform composes in, so a distance
+        // measured here is the distance the deform will use. Move the mesh node and the nearest
+        // bone changes: without the transform, point 0 would stay at (0,0) and pick `L` forever.
+        const near = rig(1, 1, [["L", -10, 0], ["R", 210, 0]]);
+        expect(at(autoBindMesh(near, "M")!, 0).map(b => b[0])[0]).toBe("L");
+        const moved = rig(1, 1, [["L", -10, 0], ["R", 210, 0]]);
+        moved.nodes.set("M", { ...(moved.nodes.get("M") as Node), geometry: { x: 200, y: 0, width: 100, height: 100 } } as Node);
+        expect(at(autoBindMesh(moved, "M")!, 0).map(b => b[0])[0]).toBe("R");
+    });
+
+    test("distance is to the bone's JOINT, which is not its corner", () => {
+        // EVERY OTHER FIXTURE HERE IS BLIND TO THIS, and deliberately says so: their bones are 0x0,
+        // so the centre of the box IS its corner and the two definitions cannot be told apart.
+        // Measuring to the corner instead survived every one of them. A bone needs a real box.
+        //
+        // `J` is 40x40 at (0,-70), so its joint is the centre, (20,-50) — 53.85 from the point at
+        // the origin, while its CORNER is 70 away. `C` is a zero-sized bone at (0,-60), 60 away by
+        // either reading. So the nearest bone is J by the joint and C by the corner, and the two
+        // answers disagree about which one leads.
+        const d = rig(1, 1, [["C", 0, -60]]);
+        d.nodes.set("J", { id: "J", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 0, y: -70, width: 40, height: 40 }, style: { fill: "#f00", opacity: 1 }, layout: {} } as Node);
+        d.nodes.set("G", { ...(d.nodes.get("G") as Node), children: ["M", "C", "J"] } as Node);
+        expect(at(autoBindMesh(d, "M")!, 0).map(b => b[0])[0]).toBe("J");
+
+        // …and the joint follows the transform ORIGIN, the same field IK rotates about. Moving it
+        // to the box's top-left puts J's joint back at (0,-70), 70 away, and C leads again.
+        d.nodes.set("J", { ...(d.nodes.get("J") as Node), transform: { origin: { x: 0, y: 0 } } } as Node);
+        expect(at(autoBindMesh(d, "M")!, 0).map(b => b[0])[0]).toBe("C");
+    });
+
+    test("only SIBLINGS are candidates, by asking boneChoices rather than walking again", () => {
+        // The offered bones and the bindable bones must be one set. A parent, a cousin or the node
+        // itself would each be inert at derivation, so binding to one would produce a rig that
+        // silently does nothing.
+        const d = rig(1, 1, [["B", 0, -50]]);
+        d.nodes.set("COUSIN", { id: "COUSIN", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: -1, width: 0, height: 0 }, style: { fill: "#000", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["G", "COUSIN"];
+        // COUSIN is nearer to point 0 than B is, and must still be ignored.
+        const m = autoBindMesh(d, "M")!;
+        expect(at(m, 0)).toEqual([["B", 1]]);
+        // With no siblings at all there is nothing to bind to, and nothing is returned.
+        const alone = rig(1, 1, []);
+        expect(autoBindMesh(alone, "M")).toBeNull();
+        expect(autoBindMesh(d, "nope")).toBeNull();
+    });
+
+    test("it REPLACES what was there, and the result really deforms", () => {
+        // "Auto-bind, then refine" — a pass that skipped bound points would answer differently the
+        // second time it ran. And the end-to-end half: the weights it writes move the artwork.
+        const d = rig(1, 1, [["B", 0, -50]]);
+        const hand = withBone(d.nodes.get("M")!.mesh!, 0, "B");
+        d.nodes.set("M", { ...(d.nodes.get("M") as Node), mesh: withBoneWeight(hand, 0, "B", 0.25) as Mesh } as Node);
+        expect(autoBindMesh(d, "M")!.points[0].bones).toEqual([{ node: "B", weight: 1 }]);
+
+        // Bind, then move the bone with a keyframe, and the outline must follow.
+        const bound = rig(1, 1, [["B", 0, -50]]);
+        bound.timeline = { frames: 30, fps: 24 };
+        bound.nodes.set("M", { ...(bound.nodes.get("M") as Node), mesh: autoBindMesh(bound, "M") as Mesh } as Node);
+        bound.nodes.set("B", { ...(bound.nodes.get("B") as Node),
+            track: [{ frame: 0, values: { geometry: { x: 0 } } }, { frame: 10, values: { geometry: { x: 40 } } }] } as Node);
+        bound.frame = 10;
+        const out = resolveScene(bound).nodes.get("M")!;
+        expect(out.type).toBe("core.path");
+        // EVERY point is bound to the one bone at weight 1, so the whole outline shifts by exactly
+        // the bone's +40 rather than bending — which is what a rigid single-bone bind means.
+        const xs = out.path!.filter(c => c.c !== "Z").map(c => (c as { x: number }).x);
+        expect(Math.min(...xs)).toBeCloseTo(40, 9);
+        expect(Math.max(...xs)).toBeCloseTo(140, 9);
+    });
+});
+
+
+describe("A mesh handle sits on the ink, and follows the pointer", () => {
+    /** A mesh node, optionally rigged to a bone that MOVES, optionally rotated itself. */
+    const scene = (opts: { bone?: "move" | "turn"; rotate?: number } = {}) => {
+        const d = createEmptyDocument();
+        d.timeline = { frames: 30, fps: 24 };
+        const mesh = restMesh(1, 1);
+        if (opts.bone) mesh.points[0] = { ...mesh.points[0], bones: [{ node: "B", weight: 1 }] };
+        d.nodes.set("G", { id: "G", type: "core.rectangle", parent: null, children: ["M", "B"],
+            geometry: { x: 0, y: 0, width: 400, height: 400 }, style: { fill: "none", opacity: 1 }, layout: {} } as Node);
+        d.nodes.set("M", { id: "M", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {}, mesh,
+            ...(opts.rotate ? { transform: { rotation: opts.rotate } } : {}) } as Node);
+        d.nodes.set("B", { id: "B", type: "core.rectangle", parent: "G", children: [],
+            geometry: { x: 200, y: 200, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {},
+            track: opts.bone === "turn"
+                ? [{ frame: 0, values: { transform: { rotation: 0 } } }, { frame: 10, values: { transform: { rotation: 90 } } }]
+                : [{ frame: 0, values: { geometry: { x: 200 } } }, { frame: 10, values: { geometry: { x: 280 } } }] } as Node);
+        d.rootNodeUuids = ["G"];
+        d.frame = 10;
+        return d;
+    };
+    const handle0 = (d: ReadonlyDocument, index = 0) =>
+        meshHandles(d, computeGeometry(d), ["M"], resolveScene(d)).find(h => h.handle === `mesh:${index}`)!;
+    const ev = (x: number, y: number) => ({ clientX: x, clientY: y, button: 0, buttons: 1,
+        preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+    const CANVAS = { left: 0, top: 0, width: 800, height: 600 } as DOMRect;
+    /** Grab the handle where it is DRAWN and pull it, the way a person would. */
+    const drag = (d: ProjectDocument, from: { cx: number; cy: number }, dx: number, dy: number) => {
+        const dispatcher = new ActionDispatcher(d);
+        const es = createEditorState();
+        es.selectedNodeIds = ["M"];
+        const tc = new ToolController(dispatcher, es, () => { });
+        tc.onMouseDown(ev(from.cx, from.cy), CANVAS);
+        tc.onMouseMove(ev(from.cx + dx, from.cy + dy), CANVAS);
+        tc.onMouseUp(ev(from.cx + dx, from.cy + dy));
+        return dispatcher.getDocument();
+    };
+
+    test("a SKINNED handle is drawn where the artwork went, not where the point is stored", () => {
+        // Reported from a screenshot: a rigged shape deformed and left its control points behind
+        // in a neat grid. The overlay must read the STORED mesh — the resolved scene folded the
+        // bend into a path and dropped it — and stored points are the REST pose.
+        const d = scene({ bone: "move" });
+        const drawn = resolveScene(d).nodes.get("M")!;
+        const inkTopLeft = Math.min(...drawn.path!.filter(c => c.c !== "Z" && Math.abs((c as { y: number }).y) < 1e-9)
+                                                  .map(c => (c as { x: number }).x));
+        expect(inkTopLeft).toBeCloseTo(80, 9);            // the bone moved 200 -> 280
+        expect(handle0(d).cx).toBeCloseTo(80, 9);
+
+        // THE FALSIFIABLE HALF, and the measurement of the bug: without the posed document the
+        // same call puts the handle back at the origin, 80 units from its own ink.
+        expect(meshHandles(d, computeGeometry(d), ["M"]).find(h => h.handle === "mesh:0")!.cx).toBe(0);
+    });
+
+    test("PICKING agrees with drawing, which is what this module is for", () => {
+        // A picker that skipped the pose would leave the handle grabbable at the empty spot it
+        // used to occupy — and the grab would silently do nothing, which reads as a broken tool.
+        const d = scene({ bone: "move" });
+        const h = handle0(d);
+        const computed = computeGeometry(d);
+        expect(meshHandleAtPoint(d, computed, ["M"], h.cx, h.cy, 1, resolveScene(d))?.handle).toBe("mesh:0");
+        // …and nothing is grabbable back at the rest position any more.
+        expect(meshHandleAtPoint(d, computed, ["M"], 0, 0, 1, resolveScene(d))).toBeNull();
+    });
+
+    test("dragging a ROTATED node's handle follows the pointer — it did not before", () => {
+        // NOT A SKINNING BUG, and worth being exact about: this was already wrong before rigs
+        // existed. A world delta added to a stored fraction is only the same thing when nothing
+        // between them turns. On a 90-degree node a +10 drag moved the handle (-4.5, +8.9).
+        const d = scene({ rotate: 90 });
+        const before = handle0(d);
+        const after = drag(d, before, 10, 0);
+        const moved = meshHandles(after, computeGeometry(after), ["M"], resolveScene(after))
+            .find(h => h.handle === "mesh:0")!;
+        expect(moved.cx).toBeCloseTo(before.cx + 10, 6);
+        expect(moved.cy).toBeCloseTo(before.cy, 6);
+    });
+
+    test("dragging a handle a ROTATING BONE moved follows the pointer too", () => {
+        // The same composition one level deeper: the bone's own rotation multiplies into the map
+        // from stored fraction to drawn position, so the inverse has to include it.
+        const d = scene({ bone: "turn" });
+        const before = handle0(d);
+        const after = drag(d, before, 10, -6);
+        const moved = meshHandles(after, computeGeometry(after), ["M"], resolveScene(after))
+            .find(h => h.handle === "mesh:0")!;
+        expect(moved.cx).toBeCloseTo(before.cx + 10, 6);
+        expect(moved.cy).toBeCloseTo(before.cy - 6, 6);
+    });
+
+    test("the plain case still works, and only the grabbed point moves", () => {
+        // The guard against fixing rotation by breaking the ordinary drag everybody uses.
+        const d = createEmptyDocument();
+        d.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {},
+            mesh: restMesh(1, 1) } as Node);
+        d.rootNodeUuids = ["M"];
+        const before = meshHandles(d, computeGeometry(d), ["M"]).find(h => h.handle === "mesh:0")!;
+        const after = drag(d, before, 25, 15);
+        const pts = after.nodes.get("M")!.mesh!.points;
+        expect(pts[0].x).toBeCloseTo(0.25, 9);
+        expect(pts[0].y).toBeCloseTo(0.15, 9);
+        expect(pts[1]).toEqual({ x: 1, y: 0 });
+        expect(pts[3]).toEqual({ x: 1, y: 1 });
+    });
+
+    test("meshPointFromWorld gives back the fraction it was asked for", () => {
+        // The inverse against the forward map, directly: ask where the point currently IS, and the
+        // answer must be the fraction it already holds. A round trip cannot prove the map is right,
+        // but it does prove the solve is not introducing a shift of its own.
+        const d = scene({ bone: "turn" });
+        const computed = computeGeometry(d), posed = resolveScene(d);
+        const h = handle0(d);
+        const mesh = d.nodes.get("M")!.mesh!;
+        const back = meshPointFromWorld(d, computed, "M", mesh, 0, h.cx, h.cy, posed)!;
+        expect(back.x).toBeCloseTo(mesh.points[0].x, 9);
+        expect(back.y).toBeCloseTo(mesh.points[0].y, 9);
+        // A node scaled to nothing has no map to invert, and the caller is told rather than handed
+        // a NaN that `meshError` would refuse on the next load.
+        const flat = createEmptyDocument();
+        flat.nodes.set("M", { id: "M", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 }, style: { fill: "#000", opacity: 1 }, layout: {},
+            transform: { scaleX: 0 }, mesh: restMesh(1, 1) } as Node);
+        flat.rootNodeUuids = ["M"];
+        expect(meshPointFromWorld(flat, computeGeometry(flat), "M", flat.nodes.get("M")!.mesh!, 0, 5, 5)).toBeNull();
     });
 });

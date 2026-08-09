@@ -868,6 +868,23 @@ The rest pose is this same chain **without `applyFrame` and without `applyIk`**,
 that move anything, built as a thunk `resolveScene` hands to `resolveMeshes` — so an unrigged
 document never builds it and a rigged one builds it once, not once per meshed node.
 
+**AND THE HANDLES HAD TO LEARN IT.** `resolveMeshes` folds the pose into the outline and drops the
+mesh, so the overlay reads the STORED points — which are the rest pose. A rigged shape therefore
+deformed and left its control points behind in a neat grid, reported from a screenshot and measured
+at 80 units on the fixture that reproduced it. Both the drawing and the PICKER now take the resolved
+scene and run the same `posedMesh`, because this is the module whose whole reason for existing is
+that the two cannot drift.
+
+Chasing that turned up an older one. The mesh drag added a WORLD delta to a stored FRACTION, which
+is the same thing only while nothing in between turns — on a 90° node a +10 pull moved the handle
+(−4.5, +8.9), away from the pointer, and the comment beside it claimed rotation was "refused rather
+than silently skewed" when it was not. It predates rigs; skinning only widened it, since a bone's
+rotation lands in the same composition. `meshPointFromWorld` now SOLVES for the fraction that puts
+the point under the pointer: the map from fraction to drawn position is exactly affine — matrices
+throughout, and blend weights that do not depend on position — so probing it three times recovers
+it and a single solve is exact. It inverts the very map the overlay draws with, which is what keeps
+a handle from disagreeing with its own drag.
+
 ### Motion paths — the route, kept apart from the spacing
 
 **Everything moved in straight lines.** A thrown ball travels on an arc, and the only way to say so

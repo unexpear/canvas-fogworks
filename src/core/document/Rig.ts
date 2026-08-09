@@ -107,7 +107,14 @@ export function ikError(ik: unknown): string | null {
  * different vector from the one the rotation actually swings, and the foot lands up to 7px off its
  * target and wanders as the knee turns. Found by measuring a planted foot and watching it drift.
  */
-function jointOffset(node: Node): { x: number; y: number } {
+/**
+ * A bone's JOINT, in its own local units — the transform origin, defaulting to the centre.
+ *
+ * Exported because auto-binding has to measure distance to the same point IK rotates ABOUT. Two
+ * definitions of "where a bone is" would put the weights and the pose in different places, and the
+ * disagreement would only show as a limb that deforms slightly off its own hinge.
+ */
+export function jointOffset(node: Node): { x: number; y: number } {
     const origin = node.transform?.origin;
     return {
         x: (origin?.x ?? 0.5) * node.geometry.width,

@@ -894,7 +894,12 @@ function handleItem(h: SelectionHandle, z: number): DrawItem {
     };
 }
 
-function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): DrawItem[] {
+/**
+ * @param posed the RESOLVED scene, for handles a rig has moved (schema 58). Passed rather than
+ * added to `RendererState`: the state is a frozen contract and this is a derived value the caller
+ * already holds — the same reasoning that keeps `expandInstances` out of `ComputedState`.
+ */
+function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument, posed: ReadonlyDocument): DrawItem[] {
     const items: DrawItem[] = [];
     const computed = state.computed;
     const selectedSet = new Set(state.selectedNodeIds);
@@ -953,7 +958,7 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument): D
             .forEach(h => items.push(handleItem(h, z)));
         // A selected `core.path` also shows a handle per on-curve POINT. Same gate, because
         // a vertex drag records the same kind of edit and an instance copy can back it too.
-        [...pathVertexHandles(doc, computed, roots), ...meshHandles(doc, computed, roots)]
+        [...pathVertexHandles(doc, computed, roots), ...meshHandles(doc, computed, roots, posed)]
             .filter(h => isHandleOffered(doc, h.nodeId, h.handle))
             .forEach(h => items.push(handleItem(h, z)));
         // A selected node with a GRADIENT fill shows where the ramp runs (schema 56). The AXIS is
@@ -1249,7 +1254,7 @@ export function buildRenderModel(
         content,
         ...(doc.lights !== undefined ? { lights: doc.lights } : {}),
         ...(doc.ambient !== undefined ? { ambient: doc.ambient } : {}),
-        overlay: buildOverlay(state, z, doc),
+        overlay: buildOverlay(state, z, doc, effective),
         defs: collectDefs(content),
         gradients: collectGradients(content),
         groups: collectGroups(doc, content)

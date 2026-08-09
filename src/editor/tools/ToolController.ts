@@ -13,7 +13,7 @@ import { EditorState, panBy, screenToWorld, viewportToFit, FIT_PADDING_PX } from
 import { computeGeometry, ComputedState, hitTest, selectionBounds } from "../../core/geometry/GeometryEngine";
 import { interactionFor, Trigger } from "../../core/document/Prototype";
 import { PICK_RADIUS_PX } from "./SelectTool";
-import { handleAtPoint, groupHandleAtPoint, vertexIndexOf, vertexHandleAtPoint, meshIndexOf, meshHandleAtPoint, gradientHandleAtPoint, gradientPointOf, isGradientHandle, GradientHandle } from "../../core/geometry/SelectionHandles";
+import { handleAtPoint, groupHandleAtPoint, vertexIndexOf, vertexHandleAtPoint, meshIndexOf, meshHandleAtPoint, gradientHandleAtPoint, gradientPointOf, isGradientHandle, GradientHandle, meshPointFromWorld } from "../../core/geometry/SelectionHandles";
 import { withHandleAt } from "../../core/document/GradientEdit";
 import { SetMeshAction } from "../../core/actions/SetMeshAction";
 import { copyMeshPoint } from "../../core/document/Mesh";
@@ -204,7 +204,11 @@ export class ToolController {
                 // the vertices sit above the corners: they are drawn on top and they are inside
                 // the box, so anything checked before them would swallow the grab.
                 const hit = gradientHandleAtPoint(doc, computed, roots, w.x, w.y, vp.zoom)
-                    ?? meshHandleAtPoint(doc, computed, roots, w.x, w.y, vp.zoom)
+                    // THE POSED SCENE, because a rig moves the control points away from where
+                    // they are stored. Drawing already accounts for it; a picker that did not
+                    // would leave every skinned handle grabbable at the empty spot it used to
+                    // occupy — and this module exists precisely so those two cannot disagree.
+                    ?? meshHandleAtPoint(doc, computed, roots, w.x, w.y, vp.zoom, resolveScene(doc))
                     ?? vertexHandleAtPoint(doc, computed, roots, w.x, w.y, vp.zoom)
                     ?? handleAtPoint(computed, roots, w.x, w.y, vp.zoom);
                 const c = hit ? computed.nodes.get(hit.nodeId) : undefined;
@@ -384,22 +388,29 @@ export class ToolController {
             const node = doc.nodes.get(this.meshNodeId);
             if (!node?.mesh) { this.meshNodeId = null; this.refresh(); return; }
             const w = screenToWorld(this.editorState.viewport, canvasRect, e.clientX, e.clientY);
-            const dx = w.x - this.meshStartX;
-            const dy = w.y - this.meshStartY;
-            this.meshStartX = w.x;
-            this.meshStartY = w.y;
-            // The delta is world-space and the points are FRACTIONS of the box (schema 43), so it
-            // is divided by the box as well as being local-only. Correct exactly while the node is
-            // translation-only — the same limit the vertex drag states, and refused the same way
-            // rather than silently skewed.
+            // THE POINT GOES WHERE THE POINTER IS, solved rather than nudged.
+            //
+            // This used to add the world delta straight to the stored fraction, and the comment
+            // here claimed that was "refused rather than silently skewed" for a rotated node. It
+            // was not refused; it skewed. Measured on a 90-degree node with no rig at all: a drag
+            // of +10 in x moved the handle (-4.5, +8.9), away from the pointer. Skinning did not
+            // introduce that, it widened it — a bone's rotation lands in the same composition —
+            // and finding it is the only good thing about having looked.
+            //
+            // `meshPointFromWorld` inverts the very map the overlay DRAWS with, so the handle
+            // cannot come to disagree with its own drag. It returns null only when that map is
+            // degenerate, and then the mesh is left alone.
             const bw = node.geometry.width, bh = node.geometry.height;
             // A zero-sized box has no fraction to express a drag in. Refusing the drag leaves the
             // mesh alone, which is better than dividing by zero and writing NaN into the document
             // — `meshError` would then reject it on the next load.
             if (bw === 0 || bh === 0) { this.refresh(); return; }
+            const target = meshPointFromWorld(doc, computeGeometry(doc), this.meshNodeId,
+                                              node.mesh, this.meshIndex, w.x, w.y, resolveScene(doc));
+            if (!target) { this.refresh(); return; }
             const points = node.mesh.points.map((p, i) =>
                 i === this.meshIndex
-                    ? { ...copyMeshPoint(p), x: p.x + dx / bw, y: p.y + dy / bh }
+                    ? { ...copyMeshPoint(p), x: target.x, y: target.y }
                     : copyMeshPoint(p));
             this.dispatcher.dispatchAction(
                 new SetMeshAction(doc, this.meshNodeId, { cols: node.mesh.cols, rows: node.mesh.rows, points }),

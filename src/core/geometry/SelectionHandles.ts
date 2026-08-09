@@ -17,7 +17,10 @@
 import { ComputedState, selectionBounds } from "./GeometryEngine";
 import { ReadonlyDocument } from "../document/Document";
 import { pathVertices } from "./PathBuilder";
+import { posedMesh } from "../document/Components";
+import { Node } from "../document/Node";
 import { Rect, applyToPoint, Mat2D, IDENTITY, multiply, invert } from "./Matrix";
+import { ReadonlyMesh } from "../document/Mesh";
 import { Gradient } from "../document/Gradient";
 import { boxQuad, cursorForDirection, quadCenter, Quad } from "./OrientedBox";
 
@@ -276,7 +279,8 @@ export function vertexHandleAtPoint(
 export function meshHandles(
     doc: ReadonlyDocument,
     state: ComputedState,
-    selectedNodeIds: readonly string[]
+    selectedNodeIds: readonly string[],
+    posed?: ReadonlyDocument
 ): SelectionHandle[] {
     const handles: SelectionHandle[] = [];
     for (const nodeId of selectedNodeIds) {
@@ -284,12 +288,26 @@ export function meshHandles(
         if (!node?.mesh) continue;
         const c = state.nodes.get(nodeId);
         if (!c) continue;
+        // THE POSED POINTS, when a rig has moved them (schema 58). The mesh has to come from the
+        // STORED document, because the resolved scene folded the bend into a path and dropped it —
+        // but stored points are the REST pose, so a skinned node drew its handles in a neat grid
+        // while its artwork was somewhere else entirely. Reported from a screenshot; the gap was
+        // 80 units on the fixture that reproduced it.
+        //
+        // `posedMesh` is the SAME function the derivation uses, called with the roles reversed:
+        // there the posed document is to hand and the rest is rebuilt, here the stored document IS
+        // the rest and the posed one is passed in. Sharing it is what keeps a handle on top of the
+        // ink rather than near it.
+        const posedNode = posed?.nodes.get(nodeId);
+        const mesh = posed && posedNode
+            ? posedMesh(node.mesh, nodeId, posedNode as Node, posed, () => doc)
+            : node.mesh;
         // The points are FRACTIONS of the box (schema 43), so they are scaled into local units
         // before the world matrix places them. `c.local` rather than the stored geometry, because
         // that is the size the shape is actually DRAWN at — under auto-layout the two differ, and
         // a handle that used the stored one would sit away from the corner it controls.
         const box = { width: c.local.width, height: c.local.height };
-        node.mesh.points.forEach((p, index) => {
+        mesh.points.forEach((p, index) => {
             const w = applyToPoint(c.world, p.x * box.width, p.y * box.height);
             if (!Number.isFinite(w.x) || !Number.isFinite(w.y)) return;
             handles.push({ nodeId, handle: `mesh:${index}`, cx: w.x, cy: w.y, cursor: "move" });
@@ -305,22 +323,104 @@ export function meshIndexOf(handle: string): number | null {
     return Number.isInteger(n) && n >= 0 ? n : null;
 }
 
-/** The MESH handle under a world point, or null — back to front, like every other picker here. */
+/**
+ * The MESH handle under a world point, or null — back to front, like every other picker here.
+ *
+ * TAKES THE POSED DOCUMENT for the same reason the drawing does, and it is not optional in
+ * spirit: this module exists so that picking cannot drift from drawing, and a picker that skipped
+ * the pose would leave every skinned handle grabbable at the empty spot it used to occupy.
+ */
 export function meshHandleAtPoint(
     doc: ReadonlyDocument,
     state: ComputedState,
     selectedNodeIds: readonly string[],
     x: number,
     y: number,
-    zoom: number
+    zoom: number,
+    posed?: ReadonlyDocument
 ): SelectionHandle | null {
     const half = HANDLE_SIZE_PX / flooredZoom(zoom) / 2;
-    const handles = meshHandles(doc, state, selectedNodeIds);
+    const handles = meshHandles(doc, state, selectedNodeIds, posed);
     for (let i = handles.length - 1; i >= 0; i--) {
         const h = handles[i];
         if (Math.abs(x - h.cx) <= half && Math.abs(y - h.cy) <= half) return h;
     }
     return null;
+}
+
+
+
+/**
+ * Where one control point would be DRAWN if the stored mesh said `mesh` — the forward map.
+ *
+ * Pulled out so the inverse below can probe the very map the overlay draws with. Two versions of
+ * "where does this point end up" is how a handle and its own drag come to disagree.
+ */
+function meshPointWorld(
+    doc: ReadonlyDocument, state: ComputedState, nodeId: string,
+    mesh: ReadonlyMesh, index: number, posed?: ReadonlyDocument
+): { x: number; y: number } | null {
+    const c = state.nodes.get(nodeId);
+    if (!c) return null;
+    const posedNode = posed?.nodes.get(nodeId);
+    const shown = posed && posedNode ? posedMesh(mesh, nodeId, posedNode as Node, posed, () => doc) : mesh;
+    const p = shown.points[index];
+    if (!p) return null;
+    const w = applyToPoint(c.world, p.x * c.local.width, p.y * c.local.height);
+    return Number.isFinite(w.x) && Number.isFinite(w.y) ? w : null;
+}
+
+/**
+ * The stored fraction that would put control point `index` UNDER a world point.
+ *
+ * THE DRAG USED TO ADD A WORLD DELTA TO A STORED FRACTION, which is only the same thing when
+ * nothing between them rotates or scales. It does not hold for a ROTATED node — measured, and it
+ * was already wrong before rigs existed: dragging a handle +10 in x on a 90-degree node moved it
+ * (-4.5, +8.9), away from the pointer. Skinning did not introduce that; it widened it, because a
+ * bone's own rotation lands in the same composition.
+ *
+ * SOLVED RATHER THAN STEPPED, because the map from a stored fraction to a drawn position is
+ * exactly AFFINE — matrices throughout, and a linear blend with weights that do not depend on the
+ * point's position. So probing it three times recovers it exactly and one solve lands on the
+ * answer; there is nothing for an iteration to converge to.
+ *
+ * The alternative the codebase already uses elsewhere — "a rotated node is skipped rather than
+ * moved somewhere it was not asked to go" — is right for an ALIGN across a selection, where one
+ * node quietly sitting out is better than one node quietly going wrong. It is not right for a
+ * handle somebody is holding: nothing happening reads as a broken grab.
+ *
+ * Returns null when the map is degenerate (a node scaled to nothing), so the caller can leave the
+ * point alone rather than divide by zero.
+ */
+export function meshPointFromWorld(
+    doc: ReadonlyDocument, state: ComputedState, nodeId: string,
+    mesh: ReadonlyMesh, index: number, worldX: number, worldY: number, posed?: ReadonlyDocument
+): { x: number; y: number } | null {
+    const here = mesh.points[index];
+    if (!here) return null;
+    const at = (x: number, y: number) => {
+        const probe: ReadonlyMesh = {
+            cols: mesh.cols, rows: mesh.rows,
+            points: mesh.points.map((p, i) => i === index ? { ...p, x, y } : p)
+        };
+        return meshPointWorld(doc, state, nodeId, probe, index, posed);
+    };
+    // A STEP IN FRACTIONS, not in pixels: the map's input is a fraction of the box, and one whole
+    // unit of it spans the shape. A hundredth is large enough to stay clear of float noise and,
+    // because the map is affine, its size cannot bias the answer.
+    const H = 0.01;
+    const base = at(here.x, here.y);
+    const dx = at(here.x + H, here.y);
+    const dy = at(here.x, here.y + H);
+    if (!base || !dx || !dy) return null;
+    const a = (dx.x - base.x) / H, b = (dy.x - base.x) / H;
+    const cc = (dx.y - base.y) / H, d = (dy.y - base.y) / H;
+    const det = a * d - b * cc;
+    if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return null;
+    const rx = worldX - base.x, ry = worldY - base.y;
+    const fx = here.x + (d * rx - b * ry) / det;
+    const fy = here.y + (a * ry - cc * rx) / det;
+    return Number.isFinite(fx) && Number.isFinite(fy) ? { x: fx, y: fy } : null;
 }
 
 /**
