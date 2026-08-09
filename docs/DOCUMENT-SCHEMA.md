@@ -1186,6 +1186,20 @@ nothing is turned; `SetTilemapAction` treats the two as equal when deciding whet
 anything. Without both halves the invariant would last exactly one edit, and every file saved
 afterwards would carry a zero per cell for a map with nothing turned in it.
 
+**AUTOTILING HAS NO SCHEMA FIELD YET, on purpose.** `document/Autotile` is the whole derivation —
+terrain in, display tiles out, by the dual-grid scheme — and it is deliberately a function before it
+is a field, because the field has a decision in it that the arithmetic settles: **the display grid is
+one larger in each direction and offset half a cell**, so a node carrying `terrain` cannot also be the
+node whose box the terrain measures. Landing the arithmetic first means the schema slice starts from a
+tested answer rather than guessing one. Storing terrain and deriving tiles is the same call as keeping
+a gradient's stops instead of its midpoint colour, and it is what `core.tilemap` was for: the
+node-per-cell document stored only the answer, with nowhere to put the question.
+
+**And the corpus cannot validate a table** — no `<wangset>` and no `<terrain>` in any of its 20 maps,
+and the maps were not drawn as if autotiled either (0.69 agreement for the dual grid over 22,198
+cells; the best-scoring layers use four of the sixteen masks, which measures tile popularity). So
+inferring terrain from an import is not a feature to build, and the tests for this are constructed.
+
 **Editing is a whole-grid replace** (`SetTilemapAction`), unlike a stroke's pixel patch — the corpus's
 largest grid is 10,000 small integers where a 4096-square surface is 67 MB, so the reason the two
 differ is arithmetic rather than taste. The rules live in `document/TilemapEdit`, whose functions all

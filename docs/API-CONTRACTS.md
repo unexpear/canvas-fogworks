@@ -2042,6 +2042,54 @@ function resizeTilemap(map, cols, rows): Tilemap | null;               // keeps 
 // `withTiles` and `resizeTilemap` are the ONLY places `flips` is built, and both drop the array when
 // nothing is turned — the absent-when-unturned invariant on `Tilemap.flips` would otherwise last
 // exactly one edit, and every file saved after would carry a zero per cell.
+// AUTOTILING (`document/Autotile`) — terrain in, tiles out, and no schema field for it yet.
+const AUTOTILE_MASKS = 16;   CORNER_TL = 1  CORNER_TR = 2  CORNER_BL = 4  CORNER_BR = 8
+interface Terrain { cols; rows; cells: readonly number[] }        // one MATERIAL id per cell, 0 = none
+interface AutotileCell { index: number; flip?: number }
+type AutotileTable = readonly (AutotileCell | null)[];            // 16 entries, indexed BY MASK
+function autotileTableError(table: unknown): string | null;
+function flipMask(flip: number, mask: number): number;            // ties the two conventions together
+function autotileClasses(): number[];                             // the six orbits, DERIVED not listed
+function rotatedTable(art: ReadonlyMap<number, number>): AutotileTable;   // 6 tiles -> all 16
+function dualMask(terrain, material, col, row): number;
+function autotile(terrain, material, table): { cols; rows; tiles: number[]; flips?: number[] };
+```
+
+**THE DUAL GRID IS THE CHEAP SCHEME.** Put the display grid half a cell off the terrain grid and every
+display tile sits over the corner where four terrain cells meet: four cells, two states each, is
+**16 tiles** against the **47** a blob set needs when a tile is chosen from its own cell's eight
+neighbours. Both describe the same silhouettes. The display grid is therefore **one larger in each
+direction** and offset by half a cell (`x - tileWidth/2`), because terrain cell `(cols-1, rows-1)`
+needs a tile past its right and bottom edges to be drawn at all. `autotile` returns its own
+dimensions rather than letting a caller derive them.
+
+**AND SIX TILES WITH ROTATION.** The 16 masks fall into six classes under the symmetries of a square
+— empty, one corner, two adjacent, two diagonal, three corners, full — so `rotatedTable` fills all
+sixteen entries from six drawings, using the `flips` every backend already honours. The classes are
+found by orbiting each mask under all eight flips, not written down: a hand-typed list of six numbers
+is six chances to name a mask that is really in another class.
+
+**`flipMask` is where two conventions are tied together**, and the only place they are. It transposes
+FIRST and then mirrors, exactly as `flipMatrix` does, because that order is not commutative. A
+disagreement here produces a table that is plausible and wrong — every mask has an entry, every entry
+names a real tile, and the map comes out with its corners pointing the wrong ways. The test is
+geometric rather than a second transcription: each corner's position inside the tile is pushed through
+the matrix the backends draw with, and must land on the corner `flipMask` claims.
+
+**MEASURED, AND THE CORPUS CANNOT VALIDATE A TABLE.** There is no terrain data in `freeassets` at all
+— not one `<wangset>`, not one `<terrain>`, across 20 `.tmx` and 14 `.tsx`. Asking whether the maps
+were nevertheless drawn *as if* autotiled — is each layer a function of some neighbourhood mask? —
+gives **0.69** for the dual grid, 0.70 for edges and 0.72 for blob over 22,198 cells, and the layers
+that score highest do so for a reason that is not autotiling: they use **four of the sixteen masks**,
+so "the commonest tile for this mask" is just "the commonest tile". One layer puts 166 distinct tiles
+in 1,650 cells. **So inferring terrain from an imported map is not a feature to build** — it cannot
+work on this art — and the tables here are exercised by CONSTRUCTED fixtures, which is a weaker claim
+than "it matches the corpus" and is said as such.
+
+**ONE MATERIAL PER LAYER**, since a cell holds one tile: a map of grass and water is two tilemap
+nodes, the same shape the importer already produces.
+
+```ts
 // FILLING THE GAPS BETWEEN POINTER SAMPLES IS THE TOOL'S JOB, not the document's: a tile grid is an
 // integer grid, so the tile tool walks `PixelBuffer.linePoints` — the same Bresenham the pixel brush
 // uses — rather than a second one that could disagree with it by a cell at some angles.

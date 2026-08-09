@@ -33,6 +33,8 @@ import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, 
          flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D } from "../document/Tilemap";
 import { withTiles, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
 import { TileTool, TileBrush } from "../../editor/tools/TileTool";
+import { Terrain, AutotileTable, AUTOTILE_MASKS, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR,
+    flipMask, autotileClasses, rotatedTable, dualMask, autotile, autotileTableError } from "../document/Autotile";
 import { SetTilemapAction } from "../actions/SetTilemapAction";
 import { EyedropperTool } from "../../editor/tools/EyedropperTool";
 import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
@@ -25705,5 +25707,196 @@ describe("The tile brush, as a gesture", () => {
         const tiles = dispatcher.getDocument().nodes.get("T")!.tilemap!.tiles;
         expect(tiles[0]).toBe(5);
         expect(tiles[2 * 8 + 3]).toBe(TILE_EMPTY);
+    });
+});
+
+describe("Autotile — terrain in, tiles out, and six shapes standing in for sixteen", () => {
+    const terrainOf = (cols: number, rows: number, cells: number[]): Terrain => ({ cols, rows, cells });
+
+    test("a flip permutes the CORNERS exactly as it permutes the tile's pixels", () => {
+        // THE TIE BETWEEN TWO CONVENTIONS, and the place a plausible-and-wrong table comes from: a
+        // mask permutation that disagreed with `flipMatrix` would give a table where every mask has
+        // an entry, every entry names a real tile, and the map comes out with its corners pointing
+        // the wrong ways. So the check is geometric rather than a second transcription of the same
+        // idea: take each corner's position INSIDE the tile, push it through the matrix the backends
+        // actually draw with, and see which corner it lands on.
+        const W = 16, H = 24;                       // non-square: a swapped axis has to show
+        const spot: Record<number, [number, number]> = {
+            [CORNER_TL]: [W / 4, H / 4], [CORNER_TR]: [3 * W / 4, H / 4],
+            [CORNER_BL]: [W / 4, 3 * H / 4], [CORNER_BR]: [3 * W / 4, 3 * H / 4]
+        };
+        const nearest = (x: number, y: number): number => {
+            let best = 0, bestD = Infinity;
+            for (const bit of [CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR]) {
+                const [sx, sy] = spot[bit];
+                const d = (sx - x) ** 2 + (sy - y) ** 2;
+                if (d < bestD) { bestD = d; best = bit; }
+            }
+            return best;
+        };
+        for (let flip = 0; flip <= (FLIP_H | FLIP_V | FLIP_D); flip++) {
+            const m = flipMatrix(flip, W, H);
+            for (const bit of [CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR]) {
+                const [x, y] = spot[bit];
+                // Where the ART at this corner ENDS UP once the tile is turned.
+                const px = m[0] * x + m[2] * y + m[4];
+                const py = m[1] * x + m[3] * y + m[5];
+                expect(flipMask(flip, bit)).toBe(nearest(px, py));
+            }
+        }
+        // …and the identity really is the identity, which the loop above would also pass if every
+        // answer were CORNER_TL.
+        expect(flipMask(0, CORNER_TR)).toBe(CORNER_TR);
+        expect(flipMask(FLIP_H, CORNER_TL)).toBe(CORNER_TR);
+        expect(flipMask(FLIP_V, CORNER_TL)).toBe(CORNER_BL);
+        // The transpose leaves the two corners ON the diagonal alone — the case a fixture that only
+        // checked TL could never tell from the identity.
+        expect(flipMask(FLIP_D, CORNER_TL)).toBe(CORNER_TL);
+        expect(flipMask(FLIP_D, CORNER_BR)).toBe(CORNER_BR);
+        expect(flipMask(FLIP_D, CORNER_TR)).toBe(CORNER_BL);
+    });
+
+    test("the sixteen masks fall into SIX classes, and the six partition all of them", () => {
+        // The "six tiles with rotation" claim, checked rather than repeated: six orbits, and every
+        // mask in exactly one of them.
+        const classes = autotileClasses();
+        expect(classes).toHaveLength(6);
+        const orbitOf = new Map<number, number>();
+        for (const c of classes) {
+            for (let flip = 0; flip <= (FLIP_H | FLIP_V | FLIP_D); flip++) {
+                const m = flipMask(flip, c);
+                // Every mask belongs to ONE class: a mask reachable from two would mean the orbits
+                // overlap and the six are not a partition.
+                if (orbitOf.has(m)) expect(orbitOf.get(m)).toBe(c);
+                orbitOf.set(m, c);
+            }
+        }
+        expect(orbitOf.size).toBe(AUTOTILE_MASKS);
+        // The classes are what the shapes are: nothing, one corner, two adjacent, two diagonal,
+        // three corners, all four — so their POPCOUNTS are 0,1,2,2,3,4.
+        const bits = (n: number) => n.toString(2).split("").filter(c => c === "1").length;
+        expect(classes.map(bits).sort()).toEqual([0, 1, 2, 2, 3, 4]);
+    });
+
+    test("a six-tile table fills all sixteen masks, and every entry is a TURN of its own art", () => {
+        // Six tiles, one per class, numbered so a wrong entry is obvious.
+        const classes = autotileClasses();
+        const art = new Map(classes.map((mask, i) => [mask, 10 + i]));
+        const table = rotatedTable(art);
+        expect(autotileTableError(table)).toBeNull();
+        expect(table.filter(e => e !== null)).toHaveLength(16);
+
+        // THE CHECK THAT MATTERS: an entry's flip, applied to the mask its own art was drawn for,
+        // must give the mask it is filed under. That is the whole contract, and it cannot be
+        // satisfied by a table that merely looks populated.
+        const classOfIndex = new Map([...art].map(([mask, index]) => [index, mask]));
+        for (let mask = 0; mask < 16; mask++) {
+            const entry = table[mask]!;
+            expect(flipMask(entry.flip ?? 0, classOfIndex.get(entry.index)!)).toBe(mask);
+        }
+        // A CLASS'S OWN MASK gets its tile UNTURNED — the flips are tried in ascending order, so an
+        // unturned tile wins over a turned one that would look the same.
+        for (const [mask, index] of art) {
+            expect(table[mask]).toEqual({ index });
+        }
+        // ART FOR ONLY SOME CLASSES leaves the other orbits empty rather than guessing.
+        const partial = rotatedTable(new Map([[classes[1], 7]]));
+        expect(partial.filter(e => e !== null)).toHaveLength(4);   // one corner: an orbit of four
+        expect(partial[classes[0]]).toBeNull();
+    });
+
+    test("a mask reads the four terrain cells around a display cell's own corner", () => {
+        // NON-SQUARE terrain (4x3) with ONE cell of material, so each of the four display cells that
+        // touch it must see it in a different corner. A square fixture, or a symmetric blob, could
+        // not tell the corners apart at all.
+        const t = terrainOf(4, 3, [
+            0, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 0, 0
+        ]);
+        // The material is at terrain (1,1). The display cell at (1,1) has it as its BOTTOM-RIGHT,
+        // (2,1) as its bottom-left, (1,2) as its top-right, and (2,2) as its top-left.
+        expect(dualMask(t, 1, 1, 1)).toBe(CORNER_BR);
+        expect(dualMask(t, 1, 2, 1)).toBe(CORNER_BL);
+        expect(dualMask(t, 1, 1, 2)).toBe(CORNER_TR);
+        expect(dualMask(t, 1, 2, 2)).toBe(CORNER_TL);
+        // Nowhere near it is nothing.
+        expect(dualMask(t, 1, 0, 0)).toBe(0);
+        // ANOTHER MATERIAL is not this one, which is what makes one layer per material work.
+        expect(dualMask(t, 2, 1, 1)).toBe(0);
+        // OFF THE TERRAIN IS NOT THE MATERIAL, so a coastline appears at the map's edge. A 2x2 block
+        // in the corner has its outermost display cell seeing only one corner.
+        const corner = terrainOf(2, 2, [1, 1, 1, 1]);
+        expect(dualMask(corner, 1, 0, 0)).toBe(CORNER_BR);
+        expect(dualMask(corner, 1, 1, 1)).toBe(CORNER_TL | CORNER_TR | CORNER_BL | CORNER_BR);
+        expect(dualMask(corner, 1, 2, 2)).toBe(CORNER_TL);
+    });
+
+    test("the display grid is ONE LARGER in each direction, and empty terrain draws nothing", () => {
+        const classes = autotileClasses();
+        const table = rotatedTable(new Map(classes.map((mask, i) => [mask, 10 + i])));
+        // 5x3 terrain -> 6x4 display: terrain cell (4,2) needs a tile past its right and bottom
+        // edges to be drawn at all, which is the half-cell offset the caller has to honour.
+        const t = terrainOf(5, 3, new Array(15).fill(0));
+        const empty = autotile(t, 1, table);
+        expect({ cols: empty.cols, rows: empty.rows }).toEqual({ cols: 6, rows: 4 });
+        expect(empty.tiles).toHaveLength(24);
+        // Mask 0 is the empty class, whose art here is tile 10 — so "nothing there" is still a TILE,
+        // which is what a table wanting a void tile means. With no art for that class it is empty.
+        const voidless = rotatedTable(new Map(classes.slice(1).map((mask, i) => [mask, 20 + i])));
+        expect(autotile(t, 1, voidless).tiles.every(x => x === TILE_EMPTY)).toBe(true);
+
+        // A 2x1 BLOCK of material, and the silhouette it produces. The display grid is 6x4 and the
+        // block sits at terrain (1,1)-(2,1), so exactly six display cells touch it.
+        const block = terrainOf(5, 3, [
+            0, 0, 0, 0, 0,
+            0, 1, 1, 0, 0,
+            0, 0, 0, 0, 0
+        ]);
+        const drawn = autotile(block, 1, voidless);
+        const touching = drawn.tiles.filter(x => x !== TILE_EMPTY).length;
+        expect(touching).toBe(6);
+        // The corners of the run are single-corner masks and the middles are two-adjacent ones —
+        // asserted through the TABLE, so a wrong mask would name a different tile.
+        const at = (col: number, row: number) => drawn.tiles[row * drawn.cols + col];
+        const cornerTile = voidless[CORNER_BR]!.index;
+        const edgeTile = voidless[CORNER_BL | CORNER_BR]!.index;
+        expect(at(1, 1)).toBe(cornerTile);                        // top-left of the block
+        expect(at(2, 1)).toBe(edgeTile);                          // between the two cells, above
+        expect(at(3, 1)).toBe(voidless[CORNER_BL]!.index);        // top-right
+    });
+
+    test("flips are ABSENT when nothing is turned, and present when something is", () => {
+        // The invariant `Tilemap.flips` states and `TilemapEdit` keeps, held from this side too: a
+        // derived grid that always carried a flip array would break it from the other end.
+        const classes = autotileClasses();
+        // A table with NO flips at all: sixteen separate tiles, one per mask.
+        const flat: AutotileTable = Array.from({ length: 16 }, (_, mask) => ({ index: 40 + mask }));
+        const t = terrainOf(3, 2, [0, 1, 0, 0, 1, 0]);
+        expect(autotile(t, 1, flat).flips).toBeUndefined();
+        expect("flips" in autotile(t, 1, flat)).toBe(false);
+        // …and the six-tile table DOES turn things, so the same terrain comes back with flips.
+        const rotated = rotatedTable(new Map(classes.map((mask, i) => [mask, 10 + i])));
+        const turned = autotile(t, 1, rotated);
+        expect(turned.flips).toBeDefined();
+        expect(turned.flips!.some(f => f !== 0)).toBe(true);
+        expect(turned.flips!).toHaveLength(turned.tiles.length);
+    });
+
+    test("a table is refused unless it is exactly sixteen storable entries", () => {
+        expect(autotileTableError(null)).toMatch(/must be an array/);
+        expect(autotileTableError([])).toMatch(/exactly 16 entries, got 0/);
+        expect(autotileTableError(new Array(17).fill(null))).toMatch(/got 17/);
+        const ok: unknown[] = new Array(16).fill(null);
+        expect(autotileTableError(ok)).toBeNull();
+        ok[3] = { index: 2, flip: FLIP_D };
+        expect(autotileTableError(ok)).toBeNull();
+        // The same bounds `tilemapError` puts on a cell, because these values become cells.
+        ok[3] = { index: -1 };
+        expect(autotileTableError(ok)).toMatch(/index must be a whole number/);
+        ok[3] = { index: 2, flip: 99 };
+        expect(autotileTableError(ok)).toMatch(/flip must be a whole number 0\.\.7/);
+        ok[3] = { index: 2.5 };
+        expect(autotileTableError(ok)).toMatch(/index must be a whole number/);
     });
 });

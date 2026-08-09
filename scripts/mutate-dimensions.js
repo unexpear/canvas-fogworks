@@ -24,7 +24,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1565;
+const EXPECTED_TESTS = 1572;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -258,6 +258,38 @@ const MUTANTS = [
       from: "    const col = Math.floor(px / pitchX);",
       to: "    const col = Math.floor(px / pitchY);",
       note: "the column divides by the VERTICAL pitch — invisible on square tiles" },
+
+    // AUTOTILING. The blindness here is a SYMMETRIC fixture rather than a square one: a blob of
+    // terrain that looks the same turned cannot tell one corner from another, and a table whose
+    // entries are all unturned cannot tell one flip order from another.
+    { id: "AT1", file: "src/core/document/Autotile.ts",
+      from: "    if (flip & FLIP_D) swap(CORNER_TR, CORNER_BL);",
+      to: "    if (flip & FLIP_D) swap(CORNER_TL, CORNER_BR);",
+      note: "the transpose swaps the corners ON the diagonal instead of the other pair" },
+    { id: "AT2", file: "src/core/document/Autotile.ts",
+      from: "        for (let flip = 0; flip <= FLIP_MAX; flip++) seen.add(flipMask(flip, mask));",
+      to: "        seen.add(mask);",
+      note: "classes are not orbits — sixteen of them instead of six" },
+    { id: "AT3", file: "src/core/document/Autotile.ts",
+      from: "        | (has(col, row - 1) ? CORNER_TR : 0)",
+      to: "        | (has(col, row - 1) ? CORNER_BL : 0)",
+      note: "the cell above names the wrong corner — invisible to a symmetric blob of terrain" },
+    { id: "AT4", file: "src/core/document/Autotile.ts",
+      from: "    const cols = terrain.cols + 1;",
+      to: "    const cols = terrain.cols;",
+      note: "the display grid is NOT one larger — the last terrain column is never fully drawn" },
+    { id: "AT5", file: "src/core/document/Autotile.ts",
+      from: "        if (c < 0 || r < 0 || c >= terrain.cols || r >= terrain.rows) return false;",
+      to: "        if (c < 0 || r < 0 || c >= terrain.cols || r >= terrain.rows) return true;",
+      note: "off the terrain counts AS the material — no coastline at the map's edge" },
+    { id: "AT6", file: "src/core/document/Autotile.ts",
+      from: "    return turned ? { cols, rows, tiles, flips } : { cols, rows, tiles };",
+      to: "    return { cols, rows, tiles, flips };",
+      note: "flips always present — the absent-when-unturned invariant, broken from the derived side" },
+    { id: "AT7", file: "src/core/document/Autotile.ts",
+      from: "        return terrain.cells[r * terrain.cols + c] === material;",
+      to: "        return terrain.cells[r * terrain.cols + c] !== 0;",
+      note: "any material counts as this one — two materials collapse into one layer" },
 ];
 
 function runSuite() {

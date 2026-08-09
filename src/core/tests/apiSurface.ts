@@ -134,7 +134,7 @@ import { TiledMapResult, TiledTileset, TiledTileImage, TiledLayer, TiledCell, pa
     tiledMapError, decodeGid, tilesetFor, tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow,
     tilemapForLayer, TiledTilemapLayer, TiledTilemapFit,
     TILED_MAX_CELLS, TILED_MAX_LAYERS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
-import { Tilemap, emptyTilemap, cellAt } from "../document/Tilemap";
+import { Tilemap, emptyTilemap, cellAt, FLIP_D } from "../document/Tilemap";
 import { GlbContainer, GltfJson, GltfNode, GltfResult, GltfMeshInstance, GltfPrimitive,
     parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GLTF_IGNORABLE_REQUIRED, GLTF_MAX_VERTICES, GLTF_MAX_PRIMITIVES, GLTF_MAX_NODE_DEPTH,
@@ -175,6 +175,9 @@ import { SetTimelineAction } from "../actions/SetTimelineAction";
 import { SetDepthAction } from "../actions/SetDepthAction";
 import { SetMeshAction } from "../actions/SetMeshAction";
 import { SetTilemapAction } from "../actions/SetTilemapAction";
+import { Terrain, AutotileCell, AutotileTable, AUTOTILE_MASKS, CORNER_TL, CORNER_TR, CORNER_BL,
+    CORNER_BR, flipMask, autotileClasses, rotatedTable, dualMask, autotile,
+    autotileTableError } from "../document/Autotile";
 import { TileEdit, withTiles, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
 import { SetLightingAction } from "../actions/SetLightingAction";
 
@@ -1134,6 +1137,23 @@ export function __apiSurfacePin(): void {
     expectType<{ col: number; row: number }[]>(rectCells(emptyTilemap(), { col: 0, row: 0 }, { col: 1, row: 1 }));
     expectType<{ col: number; row: number }[]>(fillRegion(emptyTilemap(), 0, 0));
     expectType<Tilemap | null>(resizeTilemap(emptyTilemap(), 4, 3));
+    // AUTOTILING (no schema field yet): terrain in, display tiles out. The CONTRACT is the pair of
+    // asymmetries — the display grid is ONE LARGER in each direction and offset half a cell, and a
+    // table is exactly `AUTOTILE_MASKS` entries indexed BY MASK rather than a list to search.
+    const terrain: Terrain = { cols: 2, rows: 2, cells: [0, 1, 1, 0] };
+    expectType<number>(dualMask(terrain, 1, 0, 0));
+    expectType<number>(flipMask(FLIP_D, CORNER_TL | CORNER_BR));
+    expectType<number[]>(autotileClasses());
+    const table: AutotileTable = rotatedTable(new Map(autotileClasses().map((m, i) => [m, i])));
+    expectType<AutotileCell | null>(table[CORNER_TR | CORNER_BL] ?? null);
+    expectType<string | null>(autotileTableError(table));
+    const drawn = autotile(terrain, 1, table);
+    expectType<number>(drawn.cols); expectType<number>(drawn.rows);
+    expectType<number[]>(drawn.tiles);
+    // ABSENT when nothing is turned, as on `Tilemap` itself.
+    expectType<number[] | undefined>(drawn.flips);
+    expectType<number>(AUTOTILE_MASKS);
+    expectType<number>(CORNER_BR); expectType<number>(CORNER_BL);
     expectType<Action>(new SetLightingAction(doc, [light], 0.2));
 }
 
