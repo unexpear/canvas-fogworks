@@ -11,6 +11,7 @@ import { InstanceOverride } from "../document/Components";
 import { Interaction } from "../document/Prototype";
 import { Keyframe } from "../document/Timeline";
 import { Mesh } from "../document/Mesh";
+import { Tilemap } from "../document/Tilemap";
 import { Light } from "../document/Light";
 
 /**
@@ -103,6 +104,14 @@ export type NodeDelta =
         depth?: number;
         /** The deformation GRID (schema 41). `undefined` clears it, making the node rigid again. */
         mesh?: Mesh;
+        /**
+         * The TILE GRID (schema 61) — a whole-value replace, as `path` and `mesh` are.
+         *
+         * NOT CLEARABLE, unlike most fields here: `Integrity` refuses a `core.tilemap` without a
+         * grid, so "no tilemap" is not a state the node can be in. That is why it is read with
+         * `!== undefined` rather than with `in`.
+         */
+        tilemap?: Tilemap;
     }
     /**
      * DOCUMENT-level state (schema 19): replaces the whole variable store + active theme

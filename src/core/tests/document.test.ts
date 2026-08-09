@@ -28,8 +28,10 @@ import { serializeDocument, deserializeDocument, compareDocuments, Serializer, m
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { clipsContentError, BLEND_MODES, blendModeError } from "../document/Node";
 import { pickColorAt, rampT } from "../geometry/Eyedropper";
-import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, visibleCells, TILE_EMPTY,
+import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, visibleCells, cellAt, TILE_EMPTY,
          flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D } from "../document/Tilemap";
+import { withTiles, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
+import { SetTilemapAction } from "../actions/SetTilemapAction";
 import { EyedropperTool } from "../../editor/tools/EyedropperTool";
 import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
 import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, AUTO_BIND_MAX_BONES, paintWeights, PAINT_STRENGTH } from "../document/MeshEdit";
@@ -25260,5 +25262,209 @@ describe("core.tilemap — a grid instead of ten thousand nodes (schema 61)", ()
         // PIXEL ART BY DEFAULT, like a painted surface: a 16px tile smoothed into its neighbours is
         // what nobody importing a map wants.
         expect(shape.pixelated).toBe(true);
+    });
+});
+
+describe("TilemapEdit — painting a grid, and the invariants an edit must not break", () => {
+    const sheet = (): TileSheet => ({ columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 });
+    /** NON-SQUARE by default (3 wide, 2 tall) on a NON-SQUARE cell, so a transposed index cannot pass. */
+    const grid = (tiles: number[], over: Partial<Tilemap> = {}): Tilemap =>
+        ({ cols: 3, rows: 2, tileWidth: 16, tileHeight: 24, sheet: sheet(), tiles, ...over });
+
+    test("a cell is picked by FLOOR, and the boundary belongs to the cell after it", () => {
+        // The single-point twin of `visibleCells`, and the two must round the same way or a tool
+        // paints the cell beside the one under the cursor along every boundary. The cell is 16x24 —
+        // non-square, so an axis swap shows.
+        const m = grid([0, 1, 2, 3, 4, 5]);
+        expect(cellAt(m, 0, 0)).toEqual({ col: 0, row: 0 });
+        expect(cellAt(m, 15.9, 23.9)).toEqual({ col: 0, row: 0 });
+        // EXACTLY on the boundary is the NEXT cell, because a cell owns [n*size, (n+1)*size).
+        expect(cellAt(m, 16, 24)).toEqual({ col: 1, row: 1 });
+        expect(cellAt(m, 33, 25)).toEqual({ col: 2, row: 1 });
+        // Off the grid is null rather than a clamped edge cell: a stroke that leaves the map must
+        // paint nothing, not smear along its border.
+        expect(cellAt(m, -1, 0)).toBeNull();
+        expect(cellAt(m, 48, 0)).toBeNull();
+        expect(cellAt(m, 0, 48)).toBeNull();
+        // A degenerate cell size has no cells; nothing divides by zero.
+        expect(cellAt({ ...m, tileWidth: 0 }, 5, 5)).toBeNull();
+    });
+
+    test("an edit writes the cell it names, and NOTHING is null rather than a no-op step", () => {
+        const m = grid([0, 1, 2, 3, 4, 5]);
+        const painted = withTiles(m, [{ col: 2, row: 1, index: 9 }])!;
+        expect(painted.tiles).toEqual([0, 1, 2, 3, 4, 9]);
+        // The ORIGINAL is untouched — an action's undo replays the old value, so a shared array
+        // would make undo restore what it had already been overwritten with.
+        expect(m.tiles).toEqual([0, 1, 2, 3, 4, 5]);
+        // ERASING is an edit like any other, and TILE_EMPTY rather than 0, which is a real tile.
+        expect(withTiles(m, [{ col: 0, row: 0, index: TILE_EMPTY }])!.tiles)
+            .toEqual([TILE_EMPTY, 1, 2, 3, 4, 5]);
+        // WRITING WHAT IS ALREADY THERE CHANGES NOTHING, and that is null: an undo step that undoes
+        // nothing makes a person pressing undo once appear to be ignored.
+        expect(withTiles(m, [{ col: 2, row: 1, index: 5 }])).toBeNull();
+        expect(withTiles(m, [])).toBeNull();
+        // OFF THE GRID is dropped, not refused — a drag that leaves the map and comes back is one
+        // gesture, and failing it would lose the half that landed.
+        expect(withTiles(m, [{ col: 9, row: 9, index: 7 }])).toBeNull();
+        const half = withTiles(m, [{ col: -1, row: 0, index: 7 }, { col: 1, row: 0, index: 7 }])!;
+        expect(half.tiles).toEqual([0, 7, 2, 3, 4, 5]);
+        // LATER WINS on the same cell, which is what a drag crossing itself does.
+        expect(withTiles(m, [{ col: 0, row: 0, index: 7 }, { col: 0, row: 0, index: 8 }])!.tiles[0]).toBe(8);
+    });
+
+    test("the flip array appears when a cell is turned and DISAPPEARS when none is", () => {
+        // `Tilemap.flips` documents itself as absent when nothing is turned. An invariant that only
+        // holds until the first edit is not an invariant, so it is enforced in one place.
+        const plain = grid([0, 1, 2, 3, 4, 5]);
+        expect(plain.flips).toBeUndefined();
+        const turned = withTiles(plain, [{ col: 1, row: 0, index: 1, flip: FLIP_H | FLIP_D }])!;
+        expect(turned.flips).toEqual([0, FLIP_H | FLIP_D, 0, 0, 0, 0]);
+        // Straightening the only turned cell drops the array entirely, rather than leaving a zero
+        // per cell in every saved file from then on.
+        const straight = withTiles(turned, [{ col: 1, row: 0, index: 1, flip: 0 }])!;
+        expect(straight.flips).toBeUndefined();
+        expect("flips" in straight).toBe(false);
+        // A flip ALONE is a change even when the index does not move — otherwise rotating a tile in
+        // place would silently do nothing.
+        expect(withTiles(turned, [{ col: 1, row: 0, index: 1, flip: FLIP_V }])!.flips)
+            .toEqual([0, FLIP_V, 0, 0, 0, 0]);
+        // An OMITTED flip leaves the cell's orientation alone, so repainting a turned cell with a
+        // different tile keeps the turn.
+        expect(withTiles(turned, [{ col: 1, row: 0, index: 6 }])!.flips)
+            .toEqual([0, FLIP_H | FLIP_D, 0, 0, 0, 0]);
+        // Out of range is ignored rather than stored: `tilemapError` would refuse the result, so an
+        // edit that authored one would produce a grid the loader rejects.
+        expect(withTiles(plain, [{ col: 0, row: 0, index: 0, flip: 99 }])).toBeNull();
+    });
+
+    test("a rectangle covers both corners whichever order they come in, clamped to the grid", () => {
+        const m = grid(new Array(6).fill(TILE_EMPTY));
+        const forward = rectCells(m, { col: 0, row: 0 }, { col: 1, row: 1 });
+        expect(forward).toHaveLength(4);
+        // A drag from bottom-right to top-left is the SAME rectangle — a caller that had to
+        // normalise the pair itself is a caller that will sometimes forget.
+        expect(rectCells(m, { col: 1, row: 1 }, { col: 0, row: 0 })).toEqual(forward);
+        // Clamped, not wrapped: a drag past the edge fills to the edge.
+        expect(rectCells(m, { col: -5, row: -5 }, { col: 99, row: 99 })).toHaveLength(6);
+        // Entirely outside covers nothing at all.
+        expect(rectCells(m, { col: 5, row: 0 }, { col: 9, row: 0 })).toEqual([]);
+        // One cell is a rectangle too, which is what a click means.
+        expect(rectCells(m, { col: 2, row: 1 }, { col: 2, row: 1 })).toEqual([{ col: 2, row: 1 }]);
+    });
+
+    test("a fill spreads four ways only, and a DIAGONAL wall holds it back", () => {
+        // Four-connected, not eight — the difference that decides whether a bucket leaks through the
+        // corner of a wall drawn as a diagonal line, which is how most walls in the measured maps
+        // turn a corner. The fixture is that exact shape: 0s split by a diagonal of 1s.
+        const m: Tilemap = {
+            cols: 4, rows: 3, tileWidth: 16, tileHeight: 16, sheet: sheet(),
+            tiles: [0, 1, 0, 0,
+                    1, 0, 1, 0,
+                    0, 1, 0, 1]
+        };
+        const fromCorner = fillRegion(m, 0, 0);
+        // ONE cell: its right and lower neighbours are both wall, and the 0 diagonally down-right is
+        // NOT connected. Eight-connectedness would have taken most of the map.
+        expect(fromCorner).toEqual([{ col: 0, row: 0 }]);
+        // The top-right pocket IS connected — three cells in an L, which also proves the fill finds
+        // neighbours in more than one direction.
+        const pocket = fillRegion(m, 2, 0).map(c => c.col + "," + c.row).sort();
+        expect(pocket).toEqual(["2,0", "3,0", "3,1"]);
+        // A fill matches on INDEX, not orientation: two cells showing the same tile mirrored are the
+        // same ground, and treating them as different would leave a one-cell scar in flipped art.
+        const flipped: Tilemap = { ...m, flips: [0, 0, FLIP_H, 0, 0, 0, 0, 0, 0, 0, 0, 0] };
+        expect(fillRegion(flipped, 2, 0).map(c => c.col + "," + c.row).sort()).toEqual(pocket);
+        // Off the grid fills nothing.
+        expect(fillRegion(m, -1, 0)).toEqual([]);
+        // …and a whole uniform map is reachable from any cell, which is the case a broken `seen`
+        // array would either loop on forever or stop short of.
+        const open = grid(new Array(6).fill(4));
+        expect(fillRegion(open, 2, 1)).toHaveLength(6);
+    });
+
+    test("a resize keeps cells by COORDINATE, not by position in the flat array", () => {
+        // The whole difficulty: the array is row-major, so widening by one column shifts every row
+        // after the first. A resize that copied the flat array would slide the map diagonally.
+        const m = grid([0, 1, 2,
+                        3, 4, 5]);
+        const wider = resizeTilemap(m, 4, 2)!;
+        expect(wider.cols).toBe(4);
+        expect(wider.tiles).toEqual([0, 1, 2, TILE_EMPTY,
+                                     3, 4, 5, TILE_EMPTY]);
+        // SHRINKING drops what no longer exists and keeps the rest where it was.
+        expect(resizeTilemap(m, 2, 1)!.tiles).toEqual([0, 1]);
+        // Growing DOWNWARD pads whole rows, and the cell size travels unchanged.
+        const taller = resizeTilemap(m, 3, 3)!;
+        expect(taller.tiles.slice(6)).toEqual([TILE_EMPTY, TILE_EMPTY, TILE_EMPTY]);
+        expect({ tw: taller.tileWidth, th: taller.tileHeight }).toEqual({ tw: 16, th: 24 });
+        // ORIENTATION MOVES WITH ITS CELL, which the flat-array copy would also have sheared.
+        const turned: Tilemap = { ...m, flips: [0, 0, 0, 0, FLIP_D, 0] };
+        expect(resizeTilemap(turned, 4, 2)!.flips).toEqual([0, 0, 0, 0,
+                                                           0, FLIP_D, 0, 0]);
+        // Refused rather than approximated: no change, no cells, or more than the cap.
+        expect(resizeTilemap(m, 3, 2)).toBeNull();
+        expect(resizeTilemap(m, 0, 5)).toBeNull();
+        expect(resizeTilemap(m, 2.5, 5)).toBeNull();
+        expect(resizeTilemap(m, 1024, 1025)).toBeNull();
+        // Whatever comes back is a grid the DOCUMENT would accept — the length rule especially.
+        expect(tilemapError(wider)).toBeNull();
+        expect(tilemapError(taller)).toBeNull();
+    });
+
+    test("SetTilemapAction is the door: it refuses a bad grid, a no-op, and the wrong node type", () => {
+        const doc = createEmptyDocument();
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new AddNodeAction(doc, "core.tilemap", 0, 0, 48, 48, "none", "T",
+            null, { tilemap: grid([0, 1, 2, 3, 4, 5]) }));
+        dispatcher.dispatchAction(new AddNodeAction(dispatcher.getDocument(), "core.rectangle",
+            0, 0, 10, 10, "#ffffff", "R"));
+        const d = () => dispatcher.getDocument();
+
+        // A real edit lands, and lands in the DOCUMENT rather than only in the action's answer.
+        const next = withTiles(d().nodes.get("T")!.tilemap!, [{ col: 2, row: 1, index: 9 }])!;
+        expect(dispatcher.dispatchAction(new SetTilemapAction(d(), "T", next)).success).toBe(true);
+        expect(d().nodes.get("T")!.tilemap!.tiles).toEqual([0, 1, 2, 3, 4, 9]);
+
+        // …and UNDO puts the old grid back, which is the whole reason this is an action.
+        dispatcher.undo();
+        expect(d().nodes.get("T")!.tilemap!.tiles).toEqual([0, 1, 2, 3, 4, 5]);
+
+        // A grid the LOADER would refuse is refused here, so an edit cannot author a file that
+        // opens as corrupt art.
+        const short = { ...grid([0, 1, 2, 3, 4, 5]), tiles: [0, 1, 2, 3, 4] };
+        expect(new SetTilemapAction(d(), "T", short as Tilemap).validate()).toBe(false);
+        // A NO-OP is refused rather than accepted, for the undo-does-nothing reason.
+        expect(new SetTilemapAction(d(), "T", grid([0, 1, 2, 3, 4, 5])).validate()).toBe(false);
+        // An all-zero flip array is the SAME map as none — the invariant, checked at the door too.
+        expect(new SetTilemapAction(d(), "T",
+            { ...grid([0, 1, 2, 3, 4, 5]), flips: [0, 0, 0, 0, 0, 0] }).validate()).toBe(false);
+        // Nothing but a tilemap node has a grid to set.
+        expect(new SetTilemapAction(d(), "R", next).validate()).toBe(false);
+        expect(new SetTilemapAction(d(), "nope", next).validate()).toBe(false);
+
+        // AND THE EDIT SURVIVES A SAVE. The delta layer is a hand-written list of fields, and every
+        // field added to it since has been dropped by something at least once.
+        expect(dispatcher.dispatchAction(new SetTilemapAction(d(), "T", next)).success).toBe(true);
+        const reloaded = deserializeDocument(serializeDocument(d()));
+        expect(reloaded.nodes.get("T")!.tilemap!.tiles).toEqual([0, 1, 2, 3, 4, 9]);
+    });
+
+    test("a tile edit and a move in ONE transaction keep both", () => {
+        // The `mergePatch` hazard, which has now dropped `path`, `hidden` and a dozen other fields
+        // in turn: a hand-written allow-list silently loses whatever was added after it was written.
+        const doc = createEmptyDocument();
+        const dispatcher = new ActionDispatcher(doc);
+        dispatcher.dispatchAction(new AddNodeAction(doc, "core.tilemap", 0, 0, 48, 48, "none", "T",
+            null, { tilemap: grid([0, 1, 2, 3, 4, 5]) }));
+        const d0 = dispatcher.getDocument();
+        const next = withTiles(d0.nodes.get("T")!.tilemap!, [{ col: 0, row: 0, index: 7 }])!;
+        expect(dispatcher.dispatchAction(new TransactionAction(d0, "paint-and-move", [
+            new SetTilemapAction(d0, "T", next),
+            new MoveNodeAction(d0, "T", 30, 40)
+        ])).success).toBe(true);
+        const t = dispatcher.getDocument().nodes.get("T")!;
+        expect(t.tilemap!.tiles[0]).toBe(7);
+        expect(t.geometry).toMatchObject({ x: 30, y: 40 });
     });
 });

@@ -271,6 +271,26 @@ export function tileSourceRect(
  */
 
 /**
+ * Which cell a point in the node's LOCAL space falls in, or null when it falls outside the grid.
+ *
+ * The single-point twin of `visibleCells`, and here beside it so the two cannot round differently:
+ * a renderer that culled by one rule while a tool picked by another would paint the cell next to the
+ * one under the cursor along every boundary.
+ *
+ * FLOOR, NOT ROUND. A cell owns the half-open range `[n*size, (n+1)*size)`, so a point one unit
+ * inside a cell's left edge is in that cell rather than half in its neighbour.
+ */
+export function cellAt(
+    map: ReadonlyTilemap, x: number, y: number
+): { col: number; row: number } | null {
+    if (!(map.tileWidth > 0) || !(map.tileHeight > 0)) return null;
+    const col = Math.floor(x / map.tileWidth);
+    const row = Math.floor(y / map.tileHeight);
+    if (col < 0 || row < 0 || col >= map.cols || row >= map.rows) return null;
+    return { col, row };
+}
+
+/**
  * The cells of `map` that overlap a rectangle in the node's LOCAL space, clamped to the grid.
  *
  * CULLING IS THE WHOLE POINT of drawing a tilemap rather than ten thousand nodes: the measured map

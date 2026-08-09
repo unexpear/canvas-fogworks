@@ -963,6 +963,17 @@ That needs the image's natural size, which comes from the shared `ImageCache` th
 already use — so an undecoded image draws nothing here exactly as it draws nothing on Canvas, rather
 than each backend inventing its own answer for "not ready yet".
 
+**A TILEMAP'S SHEET IS SIZED THE SAME WAY, and briefly was not.** The tilemap branch is the same
+nested-`<svg>` trick per cell, and it sized its inner `<image>` from a size *derived* from the grid
+description — whose height came from the highest index the map happened to use. A real 968×526 sheet
+whose map reached row 18 was therefore called 305 tall, so every tile was sampled 1.7× too far down
+and the whole map drew from the wrong rows. **Canvas was right throughout**, because `drawImage`
+takes the bitmap and never asks, and the GPU had exactly the same bug — so the two wrong backends
+were wrong the *same* way, and a cross-backend comparison would have called it agreement. Both now
+read `naturalSize` from this cache, and the derived helpers are deleted: a derived value that must
+equal a fact about a file is an assumption with arithmetic around it. It was found by importing a
+real map and diffing it against the node-per-cell import of the same file.
+
 ### A raster on the GPU — the href is a key, not a URL
 
 **A `core.raster` holds pixels the DOCUMENT owns**, and its href is `raster:<id>:<w>x<h>:<len>:<sum>`

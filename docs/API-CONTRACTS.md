@@ -1993,6 +1993,24 @@ function tilemapError(map): string | null;      function tileAt(map, col, row): 
 function flipAt(map, col, row): number;         function flipMatrix(flip, w, h): [a,b,c,d,e,f];
 function tileSourceRect(sheet, index): Rect | null;   // the ONE slicing rule; TiledMap delegates
 function visibleCells(map, localRect): { col0; row0; col1; row1 } | null;   // inclusive, clamped
+// The SINGLE-POINT twin of `visibleCells`, beside it so the two cannot round differently — a
+// renderer culling by one rule while a tool picks by another paints the neighbouring cell along
+// every boundary. FLOOR, so a cell owns [n*size, (n+1)*size).
+function cellAt(map, localX, localY): { col; row } | null;
+// EDITING one (`document/TilemapEdit`). Pure, whole-map in and out, and NULL MEANS NOTHING CHANGED
+// in every one of them — an action that succeeded without changing anything puts an undo step on the
+// stack that undoes nothing, which reads as undo being ignored.
+interface TileEdit { col; row; index; flip? }   // flip omitted = leave the cell's orientation alone
+function withTiles(map, edits: readonly TileEdit[]): Tilemap | null;   // off-grid edits DROPPED, not refused
+function rectCells(map, a, b): { col; row }[];                         // either corner first, clamped
+function fillRegion(map, col, row): { col; row }[];                    // FOUR-connected, matches on index alone
+function resizeTilemap(map, cols, rows): Tilemap | null;               // keeps cells by COORDINATE
+// `withTiles` and `resizeTilemap` are the ONLY places `flips` is built, and both drop the array when
+// nothing is turned — the absent-when-unturned invariant on `Tilemap.flips` would otherwise last
+// exactly one edit, and every file saved after would carry a zero per cell.
+// FILLING THE GAPS BETWEEN POINTER SAMPLES IS THE TOOL'S JOB, not the document's: a tile grid is an
+// integer grid, so the tile tool walks `PixelBuffer.linePoints` — the same Bresenham the pixel brush
+// uses — rather than a second one that could disagree with it by a cell at some angles.
 // THE SHEET'S PIXEL SIZE IS NOT DERIVED, and `sheetWidth`/`sheetHeight` are gone because they were.
 // `sheetHeight` took the row count from the HIGHEST INDEX THE MAP USED, so a real 968x526 sheet
 // whose map reached row 18 was called 305 tall: SVG places its inner `<image>` at that size so its

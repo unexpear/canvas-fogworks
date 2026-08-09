@@ -134,7 +134,7 @@ import { TiledMapResult, TiledTileset, TiledTileImage, TiledLayer, TiledCell, pa
     tiledMapError, decodeGid, tilesetFor, tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow,
     tilemapForLayer, TiledTilemapLayer, TiledTilemapFit,
     TILED_MAX_CELLS, TILED_MAX_LAYERS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
-import { Tilemap, emptyTilemap } from "../document/Tilemap";
+import { Tilemap, emptyTilemap, cellAt } from "../document/Tilemap";
 import { GlbContainer, GltfJson, GltfNode, GltfResult, GltfMeshInstance, GltfPrimitive,
     parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GLTF_IGNORABLE_REQUIRED, GLTF_MAX_VERTICES, GLTF_MAX_PRIMITIVES, GLTF_MAX_NODE_DEPTH,
@@ -174,6 +174,8 @@ import { SetTrackAction } from "../actions/SetTrackAction";
 import { SetTimelineAction } from "../actions/SetTimelineAction";
 import { SetDepthAction } from "../actions/SetDepthAction";
 import { SetMeshAction } from "../actions/SetMeshAction";
+import { SetTilemapAction } from "../actions/SetTilemapAction";
+import { TileEdit, withTiles, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
 import { SetLightingAction } from "../actions/SetLightingAction";
 
 /**
@@ -1118,6 +1120,20 @@ export function __apiSurfacePin(): void {
     expectType<Action>(new SetTimelineAction(doc, timeline));
     expectType<Action>(new SetDepthAction(doc, "id", 1));
     expectType<Action>(new SetMeshAction(doc, "id", mesh));
+    // A TILE EDIT is a whole-grid replace, unlike a stroke's patch — see `SetTilemapAction`'s header
+    // for why the two differ. The pure edit layer is the CONTRACT that matters here: every function
+    // returns null for an edit that changes nothing, so an action cannot be handed a no-op.
+    expectType<Action>(new SetTilemapAction(doc, "id", emptyTilemap()));
+    expectType<{ col: number; row: number } | null>(cellAt(emptyTilemap(), 0, 0));
+    // The flip is OPTIONAL in the type, which is the contract: omitted leaves the cell's own
+    // orientation alone, so repainting a turned cell keeps the turn.
+    const tileEdit: TileEdit = { col: 0, row: 0, index: 3 };
+    expectType<number | undefined>(tileEdit.flip);
+    expectType<Tilemap | null>(withTiles(emptyTilemap(), [tileEdit]));
+    expectType<Tilemap | null>(withTiles(emptyTilemap(), [{ col: 0, row: 0, index: 3, flip: 5 }]));
+    expectType<{ col: number; row: number }[]>(rectCells(emptyTilemap(), { col: 0, row: 0 }, { col: 1, row: 1 }));
+    expectType<{ col: number; row: number }[]>(fillRegion(emptyTilemap(), 0, 0));
+    expectType<Tilemap | null>(resizeTilemap(emptyTilemap(), 4, 3));
     expectType<Action>(new SetLightingAction(doc, [light], 0.2));
 }
 

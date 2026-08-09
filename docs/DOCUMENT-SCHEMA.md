@@ -1121,7 +1121,7 @@ choice; it is not pretended to exist.
 
 ```ts
 Node.tilemap?: Tilemap                       // only on a core.tilemap, and required there
-Tilemap { cols, rows, tileWidth, tileHeight, sheet: TileSheet, tiles: number[] }
+Tilemap { cols, rows, tileWidth, tileHeight, sheet: TileSheet, tiles: number[], flips?: number[] }
 TileSheet { columns, tileWidth, tileHeight, spacing, margin }   // sheet pixels
 TILE_EMPTY = -1        TILEMAP_MAX_CELLS = 1_048_576
 ```
@@ -1131,6 +1131,20 @@ made one `core.image` per non-empty cell: **10,618 nodes, 22ms** to compute geom
 render model — over a 16ms frame, before anything was drawn — and **5.66MB** of JSON. Every node
 carried a full geometry, style, layout and transform to say "this 16px tile, here". It becomes
 **five nodes** here, one per layer.
+
+**AND MEASURED AFTER**, both halves in one run once `tilemapForLayer` existed — the same map imported
+both ways, then the frame derived over the whole map:
+
+| | nodes | saved JSON | first frame | warm frame | to place |
+|---|---|---|---|---|---|
+| one `core.image` per cell | 10,618 | 7.80 MB | 32.3 ms | 12.1 ms | 1,244 ms |
+| one `core.tilemap` per layer | 5 | 0.77 MB | 0.8 ms | 0.1 ms | 4 ms |
+
+Those figures are not corrections of the ones above: 22ms was a single cold derivation, and 32.3 ms
+is the same kind of measurement on a machine and a schema several versions apart. What has not
+changed is the shape of the answer. The per-cell import of that map could in fact never be **saved**
+at all — every node carries the sheet's whole data URL, so `cloneDocument` throws
+`RangeError: Invalid string length` at the first revision commit, ~650MB against V8's ~512MB cap.
 
 **It is also what autotiling needs**, and that is the deeper reason. Autotiling is a function from
 *terrain* to tile, and the node-per-cell document stored only the answer with nowhere to put the
@@ -1165,6 +1179,18 @@ the index texture's otherwise-unused **blue byte**, which costs no second textur
 **A tilemap is born with a grid**, as a raster is born with its surface: `Integrity` refuses a
 `core.tilemap` without one, so a node created without one could be made and never saved. The
 default is 16×16 because 21 of the corpus's 40 Tiled maps use that size and no other comes close.
+
+**`flips` ABSENT AND `flips` ALL-ZERO ARE THE SAME MAP**, and that is a rule rather than a
+convention. `document/TilemapEdit` is the only place the array is built, and it drops it whenever
+nothing is turned; `SetTilemapAction` treats the two as equal when deciding whether an edit changed
+anything. Without both halves the invariant would last exactly one edit, and every file saved
+afterwards would carry a zero per cell for a map with nothing turned in it.
+
+**Editing is a whole-grid replace** (`SetTilemapAction`), unlike a stroke's pixel patch — the corpus's
+largest grid is 10,000 small integers where a 4096-square surface is 67 MB, so the reason the two
+differ is arithmetic rather than taste. The rules live in `document/TilemapEdit`, whose functions all
+answer `null` for an edit that changes nothing: an action that succeeded without changing anything
+puts a step on the undo stack that undoes nothing, which reads as undo being ignored.
 
 **All three backends draw it, and the GPU does the LEAST work of the three.** SVG emits an
 `<image>` per visible cell inside a cropping `<svg>` viewport and Canvas makes a nine-argument

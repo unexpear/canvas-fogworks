@@ -126,6 +126,9 @@ export function applyMutationsToDocument(
                 if ("track" in delta) node.track = delta.track;
                 if ("depth" in delta) node.depth = delta.depth;
                 if ("mesh" in delta) node.mesh = delta.mesh;
+                // `!== undefined`, NOT `in`: a `core.tilemap` without a grid is a node `Integrity`
+                // refuses, so clearing it is not an edit the protocol needs to express.
+                if (delta.tilemap !== undefined) node.tilemap = delta.tilemap;
                 if (delta.text !== undefined) node.text = delta.text;
                 if (delta.src !== undefined) node.src = delta.src;
                 if (delta.name !== undefined) node.name = delta.name;

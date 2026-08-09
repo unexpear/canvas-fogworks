@@ -36,6 +36,29 @@ second way to express undo that can disagree with the real one.
 > `success` is not evidence that anything changed — a test must read the RESULT back out of the
 > document, not assert on the action's return.
 
+## SetTilemapAction — a tile edit through the dispatcher (schema 61)
+
+```ts
+new SetTilemapAction(document, nodeId, next: Tilemap)
+```
+
+The same seam for tiles: a map could be imported and drawn and **not painted**, and a tile tool with
+its own undo stack would be the one edit that could not join a transaction.
+
+**IT CARRIES THE WHOLE GRID**, which is the opposite of the stroke above, and the difference is
+arithmetic rather than taste: a 4096-square RGBA surface is 67 MB, while the corpus's largest grid is
+10,000 small integers and the cap is a million. A whole value also keeps the delta protocol's
+existing rule and leaves the stored document describing its own map with nothing to replay.
+
+**THE CALLER COMPUTES THE NEXT MAP** — also the opposite, and for the same reason stated the other
+way round: there the payload is an *encoding* of the patch, so computing it twice could disagree,
+while here the next map IS the value. The rules live in `document/TilemapEdit`, which returns `null`
+for an edit that changes nothing; this checks that what arrived can be *stored*.
+
+**It refuses three things:** a grid `tilemapError` would refuse (so an edit cannot author a file that
+opens as corrupt art), a node that is not a `core.tilemap`, and a **no-op** — where "no-op" counts an
+all-zero `flips` array as equal to no array at all, which is what makes that invariant enforceable.
+
 ## 1. The Action contract
 
 `Action` (`Action.ts`) is abstract. Every mutation is a subclass.
@@ -279,6 +302,17 @@ fields (`geometry`, `transform`, `style`, `layout`) still merge **field by field
 actions emit partials: a move (`{x,y}`) and a resize (`{width,height}`) in one transaction must
 both land, and `layout`'s grid ⊕ container exclusivity rides along as an explicit `undefined`
 that resolves last-wins instead of dropping both.
+
+**Actions can be BUILT outside the dispatcher and run inside a transaction**, which is what
+`tileImport.tileImportActions` does: it returns the list of actions a placed Tiled map becomes, ids
+and all. Every action after the first for a given node names a node the same list creates, so it only
+works inside a `TransactionAction` — `rebind` is what makes the second action see the node the first
+one made. Dispatched one by one they would all fail validation. It exists as a module rather than
+inline in the panel for two reasons: a function returning actions can be tested, and `App.tsx` is
+guarded against constructing `UpdateNodeStyleAction` directly (every id the inspector touches may be
+a *virtual* one, which a raw action cannot write to). An import is the one case `nodeEdit`'s router
+cannot serve, because its ids exist in no document yet — so moving the construction out satisfies the
+guard honestly rather than by exemption.
 
 ## 6. Why this matters downstream
 

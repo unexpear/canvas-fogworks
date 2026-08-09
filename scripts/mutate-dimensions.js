@@ -24,7 +24,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1548;
+const EXPECTED_TESTS = 1556;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -184,6 +184,41 @@ const MUTANTS = [
       from: "            hidden: !layer.visible,",
       to: "            hidden: layer.visible,",
       note: "visibility inverted — every shown layer hidden and every hidden one shown" },
+
+    // Editing a grid. The convenient fixture here is a SQUARE cell on a SQUARE grid with nothing
+    // turned — which cannot see an axis swap, a stride, or the flip array's invariant.
+    { id: "TE1", file: "src/core/document/TilemapEdit.ts",
+      from: "    const turned = flips !== null && flips.some(f => f !== 0);",
+      to: "    const turned = flips !== null;",
+      note: "an all-zero flip array is kept — the absent-when-unturned invariant lasts one edit" },
+    { id: "TE2", file: "src/core/document/TilemapEdit.ts",
+      from: "            tiles[row * cols + col] = tileAt(map, col, row);",
+      to: "            tiles[row * map.cols + col] = tileAt(map, col, row);",
+      note: "a resize strides by the OLD width — the map slides diagonally, which no square resize shows" },
+    { id: "TE3", file: "src/core/document/TilemapEdit.ts",
+      from: "        for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {",
+      to: "        for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1]] as const) {",
+      note: "a fill spreads diagonally and leaks through a wall drawn as a diagonal" },
+    { id: "TE4", file: "src/core/document/Tilemap.ts",
+      from: "    const row = Math.floor(y / map.tileHeight);",
+      to: "    const row = Math.round(y / map.tileHeight);",
+      note: "a cell is picked by ROUNDING — every boundary picks its neighbour" },
+    { id: "TE5", file: "src/core/document/Tilemap.ts",
+      from: "    const col = Math.floor(x / map.tileWidth);",
+      to: "    const col = Math.floor(x / map.tileHeight);",
+      note: "the column divides by the cell's HEIGHT — invisible on a square cell" },
+    { id: "TE6", file: "src/core/actions/SetTilemapAction.ts",
+      from: "        if (sameMap(node.tilemap, this.next)) return false;",
+      to: "        if (false) return false;",
+      note: "a no-op edit is accepted — an undo step that undoes nothing" },
+    { id: "TE7", file: "src/core/actions/applyMutations.ts",
+      from: "                if (delta.tilemap !== undefined) node.tilemap = delta.tilemap;",
+      to: "                if (delta.tilemap !== undefined) node.tilemap = node.tilemap;",
+      note: "the delta layer drops the grid — the hand-written-list loss that has cost `path` and `hidden` before" },
+    { id: "TE8", file: "src/core/document/TilemapEdit.ts",
+      from: "        if (tiles[at] !== edit.index) { tiles[at] = edit.index; changed = true; }",
+      to: "        tiles[at] = edit.index; changed = true;",
+      note: "writing what is already there counts as a change" },
 ];
 
 function runSuite() {
