@@ -359,6 +359,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "57") { raw = migrate_57_to_58(raw); version = "58"; }
     if (version === "58") { raw = migrate_58_to_59(raw); version = "59"; }
     if (version === "59") { raw = migrate_59_to_60(raw); version = "60"; }
+    if (version === "60") { raw = migrate_60_to_61(raw); version = "61"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -900,6 +901,19 @@ function migrate_58_to_59(raw: any): any {
  */
 function migrate_59_to_60(raw: any): any {
     return { ...raw, version: "60" };
+}
+
+/**
+ * Schema 61 — `core.tilemap`, a grid of tile indices instead of a node per cell.
+ *
+ * A pass-through: no schema-60 document contains one. The bump is for the other direction, and
+ * this is the LOUD kind rather than the quiet kind. A 61 document reaching a 60 build meets a node
+ * `type` it has never heard of, and `isNodeType` refuses it outright — the file will not open,
+ * which is the gate working exactly as intended. A tilemap silently dropped would take the whole
+ * map with it.
+ */
+function migrate_60_to_61(raw: any): any {
+    return { ...raw, version: "61" };
 }
 
 function migrate_54_to_55(raw: any): any {

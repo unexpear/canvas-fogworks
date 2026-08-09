@@ -51,6 +51,7 @@
  */
 
 import { SourceRect } from "../document/Node";
+import { tileSourceRect as sheetSourceRect } from "../document/Tilemap";
 
 /** Bounds on a hand-editable file. A corrupt size should fail, not allocate. */
 export const TILED_MAX_CELLS = 1_000_000;
@@ -448,23 +449,23 @@ export function tilesetFor(tilesets: readonly TiledTileset[], gid: number): Tile
 }
 
 /**
- * Where a tile lives in its sheet.
+ * Where a tile lives in its sheet, for a GID.
  *
- * The same arithmetic `SheetSlice` performs, applied to one index rather than a whole grid: N cells
- * take N widths and N-1 gutters, so the spacing is added per cell and the margin once.
+ * THE ARITHMETIC IS NOT HERE. It is `Tilemap.tileSourceRect`, which the RENDERER also calls, and
+ * that is the point: a document holding a grid and an importer filling one must slice a sheet the
+ * same way or the map draws one pixel out per column. This half is the GID semantics — which set a
+ * gid belongs to, and whether the set actually has that many tiles — and it is genuinely this
+ * module's business, because a `Tilemap` has no gids.
  */
 export function tileSourceRect(set: TiledTileset, gid: number): SourceRect | null {
-    if (gid <= 0 || set.columns <= 0 || set.tileWidth <= 0 || set.tileHeight <= 0) return null;
+    if (gid <= 0) return null;
     const index = gid - set.firstGid;
-    if (index < 0) return null;
     if (set.tileCount > 0 && index >= set.tileCount) return null;
-    const col = index % set.columns, row = Math.floor(index / set.columns);
-    return {
-        x: set.margin + col * (set.tileWidth + set.spacing),
-        y: set.margin + row * (set.tileHeight + set.spacing),
-        width: set.tileWidth,
-        height: set.tileHeight
-    };
+    return sheetSourceRect(
+        { columns: set.columns, tileWidth: set.tileWidth, tileHeight: set.tileHeight,
+          spacing: set.spacing, margin: set.margin },
+        index
+    );
 }
 
 /**

@@ -6,6 +6,7 @@
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
 import { Node, NodeType, PathCommand, Style, RasterSurface, isNodeType, dimensionError, nodeIdError, pathError, rasterSurfaceError, srcError, styleError } from "../document/Node";
+import { Tilemap, tilemapError, emptyTilemap } from "../document/Tilemap";
 import { MutationResult, ActionPayload } from "./types";
 import { generateUUID } from "../ids/UUID";
 
@@ -33,6 +34,14 @@ export interface NodeContent {
      * inert. Creating it and giving it pixels must therefore be one act.
      */
     surface?: RasterSurface;
+    /**
+     * A `core.tilemap`'s grid (schema 61).
+     *
+     * BORN WITH ONE, for exactly the reason a raster is born with its surface: `Integrity` refuses
+     * a tilemap node without a grid, so a node created without one could be made but never saved.
+     * A caller that supplies nothing gets an empty grid rather than an invalid node.
+     */
+    tilemap?: Tilemap;
 }
 
 export class AddNodeAction extends Action {
@@ -131,6 +140,10 @@ export class AddNodeAction extends Action {
             if (this.nodeType !== "core.raster") return false;
             if (rasterSurfaceError(this.content.surface) !== null) return false;
         }
+        if (this.content?.tilemap !== undefined) {
+            if (this.nodeType !== "core.tilemap") return false;
+            if (tilemapError(this.content.tilemap) !== null) return false;
+        }
         return (
             // Membership, not just non-empty: TypeScript alone does not stop a cast,
             // a plugin (M15) or an AI-emitted action (M14) from supplying a bogus
@@ -168,6 +181,14 @@ export class AddNodeAction extends Action {
         // object must not become the document's.
         if (this.content?.surface !== undefined) {
             node.surface = { ...this.content.surface };
+        }
+        // THE GRID, deep-copied for the same reason: `tiles` is an array the caller still holds.
+        // A tilemap node with none gets the empty default rather than being born unsaveable.
+        if (this.nodeType === "core.tilemap") {
+            const given = this.content?.tilemap;
+            node.tilemap = given
+                ? { ...given, sheet: { ...given.sheet }, tiles: [...given.tiles] }
+                : emptyTilemap();
         }
 
         return {

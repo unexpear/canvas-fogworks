@@ -28,6 +28,7 @@ import { serializeDocument, deserializeDocument, compareDocuments, Serializer, m
 import { validateDocumentIntegrity } from "../document/Integrity";
 import { clipsContentError, BLEND_MODES, blendModeError } from "../document/Node";
 import { pickColorAt, rampT } from "../geometry/Eyedropper";
+import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, visibleCells, TILE_EMPTY } from "../document/Tilemap";
 import { EyedropperTool } from "../../editor/tools/EyedropperTool";
 import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
 import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, AUTO_BIND_MAX_BONES, paintWeights, PAINT_STRENGTH } from "../document/MeshEdit";
@@ -4532,9 +4533,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 59→60 landed, adding
-        // `Style.blendMode`, how a node's colour combines with what is behind it.)
-        expect(() => migrateIfNeeded(legacy, "61")).toThrow('Migration not implemented for document schema "60"');
+        // time a real migration is added — most recently when 60→61 landed, adding
+        // `core.tilemap`, a grid of tile indices instead of a node per cell.)
+        expect(() => migrateIfNeeded(legacy, "62")).toThrow('Migration not implemented for document schema "61"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -24786,5 +24787,154 @@ describe("The eyedropper as a gesture", () => {
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         expect(app).toMatch(/new EyedropperTool\(dispatcher, es, refresh, setPaintColour\)/);
         expect(app).toMatch(/"raster", "paint", "eyedropper"/);
+    });
+});
+
+describe("core.tilemap — a grid instead of ten thousand nodes (schema 61)", () => {
+    const sheet = (over: Partial<TileSheet> = {}): TileSheet =>
+        ({ columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0, ...over });
+    const grid = (cols: number, rows: number, tiles: number[], over: Partial<Tilemap> = {}): Tilemap =>
+        ({ cols, rows, tileWidth: 16, tileHeight: 16, sheet: sheet(), tiles, ...over });
+
+    test("a cell is looked up row-major, and OFF THE GRID is empty rather than wrapped", () => {
+        // A flat array indexed `row * cols + col`. Reading it the other way round is the classic
+        // transposition, and on a square grid nothing would show it — so this one is 3x2.
+        const m = grid(3, 2, [0, 1, 2, 3, 4, 5]);
+        expect(tileAt(m, 0, 0)).toBe(0);
+        expect(tileAt(m, 2, 0)).toBe(2);
+        expect(tileAt(m, 0, 1)).toBe(3);
+        expect(tileAt(m, 2, 1)).toBe(5);
+        // Outside answers EMPTY, not the wrapped neighbour: a lookup one past the right edge
+        // returning the next row's first tile is how a map grows a diagonal seam.
+        expect(tileAt(m, 3, 0)).toBe(TILE_EMPTY);
+        expect(tileAt(m, -1, 0)).toBe(TILE_EMPTY);
+        expect(tileAt(m, 0, 2)).toBe(TILE_EMPTY);
+    });
+
+    test("a tile's place in the SHEET counts margin once and spacing per gap", () => {
+        // Hand-computed, and the arithmetic that shears a map if it is wrong: with margin 2 and
+        // spacing 1, tile 5 of a 4-wide sheet is column 1, row 1 —
+        //   x = 2 + 1 * (16 + 1) = 19,  y = 2 + 1 * (16 + 1) = 19.
+        const s = sheet({ spacing: 1, margin: 2 });
+        expect(sheetRect(s, 0)).toEqual({ x: 2, y: 2, width: 16, height: 16 });
+        expect(sheetRect(s, 3)).toEqual({ x: 2 + 3 * 17, y: 2, width: 16, height: 16 });
+        expect(sheetRect(s, 5)).toEqual({ x: 19, y: 19, width: 16, height: 16 });
+        // A TIGHT sheet is the same formula with the terms at zero, which is worth pinning because
+        // it is the case every fixture would otherwise use and the one that hides the mistake.
+        expect(sheetRect(sheet(), 5)).toEqual({ x: 16, y: 16, width: 16, height: 16 });
+        // An EMPTY cell has nowhere in the sheet to be.
+        expect(sheetRect(sheet(), TILE_EMPTY)).toBeNull();
+        expect(sheetRect(sheet(), -7)).toBeNull();
+    });
+
+    test("only the cells on screen are drawn, and the far edge is INCLUSIVE", () => {
+        // The whole point: the measured map had 4,749 of its 10,618 cells visible. Cells are 16
+        // units, so a window from 40 to 100 covers columns 2 through 6.
+        const m = grid(20, 20, new Array(400).fill(0));
+        expect(visibleCells(m, { x: 40, y: 40, width: 60, height: 60 }))
+            .toEqual({ col0: 2, row0: 2, col1: 6, row1: 6 });
+        // A window ending ONE UNIT into a cell still shows that cell. Flooring instead would leave
+        // a one-tile gap along the right and bottom that only appears while scrolling.
+        expect(visibleCells(m, { x: 0, y: 0, width: 17, height: 17 }))
+            .toEqual({ col0: 0, row0: 0, col1: 1, row1: 1 });
+        // …and exactly ON the boundary does not pull in the next one.
+        expect(visibleCells(m, { x: 0, y: 0, width: 16, height: 16 }))
+            .toEqual({ col0: 0, row0: 0, col1: 0, row1: 0 });
+        // CLAMPED to the grid, so a viewport larger than the map does not loop past its end.
+        expect(visibleCells(m, { x: -500, y: -500, width: 5000, height: 5000 }))
+            .toEqual({ col0: 0, row0: 0, col1: 19, row1: 19 });
+        // Entirely off the map answers NULL, so a backend skips rather than looping over nothing.
+        expect(visibleCells(m, { x: 5000, y: 0, width: 10, height: 10 })).toBeNull();
+        expect(visibleCells(m, { x: 0, y: -900, width: 10, height: 10 })).toBeNull();
+    });
+
+    test("the grid's LENGTH must match its own dimensions", () => {
+        // The check that matters most: a grid one entry short reads every row after the first from
+        // the wrong place, which looks like corrupt art rather than a malformed file.
+        expect(tilemapError(grid(3, 2, [0, 1, 2, 3, 4, 5]))).toBeNull();
+        expect(tilemapError(grid(3, 2, [0, 1, 2, 3, 4]))).toMatch(/exactly cols \* rows \(6\).*got 5/);
+        expect(tilemapError(grid(3, 2, [0, 1, 2, 3, 4, 5, 6]))).toMatch(/got 7/);
+        // …and every other thing a hand-edited file can get wrong.
+        expect(tilemapError(undefined)).toBeNull();
+        expect(tilemapError(grid(0, 2, []))).toMatch(/cols must be a whole number >= 1/);
+        expect(tilemapError(grid(1, 1, [0], { tileWidth: 0 }))).toMatch(/tileWidth must be a positive number/);
+        expect(tilemapError(grid(1, 1, [0.5]))).toMatch(/whole numbers >= -1/);
+        expect(tilemapError(grid(1, 1, [-2]))).toMatch(/whole numbers >= -1/);
+        expect(tilemapError(grid(1, 1, [0], { sheet: sheet({ columns: 0 }) }))).toMatch(/sheet.columns/);
+        expect(tilemapError(grid(1, 1, [0], { sheet: sheet({ spacing: -1 }) }))).toMatch(/sheet.spacing/);
+        // A CAP, because `cols * rows` is a hand-editable multiplication and the array is allocated
+        // from it. The largest map in the corpus is 100x100, so the bound has room to spare.
+        expect(tilemapError({ ...grid(1, 1, [0]), cols: 2000, rows: 2000 })).toMatch(/at most/);
+    });
+
+    test("a tilemap node round-trips, and the TYPE and the grid must agree", () => {
+        const d = createEmptyDocument();
+        d.nodes.set("T", { id: "T", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 48, height: 32 }, style: { fill: "none", opacity: 1 }, layout: {},
+            src: "sheet.png", tilemap: grid(3, 2, [0, 1, 2, -1, 4, 5]) } as unknown as Node);
+        d.rootNodeUuids = ["T"];
+        const back = deserializeDocument(serializeDocument(d));
+        expect(back.nodes.get("T")!.tilemap!.tiles).toEqual([0, 1, 2, -1, 4, 5]);
+        expect(back.nodes.get("T")!.src).toBe("sheet.png");
+
+        // A GRID ON A RECTANGLE would be stored, saved and never drawn, because the renderer asks
+        // the TYPE what to draw. Refused, like a nine-slice on a rectangle.
+        const wrong = createEmptyDocument();
+        wrong.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {},
+            tilemap: grid(1, 1, [0]) } as unknown as Node);
+        wrong.rootNodeUuids = ["R"];
+        expect(() => validateDocumentIntegrity(wrong)).toThrow(/has a tilemap but is a core.rectangle/);
+
+        // …and a tilemap node with NO grid is refused too, which is why one is born with one.
+        const bare = createEmptyDocument();
+        bare.nodes.set("T", { id: "T", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {} } as Node);
+        bare.rootNodeUuids = ["T"];
+        expect(() => validateDocumentIntegrity(bare)).toThrow(/core.tilemap with no tilemap/);
+    });
+
+    test("creating one gives it a grid, so it can be saved", () => {
+        // The rule a raster already follows: `Integrity` refuses a tilemap node without a grid, so
+        // a node created without one could be made and never written to disk. The whole-type
+        // round-trip test above this file is what would catch a regression.
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        const r = dispatcher.dispatchAction(new AddNodeAction(dispatcher.getDocument(), "core.tilemap", 0, 0, 32, 32));
+        expect(r.success).toBe(true);
+        const made = [...dispatcher.getDocument().nodes.values()][0];
+        expect(made.tilemap).toBeDefined();
+        expect(tilemapError(made.tilemap)).toBeNull();
+        // SIXTEEN, because 21 of the corpus's 40 Tiled maps use 16x16 tiles and no other size
+        // comes close. A default nobody changes should be the one most files already use.
+        expect(made.tilemap!.tileWidth).toBe(16);
+        // And it is a COPY: a caller's array must not become the document's.
+        const mine = grid(1, 1, [3]);
+        const d2 = new ActionDispatcher(createEmptyDocument());
+        d2.dispatchAction(new AddNodeAction(d2.getDocument(), "core.tilemap", 0, 0, 32, 32, "none", undefined,
+            null, { tilemap: mine }));
+        mine.tiles[0] = 99;
+        expect([...d2.getDocument().nodes.values()][0].tilemap!.tiles).toEqual([3]);
+    });
+
+    test("the MODEL emits one item and culls the cells itself", () => {
+        // One item however large the map — the whole reason the node type exists. And the visible
+        // range is computed HERE rather than in three backends, because the model is the only
+        // thing that knows the viewport.
+        const d = createEmptyDocument();
+        d.nodes.set("T", { id: "T", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 1600, height: 1600 }, style: { fill: "none", opacity: 1 }, layout: {},
+            src: "sheet.png", tilemap: grid(100, 100, new Array(10000).fill(0)) } as unknown as Node);
+        d.rootNodeUuids = ["T"];
+        const model = buildRenderModel({ width: 320, height: 320 }, d,
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(d), viewport: { x: 0, y: 0, zoom: 1 } } as never);
+        const items = model.content.filter(i => i.nodeId === "T");
+        expect(items).toHaveLength(1);
+        const shape = items[0].shape as Extract<Shape, { kind: "tilemap" }>;
+        expect(shape.kind).toBe("tilemap");
+        // A 320x320 window over 16-unit cells is 20 columns of the 100, not all of them.
+        expect(shape.cells).toEqual({ col0: 0, row0: 0, col1: 19, row1: 19 });
+        // PIXEL ART BY DEFAULT, like a painted surface: a 16px tile smoothed into its neighbours is
+        // what nobody importing a map wants.
+        expect(shape.pixelated).toBe(true);
     });
 });

@@ -37,6 +37,8 @@ import { resolveRings } from "../core/geometry/Resolve";
 import { worldCommandsOf } from "../core/actions/booleanActions";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { BlendMode } from "../core/document/Node";
+import { ReadonlyTilemap, visibleCells } from "../core/document/Tilemap";
+import { localVisibleRect } from "../core/geometry/GeometryEngine";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
@@ -98,6 +100,25 @@ export type Shape =
          * cache decode LAZILY on a miss, which is exactly what image loading already does.
          */
         surface: { data: string; width: number; height: number } | null;
+    }
+    | {
+        /**
+         * A GRID OF TILES drawn from one sheet (schema 61) — ONE item, however many cells.
+         *
+         * The whole reason the node type exists: as ten thousand image items this cost 22ms a
+         * frame before anything was drawn. As one item it costs a loop inside the backend.
+         *
+         * THE VISIBLE RANGE IS COMPUTED HERE, not by the backends. Culling is the model's job —
+         * it is the only thing that knows the viewport, and three backends each deriving the same
+         * range from a world matrix is three chances to disagree about which row is the last one.
+         * `cells` is null when none of the grid is on screen, so a scrolled-away map draws nothing
+         * and the backend needs no opinion about that either.
+         */
+        kind: "tilemap"; x: number; y: number; width: number; height: number;
+        href: string | null;
+        pixelated: boolean;
+        map: ReadonlyTilemap;
+        cells: { col0: number; row0: number; col1: number; row1: number } | null;
     };
 
 /** Compile error if a `PathCommand` variant is ever added without a `commandsToPathData` case. */
@@ -829,6 +850,29 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 // to show its pixels; smoothing them is the one thing a pixel artist never wants,
                 // and an image node defaults the other way because a photograph does.
                 pixelated: node.pixelated !== false
+            };
+            paint = {
+                fill: null, opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
+                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur, blendMode
+            };
+        } else if (node.type === "core.tilemap") {
+            // THE VISIBLE RECT IN THE NODE'S OWN SPACE, ASKED FOR rather than derived. The grid is
+            // laid out in local units and `visible` is world, but this file may not compose
+            // coordinates — its only Matrix import is the `Mat2D` type, and a test checks that,
+            // because a renderer doing its own matrix work is a second geometry engine. A node
+            // that cannot be inverted shows no cells rather than all of them.
+            const localWindow = localVisibleRect(computed, id, visible);
+            shape = {
+                kind: "tilemap", x, y, width, height,
+                href: node.src ?? null,
+                // A TILE SHEET IS PIXEL ART until told otherwise, the same default a painted
+                // surface takes: a 16px tile smoothed into its neighbours is the one thing nobody
+                // importing a map wants, and it is what happens by default everywhere else.
+                pixelated: node.pixelated !== false,
+                map: node.tilemap as ReadonlyTilemap,
+                cells: node.tilemap && localWindow
+                    ? visibleCells(node.tilemap as ReadonlyTilemap, localWindow)
+                    : null
             };
             paint = {
                 fill: null, opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,

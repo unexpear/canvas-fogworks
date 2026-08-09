@@ -61,8 +61,12 @@
  *     target becomes the next scratch. One extra full-screen pass per blended item, and nothing at
  *     all for a frame that does not blend.
  *
- * WHAT THIS FILE HAS NO KNOWN GAP FOR, as of schema 60 — which is a sentence with a shelf life, and
- * `npm run header-claims` lists it on purpose so the next person to find one comes back here.
+ * THE GAP TODAY IS `core.tilemap` (schema 61). Every shape this backend draws is one outline
+ * textured by one source rect, and a grid is N rects from a single sheet — so it needs either
+ * per-vertex UVs or, better, the one-quad shader that resolves a tile per FRAGMENT, which is
+ * exactly what storing indices rather than nodes makes possible. SVG and Canvas draw a cell each
+ * because both have a nine-argument blit; this one has to be built. Until then a tilemap is absent
+ * on this backend rather than wrong, and the app labels it a preview.
  *
  * The app still offers this backend as a preview, because a backend that quietly drops content is
  * worse than one that admits what it cannot do.
@@ -1010,6 +1014,13 @@ export function shapeToLocalCommands(shape: Shape, radius: number | null): PathC
         // instead of each having an opinion about where a line breaks.
         case "text": return transformCommands(translation(shape.x, shape.y),
             rectCommands(shape.width, shape.height, 0));
+        // A TILEMAP DRAWS NOTHING HERE YET (schema 61), and it is the one shape this backend
+        // cannot express by adding a case. Every other kind is ONE outline textured by ONE source
+        // rect; a grid is N rects from one sheet, so it needs either per-vertex UVs or the
+        // single-quad shader that looks the tile up per fragment — the approach that renders a
+        // 512-cube map in 300 microseconds, and the reason the node stores indices at all.
+        // Recorded rather than discovered; `npm run header-claims` lists the header sentence.
+        case "tilemap": return null;
         default: return null;
     }
 }

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v60 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v61 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -1943,6 +1943,19 @@ function blendModeError(mode: unknown): string | null;
 // then `blendTargets` combines scratch over backdrop — fixed-function cannot branch on the
 // destination, which overlay needs. Verified pixel-identical across the three.
 function blendTargets(gl, blur, backdrop, source, mode): void;
+// A TILEMAP (schema 61), in `document/Tilemap` — a grid of indices into one sheet, because the
+// alternative measured 10,618 nodes and 22ms a frame for one 100x100 map. Only a `core.tilemap`
+// may carry one, and it MUST: `AddNodeAction` gives it the empty default so it can be saved.
+Node.tilemap?: Tilemap;
+interface Tilemap { cols; rows; tileWidth; tileHeight; sheet: TileSheet; tiles: number[] }
+interface TileSheet { columns; tileWidth; tileHeight; spacing; margin }   // sheet PIXELS
+function tilemapError(map): string | null;      function tileAt(map, col, row): number;
+function tileSourceRect(sheet, index): Rect | null;   // the ONE slicing rule; TiledMap delegates
+function visibleCells(map, localRect): { col0; row0; col1; row1 } | null;   // inclusive, clamped
+function sheetWidth(sheet) / sheetHeight(sheet, tiles): number;   // implied, for SVG's viewBox
+// A world rect in a node's LOCAL space. In the geometry engine because the render model may not
+// compose coordinates — it needed this to cull a grid, and asking is allowed where deriving is not.
+function localVisibleRect(state, nodeId, world: Rect): Rect | null;
 Node.clipsContent?: boolean;
 ComputedNode.clips?: readonly string[];   // clipping ANCESTORS, outermost first — a frame is not
                                           // in its own chain, so its own ink is never cut

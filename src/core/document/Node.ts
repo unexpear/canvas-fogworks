@@ -9,6 +9,7 @@ import { Gradient, gradientError } from "./Gradient";
 import { NineSliceInsets } from "../geometry/NineSlice";
 import { Interaction } from "./Prototype";
 import { IkConstraint } from "./Rig";
+import { Tilemap, tilemapError } from "./Tilemap";
 
 /** A `"$token"` reference in a NUMBER slot (radius/fontSize, schema 20). Same syntax as color
  *  tokens; the resolved value's range is checked at render time (broken → visible fallback). */
@@ -21,7 +22,7 @@ function isNumberToken(v: unknown): boolean {
  * it, and both validation paths check membership against it — so adding a type is
  * one edit, and an unknown type cannot slip in through a hand-edited file.
  */
-export const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path", "core.instance", "core.boolean", "core.raster"] as const;
+export const NODE_TYPES = ["core.rectangle", "core.text", "core.image", "core.ellipse", "core.line", "core.path", "core.instance", "core.boolean", "core.raster", "core.tilemap"] as const;
 export type NodeType = typeof NODE_TYPES[number];
 
 /**
@@ -288,7 +289,12 @@ export function nineSliceError(type: NodeType, slice: unknown): string | null {
 
 export function srcError(type: NodeType, src: unknown): string | null {
     if (src === undefined) return null;
-    if (type !== "core.image") return "only a core.image node may carry a src";
+    // A TILEMAP CARRIES ITS SHEET THE SAME WAY an image carries its picture, deliberately: the
+    // renderer's image cache is keyed by `src`, so a sheet loads, decodes and is reused through the
+    // path that already exists rather than through a second one that would have its own bugs.
+    if (type !== "core.image" && type !== "core.tilemap") {
+        return "only a core.image or core.tilemap node may carry a src";
+    }
     return srcValueError(src);
 }
 
@@ -432,6 +438,15 @@ export interface Node {
      * be a thing you can click, or the canvas grows invisible targets.
      */
     clipsContent?: boolean;
+
+    /**
+     * A GRID OF TILE INDICES, for a `core.tilemap` (schema 61).
+     *
+     * Measured: importing one 100x100 five-layer map as a node per cell made 10,618 nodes, 22ms of
+     * derivation and 5.66MB of JSON. It becomes five nodes here. See `document/Tilemap` for the
+     * shape, and for why the indices are the map rather than the tiles it draws.
+     */
+    tilemap?: Tilemap;
     /**
      * A surface this document OWNS, for `core.raster` (schema 55).
      *

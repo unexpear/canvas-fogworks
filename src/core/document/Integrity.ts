@@ -18,6 +18,7 @@ import { timelineError, trackError, channelsError } from "./Timeline";
 import { clipsError } from "./Clips";
 import { ikError } from "./Rig";
 import { clipsContentError } from "./Node";
+import { tilemapError } from "./Tilemap";
 import { depthError } from "./Depth";
 import { meshError } from "./Mesh";
 import { ambientError, lightsError } from "./Light";
@@ -95,6 +96,17 @@ function checkNodeRanges(node: ReadonlyNode): void {
     if (sliceErr) throw new Error(`Invalid document: node "${node.id}" ${sliceErr}.`);
     const clipErr = clipsContentError(node.clipsContent);
     if (clipErr) throw new Error(`Invalid document: node "${node.id}" ${clipErr}.`);
+    const mapErr = tilemapError(node.tilemap);
+    if (mapErr) throw new Error(`Invalid document: node "${node.id}" ${mapErr}.`);
+    // A GRID ON A RECTANGLE would be stored, saved and never drawn — the renderer asks the TYPE
+    // what to draw. Refused rather than ignored, which is the rule every other typed field here
+    // follows: `nineSlice` is only for a bitmap and `surface` only for a raster.
+    if (node.tilemap !== undefined && node.type !== "core.tilemap") {
+        throw new Error(`Invalid document: node "${node.id}" has a tilemap but is a ${node.type}.`);
+    }
+    if (node.type === "core.tilemap" && node.tilemap === undefined) {
+        throw new Error(`Invalid document: node "${node.id}" is a core.tilemap with no tilemap.`);
+    }
     const srcErr = srcError(node.type, node.src);
     if (srcErr) throw new Error(`Invalid document: node "${node.id}" ${srcErr}.`);
     // `componentId` (M6): only an instance may carry one; a DANGLING reference is deliberately

@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v60 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v61 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -1116,6 +1116,46 @@ source rect, and a panel whose middle has collapsed genuinely has four pieces.
 
 **Stretched, not tiled.** Tiling needs a repeat count, a rule for partial tiles and a per-axis
 choice; it is not pretended to exist.
+
+## `core.tilemap` — a grid instead of a node per cell (schema 61)
+
+```ts
+Node.tilemap?: Tilemap                       // only on a core.tilemap, and required there
+Tilemap { cols, rows, tileWidth, tileHeight, sheet: TileSheet, tiles: number[] }
+TileSheet { columns, tileWidth, tileHeight, spacing, margin }   // sheet pixels
+TILE_EMPTY = -1        TILEMAP_MAX_CELLS = 1_048_576
+```
+
+**MEASURED BEFORE BUILDING.** Importing `Roguelike Base Pack/Map/sample_map.tmx` (100×100, 5 layers)
+made one `core.image` per non-empty cell: **10,618 nodes, 22ms** to compute geometry and build the
+render model — over a 16ms frame, before anything was drawn — and **5.66MB** of JSON. Every node
+carried a full geometry, style, layout and transform to say "this 16px tile, here". It becomes
+**five nodes** here, one per layer.
+
+**It is also what autotiling needs**, and that is the deeper reason. Autotiling is a function from
+*terrain* to tile, and the node-per-cell document stored only the answer with nowhere to put the
+question — the same shape of mistake as flattening a gradient to its midpoint colour.
+
+**Indices, not GIDs.** Tiled's global ids are numbered across every set a map uses, so a cell's
+meaning depends on a table it is not stored beside. A `Tilemap` names its sheet and indexes into
+that one sheet, so a layer means the same thing wherever it is pasted. `TiledMap.tileSourceRect`
+now keeps only the *gid semantics* and delegates the slicing arithmetic to `Tilemap.tileSourceRect`
+— the same function the renderer calls, because an importer and a renderer that slice a sheet
+differently draw the map one pixel out per column.
+
+**The model emits ONE item and culls the cells itself**, because it is the only thing that knows
+the viewport; three backends each deriving the range would be three chances to disagree about
+which row is the last. The visible rect is *asked of* `localVisibleRect` in the geometry engine
+rather than derived, since the render model may not compose coordinates — an invariant with its own
+test.
+
+**A tilemap is born with a grid**, as a raster is born with its surface: `Integrity` refuses a
+`core.tilemap` without one, so a node created without one could be made and never saved. The
+default is 16×16 because 21 of the corpus's 40 Tiled maps use that size and no other comes close.
+
+**Not drawn by the WebGL backend yet.** Every shape that backend draws is one outline textured by
+one source rect; a grid is N rects from one sheet, so it needs the one-quad shader that resolves a
+tile per fragment — which is exactly what storing indices makes possible, and its own piece of work.
 
 ## The eyedropper (no schema change)
 

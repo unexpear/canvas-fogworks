@@ -406,6 +406,37 @@ export function toLocal(state: ComputedState, nodeId: string, x: number, y: numb
     return applyToPoint(inverse, x, y);
 }
 
+/**
+ * A world rectangle in a node's LOCAL space, axis-aligned around whatever it becomes.
+ *
+ * HERE RATHER THAN IN THE RENDER MODEL, and the invariant that says so is mechanically checked: the
+ * model's only Matrix import is the `Mat2D` TYPE, because a renderer that composes coordinates is a
+ * second geometry engine free to disagree with this one. The model needed the viewport in a
+ * tilemap's own units to pick visible cells; asking for it is allowed, deriving it is not.
+ *
+ * AXIS-ALIGNED AROUND THE FOUR CORNERS, because a rotated node turns the window into a diamond and
+ * the caller wants a range of grid cells. Over-broad rather than clever: a few cells drawn off the
+ * edge of the screen cost a `drawImage` each, and a range that was too SMALL would show the map
+ * with a bite taken out of one corner.
+ *
+ * Null when the node is unknown or its matrix cannot be inverted (scaled to nothing) — there is no
+ * local space to answer in.
+ */
+export function localVisibleRect(
+    state: ComputedState, nodeId: string, world: Rect
+): Rect | null {
+    const corners = [
+        toLocal(state, nodeId, world.x, world.y),
+        toLocal(state, nodeId, world.x + world.width, world.y),
+        toLocal(state, nodeId, world.x, world.y + world.height),
+        toLocal(state, nodeId, world.x + world.width, world.y + world.height)
+    ];
+    if (corners.some(c => c === null)) return null;
+    const xs = corners.map(c => c!.x), ys = corners.map(c => c!.y);
+    const x = Math.min(...xs), y = Math.min(...ys);
+    return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
 /** A node's local point → world space. */
 export function toWorld(state: ComputedState, nodeId: string, x: number, y: number): { x: number; y: number } | null {
     const c = state.nodes.get(nodeId);

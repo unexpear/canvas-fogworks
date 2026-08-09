@@ -15,6 +15,7 @@
  */
 
 import { toMatrixString, isTranslationOnly } from "../core/geometry/Matrix";
+import { tileAt, tileSourceRect, sheetWidth, sheetHeight } from "../core/document/Tilemap";
 import { DisplayList, DrawItem, Paint, FilterDef, PaintGradient, commandsToPathData, effectFilterId } from "./RenderModel";
 import { naturalSize, surfaceUrl } from "./ImageCache";
 import { nineSliceRects } from "../core/geometry/NineSlice";
@@ -247,6 +248,48 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         fo.appendChild(div);
         applyTail(fo, item);
         group.appendChild(fo);
+    } else if (shape.kind === "tilemap") {
+        // ONE GROUP, ONE `<image>` PER VISIBLE CELL, each showing a window onto the sheet.
+        //
+        // SVG HAS NO NINE-ARGUMENT DRAW. Canvas and the GPU can say "this rectangle of that
+        // bitmap" in one call; here a sub-rectangle is an `<image>` scaled up inside a `<svg>`
+        // viewport that crops it, which is the same trick the sprite-region path already uses.
+        // So a tilemap is genuinely more elements on this backend than on the others — but it is
+        // bounded by what is ON SCREEN, which the model already worked out, rather than by the
+        // size of the map. That is the difference between 4,749 elements and 10,618.
+        const g = document.createElementNS(svgNS, "g") as SVGGElement;
+        const map = shape.map;
+        const cells = shape.cells;
+        if (cells && shape.href) {
+            for (let row = cells.row0; row <= cells.row1; row++) {
+                for (let col = cells.col0; col <= cells.col1; col++) {
+                    const src = tileSourceRect(map.sheet, tileAt(map, col, row));
+                    if (!src) continue;
+                    const cell = document.createElementNS(svgNS, "svg");
+                    cell.setAttribute("x", String(shape.x + col * map.tileWidth));
+                    cell.setAttribute("y", String(shape.y + row * map.tileHeight));
+                    cell.setAttribute("width", String(map.tileWidth));
+                    cell.setAttribute("height", String(map.tileHeight));
+                    // The VIEWBOX is the window: the whole sheet is placed inside a viewport the
+                    // size of one tile, offset so the wanted tile lands in it.
+                    cell.setAttribute("viewBox", `${src.x} ${src.y} ${src.width} ${src.height}`);
+                    cell.setAttribute("preserveAspectRatio", "none");
+                    const img = document.createElementNS(svgNS, "image");
+                    img.setAttribute("href", shape.href);
+                    img.setAttribute("x", "0");
+                    img.setAttribute("y", "0");
+                    // Sized to the SHEET, not the tile: the viewBox above does the cropping.
+                    img.setAttribute("width", String(sheetWidth(map.sheet)));
+                    img.setAttribute("height", String(sheetHeight(map.sheet, map.tiles)));
+                    if (shape.pixelated) img.setAttribute("image-rendering", "pixelated");
+                    cell.appendChild(img);
+                    g.appendChild(cell);
+                }
+            }
+        }
+        if (paint.opacity !== null) g.setAttribute("opacity", String(paint.opacity));
+        applyTail(g, item);
+        group.appendChild(g);
     } else if (shape.kind === "image") {
         const el = document.createElementNS(svgNS, "image");
         el.setAttribute("x", String(shape.x));

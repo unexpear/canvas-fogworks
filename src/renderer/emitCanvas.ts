@@ -42,6 +42,7 @@ import { isTranslationOnly } from "../core/geometry/Matrix";
 import { ClipRegion, DisplayList, DrawItem, Paint, PaintGradient, Shape, layerTransition, textParagraphs } from "./RenderModel";
 import { GradientStop } from "../core/document/Gradient";
 import { nineSliceRects } from "../core/geometry/NineSlice";
+import { tileAt, tileSourceRect } from "../core/document/Tilemap";
 import { parseColor } from "./emitWebGL";
 import { resolveSurface, resolveImage, setImageReadyCallback } from "./ImageCache";
 import { drawTextInto } from "./TextRaster";
@@ -257,6 +258,32 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint,
                         shape.x, shape.y, shape.width, shape.height);
                 } else {
                     ctx.drawImage(img, shape.x, shape.y, shape.width, shape.height);
+                }
+            }
+            return;
+        }
+        case "tilemap": {
+            // ONE ITEM, MANY `drawImage` CALLS — and the nine-argument form is the same one a
+            // sprite region already uses, so a tile is a sub-rectangle of a sheet exactly as a
+            // sprite is. Nothing new is drawn here; what is new is that ten thousand of them
+            // arrive as one display item instead of ten thousand nodes.
+            const map = shape.map;
+            const cells = shape.cells;
+            if (!cells) return;                       // scrolled off screen: the model said so
+            // NO SHEET, NO TILES. A tilemap whose src is unset is an empty grid waiting for one,
+            // which is a legal state the inspector can produce.
+            const img = shape.href === null ? null : resolveImage(shape.href);
+            if (!img) return;                         // sheet not decoded yet, as for any image
+            if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
+            // Sticky context state, set both ways for the reason the image case sets it both ways.
+            ctx.imageSmoothingEnabled = !shape.pixelated;
+            for (let row = cells.row0; row <= cells.row1; row++) {
+                for (let col = cells.col0; col <= cells.col1; col++) {
+                    const src = tileSourceRect(map.sheet, tileAt(map, col, row));
+                    if (!src) continue;               // an empty cell draws nothing at all
+                    ctx.drawImage(img, src.x, src.y, src.width, src.height,
+                        shape.x + col * map.tileWidth, shape.y + row * map.tileHeight,
+                        map.tileWidth, map.tileHeight);
                 }
             }
             return;
