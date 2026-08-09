@@ -77,6 +77,7 @@ class MockCtx {
     private _strokeStyle = ""; get strokeStyle() { return this._strokeStyle; } set strokeStyle(v: string) { this._strokeStyle = v; this.log("set strokeStyle", v); }
     private _lineWidth = 1; get lineWidth() { return this._lineWidth; } set lineWidth(v: number) { this._lineWidth = v; this.log("set lineWidth", v); }
     private _globalAlpha = 1; get globalAlpha() { return this._globalAlpha; } set globalAlpha(v: number) { this._globalAlpha = v; this.log("set globalAlpha", v); }
+    private _gco = "source-over"; get globalCompositeOperation() { return this._gco; } set globalCompositeOperation(v: string) { this._gco = v; this.log("set globalCompositeOperation", v); }
     private _font = ""; get font() { return this._font; } set font(v: string) { this._font = v; this.log("set font", v); }
     private _textAlign = ""; get textAlign() { return this._textAlign; } set textAlign(v: string) { this._textAlign = v; this.log("set textAlign", v); }
     private _textBaseline = ""; get textBaseline() { return this._textBaseline; } set textBaseline(v: string) { this._textBaseline = v; this.log("set textBaseline", v); }
@@ -1028,5 +1029,45 @@ describe("Clipping a frame's content (schema 59)", () => {
         const ctx = new MockCtx();
         emitCanvas(ctx as unknown as CanvasRenderingContext2D, modelFor(doc), 1);
         expect(ctx.calls.map(c => c.op)).not.toContain("clip");
+    });
+});
+
+describe("Blend modes (schema 60)", () => {
+    const blended = (mode?: string) => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 },
+            style: { fill: "#f00", opacity: 1, ...(mode ? { blendMode: mode } : {}) }, layout: {} } as unknown as Node);
+        doc.rootNodeUuids = ["A"];
+        return buildRenderModel({ width: 400, height: 300 }, doc,
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(doc), viewport: { x: 0, y: 0, zoom: 1 } } as never);
+    };
+
+    test("the mode reaches the context by its own name", () => {
+        const ctx = new MockCtx();
+        emitCanvas(ctx as unknown as CanvasRenderingContext2D, blended("multiply"), 1);
+        expect(ctx.calls.find(c => c.op === "set globalCompositeOperation")?.args[0]).toBe("multiply");
+    });
+
+    test("an unblended shape never touches the property", () => {
+        // The falsifiable half: without it, a backend that set "multiply" on everything would pass
+        // the test above.
+        const ctx = new MockCtx();
+        emitCanvas(ctx as unknown as CanvasRenderingContext2D, blended(), 1);
+        expect(ctx.calls.some(c => c.op === "set globalCompositeOperation")).toBe(false);
+    });
+
+    test("the mode does not LEAK onto what is drawn next", () => {
+        // Set inside the item's own save/restore. A composite operation left switched on would
+        // multiply the rest of the document into its backdrop — and the shape that caused it would
+        // look perfectly correct.
+        const ctx = new MockCtx();
+        emitCanvas(ctx as unknown as CanvasRenderingContext2D, blended("screen"), 1);
+        const ops = ctx.calls.map(c => c.op);
+        const setAt = ops.indexOf("set globalCompositeOperation");
+        expect(setAt).toBeGreaterThan(-1);
+        // There is a `restore` after it, and the counts balance across the frame.
+        expect(ops.indexOf("restore", setAt)).toBeGreaterThan(setAt);
+        expect(ops.filter(o => o === "save").length).toBe(ops.filter(o => o === "restore").length);
     });
 });

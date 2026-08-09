@@ -43,7 +43,8 @@ const EXCLUDE = /\.(test|spec)\.(ts|tsx|js)$/;
 const CLAIM = new RegExp([
     "not yet", "yet to be", "for now", "at present", "currently (no|does not|cannot)",
     "nothing (consumes|reads|writes|calls|uses|renders|draws) (it|this|them)",
-    "remaining gap", "are ignored", "is ignored", "this backend does not", "does not allocate",
+    "remaining gap", "the gap (today )?is", "are ignored", "is ignored", "this backend does not",
+    "does not allocate", "is a divergence",
     "no (inspector|control|ui|editor|way to author)", "is not wired", "does nothing yet",
     "will (be|come|land)", "planned", "future", "eventually"
 ].join("|"), "i");

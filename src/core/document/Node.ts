@@ -728,6 +728,20 @@ export interface Style {
     /** Corner radius — a number, or a NUMBER-token reference like "$radius/medium" (schema 20). */
     radius?: number | string;
     opacity: number;
+    /**
+     * How this node's colour combines with what is already behind it (schema 60).
+     *
+     * THREE MODES, AND THE CORPUS PICKED THEM. Of the 5,279 SVG files in `freeassets`, 65 use
+     * `mix-blend-mode` and between them they name exactly three: overlay (63), multiply (54) and
+     * screen (13). No darken, lighten, dodge, burn, difference, hue, saturation, colour or
+     * luminosity anywhere — and on the pixel-art side all 92 Aseprite layers across 26 files are
+     * `normal` at full opacity, so the `blendMode` that importer already parses is always zero.
+     * Eighteen modes across three backends is a very different job from three, and two thirds of
+     * that job would be for nothing.
+     *
+     * Absent means `normal`, which is what every document meant before this existed.
+     */
+    blendMode?: BlendMode;
     /** Text font size in world units (defaults to 14) — a number, or a number-token reference (schema 20). */
     fontSize?: number | string;
     /**
@@ -775,7 +789,27 @@ export function flatFill(fill: string | Gradient): string {
  * the opacity/radius/fontSize rules. Only present fields are checked. Message substrings are
  * load-bearing (tests assert "opacity must be within"). Returns an error string, or null.
  */
+/**
+ * The blend modes this engine supports — measured, not chosen. See `Style.blendMode`.
+ *
+ * `normal` is not in the list because absent IS normal: offering both would put two spellings of
+ * "do nothing" into every file and every comparison.
+ */
+export const BLEND_MODES = ["multiply", "screen", "overlay"] as const;
+export type BlendMode = typeof BLEND_MODES[number];
+
+/** What is wrong with a blend mode, or null. */
+export function blendModeError(mode: unknown): string | null {
+    if (mode === undefined) return null;
+    if (typeof mode !== "string" || !(BLEND_MODES as readonly string[]).includes(mode)) {
+        return `style.blendMode must be one of ${BLEND_MODES.join(", ")}`;
+    }
+    return null;
+}
+
 export function styleError(s: Partial<Style>): string | null {
+    const blendErr = blendModeError(s.blendMode);
+    if (blendErr) return blendErr;
     // fill (schema 56): a colour/token string, or a gradient — whose own rules live in
     // `gradientError` so the edit path, the load path and the importer cannot disagree about what
     // a legal ramp is. The old message is kept verbatim for the non-object case: tests assert the

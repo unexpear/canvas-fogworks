@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v59 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v60 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -1116,6 +1116,40 @@ source rect, and a panel whose middle has collapsed genuinely has four pieces.
 
 **Stretched, not tiled.** Tiling needs a repeat count, a rule for partial tiles and a per-axis
 choice; it is not pretended to exist.
+
+## Blend modes (schema 60)
+
+```ts
+Style.blendMode?: "multiply" | "screen" | "overlay"   // absent = normal
+BLEND_MODES, blendModeError(mode)
+Paint.blendMode: BlendMode | null                      // what the backends read
+```
+
+**THREE MODES, AND THE CORPUS PICKED THEM.** Of the 5,279 SVG files in `freeassets`, 65 use
+`mix-blend-mode` and between them they name exactly three: **overlay (63), multiply (54), screen
+(13)**. No darken, lighten, dodge, burn, difference, hue, saturation, colour or luminosity
+anywhere. On the pixel-art side all **92 Aseprite layers across 26 files are `normal` at full
+opacity** — so the `blendMode` that importer already parses is always zero. Eighteen modes across
+three backends is a very different job from three, and two thirds of it would be for nothing.
+
+`normal` is not a value: absent *is* normal, and offering both would put two spellings of "do
+nothing" into every file and every comparison.
+
+**The names are shared with CSS and Canvas**, deliberately — `multiply`/`screen`/`overlay` are
+spelled the same in the document, in `mix-blend-mode` and in `globalCompositeOperation`, so the
+value travels end to end with no translation table anywhere to disagree with itself.
+
+**Chrome never blends.** Grid lines, handles, marquees and previews carry `null`: a selection
+handle tinted by the art beneath it is unreadable, and a grid multiplied into the page vanishes
+over dark artwork.
+
+**NOT DRAWN BY THE WebGL BACKEND YET**, which is a divergence recorded rather than discovered. All
+three modes combine a shape with what is *behind* it, and that backend renders to the default
+framebuffer, which cannot be sampled. Fixed-function blending is not a way out: it approximates
+multiply and screen only while the backdrop is opaque, and cannot express overlay at all, because
+overlay branches on the destination and `blendFunc` has no branch. Doing it exactly means rendering
+the scene into a target and ping-ponging a blend pass per blended item. `npm run header-claims`
+lists the sentence in `emitWebGL` that says so.
 
 ## Clipping content to a frame (schema 59)
 

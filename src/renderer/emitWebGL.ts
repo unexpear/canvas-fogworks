@@ -51,8 +51,20 @@
  * be the only one, and `npm run header-claims` is what found it — advisory, because the judgement
  * is a read. A sentence describing an ABSENCE has a shelf life; write it expecting to come back.
  *
+ * THE GAP TODAY IS BLEND MODES (schema 60). `multiply`, `screen` and `overlay` all combine a
+ * shape with what is BEHIND it, and this backend renders to the default framebuffer, which cannot
+ * be sampled. Fixed-function blending is not a way out: it can approximate multiply and screen
+ * only while the backdrop is opaque, and it cannot express overlay at all, because overlay
+ * branches on the destination and `blendFunc` has no branch. Doing it exactly means rendering the
+ * scene into a target and ping-ponging a blend pass per blended item — which is a real change to
+ * the most feedback-prone file here, not a flag.
+ *
+ * So a blended node draws NORMALLY on this backend, which is a divergence from the other two and
+ * is written down rather than discovered: `npm run header-claims` lists this sentence precisely so
+ * somebody comes back to it.
+ *
  * The app still offers this backend as a preview, because a backend that quietly drops content is
- * worse than one that admits what it cannot do — but the effects gap is no longer why.
+ * worse than one that admits what it cannot do — and this is now why.
  */
 
 import { ClipRegion, DisplayList, DrawItem, PaintGradient, Shape, layerTransition } from "./RenderModel";

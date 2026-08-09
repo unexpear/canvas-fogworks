@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
 
-> 🔒 Frozen contract · schema v59 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v60 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -1927,6 +1927,12 @@ function meshHandleAtPoint(doc, state, selected, x, y, zoom, posed?): SelectionH
 function meshPointFromWorld(doc, state, nodeId, mesh, index, worldX, worldY, posed?): { x, y } | null;
 // CLIPPING (schema 59). A container cuts its children to its own box, radius included — measured:
 // of 5,279 SVGs in the corpus, ZERO use <mask> and every one of the 72 clip paths is a plain rect.
+// BLENDING (schema 60). Three modes, measured: 65 of 5,279 corpus SVGs blend and name only these.
+// Absent IS normal. The names match CSS and Canvas exactly, so nothing translates anywhere.
+const BLEND_MODES = ["multiply", "screen", "overlay"];
+Style.blendMode?: BlendMode;      Paint.blendMode: BlendMode | null;   // null on all chrome
+function blendModeError(mode: unknown): string | null;
+// NOT drawn by emitWebGL: it renders to the default framebuffer and cannot sample its backdrop.
 Node.clipsContent?: boolean;
 ComputedNode.clips?: readonly string[];   // clipping ANCESTORS, outermost first — a frame is not
                                           // in its own chain, so its own ink is never cut

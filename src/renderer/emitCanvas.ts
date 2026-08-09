@@ -120,8 +120,11 @@ function gradientStyle(ctx: CanvasRenderingContext2D, g: PaintGradient): string 
 
 function fillAndStroke(ctx: CanvasRenderingContext2D, paint: Paint, localBox?: { width: number; height: number }): void {
     if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
-    // `fill: "none"` (outline items) has no canvas colour equivalent — skip the fill,
-    // exactly as SVG's fill="none" paints no interior.
+    // BLENDING (schema 60) is one property here, and the three modes this engine supports are
+    // spelled exactly as Canvas spells them — which is also exactly as CSS and SVG spell them, so
+    // the value travels from the document to all three backends without a translation table.
+    // Set inside the item's own save/restore, so it cannot leak onto whatever is drawn next.
+    if (paint.blendMode !== null) ctx.globalCompositeOperation = paint.blendMode;
     // `fill: "none"` (outline items) has no canvas colour equivalent — skip the fill,
     // exactly as SVG's fill="none" paints no interior.
     if (paint.fill !== null && paint.fill !== "none") {

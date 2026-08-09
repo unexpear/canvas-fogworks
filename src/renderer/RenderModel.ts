@@ -36,6 +36,7 @@ import { Ring, commandsToRings, ringsToCommands } from "../core/geometry/PathBoo
 import { resolveRings } from "../core/geometry/Resolve";
 import { worldCommandsOf } from "../core/actions/booleanActions";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
+import { BlendMode } from "../core/document/Node";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
 import { ComputedState, selectionBounds } from "../core/geometry/GeometryEngine";
@@ -294,6 +295,16 @@ export interface Paint {
     shadow: Shadow | null;
     /** Whole-node gaussian blur radius (world units), or null. */
     blur: number | null;
+    /**
+     * How this item's colour combines with what is behind it (schema 60), or null for normal.
+     *
+     * On the PAINT rather than on a group, because that is where the document puts it and where
+     * every one of the three backends wants it: SVG a CSS property on the element, Canvas a
+     * `globalCompositeOperation` around the draw, the GPU a blend function or a shader pass. A
+     * node blends against whatever it happens to be over, which is a different question from the
+     * one opacity groups answer.
+     */
+    blendMode: BlendMode | null;
 }
 
 /** A deduped filter definition (schema-18 effects) — emitSVG builds one `<filter id>` per entry. */
@@ -504,7 +515,7 @@ function lineItem(x1: number, y1: number, x2: number, y2: number, stroke: string
         shape: { kind: "line", x1, y1, x2, y2 },
         paint: {
             fill: null, opacity: null, stroke, strokeWidth,
-            strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
+            strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null, blendMode: null
         },
         world: null,
         nodeId: null,
@@ -709,6 +720,9 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 ? { dx: cast.x, dy: cast.y, blur: Math.hypot(cast.x, cast.y) / 2, color: "#00000059" }
                 : null;
         const blur: number | null = (hasArea && sty.blur) ? sty.blur : null;
+        // Only where there is ink to combine: a node with no area blends nothing with anything,
+        // and carrying the mode anyway would make every backend open a blend it then closes.
+        const blendMode: BlendMode | null = hasArea && sty.blendMode ? sty.blendMode : null;
 
         let shape: Shape;
         let paint: Paint;
@@ -721,7 +735,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "rect", x, y, width, height };
             paint = {
                 fill: fillOf(sty.fill),
-                opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
+                opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur, blendMode,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeJoin: sty.strokeJoin, strokeCap: sty.strokeCap, strokeMiterLimit: sty.strokeMiterLimit,
@@ -736,7 +750,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "ellipse", cx: width / 2, cy: height / 2, rx: width / 2, ry: height / 2 };
             paint = {
                 fill: fillOf(sty.fill),
-                opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
+                opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur, blendMode,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeJoin: sty.strokeJoin, strokeCap: sty.strokeCap, strokeMiterLimit: sty.strokeMiterLimit,
@@ -753,7 +767,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "line", x1: 0, y1: 0, x2: width, y2: height };
             paint = {
                 fill: null,
-                opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
+                opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur, blendMode,
                 // `||` not `??`: an empty-string stroke also falls back to `fill`, so a line
                 // is never invisible (a line's stroke IS its body, unlike a rect's border).
                 // The fallback picks the RAW winner first, THEN resolves — so a token stroke
@@ -775,7 +789,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             };
             paint = {
                 fill: fillOf(sty.fill), opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
-                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
+                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur, blendMode
             };
         } else if (node.type === "core.image") {
             // BOTH CARRIED ALWAYS, `pixelated` as a plain boolean rather than an optional. A
@@ -792,7 +806,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             };
             paint = {
                 fill: null, opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
-                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
+                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur, blendMode
             };
         } else if (node.type === "core.raster") {
             // A RASTER IS AN IMAGE THE MODEL NAMES RATHER THAN CARRIES. The surface is run-length
@@ -818,7 +832,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             };
             paint = {
                 fill: null, opacity: isOpacityGroup(node) ? 1 : sty.opacity, stroke: null, strokeWidth: null,
-                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur
+                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow, blur, blendMode
             };
         } else if (node.type === "core.path") {
             // Drawn ONLY from its commands (the first shape whose ink is independent of the
@@ -827,7 +841,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "path", commands: node.path ?? [] };
             paint = {
                 fill: fillOf(sty.fill),
-                opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur,
+                opacity: isOpacityGroup(node) ? 1 : sty.opacity, shadow, blur, blendMode,
                 stroke: sty.stroke ? color(sty.stroke) : null,
                 strokeWidth: sty.stroke ? strokeWidthOf(sty.strokeWidth) : null,
                 strokeJoin: sty.strokeJoin, strokeCap: sty.strokeCap, strokeMiterLimit: sty.strokeMiterLimit,
@@ -849,7 +863,7 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             shape = { kind: "rect", x, y, width, height };
             paint = {
                 fill: "#ff006e33", opacity: null, stroke: "#ff006e", strokeWidth: 1 / z,
-                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow: null, blur: null
+                strokeDash: null, radius: null, cursor: "pointer", pointerEvents: true, shadow: null, blur: null, blendMode: null
             };
         }
 
@@ -886,7 +900,7 @@ function outlineItem(
         shape: { kind: "rect", x: geo.x - pad, y: geo.y - pad, width: geo.width + pad * 2, height: geo.height + pad * 2 },
         paint: {
             fill: "none", opacity: null, stroke, strokeWidth,
-            strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
+            strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null, blendMode: null
         },
         world: null,
         nodeId: null,
@@ -917,7 +931,7 @@ function frameItem(quad: Quad, stroke: string, strokeWidth: number): DrawItem {
         },
         paint: {
             fill: "none", opacity: null, stroke, strokeWidth,
-            strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
+            strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null, blendMode: null
         },
         world: null,
         nodeId: null,
@@ -935,7 +949,7 @@ function handleItem(h: SelectionHandle, z: number): DrawItem {
         shape,
         paint: {
             fill: "#ffffff", opacity: null, stroke: "#00bfff", strokeWidth: 1 / z,
-            strokeDash: null, radius: null, cursor: h.cursor, pointerEvents: true, shadow: null, blur: null
+            strokeDash: null, radius: null, cursor: h.cursor, pointerEvents: true, shadow: null, blur: null, blendMode: null
         },
         world: null,
         nodeId: h.nodeId,
@@ -1026,7 +1040,7 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument, po
                 paint: {
                     fill: null, opacity: null, stroke: "#ffffff", strokeWidth: 1 / z,
                     strokeDash: `${3 / z} ${3 / z}`, radius: null, cursor: null,
-                    pointerEvents: false, shadow: null, blur: null
+                    pointerEvents: false, shadow: null, blur: null, blendMode: null
                 },
                 world: null, nodeId: null, role: "outline"
             });
@@ -1041,7 +1055,7 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument, po
             shape: { kind: "rect", x: preview.x, y: preview.y, width: preview.width, height: preview.height },
             paint: {
                 fill: "#4a90d933", opacity: null, stroke: "#4a90d9", strokeWidth: 1 / z,
-                strokeDash: `${4 / z} ${4 / z}`, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
+                strokeDash: `${4 / z} ${4 / z}`, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null, blendMode: null
             },
             world: null,
             nodeId: null,
@@ -1061,7 +1075,7 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument, po
             shape,
             paint: {
                 fill: null, opacity: null, stroke: "#ff2d9b", strokeWidth: 1 / z,
-                strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
+                strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null, blendMode: null
             },
             world: null,
             nodeId: null,
@@ -1078,7 +1092,7 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument, po
             shape: { kind: "rect", x: marquee.x, y: marquee.y, width: marquee.width, height: marquee.height },
             paint: {
                 fill: "#00bfff22", opacity: null, stroke: "#00bfff", strokeWidth: 1 / z,
-                strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
+                strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null, blendMode: null
             },
             world: null,
             nodeId: null,
@@ -1094,7 +1108,7 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument, po
             shape: { kind: "path", commands: state.pendingPath },
             paint: {
                 fill: "none", opacity: null, stroke: "#00bfff", strokeWidth: 1 / z,
-                strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null
+                strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null, blendMode: null
             },
             world: null,
             nodeId: null,
@@ -1176,7 +1190,7 @@ function withCastShadows(content: DrawItem[], computed: ComputedState, light: Li
                 paint: {
                     fill: SHADOW_ALPHA, opacity: null, stroke: null, strokeWidth: null,
                     strokeDash: null, radius: null, cursor: null, pointerEvents: false,
-                    shadow: null, blur: null
+                    shadow: null, blur: null, blendMode: null
                 }
             });
         }

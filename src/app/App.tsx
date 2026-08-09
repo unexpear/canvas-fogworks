@@ -56,6 +56,7 @@ import { SetMeshAction } from "../core/actions/SetMeshAction";
 import { WeightTool, WeightBrush } from "../editor/tools/WeightTool";
 import { SetLightingAction } from "../core/actions/SetLightingAction";
 import { restMesh, MESH_MAX_DIVISIONS, copyMeshPoint, Mesh, ReadonlyMesh } from "../core/document/Mesh";
+import { BLEND_MODES, BlendMode } from "../core/document/Node";
 import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, PAINT_STRENGTH } from "../core/document/MeshEdit";
 import { SKIN_MAX_BONES } from "../core/geometry/Skin";
 import { SetTrackAction } from "../core/actions/SetTrackAction";
@@ -2368,6 +2369,24 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                 if (id) dispatcher.dispatchAction(new SetDepthAction(dispatcher.getDocument(), id, Math.max(DEPTH_MIN, Math.min(DEPTH_MAX, v))));
                                                 refresh(); }}
                                         /></div>
+                                    {/* BLEND MODE (schema 60). Three modes, because the corpus uses
+                                        three: of 5,279 SVGs, 65 blend and they name only overlay,
+                                        multiply and screen. "normal" is the empty value rather than
+                                        an entry, because absent IS normal. */}
+                                    <div><label style={INSPECTOR_LABEL}>Blend</label>
+                                        <select
+                                            value={node.style.blendMode ?? ""}
+                                            title="How this shape's colour combines with what is behind it. Not drawn by the WebGL preview backend, which cannot sample its own backdrop yet."
+                                            onChange={e => {
+                                                const v = e.target.value;
+                                                editSelected({ style: { blendMode: v === "" ? undefined : v as BlendMode } });
+                                                refresh();
+                                            }}
+                                            style={{ ...SELECT_STYLE, width: "100%" }}
+                                        >
+                                            <option value="">normal</option>
+                                            {BLEND_MODES.map(m => <option key={m} value={m}>{m}</option>)}
+                                        </select></div>
                                     {/* CLIP CONTENT (schema 59). Only offered where it can mean
                                         something: a node with no children has nothing inside to
                                         cut, and the flag would be an offscreen target on the GPU

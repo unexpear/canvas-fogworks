@@ -358,6 +358,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "56") { raw = migrate_56_to_57(raw); version = "57"; }
     if (version === "57") { raw = migrate_57_to_58(raw); version = "58"; }
     if (version === "58") { raw = migrate_58_to_59(raw); version = "59"; }
+    if (version === "59") { raw = migrate_59_to_60(raw); version = "60"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -886,6 +887,19 @@ function migrate_57_to_58(raw: any): any {
  */
 function migrate_58_to_59(raw: any): any {
     return { ...raw, version: "59" };
+}
+
+/**
+ * Schema 60 — `Style.blendMode`, how a node's colour combines with what is behind it.
+ *
+ * A pass-through: absent means normal, which is what every schema-59 node meant. The bump is for
+ * the other direction, and it is the QUIET kind. A 60 document in a 59 build loses the blending —
+ * every multiplied shadow and screened highlight drawn flat over its backdrop — with no error and
+ * nothing obviously missing, because a normal composite of the same colours is a perfectly
+ * plausible picture. That is the failure mode the gate exists for: not a crash, a lie.
+ */
+function migrate_59_to_60(raw: any): any {
+    return { ...raw, version: "60" };
 }
 
 function migrate_54_to_55(raw: any): any {

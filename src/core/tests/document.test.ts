@@ -26,7 +26,7 @@ import { applyMutationsToDocument } from "../actions/applyMutations";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor, isEditableNode, isHandleOffered, isMasterRootCopy , overrideTargetFor} from "../actions/nodeEdit";
 import { serializeDocument, deserializeDocument, compareDocuments, Serializer, migrateIfNeeded } from "../document/Serializer";
 import { validateDocumentIntegrity } from "../document/Integrity";
-import { clipsContentError } from "../document/Node";
+import { clipsContentError, BLEND_MODES, blendModeError } from "../document/Node";
 import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
 import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, AUTO_BIND_MAX_BONES, paintWeights, PAINT_STRENGTH } from "../document/MeshEdit";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
@@ -4529,9 +4529,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 58→59 landed, adding
-        // `Node.clipsContent`, a container that cuts its children to its own box.)
-        expect(() => migrateIfNeeded(legacy, "60")).toThrow('Migration not implemented for document schema "59"');
+        // time a real migration is added — most recently when 59→60 landed, adding
+        // `Style.blendMode`, how a node's colour combines with what is behind it.)
+        expect(() => migrateIfNeeded(legacy, "61")).toThrow('Migration not implemented for document schema "60"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -24513,5 +24513,72 @@ describe("Turning clipping on, through the ordinary edit path", () => {
         // It routes through the CONTENT action; the geometry/style patch cannot carry it, and a
         // second path would be a second place to forget.
         expect(src).toMatch(/new UpdateNodeContentAction\([\s\S]{0,200}\{ clipsContent/);
+    });
+});
+
+describe("Blend modes (schema 60)", () => {
+    const shape = (blendMode?: string) => {
+        const d = createEmptyDocument();
+        d.nodes.set("A", { id: "A", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 100, height: 100 },
+            style: { fill: "#f00", opacity: 1, ...(blendMode ? { blendMode } : {}) }, layout: {} } as unknown as Node);
+        d.rootNodeUuids = ["A"];
+        return d;
+    };
+
+    test("THREE modes, because the corpus uses three", () => {
+        // Of the 5,279 SVG files in `freeassets`, 65 use `mix-blend-mode` and between them they
+        // name overlay (63), multiply (54) and screen (13) — and nothing else. All 92 Aseprite
+        // layers across 26 files are `normal` at full opacity, so the `blendMode` that importer
+        // already parses is always zero. Eighteen modes across three backends is a very different
+        // job from three, and two thirds of it would be for nothing.
+        expect([...BLEND_MODES]).toEqual(["multiply", "screen", "overlay"]);
+        // `normal` is NOT a value: absent is normal, and offering both would put two spellings of
+        // "do nothing" into every file and every comparison.
+        expect(BLEND_MODES).not.toContain("normal");
+        expect(blendModeError(undefined)).toBeNull();
+        expect(blendModeError("multiply")).toBeNull();
+        expect(blendModeError("normal")).toMatch(/must be one of/);
+        expect(blendModeError("darken")).toMatch(/must be one of/);
+        expect(blendModeError(3)).toMatch(/must be one of/);
+    });
+
+    test("it round-trips, and a bad one is refused on the LOAD path", () => {
+        const back = deserializeDocument(serializeDocument(shape("screen")));
+        expect(back.nodes.get("A")!.style.blendMode).toBe("screen");
+        const bad = JSON.parse(serializeDocument(shape("multiply")));
+        bad.document.nodes.A.style.blendMode = "colour-burn";
+        expect(() => deserializeDocument(JSON.stringify(bad))).toThrow(/blendMode must be one of/);
+    });
+
+    test("the model carries it, and only where there is ink to combine", () => {
+        const model = (doc: ProjectDocument) => buildRenderModel({ width: 400, height: 300 }, doc,
+            { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(doc), viewport: { x: 0, y: 0, zoom: 1 } } as never);
+        const item = model(shape("multiply")).content.find(i => i.nodeId === "A")!;
+        expect(item.paint.blendMode).toBe("multiply");
+        // Absent stays absent all the way through, so a backend can test one field for "normal".
+        expect(model(shape()).content.find(i => i.nodeId === "A")!.paint.blendMode).toBeNull();
+        // CHROME NEVER BLENDS. A selection handle tinted by the art beneath it is unreadable, and
+        // the grid multiplied into the page would vanish over dark artwork.
+        for (const overlayItem of model(shape("multiply")).overlay) {
+            expect(overlayItem.paint.blendMode).toBeNull();
+        }
+        for (const line of model(shape("multiply")).grid.lines) {
+            expect(line.paint.blendMode).toBeNull();
+        }
+    });
+
+    test("the mode names are shared with CSS and Canvas, so nothing translates", () => {
+        // The reason there is no lookup table in any backend: the document, `mix-blend-mode` and
+        // `globalCompositeOperation` all spell these three the same way. A translation table is a
+        // fourth place for them to disagree.
+        const svg = readFileSync(resolve(__dirname, "../../renderer/emitSVG.ts"), "utf8");
+        const canvas = readFileSync(resolve(__dirname, "../../renderer/emitCanvas.ts"), "utf8");
+        expect(svg).toMatch(/el\.style\.mixBlendMode = paint\.blendMode/);
+        expect(canvas).toMatch(/ctx\.globalCompositeOperation = paint\.blendMode/);
+        // …and the GPU says, in its own header, that it does not do this yet — recorded rather
+        // than discovered, and surfaced by `npm run header-claims`.
+        const gpu = readFileSync(resolve(__dirname, "../../renderer/emitWebGL.ts"), "utf8");
+        expect(gpu).toMatch(/THE GAP TODAY IS BLEND MODES/);
     });
 });

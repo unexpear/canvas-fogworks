@@ -137,6 +137,12 @@ function applyTail(el: SVGElement, item: DrawItem): void {
     if (fid !== null) el.setAttribute("filter", `url(#${fid})`);
     if (paint.cursor !== null) el.style.cursor = paint.cursor;
     if (!paint.pointerEvents) el.style.pointerEvents = "none";
+    // BLENDING (schema 60), in the shared tail so every shape kind gets it from one line — the
+    // opacity attribute above is set in three separate places, and a fourth thing set three times
+    // is a fourth thing to forget once. The CSS PROPERTY, not an attribute: `mix-blend-mode` was
+    // never defined as a presentation attribute, so browsers read it from style only. The mode
+    // names are shared with Canvas and with the document, so nothing translates anywhere.
+    if (paint.blendMode !== null) el.style.mixBlendMode = paint.blendMode;
 }
 
 /**
