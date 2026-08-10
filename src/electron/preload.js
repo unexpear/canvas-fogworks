@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     readFontFolder: (folder) => ipcRenderer.invoke("read-font-folder", folder),
     readFontBytes: (filePath) => ipcRenderer.invoke("read-font-bytes", filePath),
     readImageDataUrl: (filePath) => ipcRenderer.invoke("read-image-data-url", filePath),
+    readPaletteFolder: (folder) => ipcRenderer.invoke("read-palette-folder", folder),
+    readPaletteFile: (folder, filePath) => ipcRenderer.invoke("read-palette-file", folder, filePath),
     readTiledFolder: (folder) => ipcRenderer.invoke("read-tiled-folder", folder),
     readTiledMap: (folder, mapPath) => ipcRenderer.invoke("read-tiled-map", folder, mapPath),
     readTiledTileset: (folder, mapPath, relative) =>

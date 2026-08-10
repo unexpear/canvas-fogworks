@@ -254,6 +254,11 @@ const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
 // `FontFace` accepts. Two narrow doors beat one that lies about what came through it.
 const FONT_EXT = /\.(ttf|otf)$/i;
 const TILED_EXT = /\.tmx$/i;
+// PALETTES are `.json`, which is the widest pattern here and deliberately not narrowed further:
+// there is no palette extension to match on, and guessing by filename would miss every palette not
+// called `Palette.json`. What keeps this honest is that `parsePaletteFile` returns null for a file
+// that does not describe one, so the panel reports how many of the files it found were palettes.
+const PALETTE_EXT = /\.json$/i;
 /**
  * What an inflated blob may expand to.
  *
@@ -390,6 +395,42 @@ function resolveTiledAsset(folder, mapPath, relative) {
 ipcMain.handle("read-tiled-map", async (event, folder, mapPath) => {
     const target = resolveTiledAsset(folder, mapPath, path.basename(mapPath));
     if (!TILED_EXT.test(target)) throw new Error("Not a Tiled map.");
+    return fs.readFileSync(target, "utf8");
+});
+
+/**
+ * Palette files under a folder the user picked, and one of them as text.
+ *
+ * TWO NARROW DOORS rather than a reuse of the Tiled pair, for the reason the font channel is separate
+ * from the image one: `read-tiled-map` refuses anything that is not a `.tmx`, and widening it to take
+ * palettes would make its name a lie about what came through it.
+ *
+ * The path CONFINEMENT is the same and matters as much: a palette path arrives from the renderer,
+ * which got it from a scan, but nothing about that chain is a promise — so it is resolved against the
+ * folder the user actually picked and refused if it escapes.
+ */
+ipcMain.handle("read-palette-folder", async (event, folder) => {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    return walkDir(folder, name => PALETTE_EXT.test(name), SCAN_MAX_FILES).map(full => ({
+        path: full,
+        name: path.basename(full).replace(/\.json$/i, ""),
+        relative: path.relative(folder, full).replace(/\\/g, "/")
+    }));
+});
+
+ipcMain.handle("read-palette-file", async (event, folder, filePath) => {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    if (!filePath || typeof filePath !== "string") throw new Error("Invalid palette path.");
+    const root = path.resolve(folder);
+    const target = path.resolve(filePath);
+    if (target !== root && !target.startsWith(root + path.sep)) {
+        throw new Error("Refusing to read a palette outside the chosen folder.");
+    }
+    if (!PALETTE_EXT.test(target)) throw new Error("Not a palette file.");
+    // BOUNDED like every other read here. A palette is a few kilobytes; a multi-megabyte `.json`
+    // under the same folder is something else, and `JSON.parse` on it would block the main process.
+    const size = fs.statSync(target).size;
+    if (size > SCAN_MAX_BYTES) throw new Error("That file is too large to be a palette.");
     return fs.readFileSync(target, "utf8");
 });
 

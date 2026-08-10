@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1578;
+const EXPECTED_TESTS = 1582;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -332,6 +332,27 @@ const MUTANTS = [
       from: "    if (node.surface !== undefined && node.type !== \"core.raster\") {",
       to: "    if (false) {",
       note: "pixels on a rectangle load again — the rule two actions enforce and the loader did not" },
+
+    // A WHOLE-CANVAS EDIT and the palette it snaps to. `surfaceEdit`'s two guards look redundant and
+    // are not: the count is a CALLER's claim and the patch is the truth, so each catches the other's
+    // disagreement in one direction. A third mutant here (any node with a surface is editable) is
+    // EQUIVALENT now that `Integrity` refuses such a document, and is deliberately not listed.
+    { id: "SE1", file: "src/core/actions/surfaceEdit.ts",
+      from: "    if (edit(buffer) === 0) return null;",
+      to: "    edit(buffer);",
+      note: "an edit reporting no change still becomes an undo step" },
+    { id: "SE2", file: "src/core/actions/surfaceEdit.ts",
+      from: "    if (isEmptyPatch(patch)) return null;",
+      to: "    if (false) return null;",
+      note: "a caller's inflated count is trusted — an empty patch reaches the action" },
+    { id: "SE3", file: "src/core/actions/surfaceEdit.ts",
+      from: "    const before = readRegion(buffer, 0, 0, buffer.width, buffer.height);",
+      to: "    const before = readRegion(buffer, 0, 0, buffer.height, buffer.width);",
+      note: "the before-image is transposed — invisible on a square canvas" },
+    { id: "QZ1", file: "src/core/paint/Quantize.ts",
+      from: "        if (mapped[0] === r && mapped[1] === g && mapped[2] === b && mapped[3] === a) continue;",
+      to: "        if (false) continue;",
+      note: "a pixel that already matched counts as changed — caught by the suite, not by the filtered run" },
 ];
 
 function runSuite() {

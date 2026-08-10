@@ -34,6 +34,7 @@ import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, 
 import { withTiles, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
 import { TileTool, TileBrush } from "../../editor/tools/TileTool";
 import { BucketTool } from "../../editor/tools/BucketTool";
+import { surfaceEditAction, quantizeAction } from "../actions/surfaceEdit";
 import { Terrain, AutotileTable, AUTOTILE_MASKS, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR,
     flipMask, autotileClasses, rotatedTable, dualMask, autotile, autotileTableError } from "../document/Autotile";
 import { SetTilemapAction } from "../actions/SetTilemapAction";
@@ -114,7 +115,7 @@ import { encodeSurface, decodeSurface, PIXEL_CODEC_VERSION, PIXEL_RUN_MAX } from
 import { beginStroke, extendStroke, endStroke, strokeEscaped } from "../paint/Stroke";
 import { rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
 import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
-import { paletteError, paletteAt, parseFloatColour, parsePaletteFile, PALETTE_MAX_COLOURS } from "../paint/Palette";
+import { Palette, paletteError, paletteAt, parseFloatColour, parsePaletteFile, PALETTE_MAX_COLOURS } from "../paint/Palette";
 import { symmetryPoints, isMirrored, NO_SYMMETRY } from "../paint/Symmetry";
 import { nearestColour, colourDistance, quantizeToPalette } from "../paint/Quantize";
 import { worldToSurface, surfaceToWorld, surfacePixelSize, surfaceSpaceError } from "../paint/SurfaceSpace";
@@ -26079,5 +26080,110 @@ describe("The paint bucket, as a gesture — the door onto a fill nothing called
         // …and the core function has a caller at last.
         const tool = readFileSync(resolve(__dirname, "../../editor/tools/BucketTool.ts"), "utf8");
         expect(tool).toMatch(/floodFill\(buffer, p\[0\], p\[1\]/);
+    });
+});
+
+describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that reaches it", () => {
+    /** A 3x2 canvas — NON-SQUARE — of six distinct colours none of which is in the palette below. */
+    const canvasOf = (colours: Rgba[]) => {
+        const buffer = createPixelBuffer(3, 2);
+        colours.forEach((c, i) => setPixel(buffer, i % 3, Math.floor(i / 3), c));
+        return buffer;
+    };
+    const OFF: Rgba[] = [
+        [10, 10, 10, 255], [40, 40, 40, 255], [70, 70, 70, 255],
+        [100, 100, 100, 255], [130, 130, 130, 255], [160, 160, 160, 255]
+    ];
+    /** Two colours, 2x1 — so a quantise has somewhere to snap to and the grid is not square either. */
+    const twoTone: Palette = {
+        name: "two", colours: [[0, 0, 0, 255], [255, 255, 255, 255]], width: 2, height: 1, comment: "Author: nobody"
+    };
+    const docWith = (buffer: PixelBuffer) => {
+        const d = createEmptyDocument();
+        d.nodes.set("P", { id: "P", type: "core.raster", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 3, height: 2 }, style: { fill: "none", opacity: 1 }, layout: {},
+            surface: { data: encodeSurface(buffer).data, width: 3, height: 2 } } as Node);
+        d.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 3, height: 2 }, style: { fill: "#000000", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["P", "R"];
+        return d;
+    };
+    const pixelsOf = (doc: ReadonlyDocument) => {
+        const s = doc.nodes.get("P")!.surface!;
+        return decodeSurface(s.data, s.width, s.height)!;
+    };
+
+    test("quantising snaps every pixel, and ONE undo puts them all back", () => {
+        const dispatcher = new ActionDispatcher(docWith(canvasOf(OFF)));
+        const action = quantizeAction(dispatcher.getDocument(), "P", twoTone)!;
+        expect(action).not.toBeNull();
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const after = pixelsOf(dispatcher.getDocument());
+        // Each grey goes to whichever end of the two-tone palette it is nearer, and the boundary is
+        // the MIDPOINT: the weights cancel when all three channels are equal, so 100 is nearer black
+        // (9x100^2) than white (9x155^2) and 130 is nearer white. Hand-computed, because a fixture
+        // whose answer came out of the function it tests proves only that the function is consistent.
+        // Straddling the midpoint is the point: a canvas of one colour could not tell a working
+        // quantise from one that snapped everything to the first entry.
+        expect(getPixel(after, 0, 0)).toEqual([0, 0, 0, 255]);          // 10
+        expect(getPixel(after, 2, 0)).toEqual([0, 0, 0, 255]);          // 70
+        expect(getPixel(after, 0, 1)).toEqual([0, 0, 0, 255]);          // 100, still below 127.5
+        expect(getPixel(after, 1, 1)).toEqual([255, 255, 255, 255]);    // 130, just above
+        expect(getPixel(after, 2, 1)).toEqual([255, 255, 255, 255]);    // 160
+        dispatcher.undo();
+        expect(getPixel(pixelsOf(dispatcher.getDocument()), 0, 0)).toEqual(OFF[0]);
+        expect(getPixel(pixelsOf(dispatcher.getDocument()), 2, 1)).toEqual(OFF[5]);
+    });
+
+    test("a canvas ALREADY within the palette produces no action at all", () => {
+        // Not merely a no-op: an action that succeeded without changing anything leaves a step on the
+        // undo stack that undoes nothing, so the first Ctrl+Z appears to be ignored.
+        const already = canvasOf([
+            [0, 0, 0, 255], [255, 255, 255, 255], [0, 0, 0, 255],
+            [255, 255, 255, 255], [0, 0, 0, 255], [255, 255, 255, 255]
+        ]);
+        const doc = docWith(already);
+        expect(quantizeAction(doc, "P", twoTone)).toBeNull();
+    });
+
+    test("only a RASTER has pixels, and a stranger's count is not trusted", () => {
+        const doc = docWith(canvasOf(OFF));
+        expect(quantizeAction(doc, "R", twoTone)).toBeNull();       // a rectangle
+        expect(quantizeAction(doc, "nope", twoTone)).toBeNull();     // no such node
+
+        // THE CLAIM THE TWO GUARDS EXIST FOR: `edit` is a caller's function, so a count it reports
+        // that its pixels do not support must not become an undo step. The count is the cheap test
+        // and the patch is the true one — this is the case where they disagree.
+        expect(surfaceEditAction(doc, "P", () => 99)).toBeNull();
+        // …and one that changes a pixel while reporting nothing is refused by the CHEAP test, which
+        // is the same disagreement in the other direction.
+        expect(surfaceEditAction(doc, "P", buffer => { setPixel(buffer, 0, 0, [1, 2, 3, 255]); return 0; }))
+            .toBeNull();
+        // A truthful edit is accepted, or the two checks above would just be a ban on editing.
+        expect(surfaceEditAction(doc, "P", buffer => { setPixel(buffer, 0, 0, [1, 2, 3, 255]); return 1; }))
+            .not.toBeNull();
+    });
+
+    test("the palette panel and the quantiser are REACHABLE, which is the point", () => {
+        // `paint/Palette` and `paint/Quantize` had NO importer outside the tests — the audit's second
+        // and third built-but-unreachable entries. These assert the door stays open, at both ends:
+        // the main process offers the channels, the preload exposes them, and the panel uses them.
+        const main = readFileSync(resolve(__dirname, "../../electron/main.js"), "utf8");
+        expect(main).toMatch(/ipcMain\.handle\("read-palette-folder"/);
+        expect(main).toMatch(/ipcMain\.handle\("read-palette-file"/);
+        // CONFINED to the folder the user picked, like every other path that arrives from outside.
+        expect(main).toMatch(/Refusing to read a palette outside the chosen folder/);
+        const preload = readFileSync(resolve(__dirname, "../../electron/preload.js"), "utf8");
+        expect(preload).toMatch(/readPaletteFolder:/);
+        expect(preload).toMatch(/readPaletteFile:/);
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/parsePaletteFile\(json, f\.name\)/);
+        expect(app).toMatch(/quantizeAction\(doc, id, palette\)/);
+        // The grid is drawn from the palette's OWN width, not reflowed to the panel: the layout is
+        // part of the artist's meaning, and `paletteAt` addresses slots so a hole stays a hole.
+        expect(app).toMatch(/repeat\(\$\{palette\.width\}, 1fr\)/);
+        expect(app).toMatch(/paletteAt\(palette,/);
+        // The attribution is shown, because a palette is somebody's work and the file carries credit.
+        expect(app).toMatch(/palette\.comment/);
     });
 });

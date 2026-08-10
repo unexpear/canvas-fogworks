@@ -57,6 +57,8 @@ import { SetMeshAction } from "../core/actions/SetMeshAction";
 import { WeightTool, WeightBrush } from "../editor/tools/WeightTool";
 import { TileTool, TileBrush } from "../editor/tools/TileTool";
 import { BucketTool } from "../editor/tools/BucketTool";
+import { Palette, parsePaletteFile, paletteAt } from "../core/paint/Palette";
+import { quantizeAction } from "../core/actions/surfaceEdit";
 import { SetTilemapAction } from "../core/actions/SetTilemapAction";
 import { resizeTilemap } from "../core/document/TilemapEdit";
 import { Tilemap, tileSourceRect as sheetTileRect, tileIndexAt,
@@ -231,6 +233,18 @@ function hexToRgba(hex: string): Rgba {
 }
 
 /**
+ * The inverse, for a palette swatch: a colour from a FILE going into the colour control.
+ *
+ * ALPHA IS DROPPED, which is the same asymmetry `hexToRgba` documents from the other side — the
+ * control has no alpha channel. A palette's transparent slots are drawn as holes rather than as
+ * swatches, so nothing translucent reaches here in the first place.
+ */
+function rgbaToHex(c: Rgba): string {
+    const hex = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+    return `#${hex(c[0])}${hex(c[1])}${hex(c[2])}`;
+}
+
+/**
  * What the pure exporter cannot know, supplied from the DOM side.
  *
  * `ExportSVG` is deliberately pure — it is node-testable and runs where `emitSVG` cannot. That
@@ -329,6 +343,8 @@ declare global {
             writePngIntoFolder: (folder: string, filename: string, dataUrl: string) => Promise<string>;
             readFontFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
             readFontBytes: (filePath: string) => Promise<string>;
+            readPaletteFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
+            readPaletteFile: (folder: string, filePath: string) => Promise<string>;
             readTiledFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
             readTiledMap: (folder: string, mapPath: string) => Promise<string>;
             readTiledTileset: (folder: string, mapPath: string, relative: string) => Promise<string>;
@@ -1489,6 +1505,24 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         refresh();
     }, [dispatcher, es, refresh]);
 
+    /**
+     * Snap the selected canvas to a palette.
+     *
+     * The arithmetic and the patch live in `core/actions/surfaceEdit`, for the reason
+     * `tileImportActions` does: a function returning an Action can be tested, and this panel is not
+     * the third place the "decode, edit, diff, dispatch" sequence should be written out by hand.
+     */
+    const quantizeSelection = useCallback((palette: Palette) => {
+        const doc = dispatcher.getDocument();
+        const id = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
+        if (!id) return;
+        const action = quantizeAction(doc, id, palette);
+        // NULL MEANS NOTHING MOVED — a canvas already within the palette must not leave an undo step.
+        if (!action) return;
+        dispatcher.dispatchAction(action);
+        refresh();
+    }, [dispatcher, es, refresh]);
+
     /** Transform edits — routed, so a copy gets a transform override (schema 26). */
     const editTransform = (patch: { rotation?: number; scaleX?: number; scaleY?: number }) => {
         if (!selectedNodeId) return;
@@ -2214,6 +2248,10 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                             onImportSvg={importSvg}
                             editContentFont={family => { editSelected({ style: { fontFamily: family } }); refresh(); }}
                             onImportTiles={importTiles}
+                            paintColour={paintColour}
+                            onPickColour={hex => { setPaintColour(hex); setErasing(false); }}
+                            selectedRasterId={selectedRasterId}
+                            onQuantize={quantizeSelection}
                             onSetRegion={rect => { editContent({ sourceRect: rect }); refresh(); }}
                         />
                     </div>
@@ -3801,7 +3839,8 @@ const LAYER_ICONS: Record<string, string> = {
  * Both are inert without Electron (the browser build has no `electronAPI`), so the drawer says
  * so rather than showing controls that do nothing.
  */
-function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion, onImportSvg, editContentFont, onImportTiles }: {
+function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion, onImportSvg,
+    editContentFont, onImportTiles, paintColour, onPickColour, selectedRasterId, onQuantize }: {
     onPlaceImage: (dataUrl: string, name: string) => void;
     getDocument: () => ReadonlyDocument;
     /** The selected node when it is an image with a source — what a SHEET import acts ON. */
@@ -3812,6 +3851,12 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     /** Apply a registered family to the selected node — the point of loading one. */
     editContentFont: (family: string) => void;
     onImportTiles: (placements: TilePlacement[]) => void;
+    /** The swatch a palette click writes to, and what it currently holds. */
+    paintColour: string;
+    onPickColour: (hex: string) => void;
+    /** Quantising acts on a RASTER's pixels, so the button is dead without one selected. */
+    selectedRasterId: string | null;
+    onQuantize: (palette: Palette) => void;
 }) {
     const [tab, setTab] = useState<"source" | "assets" | "export" | "import">("source");
     /** Grid inputs. Strings, because a half-typed number is a state a number input has to hold. */
@@ -3820,6 +3865,8 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     const [margin, setMargin] = useState("0");
     const [spacing, setSpacing] = useState("0");
     const [step, setStep] = useState("2");
+    const [palettes, setPalettes] = useState<Palette[]>([]);
+    const [palette, setPalette] = useState<Palette | null>(null);
     const [atlasText, setAtlasText] = useState("");
     const [atlasEntries, setAtlasEntries] = useState<AtlasEntry[] | null>(null);
     const [svgText, setSvgText] = useState("");
@@ -4042,6 +4089,117 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                         }}
                         style={DRAWER_BUTTON}
                     >Place the SVG</button>
+
+                    {/* PALETTES. `paint/Palette` and `paint/Quantize` were whole modules the app
+                        could not reach — the feature audit's second and third built-but-unreachable
+                        entries. This is the door.
+
+                        A GRID, NOT A REFLOWED LIST. The palette's own `width`/`height` are honoured
+                        because the layout is part of the artist's meaning: DawnBringer's 32 colours
+                        are 8x4 to group ramps into rows, and reflowing them to fit a panel would
+                        destroy the grouping while keeping every colour. A slot with no colour is
+                        drawn as a HOLE for the same reason — 56 colours do not fill 12x5, and
+                        shifting the tail up would move every swatch after the gap. */}
+                    <label style={INSPECTOR_LABEL}>Load palettes from a folder</label>
+                    <button
+                        data-palette-btn="1"
+                        disabled={busy}
+                        onClick={async () => {
+                            const folder = await api.pickFolder();
+                            if (!folder) return;
+                            setBusy(true);
+                            try {
+                                const files = await api.readPaletteFolder(folder);
+                                const found: Palette[] = [];
+                                const problems: string[] = [];
+                                for (const f of files) {
+                                    let text: string;
+                                    try { text = await api.readPaletteFile(folder, f.path); }
+                                    catch (err) { problems.push(`${f.name}: ${String(err)}`); continue; }
+                                    // JSON.parse THROWING IS HANDLED HERE, not in the parser: it is
+                                    // the one failure that carries a useful message about WHERE the
+                                    // file is malformed, and the parser takes parsed JSON so that
+                                    // message is not swallowed into a flat null.
+                                    let json: unknown;
+                                    try { json = JSON.parse(text); }
+                                    catch (err) { problems.push(`${f.name}: ${String(err)}`); continue; }
+                                    const palette = parsePaletteFile(json, f.name);
+                                    // NOT EVERY `.json` IS A PALETTE, and there is no palette
+                                    // extension to scan for — so the honest report is how many of
+                                    // the files found actually described one.
+                                    if (palette) found.push(palette);
+                                }
+                                setPalettes(found);
+                                if (found.length > 0) setPalette(found[0]);
+                                setImportNote(`${found.length} palette${found.length === 1 ? "" : "s"} `
+                                    + `of ${files.length} .json file${files.length === 1 ? "" : "s"}`
+                                    + (problems.length > 0 ? ` · ${problems[0]}` : ""));
+                            } finally { setBusy(false); }
+                        }}
+                        style={DRAWER_BUTTON}
+                    >{busy ? "Reading…" : "Find palettes…"}</button>
+                    {palettes.length > 1 && (
+                        <select
+                            data-palette-list="1"
+                            value={palette ? palette.name : ""}
+                            onChange={e => setPalette(palettes.find(p => p.name === e.target.value) ?? null)}
+                            style={{ width: "100%", fontSize: 11, marginBottom: 6, background: UI.raised,
+                                color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3 }}
+                        >
+                            {palettes.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+                        </select>
+                    )}
+                    {palette && (
+                        <div data-palette-grid="1">
+                            <div style={{
+                                display: "grid", gap: 1, marginBottom: 4,
+                                gridTemplateColumns: `repeat(${palette.width}, 1fr)`
+                            }}>
+                                {Array.from({ length: palette.width * palette.height }, (_, i) => {
+                                    // ADDRESSED BY SLOT, so a hole stays where it is. `paletteAt`
+                                    // is the shared accessor rather than an index into `colours`,
+                                    // which may be shorter than the grid.
+                                    const c = paletteAt(palette, i % palette.width, Math.floor(i / palette.width));
+                                    if (!c || c[3] === 0) {
+                                        return <div key={i} style={{ aspectRatio: "1", background: "transparent",
+                                            border: `1px dashed ${UI.line}` }} />;
+                                    }
+                                    const hex = rgbaToHex(c);
+                                    return (
+                                        <button
+                                            key={i}
+                                            title={hex}
+                                            aria-label={`Palette colour ${hex}`}
+                                            onClick={() => onPickColour(hex)}
+                                            style={{
+                                                aspectRatio: "1", background: hex, cursor: "pointer",
+                                                border: paintColour.toLowerCase() === hex.toLowerCase()
+                                                    ? `2px solid ${UI.accent}` : "1px solid #0006",
+                                                padding: 0
+                                            }}
+                                        />
+                                    );
+                                })}
+                            </div>
+                            {/* THE ATTRIBUTION IS SHOWN because a palette is somebody's work, and
+                                the file carries the credit as a field. Dropping it on the floor
+                                while using the colours would be the wrong call. */}
+                            {palette.comment && (
+                                <div style={{ color: "#666", fontSize: 10, whiteSpace: "pre-wrap", marginBottom: 4 }}>
+                                    {palette.comment}
+                                </div>
+                            )}
+                            <button
+                                data-quantize-btn="1"
+                                disabled={!selectedRasterId}
+                                title={selectedRasterId
+                                    ? "Snap every pixel of the selected canvas to its nearest palette colour"
+                                    : "Select a canvas first — quantising acts on a raster's pixels"}
+                                onClick={() => onQuantize(palette)}
+                                style={{ ...DRAWER_BUTTON, opacity: selectedRasterId ? 1 : 0.5 }}
+                            >Quantise the selected canvas</button>
+                        </div>
+                    )}
 
                     {/* FONTS need no selection either — registering a family makes it available to
                         every backend at once, because all three ask the platform for it by name. */}
