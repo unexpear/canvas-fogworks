@@ -824,6 +824,15 @@ payload written before that resize must not be able to disagree about which is a
 the node states the size and `decodeSurface` REFUSES a payload that does not fill it exactly —
 rather than padding a transparent band, which reads as an art mistake.
 
+**A SURFACE ONLY ON A RASTER, and the loader did not check it until 2026-08-09.** `AddNodeAction`
+and `PaintSurfaceAction` both enforce the rule, and `Integrity` cites it as the precedent for its
+tilemap check while never applying it — so a hand-edited or machine-generated file could carry pixels
+on a rectangle: stored, saved, and drawn by nothing. Found by a SURVIVING MUTANT: removing
+`BucketTool`'s type check changed no test, which is what sent me looking for whatever else was
+supposed to be refusing that document. Nothing was. **Not a compatibility break** by the freeze
+rule's own question — no build could ever write such a document, because both actions refuse it, and
+a hand edit is not a contract.
+
 **`rasterSurfaceError` checks SHAPE, not pixels.** Validation runs on every load; decoding a
 4096-square surface to check it would cost a full decode per document. The payload is validated
 when something actually needs the pixels.
