@@ -10,6 +10,7 @@ import { ComputedState } from "../core/geometry/GeometryEngine";
 import { PathCommand } from "../core/document/Node";
 import { SnapGuide } from "../core/geometry/Snapping";
 import { ReadonlyDocument } from "../core/document/Document";
+import { SelectionMask } from "../core/paint/Selection";
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -21,6 +22,19 @@ export interface RendererState {
     marqueeRect?: Rect | null;
     /** Alignment (smart) guides in world coordinates, drawn while a drag snaps; absent otherwise. */
     snapGuides?: SnapGuide[] | null;
+    /**
+     * The PIXEL SELECTION to outline: which pixels of which raster an edit may touch.
+     *
+     * A DIFFERENT THING FROM `marqueeRect`, which is a box being dragged over the canvas to pick
+     * NODES. This is a mask over one surface's pixels, and it is drawn as the boundary between
+     * selected and unselected — not as its bounding box, which would draw a lasso as a rectangle.
+     *
+     * THE MASK MUST MATCH THAT NODE'S SURFACE, and the CALLER is what guarantees it: `pixelMaskFor`
+     * is the validated read, and passing an unvalidated mask would draw an outline the tools do not
+     * honour. Checking again here would be a second copy of a rule that already exists — the same
+     * reasoning that keeps `expandInstances` out of `ComputedState`.
+     */
+    pixelSelection?: { nodeId: string; mask: SelectionMask } | null;
     /** The pen stroke in progress, WORLD space — drawn as overlay, never in the document. */
     pendingPath?: PathCommand[] | null;
     /**

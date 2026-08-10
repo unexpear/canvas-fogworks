@@ -324,6 +324,13 @@ export function growSelection(mask: SelectionMask, by: number): SelectionMask {
  *
  * Derived from `growSelection` rather than walked separately, so "border" and "shrink" cannot
  * disagree about where the edge is.
+ *
+ * THE BORDER OF A FULL SELECTION IS THEREFORE EMPTY, and that is a consequence rather than a choice
+ * — found by clicking Select All and then Border in the running app. Shrinking treats the surface
+ * edge as selected (so "select all, shrink" does not eat a ring nobody asked to lose), which makes a
+ * full selection shrink to itself, which leaves this nothing to report. The alternative would be a
+ * second shrink that does NOT hold the edge, used only here; one rule with a documented consequence
+ * beats two rules that will eventually disagree about a corner.
  */
 export function borderSelection(mask: SelectionMask, by: number): SelectionMask {
     const inner = growSelection(mask, -Math.abs(Math.round(by)));

@@ -35,7 +35,7 @@ import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { DetachInstanceAction } from "../core/actions/DetachInstanceAction";
 import { UpdateNodeTransformAction } from "../core/actions/UpdateNodeTransformAction";
 import { UpdateNodeLayoutAction } from "../core/actions/UpdateNodeLayoutAction";
-import { createEditorState, frameOnLoad, pickedMeshPoint, EditorState, zoomAt, viewportToFit, FIT_PADDING_PX, screenToWorld, overlayTransform } from "../editor/EditorState";
+import { createEditorState, frameOnLoad, pickedMeshPoint, pixelMaskFor, EditorState, zoomAt, viewportToFit, FIT_PADDING_PX, screenToWorld, overlayTransform } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
@@ -57,6 +57,9 @@ import { SetMeshAction } from "../core/actions/SetMeshAction";
 import { WeightTool, WeightBrush } from "../editor/tools/WeightTool";
 import { TileTool, TileBrush } from "../editor/tools/TileTool";
 import { BucketTool } from "../editor/tools/BucketTool";
+import { PixelSelectTool, PixelSelectMode, PixelSelectConfig, WAND_TOLERANCE_MAX } from "../editor/tools/PixelSelectTool";
+import { SelectionMask, emptyMask, fullMask, invertSelection, growSelection, borderSelection,
+    isEmptySelection, selectedCount } from "../core/paint/Selection";
 import { Palette, parsePaletteFile, paletteAt } from "../core/paint/Palette";
 import { quantizeAction } from "../core/actions/surfaceEdit";
 import { SetTilemapAction } from "../core/actions/SetTilemapAction";
@@ -479,7 +482,9 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     { id: "design", label: "Design", icon: "◱", tools: ["select", "move", "shapes", "pen"], defaultTool: "select" },
     // Paint puts the CANVAS-maker beside the brush, out of the shape flyout: drawing a surface and
     // painting on it are one job, and burying the first behind a menu made the second look broken.
-    { id: "paint", label: "Paint", icon: "✏", tools: ["select", "move", "raster", "paint", "bucket", "eyedropper"], defaultTool: "paint" },
+    // The MARQUEE sits between the canvas-maker and the brush: choosing where paint may land is the
+    // step before painting, and it is what the bucket and the panel buttons obey too.
+    { id: "paint", label: "Paint", icon: "✏", tools: ["select", "move", "raster", "marquee", "paint", "bucket", "eyedropper"], defaultTool: "paint" },
     // Animation is done by SELECTING and MOVING things over time; a shape tool in this workspace is
     // a way to draw a rectangle by accident while scrubbing.
     // Rigging is ANIMATION work, so the weight brush lives here rather than beside the pixel brush
@@ -542,6 +547,15 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const [tileErasing, setTileErasing] = useState(false);
     const tileBrushRef = useRef<TileBrush>({ index: 0, flip: 0, mode: "paint", erasing: false });
     tileBrushRef.current = { index: tileIndex, flip: tileFlip, mode: tileMode, erasing: tileErasing };
+    // THE MARQUEE. Which shape a drag makes, and — for the wand only — how far a colour may differ
+    // and whether the run has to be connected. The OPERATOR is deliberately absent: it comes from the
+    // modifiers held during the gesture, so there is no way to leave "subtract" switched on and then
+    // wonder why the next marquee ate the selection.
+    const [selectMode, setSelectMode] = useState<PixelSelectMode>("rect");
+    const [wandTolerance, setWandTolerance] = useState(0);
+    const [wandContiguous, setWandContiguous] = useState(true);
+    const selectConfigRef = useRef<PixelSelectConfig>({ mode: "rect", contiguous: true, tolerance: 0 });
+    selectConfigRef.current = { mode: selectMode, contiguous: wandContiguous, tolerance: wandTolerance };
     const [brushRound, setBrushRound] = useState(false);
     const brushRoundRef = useRef(false);
     brushRoundRef.current = brushRound;
@@ -672,6 +686,11 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             // eraser toggle mean the same thing for both.
             bucket: new BucketTool(dispatcher, es, refresh,
                 () => erasingRef.current ? [0, 0, 0, 0] : hexToRgba(paintColourRef.current)),
+            // THE MARQUEE. `paint/Selection` was nine functions with no gesture — the arithmetic for
+            // rect, ellipse, lasso, wand, grow, border and invert, none of it reachable. This is the
+            // door, and it dispatches nothing: a selection is not content, so it writes editor state
+            // and leaves no history entry, the same bargain the eyedropper makes with the swatch.
+            marquee: new PixelSelectTool(dispatcher, es, refresh, () => selectConfigRef.current),
             paint: new RasterTool(dispatcher, es, refresh,
                 () => erasingRef.current ? [0, 0, 0, 0] : hexToRgba(paintColourRef.current),
                 () => makeBrush(brushSizeRef.current, brushRoundRef.current),
@@ -1214,6 +1233,13 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 hoveredNodeId: es.hoveredNodeId,
                 previewRect: es.previewRect,
                 marqueeRect: es.marqueeRect,
+                // VALIDATED HERE, once. `pixelMaskFor` is the door every consumer reads through, so
+                // the marquee drawn on screen is exactly the mask the brush and the bucket obey — a
+                // selection stale from a resize disappears from the canvas at the same moment it
+                // stops clipping, rather than lingering as an outline nothing honours.
+                pixelSelection: es.pixelSelection
+                    && pixelMaskFor(es, doc, es.pixelSelection.nodeId) !== null
+                    ? es.pixelSelection : null,
                 snapGuides: es.snapGuides,
                 pendingPath: es.pendingPath,
                 computed,
@@ -1516,10 +1542,37 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         const doc = dispatcher.getDocument();
         const id = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
         if (!id) return;
-        const action = quantizeAction(doc, id, palette);
+        // CONFINED TO THE PIXEL SELECTION when there is one. A panel button that ignored the marquee
+        // would be the one edit in the app that does — and the author would have no way to quantise
+        // just a sprite's shadow.
+        const action = quantizeAction(doc, id, palette, pixelMaskFor(es, doc, id));
         // NULL MEANS NOTHING MOVED — a canvas already within the palette must not leave an undo step.
         if (!action) return;
         dispatcher.dispatchAction(action);
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    /**
+     * Replace the pixel selection with a function of itself — Select All, Invert, Grow, Shrink, Border.
+     *
+     * ONE CALLBACK FOR ALL OF THEM, taking the transform rather than a verb, because every one of
+     * them is the same three steps: read the CURRENT mask through the validated door, apply a pure
+     * function from `paint/Selection`, and write the result back. A callback per button would be five
+     * copies of the target rule and five chances to forget that an empty result means no selection.
+     *
+     * THE FALLBACK IS AN EMPTY MASK, not a refusal: "select all" and "invert" have to work when
+     * nothing is selected yet, and those are exactly the two an author reaches for first.
+     */
+    const reviseSelection = useCallback((make: (current: SelectionMask) => SelectionMask | null) => {
+        const doc = dispatcher.getDocument();
+        const id = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
+        const surface = id ? doc.nodes.get(id)?.surface : undefined;
+        if (!id || !surface) return;
+        const current = pixelMaskFor(es, doc, id) ?? emptyMask(surface.width, surface.height);
+        const next = make(current);
+        // AN EMPTY RESULT IS NO SELECTION, the same rule the tool writes by: both read as "no
+        // constraint", and only null makes the marquee vanish.
+        es.pixelSelection = next && !isEmptySelection(next) ? { nodeId: id, mask: next } : null;
         refresh();
     }, [dispatcher, es, refresh]);
 
@@ -1924,6 +1977,79 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                         )}
                     </>
                 )}
+                {/* THE MARQUEE'S OWN ROW. It shares nothing with the brush: no colour, no size, no
+                    mirror — a selection is not paint. What it does share is the "select a canvas"
+                    refusal, because it acts on ONE raster's pixels for the same reason the brush
+                    does, and a tool you can pick that silently does nothing reads as broken. */}
+                {toolName === "marquee" && (
+                    <>
+                        {!selectedRasterId && (
+                            <span style={{ fontSize: 11, color: UI.accent, display: "flex",
+                                alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                                <span aria-hidden="true">⬚</span>
+                                Select a canvas first — a pixel selection belongs to one surface
+                            </span>
+                        )}
+                        {selectedRasterId && (<>
+                            {/* THE FOUR SHAPES. One tool, four modes — the target rule, the base
+                                mask and the combine are identical, and only the shape function
+                                differs. */}
+                            {([["rect", "▭", "Rectangle"], ["ellipse", "◯", "Ellipse"],
+                               ["lasso", "➰", "Lasso"], ["wand", "✧", "Magic wand"]] as const).map(
+                                ([mode, icon, label]) => (
+                                    <ToolButton key={mode} icon={icon} label={label}
+                                        active={selectMode === mode}
+                                        onClick={() => setSelectMode(mode)} />
+                                ))}
+                            {/* WAND ONLY. A tolerance for a rectangle means nothing, and a control
+                                whose value is ignored is worse than no control — the same rule the
+                                polygon's side count and the outline width follow. */}
+                            {selectMode === "wand" && (<>
+                                <label style={{ fontSize: 10, color: UI.textFaint, display: "flex",
+                                    alignItems: "center", gap: 3 }}>
+                                    tol
+                                    <input
+                                        type="number" min={0} max={WAND_TOLERANCE_MAX} step={1}
+                                        aria-label="Wand tolerance"
+                                        data-testid="wand-tolerance"
+                                        title="How far a colour may differ and still match, summed over all four channels. 0 is exact."
+                                        value={wandTolerance}
+                                        onChange={e => setWandTolerance(Math.max(0, Math.min(WAND_TOLERANCE_MAX,
+                                            Math.round(Number(e.target.value) || 0))))}
+                                        style={{ width: 44, background: UI.bg, color: UI.text,
+                                            border: `1px solid ${UI.line}` }}
+                                    />
+                                </label>
+                                <ToolButton icon="⛓" label="Contiguous" active={wandContiguous}
+                                    onClick={() => setWandContiguous(v => !v)} />
+                            </>)}
+                            {/* WHAT THE MODIFIERS DO, said where the tool is. Four operators with no
+                                on-screen home would be four gestures nobody discovers. */}
+                            <span style={{ fontSize: 10, color: UI.textFaint, whiteSpace: "nowrap" }}>
+                                shift adds · alt subtracts · both intersect · click to deselect
+                            </span>
+                            {/* THE WHOLE-SELECTION VERBS, which is what makes `fullMask`,
+                                `invertSelection`, `growSelection` and `borderSelection` reachable —
+                                arithmetic with no caller is what the feature audit exists to find. */}
+                            <span data-selection-count="1" style={{ fontSize: 10, color: UI.textFaint,
+                                whiteSpace: "nowrap", marginLeft: 4 }}>
+                                {es.pixelSelection ? `${selectedCount(es.pixelSelection.mask)} px` : "none"}
+                            </span>
+                            <ToolButton icon="▣" label="Select all pixels"
+                                onClick={() => reviseSelection(m => fullMask(m.width, m.height))} />
+                            <ToolButton icon="▢" label="Deselect"
+                                onClick={() => reviseSelection(() => null)} />
+                            <ToolButton icon="⧉" label="Invert selection"
+                                onClick={() => reviseSelection(invertSelection)} />
+                            <ToolButton icon="＋" label="Grow selection by a pixel"
+                                onClick={() => reviseSelection(m => growSelection(m, 1))} />
+                            <ToolButton icon="－" label="Shrink selection by a pixel"
+                                onClick={() => reviseSelection(m => growSelection(m, -1))} />
+                            <ToolButton icon="◌" label="Border of the selection"
+                                onClick={() => reviseSelection(m => borderSelection(m, 1))} />
+                        </>)}
+                    </>
+                )}
                 {toolName === "pen" && (
                     <span style={{ fontSize: 10, color: UI.textFaint, marginRight: 8 }}>
                         click to add · drag to curve · click the first point to close · Enter to finish
@@ -2025,7 +2151,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                             weights: { icon: "◑", label: "Weights" },
                             eyedropper: { icon: "⌖", label: "Eyedropper" },
                             tiles: { icon: "▦", label: "Tiles" },
-                            bucket: { icon: "◍", label: "Bucket" }
+                            bucket: { icon: "◍", label: "Bucket" },
+                            marquee: { icon: "⬚", label: "Select pixels" }
                         };
                         const t = spec[slot];
                         if (!t) return null;

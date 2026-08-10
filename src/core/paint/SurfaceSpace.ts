@@ -94,17 +94,38 @@ export function worldToSurface(space: SurfaceSpace, worldX: number, worldY: numb
 }
 
 /**
+ * The world point at a GRID coordinate — the corner between pixels, not a pixel's middle.
+ *
+ * WHAT AN OUTLINE NEEDS, and it is a different question from where a pixel IS. A selection's edge
+ * runs between two pixels, so its coordinates are integers and pixel `(x, y)` spans `(x, y)` to
+ * `(x + 1, y + 1)`. Drawing a marquee through pixel CENTRES puts the line half a pixel inside the
+ * selection on every side, which at a high zoom looks like the outline is off by one and at a low
+ * zoom looks like a row is missing.
+ *
+ * Fractional coordinates are meaningful and are not rounded: `(x + 0.5, y + 0.5)` is that pixel's
+ * centre, which is exactly how `surfaceToWorld` is defined below.
+ */
+export function surfaceCornerToWorld(
+    space: SurfaceSpace, gx: number, gy: number
+): { x: number; y: number } | null {
+    if (surfaceSpaceError(space) !== null) return null;
+    const u = gx / space.surfaceWidth;
+    const v = gy / space.surfaceHeight;
+    return applyToPoint(space.world, u * space.localWidth, v * space.localHeight);
+}
+
+/**
  * The world point at the CENTRE of a surface pixel, or null when the space has no mapping.
  *
  * THE CENTRE, NOT THE CORNER, because this exists to place things a user sees — a brush cursor, a
  * pixel highlight. Drawn at the corner each sits half a pixel up and to the left of the pixel it
  * claims to mark, which at a high zoom is the difference between a cursor on a pixel and beside it.
+ *
+ * DERIVED FROM THE CORNER rather than repeating its arithmetic, so "where is pixel (3,4)" and "where
+ * is grid line 3" can never come to disagree about which side of the half-pixel they are on.
  */
 export function surfaceToWorld(space: SurfaceSpace, sx: number, sy: number): { x: number; y: number } | null {
-    if (surfaceSpaceError(space) !== null) return null;
-    const u = (sx + 0.5) / space.surfaceWidth;
-    const v = (sy + 0.5) / space.surfaceHeight;
-    return applyToPoint(space.world, u * space.localWidth, v * space.localHeight);
+    return surfaceCornerToWorld(space, sx + 0.5, sy + 0.5);
 }
 
 /**

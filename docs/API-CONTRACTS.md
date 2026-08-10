@@ -1470,6 +1470,10 @@ interface EditorState {
   isDragging: boolean;
   previewRect: Rect | null;                 // rectangle-tool draw preview
   marqueeRect: Rect | null;                 // box-select marquee (WORLD coords), drawn as an overlay
+  // The PIXEL selection (2026-08-09): which pixels of which raster an edit may touch. A different
+  // thing from `marqueeRect`, which picks NODES. Editor state, never the schema — a selection is
+  // what the author is pointing at, not content, so it does not survive a save.
+  pixelSelection?: { nodeId: string; mask: SelectionMask } | null;
   pendingGeometry: Map<string, Partial<Geometry>> | null; // move/resize preview, fed INTO computeGeometry
   viewport: { x: number; y: number; zoom: number };
 }
@@ -1561,9 +1565,28 @@ than striping a line across the map from where it left. **A press off the grid s
 
 ```ts
 class BucketTool implements Tool { constructor(dispatcher, editorState, refresh, colour: () => Rgba) }
-function surfaceEditAction(doc, nodeId, edit: (b: PixelBuffer) => number): Action | null;
-function quantizeAction(doc, nodeId, palette: Palette): Action | null;
+function surfaceEditAction(doc, nodeId, edit: (b: PixelBuffer) => number, mask?: SelectionMask | null): Action | null;
+function quantizeAction(doc, nodeId, palette: Palette, mask?: SelectionMask | null): Action | null;
+
+// The four marquees. ONE tool, four modes: every mode resolves the same target, reads the same base
+// mask and combines the same way — only the shape function differs, and the target rule is where a
+// paint tool actually goes wrong. Dispatches NOTHING: a selection is not content, so it writes editor
+// state and leaves no history entry, the same bargain the eyedropper makes with the swatch.
+type PixelSelectMode = "rect" | "ellipse" | "lasso" | "wand";
+interface PixelSelectConfig { mode: PixelSelectMode; contiguous: boolean; tolerance: number }
+class PixelSelectTool implements Tool { constructor(dispatcher, editorState, refresh, config: () => PixelSelectConfig) }
+function wandMatcher(tolerance: number): (a, b) => boolean;   // exact at 0; sums all four channels
+const WAND_TOLERANCE_MAX = 1020;                              // 255 across four channels
 ```
+
+**The OPERATOR comes from the modifiers, not from a panel** — plain replaces, Shift adds, Alt
+subtracts, both intersect — because it is a property of the gesture: a toggle would let an author
+leave "subtract" on and then wonder why the next marquee ate their selection. **A press that never
+moves DESELECTS**, which is the only way out with a mouse; **Escape mid-drag restores the base mask**
+rather than clearing, so cancelling costs the gesture and not the selection. The lasso unions the
+polygon with the TRAIL: vertices sit at pixel centres (a corner leaves which pixel was meant
+ambiguous), which puts the traced line exactly on the boundary where half of it would fall out by
+parity.
 
 **`BucketTool` is the seam that makes `floodFill` reachable** — it had no caller outside the tests for
 as long as the paint layer has existed. The WHOLE SURFACE is the captured region, unlike a stroke's:
@@ -1638,7 +1661,12 @@ interface PixelBuffer { width: number; height: number; data: Uint8ClampedArray }
 function createPixelBuffer(w, h): PixelBuffer;      function setPixel(b, x, y, colour): void;
 function getPixel(b, x, y): Rgba | null;            function inBounds(b, x, y): boolean;
 function linePoints(x0, y0, x1, y1): [number, number][];
-function drawLine(b, x0, y0, x1, y1, colour): void; function floodFill(b, x, y, colour): number;
+function drawLine(b, x0, y0, x1, y1, colour): void;
+// A CLIP is a selection expressed as a predicate, so nothing down here knows what a selection IS.
+// Absent means unconstrained. For a FILL it is a WALL, not a filter: tested where neighbours are
+// QUEUED, or the fill tunnels under the boundary and surfaces on the far side.
+type PixelClip = (x: number, y: number) => boolean;
+function floodFill(b, x, y, colour, clip?: PixelClip): number;
 
 // PixelPatch — what a stroke costs to remember
 interface PixelPatch { x; y; width; height; before: Uint8ClampedArray; after: Uint8ClampedArray }
@@ -1650,15 +1678,20 @@ interface BrushDab { dx: number; dy: number; colour: Rgba | null }
 interface Brush { width; height; round: boolean; dabs: BrushDab[]; variants: Brush[] }
 function makeBrush(size, round): Brush;             function brushFromImage(b: PixelBuffer): Brush;
 function brushWithVariants(faces): Brush | null;    function pickFace(brush, roll: number): Brush;
-function stampBrush(b, brush, x, y, colour): void;  function brushBounds(brush, x, y): Box;
-function strokePath(b, brush, points, colour, line): void;  function strokeBounds(brush, points): Box | null;
+// The clip is tested PER DAB. At the stamp's centre instead, a wide brush lands whole or not at all
+// and the boundary becomes brush-sized and ragged rather than the line the author drew.
+function stampBrush(b, brush, x, y, colour, clip?: PixelClip): void;  function brushBounds(brush, x, y): Box;
+function strokePath(b, brush, points, colour, line, clip?: PixelClip): void;  function strokeBounds(brush, points): Box | null;
 
 // PixelCodec — a surface as text a document can hold
 function encodeSurface(b): { data: string; rawBytes: number; packedBytes: number };
 function decodeSurface(data, width, height): PixelBuffer | null;
 
 // Stroke — a drag, from first press to the patch it becomes
-function beginStroke(b, brush, x, y, colour, reach): StrokeSession | null;
+// The clip lives ON the session, captured at the press with everything else: a stroke paints from
+// three places (the press's dot, each move's segment, the mirrors) and one handed to some of them is
+// a selection the brush half-obeys.
+function beginStroke(b, brush, x, y, colour, reach, clip?: PixelClip): StrokeSession | null;
 function extendStroke(b, session, x, y, line): void;
 function endStroke(b, session, line): PixelPatch;   function strokeEscaped(session): boolean;
 
@@ -1667,8 +1700,42 @@ interface SurfaceSpace { world: Mat2D; localWidth: number; localHeight: number;
                          surfaceWidth: number; surfaceHeight: number; }
 function surfaceSpaceError(space): string | null;
 function worldToSurface(space, worldX, worldY): [number, number] | null;
-function surfaceToWorld(space, sx, sy): { x: number; y: number } | null;
+function surfaceToWorld(space, sx, sy): { x: number; y: number } | null;   // a pixel's CENTRE
+// A GRID coordinate — the corner between pixels, which is where a selection's edge runs. `surfaceToWorld`
+// is derived from this, so "where is pixel (3,4)" and "where is grid line 3" cannot drift apart.
+function surfaceCornerToWorld(space, gx, gy): { x: number; y: number } | null;
 function surfacePixelSize(space): { x: number; y: number } | null;
+
+// Selection — which pixels an edit may touch. A binary MASK, not a rectangle: a rectangle cannot
+// express a lasso, a wand, or a rectangle minus a bite, and a system that starts with rectangles
+// grows a special case per shape until something has to unify them anyway. 16MB at PIXEL_MAX_SIDE
+// against 67MB of RGBA. EDITOR state, never the schema — see `pixelMaskFor`.
+interface SelectionMask { width: number; height: number; data: Uint8Array }   // 0 or SELECTED (255)
+type SelectionOp = "replace" | "add" | "subtract" | "intersect";
+function selectionMaskError(mask): string | null;   // the length-vs-dimensions check that matters most
+function emptyMask(w, h): SelectionMask;            function fullMask(w, h): SelectionMask;
+function isSelected(mask, x, y): boolean;           // false OFF the mask, so an edit clips at the border
+function isEmptySelection(mask): boolean;           function selectedCount(mask): number;
+function maskBounds(mask): Rect | null;             // INCLUSIVE: one pixel is a 1x1 box
+function combineSelection(into, shape, op): SelectionMask | null;   // null on a size mismatch
+function rectSelection(w, h, a, b): SelectionMask;
+function ellipseSelection(w, h, a, b): SelectionMask;    // tests pixel CENTRES, so 1x1 is one pixel
+function lassoSelection(w, h, points): SelectionMask;    // even-odd, half-open in Y
+function wandSelection(buffer, x, y, same, contiguous): SelectionMask;   // `same` is INJECTED
+function growSelection(mask, by): SelectionMask;    // negative shrinks; the surface edge counts as inside
+function borderSelection(mask, by): SelectionMask;  // derived from grow — so a FULL mask's border is empty
+function invertSelection(mask): SelectionMask;
+// The mask as the predicate the primitives take, and the ONE place "empty means no constraint" lives.
+function selectionClip(mask): PixelClip | undefined;
+// Put back what a whole-surface edit changed OUTSIDE the mask; returns how many PIXELS it undid. The
+// only way to honour a mask through a stranger's callback — see docs/ACTION-SYSTEM.md.
+function restoreUnselected(buffer, before, mask): number;
+
+// SelectionOutline — the marching ants, as merged runs of GRID line (not the bounding box, which
+// would draw a lasso, a wand result and a rectangle-minus-a-bite as the same rectangle). A HOLE is
+// an edge too. Only the mask's own bounds are scanned, because this runs per frame during a drag.
+interface MaskSegment { x1: number; y1: number; x2: number; y2: number }
+function maskOutline(mask): MaskSegment[];
 ```
 
 **`SurfaceSpace` TAKES THE BOX'S SIZE, NEVER ITS ORIGIN.** `ComputedNode.local` is a Rect carrying
@@ -1867,6 +1934,10 @@ interface RendererState {
   hoveredNodeId: string | null;
   previewRect?: Rect | null;
   marqueeRect?: Rect | null;    // box-select marquee (world coords), drawn as an overlay
+  // The PIXEL selection to outline (2026-08-09): a mask over one raster's pixels, drawn as the
+  // boundary between selected and unselected — NOT its bounding box, which would draw a lasso as
+  // a rectangle. The caller validates it through `pixelMaskFor`; the model does not re-check.
+  pixelSelection?: { nodeId: string; mask: SelectionMask } | null;
   computed: ComputedState;      // world matrices + bounds + draw order (required)
   viewport: { x: number; y: number; zoom: number };
 }
@@ -2006,6 +2077,13 @@ const PAINT_STRENGTH = 0.35;   // the tool’s default, applied by the CALLER, n
 // pick goes stale four ways (another node selected, the node deleted, the warp turned off, a
 // coarser grid), and asking here means no site can forget.
 function pickedMeshPoint(es, doc): { nodeId: string; index: number } | null;
+// The mask an edit to `nodeId` must respect, or null when it may touch every pixel — the ONE door
+// every consumer reads a pixel selection through, validated on read for the same four reasons
+// `pickedMeshPoint` is: another node selected, the node deleted, the surface gone, or RESIZED. The
+// size check is the one that matters: a mask from before a resize would clip to a sheared ghost. An
+// empty mask answers null, because "nothing selected" has to mean "no constraint" in exactly one
+// place — see `selectionClip`.
+function pixelMaskFor(es, doc, nodeId: string): SelectionMask | null;
 // Handles for a mesh a rig has MOVED. `posed` is the resolved scene; without it the handles are
 // drawn at the rest pose while the ink is elsewhere. The picker takes it for the same reason —
 // this module exists so picking cannot drift from drawing.

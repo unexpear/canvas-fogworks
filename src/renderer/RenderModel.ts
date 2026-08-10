@@ -48,6 +48,8 @@ import { Quad } from "../core/geometry/OrientedBox";
 import { isGroupRotatable, isGroupResizable } from "../core/geometry/GroupTransform";
 import { isHandleOffered } from "../core/actions/nodeEdit";
 import { RendererState } from "./RendererState";
+import { maskOutline } from "../core/paint/SelectionOutline";
+import { SurfaceSpace, surfaceCornerToWorld } from "../core/paint/SurfaceSpace";
 
 const GRID_BASE = 20;
 const GRID_MAX_LINES_PER_AXIS = 300; // density cap: coarsen the grid instead of exploding line count
@@ -1126,6 +1128,49 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument, po
             role: "guide"
         });
     });
+
+    // THE PIXEL SELECTION's marching ants. Emitted before the node marquee and after the guides, so
+    // a box-select drag over a canvas that already has a pixel selection draws on top of it — the
+    // gesture in flight is what the pointer is doing now.
+    //
+    // TWO PASSES PER SEGMENT: a solid dark line with a dashed light one over it. Real ants animate
+    // the dash offset, and a still frame of a single dashed line is invisible over half the artwork
+    // an author paints — white on white, black on black. Two passes cost one extra item per run and
+    // are legible over anything.
+    //
+    // COORDINATES COME THROUGH THE NODE'S OWN MATRIX, via `surfaceCornerToWorld`, so a rotated or
+    // non-uniformly scaled canvas gets an outline that turns with it. Composing the placement here
+    // would be the renderer inventing coordinates, which is the one thing it does not do.
+    const pixelSel = state.pixelSelection;
+    if (pixelSel) {
+        const node = doc.nodes.get(pixelSel.nodeId);
+        const c = computed.nodes.get(pixelSel.nodeId);
+        if (node?.surface && c) {
+            const space: SurfaceSpace = {
+                // THE SIZE ONLY from `local` — `world` already carries the placement, and passing
+                // both counts the node's position twice.
+                world: c.world, localWidth: c.local.width, localHeight: c.local.height,
+                surfaceWidth: node.surface.width, surfaceHeight: node.surface.height
+            };
+            for (const seg of maskOutline(pixelSel.mask)) {
+                const a = surfaceCornerToWorld(space, seg.x1, seg.y1);
+                const b = surfaceCornerToWorld(space, seg.x2, seg.y2);
+                if (!a || !b || !Number.isFinite(a.x) || !Number.isFinite(b.x)) continue;
+                const line: Shape = { kind: "line", x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+                for (const pass of [{ stroke: "#000000", dash: null }, { stroke: "#ffffff", dash: `${3 / z} ${3 / z}` }]) {
+                    items.push({
+                        shape: line,
+                        paint: {
+                            fill: null, opacity: null, stroke: pass.stroke, strokeWidth: 1 / z,
+                            strokeDash: pass.dash, radius: null, cursor: null,
+                            pointerEvents: false, shadow: null, blur: null, blendMode: null
+                        },
+                        world: null, nodeId: null, role: "marquee"
+                    });
+                }
+            }
+        }
+    }
 
     // Box-select marquee (world-space; drawn once the drag has positive extent). Dropping
     // zero-area rects matches the preview emitter and keeps a degenerate box (e.g. a strict

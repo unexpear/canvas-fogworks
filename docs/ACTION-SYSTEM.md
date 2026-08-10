@@ -311,6 +311,17 @@ moved. Its two guards look redundant and are not: `edit` is a CALLER's function,
 reports is a claim while the patch is the truth, and each catches the other's disagreement in one
 direction (a count of 99 with no pixels moved, and a moved pixel reported as 0). Both are tested.
 
+**A fourth argument confines it to a PIXEL SELECTION** (2026-08-09): `surfaceEditAction(doc, nodeId,
+edit, mask)`. It is applied by putting back what fell OUTSIDE the mask — `Selection.restoreUnselected`
+— rather than by asking `edit` to respect it, and the reason is the same one the two guards exist for:
+`edit` is a stranger, and the only thing this can rely on is that it mutated the buffer. A clip
+predicate can be threaded through code this project owns (`stampBrush` takes one per dab, `floodFill`
+takes one as a WALL) and cannot be threaded through a callback. The order is the whole of it: edit,
+THEN restore, THEN diff — restoring first has nothing to restore, and diffing first records the pixels
+the restore put back. A mask whose size does not match the surface refuses the edit outright rather
+than editing everything, because "your stale selection was ignored, so the whole canvas changed" is
+the worst of the three outcomes.
+
 **Actions can be BUILT outside the dispatcher and run inside a transaction**, which is what
 `tileImport.tileImportActions` does: it returns the list of actions a placed Tiled map becomes, ids
 and all. Every action after the first for a given node names a node the same list creates, so it only

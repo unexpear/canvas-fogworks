@@ -51,8 +51,8 @@ broke a test whose subject was still true. Both are fixed.
 | Line / rectangle / ellipse **on pixels** | **absent** | `drawLine` exists and is NOT what a tool wants — a tool must stamp the BRUSH, which is `strokePath`+`linePoints`. Needs an ellipse rasteriser that does not exist |
 | Palette panel | **have** | loaded from a folder, drawn in the palette’s OWN grid with holes; closed 2026-08-09. No create/EDIT yet |
 | Quantise to a palette | **have** | `surfaceEdit.quantizeAction`, one button, one history entry — closed 2026-08-09 |
-| **Pixel selection** — rect, ellipse, lasso, magic wand, colour select | **arithmetic done, no tools yet** | `paint/Selection` (2026-08-09): a binary MASK, four combine operators, bounds. EDITOR state, not schema |
-| Modify selection (grow / shrink / border / invert) | **arithmetic done** | `growSelection` takes a negative to shrink; `borderSelection` is derived from it, so the two cannot disagree about the edge |
+| **Pixel selection** — rect, ellipse, lasso, magic wand, colour select | **have** | `paint/Selection` + `PixelSelectTool`, closed 2026-08-09. A binary MASK, four operators from the modifiers, marching ants drawn from `SelectionOutline`. EDITOR state, not schema. HONOURED by the brush (per dab), the bucket (as a WALL) and quantise (by restoring what fell outside) |
+| Modify selection (grow / shrink / border / invert) | **have** | buttons on the marquee row, closed 2026-08-09. `growSelection` takes a negative to shrink; `borderSelection` is derived from it, so the two cannot disagree about the edge — and the border of a FULL selection is consequently empty, which is documented rather than fixed |
 | Crop | **absent** | listed in PLANNED-FIXES and never built |
 | Image adjustments — brightness/contrast, HSV, curves, desaturate, invert, posterize, pixelize, outline, gradient map, palettize, colour replace | **absent** | VDE has shadow/blur as NODE effects; it has no destructive pixel adjustments |
 | Rotation algorithms (nearest, OmniScale, rotxel, cleanEdge) | **absent** | rotation is a node transform, resampled by the backend |
@@ -118,10 +118,11 @@ broke a test whose subject was still true. Both are fixed.
    this would give a tool that ignores brush size; and four tests use it to put a diagonal on a
    surface while one asserts its clipping, so deleting it would cost four hand-built fixtures and a
    guard. It stays a primitive, and its header now says why not to wire it.
-2. **Pixel selection.** The ARITHMETIC landed 2026-08-09 (`paint/Selection`). What remains is the
-   tools (rect / ellipse / lasso / wand marquees), holding the mask in `EditorState`, and making the
-   brush, the bucket and `surfaceEdit` honour it — which is the point: an unhonoured mask is a
-   marquee that draws a dashed rectangle and changes nothing.
+2. ~~**Pixel selection**~~ — DONE 2026-08-09, in two slices. The arithmetic (`paint/Selection`),
+   then the half that makes it mean something: a `PixelClip` predicate threaded to where paint
+   actually lands, `pixelMaskFor` as the one validated read, the four marquee gestures, and the
+   marching ants. What is downstream and still absent: CROP, cut/copy/paste of a region, and
+   transform-a-region — all three now have the mask they were waiting for.
 3. **Image adjustments.** A family of small, independently testable pure functions over a
    `PixelBuffer` — the shape this codebase is best at.
 4. **Tiled object layers.** The map side's largest hole and the one the "2D game engine" direction

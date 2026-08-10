@@ -22,6 +22,9 @@ import { Node } from "../core/document/Node";
 import { computeGeometry, ComputedState } from "../core/geometry/GeometryEngine";
 import { handleAtPoint, ROTATE_OFFSET_PX } from "../core/geometry/SelectionHandles";
 import { IDENTITY } from "../core/geometry/Matrix";
+import { rectSelection } from "../core/paint/Selection";
+import { createPixelBuffer } from "../core/paint/PixelBuffer";
+import { encodeSurface } from "../core/paint/PixelCodec";
 
 const SIZE = { width: 800, height: 600 };
 /** A hand-built ComputedNode's ink: a plain square box, the default for every non-shape type. */
@@ -1008,6 +1011,82 @@ describe("buildRenderModel — raster (schema 55)", () => {
         // A payload differing only in ORDER must still differ: a plain character sum would collide.
         expect(rasterHref("r", { data: "AB", width: 1, height: 1 }))
             .not.toBe(rasterHref("r", { data: "BA", width: 1, height: 1 }));
+    });
+});
+
+describe("buildRenderModel — the pixel selection's marching ants", () => {
+    /**
+     * A raster whose box is NOT at the origin and NOT square, and whose surface is a different size
+     * again: 4x2 pixels in a 40x10 box at (100, 40) means one surface pixel is 10 x 5 world units.
+     * Every one of those differences is a mistake a fixture could otherwise hide.
+     */
+    const SURFACE = { data: encodeSurface(createPixelBuffer(4, 2)).data, width: 4, height: 2 };
+    const doc = () => {
+        const d = createEmptyDocument();
+        d.nodes.set("r", { id: "r", type: "core.raster", parent: null, children: [],
+            geometry: { x: 100, y: 40, width: 40, height: 10 },
+            style: { fill: "none", opacity: 1 }, layout: {}, surface: SURFACE } as Node);
+        d.rootNodeUuids = ["r"];
+        return d;
+    };
+    const antsOf = (list: DisplayList) =>
+        list.overlay.filter(i => i.role === "marquee" && i.shape.kind === "line")
+            .map(i => i.shape as { kind: "line"; x1: number; y1: number; x2: number; y2: number });
+
+    test("the outline is drawn in WORLD units, through the node's own matrix", () => {
+        const d = doc();
+        // Pixel (1,0) alone: in the surface's grid its edges run (1,0)-(2,1), which in world units is
+        // (110,40)-(120,45). A transposed mapping would give (105,80) and a mapping that dropped the
+        // node's origin would give (10,0) — both distinguishable because nothing here is square.
+        const mask = rectSelection(4, 2, { x: 1, y: 0 }, { x: 1, y: 0 });
+        const list = buildRenderModel(SIZE, d, stateFor(d, { pixelSelection: { nodeId: "r", mask } }));
+        const ants = antsOf(list);
+        // FOUR RUNS, TWICE OVER: a solid dark line and a dashed light one per segment, because a
+        // single dashed line is invisible over half the artwork an author paints.
+        expect(ants).toHaveLength(8);
+        const solid = list.overlay.filter(i => i.role === "marquee" && i.paint.stroke === "#000000");
+        const dashed = list.overlay.filter(i => i.role === "marquee" && i.paint.stroke === "#ffffff");
+        expect(solid).toHaveLength(4);
+        expect(dashed).toHaveLength(4);
+        expect(dashed[0].paint.strokeDash).not.toBeNull();
+        expect(solid[0].paint.strokeDash).toBeNull();
+        // The four sides of one pixel, in world coordinates. Hand-computed from the box above.
+        const drawn = new Set(ants.map(s => `${s.x1},${s.y1}→${s.x2},${s.y2}`));
+        expect(drawn).toContain("110,40→120,40");   // top
+        expect(drawn).toContain("110,45→120,45");   // bottom
+        expect(drawn).toContain("110,40→110,45");   // left
+        expect(drawn).toContain("120,40→120,45");   // right
+        // NOT PICKABLE: an overlay that swallowed clicks would make the canvas inside a selection
+        // unpaintable, which is the opposite of what a selection is for.
+        expect(list.overlay.filter(i => i.role === "marquee").every(i => i.paint.pointerEvents === false))
+            .toBe(true);
+    });
+
+    test("no selection draws no ants, and neither does one on a node that is not there", () => {
+        const d = doc();
+        expect(antsOf(buildRenderModel(SIZE, d, stateFor(d)))).toHaveLength(0);
+        expect(antsOf(buildRenderModel(SIZE, d, stateFor(d, { pixelSelection: null })))).toHaveLength(0);
+        // A selection naming a node this document does not hold — which is what an undo that deleted
+        // the canvas leaves behind for one frame.
+        const mask = rectSelection(4, 2, { x: 0, y: 0 }, { x: 0, y: 0 });
+        expect(antsOf(buildRenderModel(SIZE, d, stateFor(d, { pixelSelection: { nodeId: "gone", mask } }))))
+            .toHaveLength(0);
+    });
+
+    test("the ants follow a ROTATED canvas, because the placement is the node's matrix", () => {
+        const d = doc();
+        const node = d.nodes.get("r")!;
+        // A quarter turn about the box's centre. The outline must turn with the artwork; a marquee
+        // drawn from the mask's coordinates as though they were world units would stay upright, which
+        // is exactly the bug that makes a selection look like it belongs to the screen.
+        (node as Node).transform = { rotation: Math.PI / 2 };
+        const mask = rectSelection(4, 2, { x: 0, y: 0 }, { x: 0, y: 0 });
+        const ants = antsOf(buildRenderModel(SIZE, d, stateFor(d, { pixelSelection: { nodeId: "r", mask } })));
+        expect(ants).toHaveLength(8);
+        // The pixel's top edge is 10 units long and now runs VERTICALLY: dx is 0 and dy is 10.
+        const top = ants[0];
+        expect(Math.abs(top.x2 - top.x1)).toBeCloseTo(0, 6);
+        expect(Math.abs(top.y2 - top.y1)).toBeCloseTo(10, 6);
     });
 });
 

@@ -34,6 +34,8 @@ import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, 
 import { withTiles, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
 import { TileTool, TileBrush } from "../../editor/tools/TileTool";
 import { BucketTool } from "../../editor/tools/BucketTool";
+import { PixelSelectTool, PixelSelectMode, wandMatcher, WAND_TOLERANCE_MAX } from "../../editor/tools/PixelSelectTool";
+import { MaskSegment, maskOutline } from "../paint/SelectionOutline";
 import { surfaceEditAction, quantizeAction } from "../actions/surfaceEdit";
 import { SelectionMask, SELECTED, selectionMaskError, emptyMask, fullMask, isSelected,
     isEmptySelection, selectedCount, maskBounds, combineSelection, rectSelection,
@@ -161,7 +163,7 @@ import { compileScript, snapshotFor, actionRequestError, SCRIPT_MAX_REQUESTS } f
 import { WORKER_BOOTSTRAP } from "../../editor/ScriptRunner";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
-import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld } from "../../editor/EditorState";
+import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld, EditorState } from "../../editor/EditorState";
 import { selectionHandles, selectionFrame, handleAtPoint, groupRotateHandle, groupHandleAtPoint, groupCornerHandles, HANDLE_SIZE_PX, ROTATE_OFFSET_PX , pathVertexHandles, vertexIndexOf, vertexHandleAtPoint} from "../geometry/SelectionHandles";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../geometry/GroupTransform";
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
@@ -26182,7 +26184,11 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         expect(preload).toMatch(/readPaletteFile:/);
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         expect(app).toMatch(/parsePaletteFile\(json, f\.name\)/);
-        expect(app).toMatch(/quantizeAction\(doc, id, palette\)/);
+        // AND IT PASSES THE MASK, so the one panel button that edits pixels obeys the marquee like
+        // the brush and the bucket do. Written as a containment rather than as the exact old call:
+        // this guard broke the moment the mask argument was added, for the one reason a guard must
+        // not — the thing it protects was still true.
+        expect(app).toMatch(/quantizeAction\(doc, id, palette, pixelMaskFor\(es, doc, id\)\)/);
         // The grid is drawn from the palette's OWN width, not reflowed to the panel: the layout is
         // part of the artist's meaning, and `paletteAt` addresses slots so a hole stays a hole.
         expect(app).toMatch(/repeat\(\$\{palette\.width\}, 1fr\)/);
@@ -26411,6 +26417,11 @@ describe("Selection — which pixels an edit may touch, and the rounding in ever
         for (let i = 0; i < band.data.length; i++) {
             if (band.data[i] !== 0) expect(box.data[i]).not.toBe(0);
         }
+        // THE BORDER OF A FULL SELECTION IS EMPTY, which is a consequence of the edge rule above and
+        // not an oversight: a full mask shrinks to itself, so it has nothing the shrunk one lacks.
+        // Found by clicking Select All then Border in the running app, and pinned here so the
+        // consequence is a decision rather than a surprise for the next reader.
+        expect(selectedCount(borderSelection(fullMask(W, H), 1))).toBe(0);
         // INVERT is the complement, and inverting twice is the original — the cheapest check that it
         // is not quietly clamping something.
         const inv = invertSelection(box);
@@ -26763,5 +26774,346 @@ describe("A selection nothing honours changes nothing — the brush, the bucket 
         const bucket = readFileSync(resolve(__dirname, "../../editor/tools/BucketTool.ts"), "utf8");
         expect(bucket).toMatch(/selectionClip\(pixelMaskFor\(this\.editorState/);
         expect(bucket).toMatch(/floodFill\(buffer, p\[0\], p\[1\], this\.colour\(\), clip\)/);
+    });
+});
+
+describe("The marching ants — a mask's edge, as merged runs of grid line", () => {
+    /** 6x4 — NON-SQUARE, so a transposed scan shows in the coordinates. */
+    const W = 6, H = 4;
+    /** Segments as short strings, so an expectation can be read: "1,1→3,1" is a run of two pixels. */
+    const show = (segs: MaskSegment[]) => segs.map(s => `${s.x1},${s.y1}→${s.x2},${s.y2}`);
+
+    test("a 2x2 box is FOUR merged sides, not eight pixel edges", () => {
+        const box = rectSelection(W, H, { x: 1, y: 1 }, { x: 2, y: 2 });
+        // Hand-derived. Pixel (x,y) spans (x,y)..(x+1,y+1), so the box occupies (1,1)..(3,3) and its
+        // four sides are exactly those runs. Unmerged, this would be eight unit segments — and a
+        // 64-square selection would be 256 draw items instead of 4.
+        expect(show(maskOutline(box))).toEqual([
+            "1,1→3,1",   // top
+            "1,3→3,3",   // bottom
+            "1,1→1,3",   // left
+            "3,1→3,3"    // right
+        ]);
+    });
+
+    test("one pixel is a UNIT SQUARE, and nothing selected is nothing drawn", () => {
+        // Where an off-by-one would live: a segment one short would make a single pixel's outline
+        // four zero-length lines, which every backend draws as nothing at all.
+        expect(show(maskOutline(rectSelection(W, H, { x: 4, y: 0 }, { x: 4, y: 0 })))).toEqual([
+            "4,0→5,0", "4,1→5,1", "4,0→4,1", "5,0→5,1"
+        ]);
+        expect(maskOutline(emptyMask(W, H))).toEqual([]);
+    });
+
+    test("a HOLE is an edge too, so a ring is two loops", () => {
+        // 3x3 minus its middle: the outer boundary is 4 runs and the hole is 4 more. An
+        // implementation that walked only the outer contour would draw a ring as a filled blob — and
+        // subtracting a bite from a rectangle is the gesture that produces exactly this.
+        const ring = combineSelection(
+            rectSelection(W, H, { x: 1, y: 0 }, { x: 3, y: 2 }),
+            rectSelection(W, H, { x: 2, y: 1 }, { x: 2, y: 1 }), "subtract")!;
+        expect(selectedCount(ring)).toBe(8);
+        const segs = show(maskOutline(ring));
+        expect(segs).toHaveLength(8);
+        // The outer four…
+        for (const s of ["1,0→4,0", "1,3→4,3", "1,0→1,3", "4,0→4,3"]) expect(segs).toContain(s);
+        // …and the hole's four, which are the ones a contour walk would miss.
+        for (const s of ["2,1→3,1", "2,2→3,2", "2,1→2,2", "3,1→3,2"]) expect(segs).toContain(s);
+    });
+
+    test("the SURFACE EDGE is a boundary, so select-all outlines the canvas", () => {
+        // `isSelected` answers false outside the mask, which is what makes this fall out rather than
+        // needing a special case — and it is the right answer: the edit stops there too.
+        expect(show(maskOutline(fullMask(W, H)))).toEqual([
+            "0,0→6,0", "0,4→6,4", "0,0→0,4", "6,0→6,4"
+        ]);
+    });
+
+    test("two runs in one row stay two runs — the flush is per break, not per row", () => {
+        // Columns 0-1 and 4-5 of row 0 only. A merger that flushed once per row would join them into
+        // a single segment straight across the gap, which is a marquee that claims the middle.
+        const split = combineSelection(
+            rectSelection(W, H, { x: 0, y: 0 }, { x: 1, y: 0 }),
+            rectSelection(W, H, { x: 4, y: 0 }, { x: 5, y: 0 }), "add")!;
+        const segs = show(maskOutline(split));
+        expect(segs).toContain("0,0→2,0");
+        expect(segs).toContain("4,0→6,0");
+        expect(segs).not.toContain("0,0→6,0");
+        // Eight in total: two loops of four, each a 2x1 rectangle.
+        expect(segs).toHaveLength(8);
+    });
+
+    test("a run reaching the LAST row or column is still flushed", () => {
+        // The scan runs one past the bounds so a run that never breaks is emitted. Without it a
+        // selection touching the bottom-right of its own bounding box loses two of its four sides —
+        // and every fixture that does not touch its bounds would pass regardless.
+        const corner = rectSelection(W, H, { x: 4, y: 2 }, { x: 5, y: 3 });
+        expect(show(maskOutline(corner))).toEqual([
+            "4,2→6,2", "4,4→6,4", "4,2→4,4", "6,2→6,4"
+        ]);
+    });
+});
+
+describe("The marquee, as a gesture — four shapes, four operators, no history entry", () => {
+    const RED: Rgba = [255, 0, 0, 255];
+    const BLUE: Rgba = [0, 0, 255, 255];
+    /**
+     * A NON-SQUARE surface in a NON-SQUARE box that is NOT at the origin, so a transposed axis, a
+     * dropped origin and a single scale factor each give a different answer. One surface pixel is
+     * 10 x 5 world units.
+     */
+    const SW = 8, SH = 4;
+    const BOX = { x: 100, y: 40, width: 80, height: 20 };
+    const RECT = { left: 0, top: 0 } as DOMRect;
+    const ev = (wx: number, wy: number, mods?: { shift?: boolean; alt?: boolean }) =>
+        ({ clientX: wx, clientY: wy, button: 0, buttons: 1, shiftKey: !!mods?.shift,
+            altKey: !!mods?.alt, preventDefault() { },
+            target: { getAttribute: () => null } } as unknown as MouseEvent);
+    /** The world point at the centre of a surface pixel. */
+    const at = (sx: number, sy: number) =>
+        ev(BOX.x + (sx + 0.5) * (BOX.width / SW), BOX.y + (sy + 0.5) * (BOX.height / SH));
+    const atWith = (sx: number, sy: number, mods: { shift?: boolean; alt?: boolean }) =>
+        ev(BOX.x + (sx + 0.5) * (BOX.width / SW), BOX.y + (sy + 0.5) * (BOX.height / SH), mods);
+
+    /** A raster whose left half is RED and right half BLUE, so a wand has two regions. */
+    const twoTone = () => {
+        const b = createPixelBuffer(SW, SH);
+        for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) {
+            setPixel(b, x, y, x < SW / 2 ? RED : BLUE);
+        }
+        return b;
+    };
+    function harness(opts?: { mode?: PixelSelectMode; tolerance?: number; contiguous?: boolean;
+                             select?: string[]; buffer?: PixelBuffer }) {
+        const doc = createEmptyDocument();
+        doc.nodes.set("R", {
+            id: "R", type: "core.raster", parent: null, children: [],
+            geometry: { ...BOX }, style: { fill: "none", opacity: 1 }, layout: {},
+            surface: { data: encodeSurface(opts?.buffer ?? createPixelBuffer(SW, SH)).data,
+                width: SW, height: SH }
+        } as Node);
+        doc.nodes.set("Q", { id: "Q", type: "core.rectangle", parent: null, children: [],
+            geometry: { ...BOX }, style: { fill: "#123456", opacity: 1 }, layout: {} } as Node);
+        doc.rootNodeUuids = ["R", "Q"];
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        es.selectedNodeIds = opts?.select ?? ["R"];
+        const tool = new PixelSelectTool(dispatcher, es, () => { }, () => ({
+            mode: opts?.mode ?? "rect",
+            contiguous: opts?.contiguous ?? true,
+            tolerance: opts?.tolerance ?? 0
+        }));
+        const computed = computeGeometry(dispatcher.getDocument());
+        return { dispatcher, es, tool, computed };
+    }
+    /** The mask currently selected, or null. */
+    const maskOf = (es: EditorState) => es.pixelSelection?.mask ?? null;
+
+    test("a rectangle drag selects the pixels the pointer spanned, in the SURFACE's grid", () => {
+        const h = harness();
+        h.tool.onMouseDown(at(1, 1), RECT, h.computed);
+        h.tool.onMouseMove(at(3, 2), RECT);
+        h.tool.onMouseUp();
+        const mask = maskOf(h.es)!;
+        expect(mask.width).toBe(SW);
+        expect(mask.height).toBe(SH);
+        // 3 wide by 2 tall = 6, and the box is where it was dragged rather than transposed: a
+        // transposed conversion would give {1,1,2,3} on this non-square surface.
+        expect(selectedCount(mask)).toBe(6);
+        expect(maskBounds(mask)).toEqual({ x: 1, y: 1, width: 3, height: 2 });
+        expect(h.es.pixelSelection!.nodeId).toBe("R");
+        // NOTHING WAS DISPATCHED. A selection is not content: an undo step for a marquee would put
+        // Ctrl+Z between the author and their last real edit.
+        expect(h.dispatcher.canUndo()).toBe(false);
+    });
+
+    test("shift adds, alt subtracts, and both intersect", () => {
+        const h = harness();
+        h.tool.onMouseDown(at(0, 0), RECT, h.computed);
+        h.tool.onMouseMove(at(3, 3), RECT);          // 4x4 = 16
+        h.tool.onMouseUp();
+        expect(selectedCount(maskOf(h.es)!)).toBe(16);
+
+        // ADD a column that OVERLAPS by one, so add, subtract and intersect all differ — two
+        // disjoint rectangles would make `add` and `replace` look identical.
+        h.tool.onMouseDown(atWith(3, 0, { shift: true }), RECT, h.computed);
+        h.tool.onMouseMove(atWith(5, 3, { shift: true }), RECT);
+        h.tool.onMouseUp();
+        expect(selectedCount(maskOf(h.es)!)).toBe(24);   // 16 + 12 - 4 overlapping
+
+        // SUBTRACT the same columns back out.
+        h.tool.onMouseDown(atWith(3, 0, { alt: true }), RECT, h.computed);
+        h.tool.onMouseMove(atWith(5, 3, { alt: true }), RECT);
+        h.tool.onMouseUp();
+        expect(selectedCount(maskOf(h.es)!)).toBe(12);   // columns 0-2
+        expect(maskBounds(maskOf(h.es)!)).toEqual({ x: 0, y: 0, width: 3, height: 4 });
+
+        // INTERSECT with a band, leaving what both hold.
+        h.tool.onMouseDown(atWith(2, 1, { shift: true, alt: true }), RECT, h.computed);
+        h.tool.onMouseMove(atWith(7, 2, { shift: true, alt: true }), RECT);
+        h.tool.onMouseUp();
+        expect(maskBounds(maskOf(h.es)!)).toEqual({ x: 2, y: 1, width: 1, height: 2 });
+        expect(selectedCount(maskOf(h.es)!)).toBe(2);
+    });
+
+    test("an ellipse is not a rectangle, which is the whole reason for the mode", () => {
+        const h = harness({ mode: "ellipse" });
+        h.tool.onMouseDown(at(0, 0), RECT, h.computed);
+        h.tool.onMouseMove(at(3, 3), RECT);
+        h.tool.onMouseUp();
+        const mask = maskOf(h.es)!;
+        // A 4x4 ellipse tests pixel CENTRES against a radius of 2, so the four corners fall outside:
+        // 16 - 4 = 12. Hand-derived, and the corner check is what a rectangle would pass.
+        expect(selectedCount(mask)).toBe(12);
+        expect(isSelected(mask, 0, 0)).toBe(false);
+        expect(isSelected(mask, 3, 3)).toBe(false);
+        expect(isSelected(mask, 1, 1)).toBe(true);
+    });
+
+    test("a lasso selects what was drawn AROUND and what was drawn OVER", () => {
+        const h = harness({ mode: "lasso" });
+        // A triangle traced through three corners of the surface's top-left region.
+        h.tool.onMouseDown(at(0, 0), RECT, h.computed);
+        h.tool.onMouseMove(at(3, 0), RECT);
+        h.tool.onMouseMove(at(0, 3), RECT);
+        h.tool.onMouseUp();
+        const mask = maskOf(h.es)!;
+        // THE TRACED LINE IS INCLUDED, which is the point of adding the trail: the polygon's vertices
+        // sit at pixel centres, so the line the author dragged lies exactly on the boundary and half
+        // of it would fall outside by parity. Both ends of the top edge are selected here.
+        expect(isSelected(mask, 0, 0)).toBe(true);
+        expect(isSelected(mask, 3, 0)).toBe(true);
+        expect(isSelected(mask, 0, 3)).toBe(true);
+        // The hypotenuse's far side is NOT selected — a lasso that filled its bounding box would
+        // take it, and that is the failure this fixture exists to catch.
+        expect(isSelected(mask, 3, 3)).toBe(false);
+        // And the interior is, so it is a filled shape rather than an outline.
+        expect(isSelected(mask, 1, 1)).toBe(true);
+    });
+
+    test("a wand takes the region under the click, and 'contiguous' is what bounds it", () => {
+        const h = harness({ mode: "wand", buffer: twoTone() });
+        h.tool.onMouseDown(at(0, 0), RECT, h.computed);
+        // The RED half: 4 columns x 4 rows.
+        expect(selectedCount(maskOf(h.es)!)).toBe(16);
+        expect(isSelected(maskOf(h.es)!, 4, 0)).toBe(false);
+
+        // A TOLERANCE WIDE ENOUGH to reach blue takes the whole canvas — |255-0| twice = 510, so 510
+        // matches exactly and 509 does not. The boundary is asserted rather than a safe distance from
+        // it, because `<=` against `<` is a one-character mistake with no other symptom.
+        const exact = harness({ mode: "wand", tolerance: 510, buffer: twoTone() });
+        exact.tool.onMouseDown(at(0, 0), RECT, exact.computed);
+        expect(selectedCount(maskOf(exact.es)!)).toBe(SW * SH);
+        const under = harness({ mode: "wand", tolerance: 509, buffer: twoTone() });
+        under.tool.onMouseDown(at(0, 0), RECT, under.computed);
+        expect(selectedCount(maskOf(under.es)!)).toBe(16);
+    });
+
+    test("'by colour' crosses a gap that a connected wand cannot", () => {
+        // Two separate RED blobs on a transparent canvas: contiguous finds one, global finds both.
+        const buffer = createPixelBuffer(SW, SH);
+        setPixel(buffer, 0, 0, RED);
+        setPixel(buffer, 1, 0, RED);
+        setPixel(buffer, 7, 3, RED);
+        const near = harness({ mode: "wand", buffer, contiguous: true });
+        near.tool.onMouseDown(at(0, 0), RECT, near.computed);
+        expect(selectedCount(maskOf(near.es)!)).toBe(2);
+        const all = harness({ mode: "wand", buffer, contiguous: false });
+        all.tool.onMouseDown(at(0, 0), RECT, all.computed);
+        expect(selectedCount(maskOf(all.es)!)).toBe(3);
+    });
+
+    test("a press that never moves DESELECTS, which is the only way out with a mouse", () => {
+        const h = harness();
+        h.tool.onMouseDown(at(1, 1), RECT, h.computed);
+        h.tool.onMouseMove(at(4, 3), RECT);
+        h.tool.onMouseUp();
+        expect(maskOf(h.es)).not.toBeNull();
+        // A click INSIDE the selection, with no drag.
+        h.tool.onMouseDown(at(2, 2), RECT, h.computed);
+        h.tool.onMouseUp();
+        expect(h.es.pixelSelection).toBeNull();
+        // AND IT CLEARS WHATEVER THE MODIFIERS SAY. An author holding Shift out of habit must not be
+        // trapped inside their own marquee.
+        h.tool.onMouseDown(at(1, 1), RECT, h.computed);
+        h.tool.onMouseMove(at(4, 3), RECT);
+        h.tool.onMouseUp();
+        h.tool.onMouseDown(atWith(2, 2, { shift: true }), RECT, h.computed);
+        h.tool.onMouseUp();
+        expect(h.es.pixelSelection).toBeNull();
+    });
+
+    test("Escape mid-drag restores what was selected BEFORE the gesture", () => {
+        const h = harness();
+        h.tool.onMouseDown(at(0, 0), RECT, h.computed);
+        h.tool.onMouseMove(at(1, 1), RECT);
+        h.tool.onMouseUp();
+        expect(selectedCount(maskOf(h.es)!)).toBe(4);
+        // A second drag, abandoned. The base mask comes back — not nothing, which is what an author
+        // loses if cancel is implemented as "clear".
+        h.tool.onMouseDown(at(4, 0), RECT, h.computed);
+        h.tool.onMouseMove(at(7, 3), RECT);
+        expect(selectedCount(maskOf(h.es)!)).toBe(16);
+        h.tool.onKeyDown({ key: "Escape" } as KeyboardEvent);
+        expect(selectedCount(maskOf(h.es)!)).toBe(4);
+        // Escape with NO drag in flight clears the selection — the keyboard's deselect.
+        h.tool.onKeyDown({ key: "Escape" } as KeyboardEvent);
+        expect(h.es.pixelSelection).toBeNull();
+    });
+
+    test("a subtraction that consumes everything leaves NO selection, not an empty one", () => {
+        // Both read as "no constraint" through `selectionClip`, and only null makes the marquee
+        // disappear — a stored empty mask would leave ants around nothing.
+        const h = harness();
+        h.tool.onMouseDown(at(1, 1), RECT, h.computed);
+        h.tool.onMouseMove(at(2, 2), RECT);
+        h.tool.onMouseUp();
+        h.tool.onMouseDown(atWith(0, 0, { alt: true }), RECT, h.computed);
+        h.tool.onMouseMove(atWith(7, 3, { alt: true }), RECT);
+        h.tool.onMouseUp();
+        expect(h.es.pixelSelection).toBeNull();
+    });
+
+    test("it refuses what has no single surface, exactly as the brush does", () => {
+        for (const selection of [["Q"], ["R", "Q"], []]) {
+            const h = harness({ select: selection });
+            h.tool.onMouseDown(at(1, 1), RECT, h.computed);
+            h.tool.onMouseMove(at(3, 3), RECT);
+            h.tool.onMouseUp();
+            expect(h.es.pixelSelection).toBeNull();
+        }
+    });
+
+    test("the wand's matcher is EXACT at zero and inclusive at its bound", () => {
+        const exact = wandMatcher(0);
+        expect(exact([1, 2, 3, 255], [1, 2, 3, 255])).toBe(true);
+        // ALPHA COUNTS: two pixels differing only in transparency are different colours, the same
+        // rule `floodFill` follows.
+        expect(exact([1, 2, 3, 255], [1, 2, 3, 254])).toBe(false);
+        const loose = wandMatcher(4);
+        expect(loose([10, 10, 10, 255], [12, 12, 10, 255])).toBe(true);    // 2 + 2 = 4, inclusive
+        expect(loose([10, 10, 10, 255], [12, 12, 11, 255])).toBe(false);   // 5
+        // The bound is 255 across four channels; past it every colour matches every other, so a
+        // larger number would be a control that changes nothing.
+        expect(WAND_TOLERANCE_MAX).toBe(1020);
+    });
+
+    test("the marquee is REACHABLE, and the whole-selection verbs with it", () => {
+        // `paint/Selection` was nine functions and no gesture. These assert the door stays open: the
+        // app builds the tool, the paint workspace offers it, and the row carries the four modes and
+        // the verbs — `fullMask`, `invertSelection`, `growSelection` and `borderSelection` have no
+        // other caller in the app, so without these buttons they are arithmetic nobody can run.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/marquee: new PixelSelectTool\(dispatcher, es, refresh,/);
+        expect(app).toMatch(/id: "paint",.*"marquee"/);
+        expect(app).toMatch(/toolName === "marquee"/);
+        expect(app).toMatch(/reviseSelection\(m => fullMask\(m\.width, m\.height\)\)/);
+        expect(app).toMatch(/reviseSelection\(invertSelection\)/);
+        expect(app).toMatch(/reviseSelection\(m => growSelection\(m, 1\)\)/);
+        expect(app).toMatch(/reviseSelection\(m => growSelection\(m, -1\)\)/);
+        expect(app).toMatch(/reviseSelection\(m => borderSelection\(m, 1\)\)/);
+        // And the canvas is told about the selection, validated through the one door.
+        expect(app).toMatch(/pixelSelection: es\.pixelSelection/);
+        expect(app).toMatch(/pixelMaskFor\(es, doc, es\.pixelSelection\.nodeId\)/);
     });
 });
