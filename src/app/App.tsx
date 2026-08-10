@@ -107,7 +107,7 @@ import { parseSvgDocument, svgDocumentError } from "../core/import/SvgDocument";
 import { svgNodeSpecs, SvgNodeSpec } from "../core/import/SvgNodes";
 import { parseFontFile, fontFileError, FontInfo } from "../core/import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, tilesetFor, tileSourceRect,
-    tilePosition, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer,
+    tilePosition, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer, objectPlacement,
     TiledTileset } from "../core/import/TiledMap";
 import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
@@ -4741,6 +4741,64 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                                 // Only the 820-in-124,692 that need one, so an
                                                 // unflipped tile carries no transform at all.
                                                 transform: t.rotation === 0 && t.scaleX === 1 ? null : t
+                                            });
+                                        }
+                                    }
+
+                                    // OBJECT LAYERS (2026-08-10), in file order after the tile
+                                    // layers, so an entity sits above the ground it stands on. Each
+                                    // group becomes a FRAME carrying the layer's opacity and
+                                    // visibility, and `tileImportActions` nests what follows it.
+                                    for (const group of map.objectGroups) {
+                                        // ONE PASS, kept: `objectPlacement` resolves a tileset per
+                                        // object, and asking twice — once to place and once to
+                                        // report — is the same work done again for 114 objects.
+                                        const fits = group.objects.map(o => objectPlacement(o, sets));
+                                        for (const fit of fits) {
+                                            // WHY EACH ONE WAS REFUSED, not merely how many: a
+                                            // template reference and a text object are different
+                                            // gaps, and the reason is what says whether this is a
+                                            // file to fix or a feature we do not have.
+                                            if (fit.why) problems.push(fit.why);
+                                        }
+                                        const placeable = fits.filter(f => f.placement !== null);
+                                        // AN EMPTY LAYER GETS NO FRAME. A map full of templates
+                                        // would otherwise import as a stack of empty rectangles,
+                                        // which reads as a broken import rather than as content
+                                        // this cannot open.
+                                        if (placeable.length === 0) continue;
+                                        tiles.push({
+                                            kind: "group",
+                                            // THE FRAME SPANS THE MAP, not its contents: an object
+                                            // layer has no box of its own, and a frame sized to the
+                                            // objects would move whenever one did.
+                                            x: group.offsetX, y: group.offsetY,
+                                            width: map.width * map.tileWidth,
+                                            height: map.height * map.tileHeight,
+                                            name: group.name || "Object layer",
+                                            opacity: group.opacity, hidden: !group.visible
+                                        });
+                                        for (const fit of placeable) {
+                                            const pl = fit.placement!;
+                                            const src = pl.image ? sheets.get(pl.image) : undefined;
+                                            // A tile object whose sheet did not load is counted
+                                            // where every other unplaceable thing is counted.
+                                            if (pl.shape === "image" && !src) { unresolved++; continue; }
+                                            tiles.push({
+                                                kind: "object",
+                                                shape: pl.shape,
+                                                x: pl.x + group.offsetX, y: pl.y + group.offsetY,
+                                                width: pl.width, height: pl.height,
+                                                name: pl.name,
+                                                src: src ?? null,
+                                                sourceRect: pl.sourceRect,
+                                                // Emitted only when it turns or mirrors, so an
+                                                // ordinary entity carries no transform at all.
+                                                transform: pl.rotation !== 0 || pl.scaleX !== 1 || pl.scaleY !== 1
+                                                    ? { rotation: pl.rotation, scaleX: pl.scaleX,
+                                                        scaleY: pl.scaleY, origin: pl.origin }
+                                                    : null,
+                                                path: pl.path
                                             });
                                         }
                                     }

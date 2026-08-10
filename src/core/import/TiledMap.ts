@@ -71,7 +71,7 @@
  * a map that draws correctly.
  */
 
-import { SourceRect } from "../document/Node";
+import { SourceRect, PathCommand } from "../document/Node";
 // THE SAME THREE FLAGS IN A SECOND ENCODING. Tiled packs them into the top bits of a 32-bit gid;
 // a `Tilemap` cell holds them as 1/2/4 in a parallel array. Aliased rather than renamed either
 // side, so the two names cannot be confused at a glance the way `FLIP_H` twice over would be.
@@ -400,6 +400,138 @@ function readData(
  * so the tilesets and the other layers still arrive.
  */
 /**
+ * What one object becomes on this canvas, or null with a reason.
+ *
+ * THE TWIN OF `tilemapForLayer`, deliberately: it answers "here is a node" or "here is why not", it
+ * names the tileset image as a PATH rather than loading it, and the caller resolves that against a
+ * filesystem this module refuses to know about. Everything here is arithmetic that can be tested.
+ *
+ * THREE KINDS NEVER BECOME A NODE, and each is refused rather than approximated:
+ *   - a POINT has no size, and a marker of invented size is a lie about where the author clicked;
+ *   - a TEXT object's string is not read at all, so it would arrive as an empty box;
+ *   - a TEMPLATE names a `.tx` file nothing has opened, so its size and picture are unknown.
+ * The map-level notes already count all three; this returns the same reason per object so a caller
+ * placing one at a time is not left guessing.
+ */
+export interface TiledObjectPlacement {
+    /** The node type this becomes, named by what the engine already has to hold it. */
+    shape: "image" | "rectangle" | "ellipse" | "path";
+    /** The node's box, in map pixels, ANCHORED TOP-LEFT — `objectBox` has already been applied. */
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    /** A tile object's sheet, as the tileset NAMED it. Null for every shape. */
+    image: string | null;
+    /** Which part of that sheet, or null for a collection tile (which is a whole file). */
+    sourceRect: SourceRect | null;
+    /** Radians, and the fraction of the box the turn is about — see `objectTransform`. */
+    rotation: number;
+    origin: { x: number; y: number };
+    /** The gid's flips, as this engine states them. 1 unless the tile is mirrored. */
+    scaleX: number;
+    scaleY: number;
+    /** A polygon's or polyline's commands, relative to the box above. Null for every other shape. */
+    path: PathCommand[] | null;
+    /** A label for the layers panel: the object's name, else its class, else its id. */
+    name: string;
+}
+
+/** A placement, or the reason there is none. */
+export interface TiledObjectFit {
+    placement: TiledObjectPlacement | null;
+    why: string | null;
+}
+
+export function objectPlacement(
+    obj: TiledObject, tilesets: readonly TiledTileset[]
+): TiledObjectFit {
+    // A NAME FOR THE PANEL, not data: the object's own name if it has one, else its class, else its
+    // id. The corpus names nothing and classes exactly one thing, so most of these read "object 90"
+    // — which is still the id an author can find in Tiled.
+    const name = obj.name || obj.className || `object ${obj.id}`;
+    const box = objectBox(obj);
+    const turn = objectTransform(obj);
+    const base = {
+        x: box.x, y: box.y, width: box.width, height: box.height,
+        rotation: turn.rotation, origin: turn.origin, scaleX: 1, scaleY: 1,
+        image: null as string | null, sourceRect: null as SourceRect | null,
+        path: null as PathCommand[] | null, name
+    };
+
+    if (obj.kind === "template") {
+        return { placement: null, why: `object ${obj.id} is a template reference (${obj.template}), `
+            + "whose file is not opened here" };
+    }
+    if (obj.kind === "point") {
+        return { placement: null, why: `object ${obj.id} is a point, which has no size to place` };
+    }
+    if (obj.kind === "text") {
+        return { placement: null, why: `object ${obj.id} is text, and its string is not read` };
+    }
+    if (obj.kind === "polygon" || obj.kind === "polyline") {
+        // THE BOX IS THE POINTS' OWN BOUNDS, because a polygon object states no width or height —
+        // both are 0 in the file. A node sized 0x0 is invisible and unpickable, so the geometry has
+        // to be derived, and the commands are then stated RELATIVE to it: this engine's path
+        // commands are local to the node's box, and Tiled's points are relative to the object's
+        // origin, which are two different origins whenever a point is negative. The fixture's
+        // polyline runs to -5, so this is checkable rather than assumed.
+        if (obj.points.length < 2) {
+            return { placement: null, why: `object ${obj.id} is a ${obj.kind} with fewer than two points` };
+        }
+        const xs = obj.points.map(pt => pt.x), ys = obj.points.map(pt => pt.y);
+        const minX = Math.min(...xs), minY = Math.min(...ys);
+        const commands: PathCommand[] = obj.points.map((pt, i) => (
+            i === 0 ? { c: "M" as const, x: pt.x - minX, y: pt.y - minY }
+                : { c: "L" as const, x: pt.x - minX, y: pt.y - minY }
+        ));
+        // A POLYGON CLOSES AND A POLYLINE DOES NOT, which is the whole difference between the two
+        // kinds and the only thing a consumer can tell them apart by once they are paths.
+        if (obj.kind === "polygon") commands.push({ c: "Z" });
+        return {
+            placement: {
+                ...base, shape: "path",
+                x: obj.x + minX, y: obj.y + minY,
+                width: Math.max(...xs) - minX, height: Math.max(...ys) - minY,
+                path: commands
+            },
+            why: null
+        };
+    }
+    if (obj.kind === "ellipse") return { placement: { ...base, shape: "ellipse" }, why: null };
+    if (obj.kind === "rectangle") return { placement: { ...base, shape: "rectangle" }, why: null };
+
+    // A TILE OBJECT: the picture is a tileset's, resolved exactly as a cell's is — a collection tile
+    // is a whole file with no rect to cut, and a sheet tile is a rect inside one image.
+    const cell = obj.cell;
+    const set = cell ? tilesetFor(tilesets, cell.gid) : null;
+    if (!cell || !set) {
+        return { placement: null, why: `object ${obj.id} names tile ${cell ? cell.gid : "?"}, `
+            + "which is in no tileset this map declares" };
+    }
+    const own = tileImageFor(set, cell.gid);
+    const rect = own ? null : tileSourceRect(set, cell.gid);
+    const image = own ? own.image : set.image;
+    if (!image || (!own && !rect)) {
+        return { placement: null, why: `object ${obj.id} names tile ${cell.gid}, whose tileset has no image` };
+    }
+    // THE FLIPS ARE THE SAME ARITHMETIC A CELL'S ARE, through the same function — a second copy
+    // would be a second chance to disagree about which of the three bits is a mirror.
+    const t = tileTransform(cell);
+    return {
+        placement: {
+            ...base, shape: "image", image, sourceRect: rect,
+            // THE TILE'S TURN COMPOSES WITH THE OBJECT'S. A flipped-and-rotated object carries both,
+            // and adding them is right because both are stated about the same axis; the origin stays
+            // the object's bottom-left, which is what Tiled turns about.
+            rotation: base.rotation + t.rotation,
+            scaleX: t.scaleX, scaleY: t.scaleY
+        },
+        why: null
+    };
+}
+
+/**
  * The objects of one `<objectgroup>` body.
  *
  * KIND IS DECIDED BY WHAT THE TAG CARRIES, in the order the format resolves it: a `template`
@@ -600,15 +732,18 @@ export function parseTiledMap(xml: string, opts?: { inflate?: (d: Uint8Array) =>
         notes.push(`${templated} object(s) reference a template file, which is not opened here; `
             + "they carry a position and nothing else");
     }
-    // A BOX IS NOT A SHAPE. An ellipse, a polygon, a polyline and a text object all parse — their
-    // position, size and properties are right — and this reader has nowhere to put the shape
-    // itself, so placing one as a rectangle would be a wrong picture rather than a missing one.
-    const shaped = allObjects.filter(o =>
-        o.kind === "ellipse" || o.kind === "polygon" || o.kind === "polyline" || o.kind === "text").length;
-    if (shaped > 0) {
-        notes.push(`${shaped} object(s) are an ellipse, polygon, polyline or text; `
-            + "their box is read and their shape is not");
+    // TEXT IS THE ONLY SHAPE WHOSE CONTENT IS LOST, and this note used to claim four. Writing the
+    // consumer is what corrected it: an ellipse IS its box, and a polygon's and polyline's points
+    // are read — all three have an exact node type waiting for them (`core.ellipse`, `core.path`),
+    // so calling them unrepresented was a note that would have sent someone looking for work that
+    // was already done. A text object really does lose its string, its font and its alignment.
+    const texts = allObjects.filter(o => o.kind === "text").length;
+    if (texts > 0) {
+        notes.push(`${texts} text object(s) are read as a box only; the string is not read`);
     }
+    // A POINT keeps its position and has no size, so nothing is lost in the READING — it is
+    // placement that has nowhere to put it, and `objectPlacement` says so per object.
+
     // PARALLAX IS A LAYER PROPERTY THIS ENGINE HAS (schema 40, `applyParallax`) and this reader does
     // not carry — so a map whose clouds drift at 0.5 comes in pinned to the ground. Counted rather
     // than silently flattened; three groups in the fixture use it.

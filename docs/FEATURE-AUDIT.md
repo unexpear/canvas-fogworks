@@ -132,11 +132,15 @@ broke a test whose subject was still true. Both are fixed.
    ops (pixelize, outline) and the ramp-driven ones (curves, gradient map); they are a different
    shape and want their own slice — `outline` writes where alpha was 0, so this family's
    "skip transparent pixels" rule stops being right for it.
-4. **Tiled object layers** — the READER landed 2026-08-10 (`parseTiledMap` now returns
-   `objectGroups`, with `objectBox`/`objectTransform` for the anchoring). What remains is
-   PLACEMENT: turning those objects into nodes, which is the next slice and the thing that makes
-   this reachable. Until it lands, this is arithmetic with no consumer — the state this audit
-   exists to find, recorded here rather than discovered later.
+4. ~~**Tiled object layers**~~ — DONE 2026-08-10, reader and placement. `parseTiledMap` returns
+   `objectGroups`; `objectPlacement` says what each object becomes or why it cannot; the import
+   places an object layer as a FRAME carrying its opacity and visibility with the objects nested
+   inside. A tile object becomes a `core.image` with its source rect, a rectangle a box, an ellipse
+   a `core.ellipse`, a polygon or polyline a `core.path`. WHAT IS NOT CARRIED, and is counted rather
+   than dropped silently: an object's CLASS and CUSTOM PROPERTIES (the engine has no field for
+   them — that is what a `core.entity` schema change would be for, and it should be designed against
+   imported maps rather than ahead of them), template references (`.tx` files are not opened), text
+   objects, points, and an object layer's parallax factor.
 5. **A tileset as editable content**, which is what unlocks Pixelorama's Manual/Auto/Stack modes and
    tile-level rotation. This is a schema change and should follow the terrain field.
 6. **TMX export**, so a map authored here can leave.

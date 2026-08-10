@@ -1127,6 +1127,20 @@ function objectBox(obj: TiledObject): { x: number; y: number; width: number; hei
 // Radians (the sign is NOT flipped: both conventions are clockwise on a y-down screen) plus the
 // fraction of the box Tiled turns about — {0,1} for a tile object, {0,0} for the rest.
 function objectTransform(obj: TiledObject): { rotation: number; origin: { x: number; y: number } };
+// What an object BECOMES, or why it cannot — the twin of `tilemapForLayer`, down to naming the sheet
+// as a PATH the caller resolves. A polygon's box is derived from its POINTS (Tiled states 0x0 for
+// one) and its commands are made relative to that box, which differ whenever a point is negative.
+// Three kinds never place: a point (no size), a text object (its string is unread) and a template
+// (its file is unopened).
+interface TiledObjectPlacement {
+  shape: "image" | "rectangle" | "ellipse" | "path";
+  x; y; width; height: number;          // top-left anchored, objectBox already applied
+  image: string | null; sourceRect: SourceRect | null;
+  rotation: number; origin: { x: number; y: number };   // radians + the corner it turns about
+  scaleX: number; scaleY: number;       // the gid's flips, via the same tileTransform a cell uses
+  path: PathCommand[] | null; name: string;
+}
+function objectPlacement(obj: TiledObject, tilesets: readonly TiledTileset[]): { placement: TiledObjectPlacement | null; why: string | null };
 function tilemapForLayer(map: { orientation: string; tileWidth: number; tileHeight: number },
                          layer: TiledLayer, tilesets: readonly TiledTileset[]): TiledTilemapFit;
 ```

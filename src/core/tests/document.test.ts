@@ -32,6 +32,7 @@ import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, 
          visibleCells, cellAt, TILE_EMPTY,
          flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D } from "../document/Tilemap";
 import { withTiles, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
+import { emptyTilemap } from "../document/Tilemap";
 import { TileTool, TileBrush } from "../../editor/tools/TileTool";
 import { BucketTool } from "../../editor/tools/BucketTool";
 import { PixelSelectTool, PixelSelectMode, wandMatcher, WAND_TOLERANCE_MAX } from "../../editor/tools/PixelSelectTool";
@@ -57,7 +58,7 @@ import { ResizeNodeAction } from "../actions/ResizeNodeAction";
 import { UpdateNodeGeometryAction } from "../actions/UpdateNodeGeometryAction";
 import { UpdateNodeStyleAction } from "../actions/UpdateNodeStyleAction";
 import { TransactionAction } from "../actions/TransactionAction";
-import { tileImportActions } from "../actions/tileImport";
+import { tileImportActions, TilePlacement } from "../actions/tileImport";
 import { UpdateNodeTransformAction } from "../actions/UpdateNodeTransformAction";
 import { UpdateNodeLayoutAction } from "../actions/UpdateNodeLayoutAction";
 import { ReparentNodeAction } from "../actions/ReparentNodeAction";
@@ -106,7 +107,7 @@ import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
     tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer,
-    TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES, objectBox, objectTransform,
+    TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES, objectBox, objectTransform, objectPlacement,
     TiledObject, TiledObjectGroup, TiledProperty } from "../import/TiledMap";
 import { parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GltfJson, GLTF_IGNORABLE_REQUIRED, GLTF_MAX_NODE_DEPTH,
@@ -14667,10 +14668,145 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // A polyline is NOT a polygon — same points, and one of them is not closed. The kinds are
         // what a consumer branches on, so they must not be merged.
         expect(objects[2].kind).not.toBe(objects[3].kind);
-        // …and the four that carry a shape this cannot represent are counted, the point excluded
-        // because a point IS its position and nothing is lost.
-        expect(m.notes).toContain("4 object(s) are an ellipse, polygon, polyline or text; "
-            + "their box is read and their shape is not");
+        // ONLY THE TEXT OBJECT loses anything in the reading. This assertion said four — ellipse,
+        // polygon, polyline and text — until writing the placement showed that an ellipse IS its
+        // box and the points of the other two are read, each with an exact node type waiting. A
+        // note claiming otherwise would have sent someone looking for work already done.
+        expect(m.notes).toContain("1 text object(s) are read as a box only; the string is not read");
+        expect(m.notes.some(n => /ellipse, polygon/.test(n))).toBe(false);
+    });
+
+    test("an object becomes the node type this engine already has for it", () => {
+        const m = parseTiledMap(readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "object-only.tmx"), "utf8"));
+        const set = parseTiledTileset(
+            readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "object-only-tiles.tsx"), "utf8"),
+            m.tilesets[0]);
+        const objects = m.objectGroups.flatMap(g => g.objects);
+
+        // A TILE OBJECT IS AN IMAGE, and its box is the anchored one — the same 693.727 - 192 the
+        // box test hand-checked, now carried through to the thing that becomes a node.
+        const tile = objectPlacement(objects.find(o => o.id === 90)!, [set]);
+        expect(tile.why).toBeNull();
+        expect(tile.placement).toMatchObject({
+            shape: "image", x: 146.97, y: 693.727 - 192, width: 192, height: 192,
+            rotation: 0, origin: { x: 0, y: 1 }, name: "object 90"
+        });
+        // The sheet is NAMED, not loaded — the same contract `tilemapForLayer` keeps, which is what
+        // lets this module stay pure.
+        expect(typeof tile.placement!.image).toBe("string");
+
+        // A RECTANGLE is a box, anchored top-left, and turns about its top-left.
+        const rect = objectPlacement(objects.find(o => o.id === 197)!, [set]);
+        expect(rect.placement).toMatchObject({
+            shape: "rectangle", x: 2496, y: 0, width: 32, height: 992, origin: { x: 0, y: 0 }
+        });
+        expect(rect.placement!.image).toBeNull();
+
+        // THE ONE TYPED OBJECT names itself after its class, which is what makes a layers panel
+        // readable — the corpus names nothing, so without this every entity would read "object 57".
+        expect(objectPlacement(objects.find(o => o.id === 57)!, [set]).placement!.name).toBe("exit");
+
+        // A FLIPPED tile object carries the gid's mirror as a scale, through the SAME `tileTransform`
+        // a cell uses — a second copy of that arithmetic is a second chance to disagree about which
+        // of the three bits is a mirror.
+        const flipped = objects.find(o => o.cell !== null && o.cell.flipH)!;
+        expect(objectPlacement(flipped, [set]).placement!.scaleX).toBe(-1);
+
+        // AND THE TURN COMPOSES: object 153 is rotated 90 degrees and unflipped.
+        const turned = objectPlacement(objects.find(o => o.id === 153)!, [set]);
+        expect(turned.placement!.rotation).toBeCloseTo(Math.PI / 2, 10);
+    });
+
+    test("what cannot be placed says WHY, per object rather than per map", () => {
+        const m = parseTiledMap(readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "object-only.tmx"), "utf8"));
+        const set = parseTiledTileset(
+            readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "object-only-tiles.tsx"), "utf8"),
+            m.tilesets[0]);
+        const objects = m.objectGroups.flatMap(g => g.objects);
+        const fits = objects.map(o => objectPlacement(o, [set]));
+        // 114 objects, 9 of them templates: 105 place and 9 do not.
+        expect(fits.filter(f => f.placement !== null)).toHaveLength(105);
+        expect(fits.filter(f => f.why !== null)).toHaveLength(9);
+        // THE REASON NAMES THE FILE, because "9 objects were skipped" cannot be acted on and
+        // "templates/hero.tx is not opened" can.
+        expect(fits.find(f => f.why)!.why).toContain("templates/hero.tx");
+        // Every refusal is a template here, and none is a placement — the two must not overlap.
+        for (const f of fits) expect(f.placement === null).toBe(f.why !== null);
+    });
+
+    test("a polygon becomes a PATH whose box is the points' own bounds", () => {
+        // The arithmetic a polygon object needs and a rectangle does not: Tiled states no width or
+        // height for one (both are 0 in the file), so a node sized from the attributes would be
+        // invisible and unpickable. The box is derived from the points, and the commands are then
+        // stated relative to IT — two different origins whenever a point is negative, which is why
+        // the polyline below runs to -5.
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.8" orientation="orthogonal" width="4" height="4" tilewidth="16" tileheight="16">
+ <objectgroup id="1" name="shapes">
+  <object id="3" x="5" y="6"><polygon points="0,0 10,0 10,10"/></object>
+  <object id="4" x="7" y="8"><polyline points="0,0 -5,12"/></object>
+  <object id="5" x="1" y="2" width="8" height="4"><ellipse/></object>
+  <object id="6" x="0" y="0"><point/></object>
+ </objectgroup>
+</map>`;
+        const objects = parseTiledMap(xml).objectGroups[0].objects;
+        const poly = objectPlacement(objects[0], []).placement!;
+        expect(poly).toMatchObject({ shape: "path", x: 5, y: 6, width: 10, height: 10 });
+        // CLOSED, which is the whole difference between a polygon and a polyline once both are paths.
+        expect(poly.path).toEqual([
+            { c: "M", x: 0, y: 0 }, { c: "L", x: 10, y: 0 }, { c: "L", x: 10, y: 10 }, { c: "Z" }
+        ]);
+
+        // THE NEGATIVE POINT is the one that matters: the box starts 5 to the LEFT of the object's
+        // own x, and the commands shift by the same 5 so the shape lands where it was drawn.
+        const line = objectPlacement(objects[1], []).placement!;
+        expect(line).toMatchObject({ shape: "path", x: 2, y: 8, width: 5, height: 12 });
+        expect(line.path).toEqual([{ c: "M", x: 5, y: 0 }, { c: "L", x: 0, y: 12 }]);
+        // …and it does NOT close, so a fill cannot appear across a line the author drew open.
+        expect(line.path!.some(c => c.c === "Z")).toBe(false);
+
+        // AN ELLIPSE IS ITS BOX, which is why it needs no points at all.
+        expect(objectPlacement(objects[2], []).placement).toMatchObject({
+            shape: "ellipse", x: 1, y: 2, width: 8, height: 4, path: null
+        });
+        // A POINT has no size, and inventing one would be a lie about where the author clicked.
+        const point = objectPlacement(objects[3], []);
+        expect(point.placement).toBeNull();
+        expect(point.why).toContain("no size");
+    });
+
+    test("an object layer becomes a FRAME, and its objects are placed inside it", () => {
+        // The layer's opacity belongs to the LAYER: fading thirty overlapping sprites one at a time
+        // composites differently from fading the group they are in. Nesting is also what makes the
+        // layers panel show the structure the author built.
+        const doc = createEmptyDocument();
+        const placements: TilePlacement[] = [
+            { kind: "group", x: 0, y: 0, width: 64, height: 64, name: "bounds", opacity: 0.5, hidden: true },
+            { kind: "object", shape: "rectangle", x: 1, y: 2, width: 3, height: 4, name: "wall",
+              src: null, sourceRect: null, transform: null, path: null },
+            { kind: "object", shape: "ellipse", x: 5, y: 6, width: 7, height: 8, name: "zone",
+              src: null, sourceRect: null, transform: null, path: null },
+            // A TILE LAYER CLOSES THE GROUP: a grid that arrived as a child of an object layer would
+            // inherit that layer's opacity, which is a dimmed map with no visible cause.
+            { kind: "tilemap", x: 0, y: 0, width: 32, height: 32, src: "sheet.png",
+              map: emptyTilemap(), name: "ground", opacity: 1, hidden: false }
+        ];
+        const { actions, ids } = tileImportActions(doc, placements);
+        const dispatcher = new ActionDispatcher(doc);
+        expect(dispatcher.dispatchAction(new TransactionAction(doc, "import", actions)).success).toBe(true);
+        const after = dispatcher.getDocument();
+        const [frameId, wallId, zoneId, gridId] = ids;
+        expect(after.nodes.get(wallId)!.parent).toBe(frameId);
+        expect(after.nodes.get(zoneId)!.parent).toBe(frameId);
+        // …and the grid is a ROOT, not a child of the frame that came before it.
+        expect(after.nodes.get(gridId)!.parent ?? null).toBeNull();
+        // The frame carries the layer's own flags, once, for everything inside it.
+        expect(after.nodes.get(frameId)!.style.opacity).toBe(0.5);
+        expect(after.nodes.get(frameId)!.hidden).toBe(true);
+        // A SHAPE THAT IS NOT A PICTURE gets a stroke, because "none" fill and no stroke is a node
+        // that exists and draws nothing at all.
+        expect(after.nodes.get(wallId)!.style.stroke).toBe("#ff2d9b");
+        expect(after.nodes.get(zoneId)!.type).toBe("core.ellipse");
     });
 
     test("Tiled 1.9's `class` is read as well as 1.8's `type`", () => {

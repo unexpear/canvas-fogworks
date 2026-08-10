@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1645;
+const EXPECTED_TESTS = 1649;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -602,6 +602,40 @@ const MUTANTS = [
       from: "    if (hueShift === 0 && saturationScale === 1 && valueScale === 1) return 0;",
       to: "    if (hueShift === 0 && valueScale === 1) return 0;",
       note: "a saturation-only adjustment is treated as a no-op and silently does nothing" },
+
+    // PLACING an object: the arithmetic between "what the file says" and "where the node goes".
+    { id: "OP1", file: "src/core/import/TiledMap.ts",
+      from: "                x: obj.x + minX, y: obj.y + minY,",
+      to: "                x: obj.x, y: obj.y,",
+      note: "a polygon's box ignores its own points, so any shape with a negative point shifts" },
+    { id: "OP2", file: "src/core/import/TiledMap.ts",
+      from: "            i === 0 ? { c: \"M\" as const, x: pt.x - minX, y: pt.y - minY }",
+      to: "            i === 0 ? { c: \"M\" as const, x: pt.x, y: pt.y }",
+      note: "the first command is not made relative to the derived box — the shape leaves the node" },
+    { id: "OP3", file: "src/core/import/TiledMap.ts",
+      from: '        if (obj.kind === "polygon") commands.push({ c: "Z" });',
+      to: '        if (obj.kind === "polyline") commands.push({ c: "Z" });',
+      note: "a polygon opens and a polyline closes — the only difference between the two, inverted" },
+    { id: "OP4", file: "src/core/import/TiledMap.ts",
+      from: "            rotation: base.rotation + t.rotation,",
+      to: "            rotation: t.rotation,",
+      note: "a tile object's own rotation is dropped for the tile's, so every turned entity is upright" },
+    { id: "OP5", file: "src/core/import/TiledMap.ts",
+      from: "            scaleX: t.scaleX, scaleY: t.scaleY",
+      to: "            scaleX: 1, scaleY: t.scaleY",
+      note: "the gid's mirror is lost, so a flipped entity faces the wrong way" },
+    { id: "OP6", file: "src/core/actions/tileImport.ts",
+      from: "            openGroup = id;",
+      to: "            openGroup = null;",
+      note: "an object layer's frame adopts nothing — every entity lands as a root, unfaded" },
+    { id: "OP7", file: "src/core/actions/tileImport.ts",
+      from: '        if (t.kind === "tilemap" || t.kind === "image") openGroup = null;',
+      to: '        if (t.kind === "image") openGroup = null;',
+      note: "a tile layer is adopted by the object layer above it and inherits its opacity" },
+    { id: "OP8", file: "src/core/actions/tileImport.ts",
+      from: '            if (t.shape !== "image") {',
+      to: '            if (t.shape === "image") {',
+      note: "a collision volume gets no stroke and no fill — a node that exists and draws nothing" },
 
     // THE SHADERS, which nothing in the gate compiles: tsc sees a string, the bundler sees a string,
     // jest sees a string, and the first reader that knows the language is a driver on a machine

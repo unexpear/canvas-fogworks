@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v62 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1493) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8) = 1645 tests.
+> 🔒 Frozen contract · schema v62 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1497) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8) = 1649 tests.
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1645 tests
+npm test                                   # jest (ts-jest), 1649 tests
 npm run header-claims                      # ADVISORY: module-header sentences with a shelf life
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
@@ -58,7 +58,7 @@ node scripts/menu-command.js "Zoom to Fit"
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1645 tests)
+## What is covered (1649 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -445,7 +445,7 @@ The checklist, applied when the fixture is written:
 This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
 cannot see — over the paint modules, the Tiled reader, the mesh, nine-slice, the tile grid, the tile
-brush and the autotiler, exiting non-zero on a survivor: currently **128 mutants, 128 killed**.
+brush and the autotiler, exiting non-zero on a survivor: currently **136 mutants, 136 killed**.
 Six cover `SurfaceSpace`, where the convenient fixture is not
 a square buffer but **a box at the origin** (which hides a dropped origin term) and **a
 round-trip-only assertion** (which hides a half-pixel shift, because it shifts both directions
