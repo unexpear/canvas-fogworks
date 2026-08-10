@@ -1,11 +1,10 @@
 # Document Schema
 
 <!-- describes: src/core/document -->
-<!-- re-read 2026-08-10 after the rectangle gesture: accurate. `cellCoordAt`, `terrainCoordAt`
-     and `copyTilemap` are functions the gesture needed, not fields — the schema is unchanged
-     at v63, and a rectangle stores exactly what a stroke stores. -->
+<!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
+     below. The earlier note stands — the rectangle gesture added no field. -->
 
-> 🔒 Frozen contract · schema v63 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v64 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -1187,6 +1186,27 @@ Absent is the common case and costs nothing. **Transpose first, then mirror**: T
 is not commutative, stated once in `flipMatrix` and shared by every backend that takes a matrix. The
 GPU cannot take one, so it turns the within-cell coordinate instead — reading the three bits out of
 the index texture's otherwise-unused **blue byte**, which costs no second texture or upload.
+
+**AUTHORED METADATA: what the engine carries and never reads (schema 64).** Any node may carry
+`className` — the author's own KIND for it, an imported object's `class` — and `userData`, a map from
+a property NAME to `{ type, propertyType?, value }`. Both are validated on load (`classNameError`,
+`userDataError`) and both are absent unless set; an empty value CLEARS the field rather than being
+stored, so a document only ever mentions them where somebody meant something.
+
+**THE VALUE IS TEXT, AND THE MEASUREMENT IS WHY.** All 41 custom properties in this tree live in ONE
+file (`test-fixtures/tiled/object-only.tmx`, a real Tiled sample); the other 23 `.tmx` and all 20
+shipped asset packs carry none. So "no int, no colour, no file anywhere" is one game's vocabulary —
+`bodyType`, `friction` and `floating` are a physics engine's words — and not a survey. Storing a
+parsed `string | number | boolean` would discard four of the format's eight declared types on the
+authority of a sample of one, and this engine EXPORTS `.tmx`, so a type it cannot represent is data
+destroyed by opening and saving. `type` is deliberately NOT an enum: a file written by a newer editor
+has to come back out untouched, and a closed set would be a validator that deletes the future.
+
+**NOTHING READS EITHER FIELD, AND THAT IS THE FEATURE.** They exist so that a map opened here and
+saved again is the map that was opened. `className` is NOT `node.type`: that one is what the renderer
+draws (`core.rectangle`) and is a closed set it switches on, while this is the author's word for what
+the thing IS — two different questions the format happens to spell the same, so the one the renderer
+does not read is the one that moved.
 
 **TERRAIN: the question the grid answers (schema 63).** A `Tilemap` may carry `terrain` — which
 cells hold a material, which material this layer draws, and one tile per SYMMETRY CLASS — and

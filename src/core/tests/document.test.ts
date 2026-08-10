@@ -109,7 +109,7 @@ import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
     tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer,
-    TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES, objectBox, objectTransform, objectPlacement,
+    TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES, objectBox, objectTransform, objectPlacement, parseProperties, userDataFor,
     TiledObject, TiledObjectGroup, TiledProperty } from "../import/TiledMap";
 import { parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GltfJson, GLTF_IGNORABLE_REQUIRED, GLTF_MAX_NODE_DEPTH,
@@ -126,6 +126,7 @@ import { makeBrush, brushError, stampBrush, brushBounds, strokePath, strokeBound
 import { encodeSurface, decodeSurface, PIXEL_CODEC_VERSION, PIXEL_RUN_MAX } from "../paint/PixelCodec";
 import { beginStroke, extendStroke, endStroke, strokeEscaped } from "../paint/Stroke";
 import { rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
+import { userDataError, USER_DATA_MAX, USER_VALUE_MAX } from "../document/Node";
 import { PaintSurfaceAction } from "../actions/PaintSurfaceAction";
 import { Palette, paletteError, paletteAt, parseFloatColour, parsePaletteFile, PALETTE_MAX_COLOURS } from "../paint/Palette";
 import { symmetryPoints, isMirrored, NO_SYMMETRY } from "../paint/Symmetry";
@@ -187,7 +188,7 @@ import { textParagraphs, OpacityGroup } from "../../renderer/RenderModel";
 import { resolveShortcut, isTypingTarget, NUDGE_STEP, NUDGE_STEP_LARGE, SHORTCUT_HELP } from "../../editor/shortcuts";
 import { DuplicateNodesAction, DUPLICATE_OFFSET } from "../actions/DuplicateNodesAction";
 import { alignAction, distributeAction } from "../actions/alignActions";
-import { UpdateNodeContentAction, NODE_NAME_MAX } from "../actions/UpdateNodeContentAction";
+import { UpdateNodeContentAction, NODE_NAME_MAX, ContentPatch } from "../actions/UpdateNodeContentAction";
 import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
 import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow, TrackSize, layoutError, newGridPatch, mergeLayout, transformError, Layout, variantError, variantSelectionError , slotError, slotContentError, flatFill} from "../document/Node";
@@ -4565,9 +4566,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 62→63 landed, adding
-        // `Tilemap.terrain`, the question an autotiled grid is the answer to.)
-        expect(() => migrateIfNeeded(legacy, "64")).toThrow('Migration not implemented for document schema "63"');
+        // time a real migration is added — most recently when 63→64 landed, adding
+        // `Node.className` and `Node.userData`, the metadata this engine carries without reading.)
+        expect(() => migrateIfNeeded(legacy, "65")).toThrow('Migration not implemented for document schema "64"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -14641,6 +14642,55 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(objects.reduce((n, o) => n + o.properties.length, 0)).toBe(41);
     });
 
+    test("a CLASS property's members are not smuggled in as the object's own", () => {
+        // EVERY ONE OF THESE CASES IS ABSENT FROM THE ONE REAL FILE, which is the point. All 41
+        // properties this tree has live in `object-only.tmx`, and there every float value is `1`,
+        // every bool is `true` and every string is `static` — so a fixture built from it alone
+        // cannot see an int/float confusion, cannot see `Boolean("false")` being `true` in this
+        // language, and cannot see a nested member overwriting its parent's sibling.
+        const body = [
+            '<properties>',
+            '  <property name="friction" type="float" value="0.5"/>',
+            '  <property name="mood" type="string" propertytype="Mood" value="calm"/>',
+            '  <property name="physics" type="class" propertytype="Body">',
+            '   <properties>',
+            '    <property name="friction" type="float" value="99"/>',
+            '   </properties>',
+            '  </property>',
+            '  <property name="note">line one\nline two</property>',
+            '  <property name="solid" type="bool" value="false"/>',
+            '</properties>'
+        ].join("\n");
+        const { props, unread } = parseProperties(body);
+
+        // THE NESTED MEMBER IS NOT HERE. A flat scan over the body matched it as a sibling, so this
+        // object's real `friction` was overwritten by the class member's 99 — and the exporter would
+        // then have written `friction=99` back out as a property the author never wrote. A file
+        // silently restructured, which is why the depth-aware scan is a precondition rather than a
+        // refinement.
+        expect(props.map(p => p.name)).toEqual(["friction", "mood", "note", "solid"]);
+        expect(props.find(p => p.name === "friction")!.value).toBe("0.5");
+
+        // …and the class property is COUNTED rather than dropped in silence.
+        expect(unread).toHaveLength(1);
+        expect(unread[0]).toContain("physics");
+        expect(unread[0]).toContain("class property");
+
+        // AN ENUM IS ITS BASE TYPE PLUS A NAME, and a reader that kept only `type` would turn every
+        // enum into a plain string with no way back.
+        expect(props.find(p => p.name === "mood")).toEqual(
+            { name: "mood", type: "string", propertyType: "Mood", value: "calm" });
+
+        // A BODY-FORM PROPERTY is how the format writes a MULTILINE string. The flat scan read every
+        // one of them as "" — a silent loss, since an empty string is a legal value.
+        expect(props.find(p => p.name === "note")!.value).toBe("line one\nline two");
+
+        // AND A BOOL THAT IS FALSE, the value the real file never contains. `Boolean("false")` is
+        // `true` in this language, so a parser reaching for it would pass every existing test.
+        expect(props.find(p => p.name === "solid")).toEqual(
+            { name: "solid", type: "bool", value: "false" });
+    });
+
     test("the shapes this corpus does NOT have still parse, and say what is missing", () => {
         // HAND-WRITTEN, and stated as such: there is no ellipse, polygon, polyline or text object in
         // the tree, so this is the one place a fixture cannot be a real file. It exists because the
@@ -14784,6 +14834,121 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(point.why).toContain("no size");
     });
 
+    test("an object's CLASS and PROPERTIES survive the whole way onto a node (schema 64)", () => {
+        // They were parsed from the day object layers landed and thrown away at `objectPlacement`,
+        // because a node had nowhere to put them. This walks the whole path — file text, placement,
+        // actions, document — because every one of those seams was where they went missing.
+        const m = parseTiledMap(readFileSync(
+            resolve(__dirname, "../../../test-fixtures/tiled", "object-only.tmx"), "utf8"));
+        // THE EXTERNAL TILESET, because nearly every object here is a tile object and a placement
+        // cannot resolve a gid without it — a fit that came back null would carry no metadata to
+        // check, and the test would be asserting nothing.
+        const set = parseTiledTileset(readFileSync(
+            resolve(__dirname, "../../../test-fixtures/tiled", "object-only-tiles.tsx"), "utf8"),
+            m.tilesets[0]);
+        const objects = m.objectGroups.flatMap(g => g.objects);
+
+        // THE PLACEMENT CARRIES THEM. Object 4 holds a string, a bool and a float; object 57 is the
+        // one object in the whole file with a class.
+        const fit = objectPlacement(objects.find(o => o.id === 4)!, [set]);
+        expect(fit.why).toBeNull();
+        expect(fit.placement!.userData).toEqual({
+            bodyType: { type: "string", value: "static" },
+            floating: { type: "bool", value: "true" },
+            friction: { type: "float", value: "1" }
+        });
+        expect(objectPlacement(objects.find(o => o.id === 57)!, [set]).placement!.className)
+            .toBe("exit");
+
+        // …AND SO DOES THE NODE. A placement that carried them to an action that dropped them would
+        // pass every assertion above.
+        const doc = createEmptyDocument();
+        const placements: TilePlacement[] = [
+            { kind: "object", shape: "rectangle", x: 0, y: 0, width: 4, height: 4, name: "door",
+              src: null, sourceRect: null, transform: null, path: null,
+              className: "exit", userData: { locked: { type: "bool", value: "false" } } },
+            // AND ONE WITH NEITHER, because an absent field must stay absent rather than becoming
+            // an empty object in every file this engine writes.
+            { kind: "object", shape: "rectangle", x: 8, y: 0, width: 4, height: 4, name: "plain",
+              src: null, sourceRect: null, transform: null, path: null, className: "", userData: {} }
+        ];
+        const { actions, ids } = tileImportActions(doc, placements);
+        new ActionDispatcher(doc).dispatchAction(new TransactionAction(doc, "import", actions));
+        const door = doc.nodes.get(ids[0])!;
+        expect(door.className).toBe("exit");
+        expect(door.userData).toEqual({ locked: { type: "bool", value: "false" } });
+        const plain = doc.nodes.get(ids[1])!;
+        expect(plain.className).toBeUndefined();
+        expect(plain.userData).toBeUndefined();
+    });
+
+    test("removing the LAST property removes the field, rather than storing an empty one", () => {
+        // UD3 SURVIVED THE IMPORT FIXTURE, and the reason is the whole lesson: `tileImportActions`
+        // already drops an empty map before it builds the patch, so the import path never reaches
+        // the guard being tested. The PANEL does — deleting the last row rebuilds the map minus one
+        // key and sends whatever is left, which for the last row is `{}`. A fixture that exercised
+        // only the filtered path could not see a guard that exists for the unfiltered one.
+        const doc = createEmptyDocument();
+        doc.nodes.set("N", { id: "N", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 },
+            style: { fill: "#fff", opacity: 1 }, layout: {}, name: "thing" } as Node);
+        doc.rootNodeUuids = ["N"];
+        const dispatcher = new ActionDispatcher(doc);
+        const patch = (p: ContentPatch) =>
+            dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), "N", p));
+        const node = () => dispatcher.getDocument().nodes.get("N")!;
+
+        patch({ className: "Door", userData: { hp: { type: "int", value: "3" } } });
+        expect(node().className).toBe("Door");
+        expect(node().userData).toEqual({ hp: { type: "int", value: "3" } });
+
+        // THE LAST ROW DELETED. Storing `{}` would put a field that says nothing into every file
+        // anybody ever edited — and `"userData" in node` is the question, because `toEqual({})`
+        // would pass on an absent field too.
+        patch({ userData: {} });
+        expect("userData" in node()).toBe(false);
+
+        // …and the class cleared, which the panel sends as `null` and which an empty string must
+        // also reach: both mean "there is no class", and storing "" would be a third spelling.
+        patch({ className: null });
+        expect("className" in node()).toBe(false);
+        patch({ className: "Exit" });
+        expect(node().className).toBe("Exit");
+        patch({ className: "" });
+        expect("className" in node()).toBe(false);
+    });
+
+    test("a property this document cannot hold is SKIPPED, not allowed to abort the import", () => {
+        // THE GATE EXISTS BECAUSE OF WHAT IS ABOVE IT. Import runs inside a `TransactionAction`,
+        // which THROWS when a component action fails validation — so a single property named
+        // `constructor`, which a real editor will happily write, would not lose one property: it
+        // would abort the whole map and turn a legal file into one that cannot be opened.
+        const { data, unread } = userDataFor([
+            { name: "hp", type: "int", value: "3" },
+            { name: "__proto__", type: "string", value: "boom" },
+            { name: "constructor", type: "string", value: "boom" },
+            // LAST WINS on a duplicate, and it is said out loud — a node holding two `hp`s resolves
+            // to nothing whichever one is picked.
+            { name: "hp", type: "int", value: "9" },
+            { name: "huge", type: "string", value: "x".repeat(USER_VALUE_MAX + 1) }
+        ]);
+        expect(data).toEqual({ hp: { type: "int", value: "9" } });
+        expect(unread).toHaveLength(4);
+        expect(unread.join(" ")).toContain("__proto__");
+        expect(unread.join(" ")).toContain("more than once");
+        expect(unread.join(" ")).toContain(String(USER_VALUE_MAX));
+        // …AND WHAT IT EMITS IS ALWAYS LOADABLE, which is the whole contract rather than a hope.
+        expect(userDataError(data)).toBeNull();
+
+        // The cap is enforced by COUNT, and the 65th is reported rather than dropped in silence.
+        const many = Array.from({ length: USER_DATA_MAX + 3 }, (_, i) =>
+            ({ name: `p${i}`, type: "string", value: "v" }));
+        const capped = userDataFor(many);
+        expect(Object.keys(capped.data)).toHaveLength(USER_DATA_MAX);
+        expect(capped.unread).toHaveLength(3);
+        expect(userDataError(capped.data)).toBeNull();
+    });
+
     test("an object layer becomes a FRAME, and its objects are placed inside it", () => {
         // The layer's opacity belongs to the LAYER: fading thirty overlapping sprites one at a time
         // composites differently from fading the group they are in. Nesting is also what makes the
@@ -14792,9 +14957,9 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const placements: TilePlacement[] = [
             { kind: "group", x: 0, y: 0, width: 64, height: 64, name: "bounds", opacity: 0.5, hidden: true },
             { kind: "object", shape: "rectangle", x: 1, y: 2, width: 3, height: 4, name: "wall",
-              src: null, sourceRect: null, transform: null, path: null },
+              src: null, sourceRect: null, transform: null, path: null, className: "", userData: {} },
             { kind: "object", shape: "ellipse", x: 5, y: 6, width: 7, height: 8, name: "zone",
-              src: null, sourceRect: null, transform: null, path: null },
+              src: null, sourceRect: null, transform: null, path: null, className: "", userData: {} },
             // A TILE LAYER CLOSES THE GROUP: a grid that arrived as a child of an object layer would
             // inherit that layer's opacity, which is a dimmed map with no visible cause.
             { kind: "tilemap", x: 0, y: 0, width: 32, height: 32, src: "sheet.png",
@@ -14831,7 +14996,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
             { kind: "tilemap", x: 0, y: 0, width: 32, height: 32, src: "sheet.png",
               map: emptyTilemap(), name: "ground", opacity: 1, hidden: false },
             { kind: "object", shape: "rectangle", x: 1, y: 2, width: 3, height: 4, name: "after",
-              src: null, sourceRect: null, transform: null, path: null }
+              src: null, sourceRect: null, transform: null, path: null, className: "", userData: {} }
         ];
         const { actions, ids } = tileImportActions(doc, placements);
         const dispatcher = new ActionDispatcher(doc);
@@ -28329,6 +28494,20 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         expect(unclaimed).toEqual([]);
     });
 
+    test("METADATA is REACHABLE — a field with no panel is the same gap one layer down", () => {
+        // 41 properties were parsed out of every imported map and dropped for want of a field.
+        // Giving them a field and no way to edit it would move the gap rather than close it: the
+        // data would live in the file, survive every save, and be invisible to the person who owns
+        // it. This is the door.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/<InspectorSection title="Metadata">/);
+        expect(app).toMatch(/function MetadataSection\(/);
+        expect(app).toMatch(/aria-label="Add property"/);
+        expect(app).toMatch(/aria-label={`Remove property \${name}`}/);
+        // THE CLASS IS EDITABLE TOO, and clearing it removes the field rather than storing "".
+        expect(app).toMatch(/write\(\{ className: v\.trim\(\) === "" \? null : v\.trim\(\) \}\)/);
+    });
+
     test("the terrain brush is REACHABLE, art and all", () => {
         // Terrain had a field, a validator and a derivation and NO way to author it — the state the
         // audit exists to find. These assert the door: the panel converts a layer, offers the six
@@ -28635,6 +28814,136 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
         // A POLYGON'S POINTS come back relative to the object, closed as they went out.
         expect(group.objects[2].points).toEqual([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]);
         expect(objectPlacement(group.objects[2], []).placement!.path!.some(c => c.c === "Z")).toBe(true);
+    });
+
+    test("class and properties make the ROUND TRIP, including the values the real file lacks", () => {
+        // THE FIXTURE HAS TO BE SYNTHETIC, and the reason is worth stating because it nearly was not.
+        // All 41 real properties live in `object-only.tmx`, which has ZERO tile layers — and
+        // `exportTiledMap` answers `{ xml: "", notes: ["there is no tilemap node to export"] }` for
+        // a document with none. A round trip built on the real file would have exported nothing,
+        // re-imported nothing, found no properties missing, and passed while testing nothing at all.
+        //
+        // The real file is also too convenient in three separate ways: every float value there is
+        // `1`, every bool is `true`, and every string is `static`. So this one carries a FRACTIONAL
+        // float (an int/float confusion is invisible at 1), a bool that is FALSE (`Boolean("false")`
+        // is `true` in this language), a string full of XML entities, and an ENUM — none of which
+        // any file in this tree contains.
+        const d = createEmptyDocument();
+        d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "ground",
+            tilemap: grid([1, 1, 1, 1, 1, 1]) } as Node);
+        d.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["R", "E", "P"],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "entities" } as Node);
+        d.nodes.set("R", { id: "R", type: "core.rectangle", parent: "F", children: [],
+            geometry: { x: 2, y: 3, width: 10, height: 20 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "door",
+            className: "exit",
+            userData: {
+                friction: { type: "float", value: "0.5" },
+                solid: { type: "bool", value: "false" },
+                label: { type: "string", value: `a & b < c > d "e" 'f'` },
+                mood: { type: "string", propertyType: "Mood", value: "calm" }
+            } } as Node);
+        // AN OBJECT WITH NO METADATA still has to come out as a self-closing tag rather than an
+        // empty <object></object> — and an ellipse's shape child must survive gaining a sibling.
+        d.nodes.set("E", { id: "E", type: "core.ellipse", parent: "F", children: [],
+            geometry: { x: 5, y: 6, width: 7, height: 8 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "zone" } as Node);
+        // …and a bare rectangle, which is the only shape that CAN be self-closing.
+        d.nodes.set("P", { id: "P", type: "core.rectangle", parent: "F", children: [],
+            geometry: { x: 20, y: 0, width: 4, height: 4 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "plain" } as Node);
+        d.rootNodeUuids = ["L", "F"];
+
+        const out = exportTiledMap(d, "tiles.png");
+        expect(out.notes).toEqual([]);
+        const back = parseTiledMap(out.xml);
+        expect(back.notes).toEqual([]);
+        const objects = back.objectGroups[0].objects;
+        expect(objects).toHaveLength(3);
+
+        // THE CLASS COMES BACK. It goes out as `class=` because this exporter declares version 1.10;
+        // the reader takes `class ?? type`, so an older file still reads.
+        expect(objects[0].className).toBe("exit");
+        expect(out.xml).toContain('class="exit"');
+
+        // EVERY VALUE COMES BACK AS TEXT, unparsed and unrounded.
+        const byName = new Map(objects[0].properties.map(p => [p.name, p]));
+        expect(byName.get("friction")).toEqual({ name: "friction", type: "float", value: "0.5" });
+        expect(byName.get("solid")).toEqual({ name: "solid", type: "bool", value: "false" });
+        expect(byName.get("label")!.value).toBe(`a & b < c > d "e" 'f'`);
+        // AN ENUM IS ITS BASE TYPE PLUS A NAME, and `string` is not written back because it is the
+        // format's default — so this one carries `propertytype` and no `type` at all.
+        expect(byName.get("mood")).toEqual(
+            { name: "mood", type: "string", propertyType: "Mood", value: "calm" });
+        expect(out.xml).toContain('propertytype="Mood"');
+        expect(out.xml).not.toContain('type="string"');
+
+        // THE ELLIPSE KEPT ITS SHAPE CHILD while gaining the ability to have a sibling — a wrapper
+        // that replaced the child instead of joining it would still parse as an object.
+        expect(objects[1].properties).toEqual([]);
+        expect(objects[1].kind).toBe("ellipse");
+        expect(out.xml).toContain("<ellipse/>");
+        // AND A NODE WITH NOTHING INSIDE STAYS SELF-CLOSING, rather than becoming an empty
+        // `<object></object>` on every object in every file this engine writes.
+        expect(objects[2].properties).toEqual([]);
+        expect(out.xml).toMatch(/<object id="3"[^>]*\/>/);
+    });
+
+    test("a property XML cannot carry is COUNTED, and takes nothing else with it", () => {
+        // `escapeXml` handles the five entities; it cannot make a C0 control character legal in XML,
+        // and writing one produces a file no reader will open — including this one. So the property
+        // is left out and said out loud, which is the bargain the rest of this exporter makes.
+        const d = createEmptyDocument();
+        d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "g",
+            tilemap: grid([1, 1, 1, 1, 1, 1]) } as Node);
+        d.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["R"],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "things" } as Node);
+        d.nodes.set("R", { id: "R", type: "core.rectangle", parent: "F", children: [],
+            geometry: { x: 0, y: 0, width: 4, height: 4 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "odd",
+            userData: {
+                bad: { type: "string", value: "before\u0007after" },
+                good: { type: "int", value: "7" }
+            } } as Node);
+        d.rootNodeUuids = ["L", "F"];
+
+        const out = exportTiledMap(d, "t.png");
+        expect(out.notes).toHaveLength(1);
+        expect(out.notes[0]).toContain("XML cannot carry");
+        expect(out.notes[0]).toContain("bad");
+        // THE REST OF THE OBJECT SURVIVES — one unwritable property is not a reason to drop an
+        // entity, and the file that comes out still parses.
+        const back = parseTiledMap(out.xml);
+        expect(back.notes).toEqual([]);
+        expect(back.objectGroups[0].objects[0].properties)
+            .toEqual([{ name: "good", type: "int", value: "7" }]);
+    });
+
+    test("a REFUSED object says how much data left with it", () => {
+        // "3 objects were not written" does not say that a room's worth of gameplay data went too.
+        const d = createEmptyDocument();
+        d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "g",
+            tilemap: grid([1, 1, 1, 1, 1, 1]) } as Node);
+        d.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["W"],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "mixed" } as Node);
+        d.nodes.set("W", { id: "W", type: "core.image", parent: "F", children: [],
+            geometry: { x: 0, y: 0, width: 16, height: 16 }, style: { fill: "none", opacity: 1 },
+            layout: {}, name: "photo", src: "photo.png",
+            userData: { hp: { type: "int", value: "3" }, team: { type: "string", value: "red" } } } as Node);
+        d.rootNodeUuids = ["L", "F"];
+        const out = exportTiledMap(d, "t.png");
+        expect(out.notes).toHaveLength(1);
+        expect(out.notes[0]).toContain("whole image rather than a tile");
+        expect(out.notes[0]).toContain("2 properties");
     });
 
     test("a rotation goes out in DEGREES, and the sign is not flipped", () => {

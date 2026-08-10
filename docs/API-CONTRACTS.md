@@ -2207,6 +2207,20 @@ function cellAt(map, localX, localY): { col; row } | null;
 // and these two are asked the same question one call apart. Wanted only by a RECTANGLE drag, which
 // must keep following the pointer past the map's edge and let `rectCells` clamp; told "no cell" it
 // would freeze in BOTH axes, so the last column could only be filled by stopping exactly inside it.
+// AUTHORED METADATA (schema 64) — carried, never read. Any node may hold both.
+interface UserProperty { type: string; propertyType?: string; value: string }   // value is TEXT
+type UserData = Record<string, UserProperty>;                                   // by NAME, not a list
+function userDataError(data: unknown): string | null;      // <= 64 entries, names not reserved, values text
+function classNameError(className: unknown): string | null;
+// The reader's side: a DEPTH-AWARE scan, because the flat one matched a CLASS property's nested
+// members as siblings of the object's own — a member named `friction` overwrote the real one and
+// was written back out as a property nobody wrote. A file silently restructured, not a word lost.
+function parseProperties(body: string): { props: TiledProperty[]; unread: string[] };
+// The GATE. Import runs inside a TransactionAction, which THROWS on a failed component action — so
+// a map that trips `userDataError` does not drop one property, it aborts the whole file. This can
+// only emit what the validator accepts, and reports every skip. Last wins on a duplicate name.
+function userDataFor(props: readonly TiledProperty[]): { data: UserData; unread: string[] };
+
 function cellCoordAt(map, x, y): { col; row } | null;
 // EDITING one (`document/TilemapEdit`). Pure, whole-map in and out, and NULL MEANS NOTHING CHANGED
 // in every one of them — an action that succeeded without changing anything puts an undo step on the

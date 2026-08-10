@@ -545,6 +545,28 @@ export interface Node {
      */
     locked?: boolean;
     name?: string;
+
+    /**
+     * The author's own KIND for this node (schema 64) — an imported object's `class` (its `type`
+     * before the format renamed it), a component's semantic role, a gameplay tag.
+     *
+     * NOT `type`, WHICH IS TAKEN. `node.type` is what this engine draws — `core.rectangle` — and is
+     * a closed set the renderer switches on. This is the author's word for what the thing IS, and
+     * nothing here switches on it. Two different questions that the format happens to spell the
+     * same, so one of them had to be renamed, and the one the renderer does not read is the one
+     * that moved.
+     */
+    className?: string;
+
+    /**
+     * Author-defined properties (schema 64) — see `UserData`.
+     *
+     * NOTHING IN THIS ENGINE READS THEM, and that is the feature rather than a limitation. They are
+     * carried so that a map opened here and saved again is the map that was opened: 41 of them in
+     * the one real file this tree has, and every one was being dropped at `objectPlacement` because
+     * there was no field for it to land in.
+     */
+    userData?: UserData;
 }
 
 /** A master's identity within a variant set: the set's name, plus its property values. */
@@ -605,6 +627,110 @@ function variantValuesError(what: string, values: Record<string, unknown>): stri
 export function slotError(slot: unknown): string | null {
     if (slot === undefined) return null;
     return variantNameError("slot", slot, false);
+}
+
+/** Caps on a node's authored metadata, in the `VARIANT_PROPS_MAX` tradition. */
+export const USER_DATA_MAX = 64;
+export const USER_VALUE_MAX = 4096;
+
+/**
+ * One author-defined property (schema 64): the value AS WRITTEN, and the type the file declared.
+ *
+ * THE VALUE IS TEXT, AND THE MEASUREMENT IS WHY — not the measurement anyone expects. All 41 custom
+ * properties in this tree live in ONE file (`test-fixtures/tiled/object-only.tmx`, a real Tiled
+ * sample); the other 23 `.tmx` carry none, and the 20 shipped asset packs carry none. So "no int, no
+ * colour, no file anywhere" is ONE game's vocabulary — `bodyType`, `friction` and `floating` are a
+ * physics engine's words — and not a survey. Storing `string | number | boolean` would discard four
+ * of the format's eight declared types on the authority of a sample of one, and this engine now
+ * EXPORTS `.tmx`, so a type it cannot represent is data destroyed by opening and saving.
+ * `TiledProperty` already states this rule for the reader — the type is carried so that whoever
+ * knows what it means can act on it — and this is the same rule one layer down, which is why the
+ * two shapes match field for field.
+ *
+ * `type` IS NOT AN ENUM, deliberately. A file written by a Tiled newer than this build has to come
+ * back out untouched; a closed set here would be a validator that deletes the future.
+ */
+export interface UserProperty {
+    /** The declared type, VERBATIM. `"string"` when the file omitted it — the format's default. */
+    type: string;
+    /** The `propertytype` attribute: the ENUM or class name. Absent for a plain type. */
+    propertyType?: string;
+    /** The text as written. Never parsed here, because nothing here knows what it means. */
+    value: string;
+}
+
+/**
+ * Author-defined properties BY NAME (schema 64).
+ *
+ * A MAP, NOT THE FILE'S LIST. A node holding two properties both named `friction` resolves to
+ * nothing whichever one you pick, the editor that wrote the file cannot author the duplicate, and a
+ * list would make every reader invent its own tie-break. The import gate is where last-wins is
+ * decided and counted, once.
+ */
+export type UserData = Record<string, UserProperty>;
+
+/**
+ * What is wrong with a node's `userData`, or null — SHARED by the load path (`Integrity`) and the
+ * edit path, as every other field rule here is.
+ *
+ * NOT KEYED ON NODE TYPE, and that is the deliberate difference from `nineSliceError` and
+ * `srcError`. Those refuse a field the renderer would silently ignore. NOTHING EVER READS THIS ONE
+ * — carrying it is the whole behaviour — so there is no type on which it would be inert. An
+ * imported object becomes a rectangle, an ellipse, a path or an image depending only on its shape,
+ * and its `bodyType` means the same thing on all four.
+ *
+ * IT CANNOT CHECK WHAT THE TYPES MEAN, and saying so is worth more than a validator that pretends
+ * otherwise — the same split `sourceRectError` makes about the image it cannot see. Whether
+ * "banana" is a legal float, or what an enum named "Mood" permits, lives in the editor's PROJECT
+ * file, which is not here and may never be. Refusing "banana" would delete on load what the tool
+ * that wrote it opens without complaint.
+ *
+ * IT ALSO DOES NOT CHECK WHETHER THE TEXT CAN BE WRITTEN BACK TO XML, and that is a freeze decision
+ * rather than an oversight: such a rule is knowably incomplete (lone surrogates, U+FFFE), and a
+ * load-time refusal cannot be WIDENED later without making documents that were valid at 64 refuse
+ * to open — a migration has nowhere to put that fix. So the export path escapes what it can and
+ * COUNTS what it cannot, which is the bargain the rest of that exporter already makes.
+ */
+export function userDataError(data: unknown): string | null {
+    if (data === undefined) return null;
+    if (typeof data !== "object" || data === null || Array.isArray(data)) return "userData must be an object";
+    const entries = Object.entries(data as Record<string, unknown>);
+    if (entries.length > USER_DATA_MAX) return `userData must have at most ${USER_DATA_MAX} entries`;
+    for (const [name, prop] of entries) {
+        // THE SAME KEY RULE a variant property obeys — reused, not restated. `__proto__` is
+        // swallowed by the prototype setter, so a value stored under it could never be read back:
+        // a silent, un-round-trippable loss rather than a rejection.
+        const ne = variantNameError("userData property name", name, true);
+        if (ne) return ne;
+        if (typeof prop !== "object" || prop === null || Array.isArray(prop)) {
+            return `userData."${name}" must be an object`;
+        }
+        const p = prop as Partial<UserProperty>;
+        // AN UNKNOWN TYPE IS LEGAL AND A MISSING ONE IS NOT: absent means "string" in the format and
+        // the reader writes that in, so an empty type here would be a second spelling of one type.
+        const te = variantNameError(`userData."${name}".type`, p.type, false);
+        if (te) return te;
+        if (p.propertyType !== undefined) {
+            const pte = variantNameError(`userData."${name}".propertyType`, p.propertyType, false);
+            if (pte) return pte;
+        }
+        // A NUMBER OR BOOLEAN IS REFUSED, not coerced: `3` has already lost whether the file said
+        // "3" or "3.0", and `String(3)` on the way out would be a guess about what somebody typed.
+        if (typeof p.value !== "string") return `userData."${name}".value must be text`;
+        if (p.value.length > USER_VALUE_MAX) {
+            return `userData."${name}".value must be at most ${USER_VALUE_MAX} characters`;
+        }
+    }
+    return null;
+}
+
+/**
+ * Validity of a node's `className` (schema 64) — the shape `slotError` has, and for the same
+ * reason: absent is fine, present must be a real name, and ANY node type may carry one.
+ */
+export function classNameError(className: unknown): string | null {
+    if (className === undefined) return null;
+    return variantNameError("className", className, false);
 }
 
 /**

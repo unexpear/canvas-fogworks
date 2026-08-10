@@ -21,7 +21,8 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { srcError, sourceRectError, nineSliceError, clipsContentError, SourceRect } from "../document/Node";
+import { srcError, sourceRectError, nineSliceError, clipsContentError, SourceRect,
+    UserData, userDataError, classNameError } from "../document/Node";
 import { NineSliceInsets } from "../geometry/NineSlice";
 import { MutationResult, ActionPayload, NodeDelta } from "./types";
 
@@ -47,6 +48,15 @@ export interface ContentPatch {
      * one asks the document what it holds afterwards rather than asking the action what it did.
      */
     clipsContent?: boolean | null;
+    /**
+     * The author's own kind for this node (schema 64). `null` clears it.
+     *
+     * Here with `name` and `src` because it is the same kind of fact — a hand-editable label on the
+     * node — and putting it anywhere else would mean a second undo step for one imported object.
+     */
+    className?: string | null;
+    /** Author-defined properties (schema 64). `null` clears them; see `UserData`. */
+    userData?: UserData | null;
 }
 
 /** Longest display name a node may carry — an OOM guard on a hand-editable field. */
@@ -78,6 +88,16 @@ export class UpdateNodeContentAction extends Action {
         if (this.patch.sourceRect !== undefined && this.patch.sourceRect !== null
             && sourceRectError(this.patch.sourceRect) !== null) return false;
         if (this.patch.pixelated !== undefined && typeof this.patch.pixelated !== "boolean") return false;
+        // THE SAME VALIDATORS THE LOAD PATH USES, which is the rule every field here obeys — an
+        // edit must not be able to author a document the loader would then refuse to open.
+        // EMPTY IS A CLEAR, not a refusal. A text field hands back "" the moment somebody selects
+        // the word and deletes it, and refusing that would make `validate` false — an action that
+        // is silently dropped, so the field keeps its old value with nothing to say why. `null` and
+        // "" mean the same thing here, and `applyMutations` removes the field for both.
+        if (this.patch.className !== undefined && this.patch.className !== null
+            && this.patch.className !== "" && classNameError(this.patch.className) !== null) return false;
+        if (this.patch.userData !== undefined && this.patch.userData !== null
+            && userDataError(this.patch.userData) !== null) return false;
         // Again the loader's own rule, so the inspector cannot author insets the document could
         // not reopen — and `null` is the clear rather than a value to check.
         if (this.patch.nineSlice !== undefined && this.patch.nineSlice !== null
@@ -107,6 +127,11 @@ export class UpdateNodeContentAction extends Action {
         // `null` survives here too, for the same reason the region's does: it is the clear.
         if (this.patch.nineSlice !== undefined) delta.nineSlice = this.patch.nineSlice;
         if (this.patch.clipsContent !== undefined) delta.clipsContent = this.patch.clipsContent;
+        // `null` survives here too — it is the clear. `nineSlice` was VALIDATED here once and then
+        // not copied into the delta, so these two are checked by asking the DOCUMENT what it holds
+        // afterwards rather than asking the action what it did.
+        if (this.patch.className !== undefined) delta.className = this.patch.className;
+        if (this.patch.userData !== undefined) delta.userData = this.patch.userData;
 
         return {
             updatedNodeIds: new Set([this.nodeId]),

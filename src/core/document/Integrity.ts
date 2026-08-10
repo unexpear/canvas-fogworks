@@ -12,7 +12,7 @@
 
 import { ReadonlyDocument } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
-import { transformError, layoutError, dimensionError, pathError, booleanOpError, srcError, sourceRectError, nineSliceError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError } from "./Node";
+import { transformError, layoutError, dimensionError, pathError, booleanOpError, srcError, sourceRectError, nineSliceError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError, classNameError, userDataError } from "./Node";
 import { interactionsError } from "./Prototype";
 import { timelineError, trackError, channelsError } from "./Timeline";
 import { clipsError } from "./Clips";
@@ -142,6 +142,14 @@ function checkNodeRanges(node: ReadonlyNode): void {
     if (slotErr) throw new Error(`Invalid document: node "${node.id}" ${slotErr}.`);
     const scErr = slotContentError(node.type, node.slotContent);
     if (scErr) throw new Error(`Invalid document: node "${node.id}" ${scErr}.`);
+    // AUTHORED METADATA (schema 64): the author's own kind for this node, and properties nothing
+    // here reads. Validated on load like every other field, because "nothing reads it" is a reason
+    // to keep it verbatim and not a reason to let a document carry a shape the exporter would choke
+    // on — the value must be TEXT so that what comes out is what somebody typed.
+    const cnErr = classNameError(node.className);
+    if (cnErr) throw new Error(`Invalid document: node "${node.id}" ${cnErr}.`);
+    const udErr = userDataError(node.userData);
+    if (udErr) throw new Error(`Invalid document: node "${node.id}" ${udErr}.`);
     // States (M7, schema 30). Declared since M0 as `{[key: string]: any}` and validated by
     // nothing — the dead-but-consumed field the schema doc warns against. Now it obeys the
     // same per-field rules an instance override does.

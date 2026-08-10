@@ -362,6 +362,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "60") { raw = migrate_60_to_61(raw); version = "61"; }
     if (version === "61") { raw = migrate_61_to_62(raw); version = "62"; }
     if (version === "62") { raw = migrate_62_to_63(raw); version = "63"; }
+    if (version === "63") { raw = migrate_63_to_64(raw); version = "64"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -945,6 +946,23 @@ function migrate_61_to_62(raw: any): any {
  */
 function migrate_62_to_63(raw: any): any {
     return { ...raw, version: "63" };
+}
+
+/**
+ * 63 -> 64: `Node.className` and `Node.userData` — the author's own kind for a node, and properties
+ * this engine carries without reading.
+ *
+ * NOTHING TO REWRITE, and unusually the version could almost have stayed: both fields are optional,
+ * a 63 document has neither, and a 64 document opened by a 63 build would validate (the older
+ * `Integrity` never heard of them) and draw identically, because no renderer reads either one.
+ *
+ * IT MOVES ANYWAY, and the reason is the round trip rather than the picture. A 63 build that opens a
+ * 64 document and saves it writes back a file with every property gone — silently, since the
+ * picture is unchanged and nothing warns. That is precisely the data loss this field exists to
+ * stop, so the version has to be able to say it happened.
+ */
+function migrate_63_to_64(raw: any): any {
+    return { ...raw, version: "64" };
 }
 
 function migrate_54_to_55(raw: any): any {

@@ -27,7 +27,7 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { SourceRect, PathCommand } from "../document/Node";
+import { SourceRect, PathCommand, UserData } from "../document/Node";
 import { Tilemap } from "../document/Tilemap";
 import { AddNodeAction } from "./AddNodeAction";
 import { UpdateNodeContentAction } from "./UpdateNodeContentAction";
@@ -83,6 +83,16 @@ export type TilePlacement =
         transform: { rotation: number; scaleX: number; scaleY: number; origin: { x: number; y: number } } | null;
         /** A polygon's or polyline's commands, already relative to the node's own box. */
         path: PathCommand[] | null;
+        /**
+         * The author's own kind for this object, and its custom properties (schema 64).
+         *
+         * CARRIED, NOT READ. Nothing in this engine acts on either — that is what makes them worth
+         * carrying, because a map opened here and saved again has to be the map that was opened.
+         * `objectPlacement` parsed both since object layers landed and dropped them, for want of a
+         * field to put them in.
+         */
+        className: string;
+        userData: UserData;
     };
 
 /**
@@ -156,9 +166,17 @@ export function tileImportActions(
             // root, which is what a map with objects and no layer flags should produce.
             actions.push(new AddNodeAction(doc, nodeType, t.x, t.y, t.width, t.height, "none", id,
                 openGroup, t.src !== null ? { src: t.src } : undefined));
+            // THE METADATA RIDES ON THE CONTENT ACTION rather than a fourth action of its own: it is
+            // one more field of the same node, and a separate action would be a second undo step for
+            // one imported object.
+            const meta = {
+                ...(t.className !== "" ? { className: t.className } : {}),
+                ...(Object.keys(t.userData).length > 0 ? { userData: t.userData } : {})
+            };
             actions.push(new UpdateNodeContentAction(doc, id,
-                t.shape === "image" ? { sourceRect: t.sourceRect, pixelated: true, name: t.name }
-                    : { name: t.name }));
+                t.shape === "image"
+                    ? { sourceRect: t.sourceRect, pixelated: true, name: t.name, ...meta }
+                    : { name: t.name, ...meta }));
             // A SHAPE THAT IS NOT A PICTURE gets a visible stroke, because "none" fill plus no
             // stroke is a node that exists and draws nothing at all.
             if (t.shape !== "image") {

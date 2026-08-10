@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1685;
+const EXPECTED_TESTS = 1693;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -540,8 +540,8 @@ const MUTANTS = [
       to: '            className: a.class ?? "",',
       note: "Tiled 1.8's `type` is dropped — the only class in the corpus disappears" },
     { id: "OB7", file: "src/core/import/TiledMap.ts",
-      from: '            properties.push({ name: pa.name, type: pa.type ?? "string", value: pa.value ?? "" });',
-      to: '            properties.push({ name: pa.name, type: pa.type ?? "", value: pa.value ?? "" });',
+      from: 'const head = { type: a.type ?? "string",',
+      to: 'const head = { type: a.type ?? "",',
       note: "an untyped property loses the format's default, so a consumer's switch stops being total" },
     { id: "OB8", file: "src/core/import/TiledMap.ts",
       from: "    for (const m of body.matchAll(/<object\\b([^>]*?)(\\/>|>([\\s\\S]*?)<\\/object>)/g)) {",
@@ -836,6 +836,34 @@ const MUTANTS = [
       from: "        if (e.key !== \"Escape\" || !this.rect) return;",
       to: "        if (e.key === \"Escape\") e.preventDefault();\n        if (e.key !== \"Escape\" || !this.rect) return;",
       note: "Escape is claimed with no gesture in flight, so the key stops deselecting whenever the tile tool is active" },
+
+    // AUTHORED METADATA (schema 64). The corpus evidence is thin on purpose — all 41 real
+    // properties live in ONE file, where every float is `1`, every bool is `true` and every string
+    // is `static`. So these aim at what that file cannot see.
+    { id: "UD1", file: "src/core/import/TiledMap.ts",
+      from: "        const { inner, end } = takeElement(body, re.lastIndex, \"property\");\n        re.lastIndex = end;",
+      to: "        const { inner } = takeElement(body, re.lastIndex, \"property\");",
+      note: "the scan resumes INSIDE a class property, so its members read as the object's own siblings — a member named friction overwrites the real one and is written back out as a property nobody wrote" },
+    { id: "UD2", file: "src/core/import/TiledMap.ts",
+      from: "if (variantNameError(\"name\", p.name, true) !== null) {",
+      to: "if (variantNameError(\"name\", p.name, false) !== null) {",
+      note: "a property named __proto__ passes the import gate, so the map it builds is one the loader refuses — and because import is a transaction, that aborts the whole file rather than dropping one property" },
+    { id: "UD3", file: "src/core/actions/applyMutations.ts",
+      from: "                    if (delta.userData === null || Object.keys(delta.userData).length === 0) {",
+      to: "                    if (delta.userData === null) {",
+      note: "an empty property map is STORED, so every object this engine imports carries an empty userData field that means nothing" },
+    { id: "UD4", file: "src/core/export/ExportTiled.ts",
+      from: "        if (p.type !== \"string\") a.push(`type=\"${escapeXml(p.type)}\"`);",
+      to: "        a.push(`type=\"${escapeXml(p.type)}\"`);",
+      note: "the format's DEFAULT type is written back explicitly, so an exported file no longer looks like one a person would have written" },
+    { id: "UD5", file: "src/core/export/ExportTiled.ts",
+      from: "            notes.push(`${owner} property \"${name}\" holds a character XML cannot carry, and was not written`);\n            continue;",
+      to: "            notes.push(`${owner} property \"${name}\" holds a character XML cannot carry, and was not written`);",
+      note: "a value XML cannot carry is COUNTED and then written anyway, which produces a file no reader will open" },
+    { id: "UD6", file: "src/core/export/ExportTiled.ts",
+      from: "            xml: body === \"\" ? `  <object ${attrs.join(\" \")}/>`",
+      to: "            xml: false ? `  <object ${attrs.join(\" \")}/>`",
+      note: "an object with nothing inside is written as an empty <object></object> pair rather than self-closing" },
 ];
 
 function runSuite() {

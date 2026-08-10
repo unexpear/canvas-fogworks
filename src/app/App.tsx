@@ -7,7 +7,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { ActionDispatcher } from "../core/actions/ActionDispatcher";
 import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document";
-import { Node, Shadow, flatFill } from "../core/document/Node";
+import { Node, Shadow, flatFill, UserData } from "../core/document/Node";
 import { Gradient, GradientStop } from "../core/document/Gradient";
 import { resolveTypography } from "../renderer/RenderModel";
 import { gradientFromColor, withStop, withoutStop, withStopColor, withStopOffset, withKind, GRADIENT_MIN_STOPS } from "../core/document/GradientEdit";
@@ -2516,6 +2516,15 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                 />
                             </InspectorSection>
 
+                            {/* Authored metadata (schema 64): the author's own kind for this node,
+                                and properties this engine carries without reading. The reason it is
+                                here rather than nowhere is that 41 of them were being parsed out of
+                                every imported map and dropped for want of a field — and a field with
+                                no way to edit it would be the same gap one layer down. */}
+                            <InspectorSection title="Metadata">
+                                <MetadataSection node={node as Node} dispatcher={dispatcher} refresh={refresh} />
+                            </InspectorSection>
+
                             {/* Variants (schema 27): tag a master into a set, or switch an
                                 instance between the masters of the set its own master joins. */}
                             <InspectorSection title="Variants">
@@ -4901,7 +4910,10 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                                     ? { rotation: pl.rotation, scaleX: pl.scaleX,
                                                         scaleY: pl.scaleY, origin: pl.origin }
                                                     : null,
-                                                path: pl.path
+                                                path: pl.path,
+                                                // Carried, never read — see `TilePlacement`.
+                                                className: pl.className,
+                                                userData: pl.userData
                                             });
                                         }
                                     }
@@ -5355,6 +5367,98 @@ function SlotSection({ node, dispatcher, refresh }: { node: Node; dispatcher: Ac
                     />
                 </>
             )}
+        </>
+    );
+}
+
+/**
+ * The author's own kind for a node, and its custom properties (schema 64).
+ *
+ * WHAT THE ENGINE CARRIES WITHOUT READING, which is exactly why it needs a panel: nothing else in
+ * the app would ever show it, so a property imported from a map would live in the file, survive
+ * every save, and be invisible to the person who owns it.
+ *
+ * THE TYPE IS A FREE TEXT FIELD rather than a dropdown, and that is deliberate. The document stores
+ * whatever the file declared so that a map written by a newer editor round-trips untouched; a
+ * closed list here would make those types uneditable — visible, unchangeable, and silently replaced
+ * the moment anyone touched the row. The common ones are offered as a datalist instead.
+ */
+function MetadataSection({ node, dispatcher, refresh }: { node: Node; dispatcher: ActionDispatcher; refresh: () => void }) {
+    const [newName, setNewName] = useState("");
+    const data = node.userData ?? {};
+    const names = Object.keys(data).sort();
+
+    const write = (patch: { className?: string | null; userData?: UserData | null }) => {
+        dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), node.id, patch));
+        refresh();
+    };
+    /** One property replaced, or removed when `next` is null — the whole map travels, as the delta wants. */
+    const setProp = (name: string, next: { type: string; propertyType?: string; value: string } | null) => {
+        const copy: UserData = { ...data };
+        if (next === null) delete copy[name];
+        else copy[name] = next;
+        write({ userData: copy });
+    };
+
+    return (
+        <>
+            <label style={INSPECTOR_LABEL}>Class</label>
+            <TextInput
+                value={node.className ?? ""}
+                placeholder="none"
+                onChange={v => write({ className: v.trim() === "" ? null : v.trim() })}
+            />
+            <datalist id="vde-prop-types">
+                {["string", "int", "float", "bool", "color", "file", "object"].map(t => <option key={t} value={t} />)}
+            </datalist>
+            <div style={{ color: UI.textFaint, fontSize: 10, marginTop: 8, marginBottom: 4 }}>
+                {names.length === 0
+                    ? "No properties. Nothing here is read by the engine — it is carried, so a map opened and saved is the map that was opened."
+                    : `${names.length} propert${names.length === 1 ? "y" : "ies"}, carried and never read.`}
+            </div>
+            {names.map(name => {
+                const p = data[name];
+                return (
+                    <div key={name} style={{ display: "grid", gridTemplateColumns: "1fr 64px 20px", gap: 4, marginBottom: 3 }}>
+                        <TextInput value={p.value} onChange={v => setProp(name, { ...p, value: v })} />
+                        <input
+                            list="vde-prop-types"
+                            value={p.type}
+                            title={`Type of "${name}"${p.propertyType ? ` (${p.propertyType})` : ""}`}
+                            onChange={e => {
+                                // AN EMPTY TYPE IS NOT A TYPE — `userDataError` refuses it, and the
+                                // action would silently do nothing. Mid-edit it reads as "string".
+                                const t = e.target.value.trim();
+                                setProp(name, { ...p, type: t === "" ? "string" : t });
+                            }}
+                            style={{ ...SELECT_STYLE, minWidth: 0 }}
+                        />
+                        <button
+                            onClick={() => setProp(name, null)}
+                            title={`Remove "${name}"`}
+                            aria-label={`Remove property ${name}`}
+                            style={{ ...ADJUST_BUTTON, padding: "0 4px" }}
+                        >×</button>
+                        <div style={{ gridColumn: "1 / -1", color: UI.textFaint, fontSize: 9, marginTop: -2 }}>{name}</div>
+                    </div>
+                );
+            })}
+            <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                <TextInput value={newName} placeholder="new property name" onChange={setNewName} />
+                <button
+                    disabled={newName.trim() === "" || Object.prototype.hasOwnProperty.call(data, newName.trim())}
+                    onClick={() => {
+                        const n = newName.trim();
+                        if (n === "") return;
+                        // `string` IS THE FORMAT'S DEFAULT, so a new property starts as one rather
+                        // than as a type the author has to correct before it means anything.
+                        setProp(n, { type: "string", value: "" });
+                        setNewName("");
+                    }}
+                    aria-label="Add property"
+                    style={ADJUST_BUTTON}
+                >Add</button>
+            </div>
         </>
     );
 }

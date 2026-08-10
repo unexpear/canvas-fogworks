@@ -96,18 +96,78 @@ export function tilemapCsv(map: ReadonlyTilemap, firstGid: number): string {
     return rows.join("\n");
 }
 
+/**
+ * The `<properties>` block for a node's authored metadata, and what could not be written.
+ *
+ * A VALUE THAT XML CANNOT CARRY IS COUNTED, NOT ESCAPED INTO NONSENSE. `escapeXml` handles the five
+ * entities; it cannot make a C0 control character legal in XML 1.0, and writing one produces a file
+ * that no reader — including this one — will open. So the property is left out and said out loud,
+ * which is the bargain the rest of this exporter already makes for an object it cannot write.
+ */
+function propertiesXml(
+    data: Readonly<Record<string, { type: string; propertyType?: string; value: string }>> | undefined,
+    owner: string, indent: string
+): { xml: string; notes: string[] } {
+    const notes: string[] = [];
+    if (!data) return { xml: "", notes };
+    const rows: string[] = [];
+    // SORTED BY NAME, because a map has no order of its own and an export that reordered its own
+    // properties between two saves would show a diff where nothing changed.
+    for (const name of Object.keys(data).sort()) {
+        const p = data[name];
+        // eslint-disable-next-line no-control-regex
+        if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(p.value)) {
+            notes.push(`${owner} property "${name}" holds a character XML cannot carry, and was not written`);
+            continue;
+        }
+        const a = [`name="${escapeXml(name)}"`];
+        // `string` IS THE DEFAULT and writing it back is noise — the reader puts it in, and leaving
+        // it out is what makes an exported file look like one a person would have written.
+        if (p.type !== "string") a.push(`type="${escapeXml(p.type)}"`);
+        if (p.propertyType !== undefined) a.push(`propertytype="${escapeXml(p.propertyType)}"`);
+        a.push(`value="${escapeXml(p.value)}"`);
+        rows.push(`${indent} <property ${a.join(" ")}/>`);
+    }
+    if (rows.length === 0) return { xml: "", notes };
+    return { xml: `${indent}<properties>\n${rows.join("\n")}\n${indent}</properties>`, notes };
+}
+
 /** One object as a `.tmx` element, or null with the reason it cannot be written. */
 function objectXml(
     node: { type: string; name?: string; geometry: { x: number; y: number; width: number; height: number };
             transform?: { rotation?: number; origin?: { x: number; y: number } };
             src?: string; sourceRect?: { x: number; y: number; width: number; height: number } | null;
-            path?: readonly { c: string; x?: number; y?: number }[] },
+            path?: readonly { c: string; x?: number; y?: number }[];
+            className?: string;
+            userData?: Readonly<Record<string, { type: string; propertyType?: string; value: string }>> },
     id: number, sheet: ReadonlyTilemap["sheet"], firstGid: number
-): { xml: string; why: null } | { xml: null; why: string } {
+): { xml: string; why: null; notes: string[] } | { xml: null; why: string; notes: string[] } {
     const g = node.geometry;
     const name = node.name ?? "";
     const attrs: string[] = [`id="${id}"`];
     if (name) attrs.push(`name="${escapeXml(name)}"`);
+    // `class`, NOT `type`, because this file declares version 1.10 and that is what 1.10 calls it.
+    // The reader takes either — `a.class ?? a.type` — so an older file still comes back in.
+    if (node.className) attrs.push(`class="${escapeXml(node.className)}"`);
+    const props = propertiesXml(node.userData, `object "${name || id}"`, "   ");
+    // WHAT LEAVES WITH A REFUSED OBJECT IS COUNTED TOO. An object this exporter cannot write takes
+    // its properties with it, and "3 objects were not written" does not say that a room's worth of
+    // gameplay data went with them.
+    const carried = node.userData ? Object.keys(node.userData).length : 0;
+    const lost = (why: string) => ({
+        xml: null as null,
+        why: carried > 0 ? `${why} (and its ${carried} propert${carried === 1 ? "y" : "ies"})` : why,
+        notes: [] as string[]
+    });
+    /** A self-closing tag when there is nothing inside, and a wrapped one when there is. */
+    const wrap = (inner: string): { xml: string; why: null; notes: string[] } => {
+        const body = [props.xml, inner].filter(x => x !== "").join("\n");
+        return {
+            xml: body === "" ? `  <object ${attrs.join(" ")}/>`
+                : `  <object ${attrs.join(" ")}>\n${body}\n  </object>`,
+            why: null, notes: props.notes
+        };
+    };
     // DEGREES, and the sign is not flipped — the format's rotation is clockwise on a y-down screen
     // and so are this engine's radians, which is the same agreement `objectTransform` states going
     // the other way.
@@ -115,35 +175,35 @@ function objectXml(
 
     if (node.type === "core.image") {
         const rect = node.sourceRect ?? null;
-        if (!rect) return { xml: null, why: `object "${name || id}" draws a whole image rather than a tile` };
+        if (!rect) return lost(`object "${name || id}" draws a whole image rather than a tile`);
         const index = tileIndexAt(sheet, rect.x, rect.y);
         if (index === null) {
-            return { xml: null, why: `object "${name || id}" draws from a sheet this map does not declare` };
+            return lost(`object "${name || id}" draws from a sheet this map does not declare`);
         }
         // THE HEIGHT GOES BACK ON: a tile object is anchored at its bottom-left in the file.
         attrs.push(`gid="${index + firstGid}"`, `x="${g.x}"`, `y="${g.y + g.height}"`,
             `width="${g.width}"`, `height="${g.height}"`);
         if (rotation !== 0) attrs.push(`rotation="${rotation * 180 / Math.PI}"`);
-        return { xml: `  <object ${attrs.join(" ")}/>`, why: null };
+        return wrap("");
     }
 
     attrs.push(`x="${g.x}"`, `y="${g.y}"`, `width="${g.width}"`, `height="${g.height}"`);
     if (rotation !== 0) attrs.push(`rotation="${rotation * 180 / Math.PI}"`);
     if (node.type === "core.ellipse") {
-        return { xml: `  <object ${attrs.join(" ")}>\n   <ellipse/>\n  </object>`, why: null };
+        return wrap("   <ellipse/>");
     }
     if (node.type === "core.path") {
         const commands = node.path ?? [];
         const points = commands.filter(c => c.c === "M" || c.c === "L")
             .map(c => `${c.x ?? 0},${c.y ?? 0}`).join(" ");
-        if (points === "") return { xml: null, why: `object "${name || id}" is a path with no points` };
+        if (points === "") return lost(`object "${name || id}" is a path with no points`);
         // A CLOSED path is a polygon and an open one is a polyline — the only thing that tells the
         // two apart once both are paths, and the same distinction the reader makes coming in.
         const tag = commands.some(c => c.c === "Z") ? "polygon" : "polyline";
-        return { xml: `  <object ${attrs.join(" ")}>\n   <${tag} points="${points}"/>\n  </object>`, why: null };
+        return wrap(`   <${tag} points="${points}"/>`);
     }
-    if (node.type === "core.rectangle") return { xml: `  <object ${attrs.join(" ")}/>`, why: null };
-    return { xml: null, why: `object "${name || id}" is a ${node.type}, which a .tmx has no shape for` };
+    if (node.type === "core.rectangle") return wrap("");
+    return lost(`object "${name || id}" is a ${node.type}, which a .tmx has no shape for`);
 }
 
 /**
@@ -221,6 +281,7 @@ export function exportTiledMap(doc: ReadonlyDocument, image: string): TiledExpor
             const child = resolved.nodes.get(childId);
             if (!child) continue;
             const one = objectXml(child as never, nextObjectId, sheet, 1);
+            notes.push(...one.notes);
             if (one.xml === null) { notes.push(one.why); continue; }
             nextObjectId++;
             written.push(one.xml);

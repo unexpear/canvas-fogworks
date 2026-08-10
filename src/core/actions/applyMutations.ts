@@ -154,6 +154,19 @@ export function applyMutationsToDocument(
                     if (delta.nineSlice === null) delete node.nineSlice;
                     else node.nineSlice = delta.nineSlice;
                 }
+                // AUTHORED METADATA (schema 64). An EMPTY value clears rather than being stored:
+                // `className: ""` and an empty `userData` say exactly what absent says, and writing
+                // them would put a field in every file that means nothing — the same rule
+                // `clipsContent` follows two blocks up.
+                if (delta.className !== undefined) {
+                    if (!delta.className) delete node.className;
+                    else node.className = delta.className;
+                }
+                if (delta.userData !== undefined) {
+                    if (delta.userData === null || Object.keys(delta.userData).length === 0) {
+                        delete node.userData;
+                    } else node.userData = delta.userData;
+                }
                 if (delta.sourceRect !== undefined) {
                     if (delta.sourceRect === null) delete node.sourceRect;
                     else node.sourceRect = delta.sourceRect;

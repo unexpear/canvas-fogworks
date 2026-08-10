@@ -3,7 +3,7 @@
  * @description Shared types used across all Actions and History tracking.
  */
 
-import { SourceRect, RasterSurface } from "../document/Node";
+import { SourceRect, RasterSurface, UserData } from "../document/Node";
 import { NineSliceInsets } from "../geometry/NineSlice";
 import { Node, Geometry, Style, Layout, Transform, VariantKey, StateDefinition, PathCommand, BooleanOp, RESERVED_NODE_ID } from "../document/Node";
 import { ProjectDocument, SerializedMetadata, VariableStore, ThemeMode } from "../document/Document";
@@ -69,6 +69,10 @@ export type NodeDelta =
         nineSlice?: NineSliceInsets | null;
         /** Cut children to this node's box (schema 59); null clears it. */
         clipsContent?: boolean | null;
+        /** The author's own kind for this node (schema 64); null clears it. */
+        className?: string | null;
+        /** Author-defined properties (schema 64); null clears them. Whole-map, like `overrides`. */
+        userData?: UserData | null;
         src?: string;
         name?: string;
         /** Whole-map replace of a `core.instance`'s per-instance overrides (M6 slice 2). Whole-map

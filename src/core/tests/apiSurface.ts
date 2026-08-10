@@ -38,7 +38,7 @@ import {
     CURRENT_VERSION, SCHEMA_VERSION
 } from "../document/Document";
 import { Variable, VariableStore, VariableType, VariableValue, ThemeMode, THEME_MODES, VARIABLES_MAX, VARIABLE_KEY_MAX, VARIABLE_FALLBACK_COLOR, isTokenRef, variableError, variableKeyError, variableStoreError, resolveVariable, resolveColor, resolveNumber } from "../document/Variables";
-import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, flatFill, Shadow, Layout, RESERVED_NODE_ID, RESERVED_ID_SUBSTRING, nodeIdError, SourceRect, sourceRectError, SOURCE_RECT_MAX, nineSliceError } from "../document/Node";
+import { Node, NodeType, NODE_TYPES, isNodeType, LayoutContainer, LayoutGrid, TrackSize, Constraints, HConstraint, VConstraint, Margins, layoutError, dimensionError, pathError, PathCommand, PATH_MAX_COMMANDS, styleError, flatFill, Shadow, Layout, RESERVED_NODE_ID, RESERVED_ID_SUBSTRING, nodeIdError, SourceRect, sourceRectError, SOURCE_RECT_MAX, nineSliceError, UserProperty, UserData, userDataError, classNameError, USER_DATA_MAX, USER_VALUE_MAX } from "../document/Node";
 import {
     serializeDocument, deserializeDocument, compareDocuments, Serializer,
     LoadResult, SaveResult
@@ -312,6 +312,22 @@ export function __apiSurfacePin(): void {
     expectType<NineSliceInsets>(insets);
     expectType<Slice[]>(nineSliceRects({ x: 0, y: 0, width: 9, height: 9 }, { x: 0, y: 0, width: 90, height: 90 }, insets));
     expectType<string | null>(nineSliceError("core.image", insets));
+
+    // AUTHORED METADATA (schema 64) — the value is TEXT and the declared type is carried beside it,
+    // because nothing here knows what "float" or an enum named "Mood" MEANS. Storing a parsed
+    // `string | number | boolean` would discard four of the format's eight types, and this engine
+    // exports `.tmx`, so a type it cannot represent is data destroyed by opening and saving.
+    const uprop: UserProperty = { type: "float", value: "0.5" };
+    expectType<UserProperty>(uprop);
+    expectType<string>(uprop.type);
+    expectType<string>(uprop.value);
+    expectType<string | undefined>(uprop.propertyType);
+    const udata: UserData = { friction: uprop };
+    expectType<UserData>(udata);
+    expectType<string | null>(userDataError(udata));
+    expectType<string | null>(classNameError("Door"));
+    expectType<number>(USER_DATA_MAX);
+    expectType<number>(USER_VALUE_MAX);
     // Linear blend skinning — the arithmetic that joins a posed rig to a bent mesh.
     expectType<number>(SKIN_MAX_BONES);
     expectType<string | null>(boneWeightsError([{ node: "b", weight: 1 }]));
@@ -893,7 +909,8 @@ export function __apiSurfacePin(): void {
     expectType<TiledObjectGroup[]>(tmap.objectGroups);
     const tobj: TiledObject = {
         id: 1, name: "", className: "", kind: "tile", x: 0, y: 0, width: 0, height: 0,
-        rotation: 0, visible: true, cell: null, template: null, properties: [], points: []
+        rotation: 0, visible: true, cell: null, template: null, properties: [], points: [],
+        unreadProperties: []
     };
     expectType<TiledObject>(tobj);
     expectType<TiledProperty[]>(tobj.properties);

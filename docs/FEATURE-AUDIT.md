@@ -99,7 +99,8 @@ broke a test whose subject was still true. Both are fixed.
 | Group layers (nesting preserved) | **absent** | flattened; offset and opacity of the group are lost |
 | Tile animations | **absent** | unread and unreported |
 | Wangsets / terrains | **absent** | unread; the corpus contains none, so there is nothing to import |
-| Custom properties (map, layer, tile, object) | **absent** | unread and unreported |
+| Custom properties (OBJECT) | **have** | schema 64 — `Node.className` + `Node.userData`, read, carried, written back out, and editable in the inspector's Metadata section. The value is kept as TEXT with its declared type beside it, because nothing here knows what a `float` or an enum named `Mood` means and this engine now exports `.tmx`. Measured first: all 41 custom properties in this tree live in ONE file and the 20 shipped packs carry none |
+| Custom properties (map, layer, tile) | **absent** | the reader skips them. Zero occurrences in 42 files, so there is nothing to design against — see the tile row below |
 | Infinite maps (chunked) | **absent** | refused with a message |
 | Collision shapes per tile | **absent** | |
 | Templates | **absent** | |

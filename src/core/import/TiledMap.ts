@@ -71,7 +71,8 @@
  * a map that draws correctly.
  */
 
-import { SourceRect, PathCommand } from "../document/Node";
+import { SourceRect, PathCommand, UserData, UserProperty, variantNameError,
+    USER_DATA_MAX, USER_VALUE_MAX } from "../document/Node";
 // THE SAME THREE FLAGS IN A SECOND ENCODING. Tiled packs them into the top bits of a 32-bit gid;
 // a `Tilemap` cell holds them as 1/2/4 in a parallel array. Aliased rather than renamed either
 // side, so the two names cannot be confused at a glance the way `FLIP_H` twice over would be.
@@ -215,6 +216,11 @@ export interface TiledObject {
     template: string | null;
     /** Custom properties, values kept as WRITTEN — see `TiledProperty`. */
     properties: TiledProperty[];
+    /**
+     * What `parseProperties` found and could not read — currently only class properties, whose
+     * members are a nested record and not text. COUNTED so the one thing it can never be is silent.
+     */
+    unreadProperties: string[];
     /** A polygon's or polyline's points, relative to (x, y). Empty for every other kind. */
     points: { x: number; y: number }[];
 }
@@ -232,6 +238,14 @@ export interface TiledProperty {
     name: string;
     /** `string` when the file omits it, which is what the format's default means. */
     type: string;
+    /**
+     * The `propertytype` attribute — the ENUM or class name the type refers to.
+     *
+     * AN ENUM IS WRITTEN AS ITS BASE TYPE PLUS THIS NAME (`type="string" propertytype="Mood"`), so a
+     * reader that keeps only `type` turns every enum into a plain string and cannot write it back.
+     * The name is the whole difference, and it costs one field to keep.
+     */
+    propertyType?: string;
     value: string;
 }
 
@@ -269,6 +283,69 @@ export interface TiledMapResult {
  * only knew double quotes saw a tag with NO attributes at all rather than an error, which is the
  * quiet kind of wrong. The captured quote is back-referenced so `a="it's"` does not end early.
  */
+/**
+ * `body` from `at` to the MATCHING `</tag>`, counting nested opens so a class property's members do
+ * not end the scan at the first close. Returns the inner text and where to resume.
+ */
+function takeElement(body: string, at: number, tag: string): { inner: string; end: number } {
+    const scan = new RegExp(`<${tag}\\b[^>]*?(\\/>|>)|<\\/${tag}\\s*>`, "g");
+    scan.lastIndex = at;
+    let depth = 1;
+    let m: RegExpExecArray | null;
+    while ((m = scan.exec(body)) !== null) {
+        if (m[0].startsWith("</")) {
+            if (--depth === 0) return { inner: body.slice(at, m.index), end: scan.lastIndex };
+        } else if (m[1] === ">") depth++;
+    }
+    return { inner: body.slice(at), end: body.length };
+}
+
+/**
+ * The `<property>` elements of one element's body, and what could not be read.
+ *
+ * A DEPTH-AWARE SCAN RATHER THAN A FLAT REGEX, and the difference is not tidiness. The flat form
+ * this replaces ran over the object's WHOLE inner body, so a CLASS property's nested members matched
+ * as siblings of the object's own: a member named `friction` would overwrite the object's real
+ * `friction`, and the exporter would then write those members back out as top-level properties the
+ * author never wrote. A file silently restructured, not a type word lost — which is why this is a
+ * precondition for storing properties at all rather than a refinement of it.
+ *
+ * A BODY-FORM PROPERTY (`<property name="x">two\nlines</property>`) is how the format writes a
+ * MULTILINE string, and the flat form read every one of them as `""`. Reading it is free once the
+ * scan exists.
+ */
+export function parseProperties(body: string): { props: TiledProperty[]; unread: string[] } {
+    const props: TiledProperty[] = [];
+    const unread: string[] = [];
+    const re = /<property\b([^>]*?)(\/>|>)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(body)) !== null) {
+        const a = attributes(`<property${m[1]}>`);
+        // THE DEFAULT LIVES IN ONE PLACE. `string` is what an absent type MEANS in the format, and
+        // writing it in makes every consumer's switch total — but the two branches below would each
+        // have had to remember that, which is one copy too many of a rule.
+        const head = { type: a.type ?? "string",
+            ...(a.propertytype !== undefined ? { propertyType: a.propertytype } : {}) };
+        if (m[2] === "/>") {
+            if (a.name === undefined) continue;
+            props.push({ name: a.name, ...head, value: a.value ?? "" });
+            continue;
+        }
+        const { inner, end } = takeElement(body, re.lastIndex, "property");
+        re.lastIndex = end;
+        if (/<properties\b/.test(inner)) {
+            // A CLASS PROPERTY'S MEMBERS ARE NOT READ, and this is where that is DECIDED rather than
+            // discovered: schema 64 stores text values, and a nested record is not text. Counted, so
+            // the one thing it must not be is silent. There are none in this tree's files.
+            unread.push(`property "${a.name ?? "?"}" is a class property, whose members are not read`);
+            continue;
+        }
+        if (a.name === undefined) continue;
+        props.push({ name: a.name, ...head, value: unescapeXml(inner) });
+    }
+    return { props, unread };
+}
+
 function attributes(tag: string): Record<string, string> {
     const out: Record<string, string> = {};
     for (const m of tag.matchAll(/([A-Za-z_][\w:.-]*)\s*=\s*(["'])(.*?)\2/g)) out[m[1]] = unescapeXml(m[3]);
@@ -459,12 +536,60 @@ export interface TiledObjectPlacement {
     path: PathCommand[] | null;
     /** A label for the layers panel: the object's name, else its class, else its id. */
     name: string;
+    /** The author's own kind for this object (schema 64), or "" when the file gave none. */
+    className: string;
+    /** The object's custom properties as the document holds them — see `userDataFor`. */
+    userData: UserData;
 }
 
 /** A placement, or the reason there is none. */
 export interface TiledObjectFit {
     placement: TiledObjectPlacement | null;
     why: string | null;
+}
+
+/**
+ * A file's property LIST as the document's property MAP, and everything that could not come.
+ *
+ * IT CANNOT EMIT A MAP THE LOADER WOULD REFUSE, and that is the whole contract rather than caution.
+ * Import runs inside a `TransactionAction`, which THROWS when a component action fails validation —
+ * so a map that trips `userDataError` does not drop one property, it aborts the whole import and
+ * turns a legal file into one that cannot be opened at all. A property named `constructor`, or the
+ * sixty-fifth on one object, is a thing a real editor will happily write. Every rule the validator
+ * has is therefore enforced here as a skip-and-report.
+ *
+ * LAST WINS on a duplicate name, and it is REPORTED: a node holding two `friction`s resolves to
+ * nothing whichever one is picked, and the editor that wrote the file cannot author the duplicate,
+ * so the tie-break is decided once here instead of by every reader downstream.
+ */
+export function userDataFor(
+    props: readonly TiledProperty[]
+): { data: UserData; unread: string[] } {
+    const data: Record<string, UserProperty> = {};
+    const unread: string[] = [];
+    for (const p of props) {
+        // BEFORE the assignment, and by `hasOwnProperty` rather than `in`, so `__proto__` is CAUGHT
+        // rather than swallowed by the prototype setter — a value stored under it could never be
+        // read back, which is a silent loss rather than a refusal.
+        if (variantNameError("name", p.name, true) !== null) {
+            unread.push(`property "${p.name}" has a name this document cannot hold`);
+            continue;
+        }
+        if (p.value.length > USER_VALUE_MAX) {
+            unread.push(`property "${p.name}" is ${p.value.length} characters, over the ${USER_VALUE_MAX} limit`);
+            continue;
+        }
+        const already = Object.prototype.hasOwnProperty.call(data, p.name);
+        if (!already && Object.keys(data).length >= USER_DATA_MAX) {
+            unread.push(`property "${p.name}" is past the ${USER_DATA_MAX}-property limit`);
+            continue;
+        }
+        if (already) unread.push(`property "${p.name}" appears more than once; the last one is kept`);
+        data[p.name] = p.propertyType !== undefined
+            ? { type: p.type, propertyType: p.propertyType, value: p.value }
+            : { type: p.type, value: p.value };
+    }
+    return { data, unread };
 }
 
 export function objectPlacement(
@@ -476,11 +601,16 @@ export function objectPlacement(
     const name = obj.name || obj.className || `object ${obj.id}`;
     const box = objectBox(obj);
     const turn = objectTransform(obj);
+    // THE METADATA TRAVELS WITH THE SHAPE. The reader has parsed the class and the properties since
+    // object layers landed, and this function dropped both on the floor because a node had nowhere
+    // to put them (schema 64 gave it one). Everything that could not come is reported by the caller.
+    const { data: userData } = userDataFor(obj.properties);
     const base = {
         x: box.x, y: box.y, width: box.width, height: box.height,
         rotation: turn.rotation, origin: turn.origin, scaleX: 1, scaleY: 1,
         image: null as string | null, sourceRect: null as SourceRect | null,
-        path: null as PathCommand[] | null, name
+        path: null as PathCommand[] | null, name,
+        className: obj.className, userData
     };
 
     if (obj.kind === "template") {
@@ -590,14 +720,9 @@ function parseObjects(body: string): TiledObject[] {
             : /<text\b/.test(inner) ? "text"
             : a.gid !== undefined ? "tile"
             : "rectangle";
-        const properties: TiledProperty[] = [];
-        for (const pm of inner.matchAll(/<property\b[^>]*\/?>/g)) {
-            const pa = attributes(pm[0]);
-            if (pa.name === undefined) continue;
-            // `string` IS THE FORMAT'S DEFAULT, and writing it in makes every consumer's switch
-            // total — an absent type is not a missing property, it is a text one.
-            properties.push({ name: pa.name, type: pa.type ?? "string", value: pa.value ?? "" });
-        }
+        // `string` IS THE FORMAT'S DEFAULT, and `parseProperties` writes it in so every consumer's
+        // switch is total — an absent type is not a missing property, it is a text one.
+        const { props: properties, unread: unreadProps } = parseProperties(inner);
         out.push({
             id: num(a.id, 0),
             name: a.name ?? "",
@@ -616,6 +741,7 @@ function parseObjects(body: string): TiledObject[] {
             cell: a.gid !== undefined ? decodeGid(num(a.gid, 0)) : null,
             template: a.template ?? null,
             properties,
+            unreadProperties: unreadProps,
             points: kind === "polygon" ? points("polygon") : kind === "polyline" ? points("polyline") : []
         });
     }
