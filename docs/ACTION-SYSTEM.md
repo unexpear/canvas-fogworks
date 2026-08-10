@@ -333,6 +333,14 @@ a *virtual* one, which a raw action cannot write to). An import is the one case 
 cannot serve, because its ids exist in no document yet — so moving the construction out satisfies the
 guard honestly rather than by exemption.
 
+**The list is an ORDERING, not a bag** (2026-08-10). Object layers join the same list tile layers
+use, because a map interleaves the two and a separate call would put every entity above every tile
+or below it, whichever way round the caller happened to write the two lines. Nesting rides on that
+order: a `group` placement opens a frame and the `object` placements after it become its children,
+because the caller cannot name a parent id — the ids are minted inside `tileImportActions`. A
+`tilemap` or a loose `image` CLOSES the open group, so a grid never inherits an object layer's
+opacity.
+
 ## 6. Why this matters downstream
 
 Because every change is a validated, serializable, reversible Action funnelled through
