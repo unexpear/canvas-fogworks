@@ -123,6 +123,8 @@ import { capturePatch, applyPatch, revertPatch, invertPatch, readRegion, isEmpty
     patchCost, EMPTY_PATCH } from "../paint/PixelPatch";
 import { makeBrush, brushError, stampBrush, brushBounds, strokePath, strokeBounds,
     BRUSH_MAX_SIZE, brushFromImage, brushWithVariants, pickFace } from "../paint/Brush";
+import { rngFrom, seedFrom } from "../random/Rng";
+import { caveCells } from "../document/CaveTerrain";
 import { encodeSurface, decodeSurface, PIXEL_CODEC_VERSION, PIXEL_RUN_MAX } from "../paint/PixelCodec";
 import { beginStroke, extendStroke, endStroke, strokeEscaped } from "../paint/Stroke";
 import { rasterSurfaceError, RASTER_MAX_SIDE } from "../document/Node";
@@ -28132,6 +28134,269 @@ describe("Adjust — the colour edits, and the half-steps that make them reversi
         expect(at(b, 2, 1)).toEqual([10, 20, 30, 0]);
         // A MAP THAT CHANGES NOTHING reports nothing, so no undo step is left behind.
         expect(mapColours(b, (r, g, bl) => [r, g, bl])).toBe(0);
+    });
+});
+
+describe("Rng — reproducible randomness, and the port that had to be checked", () => {
+    // THE ORACLE IS NOT THIS FILE. Every pinned value below was computed by the same arithmetic
+    // expressed in BigInt with every 32-bit wrap done by hand — a reference that shares no operator
+    // with the implementation: no `Math.imul`, no `>>>`, no `| 0`. Two independent computations
+    // agreeing over 2,000 draws for four seeds is what makes these numbers evidence rather than a
+    // recording of whatever the code did the first time it ran.
+    test("the first draws are the ones the arithmetic says, not the ones the code happened to make", () => {
+        const a = rngFrom(1);
+        expect(a.next()).toBeCloseTo(0.6270739406, 9);
+        expect(a.next()).toBeCloseTo(0.0027357212, 9);
+        expect(a.next()).toBeCloseTo(0.5274470400, 9);
+        // SEED 0 IS A REAL SEED. mulberry32 adds a constant before its first mix, so 0 is not the
+        // degenerate state it is in the generator families that need a non-zero one — and a caller
+        // never has to special-case it.
+        const z = rngFrom(0);
+        expect(z.next()).toBeCloseTo(0.2664292087, 9);
+        expect(z.next()).toBeCloseTo(0.0003297457, 9);
+        // …and a large seed, because `>>> 0` on the way in is what makes one defined at all.
+        expect(rngFrom(0xDEADBEEF).next()).toBeCloseTo(0.9413696141, 9);
+    });
+
+    test("NO draw is negative — the single easiest way to get this port wrong", () => {
+        // `^` yields a SIGNED 32-bit number in this language, so a port that divides without the
+        // `>>> 0` produces negative draws for roughly half of all values. Every consumer would keep
+        // working: `pickFace` clamps, a fill test compares against a threshold. The cave would just
+        // be wrong, and nothing would say so. A range check that only asserted `< 1` would pass.
+        const r = rngFrom(12345);
+        let min = 1, max = 0;
+        for (let i = 0; i < 20000; i++) {
+            const v = r.next();
+            if (v < min) min = v;
+            if (v > max) max = v;
+        }
+        expect(min).toBeGreaterThanOrEqual(0);
+        expect(max).toBeLessThan(1);
+        // …and it really does use the range, so "never negative" is not passing because the stream
+        // is stuck near a constant.
+        expect(min).toBeLessThan(0.001);
+        expect(max).toBeGreaterThan(0.999);
+    });
+
+    test("the same seed is the same stream, and a different seed is a different one", () => {
+        // A generated map that changes when reopened is not a document — this is that rule, stated
+        // as a test. Two streams, not one read twice, because state held in the wrong place would
+        // pass the second form.
+        const first = Array.from({ length: 50 }, () => rngFrom(7).next());
+        expect(new Set(first).size).toBe(1);            // a fresh stream restarts, every time
+        const a = rngFrom(7), b = rngFrom(7), c = rngFrom(8);
+        const sa = Array.from({ length: 50 }, () => a.next());
+        const sb = Array.from({ length: 50 }, () => b.next());
+        const sc = Array.from({ length: 50 }, () => c.next());
+        expect(sa).toEqual(sb);
+        // AND THE SEED IS NOT IGNORED. A generator that returned one sequence whatever it was given
+        // would pass every assertion above this line.
+        expect(sc).not.toEqual(sa);
+    });
+
+    test("int(bound) stays inside its bound, and answers 0 rather than NaN for a bad one", () => {
+        const r = rngFrom(99);
+        const seen = new Set<number>();
+        for (let i = 0; i < 5000; i++) {
+            const v = r.int(6);
+            expect(Number.isInteger(v)).toBe(true);
+            expect(v).toBeGreaterThanOrEqual(0);
+            expect(v).toBeLessThan(6);
+            seen.add(v);
+        }
+        // ALL SIX, so "inside the bound" is not passing because it only ever returns 0 — which is
+        // exactly what a broken `int` built on a stuck stream would do.
+        expect(seen.size).toBe(6);
+        // A NON-BOUND IS "THERE IS NOTHING TO CHOOSE", not NaN. `%` would have given NaN for 0, and
+        // NaN as an array index is a silent undefined rather than an error.
+        for (const bad of [0, -3, 1.5, NaN, Infinity]) expect(rngFrom(1).int(bad)).toBe(0);
+    });
+
+    test("seedFrom turns a word into a stream, and the empty word is still a word", () => {
+        // Checked against an independent BigInt FNV-1a, like the generator itself.
+        expect(seedFrom("")).toBe(2166136261);          // the offset basis, untouched
+        expect(seedFrom("cave")).toBe(2536635992);
+        expect(seedFrom("level 3")).toBe(3047751580);
+        expect(seedFrom("again")).toBe(3007309135);
+        // DIFFERENT WORDS DIFFER and the same word never doesn't — the only two properties a seed
+        // hash owes anyone.
+        expect(seedFrom("cave")).toBe(seedFrom("cave"));
+        expect(seedFrom("cave")).not.toBe(seedFrom("cavf"));
+        // …including words that differ only by ORDER, which a sum-of-characters hash would collide.
+        expect(seedFrom("ab")).not.toBe(seedFrom("ba"));
+    });
+});
+
+describe("CaveTerrain — cellular automata over the question, not the picture", () => {
+    // NON-SQUARE ON PURPOSE, everywhere below. A 40x25 grid cannot hide a row/col transposition,
+    // and this project has been caught by a square fixture twice.
+    const COLS = 40, ROWS = 25;
+
+    test("the rule has three names and is ONE function — all eighteen cases", () => {
+        // Not a simulation: `self + neighbours >= 5`, "B5678/S45678", and ">4 rock, <4 floor, 4
+        // unchanged" are the same map from (state, count) to state. Enumerating all of it is
+        // cheaper than any sample and cannot be fooled by a lucky seed.
+        for (const self of [0, 1]) {
+            for (let n = 0; n <= 8; n++) {
+                const sum = self + n >= 5 ? 1 : 0;
+                const unchanged = n > 4 ? 1 : n < 4 ? 0 : self;
+                const birthSurvive = self ? (n >= 4 ? 1 : 0) : (n >= 5 ? 1 : 0);
+                expect(sum).toBe(unchanged);
+                expect(sum).toBe(birthSurvive);
+            }
+        }
+        // AND THE THRESHOLD IS SELF-DUAL, which is the property that stops the map drifting: a rule
+        // `w*self + n >= t` is self-dual exactly when `t = (w+9)/2`. Counting the cell itself makes
+        // `w = 2` against a threshold of 5, which is half a step towards rock — so it grows rock on
+        // every pass, and nothing about the output would say so.
+        const dual = (w: number, t: number) => {
+            for (const self of [0, 1]) {
+                for (let n = 0; n <= 8; n++) {
+                    const out = w * self + n >= t ? 1 : 0;
+                    const flipped = w * (1 - self) + (8 - n) >= t ? 1 : 0;
+                    if (flipped !== 1 - out) return false;
+                }
+            }
+            return true;
+        };
+        expect(dual(1, 5)).toBe(true);      // the rule this module runs
+        expect(dual(2, 5)).toBe(false);     // the misreading that counts the cell itself
+    });
+
+    test("a cave is ONE connected space, and the same seed is the same cave", () => {
+        const seen: string[] = [];
+        for (let seed = 0; seed < 12; seed++) {
+            const r = caveCells(COLS, ROWS, 1, rngFrom(seed));
+            expect(r.cells).toHaveLength(COLS * ROWS);
+            // ONE region, which is what `connect` is for — raw automata output is pocketed.
+            expect(r.regions).toBe(1);
+            // …and it is a cave rather than a solid block or an empty room.
+            expect(r.floor).toBeGreaterThan(COLS * ROWS * 0.15);
+            expect(r.floor).toBeLessThan(COLS * ROWS * 0.65);
+            seen.push(r.cells.join(""));
+        }
+        // A GENERATED MAP THAT CHANGES WHEN REOPENED IS NOT A DOCUMENT.
+        expect(caveCells(COLS, ROWS, 1, rngFrom(7)).cells)
+            .toEqual(caveCells(COLS, ROWS, 1, rngFrom(7)).cells);
+        // AND THE SEED IS NOT IGNORED — twelve seeds, twelve different caves. A generator that
+        // returned one cave whatever it was given would pass every assertion above.
+        expect(new Set(seen).size).toBe(12);
+    });
+
+    test("the material is written in, and 0 really means open", () => {
+        // The automaton runs on 1 and 0 and the material is applied at the end; a generator that
+        // wrote its working value would put material 1 into a layer drawing material 3.
+        const r = caveCells(COLS, ROWS, 3, rngFrom(5));
+        expect(new Set(r.cells)).toEqual(new Set([0, 3]));
+        expect(r.cells.filter(c => c === 0)).toHaveLength(r.floor);
+    });
+
+    test("the margin is TWO because of the DUAL GRID, not because of caves", () => {
+        // ISOLATED ON PURPOSE: rock only in the margin, floor everywhere else. A real cave's
+        // interior is around 60% rock, so that ring reads full for reasons that have nothing to do
+        // with the margin — measuring it there would have "passed" at margin 1 and proved nothing.
+        const ringFull = (margin: number) => {
+            const cells = new Array(COLS * ROWS).fill(0);
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    if (c < margin || r < margin || c >= COLS - margin || r >= ROWS - margin) {
+                        cells[r * COLS + c] = 1;
+                    }
+                }
+            }
+            const terrain = { cols: COLS, rows: ROWS, cells };
+            let full = 0, total = 0;
+            for (let row = 1; row <= ROWS - 1; row++) {
+                for (let col = 1; col <= COLS - 1; col++) {
+                    if (row !== 1 && row !== ROWS - 1 && col !== 1 && col !== COLS - 1) continue;
+                    total++;
+                    if (dualMask(terrain, 1, col, row) === 15) full++;
+                }
+            }
+            return { full, total };
+        };
+        // The display grid is one larger each way, so a display cell's four corners are the four
+        // terrain cells up-left of it. One ring of rock leaves the fourth corner outside the ring,
+        // so NOT ONE display cell of that ring is full; two rings of rock and every one is.
+        const one = ringFull(1), two = ringFull(2);
+        expect(one.full).toBe(0);
+        expect(two.full).toBe(two.total);
+        // …and the OUTERMOST display ring can never be full whatever the margin, because three of
+        // its four corners are off the terrain entirely. That is why one ring is not enough.
+        const solid = { cols: COLS, rows: ROWS, cells: new Array(COLS * ROWS).fill(1) };
+        for (let col = 0; col <= COLS; col++) expect(dualMask(solid, 1, col, 0)).not.toBe(15);
+
+        // WHICH IS WHY THE DEFAULT IS 2: the generator's own outer two rings are solid rock.
+        //
+        // AND `connect: false` HERE, which is the whole point of this line. The margin is stamped
+        // ONCE and the border stays rock only because OFF THE GRID COUNTS AS ROCK — an edge cell
+        // sees five off-grid neighbours and so stays. Make off-grid count as floor and the border
+        // erodes… into small pockets that `connect` then fills straight back in, leaving the same
+        // 351 floor cells and a border that looks solid. A mutant doing exactly that survived this
+        // test until it stopped culling: with the culling off, that mutant breaks row 0 and takes
+        // the region count from 1 to 5.
+        const cave = caveCells(COLS, ROWS, 1, rngFrom(3), { connect: false });
+        for (let c = 0; c < COLS; c++) {
+            expect(cave.cells[c]).toBe(1);                       // row 0
+            expect(cave.cells[COLS + c]).toBe(1);                // row 1
+            expect(cave.cells[(ROWS - 1) * COLS + c]).toBe(1);
+        }
+        // …and asking for less really does give less, so the 2 is a default rather than a constant.
+        const thin = caveCells(COLS, ROWS, 1, rngFrom(3), { margin: 1, connect: false });
+        expect(thin.cells.slice(COLS, 2 * COLS).every(v => v === 1)).toBe(false);
+    });
+
+    test("passes are a COUNT, never a convergence test — the loop would not terminate", () => {
+        // This rule is a symmetric threshold network under parallel update, so its orbits have
+        // period 1 or 2 and nothing longer — and the period-2 ones never settle. Measured over 400
+        // seeds at 100x100: 389 reach a fixed point (worst at pass 53) and ELEVEN cycle forever.
+        // A `while (changed)` loop hangs on those, so the count is a constant and this asserts that
+        // asking for more passes is always answered rather than sometimes hanging.
+        for (const passes of [0, 1, 5, 60]) {
+            const r = caveCells(COLS, ROWS, 1, rngFrom(11), { passes });
+            expect(r.cells).toHaveLength(COLS * ROWS);
+        }
+        // ZERO PASSES IS RAW NOISE with the border forced — visibly not a cave, which is what shows
+        // the passes are doing the work rather than the fill being lucky.
+        const raw = caveCells(COLS, ROWS, 1, rngFrom(11), { passes: 0, connect: false });
+        const carved = caveCells(COLS, ROWS, 1, rngFrom(11), { passes: 5, connect: false });
+        expect(raw.regions).toBeGreaterThan(carved.regions * 5);
+    });
+
+    test("connect is what makes it one space, and turning it off shows the pockets", () => {
+        let pocketed = 0;
+        for (let seed = 0; seed < 12; seed++) {
+            const loose = caveCells(COLS, ROWS, 1, rngFrom(seed), { connect: false });
+            const tight = caveCells(COLS, ROWS, 1, rngFrom(seed), { connect: true });
+            if (loose.regions > 1) pocketed++;
+            // WHATEVER THE AUTOMATON LEFT, culling answers ONE — that is the guarantee.
+            expect(tight.regions).toBe(1);
+            // …and it only ever fills, so the connected cave is a subset of the loose one.
+            expect(tight.floor).toBeLessThanOrEqual(loose.floor);
+        }
+        // Half the seeds leave unreachable pockets, so `regions === 1` is the culling working
+        // rather than the automaton happening to produce one region.
+        expect(pocketed).toBeGreaterThanOrEqual(5);
+    });
+
+    test("the generator is REACHABLE, seed and all", () => {
+        // Arithmetic nothing calls is not a feature — `rectCells`, `floodFill` and the .tmx
+        // exporter each sat unused until something asked. This is the door.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/data-cave="1"/);
+        expect(app).toMatch(/aria-label="Generate cave"/);
+        expect(app).toMatch(/caveCells\(map\.cols, map\.rows,/);
+        // THE SEED IS A WORD the author can write down, hashed on the way in.
+        expect(app).toMatch(/rngFrom\(seedFrom\(caveSeed\)\)/);
+        // …and it goes through the same validated edit path a brush stroke uses, so one press is
+        // one undo step and the generator cannot author a terrain the loader would refuse.
+        expect(app).toMatch(/setMap\(withTerrain\(map,/);
+    });
+
+    test("a degenerate size is answered rather than thrown at", () => {
+        for (const [c, r] of [[0, 10], [10, 0], [-1, 5], [2.5, 4]]) {
+            expect(caveCells(c, r, 1, rngFrom(1))).toEqual({ cells: [], floor: 0, regions: 0 });
+        }
     });
 });
 

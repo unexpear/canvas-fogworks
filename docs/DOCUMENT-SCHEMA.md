@@ -1,6 +1,11 @@
 # Document Schema
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-08-10 after the cave generator: accurate, and NO field moved. The generator
+     writes `Tilemap.terrain.cells` through the same edit path a brush stroke uses, which is the
+     clearest evidence schema 63's split (store the question, derive the picture) was the right
+     one — a whole generator landed without a schema change. The single `terrain.material` is
+     the next real constraint: a generator wanting rock AND water has nowhere to put the second. -->
 <!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
      below. The earlier note stands — the rectangle gesture added no field. -->
 

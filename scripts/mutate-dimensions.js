@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1693;
+const EXPECTED_TESTS = 1705;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -864,6 +864,34 @@ const MUTANTS = [
       from: "            xml: body === \"\" ? `  <object ${attrs.join(\" \")}/>`",
       to: "            xml: false ? `  <object ${attrs.join(\" \")}/>`",
       note: "an object with nothing inside is written as an empty <object></object> pair rather than self-closing" },
+
+    // THE CAVE GENERATOR. Every one of these produces a cave that still looks like a cave — which
+    // is the whole difficulty: the rule has three equivalent phrasings and two misreadings that
+    // differ from it by one character, and none of them throws.
+    { id: "CV1", file: "src/core/document/CaveTerrain.ts",
+      from: "                        if (dr === 0 && dc === 0) continue;",
+      to: "                        if (dr === 0 && dc === 0 && false) continue;",
+      note: "the cell counts itself, so the rule stops being self-dual and grows rock on every pass" },
+    { id: "CV2", file: "src/core/document/CaveTerrain.ts",
+      from: "                        if (rr < 0 || cc < 0 || rr >= rows || cc >= cols) { n++; continue; }",
+      to: "                        if (rr < 0 || cc < 0 || rr >= rows || cc >= cols) { continue; }",
+      note: "off the grid counts as FLOOR, so the cave erodes outward instead of being closed by the edge" },
+    { id: "CV3", file: "src/core/document/CaveTerrain.ts",
+      from: "const DEFAULTS = { fill: 0.45, passes: 5, margin: 2, connect: true };",
+      to: "const DEFAULTS = { fill: 0.45, passes: 5, margin: 1, connect: true };",
+      note: "one ring of rock instead of two, so the dual grid's outermost drawable ring is never full and the map has a ragged fringe" },
+    { id: "CV4", file: "src/core/document/CaveTerrain.ts",
+      from: "                next[r * cols + c] = cur[r * cols + c] + n >= 5 ? 1 : 0;",
+      to: "                next[r * cols + c] = cur[r * cols + c] + n > 5 ? 1 : 0;",
+      note: "the threshold is off by one, which dissolves the rock instead of coarsening it" },
+    { id: "CV5", file: "src/core/document/CaveTerrain.ts",
+      from: "    for (let i = 1; i < sizes.length; i++) if (sizes[i] > sizes[best]) best = i;",
+      to: "    for (let i = 1; i < sizes.length; i++) if (sizes[i] < sizes[best]) best = i;",
+      note: "the SMALLEST pocket is kept and the cave filled in — still one region, still connected, and unplayable" },
+    { id: "CV7", file: "src/core/document/CaveTerrain.ts",
+      from: "        cells[i] = cur[i] === 1 ? material : 0;",
+      to: "        cells[i] = cur[i] === 1 ? 1 : 0;",
+      note: "the automaton's working value is stored instead of the material, so a layer drawing material 3 fills with 1s it cannot see" },
 ];
 
 function runSuite() {

@@ -2221,6 +2221,25 @@ function parseProperties(body: string): { props: TiledProperty[]; unread: string
 // only emit what the validator accepts, and reports every skip. Last wins on a duplicate name.
 function userDataFor(props: readonly TiledProperty[]): { data: UserData; unread: string[] };
 
+// REPRODUCIBLE RANDOMNESS (`core/random/Rng`). `Math.random` appears in this repo ONLY inside
+// comments forbidding it: a generated map that changes when reopened is not a document.
+interface Rng { next(): number; int(bound: number): number }   // next() is [0,1), never 1
+function rngFrom(seed: number): Rng;      // mulberry32; seed 0 is a real seed
+function seedFrom(text: string): number;  // FNV-1a, so an author's SEED can be a word
+// The port is checked against the same arithmetic in BigInt with every 32-bit wrap done by hand —
+// a reference sharing no operator with it. `^` yields a SIGNED 32-bit number, so a port missing one
+// `>>> 0` gives negative draws half the time and every consumer keeps working.
+
+// A CAVE, as the question a grid answers (`core/document/CaveTerrain`). Writes terrain, not tiles.
+interface CaveOptions { fill?: number; passes?: number; margin?: number; connect?: boolean }
+function caveCells(cols, rows, material, rng: Rng, options?): { cells: number[]; floor: number; regions: number };
+// fill 0.45 sits between two COMPUTABLE thresholds: ~0.407 (site percolation — below it the raw
+// noise already percolates and you get one room) and ~0.50 (where the rule is self-dual and the
+// floor shatters). passes is a COUNT and never a convergence test: the rule is a symmetric
+// threshold network, so orbits have period 1 or 2, and 11 of 400 seeds cycle forever. margin is 2
+// because of the DUAL GRID, not because of caves — the outermost display ring has three of its four
+// corners off the terrain and can never read as full rock.
+
 function cellCoordAt(map, x, y): { col; row } | null;
 // EDITING one (`document/TilemapEdit`). Pure, whole-map in and out, and NULL MEANS NOTHING CHANGED
 // in every one of them — an action that succeeded without changing anything puts an undo step on the

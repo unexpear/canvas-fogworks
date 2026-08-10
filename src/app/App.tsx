@@ -65,8 +65,10 @@ import { SelectionMask, emptyMask, fullMask, invertSelection, growSelection, bor
 import { Palette, parsePaletteFile, paletteAt } from "../core/paint/Palette";
 import { quantizeAction, surfaceEditAction } from "../core/actions/surfaceEdit";
 import { SetTilemapAction } from "../core/actions/SetTilemapAction";
-import { resizeTilemap, withTerrainArt, asTerrain } from "../core/document/TilemapEdit";
+import { resizeTilemap, withTerrainArt, asTerrain, withTerrain } from "../core/document/TilemapEdit";
 import { autotileClasses, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR } from "../core/document/Autotile";
+import { caveCells } from "../core/document/CaveTerrain";
+import { rngFrom, seedFrom } from "../core/random/Rng";
 import { Tilemap, tileSourceRect as sheetTileRect, tileIndexAt,
     FLIP_H, FLIP_V, FLIP_D } from "../core/document/Tilemap";
 import { EyedropperTool } from "../editor/tools/EyedropperTool";
@@ -549,6 +551,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const [tileIndex, setTileIndex] = useState(0);
     const [tileFlip, setTileFlip] = useState(0);
     const [tileMode, setTileMode] = useState<"paint" | "fill" | "rect">("paint");
+    /** The word a cave is generated from — hashed by `seedFrom`, so the author can write it down. */
+    const [caveSeed, setCaveSeed] = useState("cave");
     const [tileErasing, setTileErasing] = useState(false);
     // TERRAIN (schema 63): the same brush over a different question — which cells are grass rather
     // than which tile is drawn. Material 1 by default because 0 is the eraser, so a first stroke
@@ -2921,6 +2925,35 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                         <span style={{ fontSize: 10, color: UI.textFaint }}>
                                                             0 erases
                                                         </span>
+                                                    </div>
+                                                    {/* GENERATE the question rather than paint it.
+                                                        Cellular automata writes WHICH CELLS ARE
+                                                        ROCK and `resolveTilemaps` draws it, so this
+                                                        is four rules and not a renderer — and the
+                                                        SEED is a word, so the same cave comes back
+                                                        tomorrow. A generated map that changes when
+                                                        reopened is not a document. */}
+                                                    <div data-cave="1" style={{ display: "flex", gap: 4, marginTop: 6, alignItems: "center" }}>
+                                                        <TextInput value={caveSeed} placeholder="seed word"
+                                                            onChange={setCaveSeed} />
+                                                        <button
+                                                            aria-label="Generate cave"
+                                                            title="Fill this layer's terrain with a cave: cellular automata over which cells are the material. The same seed always gives the same cave."
+                                                            onClick={() => {
+                                                                const grid = caveCells(map.cols, map.rows,
+                                                                    map.terrain!.material,
+                                                                    rngFrom(seedFrom(caveSeed)));
+                                                                if (grid.cells.length === 0) return;
+                                                                // THROUGH THE SAME EDIT PATH A BRUSH USES, so the
+                                                                // generator cannot author a terrain the loader
+                                                                // would refuse — and one press is one undo step.
+                                                                setMap(withTerrain(map, grid.cells.map((m, i) => ({
+                                                                    col: i % map.cols, row: Math.floor(i / map.cols),
+                                                                    material: m
+                                                                }))));
+                                                            }}
+                                                            style={ADJUST_BUTTON}
+                                                        >Generate cave</button>
                                                     </div>
                                                     {/* THE SIX SHAPES AN ARTIST DRAWS. Each button
                                                         shows the neighbourhood it stands for and
