@@ -2183,6 +2183,19 @@ function cellAt(map, localX, localY): { col; row } | null;
 // stack that undoes nothing, which reads as undo being ignored.
 interface TileEdit { col; row; index; flip? }   // flip omitted = leave the cell's orientation alone
 function withTiles(map, edits: readonly TileEdit[]): Tilemap | null;   // off-grid edits DROPPED, not refused
+// TERRAIN EDITS (schema 63). `withTiles` REFUSES an autotiled layer: its grid is derived, so a
+// stroke would write a picture the derivation overrules — and the rebuild would drop the terrain
+// on the way past, un-autotiling a layer with one click.
+interface TerrainEdit { col: number; row: number; material: number }   // 0 is the eraser
+function withTerrain(map, edits: readonly TerrainEdit[]): Tilemap | null;
+function withTerrainArt(map, mask: number, index: number): Tilemap | null;   // one CLASS at a time
+// One-way and deliberate: it throws the tiles away, because a stored grid and a derived one are
+// two pictures that can disagree. Never something a brush stroke does.
+function asTerrain(map, material: number, art): Tilemap | null;
+// Which TERRAIN cell a point falls in, given the RESOLVED node's own space — the inverse of the
+// dual grid's half-cell offset. Every consumer reads geometry from `computeGeometry`, which
+// resolves internally, so a tool is answered in the DISPLAY grid and terrain lives in the other.
+function terrainCellAt(map, localX: number, localY: number): { col: number; row: number } | null;
 function rectCells(map, a, b): { col; row }[];                         // either corner first, clamped
 function fillRegion(map, col, row): { col; row }[];                    // FOUR-connected, matches on index alone
 function resizeTilemap(map, cols, rows): Tilemap | null;               // keeps cells by COORDINATE
