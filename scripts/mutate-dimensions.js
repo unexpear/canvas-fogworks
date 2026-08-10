@@ -632,7 +632,7 @@ const MUTANTS = [
     { id: "TR10", file: "src/core/actions/SetTilemapAction.ts",
       from: "    if (a.art.length !== b.art.length) return false;",
       to: "    if (a.art.length !== b.art.length) return true;",
-      note: "re-assigning a class's tile reads as no change, so the art cannot be edited" },
+      note: "ASSIGNING a class that had none reads as no change — the six pickers cannot be used" },
     { id: "TB1", file: "src/core/document/Autotile.ts",
       from: "    const col = Math.floor((localX - map.tileWidth / 2) / map.tileWidth);",
       to: "    const col = Math.floor(localX / map.tileWidth);",
