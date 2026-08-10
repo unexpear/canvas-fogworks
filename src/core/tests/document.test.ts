@@ -27975,6 +27975,15 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         const reArt = { ...current, terrain: { ...current.terrain!,
             art: current.terrain!.art.map((a, i) => (i === 0 ? { mask: a.mask, index: 99 } : a)) } };
         expect(new SetTilemapAction(dispatcher.getDocument(), "T", reArt as never).validate()).toBe(true);
+
+        // AND SO DOES ASSIGNING A CLASS THAT HAD NONE, which is a change in the art's LENGTH rather
+        // than in one of its entries — the case a surviving mutant found, because every other
+        // assertion here edits an index and leaves the count alone. It is not an edge case: it is
+        // what the panel's six pickers do the first time each is clicked.
+        const sparse = dispatcher.getDocument().nodes.get("T")!.tilemap!;
+        const appended = { ...sparse, terrain: { ...sparse.terrain!,
+            art: [...sparse.terrain!.art, { mask: 6, index: 21 }] } };
+        expect(new SetTilemapAction(dispatcher.getDocument(), "T", appended as never).validate()).toBe(true);
     });
 
     test("PAINTING terrain re-derives the picture, which is the whole point", () => {
