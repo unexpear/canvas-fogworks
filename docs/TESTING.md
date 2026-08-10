@@ -441,6 +441,21 @@ The checklist, applied when the fixture is written:
    every test passed and the app drew the right picture through the Canvas fallback. The guard is
    `GLSL_SOURCES` plus a reserved-word scan (mutant `RW1`), and the general form of the question is
    worth asking of any string this project hands to another language.
+7. **Does the fixture walk THIS branch, or one that looks like it?** The most repeated fixture
+   failure in this codebase is not a wrong assertion — it is a fixture that never reaches the line.
+   Five in one sitting (2026-08-10), each caught by a survivor and none by a test:
+   - SQUARE CELLS (16x16) hid a half-cell offset that read the wrong axis. Terrain's are 16x8 now.
+   - A grid with EVERY tile filled could not tell `some` from `every`, so the rule forbidding stored
+     tiles on an autotiled layer was unguarded. One filled cell among five empties tells them apart.
+   - Clicks that all landed MID-CELL could not see a half-cell error, because the floor is the same
+     either way. One pixel inside a boundary can.
+   - A layer differing in cell WIDTH left the HEIGHT check unexercised: the first check refused it
+     and the second never ran.
+   - A rotation test built from RECTANGLES never reached the tile branch, which writes its own
+     attributes — so "a tile object states its rotation" was protected by nothing.
+   The shape of the question: when a branch writes its own output, the fixture has to walk *that*
+   branch, not a sibling that resembles it; and when two checks guard one line, each needs an input
+   the other would let through.
 
 This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
