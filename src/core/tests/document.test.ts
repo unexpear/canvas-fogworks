@@ -3,7 +3,7 @@
  * Covers: document model, serialization, action system, dispatcher, history.
  */
 
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import { resolve } from "path";
 import { inflateSync } from "zlib";
 import { createEmptyDocument, ProjectDocument, ReadonlyDocument, CURRENT_VERSION, SCHEMA_VERSION } from "../document/Document";
@@ -1437,7 +1437,10 @@ describe("SelectTool marquee", () => {
     // `buttons` defaults to 1 (left held) — the marquee abandons on a move with no button held.
     const md = (x: number, y: number, shift = false, buttons = 1) =>
         ({ clientX: x, clientY: y, button: 0, buttons, shiftKey: shift, preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
-    const key = (k: string) => ({ key: k } as unknown as KeyboardEvent);
+    // WITH A COUNTER, because a fixture whose event has no `preventDefault` cannot notice a cancel
+    // that never claims the press — and an unclaimed Escape is a cancel the app never reaches.
+    let claims = 0;
+    const key = (k: string) => ({ key: k, preventDefault() { claims++; } } as unknown as KeyboardEvent);
 
     function harness() {
         const doc = createEmptyDocument();
@@ -1564,7 +1567,9 @@ describe("SelectTool marquee", () => {
         tool.onMouseDown(md(-5, -5), rect);
         tool.onMouseMove(md(60, 40), rect);
         expect(es.marqueeRect).not.toBeNull();
+        claims = 0;
         tool.onKeyDown(key("Escape"));
+        expect(claims).toBe(1);                     // claimed, so Escape does not also deselect
         expect(es.marqueeRect).toBeNull();          // overlay cleared
         tool.onMouseUp(md(60, 40));                 // the release no longer commits a selection
         expect(es.selectedNodeIds).toEqual(["B"]);  // selection untouched
@@ -7132,7 +7137,9 @@ describe("ShapeTool: every basic shape draws", () => {
         tool.onMouseDown(ev(0, 0), canvas);
         tool.onMouseMove(ev(80, 80), canvas);
         expect(es.previewRect).not.toBeNull();
-        tool.onKeyDown({ key: "Escape" } as KeyboardEvent);
+        let claimed = 0;
+        tool.onKeyDown({ key: "Escape", preventDefault() { claimed++; } } as unknown as KeyboardEvent);
+        expect(claimed).toBe(1);                    // claimed, so Escape does not also deselect
         expect(es.previewRect).toBeNull();
         tool.onMouseUp();
         expect(dispatcher.getDocument().rootNodeUuids).toEqual([]);
@@ -26079,7 +26086,13 @@ describe("The tile brush, as a gesture", () => {
         h.tool.onMouseDown(at(1, 1), CANVAS);
         h.tool.onMouseMove(at(5, 3), CANVAS);
         expect(filled(h.cells())).toHaveLength(15);
-        h.tool.onKeyDown({ key: "Escape", preventDefault() { } } as unknown as KeyboardEvent);
+        // THE PRESS MUST BE CLAIMED, or the cancel is unreachable in the running app: `App` offers
+        // Escape to the tool first and falls back to DESELECT unless the tool called
+        // `preventDefault`. A cancel that works in a test and not in the app is what this asserts
+        // against — it happened, and the tool was seen receiving a plain `q` and never Escape.
+        let claimed = 0;
+        h.tool.onKeyDown({ key: "Escape", preventDefault() { claimed++; } } as unknown as KeyboardEvent);
+        expect(claimed).toBe(1);
         expect(filled(h.cells())).toEqual([]);
         // NO TRACE, which is the difference between cancelling and undoing — the rotate handle's
         // bargain, and the reason the checkpoint is taken at the press.
@@ -26087,6 +26100,12 @@ describe("The tile brush, as a gesture", () => {
         // …and the release that follows an Escape does not resurrect the gesture.
         h.tool.onMouseUp();
         expect(filled(h.cells())).toEqual([]);
+
+        // WITH NO GESTURE IN FLIGHT IT CLAIMS NOTHING, which is the other half: a tool that
+        // swallowed Escape whenever it happened to be active would stop the key ever deselecting.
+        let idle = 0;
+        h.tool.onKeyDown({ key: "Escape", preventDefault() { idle++; } } as unknown as KeyboardEvent);
+        expect(idle).toBe(0);
     });
 
     test("a rectangle whose FIRST frame changes nothing still opens its own undo step", () => {
@@ -27588,10 +27607,15 @@ describe("The marquee, as a gesture — four shapes, four operators, no history 
         h.tool.onMouseDown(at(4, 0), RECT, h.computed);
         h.tool.onMouseMove(at(7, 3), RECT);
         expect(selectedCount(maskOf(h.es)!)).toBe(16);
-        h.tool.onKeyDown({ key: "Escape" } as KeyboardEvent);
+        let claimed = 0;
+        const esc = () => h.tool.onKeyDown(
+            { key: "Escape", preventDefault() { claimed++; } } as unknown as KeyboardEvent);
+        esc();
+        expect(claimed).toBe(1);                    // claimed, so Escape does not also deselect
         expect(selectedCount(maskOf(h.es)!)).toBe(4);
         // Escape with NO drag in flight clears the selection — the keyboard's deselect.
-        h.tool.onKeyDown({ key: "Escape" } as KeyboardEvent);
+        esc();
+        expect(claimed).toBe(2);                    // a mask to clear is a claim too
         expect(h.es.pixelSelection).toBeNull();
     });
 
@@ -28272,6 +28296,37 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // …and the picture that follows really did change.
         const drawn = resolveTilemaps(dispatcher.getDocument()).nodes.get("T")!.tilemap!.tiles;
         expect(drawn.some((t: number) => t !== TILE_EMPTY)).toBe(true);
+    });
+
+    test("ESCAPE reaches the active tool BEFORE it means deselect", () => {
+        // The bug this asserts against made every cancel in the app unreachable — rotate, resize,
+        // marquee, pen, pixel-selection and the tile rectangle. `deselect` stands aside only when
+        // NOTHING is selected, and a gesture that can be cancelled always has a selection, because
+        // it needed one to start. So the shortcut consumed every press.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const handler = app.slice(app.indexOf("const handleKeyDown = "), app.indexOf("const handleKeyUp = "));
+        const toTool = handler.indexOf("toolController.onKeyDown(e)");
+        const toShortcut = handler.indexOf("const shortcut = resolveShortcut(e)");
+        expect(toTool).toBeGreaterThan(-1);
+        expect(toShortcut).toBeGreaterThan(-1);
+        // ORDER IS THE WHOLE ASSERTION: the tool is offered the key first.
+        expect(toTool).toBeLessThan(toShortcut);
+        // THE WHOLE SHAPE, not just the order: which key, offered to the tool, and a claim ending
+        // the handler. Asserting the order of two substrings alone would survive a comparison
+        // against the wrong key — the block would simply never run.
+        expect(handler).toMatch(
+            /if \(e\.key === "Escape"\) \{\s*toolController\.onKeyDown\(e\);\s*if \(e\.defaultPrevented\) return;/);
+
+        // AND EVERY TOOL THAT CANCELS ON ESCAPE MUST CLAIM THE PRESS, or it is offered the key and
+        // silently declines it — which is indistinguishable from the bug above. Structural on
+        // purpose: the next tool with an Escape branch is caught before anyone drives the app.
+        const dir = resolve(__dirname, "../../editor/tools");
+        const unclaimed = readdirSync(dir).filter(f => f.endsWith(".ts")).filter(f => {
+            const src = readFileSync(resolve(dir, f), "utf8");
+            const cancels = /e\.key === "Escape"|e\.key !== "Escape"/.test(src);
+            return cancels && !src.includes("e.preventDefault()");
+        });
+        expect(unclaimed).toEqual([]);
     });
 
     test("the terrain brush is REACHABLE, art and all", () => {

@@ -206,9 +206,14 @@ export class PixelSelectTool implements Tool {
         if (s) {
             this.session = null;
             this.write(s.nodeId, s.base);
+            e.preventDefault();               // claimed: Escape cancels rather than deselecting
             return;
         }
+        // A MASK TO CLEAR IS ALSO A CLAIM, and an empty one is not: with no pixel selection and no
+        // drag there is nothing here for Escape to mean, so it falls through to deselecting the node.
+        if (!this.editorState.pixelSelection) return;
         this.editorState.pixelSelection = null;
+        e.preventDefault();
         this.refresh();
     }
 

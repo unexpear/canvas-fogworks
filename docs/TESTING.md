@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v63 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1532) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8) = 1684 tests.
+> 🔒 Frozen contract · schema v63 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1533) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8) = 1685 tests.
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1684 tests
+npm test                                   # jest (ts-jest), 1685 tests
 npm run header-claims                      # ADVISORY: module-header sentences with a shelf life
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
@@ -58,7 +58,7 @@ node scripts/menu-command.js "Zoom to Fit"
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1684 tests)
+## What is covered (1685 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -456,12 +456,25 @@ The checklist, applied when the fixture is written:
    The shape of the question: when a branch writes its own output, the fixture has to walk *that*
    branch, not a sibling that resembles it; and when two checks guard one line, each needs an input
    the other would let through.
+8. **Is this code REACHED by anything the app runs?** The sibling of question 6, and it has the same
+   signature: a green test over code nothing calls. Escape's cancel was the case (2026-08-10). Seven
+   tools implement an Escape branch — rotate, resize, marquee, move, pen, pixel-selection, the tile
+   rectangle — and *not one of them could be reached*, because `App` resolved the DESELECT shortcut
+   first and `deselect` stands aside only when nothing is selected, while a gesture that can be
+   cancelled always has a selection: it needed one to start. Every unit test passed; the feature had
+   never worked. Found by driving the real app, then by instrumenting: the tool was seen receiving a
+   plain `q` mid-gesture and never receiving Escape.
+   Three of those tests could not have caught it for a second reason worth naming — their fixture
+   passed an event object with **no `preventDefault` at all**, so "did the tool claim the press"
+   was not a question the fixture could ask. The guard is now behavioural (a counting
+   `preventDefault`) plus a structural sweep of `editor/tools` for an Escape branch that never
+   claims, so the next tool with a dead cancel fails the suite rather than the app.
 
 This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
 cannot see — over the paint modules, the Tiled reader, the mesh, nine-slice, the tile grid, the tile
-brush and the autotiler, exiting non-zero on a survivor: currently **172 mutants, 172 killed**
-(full run at 1,684 tests, nothing NOT APPLIED and nothing AMBIGUOUS). The exporter's ten are
+brush and the autotiler, exiting non-zero on a survivor: currently **176 mutants, 176 killed**
+(full run at 1,685 tests, nothing NOT APPLIED and nothing AMBIGUOUS). The exporter's ten are
 checked by the ROUND TRIP: a real map imported, exported and imported again, compared cell by
 cell — so a mutation has to survive a reader that was written against files Tiled itself wrote.
 Six cover `SurfaceSpace`, where the convenient fixture is not

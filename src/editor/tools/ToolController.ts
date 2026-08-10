@@ -812,8 +812,12 @@ export class ToolController {
         }
 
         if (e.key === "Escape") {
+            // EVERY BRANCH HERE CLAIMS THE PRESS with `preventDefault`, which is how `App`'s key
+            // handler knows a gesture cancelled and that Escape must NOT also deselect. Without it
+            // the deselect shortcut wins every time, because a gesture always has a selection.
             if (this.resizeMode) {
                 this.resetResize();
+                e.preventDefault();
                 this.refresh();
                 return;
             }
@@ -829,6 +833,7 @@ export class ToolController {
                 }
                 this.resetRotate();
                 this.editorState.isDragging = false;
+                e.preventDefault();
                 this.refresh();
                 return;
             }
@@ -838,12 +843,14 @@ export class ToolController {
                 if (!this.cancelGesture()) this.commitGroupRotate(0);
                 this.resetGroupRotate();
                 this.editorState.isDragging = false;
+                e.preventDefault();
                 this.refresh();
                 return;
             }
             if (this.groupResizeMode) {
                 // Preview-only gesture (like single resize): nothing committed — drop the preview.
                 this.resetGroupResize();
+                e.preventDefault();
                 this.refresh();
                 return;
             }

@@ -216,6 +216,7 @@ export class MoveTool implements Tool {
         if (e.key === "Escape" && this.isDragging) {
             // Nothing was mutated — just drop the preview and cancel.
             this.endDrag();
+            e.preventDefault();               // claimed: Escape cancels rather than deselecting
             this.refresh();
         }
     }

@@ -1547,6 +1547,15 @@ interface Tool {                             // all methods optional
 class ToolController {
   constructor(dispatcher: ActionDispatcher, editorState: EditorState, refresh: () => void);
   setTool(tool: Tool): void;
+  // ESCAPE REACHES THE ACTIVE TOOL BEFORE IT MEANS DESELECT, and until 2026-08-10 it did not — so
+  // every cancel below, and every tool's own, was unreachable in the running app while its unit
+  // tests passed. `App` resolves the DESELECT shortcut from a key press, and `deselect` stands
+  // aside only when NOTHING is selected; a gesture that can be cancelled always has a selection,
+  // because it needed one to start. `App` now offers Escape to `toolController.onKeyDown` FIRST and
+  // falls back to deselect only if the press was not claimed. A TOOL CLAIMS IT by calling
+  // `preventDefault` in the branch that acted — which is why each of those branches is guarded by
+  // "is there a gesture": a cancel that claimed the key whenever its tool happened to be active
+  // would stop Escape ever deselecting.
   // routes pointer/key events; owns viewport PAN (space+drag / middle-mouse), corner-RESIZE and
   // ROTATE (both via DOM-free `handleAtPoint` over the selection, NOT `data-resize-handle`; rotate
   // spins about the node's world-AABB centre and live-commits a coalesced `UpdateNodeTransformAction`

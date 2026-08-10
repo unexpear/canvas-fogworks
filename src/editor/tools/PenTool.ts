@@ -101,7 +101,15 @@ export class PenTool implements Tool {
 
     onKeyDown(e: KeyboardEvent): void {
         if (e.key === "Enter") { this.commit(false); return; }
-        if (e.key === "Escape") { this.cancel(); return; }
+        // ONLY A STROKE IN PROGRESS CLAIMS THE PRESS. `cancel` is harmless with no points, but
+        // calling `preventDefault` anyway would make Escape stop deselecting for as long as the pen
+        // is the active tool — a cancel that consumes a key it did not use.
+        if (e.key === "Escape") {
+            const had = this.points.length > 0;
+            this.cancel();
+            if (had) e.preventDefault();
+            return;
+        }
     }
 
     /** Abandon the stroke — nothing is dispatched, so there is no undo step for a false start. */

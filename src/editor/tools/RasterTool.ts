@@ -169,7 +169,12 @@ export class RasterTool implements Tool {
     }
 
     onKeyDown(e: KeyboardEvent): void {
-        if (e.key === "Escape") this.cancel();
+        // ONLY A STROKE IN PROGRESS CLAIMS THE PRESS — see the same guard in `PenTool`.
+        if (e.key === "Escape") {
+            const had = this.session !== null;
+            this.cancel();
+            if (had) e.preventDefault();
+        }
     }
 
     /** Paint from the last sample to this one, mirrored as the symmetry mode asks. */

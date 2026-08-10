@@ -323,6 +323,7 @@ export class ShapeTool implements Tool {
     onKeyDown(e: KeyboardEvent): void {
         if (e.key === "Escape" && this.isDragging) {
             this.cancel();
+            e.preventDefault();               // claimed: Escape cancels rather than deselecting
             this.refresh();
         }
     }

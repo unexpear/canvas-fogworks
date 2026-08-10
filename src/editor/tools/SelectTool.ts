@@ -133,6 +133,7 @@ export class SelectTool implements Tool {
         // Escape cancels an in-flight marquee (parity with move/resize/draw); selection is left as-is.
         if (e.key === "Escape" && this.marqueeActive) {
             this.resetMarquee();
+            e.preventDefault();               // claimed: Escape cancels rather than deselecting
             this.refresh();
         }
     }

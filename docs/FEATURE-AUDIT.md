@@ -1,6 +1,9 @@
 # Feature audit — VDE against Pixelorama and Tiled
 
 <!-- describes: src/editor/tools, src/core/paint, src/core/import, src/core/export -->
+<!-- re-read 2026-08-10 after Escape's routing: accurate, and one row moved (the tilemap
+     rectangle-fill is no longer absent). The Escape finding is not a feature row — every
+     cancel it unblocked was already listed as had; they simply did not work. -->
 <!-- re-read 2026-08-09 after the selection slices: the two selection rows and ranking item 2 are
      updated above. Verified against the running app, not just the source — the marquee, the
      clipped stroke and the refused bucket click were all driven over CDP. -->

@@ -1142,6 +1142,24 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             // would destroy the selection mid-word and every arrow would move the shape
             // instead of the caret.
             if (!isTypingTarget(e.target as HTMLElement)) {
+                // ESCAPE MEANS "CANCEL WHAT I AM DOING" BEFORE IT MEANS "DESELECT", and getting
+                // that order wrong made every cancel in the app unreachable. `deselect` stands
+                // aside only when NOTHING is selected — and a gesture that can be cancelled always
+                // has a selection, because it needed one to start: a rotate, a resize, a marquee, a
+                // pen stroke, a tile rectangle. So the shortcut consumed every press and no tool
+                // ever saw the key. Found live, not by reading: with a rectangle mid-drag the tool
+                // received a plain `q` and never received Escape.
+                //
+                // A TOOL SAYS IT CONSUMED THE PRESS by calling `preventDefault` in the branch that
+                // acted — which is why each of those branches is guarded by "is there a gesture".
+                // Unclaimed, Escape falls through and still means deselect.
+                if (e.key === "Escape") {
+                    toolController.onKeyDown(e);
+                    if (e.defaultPrevented) return;
+                    const cancel = resolveShortcut(e);
+                    if (cancel && runShortcut(cancel)) e.preventDefault();
+                    return;
+                }
                 const shortcut = resolveShortcut(e);
                 if (shortcut?.kind === "tool") {
                     // A TOOL THE CURRENT WORKSPACE DOES NOT SHOW would otherwise become active

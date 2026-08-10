@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1684;
+const EXPECTED_TESTS = 1685;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -816,6 +816,26 @@ const MUTANTS = [
       from: "        if (!result.success) return;\n        rect.dispatched = true;",
       to: "        rect.dispatched = true;\n        if (!result.success) return;",
       note: "a REFUSED first frame still opens the step, so the rectangle coalesces into whatever the author did before it" },
+    // ESCAPE'S ROUTING (2026-08-10). Found live, after the rectangle's own Escape test passed in
+    // jest and did nothing in the app: `deselect` stands aside only when NOTHING is selected, and a
+    // cancellable gesture always has a selection, so the shortcut consumed every press and no tool
+    // ever saw the key. Seven tools had a dead Escape branch.
+    { id: "EK1", file: "src/app/App.tsx",
+      from: "                if (e.key === \"Escape\") {\n                    toolController.onKeyDown(e);\n                    if (e.defaultPrevented) return;",
+      to: "                if (e.key === \"Escape\") {\n                    if (e.defaultPrevented) return;",
+      note: "Escape is never offered to the active tool, so every cancel in the app is unreachable again" },
+    { id: "EK2", file: "src/app/App.tsx",
+      from: "                    if (e.defaultPrevented) return;\n                    const cancel = resolveShortcut(e);",
+      to: "                    if (!e.defaultPrevented) return;\n                    const cancel = resolveShortcut(e);",
+      note: "a tool that CLAIMED the press is then also deselected, and one that declined it is not" },
+    { id: "EK3", file: "src/editor/tools/TileTool.ts",
+      from: "        this.rect = null;\n        e.preventDefault();",
+      to: "        this.rect = null;",
+      note: "the rectangle cancels without claiming the press, so Escape also deselects — the cancel works in a test and not in the app" },
+    { id: "EK4", file: "src/editor/tools/TileTool.ts",
+      from: "        if (e.key !== \"Escape\" || !this.rect) return;",
+      to: "        if (e.key === \"Escape\") e.preventDefault();\n        if (e.key !== \"Escape\" || !this.rect) return;",
+      note: "Escape is claimed with no gesture in flight, so the key stops deselecting whenever the tile tool is active" },
 ];
 
 function runSuite() {
