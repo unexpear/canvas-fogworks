@@ -1207,6 +1207,13 @@ half a cell. That is why terrain cannot live on the node whose box it measures w
 derivation — the two boxes are different boxes — and why `resolveTilemaps` runs LAST in the chain,
 after everything that reads a box.
 
+**A terrain layer is authored, not just stored.** `TilemapEdit` carries the three edits an author's
+gestures go through — `withTerrain` paints cells, `withTerrainArt` assigns one tile per symmetry
+class, and `asTerrain` converts a layer (one-way, discarding its tiles). `withTiles` REFUSES an
+autotiled layer outright: painting a derived grid writes a picture the derivation overrules, and the
+rebuild would drop the terrain on the way past — one click and the layer silently stops being
+autotiled.
+
 **Opening a 63 document in a 62 build loses the picture, not a detail of it.** The older validator
 never heard of `terrain` so the file passes, and the stored tiles are all empty *by the rule above* —
 so an autotiled layer comes back blank with nothing to say why. The loudest reason yet for a version
