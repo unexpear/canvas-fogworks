@@ -326,6 +326,7 @@ function pickImageSource(): Promise<string | null> {
 }
 import { RendererState } from "../renderer/SVGRenderer";
 import { renderScene, RenderBackend } from "../renderer/renderScene";
+import { GL_FALLBACK_ATTR } from "../renderer/WebGLRenderer";
 import { rulerTicks } from "../core/geometry/Ruler";
 
 const RULER = 18; // ruler bar thickness in px
@@ -567,6 +568,21 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     // the document, so collapsing is not undoable and not persisted.
     const [collapsedLayers, setCollapsedLayers] = useState<Set<string>>(new Set());
     const [backend, setBackend] = useState<RenderBackend>("svg");
+    /**
+     * Why the GPU backend is drawing through Canvas, when it is.
+     *
+     * A SILENT FALLBACK IS A LIE THE APP TELLS ABOUT ITSELF. The WebGL backend spent months
+     * handing every frame to Canvas because a shader would not compile, and nothing anywhere
+     * said so — the menu switched, the picture appeared, and every "verified on the GPU" claim
+     * made by driving the app was measuring Canvas. The renderer now records the reason on the
+     * container; this is where a PERSON sees it.
+     *
+     * Read from the DOM after the repaint rather than passed back through a callback, because
+     * the fallback is discovered inside an imperative render that React does not own — a
+     * setState from in there would be a render inside a render.
+     */
+    const [glFallback, setGlFallback] = useState<string | null>(null);
+    const glFallbackRef = useRef<string | null>(null);
     const [showFolders, setShowFolders] = useState(false);
     const [showTokens, setShowTokens] = useState(false);
     const [showScript, setShowScript] = useState(false);
@@ -1246,6 +1262,13 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 viewport: es.viewport
             };
             renderScene(canvasRef.current, doc, rendererState, backend, refresh);
+            // GUARDED BY A REF, so this settles: the state change re-renders, the effect runs again,
+            // the reason is unchanged and nothing is set. Without it, every frame would setState.
+            const fell = canvasRef.current.dataset[GL_FALLBACK_ATTR] ?? null;
+            if (fell !== glFallbackRef.current) {
+                glFallbackRef.current = fell;
+                setGlFallback(fell);
+            }
 
             // The animation clock. A transition is redrawn until its duration is up, then cleared
             // — so the running state is derived from a TIMESTAMP rather than accumulated per
@@ -2049,6 +2072,22 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                 onClick={() => reviseSelection(m => borderSelection(m, 1))} />
                         </>)}
                     </>
+                )}
+                {/* THE GPU BACKEND FELL BACK, said where a person will see it. Not a toast and not a
+                    console line: this stays up for as long as it is true, because the thing it is
+                    reporting is a state the app is IN, not an event that happened. It sits at the
+                    end of the row rather than beside the tool controls — it belongs to the window,
+                    not to whatever tool is selected — and carries the driver's own words in its
+                    tooltip, which is what turns "it fell back" into something anyone can fix. */}
+                {glFallback !== null && (
+                    <span
+                        data-gl-fallback="1"
+                        title={`WebGL could not be used: ${glFallback}`}
+                        style={{ fontSize: 10, color: "#ffb454", marginLeft: "auto",
+                            whiteSpace: "nowrap", cursor: "help" }}
+                    >
+                        ⚠ WebGL unavailable — drawing with Canvas
+                    </span>
                 )}
                 {toolName === "pen" && (
                     <span style={{ fontSize: 10, color: UI.textFaint, marginRight: 8 }}>

@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1625;
+const EXPECTED_TESTS = 1628;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -513,6 +513,18 @@ const MUTANTS = [
       from: "            this.write(s.nodeId, s.base);",
       to: "            this.editorState.pixelSelection = null;",
       note: "Escape mid-drag clears instead of restoring — cancel costs the author their selection" },
+    // THE SHADERS, which nothing in the gate compiles: tsc sees a string, the bundler sees a string,
+    // jest sees a string, and the first reader that knows the language is a driver on a machine
+    // somewhere. An identifier named `packed` — reserved in GLSL ES 1.00 — turned the whole GPU
+    // backend off silently for months. This is the guard that would have caught it on day one.
+    { id: "RW1", file: "src/renderer/emitWebGL.ts",
+      from: "        vec4 cellTexel = texture2D(u_tileIndex, (cell + 0.5) / u_tileGrid.xy);",
+      to: "        vec4 packed = texture2D(u_tileIndex, (cell + 0.5) / u_tileGrid.xy);",
+      note: "a shader declares a GLSL ES 1.00 RESERVED WORD — the GPU path dies, silently" },
+    { id: "RW2", file: "src/renderer/emitWebGL.ts",
+      from: '    return (log ?? "no log").replace(/[\u0000-\u001f]+/g, " ").trim() || "no log";',
+      to: '    return (log ?? "no log").trim() || "no log";',
+      note: "a driver's NUL terminator survives into the tooltip, so the reason reads as corruption" },
     { id: "MK11", file: "src/editor/tools/RasterTool.ts",
       from: "        const mirror: StrokeSession = { ...s.stroke, points: [from] };",
       to: "        const mirror: StrokeSession = { ...s.stroke, points: [from], clip: undefined };",

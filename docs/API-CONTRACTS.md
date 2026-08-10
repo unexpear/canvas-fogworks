@@ -2286,6 +2286,19 @@ function setLighting(gl, state, lights, ambient): void;                         
 // the resolution, while a GPU has to be told how many vertices to take.
 function viewMatrix(width: number, height: number, vpX: number, vpY: number, zoom: number): number[];             // world → clip, column-major 3x3
 function renderWebGL(container: HTMLElement, doc: ReadonlyDocument, state: RendererState, onAsyncReady?: () => void): void; // ∘ emitWebGL, falls back to renderCanvas
+// AND THE FALLBACK SAYS SO (2026-08-09). It was silent, and that hid a dead GPU backend for months:
+// the fragment shader declared an identifier named `packed` — a RESERVED WORD in GLSL ES 1.00 — so
+// `initGL` returned null and every frame went to Canvas while the menu, the backend stamp and the
+// picture all looked right. The reason is now recorded in three places: `lastGLFailure()`, a
+// `data-vde-gl-fallback` attribute on the container (`GL_FALLBACK_ATTR`, which App reads and shows in
+// the toolbar), and a console warning, once per distinct reason.
+const GL_FALLBACK_ATTR = "vdeGlFallback";
+function lastGLFailure(): string | null;              // why the last initGL answered null
+function readableGLLog(log: string | null): string;   // a driver's log fit for one line of UI (ANGLE NUL-terminates)
+// Every shader the backend compiles, EXPORTED so a test can read the source: a shader is the only
+// code here nothing in the gate compiles — tsc, esbuild and jest all see a string, and the first
+// reader that knows the language is a driver on somebody's machine.
+const GLSL_SOURCES: readonly { name: string; source: string }[];
 type RenderBackend = "svg" | "canvas" | "webgl";
 function renderScene(container: HTMLElement, doc: ReadonlyDocument, state: RendererState, backend: RenderBackend, onAsyncReady?: () => void): void; // the live backend selector
 ```

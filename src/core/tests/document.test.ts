@@ -170,7 +170,7 @@ import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, sna
 import { rulerTicks, niceStep } from "../geometry/Ruler";
 import { MoveTool } from "../../editor/tools/MoveTool";
 import { buildRenderModel, PaintGradient, resolvePaintGradient, resolveTypography, Shape } from "../../renderer/RenderModel";
-import { BLEND_CODE, packTileIndices } from "../../renderer/emitWebGL";
+import { BLEND_CODE, packTileIndices, GLSL_SOURCES, readableGLLog } from "../../renderer/emitWebGL";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, polygonCommands, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../../editor/tools/ShapeTool";
 import { polygonPoints, clampSides, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../geometry/Polygon";
 import { FrameSelectionAction } from "../actions/FrameSelectionAction";
@@ -21159,6 +21159,78 @@ describe("Adaptive decomposition — curves cut to what the screen can show", ()
         const truth = Math.PI * (105 * 105 - 95 * 95);
         expect(area(fine) / truth).toBeGreaterThan(0.999);
         expect(area(coarse) / truth).toBeGreaterThan(0.95);
+    });
+});
+
+describe("The shaders, as a LANGUAGE — the one thing the gate never compiled", () => {
+    /**
+     * GLSL ES 1.00's reserved words, from the spec's §3.6 "Keywords" table — identifiers held back
+     * for future use, which a compiler must refuse.
+     *
+     * NOT THE KEYWORD LIST. `float`, `if` and `return` are keywords a shader uses constantly; these
+     * are the ones that look like ordinary names and are not, which is exactly why one of them gets
+     * chosen for a variable. `packed` was, and it turned the entire GPU backend off — silently,
+     * because a shader is the only code here that nothing in the gate compiles: `tsc` sees a string,
+     * the bundler sees a string, jest sees a string, and the first reader that knows the language is
+     * a driver on somebody's machine.
+     */
+    const RESERVED = [
+        "asm", "class", "union", "enum", "typedef", "template", "this", "packed",
+        "goto", "switch", "default", "inline", "noinline", "volatile", "public", "static",
+        "extern", "external", "interface", "flat", "long", "short", "double", "half", "fixed",
+        "unsigned", "superp", "input", "output",
+        "hvec2", "hvec3", "hvec4", "dvec2", "dvec3", "dvec4", "fvec2", "fvec3", "fvec4",
+        "sampler1D", "sampler3D", "sampler1DShadow", "sampler2DShadow",
+        "sampler2DRect", "sampler3DRect", "sampler2DRectShadow",
+        "sizeof", "cast", "namespace", "using"
+    ];
+    /** The source with its comments removed, so prose about a reserved word is not a use of one. */
+    const code = (source: string) => source.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+
+    test("no shader uses a RESERVED WORD as an identifier", () => {
+        // The test that would have caught `packed` the day it was written, and catches the next one
+        // — for every shader at once, including any added later, because the list is the source of
+        // truth for what gets compiled rather than six separate expectations.
+        expect(GLSL_SOURCES.length).toBeGreaterThanOrEqual(6);
+        for (const { name, source } of GLSL_SOURCES) {
+            const body = code(source);
+            for (const word of RESERVED) {
+                // WHOLE WORDS ONLY: `flat` must not match `flatten`, and `output` must not match
+                // `u_output`. A substring match would make this test unusable and it would be
+                // switched off, which is worse than not having it.
+                expect({ shader: name, word, used: new RegExp(`\\b${word}\\b`).test(body) })
+                    .toEqual({ shader: name, word, used: false });
+            }
+        }
+    });
+
+    test("a driver's log is fit to put in a sentence", () => {
+        // ANGLE hands back a C string WITH its NUL terminator, and the message goes straight into a
+        // tooltip - where a stray NUL renders as a replacement glyph in some fonts and as nothing
+        // in others. Either way it reads as corruption in a message whose whole job is to be
+        // believed. Measured from the real driver: the log for the `packed` failure ended in one.
+        expect(readableGLLog("ERROR: 0:181: 'packed' : Illegal use of reserved word\u0000"))
+            .toBe("ERROR: 0:181: 'packed' : Illegal use of reserved word");
+        // Multi-line logs are flattened, because this lands on ONE line of UI.
+        expect(readableGLLog("first\nsecond")).toBe("first second");
+        // Nothing at all still says something — a blank reason reads as "no reason recorded", which
+        // is what the fallback prints when it has nothing, and the two must not be confused.
+        expect(readableGLLog(null)).toBe("no log");
+        expect(readableGLLog("")).toBe("no log");
+        expect(readableGLLog("   ")).toBe("no log");
+    });
+
+    test("the comment-stripper is not the thing under test — it is checked both ways", () => {
+        // A stripper that removed everything would make the test above pass for any shader at all,
+        // which is the failure mode of every "scan the source" guard. So: a reserved word inside a
+        // comment is invisible, and the same word in code is found.
+        expect(code("// packed is a reserved word\nvec4 a;").includes("packed")).toBe(false);
+        expect(code("/* packed */\nvec4 b;").includes("packed")).toBe(false);
+        expect(code("vec4 packed = texture2D(u, v);").includes("packed")).toBe(true);
+        // …and the real fragment shader still says what it needs to, so the strip did not eat code.
+        const fragment = GLSL_SOURCES.find(s => s.name === "FRAGMENT_SHADER")!;
+        expect(code(fragment.source)).toContain("gl_FragColor");
+        expect(code(fragment.source)).toContain("cellTexel");
     });
 });
 

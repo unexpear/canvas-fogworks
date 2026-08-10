@@ -471,9 +471,15 @@ void main() {
         if (cell.x < 0.0 || cell.y < 0.0 || cell.x >= u_tileGrid.x || cell.y >= u_tileGrid.y) discard;
         // The texel CENTRE, which is what makes NEAREST sampling land on the cell meant rather than
         // on whichever side of the boundary a rounding error falls.
-        vec4 packed = texture2D(u_tileIndex, (cell + 0.5) / u_tileGrid.xy);
-        if (packed.a < 0.5) discard;
-        float index = floor(packed.r * 255.0 + 0.5) + floor(packed.g * 255.0 + 0.5) * 256.0;
+        // NAMED cellTexel, NOT packed. "packed" is a RESERVED WORD in GLSL ES 1.00 — one of the
+        // identifiers the spec holds back for future use — so this shader did not compile, and
+        // because initGL answered a bare null the whole GPU backend silently drew itself through
+        // Canvas from the day this was written. Nothing said so: the menu switched, the container's
+        // backend stamp read webgl, and the picture appeared.
+        // (No backticks in this comment: the shader is a template literal, and one ends the string.)
+        vec4 cellTexel = texture2D(u_tileIndex, (cell + 0.5) / u_tileGrid.xy);
+        if (cellTexel.a < 0.5) discard;
+        float index = floor(cellTexel.r * 255.0 + 0.5) + floor(cellTexel.g * 255.0 + 0.5) * 256.0;
         float scol = mod(index, u_tileSheet.x);
         float srow = floor(index / u_tileSheet.x);
         vec2 origin = vec2(u_tileMargin.x, u_tileMargin.x)
@@ -484,7 +490,7 @@ void main() {
         // ORIENTATION, from the blue byte. TRANSPOSE FIRST, then mirror — Tiled's order, which is
         // not commutative, and the same order flipMatrix states for the backends that can take a
         // matrix. Turning the coordinate rather than the tile is what keeps this one draw call.
-        float flags = floor(packed.b * 255.0 + 0.5);
+        float flags = floor(cellTexel.b * 255.0 + 0.5);
         if (mod(floor(flags / 4.0), 2.0) > 0.5) within = within.yx;
         if (mod(flags, 2.0) > 0.5) within.x = 1.0 - within.x;
         if (mod(floor(flags / 2.0), 2.0) > 0.5) within.y = 1.0 - within.y;
@@ -506,6 +512,29 @@ void main() {
     // model that added light instead would wash every hue toward the light's own.
     gl_FragColor = vec4(base.rgb * lit, base.a);
 }`;
+
+/**
+ * Every shader this backend compiles, by name — so a TEST can read the SOURCE.
+ *
+ * EXPORTED FOR ONE REASON, and it is a good one: a shader is the only code in this project that is
+ * never compiled by anything the gate runs. `tsc` sees a string, the bundler sees a string, jest
+ * sees a string; the first thing that reads it as a language is a GPU driver on someone's machine.
+ * That is how an identifier named `packed` — a RESERVED WORD in GLSL ES 1.00 — sat here silently
+ * turning the whole GPU backend off, while every test passed and the app drew the right picture
+ * through the Canvas fallback.
+ *
+ * A list rather than four separate exports, because the property a test wants to check holds of ALL
+ * of them, and a fifth shader added later must be checked too — appending to a list is a change the
+ * next author will remember to make, and a fifth `expect` is not.
+ */
+export const GLSL_SOURCES: readonly { name: string; source: string }[] = [
+    { name: "VERTEX_SHADER", source: VERTEX_SHADER },
+    { name: "FRAGMENT_SHADER", source: FRAGMENT_SHADER },
+    { name: "BLUR_VERTEX_SHADER", source: BLUR_VERTEX_SHADER },
+    { name: "BLUR_FRAGMENT_SHADER", source: BLUR_FRAGMENT_SHADER },
+    { name: "BLEND_FRAGMENT_SHADER", source: BLEND_FRAGMENT_SHADER },
+    { name: "COMPOSITE_FRAGMENT_SHADER", source: COMPOSITE_FRAGMENT_SHADER }
+];
 
 /**
  * Everything a frame needs, built once per canvas and cached on it.
@@ -647,14 +676,55 @@ export interface GLState {
     gradColorLoc: WebGLUniformLocation | null;
 }
 
-function compile(gl: WebGLRenderingContext, type: number, source: string): WebGLShader | null {
+/**
+ * Why the GPU path could not be set up, or null.
+ *
+ * A NULL RETURN IS NOT A DIAGNOSIS, and this exists because that cost a whole verification session:
+ * the backend fell back to Canvas on every frame, in a window where WebGL was demonstrably available,
+ * and there was NOTHING anywhere saying so. Everything downstream looked correct — the menu switched,
+ * the backend stamp read "webgl", the picture appeared — while nothing GPU-specific was running at
+ * all. `initGL` has five ways to answer null and they want five different fixes.
+ *
+ * MODULE-LEVEL rather than returned, so `initGL` keeps the signature the API surface pins, and the
+ * one caller that needs the reason (`renderWebGL`, deciding what to say) can ask for it.
+ */
+let glFailure: string | null = null;
+
+/** Why the last `initGL` returned null, or null when the last one succeeded. */
+export function lastGLFailure(): string | null {
+    return glFailure;
+}
+
+/**
+ * A driver's info log, fit to put in a sentence.
+ *
+ * NUL-TERMINATED IN PRACTICE: ANGLE hands back a C string complete with its terminator, and a ` `
+ * left in the middle of a tooltip renders as a replacement glyph in some fonts and as nothing in
+ * others — either way it reads as corruption in a message whose whole job is to be believed. Every
+ * control character goes, not just the trailing one, because a multi-line log is being flattened
+ * into one line anyway.
+ *
+ * EXPORTED SO IT CAN BE TESTED, because the only other way to see this run is to break a shader on
+ * purpose — which is exactly how it was found.
+ */
+export function readableGLLog(log: string | null): string {
+    // eslint-disable-next-line no-control-regex
+    return (log ?? "no log").replace(/[ -]+/g, " ").trim() || "no log";
+}
+
+function compile(gl: WebGLRenderingContext, type: number, source: string, label: string): WebGLShader | null {
     const shader = gl.createShader(type);
-    if (!shader) return null;
+    if (!shader) { glFailure = `${label}: the context would not create a shader object`; return null; }
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
     // A shader that fails to compile is a programming error, not a document error — but this is a
     // renderer, so it reports null and lets the caller fall back rather than throwing into a frame.
-    return gl.getShaderParameter(shader, gl.COMPILE_STATUS) ? shader : null;
+    // THE DRIVER'S OWN WORDS ARE KEPT. A compile failure is specific to the GPU in front of you —
+    // one card's shader is another's "too many uniforms" — so the log is the only thing that turns
+    // "the GPU path is off" into something anybody can act on.
+    if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return shader;
+    glFailure = `${label} did not compile: ${readableGLLog(gl.getShaderInfoLog(shader))}`;
+    return null;
 }
 
 /** Build the program and buffer, or null when WebGL is unavailable (a headless test, an old GPU). */
@@ -665,10 +735,10 @@ function compile(gl: WebGLRenderingContext, type: number, source: string): WebGL
  * backend loses only what it never had.
  */
 export function initBlur(gl: WebGLRenderingContext): BlurState | null {
-    const vs = compile(gl, gl.VERTEX_SHADER, BLUR_VERTEX_SHADER);
-    const fs = compile(gl, gl.FRAGMENT_SHADER, BLUR_FRAGMENT_SHADER);
-    const cfs = compile(gl, gl.FRAGMENT_SHADER, COMPOSITE_FRAGMENT_SHADER);
-    const bfs = compile(gl, gl.FRAGMENT_SHADER, BLEND_FRAGMENT_SHADER);
+    const vs = compile(gl, gl.VERTEX_SHADER, BLUR_VERTEX_SHADER, "the blur vertex shader");
+    const fs = compile(gl, gl.FRAGMENT_SHADER, BLUR_FRAGMENT_SHADER, "the blur fragment shader");
+    const cfs = compile(gl, gl.FRAGMENT_SHADER, COMPOSITE_FRAGMENT_SHADER, "the composite fragment shader");
+    const bfs = compile(gl, gl.FRAGMENT_SHADER, BLEND_FRAGMENT_SHADER, "the blend fragment shader");
     const program = gl.createProgram();
     const composite = gl.createProgram();
     const blend = gl.createProgram();
@@ -964,10 +1034,20 @@ export function effectPlan(paint: DrawItem["paint"], scale: number): EffectPlan 
 }
 
 export function initGL(canvas: HTMLCanvasElement): GLState | null {
+    glFailure = null;
     const gl = (canvas.getContext("webgl") || canvas.getContext("experimental-webgl")) as WebGLRenderingContext | null;
-    if (!gl) return null;
-    const vs = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-    const fs = compile(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+    if (!gl) {
+        // NO 2D-CONTEXT TEST HERE, and that is worth stating because the obvious diagnosis is a
+        // trap I wrote and then caught: "did this canvas already hold a 2D context?" would explain
+        // the failure exactly — a canvas gives out one context type for life — but asking
+        // `getContext("2d")` on a FRESH canvas SUCCEEDS and creates one, so the test reports
+        // "already 2D" for every honest failure and poisons the element on the way past. The caller
+        // is the one that can answer it, because it tests the element BEFORE handing it over.
+        glFailure = "the browser would not give this canvas a WebGL context";
+        return null;
+    }
+    const vs = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER, "the vertex shader");
+    const fs = compile(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER, "the fragment shader");
     const program = gl.createProgram();
     const buffer = gl.createBuffer();
     const normalBuffer = gl.createBuffer();
@@ -975,11 +1055,21 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
     const heightTex = gl.createTexture();
     const imageTex = gl.createTexture();
     const tileIndexTex = gl.createTexture();
-    if (!vs || !fs || !program || !buffer || !normalBuffer || !localBuffer || !heightTex || !imageTex || !tileIndexTex) return null;
+    if (!vs || !fs || !program || !buffer || !normalBuffer || !localBuffer || !heightTex || !imageTex || !tileIndexTex) {
+        // `compile` has already said which shader when it was one of those; anything else here is
+        // the context refusing to allocate, which is a different problem with a different fix.
+        if (!glFailure) glFailure = "the context would not allocate a program, a buffer or a texture";
+        return null;
+    }
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
     gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        // LINKING IS WHERE A DRIVER'S LIMITS BITE — too many varyings, too many uniforms — and both
+        // shaders compiled, so the log here names something neither of them could have said alone.
+        glFailure = `the program did not link: ${readableGLLog(gl.getProgramInfoLog(program))}`;
+        return null;
+    }
     return {
         gl, program, buffer, normalBuffer, localBuffer, heightTex, imageTex,
         imageKey: null,
