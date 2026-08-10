@@ -446,7 +446,9 @@ This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
 cannot see — over the paint modules, the Tiled reader, the mesh, nine-slice, the tile grid, the tile
 brush and the autotiler, exiting non-zero on a survivor: currently **163 mutants, 163 killed**
-(full run at 1,673 tests, nothing NOT APPLIED and nothing AMBIGUOUS).
+(full run at 1,673 tests, nothing NOT APPLIED and nothing AMBIGUOUS). The exporter's ten are
+checked by the ROUND TRIP: a real map imported, exported and imported again, compared cell by
+cell — so a mutation has to survive a reader that was written against files Tiled itself wrote.
 Six cover `SurfaceSpace`, where the convenient fixture is not
 a square buffer but **a box at the origin** (which hides a dropped origin term) and **a
 round-trip-only assertion** (which hides a half-pixel shift, because it shifts both directions
