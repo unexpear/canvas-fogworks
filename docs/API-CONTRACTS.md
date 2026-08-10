@@ -1731,6 +1731,24 @@ function selectionClip(mask): PixelClip | undefined;
 // only way to honour a mask through a stranger's callback — see docs/ACTION-SYSTEM.md.
 function restoreUnselected(buffer, before, mask): number;
 
+// Adjust — destructive colour edits. EVERY ONE IS `(buffer, ...args) => number`, which is exactly
+// what `surfaceEditAction` takes, so a new adjustment becomes a panel button by being written: no
+// action, no plumbing. The number is pixels CHANGED, which is what decides whether there is an undo
+// step at all. ALPHA IS NEVER TOUCHED and fully transparent pixels are skipped entirely — their RGB
+// is invisible, and mapping it would only enlarge every patch.
+const MID = 127.5;                        // the true centre of 0..255; 128 drifts an image darker
+const POSTERIZE_MIN = 2, POSTERIZE_MAX = 256;
+function mapColours(buffer, map: (r, g, b) => [number, number, number]): number;   // memoised per COLOUR
+function adjustBrightness(buffer, amount): number;   // ADDITIVE, so it moves black (unlike value)
+function adjustContrast(buffer, amount): number;     // percentage, pivoting on MID
+function rgbToHsv(r, g, b): [number, number, number];    // h 0..360, s and v 0..1; a grey has NO hue
+function hsvToRgb(h, s, v): [number, number, number];    // hue wraps; the round trip is exact on bytes
+function adjustHsv(buffer, hueShift, saturationScale, valueScale): number;  // ONE pass: three round trips would each round
+function desaturate(buffer): number;                 // Rec.601 luma — NOT Quantize's 2:4:3, which weights SQUARED differences
+function invertColours(buffer): number;
+function posterize(buffer, levels): number;          // the RANGE into levels-1 intervals, so the endpoints survive
+function replaceColour(buffer, from: Rgba, to: Rgba, same): number;   // `same` injected, as wandSelection takes it
+
 // SelectionOutline — the marching ants, as merged runs of GRID line (not the bounding box, which
 // would draw a lasso, a wand result and a rectangle-minus-a-bite as the same rectangle). A HOLE is
 // an edge too. Only the mask's own bounds are scanned, because this runs per frame during a drag.

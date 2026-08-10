@@ -42,7 +42,9 @@ import { MoveTool } from "../editor/tools/MoveTool";
 import { PenTool } from "../editor/tools/PenTool";
 import { ShapeTool, SHAPE_KINDS, ShapeKind, PaintMode, supportsPaintMode, clampStrokeWidth, DEFAULT_STROKE_WIDTH, STROKE_WIDTH_MAX } from "../editor/tools/ShapeTool";
 import { RasterTool } from "../editor/tools/RasterTool";
-import { Rgba } from "../core/paint/PixelBuffer";
+import { Rgba, PixelBuffer } from "../core/paint/PixelBuffer";
+import { adjustBrightness, adjustContrast, adjustHsv, desaturate, invertColours, posterize,
+    replaceColour, POSTERIZE_MIN, POSTERIZE_MAX } from "../core/paint/Adjust";
 import { makeBrush, BRUSH_MAX_SIZE } from "../core/paint/Brush";
 import { SymmetryMode, NO_SYMMETRY } from "../core/paint/Symmetry";
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
@@ -57,11 +59,11 @@ import { SetMeshAction } from "../core/actions/SetMeshAction";
 import { WeightTool, WeightBrush } from "../editor/tools/WeightTool";
 import { TileTool, TileBrush } from "../editor/tools/TileTool";
 import { BucketTool } from "../editor/tools/BucketTool";
-import { PixelSelectTool, PixelSelectMode, PixelSelectConfig, WAND_TOLERANCE_MAX } from "../editor/tools/PixelSelectTool";
+import { PixelSelectTool, PixelSelectMode, PixelSelectConfig, WAND_TOLERANCE_MAX, wandMatcher } from "../editor/tools/PixelSelectTool";
 import { SelectionMask, emptyMask, fullMask, invertSelection, growSelection, borderSelection,
     isEmptySelection, selectedCount } from "../core/paint/Selection";
 import { Palette, parsePaletteFile, paletteAt } from "../core/paint/Palette";
-import { quantizeAction } from "../core/actions/surfaceEdit";
+import { quantizeAction, surfaceEditAction } from "../core/actions/surfaceEdit";
 import { SetTilemapAction } from "../core/actions/SetTilemapAction";
 import { resizeTilemap } from "../core/document/TilemapEdit";
 import { Tilemap, tileSourceRect as sheetTileRect, tileIndexAt,
@@ -557,6 +559,19 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const [wandContiguous, setWandContiguous] = useState(true);
     const selectConfigRef = useRef<PixelSelectConfig>({ mode: "rect", contiguous: true, tolerance: 0 });
     selectConfigRef.current = { mode: selectMode, contiguous: wandContiguous, tolerance: wandTolerance };
+    // THE ADJUSTMENT PANEL's numbers. Each is the amount ONE application applies, because these are
+    // destructive edits rather than a live slider: a slider that meant "brightness = +30" would have
+    // to hold a before-image across its whole drag and re-derive from it, which is a second source of
+    // truth for the picture — the thing `RasterTool` refuses by committing to the document instead.
+    // Apply, look, and Ctrl+Z is the honest workflow until an adjustment LAYER exists.
+    const [adjBrightness, setAdjBrightness] = useState(20);
+    const [adjContrast, setAdjContrast] = useState(20);
+    const [adjHue, setAdjHue] = useState(30);
+    const [adjSaturation, setAdjSaturation] = useState(1.2);
+    const [adjValue, setAdjValue] = useState(1);
+    const [adjLevels, setAdjLevels] = useState(4);
+    const [adjFrom, setAdjFrom] = useState("#000000");
+    const [adjTolerance, setAdjTolerance] = useState(0);
     const [brushRound, setBrushRound] = useState(false);
     const brushRoundRef = useRef(false);
     brushRoundRef.current = brushRound;
@@ -662,6 +677,19 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         if (es.selectedNodeIds.length !== 1) return null;
         const n = dispatcher.getDocument().nodes.get(es.selectedNodeIds[0]);
         return n && n.type === "core.raster" && n.surface ? n.id : null;
+    })();
+
+    /**
+     * How many pixels the selection holds, or null when nothing confines an edit to this canvas.
+     *
+     * COMPUTED ONCE PER RENDER and read by both the marquee row and the Adjust panel, because it
+     * walks the whole mask: at `PIXEL_MAX_SIDE` that is 16.7 million bytes, and two callers counting
+     * it separately would do that twice for one number that must agree in both places anyway.
+     */
+    const pixelSelectionCount = (() => {
+        if (!selectedRasterId) return null;
+        const mask = pixelMaskFor(es, dispatcher.getDocument(), selectedRasterId);
+        return mask ? selectedCount(mask) : null;
     })();
 
     const toolControllerRef = useRef<ToolController | null>(null);
@@ -1576,6 +1604,30 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     }, [dispatcher, es, refresh]);
 
     /**
+     * Apply a pixel adjustment to the selected canvas, confined to the pixel selection.
+     *
+     * ONE CALLBACK FOR EVERY ADJUSTMENT, and that is the payoff of the shape `core/paint/Adjust`
+     * chose: each of them is already `(buffer) => number`, which is exactly what `surfaceEditAction`
+     * takes, so a new adjustment becomes a button by being written — no action, no plumbing, no
+     * second copy of "decode, edit, diff, dispatch".
+     *
+     * THE MASK GOES THROUGH THE SAME DOOR the brush and the bucket read, so an adjustment obeys the
+     * marquee. Without it, the one edit that acts on every pixel at once would be the one edit that
+     * ignored where the author said to act.
+     */
+    const applyAdjustment = useCallback((edit: (b: PixelBuffer) => number) => {
+        const doc = dispatcher.getDocument();
+        const id = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
+        if (!id) return;
+        const action = surfaceEditAction(doc, id, edit, pixelMaskFor(es, doc, id));
+        // NULL MEANS NOTHING MOVED — an adjustment that changed no pixel must not leave an undo step
+        // that undoes nothing, which is the same rule quantise follows.
+        if (!action) return;
+        dispatcher.dispatchAction(action);
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    /**
      * Replace the pixel selection with a function of itself — Select All, Invert, Grow, Shrink, Border.
      *
      * ONE CALLBACK FOR ALL OF THEM, taking the transform rather than a verb, because every one of
@@ -2056,7 +2108,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                 arithmetic with no caller is what the feature audit exists to find. */}
                             <span data-selection-count="1" style={{ fontSize: 10, color: UI.textFaint,
                                 whiteSpace: "nowrap", marginLeft: 4 }}>
-                                {es.pixelSelection ? `${selectedCount(es.pixelSelection.mask)} px` : "none"}
+                                {pixelSelectionCount === null ? "none" : `${pixelSelectionCount} px`}
                             </span>
                             <ToolButton icon="▣" label="Select all pixels"
                                 onClick={() => reviseSelection(m => fullMask(m.width, m.height))} />
@@ -3170,6 +3222,87 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                 </InspectorSection>
                             )}
 
+                            {/* THE ADJUSTMENTS. `core/paint/Adjust` is a family of pure functions
+                                over a buffer, every one of them already shaped `(buffer) => number`
+                                — which is exactly what `surfaceEditAction` takes, so each becomes a
+                                button by being written. They are DESTRUCTIVE and they obey the pixel
+                                selection, both of which the panel says out loud. */}
+                            {node.type === "core.raster" && node.surface && (
+                                <InspectorSection title="Adjust">
+                                    <div style={{ fontSize: 10, color: UI.textFaint, marginBottom: 4 }}>
+                                        {pixelSelectionCount === null
+                                            ? "Applies to the whole canvas — destructive, one undo step each."
+                                            : `Confined to the ${pixelSelectionCount} px selection.`}
+                                    </div>
+                                    <div style={ADJUST_ROW}>
+                                        <NumberField label="bright" value={adjBrightness} min={-255} max={255}
+                                            onChange={setAdjBrightness} />
+                                        <button data-adjust="brightness" style={ADJUST_BUTTON}
+                                            onClick={() => applyAdjustment(b => adjustBrightness(b, adjBrightness))}
+                                        >Apply</button>
+                                    </div>
+                                    <div style={ADJUST_ROW}>
+                                        <NumberField label="contrast" value={adjContrast} min={-100} max={100}
+                                            onChange={setAdjContrast} />
+                                        <button data-adjust="contrast" style={ADJUST_BUTTON}
+                                            onClick={() => applyAdjustment(b => adjustContrast(b, adjContrast))}
+                                        >Apply</button>
+                                    </div>
+                                    {/* HUE, SATURATION AND VALUE ARE ONE PASS, because they share the
+                                        conversion — three separate round trips would each lose a unit
+                                        to rounding, so doing them together is not merely faster. */}
+                                    <div style={ADJUST_ROW}>
+                                        <NumberField label="hue°" value={adjHue} min={-360} max={360}
+                                            onChange={setAdjHue} />
+                                        <NumberField label="sat×" value={adjSaturation} min={0} max={8} step={0.1}
+                                            onChange={setAdjSaturation} />
+                                        <NumberField label="val×" value={adjValue} min={0} max={8} step={0.1}
+                                            onChange={setAdjValue} />
+                                        <button data-adjust="hsv" style={ADJUST_BUTTON}
+                                            onClick={() => applyAdjustment(b => adjustHsv(b, adjHue, adjSaturation, adjValue))}
+                                        >Apply</button>
+                                    </div>
+                                    <div style={ADJUST_ROW}>
+                                        <NumberField label="levels" value={adjLevels}
+                                            min={POSTERIZE_MIN} max={POSTERIZE_MAX}
+                                            onChange={setAdjLevels} />
+                                        <button data-adjust="posterize" style={ADJUST_BUTTON}
+                                            onClick={() => applyAdjustment(b => posterize(b, adjLevels))}
+                                        >Posterize</button>
+                                    </div>
+                                    {/* REPLACE takes the matcher the WAND uses, so "select this
+                                        colour" and "replace this colour" cannot come to mean
+                                        different pixels. The swatch is the destination, which is
+                                        also what the brush and the bucket paint with. */}
+                                    <div style={ADJUST_ROW}>
+                                        <input
+                                            type="color"
+                                            aria-label="Colour to replace"
+                                            data-adjust-from="1"
+                                            value={adjFrom}
+                                            onChange={e => setAdjFrom(e.target.value)}
+                                            style={{ width: 26, height: 20, padding: 0, background: "none",
+                                                border: `1px solid ${UI.line}` }}
+                                        />
+                                        <span style={{ fontSize: 10, color: UI.textFaint }}>→ {paintColour}</span>
+                                        <NumberField label="tol" value={adjTolerance} min={0} max={WAND_TOLERANCE_MAX}
+                                            onChange={setAdjTolerance} />
+                                        <button data-adjust="replace" style={ADJUST_BUTTON}
+                                            onClick={() => applyAdjustment(b => replaceColour(
+                                                b, hexToRgba(adjFrom), hexToRgba(paintColour), wandMatcher(adjTolerance)))}
+                                        >Replace</button>
+                                    </div>
+                                    <div style={ADJUST_ROW}>
+                                        <button data-adjust="desaturate" style={ADJUST_BUTTON}
+                                            onClick={() => applyAdjustment(desaturate)}
+                                        >Desaturate</button>
+                                        <button data-adjust="invert" style={ADJUST_BUTTON}
+                                            onClick={() => applyAdjustment(invertColours)}
+                                        >Invert</button>
+                                    </div>
+                                </InspectorSection>
+                            )}
+
                             <InspectorSection title="Layout">
                                 {/* Auto-layout has been in the engine since M2 — flex, hug, grow,
                                 shrink, wrap, and a whole grid module. Since schema 26 `layout`
@@ -3598,6 +3731,46 @@ function ToolButton({ icon, label, active, disabled, compact, onClick }: {
 
 /** Inspector chrome — one place for the panel's spacing so the sections stay uniform. */
 const INSPECTOR_LABEL: React.CSSProperties = { color: "#aaa", display: "block", marginTop: 4 };
+
+/** One row of the Adjust panel: a few small fields and the button that spends them. */
+const ADJUST_ROW: React.CSSProperties = {
+    display: "flex", alignItems: "center", gap: 4, marginTop: 4, flexWrap: "wrap"
+};
+const ADJUST_BUTTON: React.CSSProperties = {
+    fontSize: 10, padding: "2px 6px", background: "transparent", color: "#ccc",
+    border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer"
+};
+
+/**
+ * A labelled number, small enough for a panel row.
+ *
+ * CLAMPED HERE rather than at the button, so the value the field SHOWS is the value that will be
+ * applied — a field that accepted 900 and then quietly applied 255 would make the result look like
+ * an arithmetic bug in the adjustment. An unparseable entry keeps the last good number rather than
+ * becoming NaN, which every adjustment would turn into a transparent canvas.
+ */
+function NumberField({ label, value, min, max, step, onChange }: {
+    label: string; value: number; min: number; max: number; step?: number;
+    onChange: (v: number) => void;
+}) {
+    return (
+        <label style={{ fontSize: 10, color: "#888", display: "flex", alignItems: "center", gap: 2 }}>
+            {label}
+            <input
+                type="number" min={min} max={max} step={step ?? 1}
+                aria-label={label}
+                value={value}
+                onChange={e => {
+                    const raw = Number(e.target.value);
+                    if (!Number.isFinite(raw)) return;
+                    onChange(Math.max(min, Math.min(max, raw)));
+                }}
+                style={{ width: 46, fontSize: 10, background: "#12121e", color: "#ddd",
+                    border: "1px solid #2a2a4a", borderRadius: 3 }}
+            />
+        </label>
+    );
+}
 const INSPECTOR_GRID: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 };
 
 /** A titled group of controls. Sections are what turn a list of fields into a panel you can scan. */

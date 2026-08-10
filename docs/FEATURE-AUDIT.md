@@ -57,7 +57,8 @@ broke a test whose subject was still true. Both are fixed.
 | **Pixel selection** — rect, ellipse, lasso, magic wand, colour select | **have** | `paint/Selection` + `PixelSelectTool`, closed 2026-08-09. A binary MASK, four operators from the modifiers, marching ants drawn from `SelectionOutline`. EDITOR state, not schema. HONOURED by the brush (per dab), the bucket (as a WALL) and quantise (by restoring what fell outside) |
 | Modify selection (grow / shrink / border / invert) | **have** | buttons on the marquee row, closed 2026-08-09. `growSelection` takes a negative to shrink; `borderSelection` is derived from it, so the two cannot disagree about the edge — and the border of a FULL selection is consequently empty, which is documented rather than fixed |
 | Crop | **absent** | listed in PLANNED-FIXES and never built |
-| Image adjustments — brightness/contrast, HSV, curves, desaturate, invert, posterize, pixelize, outline, gradient map, palettize, colour replace | **absent** | VDE has shadow/blur as NODE effects; it has no destructive pixel adjustments |
+| Image adjustments — brightness/contrast, HSV, desaturate, invert, posterize, colour replace | **have** | `paint/Adjust` + an inspector section, closed 2026-08-10. Every one is `(buffer) => number`, which is what `surfaceEditAction` takes — so each became a button by being written, and each obeys the pixel selection. Destructive, one undo step apiece |
+| Image adjustments — curves, gradient map, pixelize, outline, palettize | **absent** | the first two want a ramp editor; the last three are NEIGHBOURHOOD ops, which is a different shape from the per-pixel family (`outline` must write where alpha was 0, so "skip transparent" stops being right) |
 | Rotation algorithms (nearest, OmniScale, rotxel, cleanEdge) | **absent** | rotation is a node transform, resampled by the backend |
 | Indexed colour mode | **absent** | Pixelorama carries index maps and a palette index per pixel |
 | Onion skinning, animation tags, timeline | **have** | schema 39 |
@@ -126,8 +127,11 @@ broke a test whose subject was still true. Both are fixed.
    actually lands, `pixelMaskFor` as the one validated read, the four marquee gestures, and the
    marching ants. What is downstream and still absent: CROP, cut/copy/paste of a region, and
    transform-a-region — all three now have the mask they were waiting for.
-3. **Image adjustments.** A family of small, independently testable pure functions over a
-   `PixelBuffer` — the shape this codebase is best at.
+3. ~~**Image adjustments**~~ — the per-pixel family is DONE 2026-08-10 (`paint/Adjust`): brightness,
+   contrast, HSV, desaturate, invert, posterize, colour replace. What remains is the NEIGHBOURHOOD
+   ops (pixelize, outline) and the ramp-driven ones (curves, gradient map); they are a different
+   shape and want their own slice — `outline` writes where alpha was 0, so this family's
+   "skip transparent pixels" rule stops being right for it.
 4. **Tiled object layers.** The map side's largest hole and the one the "2D game engine" direction
    needs first: entities, not tiles.
 5. **A tileset as editable content**, which is what unlocks Pixelorama's Manual/Auto/Stack modes and

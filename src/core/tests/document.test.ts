@@ -37,6 +37,8 @@ import { BucketTool } from "../../editor/tools/BucketTool";
 import { PixelSelectTool, PixelSelectMode, wandMatcher, WAND_TOLERANCE_MAX } from "../../editor/tools/PixelSelectTool";
 import { MaskSegment, maskOutline } from "../paint/SelectionOutline";
 import { surfaceEditAction, quantizeAction } from "../actions/surfaceEdit";
+import { MID, POSTERIZE_MIN, POSTERIZE_MAX, mapColours, adjustBrightness, adjustContrast,
+    rgbToHsv, hsvToRgb, adjustHsv, desaturate, invertColours, posterize, replaceColour } from "../paint/Adjust";
 import { SelectionMask, SELECTED, selectionMaskError, emptyMask, fullMask, isSelected,
     isEmptySelection, selectedCount, maskBounds, combineSelection, rectSelection,
     ellipseSelection, lassoSelection, wandSelection, growSelection, borderSelection,
@@ -27187,5 +27189,299 @@ describe("The marquee, as a gesture — four shapes, four operators, no history 
         // And the canvas is told about the selection, validated through the one door.
         expect(app).toMatch(/pixelSelection: es\.pixelSelection/);
         expect(app).toMatch(/pixelMaskFor\(es, doc, es\.pixelSelection\.nodeId\)/);
+    });
+});
+
+describe("Adjust — the colour edits, and the half-steps that make them reversible-looking", () => {
+    /** A 3x2 buffer — NON-SQUARE — of the colours a test names, row-major. */
+    const bufferOf = (colours: Rgba[]) => {
+        const b = createPixelBuffer(3, 2);
+        colours.forEach((c, i) => setPixel(b, i % 3, Math.floor(i / 3), c));
+        return b;
+    };
+    const at = (b: PixelBuffer, x: number, y: number) => getPixel(b, x, y)!;
+
+    test("brightness ADDS, clamps at both ends, and reports what it changed", () => {
+        const b = bufferOf([
+            [0, 0, 0, 255], [10, 20, 30, 255], [250, 250, 250, 255],
+            [128, 128, 128, 255], [255, 255, 255, 255], [5, 5, 5, 0]
+        ]);
+        // +10 lifts BLACK, which is what distinguishes an additive brightness from a multiplicative
+        // one — `value` in HSV leaves black black, and an artist reaching for "brightness" on a dark
+        // sprite means this one.
+        expect(adjustBrightness(b, 10)).toBe(4);
+        expect(at(b, 0, 0)).toEqual([10, 10, 10, 255]);
+        expect(at(b, 1, 0)).toEqual([20, 30, 40, 255]);
+        // CLAMPED at the top: 250 + 10 is 255, not 260 and not 4.
+        expect(at(b, 2, 0)).toEqual([255, 255, 255, 255]);
+        // WHITE was already at the ceiling, so it did not change — which is why the count is 4 and
+        // not 5: the count is pixels CHANGED, and `surfaceEditAction` turns a zero into no undo step.
+        expect(at(b, 1, 1)).toEqual([255, 255, 255, 255]);
+        // A FULLY TRANSPARENT pixel is untouched, RGB included: its colour is invisible, and moving
+        // it would put bytes nobody can see into every patch.
+        expect(at(b, 2, 1)).toEqual([5, 5, 5, 0]);
+        expect(adjustBrightness(b, 0)).toBe(0);
+    });
+
+    test("contrast pivots on 127.5, which is what stops it drifting toward black", () => {
+        const b = bufferOf([
+            [0, 0, 0, 255], [64, 64, 64, 255], [128, 128, 128, 255],
+            [192, 192, 192, 255], [255, 255, 255, 255], [100, 150, 200, 255]
+        ]);
+        // +100% doubles the distance from the middle. Hand-computed: 64 is 63.5 below the pivot, so
+        // it goes to 127.5 - 127 = 0.5, which rounds to 1 — NOT 0, and that half is the whole point.
+        // On a pivot of 128 the same pixel lands at exactly 0, and every image creeps darker with
+        // each application in a way that is invisible once and obvious after ten.
+        // FOUR, not six: black and white are ALREADY at the ends, so doubling their distance from
+        // the middle clamps them back onto themselves. My first expectation said six and the code
+        // was right — the count is pixels CHANGED, and an image that is already high-contrast has
+        // fewer of them than it has pixels.
+        expect(adjustContrast(b, 100)).toBe(4);
+        expect(at(b, 0, 0)).toEqual([0, 0, 0, 255]);
+        expect(at(b, 1, 1)).toEqual([255, 255, 255, 255]);
+        expect(at(b, 1, 0)).toEqual([1, 1, 1, 255]);
+        // 192 is 64.5 above the pivot → 127.5 + 129 = 256.5 → clamped to 255. My expectation said
+        // 254 while the comment beside it said 256.5; the comment was right.
+        expect(at(b, 0, 1)).toEqual([255, 255, 255, 255]);
+        // …and the colour pixel moves on every channel independently: 100 → 72.5 → 73.
+        expect(at(b, 2, 1)).toEqual([73, 173, 255, 255]);
+        // 128 is HALF A STEP above the pivot, so it moves — a fixture using only 128 would see
+        // nothing and read as a working no-op.
+        expect(at(b, 2, 0)).toEqual([129, 129, 129, 255]);
+        // -100% collapses everything onto the pivot itself, which rounds to 128 rather than 127.
+        const flat = bufferOf([
+            [0, 0, 0, 255], [64, 64, 64, 255], [128, 128, 128, 255],
+            [192, 192, 192, 255], [255, 255, 255, 255], [100, 150, 200, 255]
+        ]);
+        // FIVE, because the mid-grey pixel is already where everything is going. The same rule as
+        // above, and the third time in this test that "pixels changed" is not "pixels visited".
+        expect(adjustContrast(flat, -100)).toBe(5);
+        for (const [x, y] of [[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]] as const) {
+            expect(at(flat, x, y)).toEqual([128, 128, 128, 255]);
+        }
+        expect(adjustContrast(flat, 0)).toBe(0);
+    });
+
+    test("HSV round-trips EXACTLY, over a sweep rather than a lucky colour", () => {
+        // The property everything else in this module leans on: a hue shift of zero and scales of
+        // one must return the very same bytes. A single fixture colour cannot show this — the
+        // conversion has six sectors and the failure is usually in one of them — so this sweeps
+        // 4,096 colours across the whole cube, including every grey (where hue is undefined) and
+        // every pure primary (where two channels are equal and the max is ambiguous).
+        let checked = 0;
+        for (let r = 0; r <= 255; r += 17) {
+            for (let g = 0; g <= 255; g += 17) {
+                for (let bl = 0; bl <= 255; bl += 17) {
+                    const [h, s, v] = rgbToHsv(r, g, bl);
+                    const [rr, gg, bb] = hsvToRgb(h, s, v);
+                    expect([Math.round(rr), Math.round(gg), Math.round(bb)]).toEqual([r, g, bl]);
+                    checked++;
+                }
+            }
+        }
+        expect(checked).toBe(16 * 16 * 16);
+        // A GREY HAS NO HUE, and saying so rather than inventing red is what keeps the trip exact.
+        expect(rgbToHsv(80, 80, 80)).toEqual([0, 0, 80 / 255]);
+        // Hue WRAPS in both directions, so a rotation past the end is not a clamp.
+        expect(hsvToRgb(0, 1, 1)).toEqual(hsvToRgb(360, 1, 1));
+        expect(hsvToRgb(-60, 1, 1)).toEqual(hsvToRgb(300, 1, 1));
+    });
+
+    test("hue, saturation and value are ONE pass, and each does its own thing", () => {
+        const red: Rgba = [255, 0, 0, 255];
+        // 120 degrees takes red to green exactly — the sector arithmetic, checked at a boundary
+        // rather than in the middle of one where a small error would round away.
+        const h = bufferOf([red, red, red, red, red, red]);
+        expect(adjustHsv(h, 120, 1, 1)).toBe(6);
+        expect(at(h, 0, 0)).toEqual([0, 255, 0, 255]);
+
+        // HALF THE SATURATION of pure red is a pink whose minimum channel is 127.5 → 128, not 127:
+        // c = v*s = 0.5, m = 0.5, so the low channels land exactly on the half.
+        const s = bufferOf([red, red, red, red, red, red]);
+        expect(adjustHsv(s, 0, 0.5, 1)).toBe(6);
+        expect(at(s, 0, 0)).toEqual([255, 128, 128, 255]);
+
+        // HALF THE VALUE is a darker red, and it leaves the hue alone — a version that multiplied
+        // the channels and re-derived the hue would drift.
+        const v = bufferOf([red, red, red, red, red, red]);
+        expect(adjustHsv(v, 0, 1, 0.5)).toBe(6);
+        expect(at(v, 0, 0)).toEqual([128, 0, 0, 255]);
+        // AND VALUE LEAVES BLACK BLACK, which is what makes it a different control from brightness.
+        const black = bufferOf(Array(6).fill([0, 0, 0, 255]) as Rgba[]);
+        expect(adjustHsv(black, 0, 1, 2)).toBe(0);
+        expect(adjustBrightness(black, 20)).toBe(6);
+        // The no-op parameters are a no-op.
+        expect(adjustHsv(bufferOf(Array(6).fill(red) as Rgba[]), 0, 1, 1)).toBe(0);
+    });
+
+    test("desaturate uses LUMA, not an average — a saturated blue must not come out light", () => {
+        const b = bufferOf([
+            [255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255],
+            [90, 90, 90, 255], [255, 255, 255, 255], [10, 20, 30, 0]
+        ]);
+        expect(desaturate(b)).toBe(3);
+        // Rec.601: 0.299, 0.587, 0.114 — so red is 76, green 150 and blue 29. A plain average would
+        // make all three 85, which reads as three identical greys for three very different colours,
+        // and blue would be far too light.
+        expect(at(b, 0, 0)).toEqual([76, 76, 76, 255]);
+        expect(at(b, 1, 0)).toEqual([150, 150, 150, 255]);
+        expect(at(b, 2, 0)).toEqual([29, 29, 29, 255]);
+        // A grey is ALREADY its own luma, so it does not count as changed.
+        expect(at(b, 0, 1)).toEqual([90, 90, 90, 255]);
+        expect(at(b, 2, 1)).toEqual([10, 20, 30, 0]);   // transparent, untouched
+    });
+
+    test("invert is a negative of the COLOUR, and leaves alpha alone", () => {
+        const b = bufferOf([
+            [0, 0, 0, 255], [255, 255, 255, 255], [10, 20, 30, 255],
+            [128, 128, 128, 255], [1, 2, 3, 128], [9, 9, 9, 0]
+        ]);
+        expect(invertColours(b)).toBe(5);
+        expect(at(b, 0, 0)).toEqual([255, 255, 255, 255]);
+        expect(at(b, 2, 0)).toEqual([245, 235, 225, 255]);
+        // 128 inverts to 127, not to itself — the range has no fixed point, and a fixture using only
+        // mid-grey would see nothing.
+        expect(at(b, 0, 1)).toEqual([127, 127, 127, 255]);
+        // A SEMI-TRANSPARENT pixel keeps its alpha exactly: inverting it would turn what the artist
+        // erased into solid paint, which is not a negative of the picture but a destruction of it.
+        expect(at(b, 1, 1)).toEqual([254, 253, 252, 128]);
+        expect(at(b, 2, 1)).toEqual([9, 9, 9, 0]);
+        // Twice is the original — the cheapest check that nothing is quietly clamping.
+        invertColours(b);
+        expect(at(b, 2, 0)).toEqual([10, 20, 30, 255]);
+        expect(at(b, 1, 1)).toEqual([1, 2, 3, 128]);
+    });
+
+    test("posterize keeps the ENDPOINTS, which the obvious implementation does not", () => {
+        const b = bufferOf([
+            [0, 0, 0, 255], [255, 255, 255, 255], [100, 100, 100, 255],
+            [200, 200, 200, 255], [130, 130, 130, 255], [7, 7, 7, 0]
+        ]);
+        // FOUR levels: the steps are 0, 85, 170, 255 — the range cut into THREE intervals. The naive
+        // `floor(v / 64) * 64` gives 0, 64, 128, 192 and maps white to 192, so a black-and-white
+        // sprite loses its white. That is the failure this fixture exists to catch.
+        expect(posterize(b, 4)).toBe(3);
+        expect(at(b, 0, 0)).toEqual([0, 0, 0, 255]);
+        expect(at(b, 1, 0)).toEqual([255, 255, 255, 255]);
+        expect(at(b, 2, 0)).toEqual([85, 85, 85, 255]);      // 100 → nearest of 85/170
+        expect(at(b, 0, 1)).toEqual([170, 170, 170, 255]);   // 200 → 170
+        expect(at(b, 1, 1)).toEqual([170, 170, 170, 255]);   // 130 is above the 127.5 midpoint
+        // TWO levels is black and white, the useful extreme; anything below it is refused rather
+        // than clamped, because "one level" is a solid colour and the arithmetic divides by zero.
+        const two = bufferOf([[100, 100, 100, 255], [130, 130, 130, 255], [0, 0, 0, 255],
+                              [255, 255, 255, 255], [200, 200, 200, 255], [1, 1, 1, 255]]);
+        // FOUR change: 100 and 1 fall to black, 130 and 200 rise to white. The 0 and the 255 are
+        // already levels. Hand-counted after my first expectation of three forgot the [1,1,1].
+        expect(posterize(two, 2)).toBe(4);
+        expect(at(two, 2, 1)).toEqual([0, 0, 0, 255]);
+        expect(at(two, 1, 1)).toEqual([255, 255, 255, 255]);
+        expect(at(two, 0, 0)).toEqual([0, 0, 0, 255]);
+        expect(at(two, 1, 0)).toEqual([255, 255, 255, 255]);
+        expect(posterize(bufferOf(Array(6).fill([100, 100, 100, 255]) as Rgba[]), 1)).toBe(0);
+        expect(posterize(bufferOf(Array(6).fill([100, 100, 100, 255]) as Rgba[]), 0)).toBe(0);
+        expect(posterize(bufferOf(Array(6).fill([100, 100, 100, 255]) as Rgba[]), 257)).toBe(0);
+        // 256 levels is the input itself — the identity, and the boundary the guard must ALLOW.
+        expect(posterize(bufferOf([[1, 2, 3, 255], [4, 5, 6, 255], [7, 8, 9, 255],
+                                   [10, 11, 12, 255], [13, 14, 15, 255], [16, 17, 18, 255]]), 256)).toBe(0);
+    });
+
+    test("colour replace takes the matcher the WAND uses, so the two cannot disagree", () => {
+        const b = bufferOf([
+            [255, 0, 0, 255], [250, 5, 5, 255], [0, 0, 255, 255],
+            [255, 0, 0, 128], [0, 0, 0, 255], [255, 0, 0, 0]
+        ]);
+        const exact = wandMatcher(0);
+        // EXACT: only the two fully-matching pixels move — and the SEMI-TRANSPARENT one is one of
+        // them, because the matcher is handed the target's own alpha rather than the pixel's. An
+        // implementation that passed the pixel's alpha would silently never match it, and nothing in
+        // the panel would say why.
+        expect(replaceColour(b, [255, 0, 0, 255], [0, 255, 0, 255], exact)).toBe(2);
+        expect(at(b, 0, 0)).toEqual([0, 255, 0, 255]);
+        expect(at(b, 0, 1)).toEqual([0, 255, 0, 128]);       // alpha kept, colour replaced
+        expect(at(b, 1, 0)).toEqual([250, 5, 5, 255]);       // a near miss stays
+        expect(at(b, 2, 1)).toEqual([255, 0, 0, 0]);         // transparent: skipped entirely
+        // A TOLERANCE takes the near miss too — the same rule the wand selects with, which is what
+        // keeps "select this colour" and "replace this colour" meaning the same thing.
+        const loose = bufferOf([
+            [255, 0, 0, 255], [250, 5, 5, 255], [0, 0, 255, 255],
+            [255, 0, 0, 128], [0, 0, 0, 255], [255, 0, 0, 0]
+        ]);
+        expect(replaceColour(loose, [255, 0, 0, 255], [0, 255, 0, 255], wandMatcher(20))).toBe(3);
+        expect(at(loose, 1, 0)).toEqual([0, 255, 0, 255]);
+        expect(at(loose, 2, 0)).toEqual([0, 0, 255, 255]);   // blue is nowhere near
+    });
+
+    test("an adjustment is confined by the SELECTION, through the door every edit reads", () => {
+        // The point of the shape: every adjustment is already `(buffer) => number`, which is what
+        // `surfaceEditAction` takes — so obeying the marquee costs nothing but passing the mask.
+        const doc = createEmptyDocument();
+        const canvas = createPixelBuffer(4, 2);
+        for (let y = 0; y < 2; y++) for (let x = 0; x < 4; x++) setPixel(canvas, x, y, [10, 10, 10, 255]);
+        doc.nodes.set("R", { id: "R", type: "core.raster", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 4, height: 2 }, style: { fill: "none", opacity: 1 }, layout: {},
+            surface: { data: encodeSurface(canvas).data, width: 4, height: 2 } } as Node);
+        doc.rootNodeUuids = ["R"];
+        const dispatcher = new ActionDispatcher(doc);
+        // The left half only.
+        const mask = rectSelection(4, 2, { x: 0, y: 0 }, { x: 1, y: 1 });
+        const action = surfaceEditAction(dispatcher.getDocument(), "R", b => invertColours(b), mask)!;
+        expect(action).not.toBeNull();
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const after = (() => {
+            const s = dispatcher.getDocument().nodes.get("R")!.surface!;
+            return decodeSurface(s.data, s.width, s.height)!;
+        })();
+        expect(getPixel(after, 0, 0)).toEqual([245, 245, 245, 255]);
+        expect(getPixel(after, 1, 1)).toEqual([245, 245, 245, 255]);
+        expect(getPixel(after, 2, 0)).toEqual([10, 10, 10, 255]);   // outside the marquee
+        expect(getPixel(after, 3, 1)).toEqual([10, 10, 10, 255]);
+    });
+
+    test("the adjustments are REACHABLE, which is what an audit asks of arithmetic", () => {
+        // `core/paint/Adjust` would otherwise be nine functions with no caller — the exact state the
+        // feature audit exists to find, and the one `Palette`, `Quantize` and `floodFill` were all
+        // in before somebody asked.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/const action = surfaceEditAction\(doc, id, edit, pixelMaskFor\(es, doc, id\)\)/);
+        for (const [attr, call] of [
+            ["brightness", /adjustBrightness\(b, adjBrightness\)/],
+            ["contrast", /adjustContrast\(b, adjContrast\)/],
+            ["hsv", /adjustHsv\(b, adjHue, adjSaturation, adjValue\)/],
+            ["posterize", /posterize\(b, adjLevels\)/],
+            ["replace", /replaceColour\(/],
+            ["desaturate", /applyAdjustment\(desaturate\)/],
+            ["invert", /applyAdjustment\(invertColours\)/]
+        ] as const) {
+            expect(app).toMatch(new RegExp(`data-adjust="${attr}"`));
+            expect(app).toMatch(call);
+        }
+        // AND THE REPLACEMENT USES THE WAND'S MATCHER, so the two features cannot come to disagree
+        // about which pixels they mean.
+        expect(app).toMatch(/wandMatcher\(adjTolerance\)/);
+    });
+
+    test("the memo is keyed on COLOUR, so a repeated colour maps once and identically", () => {
+        // `mapColours` caches per distinct colour, which is the difference between a photograph
+        // taking a second and taking a minute. The risk of a cache is that it answers for a pixel it
+        // was not asked about — so: two pixels of the same colour must come out the same, and a
+        // caller's map must be asked exactly once per DISTINCT colour, not once per pixel.
+        const b = bufferOf([
+            [10, 20, 30, 255], [10, 20, 30, 255], [40, 50, 60, 255],
+            [10, 20, 30, 255], [40, 50, 60, 255], [10, 20, 30, 0]
+        ]);
+        const asked: string[] = [];
+        const changed = mapColours(b, (r, g, bl) => {
+            asked.push(`${r},${g},${bl}`);
+            return [r + 1, g + 1, bl + 1];
+        });
+        // FIVE pixels changed (the transparent one is skipped) from TWO distinct colours.
+        expect(changed).toBe(5);
+        expect(asked).toEqual(["10,20,30", "40,50,60"]);
+        expect(at(b, 0, 0)).toEqual([11, 21, 31, 255]);
+        expect(at(b, 1, 0)).toEqual([11, 21, 31, 255]);
+        expect(at(b, 2, 0)).toEqual([41, 51, 61, 255]);
+        expect(at(b, 2, 1)).toEqual([10, 20, 30, 0]);
+        // A MAP THAT CHANGES NOTHING reports nothing, so no undo step is left behind.
+        expect(mapColours(b, (r, g, bl) => [r, g, bl])).toBe(0);
     });
 });

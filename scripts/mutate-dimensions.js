@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1628;
+const EXPECTED_TESTS = 1639;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -513,6 +513,49 @@ const MUTANTS = [
       from: "            this.write(s.nodeId, s.base);",
       to: "            this.editorState.pixelSelection = null;",
       note: "Escape mid-drag clears instead of restoring — cancel costs the author their selection" },
+    // THE ADJUSTMENTS. Every one is a small pure map over a buffer, which is the shape that makes a
+    // wrong constant invisible: the picture still looks like a picture.
+    { id: "AD1", file: "src/core/paint/Adjust.ts",
+      from: "export const MID = 127.5;",
+      to: "export const MID = 128;",
+      note: "contrast pivots on 128, so every application creeps toward black — invisible once" },
+    { id: "AD2", file: "src/core/paint/Adjust.ts",
+      from: "    const quantise = (v: number) => Math.round(v / step) * step;",
+      to: "    const quantise = (v: number) => Math.floor(v / step) * step;",
+      note: "posterize floors instead of rounding — every value falls to the level below" },
+    { id: "AD3", file: "src/core/paint/Adjust.ts",
+      from: "    const step = 255 / (n - 1);",
+      to: "    const step = 255 / n;",
+      note: "posterize cuts the VALUES into buckets rather than the RANGE into intervals" },
+    { id: "AD4", file: "src/core/paint/Adjust.ts",
+      from: "        if (buffer.data[i + 3] === 0) continue;",
+      to: "        if (buffer.data[i + 3] < 0) continue;",
+      note: "transparent pixels are adjusted too, putting invisible bytes into every patch" },
+    { id: "AD5", file: "src/core/paint/Adjust.ts",
+      from: "        if (out === key) continue;",
+      to: "        if (out === key && false) continue;",
+      note: "an unchanged pixel counts as changed, so a no-op edit becomes an undo step" },
+    { id: "AD6", file: "src/core/paint/Adjust.ts",
+      from: "        const y = 0.299 * r + 0.587 * g + 0.114 * b;",
+      to: "        const y = 0.587 * r + 0.299 * g + 0.114 * b;",
+      note: "desaturate weights red like green — a plain-average grey by another route" },
+    { id: "AD7", file: "src/core/paint/Adjust.ts",
+      from: "    return Math.max(0, Math.min(255, Math.round(v)));",
+      to: "    return Math.max(0, Math.min(255, Math.floor(v)));",
+      note: "the byte floors, so every half-step lands one below — the pivot's whole point" },
+    { id: "AD8", file: "src/core/paint/Adjust.ts",
+      from: "    return [h, max === 0 ? 0 : d / max, max / 255];",
+      to: "    return [h, max === 0 ? 0 : d / 255, max / 255];",
+      note: "saturation divides by the wrong thing — the HSV round trip stops being exact" },
+    { id: "AD9", file: "src/core/paint/Adjust.ts",
+      from: "    const sector = Math.floor(hue / 60) % 6;",
+      to: "    const sector = Math.floor(hue / 60) % 5;",
+      note: "the last hue sector wraps to the first — magenta comes back red" },
+    { id: "AD10", file: "src/core/paint/Adjust.ts",
+      from: "    if (hueShift === 0 && saturationScale === 1 && valueScale === 1) return 0;",
+      to: "    if (hueShift === 0 && valueScale === 1) return 0;",
+      note: "a saturation-only adjustment is treated as a no-op and silently does nothing" },
+
     // THE SHADERS, which nothing in the gate compiles: tsc sees a string, the bundler sees a string,
     // jest sees a string, and the first reader that knows the language is a driver on a machine
     // somewhere. An identifier named `packed` — reserved in GLSL ES 1.00 — turned the whole GPU
