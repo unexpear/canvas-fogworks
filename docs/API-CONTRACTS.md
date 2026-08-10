@@ -1559,6 +1559,22 @@ would keep an orientation nothing can see and hold the whole `flips` array alive
 **Leaving the grid mid-stroke drops the anchor**, so coming back paints where the pointer is rather
 than striping a line across the map from where it left. **A press off the grid starts nothing.**
 
+```ts
+class BucketTool implements Tool { constructor(dispatcher, editorState, refresh, colour: () => Rgba) }
+function surfaceEditAction(doc, nodeId, edit: (b: PixelBuffer) => number): Action | null;
+function quantizeAction(doc, nodeId, palette: Palette): Action | null;
+```
+
+**`BucketTool` is the seam that makes `floodFill` reachable** — it had no caller outside the tests for
+as long as the paint layer has existed. The WHOLE SURFACE is the captured region, unlike a stroke's:
+a stroke's future is bounded by the brush, a fill's only by the canvas. One click is one history
+entry, with no coalescing, because a drag is one gesture and two clicks are two decisions.
+
+**A palette is loaded through its own two IPC channels** (`readPaletteFolder` / `readPaletteFile`),
+mirroring the Tiled pair rather than widening it, and confined to the folder the user picked. There is
+no palette extension to scan for, so the scan is `.json` and the panel reports how many of the files
+found actually described a palette — `parsePaletteFile` answering null is what makes that honest.
+
 `tileIndexAt` is the picker's half of the same arithmetic — the exact inverse of `tileSourceRect`,
 answering **null in the gutter and the margin** rather than the neighbouring tile.
 

@@ -303,6 +303,14 @@ actions emit partials: a move (`{x,y}`) and a resize (`{width,height}`) in one t
 both land, and `layout`'s grid ⊕ container exclusivity rides along as an explicit `undefined`
 that resolves last-wins instead of dropping both.
 
+**`surfaceEdit` is the same idea for a PANEL rather than a gesture.** A brush and a bucket are
+gestures and live in `editor/tools`; quantising a canvas is a button, and a button has nowhere
+testable to put its arithmetic. `surfaceEditAction(doc, nodeId, edit)` runs the sequence that is the
+whole difficulty — capture the region BEFORE the edit, edit, then diff — and returns null when nothing
+moved. Its two guards look redundant and are not: `edit` is a CALLER's function, so the count it
+reports is a claim while the patch is the truth, and each catches the other's disagreement in one
+direction (a count of 99 with no pixels moved, and a moved pixel reported as 0). Both are tested.
+
 **Actions can be BUILT outside the dispatcher and run inside a transaction**, which is what
 `tileImport.tileImportActions` does: it returns the list of actions a placed Tiled map becomes, ids
 and all. Every action after the first for a given node names a node the same list creates, so it only
