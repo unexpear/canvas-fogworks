@@ -338,8 +338,11 @@ use, because a map interleaves the two and a separate call would put every entit
 or below it, whichever way round the caller happened to write the two lines. Nesting rides on that
 order: a `group` placement opens a frame and the `object` placements after it become its children,
 because the caller cannot name a parent id — the ids are minted inside `tileImportActions`. A
-`tilemap` or a loose `image` CLOSES the open group, so a grid never inherits an object layer's
-opacity.
+`tilemap` or a loose `image` CLOSES the open group — which protects what comes AFTER it, not the grid
+itself: a tile layer is added with an explicit null parent and could never be adopted. Without the
+close, an `object` following a tile layer would be handed to a frame two layers up and inherit an
+opacity from a group it is not in. A surviving mutant found this, because the comment beside the code
+claimed the other effect and no test could see the real one.
 
 ## 6. Why this matters downstream
 
