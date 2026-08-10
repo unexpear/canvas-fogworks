@@ -27,7 +27,7 @@ The useful distinction this audit turned up is that a missing feature is not alw
 | **built, unreachable** | the core function exists and is tested; nothing in the UI calls it |
 | **absent** | not written |
 
-**Five capabilities were built and unreachable; three are now wired.** `PixelBuffer.floodFill` and `PixelBuffer.drawLine`
+**Five capabilities were built and unreachable; three are now wired and one was reclassified.** `PixelBuffer.floodFill` and `PixelBuffer.drawLine`
 had **no caller anywhere outside the tests**; `paint/Palette` and `paint/Quantize` have **no importer
 outside the tests at all** — an entire palette-and-quantisation layer the app cannot reach; and
 `diagnostics/ActionJournal.recordAction` has no caller either, so nothing is ever journalled. These
@@ -48,11 +48,11 @@ broke a test whose subject was still true. Both are fixed.
 | Symmetry guides | **have** | `paint/Symmetry`, reachable |
 | Eyedropper | **have** | reads the DOCUMENT, not the framebuffer |
 | Bucket fill (pixels) | **have** | `BucketTool`, in the Paint strip — closed 2026-08-09; still no tolerance parameter |
-| Line / rectangle / ellipse **on pixels** | **built, unreachable** (line) / **absent** (shapes) | `drawLine` has no caller; the shape tools make vector nodes |
+| Line / rectangle / ellipse **on pixels** | **absent** | `drawLine` exists and is NOT what a tool wants — a tool must stamp the BRUSH, which is `strokePath`+`linePoints`. Needs an ellipse rasteriser that does not exist |
 | Palette panel | **have** | loaded from a folder, drawn in the palette’s OWN grid with holes; closed 2026-08-09. No create/EDIT yet |
 | Quantise to a palette | **have** | `surfaceEdit.quantizeAction`, one button, one history entry — closed 2026-08-09 |
-| **Pixel selection** — rect, ellipse, lasso, magic wand, colour select, paint-select | **absent** | `marqueeRect` selects NODES; there is no selection mask anywhere |
-| Modify selection (grow / shrink / border) | **absent** | needs the above first |
+| **Pixel selection** — rect, ellipse, lasso, magic wand, colour select | **arithmetic done, no tools yet** | `paint/Selection` (2026-08-09): a binary MASK, four combine operators, bounds. EDITOR state, not schema |
+| Modify selection (grow / shrink / border / invert) | **arithmetic done** | `growSelection` takes a negative to shrink; `borderSelection` is derived from it, so the two cannot disagree about the edge |
 | Crop | **absent** | listed in PLANNED-FIXES and never built |
 | Image adjustments — brightness/contrast, HSV, curves, desaturate, invert, posterize, pixelize, outline, gradient map, palettize, colour replace | **absent** | VDE has shadow/blur as NODE effects; it has no destructive pixel adjustments |
 | Rotation algorithms (nearest, OmniScale, rotxel, cleanEdge) | **absent** | rotation is a node transform, resampled by the backend |
@@ -112,13 +112,16 @@ broke a test whose subject was still true. Both are fixed.
 ## The ranking this suggests
 
 1. ~~**Wire up what is already built**~~ — bucket, palette panel and quantise are DONE (2026-08-09).
-   What remains of that tranche: `PixelBuffer.drawLine`, still with no caller, and
-   `ActionJournal.recordAction`, still journalling nothing. `drawLine` may be the wrong primitive to
-   wire rather than a missing feature — a line TOOL wants the brush stamped along the line, which is
-   `Brush.strokePath` with `linePoints`, so `drawLine` is arguably superseded and should be deleted
-   rather than reached. Decide that before building a tool around it.
-2. **Pixel selection.** The largest single hole on the paint side, and everything else there
-   (crop, transform a region, cut/copy/paste, modify-selection) is downstream of it.
+   What remains of that tranche: `ActionJournal.recordAction`, still journalling nothing.
+   **`drawLine` is SETTLED and is not part of it** — it is neither a missing feature nor dead code. A
+   line tool must stamp the chosen BRUSH along the line (`strokePath` handed `linePoints`), so wiring
+   this would give a tool that ignores brush size; and four tests use it to put a diagonal on a
+   surface while one asserts its clipping, so deleting it would cost four hand-built fixtures and a
+   guard. It stays a primitive, and its header now says why not to wire it.
+2. **Pixel selection.** The ARITHMETIC landed 2026-08-09 (`paint/Selection`). What remains is the
+   tools (rect / ellipse / lasso / wand marquees), holding the mask in `EditorState`, and making the
+   brush, the bucket and `surfaceEdit` honour it — which is the point: an unhonoured mask is a
+   marquee that draws a dashed rectangle and changes nothing.
 3. **Image adjustments.** A family of small, independently testable pure functions over a
    `PixelBuffer` — the shape this codebase is best at.
 4. **Tiled object layers.** The map side's largest hole and the one the "2D game engine" direction
