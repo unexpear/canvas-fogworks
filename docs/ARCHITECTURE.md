@@ -1,6 +1,9 @@
 # Architecture
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer -->
+<!-- re-read 2026-08-10 after schema 64: accurate at this altitude. `applyMutations` gained two
+     fields whose whole behaviour is that NOTHING derives from them, so no arrow in the chain
+     moved — which is the clearest case the derivation picture still holds. -->
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 <!-- re-read 2026-08-09 after pixel selection: still accurate, and it surfaced a real omission — `core/paint` had never been in the module table at all, eleven modules in. Added, with the clip rule. -->
 <!-- re-read 2026-08-10 after the adjustments and the WebGL fix: accurate. The renderer row now records that the GPU fallback speaks; the paint row gained `Adjust`. -->

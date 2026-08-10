@@ -1,6 +1,9 @@
 # Coding Standards
 
 <!-- describes: src/core/document/Document.ts -->
+<!-- re-read 2026-08-10 after schema 64: accurate. The new fields follow the stated rules —
+     one validator shared by the load and edit paths, and a header that says WHY the value is
+     text rather than what it is. -->
 
 > 🔒 Frozen contract · schema v63 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Conventions + the hard rules that protect the invariants.
 
