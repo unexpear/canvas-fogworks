@@ -1109,6 +1109,24 @@ interface TiledTilemapLayer {
     dropped: number;                                // cells the set has no tile for — holes, counted
 }
 interface TiledTilemapFit { layer: TiledTilemapLayer | null; why: string | null }
+// OBJECT LAYERS (2026-08-10) — the half of Tiled a game needs first: a tile layer says what is at
+// every position, an object layer says where a few THINGS are. `parseTiledMap` now returns these.
+interface TiledProperty { name: string; type: string; value: string }   // value kept AS WRITTEN
+interface TiledObject {
+  id: number; name: string; className: string;   // `class` (1.9) and `type` (1.8) are ONE field
+  kind: "tile" | "rectangle" | "ellipse" | "point" | "polygon" | "polyline" | "text" | "template";
+  x: number; y: number; width: number; height: number;   // NOT a top-left corner for a tile — see objectBox
+  rotation: number;                                       // DEGREES, clockwise, about (x, y)
+  visible: boolean; cell: TiledCell | null; template: string | null;
+  properties: TiledProperty[]; points: { x: number; y: number }[];      // points are RELATIVE to (x, y)
+}
+interface TiledObjectGroup { id; name; opacity; visible; offsetX; offsetY; objects: TiledObject[] }
+// A TILE OBJECT'S (x, y) IS ITS BOTTOM-LEFT and every other object's is its top-left — the most
+// common Tiled importing bug there is, and invisible: everything lands one object-height too low.
+function objectBox(obj: TiledObject): { x: number; y: number; width: number; height: number };
+// Radians (the sign is NOT flipped: both conventions are clockwise on a y-down screen) plus the
+// fraction of the box Tiled turns about — {0,1} for a tile object, {0,0} for the rest.
+function objectTransform(obj: TiledObject): { rotation: number; origin: { x: number; y: number } };
 function tilemapForLayer(map: { orientation: string; tileWidth: number; tileHeight: number },
                          layer: TiledLayer, tilesets: readonly TiledTileset[]): TiledTilemapFit;
 ```

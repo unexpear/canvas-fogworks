@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v62 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1487) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8) = 1639 tests.
+> 🔒 Frozen contract · schema v62 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1493) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8) = 1645 tests.
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1639 tests
+npm test                                   # jest (ts-jest), 1645 tests
 npm run header-claims                      # ADVISORY: module-header sentences with a shelf life
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
@@ -58,7 +58,7 @@ node scripts/menu-command.js "Zoom to Fit"
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1639 tests)
+## What is covered (1645 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -445,7 +445,7 @@ The checklist, applied when the fixture is written:
 This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
 cannot see — over the paint modules, the Tiled reader, the mesh, nine-slice, the tile grid, the tile
-brush and the autotiler, exiting non-zero on a survivor: currently **117 mutants, 117 killed**.
+brush and the autotiler, exiting non-zero on a survivor: currently **128 mutants, 128 killed**.
 Six cover `SurfaceSpace`, where the convenient fixture is not
 a square buffer but **a box at the origin** (which hides a dropped origin term) and **a
 round-trip-only assertion** (which hides a half-pixel shift, because it shifts both directions
@@ -453,6 +453,23 @@ equally). Three cover `TiledMap`, where it is **a map that offsets only one axis
 invisible), **a map that always states the attribute** (so a missing default is invisible), and
 **a corpus where only one render order ever occurs** (so an inverted condition is invisible —
 all 20 maps in the tree use `right-down`).
+
+**AND A FOURTH: `AMBIGUOUS`.** A `from` that appears TWICE in its file mutates whichever site
+comes first, because `String.replace` takes the first — so the mutant silently tests a line its note
+does not describe. Added 2026-08-10 after reading Tiled's object layers gave
+`visible: a.visible === undefined ? ...` a second home: `TM4` re-aimed from a tile layer to an
+object and went on reporting a kill, for a guard nothing was testing any more. Four mutants were
+mis-aimed by that one change. Both this and `NOT APPLIED` exit non-zero.
+
+**A CONTROL CHARACTER IN SOURCE is a lint error** (`npm run lint`), and it is there because nothing
+else in the gate can see one: `tsc` compiles it, esbuild bundles it, jest runs it, and a terminal
+renders it by ERASING the character before it, so the file reads correctly on screen while meaning
+something else. On 2026-08-10 a word-boundary escape reached a regex as a literal 0x08 through a
+shell heredoc, turning a pattern that matches every object tag into one that matches nothing — and
+the reader then found zero objects in a file holding 114, with every test still green. Tab, newline
+and carriage return are the only control characters a source file may contain; a deliberate one (a
+NUL joining cache-key fields) is written as an escape so it is visible and so this check can tell it
+from an accident.
 
 **THERE IS A THIRD VERDICT, and it is the one that has actually cost guards.** `NOT APPLIED` means
 the mutation's `from` matched nothing, so the mutant tested NOTHING while the run still summarised as

@@ -698,7 +698,7 @@ export function lastGLFailure(): string | null {
 /**
  * A driver's info log, fit to put in a sentence.
  *
- * NUL-TERMINATED IN PRACTICE: ANGLE hands back a C string complete with its terminator, and a ` `
+ * NUL-TERMINATED IN PRACTICE: ANGLE hands back a C string complete with its terminator, and a NUL
  * left in the middle of a tooltip renders as a replacement glyph in some fonts and as nothing in
  * others — either way it reads as corruption in a message whose whole job is to be believed. Every
  * control character goes, not just the trailing one, because a multi-line log is being flattened
@@ -709,7 +709,7 @@ export function lastGLFailure(): string | null {
  */
 export function readableGLLog(log: string | null): string {
     // eslint-disable-next-line no-control-regex
-    return (log ?? "no log").replace(/[ -]+/g, " ").trim() || "no log";
+    return (log ?? "no log").replace(/[\u0000-\u001f]+/g, " ").trim() || "no log";
 }
 
 function compile(gl: WebGLRenderingContext, type: number, source: string, label: string): WebGLShader | null {

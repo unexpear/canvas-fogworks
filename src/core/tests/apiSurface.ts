@@ -133,6 +133,7 @@ import { FontInfo, FontFlavour, parseFontFile, fontFileError, FONT_MAX_TABLES, F
 import { TiledMapResult, TiledTileset, TiledTileImage, TiledLayer, TiledCell, parseTiledMap, parseTiledTileset,
     tiledMapError, decodeGid, tilesetFor, tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow,
     tilemapForLayer, TiledTilemapLayer, TiledTilemapFit,
+    TiledObject, TiledObjectGroup, TiledProperty, objectBox, objectTransform,
     TILED_MAX_CELLS, TILED_MAX_LAYERS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
 import { Tilemap, emptyTilemap, cellAt, FLIP_D } from "../document/Tilemap";
 import { GlbContainer, GltfJson, GltfNode, GltfResult, GltfMeshInstance, GltfPrimitive,
@@ -885,6 +886,20 @@ export function __apiSurfacePin(): void {
     // CONTRACT is the pair: a caller must be able to tell "not a grid" from "a grid", and be told
     // WHY, because the fallback costs one node per cell and the reason is what says whether that is
     // a file to fix or a feature we do not have.
+    // OBJECT LAYERS (2026-08-10): the half of Tiled a game needs first — entities rather than
+    // cells. The CONTRACT that matters is the anchoring: a tile object's (x, y) is its BOTTOM-LEFT
+    // and everything else's is its top-left, so `objectBox` is the only sanctioned way to ask where
+    // one is, and `objectTransform` is the only sanctioned way to ask which corner it turns about.
+    expectType<TiledObjectGroup[]>(tmap.objectGroups);
+    const tobj: TiledObject = {
+        id: 1, name: "", className: "", kind: "tile", x: 0, y: 0, width: 0, height: 0,
+        rotation: 0, visible: true, cell: null, template: null, properties: [], points: []
+    };
+    expectType<TiledObject>(tobj);
+    expectType<TiledProperty[]>(tobj.properties);
+    expectType<{ x: number; y: number; width: number; height: number }>(objectBox(tobj));
+    expectType<{ rotation: number; origin: { x: number; y: number } }>(objectTransform(tobj));
+
     const fit: TiledTilemapFit = tilemapForLayer(tmap, tlayer, tmap.tilesets);
     expectType<TiledTilemapLayer | null>(fit.layer);
     expectType<string | null>(fit.why);

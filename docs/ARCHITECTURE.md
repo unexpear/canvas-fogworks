@@ -4,6 +4,9 @@
 <!-- re-read 2026-07-31 after the editor slices (align/distribute, full properties inspector): accurate at this doc's altitude -->
 <!-- re-read 2026-08-09 after pixel selection: still accurate, and it surfaced a real omission — `core/paint` had never been in the module table at all, eleven modules in. Added, with the clip rule. -->
 <!-- re-read 2026-08-10 after the adjustments and the WebGL fix: accurate. The renderer row now records that the GPU fallback speaks; the paint row gained `Adjust`. -->
+<!-- re-read 2026-08-10 after the Tiled object reader: accurate at this altitude. The importer is
+     not in the module table (it never has been) and the table is about the engine's own layers,
+     not its readers; API-CONTRACTS carries the reader's surface. -->
 
 
 > 🔒 Frozen contract · schema v62 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.

@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1639;
+const EXPECTED_TESTS = 1645;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -99,20 +99,20 @@ const MUTANTS = [
     // TiledMap — a layer's offset. The convenient fixture is a map where the two axes are equal,
     // or where one is absent, or where the layer offset and the tileset's tileoffset agree.
     { id: "TM1", file: "src/core/import/TiledMap.ts",
-      from: "            offsetX: num(a.offsetx, 0),",
-      to: "            offsetX: num(a.offsety, 0),",
+      from: "            offsetX: num(a.offsetx, 0),\n            offsetY: num(a.offsety, 0),\n            // CLAMPED",
+      to: "            offsetX: num(a.offsety, 0),\n            offsetY: num(a.offsety, 0),\n            // CLAMPED",
       note: "layer offset reads the wrong axis — invisible when a map offsets only one axis" },
     { id: "TM2", file: "src/core/import/TiledMap.ts",
-      from: "            offsetY: num(a.offsety, 0),",
-      to: "            offsetY: num(a.offsety, undefined as unknown as number),",
+      from: "            offsetY: num(a.offsety, 0),\n            // CLAMPED",
+      to: "            offsetY: num(a.offsety, undefined as unknown as number),\n            // CLAMPED",
       note: "an absent layer offset becomes undefined, not 0 — invisible unless a map omits it" },
     { id: "TM3", file: "src/core/import/TiledMap.ts",
       from: '    if (order !== "right-down") {',
       to: '    if (order === "right-down") {',
       note: "the render-order note fires on the DEFAULT — invisible if only one order is ever tested" },
     { id: "TM4", file: "src/core/import/TiledMap.ts",
-      from: "visible: a.visible === undefined ? true : num(a.visible, 1) !== 0,",
-      to: "visible: a.visible !== undefined,",
+      from: "visible: a.visible === undefined ? true : num(a.visible, 1) !== 0,\n            cells: raw.map(decodeGid)",
+      to: "visible: a.visible !== undefined,\n            cells: raw.map(decodeGid)",
       note: "treats the ATTRIBUTE'S PRESENCE as the flag — invisible unless a map says visible=\"1\"" },
     // NineSlice — the newest member of the family, and it arrived with two survivors: every
     // fixture used a SQUARE 9x9 source, so "clamp the vertical against the width" was invisible.
@@ -147,8 +147,8 @@ const MUTANTS = [
       note: "and the other axis of the same division, which a square box cannot tell apart" },
 
     { id: "TM5", file: "src/core/import/TiledMap.ts",
-      from: "opacity: Math.min(1, Math.max(0, num(a.opacity, 1))),",
-      to: "opacity: num(a.opacity, 1),",
+      from: "opacity: Math.min(1, Math.max(0, num(a.opacity, 1))),\n            // ABSENT MEANS SHOWN",
+      to: "opacity: num(a.opacity, 1),\n            // ABSENT MEANS SHOWN",
       note: "opacity is not clamped — invisible unless a map states one outside 0..1" },
 
     // `tilemapForLayer` — a whole layer as one grid. Every mutation here is one a SQUARE layer, a
@@ -513,6 +513,53 @@ const MUTANTS = [
       from: "            this.write(s.nodeId, s.base);",
       to: "            this.editorState.pixelSelection = null;",
       note: "Escape mid-drag clears instead of restoring — cancel costs the author their selection" },
+    // TILED OBJECT LAYERS. The anchoring rule is the one that matters and the one a fixture cannot
+    // see by accident: every object still lands SOMEWHERE plausible when it is wrong.
+    { id: "OB1", file: "src/core/import/TiledMap.ts",
+      from: '        y: obj.kind === "tile" ? obj.y - obj.height : obj.y,',
+      to: "        y: obj.y,",
+      note: "a tile object is anchored top-left — every one lands an object-height too low" },
+    { id: "OB2", file: "src/core/import/TiledMap.ts",
+      from: '        y: obj.kind === "tile" ? obj.y - obj.height : obj.y,',
+      to: "        y: obj.y - obj.height,",
+      note: "the bottom-left shift is applied to EVERY kind, so collision volumes ride up" },
+    { id: "OB3", file: "src/core/import/TiledMap.ts",
+      from: '        origin: obj.kind === "tile" ? { x: 0, y: 1 } : { x: 0, y: 0 }',
+      to: "        origin: { x: 0, y: 0 }",
+      note: "a rotated tile object turns about the wrong corner and swings off its position" },
+    { id: "OB4", file: "src/core/import/TiledMap.ts",
+      from: "        rotation: obj.rotation * Math.PI / 180,",
+      to: "        rotation: -obj.rotation * Math.PI / 180,",
+      note: "the rotation sign is 'corrected' for clockwise, mirroring every rotated object" },
+    { id: "OB5", file: "src/core/import/TiledMap.ts",
+      from: '            a.template !== undefined ? "template"',
+      to: '            a.template !== null ? "template"',
+      note: "every object reads as a template, because an absent attribute is undefined not null" },
+    { id: "OB6", file: "src/core/import/TiledMap.ts",
+      from: '            className: a.class ?? a.type ?? "",',
+      to: '            className: a.class ?? "",',
+      note: "Tiled 1.8's `type` is dropped — the only class in the corpus disappears" },
+    { id: "OB7", file: "src/core/import/TiledMap.ts",
+      from: '            properties.push({ name: pa.name, type: pa.type ?? "string", value: pa.value ?? "" });',
+      to: '            properties.push({ name: pa.name, type: pa.type ?? "", value: pa.value ?? "" });',
+      note: "an untyped property loses the format's default, so a consumer's switch stops being total" },
+    { id: "OB8", file: "src/core/import/TiledMap.ts",
+      from: "    for (const m of body.matchAll(/<object\\b([^>]*?)(\\/>|>([\\s\\S]*?)<\\/object>)/g)) {",
+      to: "    for (const m of body.matchAll(/<object\\b([^>]*?)(\\/>|>([\\s\\S]*)<\\/object>)/g)) {",
+      note: "the object close is GREEDY, so one object swallows its neighbours and their properties" },
+    { id: "OB9", file: "src/core/import/TiledMap.ts",
+      from: "                return { x: num(px, 0), y: num(py, 0) };",
+      to: "                return { x: num(px, 0), y: num(px, 0) };",
+      note: "a polygon's points read x for y — invisible on any point where the two are equal" },
+    { id: "OB11", file: "src/core/import/TiledMap.ts",
+      from: "            visible: a.visible === undefined ? true : num(a.visible, 1) !== 0,\n            cell:",
+      to: "            visible: a.visible !== undefined,\n            cell:",
+      note: "an OBJECT's visibility reads the attribute's presence — every shown object hides" },
+    { id: "OB10", file: "src/core/import/TiledMap.ts",
+      from: "            visible: a.visible === undefined ? true : num(a.visible, 1) !== 0,\n            offsetX: num(a.offsetx, 0),\n            offsetY: num(a.offsety, 0),\n            objects: parseObjects(m[3] ?? \"\")",
+      to: "            visible: a.visible !== undefined,\n            offsetX: num(a.offsetx, 0),\n            offsetY: num(a.offsety, 0),\n            objects: parseObjects(m[3] ?? \"\")",
+      note: "an object layer's visibility reads the ATTRIBUTE'S PRESENCE, hiding every shown layer" },
+
     // THE ADJUSTMENTS. Every one is a small pure map over a buffer, which is the shape that makes a
     // wrong constant invisible: the picture still looks like a picture.
     { id: "AD1", file: "src/core/paint/Adjust.ts",
@@ -565,7 +612,7 @@ const MUTANTS = [
       to: "        vec4 packed = texture2D(u_tileIndex, (cell + 0.5) / u_tileGrid.xy);",
       note: "a shader declares a GLSL ES 1.00 RESERVED WORD — the GPU path dies, silently" },
     { id: "RW2", file: "src/renderer/emitWebGL.ts",
-      from: '    return (log ?? "no log").replace(/[\u0000-\u001f]+/g, " ").trim() || "no log";',
+      from: '    return (log ?? "no log").replace(/[\\u0000-\\u001f]+/g, " ").trim() || "no log";',
       to: '    return (log ?? "no log").trim() || "no log";',
       note: "a driver's NUL terminator survives into the tooltip, so the reason reads as corruption" },
     { id: "MK11", file: "src/editor/tools/RasterTool.ts",
@@ -625,10 +672,22 @@ for (const mut of selected) {
     // Matching a normalised copy is the fix; the file is restored from `original`, so the
     // normalisation never outlives the run.
     const source = original.replace(/\r\n/g, "\n");
-    if (!source.includes(mut.from)) {
+    const occurrences = source.split(mut.from).length - 1;
+    if (occurrences === 0) {
         // NOT a survivor and NOT a kill: the code moved out from under the mutation, so the
         // battery is testing nothing. Re-author it against the code as it now stands.
         console.log(`${mut.id}  NOT APPLIED — 'from' no longer matches ${mut.file}`);
+        survivors++;
+        continue;
+    }
+    if (occurrences > 1) {
+        // AMBIGUOUS — the verdict this harness was missing, and the worse of the two. `String.replace`
+        // takes the FIRST match, so a `from` that appears twice mutates whichever site comes first
+        // while its note goes on describing the other. Not hypothetical: reading object layers gave
+        // `visible: a.visible === undefined ? ...` a second home, and TM4 silently re-aimed from a
+        // tile layer to an object — still reporting a kill, for a guard nothing was testing.
+        console.log(`${mut.id}  AMBIGUOUS — 'from' matches ${occurrences} places in ${mut.file}; `
+            + "add context so it names one");
         survivors++;
         continue;
     }

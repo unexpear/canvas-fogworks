@@ -46,6 +46,34 @@ for (const root of ROOTS) {
 // quoting a symbol name the way every other comment in this codebase does TERMINATES the string,
 // and the failure surfaces as a TS1005 pointing at a line of GLSL — which reads as anything but
 // its cause. It cost a round twice before this check existed.
+/**
+ * A CONTROL CHARACTER IN SOURCE — the one defect nothing else in this project can see.
+ *
+ * `tsc` compiles it, esbuild bundles it, jest runs it, and a terminal RENDERS it by erasing the
+ * character before it, so the source reads correctly on screen while meaning something else. It cost
+ * an hour on 2026-08-10: a word-boundary escape in a regex arrived as a literal 0x08 through a shell
+ * heredoc, turning a pattern that matches every object tag into one that matches nothing — in a
+ * reader that then silently found zero objects in a file full of them.
+ *
+ * TAB, NEWLINE AND CARRIAGE RETURN ARE THE ONLY ONES ALLOWED, because they are the only ones that
+ * mean anything in a text file. Everything else in the C0 range is a transcription accident, and the
+ * moment it arrives is the only cheap moment to find it.
+ */
+const controlOffenders = [];
+for (const root of ROOTS) {
+    const dir = path.join(rootDir, root);
+    if (!fs.existsSync(dir)) continue;
+    for (const file of walk(dir)) {
+        const text = fs.readFileSync(file, "utf-8");
+        const m = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.exec(text);
+        if (!m) continue;
+        const line = text.slice(0, m.index).split("\n").length;
+        const code = "0x" + m[0].charCodeAt(0).toString(16).padStart(2, "0");
+        controlOffenders.push(
+            path.relative(rootDir, file).split(path.sep).join("/") + ":" + line + " holds " + code);
+    }
+}
+
 const shaderOffenders = [];
 for (const root of ROOTS) {
     const dir = path.join(rootDir, root);
@@ -84,6 +112,16 @@ if (parseOffenders.length > 0) {
         `A script under scripts/ does not parse (${parseOffenders.length}):\n`
         + parseOffenders.map(f => "  " + f).join("\n")
         + "\n\nNothing else in the gate loads these, so this is the only thing that would notice."
+    );
+    process.exit(1);
+}
+
+if (controlOffenders.length > 0) {
+    console.error(
+        "A CONTROL CHARACTER is in the source of " + controlOffenders.length + " file(s):\n" +
+        controlOffenders.map(f => "  " + f).join("\n") +
+        "\n\nNothing else notices: it compiles, it bundles, it runs, and a terminal hides it by\n" +
+        "erasing the character before it. Usually an escape eaten by a shell heredoc."
     );
     process.exit(1);
 }

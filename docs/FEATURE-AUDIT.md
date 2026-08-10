@@ -132,8 +132,11 @@ broke a test whose subject was still true. Both are fixed.
    ops (pixelize, outline) and the ramp-driven ones (curves, gradient map); they are a different
    shape and want their own slice — `outline` writes where alpha was 0, so this family's
    "skip transparent pixels" rule stops being right for it.
-4. **Tiled object layers.** The map side's largest hole and the one the "2D game engine" direction
-   needs first: entities, not tiles.
+4. **Tiled object layers** — the READER landed 2026-08-10 (`parseTiledMap` now returns
+   `objectGroups`, with `objectBox`/`objectTransform` for the anchoring). What remains is
+   PLACEMENT: turning those objects into nodes, which is the next slice and the thing that makes
+   this reachable. Until it lands, this is arithmetic with no consumer — the state this audit
+   exists to find, recorded here rather than discovered later.
 5. **A tileset as editable content**, which is what unlocks Pixelorama's Manual/Auto/Stack modes and
    tile-level rotation. This is a schema change and should follow the terrain field.
 6. **TMX export**, so a map authored here can leave.

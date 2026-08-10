@@ -152,7 +152,7 @@ export function textRasterKey(shape: TextShape, paint: Paint, scale: number): st
     return [
         shape.text, shape.width, shape.height, shape.fontSize, shape.fontFamily, shape.fontWeight,
         shape.textAlign, shape.lineHeight, shape.letterSpacing, paint.fill ?? "", paint.opacity ?? "", scale
-    ].join(" ");
+    ].join("\u0000");
 }
 
 /**

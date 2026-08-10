@@ -51,10 +51,24 @@
  * and reported for exactly that reason. Layer `opacity` and `visible` are READ rather than noted,
  * because both are cheap and both are wrong to ignore in a way a viewer sees at once.
  *
- * STILL DELIBERATELY UNREAD, and now reported: object layers, image layers, group nesting, and any
- * orientation `tilePosition` cannot place. Tile animations, wangsets, terrains, templates, infinite
- * chunks and custom properties are unread and NOT reported — they change no tile's position, so a
- * note about them would be noise on a map that draws correctly.
+ * OBJECT LAYERS ARE READ (2026-08-10), which is the half of Tiled a game needs first: a tile layer
+ * says what is at every position, an object layer says where a few THINGS are. Measured before it
+ * was designed — the asset tree's 20 maps have none at all, and the sandbox fixture has 11 groups
+ * and 114 objects that are 103 tile objects, 9 template references and 2 plain rectangles, with not
+ * one point, ellipse, polygon, polyline or text among them. So the effort went where the objects
+ * are, and the shapes the format allows but this corpus never uses are read as far as their box and
+ * REPORTED rather than pretended.
+ *
+ * A TILE OBJECT'S (x, y) IS ITS BOTTOM-LEFT CORNER and every other object's is its top-left, which
+ * is the single most common Tiled importing bug and the reason `objectBox` exists as the only
+ * sanctioned way to ask where an object is. It is invisible in the worst way: every object still
+ * lands somewhere plausible, one object-height too low.
+ *
+ * STILL DELIBERATELY UNREAD, and now reported: image layers, group nesting, an object layer's
+ * parallax factor, the `.tx` files template objects name, and any orientation `tilePosition` cannot
+ * place. Tile animations, wangsets, terrains, infinite chunks and a TILE's custom properties are
+ * unread and NOT reported — they change no tile's position, so a note about them would be noise on
+ * a map that draws correctly.
  */
 
 import { SourceRect } from "../document/Node";
@@ -160,6 +174,78 @@ export interface TiledLayer {
     cells: TiledCell[];
 }
 
+/**
+ * One object in an object layer: an ENTITY rather than a cell.
+ *
+ * A tile layer says what is at every position; an object layer says where a few things ARE. That is
+ * the difference between a map and a level — a spawn point, a door, a collision volume, a decoration
+ * placed off the grid — and it is the half of Tiled a game needs first.
+ *
+ * MEASURED (2026-08-10): the asset tree's 20 maps have NO object layers at all. Tiled's own
+ * `sticker-knight` sandbox, kept here as `test-fixtures/tiled/object-only.tmx`, has 11 groups and
+ * 114 objects: 103 TILE objects, 9 template references and 2 plain rectangles. Thirteen carry flip
+ * bits in their gid, eight carry a rotation, 19 carry custom properties, exactly one carries a
+ * `type`, and none carries a name. There is not one point, ellipse, polygon, polyline or text object
+ * in the tree — so those are read as far as their box and REPORTED, rather than pretended.
+ */
+export interface TiledObject {
+    id: number;
+    name: string;
+    /**
+     * Tiled's `type` (1.8 and earlier) or `class` (1.9 and later) — one field, renamed mid-format.
+     *
+     * BOTH ARE READ INTO ONE FIELD because they are the same thing, and a reader that knew only the
+     * newer name would silently drop every class in the corpus that exists: the one typed object in
+     * this tree writes `type="exit"`.
+     */
+    className: string;
+    /** What the object IS, which decides how its box is anchored — see `objectBox`. */
+    kind: "tile" | "rectangle" | "ellipse" | "point" | "polygon" | "polyline" | "text" | "template";
+    /** As the file states them. NOT a top-left corner for a tile object — see `objectBox`. */
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    /** Degrees, CLOCKWISE, about the object's own (x, y) — which is not its centre. */
+    rotation: number;
+    visible: boolean;
+    /** The tile and its flips, for a tile object; null for every other kind. */
+    cell: TiledCell | null;
+    /** The `.tx` file a template object names. Resolving it needs a filesystem, so a CALLER does. */
+    template: string | null;
+    /** Custom properties, values kept as WRITTEN — see `TiledProperty`. */
+    properties: TiledProperty[];
+    /** A polygon's or polyline's points, relative to (x, y). Empty for every other kind. */
+    points: { x: number; y: number }[];
+}
+
+/**
+ * One custom property, with its declared type and its value AS WRITTEN.
+ *
+ * THE VALUE IS NOT PARSED, and that is deliberate. Tiled's types are `string`, `int`, `float`,
+ * `bool`, `color`, `file`, `object` and `class`, and what a consumer wants from each differs: a
+ * game's loader wants a number, an inspector wants the text the author typed, and a round-trip back
+ * to `.tmx` wants the exact string. Parsing here would pick one and lose the others; the type is
+ * carried so any of them can be done by whoever knows which.
+ */
+export interface TiledProperty {
+    name: string;
+    /** `string` when the file omits it, which is what the format's default means. */
+    type: string;
+    value: string;
+}
+
+/** An object layer: the things, plus what the layer does to all of them. */
+export interface TiledObjectGroup {
+    id: number;
+    name: string;
+    opacity: number;
+    visible: boolean;
+    offsetX: number;
+    offsetY: number;
+    objects: TiledObject[];
+}
+
 /** A read map. */
 export interface TiledMapResult {
     width: number;
@@ -169,6 +255,8 @@ export interface TiledMapResult {
     orientation: string;
     tilesets: TiledTileset[];
     layers: TiledLayer[];
+    /** Object layers, in file order. Empty for the 20 maps in this tree, which have none. */
+    objectGroups: TiledObjectGroup[];
     /** What could not be represented exactly, reported rather than left to be discovered. */
     notes: string[];
 }
@@ -311,6 +399,115 @@ function readData(
  * zlib-compressed layer; without it such a layer is skipped with a note rather than failing the map,
  * so the tilesets and the other layers still arrive.
  */
+/**
+ * The objects of one `<objectgroup>` body.
+ *
+ * KIND IS DECIDED BY WHAT THE TAG CARRIES, in the order the format resolves it: a `template`
+ * reference first (it supplies everything else and this reader has not opened it), then a child
+ * element naming a shape, then a `gid` making it a tile, and a bare box is a rectangle. Deciding on
+ * `gid` first would call a templated tile object a tile and then report a box the template holds.
+ */
+function parseObjects(body: string): TiledObject[] {
+    const out: TiledObject[] = [];
+    // Each object is its own tag, self-closing or with a body — the same shape the tileset scan
+    // uses, and the reason both are written out rather than shared: a `<object>` inside a `<text>`
+    // does not exist, but a `<properties>` inside an object does, and the lazy close is what keeps
+    // one object's properties out of the next one.
+    for (const m of body.matchAll(/<object\b([^>]*?)(\/>|>([\s\S]*?)<\/object>)/g)) {
+        const a = attributes(`<object${m[1]}>`);
+        const inner = m[3] ?? "";
+        const points = (tag: string) => {
+            const p = new RegExp(`<${tag}\\b[^>]*>`).exec(inner);
+            if (!p) return [];
+            const raw = attributes(p[0]).points ?? "";
+            return raw.split(" ").filter(Boolean).map(pair => {
+                const [px, py] = pair.split(",");
+                return { x: num(px, 0), y: num(py, 0) };
+            });
+        };
+        const kind: TiledObject["kind"] =
+            a.template !== undefined ? "template"
+            : /<point\b/.test(inner) ? "point"
+            : /<ellipse\b/.test(inner) ? "ellipse"
+            : /<polygon\b/.test(inner) ? "polygon"
+            : /<polyline\b/.test(inner) ? "polyline"
+            : /<text\b/.test(inner) ? "text"
+            : a.gid !== undefined ? "tile"
+            : "rectangle";
+        const properties: TiledProperty[] = [];
+        for (const pm of inner.matchAll(/<property\b[^>]*\/?>/g)) {
+            const pa = attributes(pm[0]);
+            if (pa.name === undefined) continue;
+            // `string` IS THE FORMAT'S DEFAULT, and writing it in makes every consumer's switch
+            // total — an absent type is not a missing property, it is a text one.
+            properties.push({ name: pa.name, type: pa.type ?? "string", value: pa.value ?? "" });
+        }
+        out.push({
+            id: num(a.id, 0),
+            name: a.name ?? "",
+            // BOTH SPELLINGS, one field: `type` is what 1.8 wrote and `class` is what 1.9 renamed it
+            // to. The newer wins when a file somehow carries both.
+            className: a.class ?? a.type ?? "",
+            kind,
+            x: num(a.x, 0),
+            y: num(a.y, 0),
+            // A POINT AND A TEMPLATE HAVE NO SIZE of their own, and 0 is the honest answer rather
+            // than a guess — a template's size lives in the file this has not opened.
+            width: num(a.width, 0),
+            height: num(a.height, 0),
+            rotation: num(a.rotation, 0),
+            visible: a.visible === undefined ? true : num(a.visible, 1) !== 0,
+            cell: a.gid !== undefined ? decodeGid(num(a.gid, 0)) : null,
+            template: a.template ?? null,
+            properties,
+            points: kind === "polygon" ? points("polygon") : kind === "polyline" ? points("polyline") : []
+        });
+    }
+    return out;
+}
+
+/**
+ * Where an object's box IS, in map pixels, anchored top-left like every node in this engine.
+ *
+ * A TILE OBJECT'S (x, y) IS ITS BOTTOM-LEFT CORNER. Every other object's is its top-left. That one
+ * asymmetry is the most common Tiled importing bug there is, and it is invisible in the worst way:
+ * every object still lands somewhere plausible, just one tile-height too low, so a level looks
+ * "slightly off" rather than broken. Tiled inherited it from an era when a tile object was drawn
+ * from its baseline, and the format kept it.
+ *
+ * THE HEIGHT USED IS THE OBJECT'S OWN, not the tile's. A tile object may be stretched — 103 of the
+ * 114 objects in the fixture are tile objects and their sizes vary from 32x512 to 2528x385 — so
+ * subtracting the tileset's tile height would be right only for an unscaled one.
+ */
+export function objectBox(obj: TiledObject): { x: number; y: number; width: number; height: number } {
+    return {
+        x: obj.x,
+        y: obj.kind === "tile" ? obj.y - obj.height : obj.y,
+        width: obj.width,
+        height: obj.height
+    };
+}
+
+/**
+ * An object's rotation, as this engine states one: RADIANS, and the fraction of the box it turns about.
+ *
+ * TILED ROTATES ABOUT THE OBJECT'S OWN (x, y) — which `objectBox` has just established is the
+ * BOTTOM-LEFT for a tile object and the top-left for everything else. This engine rotates about a
+ * `transform.origin` given as a fraction of the box, so the two are reconciled by naming the corner
+ * rather than by moving the object: {0, 1} for a tile object, {0, 0} for the rest.
+ *
+ * THE SIGN IS NOT FLIPPED, and that is worth stating because "clockwise" usually means a sign
+ * change. It does not here: the format's degrees are clockwise on a screen whose y grows DOWNWARD,
+ * and so are this engine's radians — two conventions that happen to agree, and a reader that
+ * "corrected" for the word clockwise would mirror every rotated object.
+ */
+export function objectTransform(obj: TiledObject): { rotation: number; origin: { x: number; y: number } } {
+    return {
+        rotation: obj.rotation * Math.PI / 180,
+        origin: obj.kind === "tile" ? { x: 0, y: 1 } : { x: 0, y: 0 }
+    };
+}
+
 export function parseTiledMap(xml: string, opts?: { inflate?: (d: Uint8Array) => Uint8Array }): TiledMapResult {
     const bad = tiledMapError(xml);
     if (bad) throw new Error(`Invalid Tiled map: ${bad}.`);
@@ -378,8 +575,47 @@ export function parseTiledMap(xml: string, opts?: { inflate?: (d: Uint8Array) =>
     // with not one <layer> in it — otherwise parses "successfully" into zero layers and zero cells,
     // and a caller cannot tell that from an empty map. That is the same silent-nothing this
     // codebase has been bitten by twice, and a count is what makes it visible.
-    const groups = [...xml.matchAll(/<objectgroup\b/g)].length;
-    if (groups > 0) notes.push(`${groups} object layer(s) are not read; only tile layers are`);
+    // OBJECT LAYERS ARE READ NOW, and what remains unread inside them is counted instead. The note
+    // this replaces said "object layer(s) are not read", which was the honest report of a real gap;
+    // the same discipline applies one level down, because a template this cannot open and a shape it
+    // can only give a box to are both content a caller must know it is not getting.
+    const objectGroups: TiledObjectGroup[] = [];
+    for (const m of xml.matchAll(/<objectgroup\b([^>]*?)(\/>|>([\s\S]*?)<\/objectgroup>)/g)) {
+        const a = attributes(`<objectgroup${m[1]}>`);
+        objectGroups.push({
+            id: num(a.id, 0),
+            name: a.name ?? "",
+            // The same two rules a tile layer follows, for the same two reasons — clamped because
+            // nothing enforces 0..1, and shown unless the file explicitly says "0".
+            opacity: Math.min(1, Math.max(0, num(a.opacity, 1))),
+            visible: a.visible === undefined ? true : num(a.visible, 1) !== 0,
+            offsetX: num(a.offsetx, 0),
+            offsetY: num(a.offsety, 0),
+            objects: parseObjects(m[3] ?? "")
+        });
+    }
+    const allObjects = objectGroups.flatMap(g => g.objects);
+    const templated = allObjects.filter(o => o.kind === "template").length;
+    if (templated > 0) {
+        notes.push(`${templated} object(s) reference a template file, which is not opened here; `
+            + "they carry a position and nothing else");
+    }
+    // A BOX IS NOT A SHAPE. An ellipse, a polygon, a polyline and a text object all parse — their
+    // position, size and properties are right — and this reader has nowhere to put the shape
+    // itself, so placing one as a rectangle would be a wrong picture rather than a missing one.
+    const shaped = allObjects.filter(o =>
+        o.kind === "ellipse" || o.kind === "polygon" || o.kind === "polyline" || o.kind === "text").length;
+    if (shaped > 0) {
+        notes.push(`${shaped} object(s) are an ellipse, polygon, polyline or text; `
+            + "their box is read and their shape is not");
+    }
+    // PARALLAX IS A LAYER PROPERTY THIS ENGINE HAS (schema 40, `applyParallax`) and this reader does
+    // not carry — so a map whose clouds drift at 0.5 comes in pinned to the ground. Counted rather
+    // than silently flattened; three groups in the fixture use it.
+    const parallaxGroups = [...xml.matchAll(/<objectgroup\b[^>]*\bparallax[xy]=/g)].length;
+    if (parallaxGroups > 0) {
+        notes.push(`${parallaxGroups} object layer(s) set a parallax factor, which is not read`);
+    }
     const imageLayers = [...xml.matchAll(/<imagelayer\b/g)].length;
     if (imageLayers > 0) notes.push(`${imageLayers} image layer(s) are not read`);
     // A <group> NESTS layers, so its children are found by the layer scan above but their grouping
@@ -419,7 +655,7 @@ export function parseTiledMap(xml: string, opts?: { inflate?: (d: Uint8Array) =>
         tileWidth: num(mapAttrs.tilewidth, 0),
         tileHeight: num(mapAttrs.tileheight, 0),
         orientation,
-        tilesets, layers, notes
+        tilesets, layers, objectGroups, notes
     };
 }
 

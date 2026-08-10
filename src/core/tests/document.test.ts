@@ -106,7 +106,8 @@ import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
     tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer,
-    TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
+    TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES, objectBox, objectTransform,
+    TiledObject, TiledObjectGroup, TiledProperty } from "../import/TiledMap";
 import { parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GltfJson, GLTF_IGNORABLE_REQUIRED, GLTF_MAX_NODE_DEPTH,
     gltfMaterials, gltfImageSource } from "../import/Gltf";
@@ -14503,9 +14504,12 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const m = parseTiledMap(readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "object-only.tmx"), "utf8"));
         expect(m).toMatchObject({ orientation: "orthogonal", width: 79, height: 45 });
         expect(m.layers).toHaveLength(0);
-        // THE COUNT IS THE POINT. "Some objects were skipped" cannot be told from "one stray tag";
-        // eleven says the whole map is over there.
-        expect(m.notes).toContain("11 object layer(s) are not read; only tile layers are");
+        // THE OBJECTS ARE READ NOW (2026-08-10). This assertion used to pin the NOTE that said they
+        // were not — an honest report of a real gap — and the gap is what closed, so it pins the
+        // reading instead. Eleven groups and 114 objects: the whole map really is over there.
+        expect(m.objectGroups).toHaveLength(11);
+        expect(m.objectGroups.flatMap(g => g.objects)).toHaveLength(114);
+        expect(m.notes).not.toContain("11 object layer(s) are not read; only tile layers are");
 
         // The map is still USABLE for what it does carry — its tileset resolves, so a caller can
         // decide to read the objects itself rather than being handed a failure.
@@ -14518,6 +14522,168 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const set = parseTiledTileset(readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "object-only-tiles.tsx"), "utf8"), m.tilesets[0]);
         expect(set.tiles.length).toBeGreaterThan(20);
         expect(set.image).toBeNull();
+    });
+
+    test("what an object layer HOLDS, counted against the file rather than assumed", () => {
+        const m = parseTiledMap(readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "object-only.tmx"), "utf8"));
+        const objects = m.objectGroups.flatMap(g => g.objects);
+        // MEASURED, and the measurement is the design: 103 tile objects, 9 template references and
+        // 2 plain rectangles, with not one point, ellipse, polygon, polyline or text in the tree.
+        // A reader built for the shapes Tiled CAN write rather than the ones it DID would have spent
+        // its effort on the empty 90%.
+        const kinds = objects.reduce<Record<string, number>>((acc, o) => {
+            acc[o.kind] = (acc[o.kind] ?? 0) + 1;
+            return acc;
+        }, {});
+        expect(kinds).toEqual({ tile: 103, template: 9, rectangle: 2 });
+        expect(objects.filter(o => o.rotation !== 0)).toHaveLength(8);
+        expect(objects.filter(o => o.cell && (o.cell.flipH || o.cell.flipV || o.cell.flipD))).toHaveLength(13);
+        expect(objects.filter(o => o.properties.length > 0)).toHaveLength(19);
+        // ONE typed object in the whole file, and it writes Tiled 1.8's `type` rather than 1.9's
+        // `class` — a reader that knew only the newer name would drop the only class there is.
+        expect(objects.filter(o => o.className !== "")).toHaveLength(1);
+        expect(objects.find(o => o.className === "exit")).toMatchObject({ id: 57, kind: "tile" });
+        // NONE is named, which is worth pinning because "name the entity" is the obvious way to
+        // identify one and this corpus does not do it — the class and the properties carry meaning.
+        expect(objects.filter(o => o.name !== "")).toHaveLength(0);
+
+        // THE GROUP'S OWN FLAGS, which a viewer sees at once if they are dropped: one layer is
+        // dimmed to 0.36 and one is hidden outright.
+        expect(m.objectGroups.find(g => g.name === "shading")!.opacity).toBeCloseTo(0.36, 5);
+        expect(m.objectGroups.find(g => g.name === "bounds")!.visible).toBe(false);
+        expect(m.objectGroups.find(g => g.name === "static")!.visible).toBe(true);
+        expect(m.objectGroups.find(g => g.name === "static")!.opacity).toBe(1);
+
+        // WHAT IS STILL NOT READ IS STILL COUNTED — the same discipline one level down.
+        expect(m.notes).toContain("9 object(s) reference a template file, which is not opened here; "
+            + "they carry a position and nothing else");
+        expect(m.notes).toContain("3 object layer(s) set a parallax factor, which is not read");
+        // …and nothing claims a shape it did not find.
+        expect(m.notes.some(n => /ellipse, polygon/.test(n))).toBe(false);
+    });
+
+    test("a tile object is anchored at its BOTTOM-LEFT, and everything else at its top-left", () => {
+        const m = parseTiledMap(readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "object-only.tmx"), "utf8"));
+        const objects = m.objectGroups.flatMap(g => g.objects);
+        // The single most common Tiled importing bug, and the reason it survives: every object still
+        // lands somewhere plausible, one object-height too low. Hand-checked against the file —
+        // `<object id="90" gid="16" x="146.97" y="693.727" width="192" height="192"/>` is a tile
+        // object, so its box TOP is 693.727 - 192.
+        const tile = objects.find(o => o.id === 90)!;
+        expect(tile.kind).toBe("tile");
+        expect(objectBox(tile)).toEqual({ x: 146.97, y: 693.727 - 192, width: 192, height: 192 });
+        // A PLAIN RECTANGLE in the same file is NOT shifted: `<object id="197" x="2496" y="0"
+        // width="32" height="992">` is a collision volume anchored top-left.
+        const rect = objects.find(o => o.id === 197)!;
+        expect(rect.kind).toBe("rectangle");
+        expect(objectBox(rect)).toEqual({ x: 2496, y: 0, width: 32, height: 992 });
+        // The asymmetry is the whole point, so it is asserted as a DIFFERENCE rather than twice
+        // over: two objects with the same y come out at different tops.
+        expect(objectBox(tile).y).not.toBe(tile.y);
+        expect(objectBox(rect).y).toBe(rect.y);
+    });
+
+    test("rotation is radians about the corner Tiled turns about, and the sign is NOT flipped", () => {
+        const m = parseTiledMap(readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "object-only.tmx"), "utf8"));
+        const objects = m.objectGroups.flatMap(g => g.objects);
+        // `<object id="153" gid="29" ... rotation="90"/>` — degrees in, radians out.
+        const turned = objects.find(o => o.id === 153)!;
+        expect(turned.rotation).toBe(90);
+        expect(objectTransform(turned).rotation).toBeCloseTo(Math.PI / 2, 10);
+        // THE ORIGIN NAMES THE CORNER rather than moving the object: bottom-left for a tile object,
+        // top-left for the rest. Turning about the centre — this engine's default — would swing a
+        // rotated object clean off its position.
+        expect(objectTransform(turned).origin).toEqual({ x: 0, y: 1 });
+        expect(objectTransform(objects.find(o => o.id === 197)!).origin).toEqual({ x: 0, y: 0 });
+        // A NEGATIVE ROTATION STAYS NEGATIVE. The format's degrees are clockwise on a y-down screen
+        // and so are this engine's radians, so "correcting" for the word clockwise would mirror
+        // every rotated object. The file carries -10.4469 and -270, which is what makes this
+        // checkable at all.
+        const back = objects.find(o => o.rotation < 0)!;
+        expect(objectTransform(back).rotation).toBeLessThan(0);
+        expect(objectTransform(back).rotation).toBeCloseTo(back.rotation * Math.PI / 180, 10);
+    });
+
+    test("custom properties keep their TYPE and their text, and stay with their own object", () => {
+        const m = parseTiledMap(readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "object-only.tmx"), "utf8"));
+        const objects = m.objectGroups.flatMap(g => g.objects);
+        // `<object id="4" gid="30" ...>` carries three: a string, a bool and a float. The VALUE is
+        // kept as written rather than parsed — a loader wants a number, an inspector wants the text,
+        // and a round-trip wants the exact string, so the type is carried and the choice is left.
+        const floating = objects.find(o => o.id === 4)!;
+        expect(floating.properties).toEqual([
+            { name: "bodyType", type: "string", value: "static" },
+            { name: "floating", type: "bool", value: "true" },
+            { name: "friction", type: "float", value: "1" }
+        ]);
+        // AN ABSENT TYPE IS `string`, which is the format's default — writing it in makes every
+        // consumer's switch total.
+        expect(floating.properties[0].type).toBe("string");
+
+        // PROPERTIES STAY WITH THEIR OWN OBJECT. The parse walks objects with a LAZY close, so a
+        // greedy one would hand object 2's properties to object 3 and leave a trail of entities
+        // carrying their neighbour's data — right count, wrong owner, and no error anywhere.
+        const ground = m.objectGroups.find(g => g.name === "ground")!;
+        const decorations = ground.objects.filter(o => o.id === 12 || o.id === 13);
+        expect(decorations).toHaveLength(2);
+        for (const d of decorations) expect(d.properties).toEqual([]);
+        // The whole file's property count, so nothing is double-counted or dropped.
+        expect(objects.reduce((n, o) => n + o.properties.length, 0)).toBe(41);
+    });
+
+    test("the shapes this corpus does NOT have still parse, and say what is missing", () => {
+        // HAND-WRITTEN, and stated as such: there is no ellipse, polygon, polyline or text object in
+        // the tree, so this is the one place a fixture cannot be a real file. It exists because the
+        // format has them and a reader that threw on one would fail a map it could mostly read.
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.8" orientation="orthogonal" renderorder="right-down" width="4" height="4" tilewidth="16" tileheight="16">
+ <objectgroup id="1" name="shapes" offsetx="12" offsety="-4">
+  <object id="1" name="spawn" type="player" x="10" y="20" visible="0"><point/></object>
+  <object id="2" x="30" y="40" width="20" height="10"><ellipse/></object>
+  <object id="3" x="5" y="6"><polygon points="0,0 10,0 10,10"/></object>
+  <object id="4" x="7" y="8"><polyline points="0,0 -5,12"/></object>
+  <object id="5" x="1" y="2" width="80" height="20"><text wrap="1">hello</text></object>
+ </objectgroup>
+</map>`;
+        const m = parseTiledMap(xml);
+        const objects = m.objectGroups[0].objects;
+        expect(objects.map(o => o.kind)).toEqual(["point", "ellipse", "polygon", "polyline", "text"]);
+        // A POINT HAS NO SIZE, and 0 is the honest answer rather than a guessed tile.
+        expect(objectBox(objects[0])).toEqual({ x: 10, y: 20, width: 0, height: 0 });
+        expect(objects[0]).toMatchObject({ name: "spawn", className: "player" });
+        // AN OBJECT CAN BE HIDDEN ON ITS OWN, separately from its layer — the corpus has a hidden
+        // LAYER and not one hidden object, so this is the only place the object-level flag is
+        // exercised. Reading the attribute's PRESENCE rather than its value would hide every
+        // object that says visible="1", which is the same mistake the layer reader was written to
+        // avoid and a different line of code.
+        expect(objects[0].visible).toBe(false);
+        expect(objects[1].visible).toBe(true);
+        // THE GROUP'S OFFSET is read too, and the two axes differ so a swap cannot pass.
+        expect(m.objectGroups[0]).toMatchObject({ offsetX: 12, offsetY: -4, id: 1, name: "shapes" });
+        // THE POINTS ARE RELATIVE TO THE OBJECT, which is how the format states them — adding the
+        // object's own x/y here would place every polygon twice as far out as it belongs.
+        expect(objects[2].points).toEqual([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]);
+        expect(objects[3].points).toEqual([{ x: 0, y: 0 }, { x: -5, y: 12 }]);
+        // A polyline is NOT a polygon — same points, and one of them is not closed. The kinds are
+        // what a consumer branches on, so they must not be merged.
+        expect(objects[2].kind).not.toBe(objects[3].kind);
+        // …and the four that carry a shape this cannot represent are counted, the point excluded
+        // because a point IS its position and nothing is lost.
+        expect(m.notes).toContain("4 object(s) are an ellipse, polygon, polyline or text; "
+            + "their box is read and their shape is not");
+    });
+
+    test("Tiled 1.9's `class` is read as well as 1.8's `type`", () => {
+        // One field renamed mid-format. The corpus is entirely 1.8, so this is the guard that stops
+        // the newer spelling being dropped the day a newer file arrives.
+        const xml = `<map version="1.10" orientation="orthogonal" width="1" height="1" tilewidth="8" tileheight="8">
+ <objectgroup id="1" name="g">
+  <object id="1" class="door" x="0" y="0" width="8" height="8"/>
+  <object id="2" type="chest" x="8" y="0" width="8" height="8"/>
+ </objectgroup>
+</map>`;
+        const objects = parseTiledMap(xml).objectGroups[0].objects;
+        expect(objects.map(o => o.className)).toEqual(["door", "chest"]);
     });
 
     test("an object's GID still decodes, flip flags and all", () => {
