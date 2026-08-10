@@ -107,6 +107,17 @@ function checkNodeRanges(node: ReadonlyNode): void {
     if (node.type === "core.tilemap" && node.tilemap === undefined) {
         throw new Error(`Invalid document: node "${node.id}" is a core.tilemap with no tilemap.`);
     }
+    // …AND THE PRECEDENT THE COMMENT ABOVE CITES WAS NOT ACTUALLY ENFORCED. "`surface` only for a
+    // raster" is the rule `AddNodeAction` and `PaintSurfaceAction` both apply, and the LOAD path did
+    // not, so a hand-edited or machine-generated file could carry pixels on a rectangle: stored,
+    // saved, and drawn by nothing. Found by a surviving mutant — `BucketTool`'s type check turned
+    // out to be the only thing standing between that document and a fill on a node with no picture.
+    //
+    // NOT A COMPATIBILITY BREAK, by the freeze rule's own question: no build could ever WRITE such a
+    // document, because both actions refuse it. A hand edit is not a contract.
+    if (node.surface !== undefined && node.type !== "core.raster") {
+        throw new Error(`Invalid document: node "${node.id}" has a surface but is a ${node.type}.`);
+    }
     const srcErr = srcError(node.type, node.src);
     if (srcErr) throw new Error(`Invalid document: node "${node.id}" ${srcErr}.`);
     // `componentId` (M6): only an instance may carry one; a DANGLING reference is deliberately

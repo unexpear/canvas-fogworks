@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1572;
+const EXPECTED_TESTS = 1578;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -310,6 +310,28 @@ const MUTANTS = [
       from: "            for (let flip = 0; flip <= FLIP_MAX; flip++) {\n                if (flipMask(flip, classMask) !== mask) continue;",
       to: "            for (let flip = FLIP_MAX; flip >= 0; flip--) {\n                if (flipMask(flip, classMask) !== mask) continue;",
       note: "flips tried DESCENDING — a class's own mask gets a turned tile that only looks the same" },
+
+    // THE BUCKET, whose blind fixture is a SQUARE canvas and an OPAQUE fill. Three of the six
+    // mutations first written for it survive and are NOT here: two are equivalent by design (the
+    // action refuses an empty patch on its own; `Integrity` refuses a surface on a non-raster) and
+    // one was a deliberate control. A battery must only hold mutants that kill, or its own summary
+    // lies — the reasoning for the three that do not lives in `BucketTool`'s comments.
+    { id: "BK1", file: "src/editor/tools/BucketTool.ts",
+      from: "        const before = readRegion(buffer, 0, 0, buffer.width, buffer.height);",
+      to: "        const before = readRegion(buffer, 0, 0, buffer.height, buffer.width);",
+      note: "the captured region is transposed — invisible on a square canvas AND on any opaque fill" },
+    { id: "BK2", file: "src/editor/tools/BucketTool.ts",
+      from: "        if (ids.length !== 1) return null;",
+      to: "        if (ids.length < 1) return null;",
+      note: "two selected canvases no longer refuse — which one would the fill be for?" },
+    { id: "BK3", file: "src/core/paint/PixelBuffer.ts",
+      from: "        const neighbours: [number, number][] = [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]];",
+      to: "        const neighbours: [number, number][] = [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1], [cx + 1, cy + 1], [cx - 1, cy - 1]];",
+      note: "the fill spreads diagonally and leaks through the wall a diagonal seam is meant to be" },
+    { id: "IN1", file: "src/core/document/Integrity.ts",
+      from: "    if (node.surface !== undefined && node.type !== \"core.raster\") {",
+      to: "    if (false) {",
+      note: "pixels on a rectangle load again — the rule two actions enforce and the loader did not" },
 ];
 
 function runSuite() {

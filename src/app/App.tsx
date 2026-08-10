@@ -56,6 +56,7 @@ import { SetDepthAction } from "../core/actions/SetDepthAction";
 import { SetMeshAction } from "../core/actions/SetMeshAction";
 import { WeightTool, WeightBrush } from "../editor/tools/WeightTool";
 import { TileTool, TileBrush } from "../editor/tools/TileTool";
+import { BucketTool } from "../editor/tools/BucketTool";
 import { SetTilemapAction } from "../core/actions/SetTilemapAction";
 import { resizeTilemap } from "../core/document/TilemapEdit";
 import { Tilemap, tileSourceRect as sheetTileRect, tileIndexAt,
@@ -462,7 +463,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     { id: "design", label: "Design", icon: "◱", tools: ["select", "move", "shapes", "pen"], defaultTool: "select" },
     // Paint puts the CANVAS-maker beside the brush, out of the shape flyout: drawing a surface and
     // painting on it are one job, and burying the first behind a menu made the second look broken.
-    { id: "paint", label: "Paint", icon: "✏", tools: ["select", "move", "raster", "paint", "eyedropper"], defaultTool: "paint" },
+    { id: "paint", label: "Paint", icon: "✏", tools: ["select", "move", "raster", "paint", "bucket", "eyedropper"], defaultTool: "paint" },
     // Animation is done by SELECTING and MOVING things over time; a shape tool in this workspace is
     // a way to draw a rectangle by accident while scrubbing.
     // Rigging is ANIMATION work, so the weight brush lives here rather than beside the pixel brush
@@ -649,6 +650,12 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             // THE BRUSH. Keyed "paint", not "raster": the `raster` SHAPE creates a surface, this
             // paints on one that exists. Two gestures, two tools — a single tool that did both
             // could not tell "start a new canvas here" from "start a stroke here".
+            // THE BUCKET. `floodFill` was written, tested and mutation-checked with NO CALLER until
+            // the feature audit asked whether anything reached it — this is the door, not new
+            // arithmetic. It takes the same colour thunk the brush does, so the swatch and the
+            // eraser toggle mean the same thing for both.
+            bucket: new BucketTool(dispatcher, es, refresh,
+                () => erasingRef.current ? [0, 0, 0, 0] : hexToRgba(paintColourRef.current)),
             paint: new RasterTool(dispatcher, es, refresh,
                 () => erasingRef.current ? [0, 0, 0, 0] : hexToRgba(paintColourRef.current),
                 () => makeBrush(brushSizeRef.current, brushRoundRef.current),
@@ -1817,7 +1824,12 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     you cannot then see is picking nothing you can act on — the tool sets the brush
                     colour, so the brush colour has to be on screen while it is selected. Found by
                     driving it: choosing the eyedropper hid the very control it writes to. */}
-                {(toolName === "paint" || toolName === "eyedropper") && (
+                {/* THE BUCKET SHARES THIS ROW TOO, and for the same reason the eyedropper does:
+                    it fills with the swatch colour and honours the erase toggle, so a bucket
+                    whose colour is off screen is a click with an invisible outcome. Found the
+                    first time by driving the eyedropper, which hid the very control it writes
+                    to — the lesson generalises to every tool that reads the swatch. */}
+                {(toolName === "paint" || toolName === "eyedropper" || toolName === "bucket") && (
                     <>
                         {/* WHY THE TOOL CANNOT ACT, said where the tool's own controls are.
                             The brush paints the SELECTION, so with nothing selected — or a
@@ -1978,7 +1990,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                             raster: { icon: SHAPE_ICONS.raster, label: "Canvas" },
                             weights: { icon: "◑", label: "Weights" },
                             eyedropper: { icon: "⌖", label: "Eyedropper" },
-                            tiles: { icon: "▦", label: "Tiles" }
+                            tiles: { icon: "▦", label: "Tiles" },
+                            bucket: { icon: "◍", label: "Bucket" }
                         };
                         const t = spec[slot];
                         if (!t) return null;

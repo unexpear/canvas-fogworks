@@ -33,6 +33,7 @@ import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, 
          flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D } from "../document/Tilemap";
 import { withTiles, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
 import { TileTool, TileBrush } from "../../editor/tools/TileTool";
+import { BucketTool } from "../../editor/tools/BucketTool";
 import { Terrain, AutotileTable, AUTOTILE_MASKS, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR,
     flipMask, autotileClasses, rotatedTable, dualMask, autotile, autotileTableError } from "../document/Autotile";
 import { SetTilemapAction } from "../actions/SetTilemapAction";
@@ -104,7 +105,7 @@ import { parseObj, objError, parseMtl, mtlError, resolveObjIndex,
     OBJ_FACE_MAX_CORNERS, OBJ_MAX_GROUPS } from "../import/Obj";
 import { MESH_IDENTITY } from "../import/MeshData";
 import { createPixelBuffer, pixelBufferError, getPixel, setPixel, inBounds, linePoints,
-    drawLine, floodFill, PIXEL_MAX_SIDE, Rgba } from "../paint/PixelBuffer";
+    drawLine, floodFill, PIXEL_MAX_SIDE, Rgba, PixelBuffer } from "../paint/PixelBuffer";
 import { capturePatch, applyPatch, revertPatch, invertPatch, readRegion, isEmptyPatch,
     patchCost, EMPTY_PATCH } from "../paint/PixelPatch";
 import { makeBrush, brushError, stampBrush, brushBounds, strokePath, strokeBounds,
@@ -25046,7 +25047,10 @@ describe("The eyedropper as a gesture", () => {
         // …and the App hands it the SWATCH setter, not a document action.
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         expect(app).toMatch(/new EyedropperTool\(dispatcher, es, refresh, setPaintColour\)/);
-        expect(app).toMatch(/"raster", "paint", "eyedropper"/);
+        // THE PAINT STRIP CONTAINS IT, rather than the strip being exactly this list: the literal
+        // match broke the day a bucket was added between "paint" and "eyedropper", which is a
+        // guard failing for the one reason it should not — the thing it protects was still true.
+        expect(app).toMatch(/id: "paint",.*"eyedropper"/);
     });
 });
 
@@ -25152,6 +25156,26 @@ describe("core.tilemap — a grid instead of ten thousand nodes (schema 61)", ()
             geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {} } as Node);
         bare.rootNodeUuids = ["T"];
         expect(() => validateDocumentIntegrity(bare)).toThrow(/core.tilemap with no tilemap/);
+
+        // AND THE PRECEDENT THAT COMMENT CITES WAS NOT ENFORCED. "`surface` only for a raster" is the
+        // rule both `AddNodeAction` and `PaintSurfaceAction` apply, and the LOAD path did not — so a
+        // hand-edited file could carry pixels on a rectangle: stored, saved, drawn by nothing. Found
+        // by a SURVIVING MUTANT: removing `BucketTool`'s type check changed no test, which is what
+        // sent me looking for whatever else was supposed to be stopping it. Nothing was.
+        const pixelsOnARect = createEmptyDocument();
+        pixelsOnARect.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 }, style: { fill: "#000", opacity: 1 }, layout: {},
+            surface: { data: encodeSurface(createPixelBuffer(2, 2)).data, width: 2, height: 2 } } as unknown as Node);
+        pixelsOnARect.rootNodeUuids = ["R"];
+        expect(() => validateDocumentIntegrity(pixelsOnARect))
+            .toThrow(/has a surface but is a core.rectangle/);
+        // …and a RASTER with one still loads, or the check would just be a ban on painting.
+        const fine = createEmptyDocument();
+        fine.nodes.set("P", { id: "P", type: "core.raster", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 2, height: 2 }, style: { fill: "none", opacity: 1 }, layout: {},
+            surface: { data: encodeSurface(createPixelBuffer(2, 2)).data, width: 2, height: 2 } } as unknown as Node);
+        fine.rootNodeUuids = ["P"];
+        expect(() => validateDocumentIntegrity(fine)).not.toThrow();
     });
 
     test("creating one gives it a grid, so it can be saved", () => {
@@ -25898,5 +25922,162 @@ describe("Autotile — terrain in, tiles out, and six shapes standing in for six
         expect(autotileTableError(ok)).toMatch(/flip must be a whole number 0\.\.7/);
         ok[3] = { index: 2.5 };
         expect(autotileTableError(ok)).toMatch(/index must be a whole number/);
+    });
+});
+
+describe("The paint bucket, as a gesture — the door onto a fill nothing called", () => {
+    const RED: Rgba = [255, 0, 0, 255];
+    const BLUE: Rgba = [0, 0, 255, 255];
+    /**
+     * A 6x4 canvas — NON-SQUARE, so a transposed surface coordinate shows — holding two regions of
+     * RED split by a diagonal wall of BLUE, and one BLUE pixel diagonally adjacent to the seed.
+     *
+     *   R R B R R R        A fill from (0,0) must take the three R's above the diagonal and stop:
+     *   R B R R R R        four-connectedness is what makes a diagonal a WALL in pixel art, and a
+     *   B R R R R R        leak through it is the classic bucket bug.
+     *   R R R R R R
+     */
+    const canvas = () => {
+        const buffer = createPixelBuffer(6, 4);
+        for (let y = 0; y < 4; y++) for (let x = 0; x < 6; x++) setPixel(buffer, x, y, RED);
+        setPixel(buffer, 2, 0, BLUE);
+        setPixel(buffer, 1, 1, BLUE);
+        setPixel(buffer, 0, 2, BLUE);
+        return buffer;
+    };
+    const docWith = (buffer: PixelBuffer) => {
+        const d = createEmptyDocument();
+        const encoded = encodeSurface(buffer);
+        d.nodes.set("R", { id: "R", type: "core.raster", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 6, height: 4 }, style: { fill: "none", opacity: 1 }, layout: {},
+            surface: { data: encoded.data, width: 6, height: 4 } } as Node);
+        d.nodes.set("B", { id: "B", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 6, height: 4 }, style: { fill: "#123456", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["R", "B"];
+        return d;
+    };
+    const CANVAS = { left: 0, top: 0, width: 800, height: 600 } as DOMRect;
+    /** One world unit is one surface pixel here, so a click at (x+0.5, y+0.5) is pixel (x, y). */
+    const at = (x: number, y: number) => ({ clientX: x + 0.5, clientY: y + 0.5, button: 0, buttons: 1,
+        preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+    const harness = (colour: Rgba = BLUE) => {
+        const dispatcher = new ActionDispatcher(docWith(canvas()));
+        const es = createEditorState();
+        es.selectedNodeIds = ["R"];
+        const tool = new BucketTool(dispatcher, es, () => { }, () => colour);
+        const pixels = () => {
+            const s = dispatcher.getDocument().nodes.get("R")!.surface!;
+            return decodeSurface(s.data, s.width, s.height)!;
+        };
+        return { dispatcher, es, tool, pixels };
+    };
+    const countOf = (b: PixelBuffer, c: Rgba) => {
+        let n = 0;
+        for (let y = 0; y < b.height; y++) for (let x = 0; x < b.width; x++) {
+            const p = getPixel(b, x, y)!;
+            if (p[0] === c[0] && p[1] === c[1] && p[2] === c[2] && p[3] === c[3]) n++;
+        }
+        return n;
+    };
+
+    test("a click fills the connected region and STOPS at a diagonal wall", () => {
+        const h = harness();
+        h.tool.onMouseDown(at(0, 0), CANVAS, computeGeometry(h.dispatcher.getDocument()));
+        const after = h.pixels();
+        // The three RED pixels above the diagonal became BLUE; the 15 below did not.
+        expect(getPixel(after, 0, 0)).toEqual(BLUE);
+        expect(getPixel(after, 1, 0)).toEqual(BLUE);
+        expect(getPixel(after, 0, 1)).toEqual(BLUE);
+        // ACROSS the diagonal is untouched — an eight-connected fill would have taken the lot.
+        expect(getPixel(after, 3, 0)).toEqual(RED);
+        expect(getPixel(after, 2, 1)).toEqual(RED);
+        expect(getPixel(after, 1, 2)).toEqual(RED);
+        // 3 filled + the 3 wall pixels that were already BLUE.
+        expect(countOf(after, BLUE)).toBe(6);
+        expect(countOf(after, RED)).toBe(18);
+    });
+
+    test("it is ONE history entry, and undo restores every pixel it changed", () => {
+        const h = harness();
+        h.tool.onMouseDown(at(3, 0), CANVAS, computeGeometry(h.dispatcher.getDocument()));
+        // 24 pixels: 3 are the BLUE wall, and the wall splits the other 21 into 18 and 3. Filling
+        // the large side leaves exactly the small side RED, which is also a second check that the
+        // two regions really are separated.
+        expect(countOf(h.pixels(), RED)).toBe(3);
+        h.dispatcher.undo();
+        expect(countOf(h.pixels(), RED)).toBe(21);
+        expect(countOf(h.pixels(), BLUE)).toBe(3);
+    });
+
+    test("filling with the colour ALREADY there dispatches nothing at all", () => {
+        // Not merely harmless: an action that succeeded without changing anything leaves a step on
+        // the undo stack that undoes nothing, so the first Ctrl+Z appears to be ignored. Checked by
+        // asking the HISTORY, because a pixel comparison alone cannot tell "no change" from
+        // "changed and changed back".
+        const h = harness(RED);
+        h.tool.onMouseDown(at(3, 0), CANVAS, computeGeometry(h.dispatcher.getDocument()));
+        expect(countOf(h.pixels(), RED)).toBe(21);
+        // Nothing to undo: the document is identical to the one before the click.
+        const before = serializeDocument(h.dispatcher.getDocument());
+        h.dispatcher.undo();
+        expect(serializeDocument(h.dispatcher.getDocument())).toBe(before);
+    });
+
+    test("it refuses what it cannot fill, and a click OFF the surface fills nothing", () => {
+        // Off the canvas: clamping to the nearest edge pixel would fill the region at the border,
+        // which is a large edit nobody asked for.
+        const off = harness();
+        off.tool.onMouseDown(at(40, 40), CANVAS, computeGeometry(off.dispatcher.getDocument()));
+        expect(countOf(off.pixels(), RED)).toBe(21);
+
+        // NOT A RASTER, two nodes at once, and nothing selected — the same three refusals the brush
+        // makes, for the same reason: which canvas would the fill be for?
+        for (const selection of [["B"], ["R", "B"], []]) {
+            const h = harness();
+            h.es.selectedNodeIds = selection;
+            h.tool.onMouseDown(at(0, 0), CANVAS, computeGeometry(h.dispatcher.getDocument()));
+            expect(countOf(h.pixels(), RED)).toBe(21);
+        }
+    });
+
+    test("ERASING with the bucket clears a region to transparent", () => {
+        // A REAL FEATURE — the bucket reads the same swatch and erase toggle the brush does — and the
+        // fixture a mutation battery asked for. A transposed before-image survives every OPAQUE fill
+        // here, because the misread bytes never coincide with the colour being written; erasing writes
+        // [0,0,0,0], the misread bytes ARE zeros, and the two then compare equal, so pixels drop out
+        // of the patch and the erase comes out incomplete. The blind spot was in the fixture, not the
+        // assertion.
+        const CLEAR: Rgba = [0, 0, 0, 0];
+        const h = harness(CLEAR);
+        h.tool.onMouseDown(at(3, 0), CANVAS, computeGeometry(h.dispatcher.getDocument()));
+        const after = h.pixels();
+        // The whole 18-pixel region is transparent, and every one of them is checked rather than a
+        // count: a count cannot tell "18 cleared" from "17 cleared and one that was already clear".
+        for (const [x, y] of [[3, 0], [4, 0], [5, 0], [2, 1], [5, 3], [0, 3], [3, 2]]) {
+            expect(getPixel(after, x, y)).toEqual(CLEAR);
+        }
+        // …and the small region across the wall is untouched.
+        expect(getPixel(after, 0, 0)).toEqual(RED);
+        expect(countOf(after, RED)).toBe(3);
+        expect(countOf(after, CLEAR)).toBe(18);
+    });
+
+    test("the tool is REACHABLE, which is the whole point of it existing", () => {
+        // `floodFill` was written, tested and mutation-checked with no caller anywhere outside the
+        // tests — the audit found it by asking whether anything in the app reached it. This asserts
+        // the door stays open: the app constructs the tool, the paint workspace offers it, and the
+        // colour row shows while it is selected (a bucket whose colour is off screen is a click with
+        // an invisible outcome, which is exactly how the eyedropper shipped once).
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/bucket: new BucketTool\(dispatcher, es, refresh,/);
+        // THE STRIP CONTAINS IT, rather than the strip being exactly one list. The eyedropper's own
+        // guard next door was written the literal way and broke the moment this bucket was inserted
+        // between "paint" and "eyedropper" — a guard failing for the one reason it must not, since
+        // the thing it protects was still true.
+        expect(app).toMatch(/id: "paint",.*"bucket"/);
+        expect(app).toMatch(/toolName === "bucket"/);
+        // …and the core function has a caller at last.
+        const tool = readFileSync(resolve(__dirname, "../../editor/tools/BucketTool.ts"), "utf8");
+        expect(tool).toMatch(/floodFill\(buffer, p\[0\], p\[1\]/);
     });
 });

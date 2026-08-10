@@ -27,11 +27,18 @@ The useful distinction this audit turned up is that a missing feature is not alw
 | **built, unreachable** | the core function exists and is tested; nothing in the UI calls it |
 | **absent** | not written |
 
-**Four capabilities are built and unreachable.** `PixelBuffer.floodFill` and `PixelBuffer.drawLine`
-have **no caller anywhere outside the tests**, and `paint/Palette` and `paint/Quantize` have **no
-importer outside the tests at all** — an entire palette-and-quantisation layer the app cannot reach.
-These are the cheapest features in the project: the arithmetic is written, tested and mutation-checked,
-and only a tool and a panel are missing.
+**Five capabilities were built and unreachable.** `PixelBuffer.floodFill` and `PixelBuffer.drawLine`
+had **no caller anywhere outside the tests**; `paint/Palette` and `paint/Quantize` have **no importer
+outside the tests at all** — an entire palette-and-quantisation layer the app cannot reach; and
+`diagnostics/ActionJournal.recordAction` has no caller either, so nothing is ever journalled. These
+are the cheapest features in the project: the arithmetic is written, tested and mutation-checked, and
+only a tool or a panel is missing.
+
+**`floodFill` is now reachable** (`BucketTool`, 2026-08-09), and wiring it found two things a feature
+list cannot: `BucketTool`'s "only a raster" check was the ONLY thing refusing pixels on a rectangle,
+because `Integrity` never enforced the rule its own comment cites as precedent — both actions do, the
+loader did not. And an existing guard pinned the paint strip's exact tool list, so inserting a tool
+broke a test whose subject was still true. Both are fixed.
 
 ## Paint side — against Pixelorama
 
@@ -40,7 +47,7 @@ and only a tool and a panel are missing.
 | Pencil / brush, eraser, size, roundness | **have** | `RasterTool`, `paint/Brush` |
 | Symmetry guides | **have** | `paint/Symmetry`, reachable |
 | Eyedropper | **have** | reads the DOCUMENT, not the framebuffer |
-| Bucket fill (pixels) | **built, unreachable** | `floodFill` exists; no tool, and no tolerance parameter |
+| Bucket fill (pixels) | **have** | `BucketTool`, in the Paint strip — closed 2026-08-09; still no tolerance parameter |
 | Line / rectangle / ellipse **on pixels** | **built, unreachable** (line) / **absent** (shapes) | `drawLine` has no caller; the shape tools make vector nodes |
 | Palette panel, create/edit palettes | **built, unreachable** | `paint/Palette` has no UI |
 | Quantise to a palette | **built, unreachable** | `paint/Quantize` has no UI |
