@@ -28431,11 +28431,26 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
         d.nodes.set("B", { id: "B", type: "core.rectangle", parent: "F", children: [],
             geometry: { x: 8, y: 0, width: 4, height: 4 }, style: { fill: "none", opacity: 1 },
             layout: {}, name: "back", transform: { rotation: -Math.PI / 6 } } as Node);
+        // A ROTATED TILE OBJECT, because the tile branch writes its own attributes and a fixture of
+        // rectangles alone leaves that line unguarded — which is exactly what a surviving mutant
+        // found. Eight of the sandbox fixture's 114 objects carry a rotation and every one is a tile.
+        d.nodes.set("C", { id: "C", type: "core.image", parent: "F", children: [],
+            geometry: { x: 16, y: 24, width: 8, height: 8 }, style: { fill: "none", opacity: 1 },
+            layout: {}, name: "turned tile", src: "t.png",
+            sourceRect: { x: 8, y: 8, width: 8, height: 8 },
+            transform: { rotation: Math.PI / 4, origin: { x: 0, y: 1 } } } as Node);
+        (d.nodes.get("F") as Node).children.push("C");
         d.rootNodeUuids = ["L", "F"];
         const objects = parseTiledMap(exportTiledMap(d, "t.png").xml).objectGroups[0].objects;
         expect(objects[0].rotation).toBeCloseTo(90, 6);
         expect(objects[1].rotation).toBeCloseTo(-30, 6);
         expect(objectTransform(objects[1]).rotation).toBeCloseTo(-Math.PI / 6, 10);
+        // The tile object carries its own, in degrees, about the corner Tiled turns about — and its
+        // box still comes back where it went out, so the rotation did not disturb the anchoring.
+        expect(objects[2].kind).toBe("tile");
+        expect(objects[2].rotation).toBeCloseTo(45, 6);
+        expect(objectTransform(objects[2]).origin).toEqual({ x: 0, y: 1 });
+        expect(objectBox(objects[2])).toEqual({ x: 16, y: 24, width: 8, height: 8 });
     });
 
     test("an object the format cannot hold is COUNTED, not dropped in silence", () => {
