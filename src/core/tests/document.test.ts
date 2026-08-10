@@ -35,6 +35,10 @@ import { withTiles, rectCells, fillRegion, resizeTilemap } from "../document/Til
 import { TileTool, TileBrush } from "../../editor/tools/TileTool";
 import { BucketTool } from "../../editor/tools/BucketTool";
 import { surfaceEditAction, quantizeAction } from "../actions/surfaceEdit";
+import { SelectionMask, SELECTED, selectionMaskError, emptyMask, fullMask, isSelected,
+    isEmptySelection, selectedCount, maskBounds, combineSelection, rectSelection,
+    ellipseSelection, lassoSelection, wandSelection, growSelection, borderSelection,
+    invertSelection } from "../paint/Selection";
 import { Terrain, AutotileTable, AUTOTILE_MASKS, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR,
     flipMask, autotileClasses, rotatedTable, dualMask, autotile, autotileTableError } from "../document/Autotile";
 import { SetTilemapAction } from "../actions/SetTilemapAction";
@@ -26185,5 +26189,263 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         expect(app).toMatch(/paletteAt\(palette,/);
         // The attribution is shown, because a palette is somebody's work and the file carries credit.
         expect(app).toMatch(/palette\.comment/);
+    });
+});
+
+describe("Selection — which pixels an edit may touch, and the rounding in every one of them", () => {
+    /** A picture of a mask, for assertions that can be read: `#` selected, `.` not. */
+    const draw = (m: SelectionMask) => {
+        const rows: string[] = [];
+        for (let y = 0; y < m.height; y++) {
+            let row = "";
+            for (let x = 0; x < m.width; x++) row += m.data[y * m.width + x] !== 0 ? "#" : ".";
+            rows.push(row);
+        }
+        return rows;
+    };
+    /** Non-square throughout: 6 wide, 4 tall, so a transposed index cannot pass. */
+    const W = 6, H = 4;
+
+    test("a mask is refused unless its length matches its own dimensions", () => {
+        expect(selectionMaskError(emptyMask(W, H))).toBeNull();
+        expect(selectionMaskError(null)).toMatch(/must be an object/);
+        expect(selectionMaskError({ width: 0, height: 4, data: new Uint8Array(0) }))
+            .toMatch(/width must be a whole number >= 1/);
+        expect(selectionMaskError({ width: W, height: H, data: [0, 0] }))
+            .toMatch(/must be a Uint8Array/);
+        // The check that matters most, and the same one `tilemapError` makes about its grid: a mask
+        // one byte short reads every row after the first from the wrong place.
+        expect(selectionMaskError({ width: W, height: H, data: new Uint8Array(W * H - 1) }))
+            .toMatch(/exactly width \* height \(24\) bytes, got 23/);
+        expect(selectionMaskError({ width: 99999, height: 1, data: new Uint8Array(99999) }))
+            .toMatch(/at most 4096/);
+    });
+
+    test("a rectangle takes both corners in either order, and clips rather than wraps", () => {
+        expect(draw(rectSelection(W, H, { x: 1, y: 1 }, { x: 3, y: 2 }))).toEqual([
+            "......",
+            ".###..",
+            ".###..",
+            "......"
+        ]);
+        // A drag from the far corner is the SAME rectangle — a caller that had to normalise the pair
+        // itself is a caller that will sometimes forget.
+        expect(draw(rectSelection(W, H, { x: 3, y: 2 }, { x: 1, y: 1 })))
+            .toEqual(draw(rectSelection(W, H, { x: 1, y: 1 }, { x: 3, y: 2 })));
+        // CLIPPED, not wrapped: a drag off the edge selects to the edge and does not appear on the
+        // opposite side, which is what an index computed without clamping would do.
+        expect(draw(rectSelection(W, H, { x: -5, y: -5 }, { x: 99, y: 99 })))
+            .toEqual(["######", "######", "######", "######"]);
+        expect(draw(rectSelection(W, H, { x: 8, y: 0 }, { x: 9, y: 1 })))
+            .toEqual(["......", "......", "......", "......"]);
+        // A single pixel is a 1x1 rectangle, not nothing.
+        expect(selectedCount(rectSelection(W, H, { x: 4, y: 3 }, { x: 4, y: 3 }))).toBe(1);
+    });
+
+    test("the SMALLEST ellipse is one pixel, which is the rounding a corner test gets wrong", () => {
+        // The pixel CENTRE is what is tested. A 1x1 drag has radius 0.5 about the pixel's centre, so
+        // the centre is inside by exactly zero margin — test the corner instead and the smallest
+        // ellipse is empty, which an author dragging out a small circle sees as nothing happening.
+        expect(selectedCount(ellipseSelection(W, H, { x: 2, y: 2 }, { x: 2, y: 2 }))).toBe(1);
+        // A 5x3 ellipse, with the rows DERIVED rather than guessed: rx=2.5, ry=1.5, centre (2.5,1.5),
+        // so row 0's half-width is 2.5*sqrt(1-(1/1.5)^2) = 1.863 and the pixel centres inside it are
+        // x = 1,2,3; row 1 is the full 2.5 and takes all five. The corners are OUT, which is the whole
+        // difference from `rectSelection` — a filled box would pass a laxer assertion. (My first
+        // expectation here was a DIAMOND, which is what a 5x3 ellipse is not; the function was right.)
+        expect(draw(ellipseSelection(W, H, { x: 0, y: 0 }, { x: 4, y: 2 }))).toEqual([
+            ".###..",
+            "#####.",
+            ".###..",
+            "......"
+        ]);
+        // NON-SQUARE on purpose: swapping the two radii would still produce an ellipse, and only a
+        // fixture whose width and height differ can tell which way up it is.
+        const tall = ellipseSelection(W, H, { x: 1, y: 0 }, { x: 2, y: 3 });
+        expect(draw(tall)).toEqual([
+            ".##...",
+            ".##...",
+            ".##...",
+            ".##..."
+        ]);
+    });
+
+    test("a lasso fills its inside, and a vertex level with the ray does not stripe the row", () => {
+        // A TRIANGLE, which no rectangle or ellipse can express — the shape the module exists for.
+        // DERIVED from the hypotenuse, which runs from (5,0) to (0,4): at a row's centre py the edge
+        // sits at x = 5 - 5*(py/4), so row 0 cuts at 4.375 (pixels 0-3), row 1 at 3.125 (0-2), row 2
+        // at 1.875 (0-1) and row 3 at 0.625 (just 0). A staircase, one pixel narrower each row.
+        const tri = lassoSelection(W, H, [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 0, y: 4 }]);
+        expect(draw(tri)).toEqual([
+            "####..",
+            "###...",
+            "##....",
+            "#....."
+        ]);
+        // FEWER THAN THREE POINTS is not a polygon and selects nothing, rather than a line of pixels
+        // that no fill rule agrees about.
+        expect(selectedCount(lassoSelection(W, H, [{ x: 0, y: 0 }, { x: 3, y: 3 }]))).toBe(0);
+        // A DIAMOND whose vertices sit exactly on pixel boundaries: the half-open Y rule is what
+        // stops the vertex level with a scanline counting twice, which would flip that row's parity
+        // and leave it empty or fully selected. Both are visible in the picture.
+        const diamond = lassoSelection(W, H, [{ x: 3, y: 0 }, { x: 5, y: 2 }, { x: 3, y: 4 }, { x: 1, y: 2 }]);
+        expect(draw(diamond)).toEqual([
+            "..#...",
+            ".###..",
+            ".###..",
+            "..#..."
+        ]);
+        // VERTICALLY SYMMETRIC, which is the property a double-counted vertex destroys: the row level
+        // with the left and right vertices would come out empty or full while its mirror did not.
+        expect(draw(diamond)[0]).toEqual(draw(diamond)[3]);
+        expect(draw(diamond)[1]).toEqual(draw(diamond)[2]);
+        // …and no row is entirely empty in the middle of the shape, which is what a double-counted
+        // vertex produces and what a single-row assertion would miss.
+        expect(draw(diamond).every(r => r.includes("#"))).toBe(true);
+
+        // A VERTEX EXACTLY ON A SCANLINE, which the diamond above does NOT have: its vertices sit at
+        // integer y, and rows are sampled at y+0.5, so `>` and `>=` behave identically and a mutation
+        // between them survived. Here the top edge lies AT y=0.5 — row 0's own ray — so the half-open
+        // rule is the only thing that counts its crossings once. Under `>=` the whole of row 0
+        // disappears, which is the striping this rule exists to prevent.
+        const onTheRay = lassoSelection(W, H, [{ x: 1, y: 0.5 }, { x: 5, y: 0.5 }, { x: 3, y: 3.5 }]);
+        expect(draw(onTheRay)).toEqual([
+            ".####.",
+            "..##..",
+            "..##..",
+            "......"
+        ]);
+    });
+
+    test("the four operators combine two shapes, and a size mismatch is refused", () => {
+        const left = rectSelection(W, H, { x: 0, y: 0 }, { x: 2, y: 3 });     // 3 wide
+        const right = rectSelection(W, H, { x: 2, y: 0 }, { x: 3, y: 3 });    // 2 wide, DIFFERENT
+        // OVERLAPPING BY ONE COLUMN, so every operator gives a different answer — two disjoint
+        // rectangles would make `add` and `subtract` look the same as `replace` and `nothing`.
+        //
+        // AND OF DIFFERENT WIDTHS on purpose: with two 3-wide rectangles, `left minus right` and
+        // `right minus left` are both 8 pixels, so a subtract that took the wrong side of the overlap
+        // survived. 12 and 8 make the two differences 8 and 4, which cannot be confused.
+        expect(selectedCount(left)).toBe(12);
+        expect(selectedCount(right)).toBe(8);
+        expect(selectedCount(combineSelection(left, right, "replace")!)).toBe(8);
+        expect(selectedCount(combineSelection(left, right, "add")!)).toBe(16);
+        expect(selectedCount(combineSelection(left, right, "subtract")!)).toBe(8);
+        expect(selectedCount(combineSelection(right, left, "subtract")!)).toBe(4);
+        expect(selectedCount(combineSelection(left, right, "intersect")!)).toBe(4);
+        expect(draw(combineSelection(left, right, "intersect")!)).toEqual([
+            "..#...",
+            "..#...",
+            "..#...",
+            "..#..."
+        ]);
+        // A shape of the wrong size is REFUSED rather than combined against a sheared index.
+        expect(combineSelection(left, emptyMask(H, W), "add")).toBeNull();
+    });
+
+    test("a wand takes the connected run, and 'by colour' takes every match", () => {
+        // Two separate blobs of the SAME colour: contiguous finds one, global finds both. A fixture
+        // with a single blob cannot tell the two modes apart at all.
+        const buffer = createPixelBuffer(W, H);
+        for (const [x, y] of [[0, 0], [1, 0], [0, 1]] as const) setPixel(buffer, x, y, [255, 0, 0, 255]);
+        for (const [x, y] of [[5, 3], [4, 3]] as const) setPixel(buffer, x, y, [255, 0, 0, 255]);
+        const exact = (a: readonly number[], b: readonly number[]) =>
+            a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+        expect(selectedCount(wandSelection(buffer, 0, 0, exact, true))).toBe(3);
+        expect(selectedCount(wandSelection(buffer, 0, 0, exact, false))).toBe(5);
+        // A DIAGONAL is not a connection, for the reason the bucket is four-connected: the join an
+        // artist uses to enclose a shape must be a wall.
+        setPixel(buffer, 2, 2, [255, 0, 0, 255]);
+        setPixel(buffer, 3, 3, [255, 0, 0, 255]);
+        expect(selectedCount(wandSelection(buffer, 2, 2, exact, true))).toBe(1);
+        // TOLERANCE IS THE CALLER'S, which is why `same` is injected: a near-match counts only if the
+        // caller says so.
+        const loose = (a: readonly number[], b: readonly number[]) =>
+            Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) < 300;
+        expect(selectedCount(wandSelection(buffer, 0, 0, loose, false))).toBe(W * H);
+        // A seed off the surface selects nothing rather than clamping to an edge pixel.
+        expect(selectedCount(wandSelection(buffer, -1, 0, exact, true))).toBe(0);
+    });
+
+    test("grow and shrink are one function, and shrinking a FULL selection loses nothing", () => {
+        const dot = rectSelection(W, H, { x: 2, y: 1 }, { x: 2, y: 1 });
+        expect(draw(growSelection(dot, 1))).toEqual([
+            "..#...",
+            ".###..",
+            "..#...",
+            "......"
+        ]);
+        // FOUR-CONNECTED per step, so growing twice is a diamond rather than a square — the shape an
+        // eight-connected grow would give, and the difference a single step cannot show.
+        expect(selectedCount(growSelection(dot, 2))).toBe(12);
+        // SHRINKING IS GROWING THE INVERSE, and the surface edge counts as selected while shrinking:
+        // without that, "select all then shrink by 1" would eat a ring off the outside that nobody
+        // asked to lose. This is the assertion that pins the decision.
+        expect(selectedCount(growSelection(fullMask(W, H), -1))).toBe(W * H);
+        // A shrink that consumes a shape leaves nothing, rather than one stubborn pixel.
+        expect(selectedCount(growSelection(dot, -1))).toBe(0);
+        // Zero is a copy, not the same array — a caller mutating the result must not reach back.
+        const same = growSelection(dot, 0);
+        same.data[0] = SELECTED;
+        expect(dot.data[0]).toBe(0);
+    });
+
+    test("a border is what a shape has and its shrunk self does not, and INVERT is the complement", () => {
+        const box = rectSelection(W, H, { x: 1, y: 1 }, { x: 4, y: 3 });
+        // 4x3 box = 12 pixels. Shrinking by one keeps a pixel only if all four neighbours are inside,
+        // AND the surface edge counts as inside — the box's bottom row IS the surface's bottom row
+        // (height 4, rows 1..3), so those pixels keep their downward neighbour for free. Survivors are
+        // columns 2-3 of rows 2-3: FOUR, and the band is the other eight. Hand-derived; my first
+        // expectation of two forgot that the box touches the edge, and the function was right.
+        expect(selectedCount(box)).toBe(12);
+        expect(draw(growSelection(box, -1))).toEqual([
+            "......",
+            "......",
+            "..##..",
+            "..##.."
+        ]);
+        expect(selectedCount(growSelection(box, -1))).toBe(4);
+        expect(selectedCount(borderSelection(box, 1))).toBe(8);
+        // Every bordered pixel was in the original: a band outside the shape would be a grow, not a
+        // border, and the two are one function apart.
+        const band = borderSelection(box, 1);
+        for (let i = 0; i < band.data.length; i++) {
+            if (band.data[i] !== 0) expect(box.data[i]).not.toBe(0);
+        }
+        // INVERT is the complement, and inverting twice is the original — the cheapest check that it
+        // is not quietly clamping something.
+        const inv = invertSelection(box);
+        expect(selectedCount(inv)).toBe(W * H - 12);
+        expect(draw(invertSelection(inv))).toEqual(draw(box));
+        // …and an empty selection inverts to everything, which is the state a "select all" produces.
+        expect(selectedCount(invertSelection(emptyMask(W, H)))).toBe(W * H);
+        expect(isEmptySelection(emptyMask(W, H))).toBe(true);
+        expect(isEmptySelection(box)).toBe(false);
+    });
+
+    test("bounds are INCLUSIVE, so one pixel is a 1x1 box and nothing is null", () => {
+        // Where an off-by-one lives, and what crop would eat if it were wrong.
+        expect(maskBounds(rectSelection(W, H, { x: 4, y: 3 }, { x: 4, y: 3 })))
+            .toEqual({ x: 4, y: 3, width: 1, height: 1 });
+        expect(maskBounds(rectSelection(W, H, { x: 1, y: 1 }, { x: 3, y: 2 })))
+            .toEqual({ x: 1, y: 1, width: 3, height: 2 });
+        // NON-CONTIGUOUS: the box spans both blobs, which is what "transform this region" needs and
+        // what a bounds computed from the first run of pixels would get wrong.
+        const two = combineSelection(
+            rectSelection(W, H, { x: 0, y: 0 }, { x: 0, y: 0 }),
+            rectSelection(W, H, { x: 5, y: 3 }, { x: 5, y: 3 }), "add")!;
+        expect(maskBounds(two)).toEqual({ x: 0, y: 0, width: 6, height: 4 });
+        expect(maskBounds(emptyMask(W, H))).toBeNull();
+    });
+
+    test("off the mask is NOT selected, so an edit clips at the border", () => {
+        const all = fullMask(W, H);
+        expect(isSelected(all, 0, 0)).toBe(true);
+        expect(isSelected(all, W - 1, H - 1)).toBe(true);
+        // The reason this matters: every consumer asks `isSelected` per pixel, and a mask that
+        // answered true outside itself would let an edit run off the surface.
+        expect(isSelected(all, -1, 0)).toBe(false);
+        expect(isSelected(all, 0, -1)).toBe(false);
+        expect(isSelected(all, W, 0)).toBe(false);
+        expect(isSelected(all, 0, H)).toBe(false);
     });
 });

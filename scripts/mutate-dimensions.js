@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1582;
+const EXPECTED_TESTS = 1592;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -353,6 +353,52 @@ const MUTANTS = [
       from: "        if (mapped[0] === r && mapped[1] === g && mapped[2] === b && mapped[3] === a) continue;",
       to: "        if (false) continue;",
       note: "a pixel that already matched counts as changed — caught by the suite, not by the filtered run" },
+
+    // PIXEL SELECTION, where the blind fixture is a CIRCLE (hides swapped radii), a polygon whose
+    // vertices sit at integer y (hides the half-open scanline rule), and two overlapping rectangles of
+    // the SAME width (hides a subtract that takes the wrong side). One mutant is deliberately absent:
+    // the wand's row bound is not observable in the result, because a read past the buffer is
+    // `undefined` and a write past a `Uint8Array` is a silent no-op — stated in the module.
+    { id: "SL1", file: "src/core/paint/Selection.ts",
+      from: "            const dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry;",
+      to: "            const dx = (x - cx) / rx, dy = (y - cy) / ry;",
+      note: "the ellipse tests a pixel's CORNER \u2014 the smallest one becomes empty" },
+    { id: "SL2", file: "src/core/paint/Selection.ts",
+      from: "            const dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry;",
+      to: "            const dx = (x + 0.5 - cx) / ry, dy = (y + 0.5 - cy) / rx;",
+      note: "the two radii are swapped \u2014 invisible on a circular fixture" },
+    { id: "SL3", file: "src/core/paint/Selection.ts",
+      from: "                if ((a.y > py) === (b.y > py)) continue;",
+      to: "                if ((a.y >= py) === (b.y >= py)) continue;",
+      note: "the lasso's Y rule is no longer half-open \u2014 needs a vertex ON a scanline to show" },
+    { id: "SL4", file: "src/core/paint/Selection.ts",
+      from: "                if (px < a.x + t * (b.x - a.x)) inside = !inside;",
+      to: "                if (px > a.x + t * (b.x - a.x)) inside = !inside;",
+      note: "the lasso crosses on the wrong side \u2014 inside becomes outside" },
+    { id: "SL5", file: "src/core/paint/Selection.ts",
+      from: "                    if (px < 0 || py < 0 || px >= mask.width || py >= mask.height) return shrinking;",
+      to: "                    if (px < 0 || py < 0 || px >= mask.width || py >= mask.height) return false;",
+      note: "shrinking eats a ring off the SURFACE EDGE \u2014 select all, shrink, lose a border" },
+    { id: "SL6", file: "src/core/paint/Selection.ts",
+      from: "                if (shrinking ? (self && neighbours) : any) next[i] = SELECTED;",
+      to: "                if (shrinking ? (self || neighbours) : any) next[i] = SELECTED;",
+      note: "shrinking stops shrinking at all" },
+    { id: "SL7", file: "src/core/paint/Selection.ts",
+      from: "    return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };",
+      to: "    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };",
+      note: "mask bounds are EXCLUSIVE \u2014 one pixel is a 0x0 box and a crop eats the outline" },
+    { id: "SL8", file: "src/core/paint/Selection.ts",
+      from: "            : op === \"subtract\" ? (had && !now)",
+      to: "            : op === \"subtract\" ? (!had && now)",
+      note: "subtract takes the wrong side of the overlap \u2014 needs rectangles of DIFFERENT widths to show" },
+    { id: "SL9", file: "src/core/paint/Selection.ts",
+      from: "    if (into.width !== shape.width || into.height !== shape.height) return null;",
+      to: "    if (false) return null;",
+      note: "a mismatched shape is combined against a sheared index" },
+    { id: "SL10", file: "src/core/paint/Selection.ts",
+      from: "    const cells = (m.width as number) * (m.height as number);",
+      to: "    const cells = (m.width as number) + (m.height as number);",
+      note: "the mask length check adds instead of multiplying" },
 ];
 
 function runSuite() {

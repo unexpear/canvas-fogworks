@@ -118,7 +118,20 @@ export function linePoints(x0: number, y0: number, x1: number, y1: number): [num
     return points;
 }
 
-/** Paint a line. */
+/**
+ * Paint a one-pixel line.
+ *
+ * NOT THE PRIMITIVE A LINE TOOL SHOULD USE, and this note exists because a feature audit listed it as
+ * a built-but-unreachable FEATURE waiting for a tool. It is not: a line tool must stamp the CHOSEN
+ * BRUSH along the line, which is `Brush.strokePath` handed `linePoints` — the same Bresenham, so the
+ * two agree by construction rather than by luck. Wiring this instead would give a tool that ignores
+ * the brush size, which is a worse tool than none.
+ *
+ * WHAT IT IS is a correct primitive with no product caller YET, and the shortest way for a test to
+ * put a diagonal wall on a surface — which is how the flood-fill and codec tests build their
+ * fixtures. Kept for that, and because it is the only place the clip-to-surface behaviour of a line
+ * is asserted; deleting it would mean four tests constructing diagonals by hand.
+ */
 export function drawLine(
     buffer: PixelBuffer, x0: number, y0: number, x1: number, y1: number, colour: Rgba
 ): void {
