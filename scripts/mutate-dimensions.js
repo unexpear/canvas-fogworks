@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1657;
+const EXPECTED_TESTS = 1663;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -242,8 +242,8 @@ const MUTANTS = [
       to: "        this.write(nodeId, [cell].map(c => [c.col, c.row] as [number, number])",
       note: "the gaps between pointer samples are NOT filled — a stroke comes out as beads" },
     { id: "TT2", file: "src/editor/tools/TileTool.ts",
-      from: "        return cellAt(map, local.x, local.y);",
-      to: "        return cellAt(map, w.x, w.y);",
+      from: "            : cellAt(map, local.x, local.y);",
+      to: "            : cellAt(map, w.x, w.y);",
       note: "the cell is picked in WORLD space — a moved or nested map paints the wrong cell" },
     { id: "TT3", file: "src/editor/tools/TileTool.ts",
       from: "        if (e.altKey) {",
@@ -625,6 +625,47 @@ const MUTANTS = [
     // which is neither a kill nor a survivor and would make the summary line a lie. The behaviour
     // is still asserted (the resolved node's terrain is undefined); it simply has two guards, one
     // of which runs at compile time.
+    { id: "TR9", file: "src/core/actions/SetTilemapAction.ts",
+      from: "    return sameTerrain(a.terrain, b.terrain);",
+      to: "    return true;",
+      note: "a terrain edit reads as a no-op and is REFUSED — the brush silently does nothing" },
+    { id: "TR10", file: "src/core/actions/SetTilemapAction.ts",
+      from: "    if (a.art.length !== b.art.length) return false;",
+      to: "    if (a.art.length !== b.art.length) return true;",
+      note: "re-assigning a class's tile reads as no change, so the art cannot be edited" },
+    { id: "TB1", file: "src/core/document/Autotile.ts",
+      from: "    const col = Math.floor((localX - map.tileWidth / 2) / map.tileWidth);",
+      to: "    const col = Math.floor(localX / map.tileWidth);",
+      note: "the terrain brush does not undo the half-cell offset — it paints the neighbour" },
+    { id: "TB2", file: "src/core/document/Autotile.ts",
+      from: "    const row = Math.floor((localY - map.tileHeight / 2) / map.tileHeight);",
+      to: "    const row = Math.floor((localY - map.tileWidth / 2) / map.tileHeight);",
+      note: "the vertical offset subtracts the cell's WIDTH — invisible on a square cell" },
+    { id: "TB3", file: "src/core/document/TilemapEdit.ts",
+      from: "    if (map.terrain) return null;\n    const tiles = map.tiles.slice();",
+      to: "    const tiles = map.tiles.slice();",
+      note: "tiles can be painted onto an autotiled layer, which silently drops its terrain" },
+    { id: "TB4", file: "src/core/document/TilemapEdit.ts",
+      from: "        if (cells[at] === edit.material) continue;",
+      to: "        if (cells[at] !== edit.material) continue;",
+      note: "a terrain edit writes only where it changes nothing — the brush does nothing" },
+    { id: "TB5", file: "src/core/document/TilemapEdit.ts",
+      from: "        if (!Number.isInteger(edit.material) || edit.material < 0) continue;",
+      to: "        if (!Number.isInteger(edit.material) || edit.material < -1) continue;",
+      note: "a negative material is stored, which `terrainError` would refuse on the next load" },
+    { id: "TB6", file: "src/core/document/TilemapEdit.ts",
+      from: "    if (at >= 0 && art[at].index === index) return null;",
+      to: "    if (at >= 0) return null;",
+      note: "a class's tile can never be REASSIGNED, so the six pickers are write-once" },
+    { id: "TB7", file: "src/core/document/TilemapEdit.ts",
+      from: "    const next = rebuild(map, new Array(map.cols * map.rows).fill(TILE_EMPTY), null);",
+      to: "    const next = rebuild(map, map.tiles.slice(), null);",
+      note: "becoming a terrain layer keeps its tiles, which `tilemapError` then refuses" },
+    { id: "TB8", file: "src/core/document/TilemapEdit.ts",
+      from: "            material: map.terrain.material,",
+      to: "            material: 0,",
+      note: "terrain survives an unrelated edit with its material reset to the ERASER" },
+
     { id: "TR5", file: "src/core/document/Components.ts",
       from: "            { cols: map.cols, rows: map.rows, cells: terrain.cells }, terrain.material, table);",
       to: "            { cols: map.rows, rows: map.cols, cells: terrain.cells }, terrain.material, table);",

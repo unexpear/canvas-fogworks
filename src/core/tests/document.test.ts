@@ -31,7 +31,7 @@ import { pickColorAt, rampT } from "../geometry/Eyedropper";
 import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, tileSourceRect as sheetTileRect, tileIndexAt,
          visibleCells, cellAt, TILE_EMPTY,
          flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D } from "../document/Tilemap";
-import { withTiles, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
+import { withTiles, withTerrain, withTerrainArt, asTerrain, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
 import { resolveTilemaps } from "../document/Components";
 import { emptyTilemap } from "../document/Tilemap";
 import { TileTool, TileBrush } from "../../editor/tools/TileTool";
@@ -25978,7 +25978,7 @@ describe("The tile brush, as a gesture", () => {
         es.selectedNodeIds = ["T"];
         const picked: { index: number; flip: number }[] = [];
         const tool = new TileTool(dispatcher, es, () => { },
-            () => ({ index: 3, flip: 0, mode: "paint", erasing: false, ...brush }),
+            () => ({ index: 3, flip: 0, mode: "paint", erasing: false, terrain: false, material: 1, ...brush }),
             (index, flip) => picked.push({ index, flip }));
         return { dispatcher, es, tool, picked, cells: () => dispatcher.getDocument().nodes.get("T")!.tilemap!.tiles };
     };
@@ -26064,7 +26064,7 @@ describe("The tile brush, as a gesture", () => {
         const es = createEditorState();
         es.selectedNodeIds = ["T"];
         const eraser = new TileTool(turned.dispatcher, es, () => { },
-            () => ({ index: 3, flip: FLIP_D, mode: "paint", erasing: true }), () => { });
+            () => ({ index: 3, flip: FLIP_D, mode: "paint", erasing: true, terrain: false, material: 1 }), () => { });
         eraser.onMouseDown(at(2, 2), CANVAS);
         eraser.onMouseUp();
         const after = turned.dispatcher.getDocument().nodes.get("T")!.tilemap!;
@@ -26132,7 +26132,7 @@ describe("The tile brush, as a gesture", () => {
         const es = createEditorState();
         es.selectedNodeIds = ["T"];
         const tool = new TileTool(dispatcher, es, () => { },
-            () => ({ index: 5, flip: 0, mode: "paint", erasing: false }), () => { });
+            () => ({ index: 5, flip: 0, mode: "paint", erasing: false, terrain: false, material: 1 }), () => { });
         // A click at world (48,32) is the node's ORIGIN, so it is cell 0,0 — not cell 3,2.
         tool.onMouseDown(at(3, 2), CANVAS);
         tool.onMouseUp();
@@ -27946,6 +27946,174 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // node whose box changed must not be measured at its stored size by layout or picking.
         const computed = computeGeometry(scene);
         expect(computed.nodes.get("T")!.bounds.width).toBe(64);
+    });
+
+    test("a terrain edit is a CHANGE, which the no-op guard could not see", () => {
+        // The bug schema 63 introduced and nothing would have caught until the brush silently did
+        // nothing: an autotiled layer's tiles are empty BY RULE and its picture is derived, so a
+        // terrain stroke changes no tile — and `sameMap` stopped at the tiles. Every terrain edit
+        // there is looked like a no-op, and `validate()` refuses those.
+        const doc = docWith(terrainMap());
+        const dispatcher = new ActionDispatcher(doc);
+        const before = doc.nodes.get("T")!.tilemap!;
+        const painted = { ...before, terrain: { ...before.terrain!, cells: [1, 1, 1, 1, 0, 0] } };
+        const action = new SetTilemapAction(dispatcher.getDocument(), "T", painted as never);
+        expect(action.validate()).toBe(true);
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        expect(dispatcher.getDocument().nodes.get("T")!.tilemap!.terrain!.cells).toEqual([1, 1, 1, 1, 0, 0]);
+
+        // …and a genuine no-op is STILL refused, or the fix would just be a removed guard. Built
+        // from the map the document NOW holds: my first version of this used the pre-edit map, which
+        // is a real change by then — the assertion failed and the code was right.
+        const now = dispatcher.getDocument().nodes.get("T")!.tilemap!;
+        const same = { ...now, terrain: { ...now.terrain! } };
+        expect(new SetTilemapAction(dispatcher.getDocument(), "T", same as never).validate()).toBe(false);
+
+        // THE ART COUNTS AS A CHANGE TOO: assigning a different tile to a class repaints every cell
+        // in that class's orbit, so an edit that only touched the art must not read as nothing.
+        const current = dispatcher.getDocument().nodes.get("T")!.tilemap!;
+        const reArt = { ...current, terrain: { ...current.terrain!,
+            art: current.terrain!.art.map((a, i) => (i === 0 ? { mask: a.mask, index: 99 } : a)) } };
+        expect(new SetTilemapAction(dispatcher.getDocument(), "T", reArt as never).validate()).toBe(true);
+    });
+
+    test("PAINTING terrain re-derives the picture, which is the whole point", () => {
+        // End to end through the real path: dispatch a terrain edit, resolve the scene, and read the
+        // tiles. Nothing wrote a tile; the picture changed because the question did.
+        const doc = docWith(terrainMap());
+        const dispatcher = new ActionDispatcher(doc);
+        const before = resolveTilemaps(dispatcher.getDocument()).nodes.get("T")!.tilemap!.tiles.slice();
+        const map = dispatcher.getDocument().nodes.get("T")!.tilemap!;
+        // Fill the whole terrain with the material: every display cell that has four grass corners
+        // becomes the FULL class, which is the one tile a fully-covered map should show.
+        const filled = { ...map, terrain: { ...map.terrain!, cells: [1, 1, 1, 1, 1, 1] } };
+        expect(dispatcher.dispatchAction(new SetTilemapAction(dispatcher.getDocument(), "T", filled as never)).success)
+            .toBe(true);
+        const after = resolveTilemaps(dispatcher.getDocument()).nodes.get("T")!.tilemap!;
+        expect(after.tiles).not.toEqual(before);
+        // The interior corner of a 3x2 terrain fully covered: display (1,1) has all four corners
+        // grass, so it is the full class — tile 16 in this art. Hand-derived.
+        expect(after.tiles[1 * after.cols + 1]).toBe(16);
+        // AND THE STORED DOCUMENT STILL HOLDS NO TILES, because the picture is not what was edited.
+        expect(dispatcher.getDocument().nodes.get("T")!.tilemap!.tiles.every((t: number) => t === TILE_EMPTY))
+            .toBe(true);
+    });
+
+    test("the EDIT arithmetic: painting cells, assigning art, and becoming a terrain layer", () => {
+        const map = terrainMap() as never as Tilemap;
+        // PAINTING. Off the grid is dropped rather than refused, because that is what a drag does;
+        // an unchanged cell contributes nothing, so a stroke over what is already grass is null.
+        const painted = withTerrain(map, [
+            { col: 2, row: 1, material: 1 },
+            { col: 99, row: 0, material: 1 },   // off the grid
+            { col: 0, row: 0, material: 1 }     // already grass
+        ]);
+        expect(painted!.terrain!.cells).toEqual([1, 1, 0, 1, 0, 1]);
+        expect(withTerrain(map, [{ col: 0, row: 0, material: 1 }])).toBeNull();
+        expect(withTerrain(map, [])).toBeNull();
+        // MATERIAL 0 IS THE ERASER, and it is a change like any other.
+        expect(withTerrain(map, [{ col: 0, row: 0, material: 0 }])!.terrain!.cells[0]).toBe(0);
+        // A NEGATIVE MATERIAL is not a material; the edit is dropped rather than stored.
+        expect(withTerrain(map, [{ col: 0, row: 0, material: -1 }])).toBeNull();
+
+        // ART. One class at a time, because that is how an artist draws — and reassigning the same
+        // tile to the same class changes nothing.
+        const reArt = withTerrainArt(map, 15, 42);
+        expect(reArt!.terrain!.art.find(a => a.mask === 15)!.index).toBe(42);
+        expect(withTerrainArt(map, 15, 16)).toBeNull();
+        // A class with no art yet is APPENDED rather than ignored, or six pickers could only ever
+        // edit the classes that already had tiles.
+        const fresh = withTerrainArt(map, 6, 77);
+        expect(fresh!.terrain!.art.find(a => a.mask === 6)!.index).toBe(77);
+        expect(withTerrainArt(map, 16, 3)).toBeNull();   // not one of the sixteen
+
+        // BECOMING a terrain layer throws the tiles away, which is why it is a deliberate act and
+        // never something a brush stroke does.
+        const ordinary: Tilemap = { cols: 3, rows: 2, tileWidth: 16, tileHeight: 8,
+            sheet: { image: "t.png", tileWidth: 8, tileHeight: 8, columns: 4, margin: 0, spacing: 0 } as never,
+            tiles: [1, 2, 3, 4, 5, 6] };
+        const converted = asTerrain(ordinary, 1, [{ mask: 15, index: 9 }])!;
+        expect(converted.tiles.every(t => t === TILE_EMPTY)).toBe(true);
+        expect(converted.terrain!.cells).toEqual([0, 0, 0, 0, 0, 0]);
+        expect(tilemapError(converted)).toBeNull();
+        // A fresh terrain layer draws NOTHING until it is painted, rather than guessing the map was
+        // all one material.
+        expect(converted.terrain!.material).toBe(1);
+        expect(asTerrain(converted, 1, [])).toBeNull();          // already terrain
+        expect(asTerrain(ordinary, 0, [])).toBeNull();           // material 0 is "nothing"
+    });
+
+    test("an autotiled layer's TILES cannot be painted, and terrain survives every other edit", () => {
+        // A stroke on a derived grid would write a picture the derivation immediately overrules —
+        // and `rebuild` used to drop the terrain on the way past, so one click turned an autotiled
+        // layer into a hand-drawn one with no way back. Found by reading the code the brush would
+        // call, before the brush existed.
+        const map = terrainMap() as never as Tilemap;
+        expect(withTiles(map, [{ col: 0, row: 0, index: 5, flip: 0 }])).toBeNull();
+        // …while an edit that IS about terrain keeps everything else intact, sheet included.
+        const painted = withTerrain(map, [{ col: 2, row: 1, material: 1 }])!;
+        expect(painted.sheet).toEqual(map.sheet);
+        expect(painted.terrain!.material).toBe(1);
+        expect(painted.terrain!.art).toEqual(map.terrain!.art);
+        expect(painted.tiles.every(t => t === TILE_EMPTY)).toBe(true);
+    });
+
+    test("the terrain BRUSH paints the question, and one drag is one undo step", () => {
+        // The gesture, driven the way the tile brush's own tests drive it: a press and a drag over
+        // the STORED box, which is what makes a click land in one terrain cell rather than
+        // ambiguously between the four that a display tile covers.
+        const doc = docWith(terrainMap());
+        const dispatcher = new ActionDispatcher(doc);
+        const es = createEditorState();
+        es.selectedNodeIds = ["T"];
+        const tool = new TileTool(dispatcher, es, () => { },
+            () => ({ index: 0, flip: 0, mode: "paint", erasing: false, terrain: true, material: 2 }),
+            () => { });
+        const rect = { left: 0, top: 0 } as DOMRect;
+        // The node is at (100, 40) with 16x8 cells, so cell (0,0) is centred at (108, 44).
+        const at = (col: number, row: number) => ({
+            clientX: 100 + col * 16 + 8, clientY: 40 + row * 8 + 4,
+            button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null }
+        } as unknown as MouseEvent);
+        tool.onMouseDown(at(2, 0), rect);
+        tool.onMouseMove(at(2, 1), rect);
+        tool.onMouseUp();
+        const terrain = dispatcher.getDocument().nodes.get("T")!.tilemap!.terrain!;
+        // Material 2 in the two cells the drag crossed, and the rest untouched.
+        expect(terrain.cells).toEqual([1, 1, 2, 1, 0, 2]);
+        // A CLICK NEAR A CELL'S EDGE, which is the only kind that can see a half-cell error: a
+        // click in the middle of a cell floors to the same row whether the offset subtracted the
+        // cell's height or its width. TB2 survived the mid-cell version of this test.
+        // Terrain row 1 starts at resolved-local y = 12 (the node resolves to y = 36), so a click
+        // at client y = 49 is one pixel into it, and col 0 spans resolved-local x 8..24.
+        tool.onMouseDown({ clientX: 108, clientY: 49, button: 0, buttons: 1, preventDefault() { },
+            target: { getAttribute: () => null } } as unknown as MouseEvent, rect);
+        tool.onMouseUp();
+        expect(dispatcher.getDocument().nodes.get("T")!.tilemap!.terrain!.cells[3]).toBe(2);
+
+        // THE TILES ARE STILL EMPTY — the brush painted the question, not the answer.
+        expect(dispatcher.getDocument().nodes.get("T")!.tilemap!.tiles.every((t: number) => t === TILE_EMPTY))
+            .toBe(true);
+        // …and the picture that follows really did change.
+        const drawn = resolveTilemaps(dispatcher.getDocument()).nodes.get("T")!.tilemap!.tiles;
+        expect(drawn.some((t: number) => t !== TILE_EMPTY)).toBe(true);
+    });
+
+    test("the terrain brush is REACHABLE, art and all", () => {
+        // Terrain had a field, a validator and a derivation and NO way to author it — the state the
+        // audit exists to find. These assert the door: the panel converts a layer, offers the six
+        // classes an artist draws, and the brush has a terrain mode.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/data-terrain-start="1"/);
+        expect(app).toMatch(/asTerrain\(map, tileMaterial \|\| 1,/);
+        expect(app).toMatch(/data-terrain-art="1"/);
+        expect(app).toMatch(/withTerrainArt\(map, mask, tileIndex\)/);
+        expect(app).toMatch(/terrain: tileTerrain, material: tileMaterial/);
+        // WITHOUT ART A TERRAIN LAYER DRAWS NOTHING, so the panel says which classes are unassigned
+        // rather than leaving an author to wonder why the map is blank.
+        expect(app).toMatch(/a shape with no tile draws nothing/);
+        const tool = readFileSync(resolve(__dirname, "../../editor/tools/TileTool.ts"), "utf8");
+        expect(tool).toMatch(/withTerrain\(map, edits\)/);
     });
 
     test("a stored terrain survives a round trip through the file", () => {

@@ -65,7 +65,8 @@ import { SelectionMask, emptyMask, fullMask, invertSelection, growSelection, bor
 import { Palette, parsePaletteFile, paletteAt } from "../core/paint/Palette";
 import { quantizeAction, surfaceEditAction } from "../core/actions/surfaceEdit";
 import { SetTilemapAction } from "../core/actions/SetTilemapAction";
-import { resizeTilemap } from "../core/document/TilemapEdit";
+import { resizeTilemap, withTerrainArt, asTerrain } from "../core/document/TilemapEdit";
+import { autotileClasses, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR } from "../core/document/Autotile";
 import { Tilemap, tileSourceRect as sheetTileRect, tileIndexAt,
     FLIP_H, FLIP_V, FLIP_D } from "../core/document/Tilemap";
 import { EyedropperTool } from "../editor/tools/EyedropperTool";
@@ -548,8 +549,15 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const [tileFlip, setTileFlip] = useState(0);
     const [tileMode, setTileMode] = useState<"paint" | "fill">("paint");
     const [tileErasing, setTileErasing] = useState(false);
-    const tileBrushRef = useRef<TileBrush>({ index: 0, flip: 0, mode: "paint", erasing: false });
-    tileBrushRef.current = { index: tileIndex, flip: tileFlip, mode: tileMode, erasing: tileErasing };
+    // TERRAIN (schema 63): the same brush over a different question — which cells are grass rather
+    // than which tile is drawn. Material 1 by default because 0 is the eraser, so a first stroke
+    // paints something rather than nothing.
+    const [tileTerrain, setTileTerrain] = useState(false);
+    const [tileMaterial, setTileMaterial] = useState(1);
+    const tileBrushRef = useRef<TileBrush>({ index: 0, flip: 0, mode: "paint", erasing: false,
+        terrain: false, material: 1 });
+    tileBrushRef.current = { index: tileIndex, flip: tileFlip, mode: tileMode, erasing: tileErasing,
+        terrain: tileTerrain, material: tileMaterial };
     // THE MARQUEE. Which shape a drag makes, and — for the wand only — how far a colour may differ
     // and whether the run has to be connected. The OPERATOR is deliberately absent: it comes from the
     // modifiers held during the gesture, so there is no way to leave "subtract" switched on and then
@@ -2786,6 +2794,28 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                     const map = stored?.tilemap;
                                     if (!stored || stored.type !== "core.tilemap" || !map) return null;
                                     const ring = sheetTileRect(map.sheet, tileIndex);
+                                    /**
+                                     * TERRAIN (schema 63). Without art a terrain layer draws
+                                     * NOTHING — the derivation has no tile to put anywhere — so the
+                                     * six class pickers are not a refinement of this feature, they
+                                     * are the feature. Each class stands for its whole orbit under
+                                     * the symmetries of a square, which is why six buttons cover
+                                     * sixteen neighbourhoods.
+                                     */
+                                    const classes = autotileClasses();
+                                    const artFor = (mask: number) =>
+                                        map.terrain?.art.find(a => a.mask === mask)?.index ?? null;
+                                    /** A 2x2 picture of which corners a class holds — the mask, drawn. */
+                                    const maskSwatch = (mask: number) => (
+                                        <span style={{ display: "grid", gridTemplateColumns: "6px 6px",
+                                            gridTemplateRows: "6px 6px", gap: 1 }}>
+                                            {[CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR].map(bit => (
+                                                <span key={bit} style={{
+                                                    background: (mask & bit) !== 0 ? UI.accent : "#333"
+                                                }} />
+                                            ))}
+                                        </span>
+                                    );
                                     /** Replace the grid, keeping the node's box in step, as ONE step. */
                                     const setMap = (next: Tilemap | null) => {
                                         if (!next) return;
@@ -2837,6 +2867,58 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                 a gesture nobody finds. */}
                                             <div style={{ color: "#666", fontSize: 10, marginTop: 3 }}>
                                                 alt-click the map to pick up the tile under the cursor
+                                            </div>
+                                            {/* TERRAIN. A layer either stores its picture or
+                                                derives it, and the button that converts is one-way
+                                                by design: it throws the tiles away, because a
+                                                stored grid and a derived one are two pictures that
+                                                can disagree. */}
+                                            <div style={{ marginTop: 6, borderTop: `1px solid ${UI.line}`, paddingTop: 6 }}>
+                                                {!map.terrain ? (
+                                                    <button
+                                                        data-terrain-start="1"
+                                                        title="Turn this layer into an autotiled one: it will store WHICH CELLS are the material and derive the tiles. The tiles it has now are discarded."
+                                                        onClick={() => setMap(asTerrain(map, tileMaterial || 1,
+                                                            [{ mask: 15, index: tileIndex }]))}
+                                                        style={ADJUST_BUTTON}
+                                                    >Autotile this layer…</button>
+                                                ) : (<>
+                                                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                                        <ToolButton icon="⛰" label="Paint terrain" active={tileTerrain}
+                                                            onClick={() => setTileTerrain(v => !v)} />
+                                                        <NumberField label="material" value={tileMaterial} min={0} max={255}
+                                                            onChange={setTileMaterial} />
+                                                        <span style={{ fontSize: 10, color: UI.textFaint }}>
+                                                            0 erases
+                                                        </span>
+                                                    </div>
+                                                    {/* THE SIX SHAPES AN ARTIST DRAWS. Each button
+                                                        shows the neighbourhood it stands for and
+                                                        assigns the CURRENTLY PICKED tile to it, so
+                                                        the sheet below is the palette for both. */}
+                                                    <div data-terrain-art="1" style={{ display: "flex", gap: 4, marginTop: 5, flexWrap: "wrap" }}>
+                                                        {classes.map(mask => (
+                                                            <button
+                                                                key={mask}
+                                                                title={`Assign tile ${tileIndex} to this shape (mask ${mask})`}
+                                                                onClick={() => setMap(withTerrainArt(map, mask, tileIndex))}
+                                                                style={{ display: "flex", flexDirection: "column",
+                                                                    alignItems: "center", gap: 2, padding: "3px 4px",
+                                                                    background: "transparent", cursor: "pointer",
+                                                                    border: `1px solid ${artFor(mask) === null ? "#a33" : UI.line}`,
+                                                                    borderRadius: 3 }}
+                                                            >
+                                                                {maskSwatch(mask)}
+                                                                <span style={{ fontSize: 9, color: artFor(mask) === null ? "#a66" : "#888" }}>
+                                                                    {artFor(mask) === null ? "—" : artFor(mask)}
+                                                                </span>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                    <div style={{ color: "#666", fontSize: 10, marginTop: 3 }}>
+                                                        a shape with no tile draws nothing — pick a tile below, then click a shape
+                                                    </div>
+                                                </>)}
                                             </div>
                                             {stored.src && (
                                                 <div

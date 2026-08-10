@@ -98,5 +98,28 @@ function sameMap(a: ReadonlyTilemap, b: ReadonlyTilemap): boolean {
     const af = a.flips, bf = b.flips;
     const turned = (f: readonly number[] | undefined, i: number) => (f ? f[i] ?? 0 : 0);
     for (let i = 0; i < a.tiles.length; i++) if (turned(af, i) !== turned(bf, i)) return false;
+    return sameTerrain(a.terrain, b.terrain);
+}
+
+/**
+ * Whether two terrains are the same (schema 63).
+ *
+ * THIS EXISTS BECAUSE ITS ABSENCE WAS A SILENT REFUSAL. A terrain edit changes no tile — the tiles
+ * of an autotiled layer are empty by rule, and the picture is derived — so a `sameMap` that stopped
+ * at the tiles saw every terrain stroke as a no-op and `validate()` rejected it. The field, the
+ * validator and the derivation were all correct and the one action that could write terrain refused
+ * every terrain edit there is. Found by asking what the brush would do before writing the brush.
+ */
+function sameTerrain(a: ReadonlyTilemap["terrain"], b: ReadonlyTilemap["terrain"]): boolean {
+    if (a === undefined || b === undefined) return a === b;
+    if (a.material !== b.material) return false;
+    if (a.cells.length !== b.cells.length) return false;
+    for (let i = 0; i < a.cells.length; i++) if (a.cells[i] !== b.cells[i]) return false;
+    // THE ART COUNTS TOO: assigning a different tile to a class changes every cell in its orbit, so
+    // an edit that only repainted the art would otherwise be refused as a no-op.
+    if (a.art.length !== b.art.length) return false;
+    for (let i = 0; i < a.art.length; i++) {
+        if (a.art[i].mask !== b.art[i].mask || a.art[i].index !== b.art[i].index) return false;
+    }
     return true;
 }

@@ -178,6 +178,33 @@ export function dualMask(terrain: Terrain, material: number, col: number, row: n
         | (has(col, row) ? CORNER_BR : 0);
 }
 
+/**
+ * Which TERRAIN cell a point falls in, given coordinates in the RESOLVED node's own space.
+ *
+ * THE INVERSE OF THE HALF-CELL OFFSET, and it has to exist because every consumer — tools included
+ * — reads geometry from `computeGeometry`, which resolves the scene internally. So a tool that asks
+ * "which cell is under the pointer" is answered in the DISPLAY grid: one larger each way and shifted
+ * half a cell. Painting terrain needs the other grid.
+ *
+ * FOUND BY A TEST, not by reasoning: the terrain brush painted nothing, and `toLocal` was returning
+ * a point half a cell further along than the arithmetic expected — which on the last column and row
+ * falls off the grid entirely and reads as a brush that mysteriously stops working near the edge.
+ *
+ * It lives here rather than in the tool because the offset is this module's rule; a second copy in a
+ * gesture would be a second thing to keep in step with `autotile`.
+ */
+export function terrainCellAt(
+    map: { cols: number; rows: number; tileWidth: number; tileHeight: number },
+    localX: number, localY: number
+): { col: number; row: number } | null {
+    const col = Math.floor((localX - map.tileWidth / 2) / map.tileWidth);
+    const row = Math.floor((localY - map.tileHeight / 2) / map.tileHeight);
+    // `cols`/`rows` here are the STORED grid's — the terrain's own — because that is what a tool
+    // reads out of the document. The display grid is one larger and is not what is being painted.
+    if (col < 0 || row < 0 || col >= map.cols || row >= map.rows) return null;
+    return { col, row };
+}
+
 /** A resolved display grid: one larger than the terrain in each direction, offset half a cell. */
 export interface AutotileResult {
     cols: number;

@@ -43,6 +43,11 @@ export const TILE_FILL_MAX = TILEMAP_MAX_CELLS;
  * landed. Edits are applied IN ORDER, so a later one on the same cell wins.
  */
 export function withTiles(map: ReadonlyTilemap, edits: readonly TileEdit[]): Tilemap | null {
+    // AN AUTOTILED LAYER HAS NO TILES TO PAINT. Its grid is derived from terrain, and the stored
+    // tiles are empty by rule — so a stroke here would write a picture the derivation immediately
+    // overrules, and `rebuild` would drop the terrain on the way past. That is a layer silently
+    // ceasing to be autotiled because somebody clicked on it once. Paint the terrain instead.
+    if (map.terrain) return null;
     const tiles = map.tiles.slice();
     // MATERIALISED ONLY IF NEEDED, and dropped again below if it ends up all zeros — see
     // `normaliseFlips`. `Tilemap.flips` documents itself as absent when nothing is turned, and an
@@ -65,6 +70,93 @@ export function withTiles(map: ReadonlyTilemap, edits: readonly TileEdit[]): Til
     }
     if (!changed) return null;
     return rebuild(map, tiles, flips);
+}
+
+/** What one terrain cell becomes: a material id, or 0 for nothing. */
+export interface TerrainEdit {
+    col: number;
+    row: number;
+    material: number;
+}
+
+/**
+ * `map` with terrain cells painted, or null when nothing changes.
+ *
+ * THE TWIN OF `withTiles`, and deliberately the same shape: off the grid is dropped rather than
+ * refused (a drag that leaves the map and comes back is one gesture), edits apply in order, and null
+ * means nothing moved. What differs is what is being written — the QUESTION rather than the answer,
+ * so the picture follows from `resolveTilemaps` instead of from here.
+ *
+ * A MAP WITHOUT TERRAIN IS REFUSED rather than given one. Turning an ordinary layer into an
+ * autotiled one throws its tiles away and needs art to draw with; that is a decision an author makes
+ * once, in `asTerrain`, not something a brush stroke should do by surprise.
+ */
+export function withTerrain(map: ReadonlyTilemap, edits: readonly TerrainEdit[]): Tilemap | null {
+    const terrain = map.terrain;
+    if (!terrain) return null;
+    const cells = terrain.cells.slice();
+    let changed = false;
+    for (const edit of edits) {
+        if (!Number.isInteger(edit.col) || !Number.isInteger(edit.row)) continue;
+        if (edit.col < 0 || edit.row < 0 || edit.col >= map.cols || edit.row >= map.rows) continue;
+        // A MATERIAL IS A WHOLE NUMBER AND NOT NEGATIVE, the same rule `terrainError` states — 0 is
+        // "nothing", which is what an eraser writes.
+        if (!Number.isInteger(edit.material) || edit.material < 0) continue;
+        const at = edit.row * map.cols + edit.col;
+        if (cells[at] === edit.material) continue;
+        cells[at] = edit.material;
+        changed = true;
+    }
+    if (!changed) return null;
+    const next = rebuild(map, map.tiles.slice(), map.flips ? map.flips.slice() : null);
+    return { ...next, terrain: { ...next.terrain!, cells } };
+}
+
+/**
+ * `map` with a different tile assigned to one symmetry class, or null when nothing changes.
+ *
+ * ONE CLASS AT A TIME, because that is how an artist draws: six shapes, each standing for its whole
+ * orbit under the symmetries of a square. Passing the whole table would make the caller responsible
+ * for a derivation `rotatedTable` already owns.
+ */
+export function withTerrainArt(map: ReadonlyTilemap, mask: number, index: number): Tilemap | null {
+    const terrain = map.terrain;
+    if (!terrain) return null;
+    if (!Number.isInteger(mask) || mask < 0 || mask >= 16) return null;
+    if (!Number.isInteger(index) || index < 0) return null;
+    const art = terrain.art.map(a => ({ mask: a.mask, index: a.index }));
+    const at = art.findIndex(a => a.mask === mask);
+    if (at >= 0 && art[at].index === index) return null;
+    if (at >= 0) art[at] = { mask, index };
+    else art.push({ mask, index });
+    const next = rebuild(map, map.tiles.slice(), map.flips ? map.flips.slice() : null);
+    return { ...next, terrain: { ...next.terrain!, art } };
+}
+
+/**
+ * An ordinary layer turned into an autotiled one, or null when it already is one.
+ *
+ * IT THROWS THE TILES AWAY, and says so here rather than doing it quietly: an autotiled layer's
+ * stored tiles must be empty, because the picture is derived and a stored one would be a second
+ * picture that can disagree. So this is a one-way door an author walks through deliberately — which
+ * is exactly why a brush stroke must never do it, and why `withTerrain` refuses a map without
+ * terrain instead of helpfully adding some.
+ *
+ * The cells start at 0, which is "nothing": a fresh terrain layer draws nothing until it is painted,
+ * rather than guessing that the map was all one material.
+ */
+export function asTerrain(map: ReadonlyTilemap, material: number, art: readonly { mask: number; index: number }[]): Tilemap | null {
+    if (map.terrain) return null;
+    if (!Number.isInteger(material) || material < 1) return null;
+    const next = rebuild(map, new Array(map.cols * map.rows).fill(TILE_EMPTY), null);
+    return {
+        ...next,
+        terrain: {
+            cells: new Array(map.cols * map.rows).fill(0),
+            material,
+            art: art.map(a => ({ mask: a.mask, index: a.index }))
+        }
+    };
 }
 
 /**
@@ -165,7 +257,8 @@ export function resizeTilemap(map: ReadonlyTilemap, cols: number, rows: number):
  * had nothing ever been turned — rather than carrying a zero per cell forever after one gesture.
  */
 function rebuild(
-    map: { cols: number; rows: number; tileWidth: number; tileHeight: number; sheet: Readonly<TileSheet> },
+    map: { cols: number; rows: number; tileWidth: number; tileHeight: number; sheet: Readonly<TileSheet>;
+           terrain?: ReadonlyTilemap["terrain"] },
     tiles: number[], flips: number[] | null
 ): Tilemap {
     const turned = flips !== null && flips.some(f => f !== 0);
@@ -176,6 +269,13 @@ function rebuild(
         // the object would make an inspector edit to one grid's sheet appear in an undone state too.
         sheet: { ...map.sheet },
         tiles,
-        ...(turned ? { flips: flips as number[] } : {})
+        ...(turned ? { flips: flips as number[] } : {}),
+        // TERRAIN SURVIVES EVERY EDIT THAT IS NOT ABOUT IT, and copied for the same reason the sheet
+        // is: a caller holding the old map must keep seeing the old terrain.
+        ...(map.terrain ? { terrain: {
+            cells: map.terrain.cells.slice(),
+            material: map.terrain.material,
+            art: map.terrain.art.map(a => ({ mask: a.mask, index: a.index }))
+        } } : {})
     };
 }

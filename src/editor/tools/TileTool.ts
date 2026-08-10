@@ -20,6 +20,12 @@
  * node's own matrix is what `toLocal` applies, so a rotated or scaled tilemap paints correctly with
  * nothing here knowing that it is.
  *
+ * IT ALSO PAINTS TERRAIN (schema 63), which is the same gesture over a different question: which
+ * cells are grass, rather than which tile is drawn. The cell is found in the STORED node's box,
+ * which is what makes a click land squarely in one terrain cell — the DISPLAY grid is half a cell
+ * off and one larger, so a click on a drawn tile is ambiguous between the four terrain cells that
+ * tile covers. Painting the question and letting `resolveTilemaps` answer it is the whole point.
+ *
  * ALT PICKS instead of painting, which is the one gesture every tile editor has: the tile under the
  * cursor becomes the brush, orientation included. It writes to the BRUSH, not the document, so it
  * leaves no history entry — the same shape as the eyedropper writing to the swatch.
@@ -31,8 +37,9 @@ import { Tool } from "./ToolController";
 import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
 import { EditorState, screenToWorld } from "../EditorState";
 import { SetTilemapAction } from "../../core/actions/SetTilemapAction";
-import { withTiles, fillRegion, TileEdit } from "../../core/document/TilemapEdit";
+import { withTiles, withTerrain, fillRegion, TileEdit, TerrainEdit } from "../../core/document/TilemapEdit";
 import { cellAt, tileAt, flipAt, TILE_EMPTY } from "../../core/document/Tilemap";
+import { terrainCellAt } from "../../core/document/Autotile";
 import { computeGeometry, toLocal } from "../../core/geometry/GeometryEngine";
 import { linePoints } from "../../core/paint/PixelBuffer";
 
@@ -46,6 +53,17 @@ export interface TileBrush {
     mode: "paint" | "fill";
     /** Whether a stroke clears cells instead of writing `index`. */
     erasing: boolean;
+    /**
+     * Paint TERRAIN rather than tiles (schema 63) — which cells are grass, not which tile is drawn.
+     *
+     * THE SAME GESTURE OVER DIFFERENT MATERIAL, which is why it is a flag here rather than a second
+     * tool: the target rule, the cell lookup, the gap-filling between samples and the one-undo-step
+     * bargain are all identical, and only the value written differs. A second class would be a
+     * second copy of the part that is easy to get wrong.
+     */
+    terrain: boolean;
+    /** Which material a terrain stroke writes. 0 is the eraser, as `terrainError` states. */
+    material: number;
 }
 
 export class TileTool implements Tool {
@@ -79,9 +97,18 @@ export class TileTool implements Tool {
         // THE NODE'S OWN SPACE, asked of the geometry engine rather than composed here: a tilemap
         // inside a rotated frame is still a grid, and the only thing that knows the chain of
         // matrices above it is the computed state.
+        //
+        // AND THAT SPACE IS THE RESOLVED ONE. `computeGeometry` resolves the scene internally — that
+        // is what keeps every consumer reading one scene — so for an autotiled layer this point is
+        // in the DISPLAY grid, which is one larger each way and offset half a cell. Terrain is
+        // painted in the other grid, and `terrainCellAt` is the inverse. Getting this wrong does not
+        // look like an off-by-one: the brush paints a neighbouring cell everywhere and nothing at
+        // all along the last row and column.
         const local = toLocal(computeGeometry(doc), nodeId, w.x, w.y);
         if (!local) return null;
-        return cellAt(map, local.x, local.y);
+        return map.terrain
+            ? terrainCellAt(map, local.x, local.y)
+            : cellAt(map, local.x, local.y);
     }
 
     onMouseDown(e: MouseEvent, canvasRect?: DOMRect): void {
@@ -155,6 +182,19 @@ export class TileTool implements Tool {
         const doc = this.dispatcher.getDocument();
         const map = doc.nodes.get(nodeId)?.tilemap;
         if (!map || cells.length === 0) return;
+        // TERRAIN IS A DIFFERENT QUESTION, so it takes a different edit — and the tiles are left
+        // exactly alone, because on an autotiled layer they are derived and `withTiles` refuses to
+        // touch them at all.
+        if (brush.terrain) {
+            const edits: TerrainEdit[] = cells.map(c => ({
+                col: c.col, row: c.row, material: brush.erasing ? 0 : brush.material
+            }));
+            const painted = withTerrain(map, edits);
+            if (!painted) return;
+            this.dispatcher.dispatchAction(new SetTilemapAction(doc, nodeId, painted), { coalesce });
+            this.refresh();
+            return;
+        }
         const index = brush.erasing ? TILE_EMPTY : brush.index;
         // AN ERASED CELL IS ALSO STRAIGHTENED. An empty cell that kept an orientation is a stored
         // value nothing can see, and it would hold the whole `flips` array alive — the invariant is
