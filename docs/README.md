@@ -39,6 +39,7 @@ This is the primary defense against architectural drift.
 | [ACTION-SYSTEM.md](ACTION-SYSTEM.md) | Action contract, dispatch lifecycle, delta protocol, history/undo-redo, transactions | 🔒 |
 | [API-CONTRACTS.md](API-CONTRACTS.md) | Public interfaces of every core module | 🔒 |
 | [TESTING.md](TESTING.md) | Strategy, how to run, coverage, regression discipline | 🔒 |
+| [FEATURE-AUDIT.md](FEATURE-AUDIT.md) | What exists, what is built and unreachable, and what is absent — measured against Pixelorama and Tiled | — |
 | [CODING-STANDARDS.md](CODING-STANDARDS.md) | Invariants, conventions, review checklist | 🔒 |
 
 ## Quick facts
@@ -47,7 +48,7 @@ This is the primary defense against architectural drift.
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
 - **Tests:** 1572 — `src/core/tests/document.test.ts` (1423) + `src/renderer/RenderModel.test.ts` (81) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8).
-- **Verify the tests themselves:** `npm run mutate:dimensions` (22/22) — breaks the paint arithmetic
+- **Verify the tests themselves:** `npm run mutate:dimensions` (61/61) — breaks the paint arithmetic
   on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
   and it refuses a dirty tree. See TESTING.md § Fixture design.
 

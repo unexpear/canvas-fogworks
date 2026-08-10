@@ -437,14 +437,29 @@ The checklist, applied when the fixture is written:
 
 This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
-cannot see — over the paint modules and the Tiled reader, exiting non-zero on a survivor:
-currently **18 mutants, 18 killed**. Six cover `SurfaceSpace`, where the convenient fixture is not
+cannot see — over the paint modules, the Tiled reader, the mesh, nine-slice, the tile grid, the tile
+brush and the autotiler, exiting non-zero on a survivor: currently **61 mutants, 61 killed**.
+Six cover `SurfaceSpace`, where the convenient fixture is not
 a square buffer but **a box at the origin** (which hides a dropped origin term) and **a
 round-trip-only assertion** (which hides a half-pixel shift, because it shifts both directions
 equally). Three cover `TiledMap`, where it is **a map that offsets only one axis** (so a swap is
 invisible), **a map that always states the attribute** (so a missing default is invisible), and
 **a corpus where only one render order ever occurs** (so an inverted condition is invisible —
 all 20 maps in the tree use `right-down`).
+
+**THERE IS A THIRD VERDICT, and it is the one that has actually cost guards.** `NOT APPLIED` means
+the mutation's `from` matched nothing, so the mutant tested NOTHING while the run still summarised as
+a pass — five guards were lost to it across two sittings. Three of those were **line endings**: every
+`from` is written with `
+`, so a two-line mutation matches a file newly written in the working tree
+and stops matching the same file once a checkout turns it CRLF (this tree holds both kinds). The
+matcher now normalises before matching. The other two were mutations "simplified" into a shape that no
+longer appeared in the source. Read every `NOT APPLIED` as a missing guard.
+
+**AND THE BATTERY ITSELF IS NOT LOADED BY THE GATE.** A syntax error in `scripts/mutate-dimensions.js`
+once passed `npm run check` and `npm run lint` and was committed — the battery then died on require,
+which is a tool reporting nothing rather than a tool reporting a problem. `check-module-headers` now
+compiles every `.js` under `scripts/` (with `vm.compileFunction`, which compiles without executing).
 
 It found the first survivor — `Symmetry`'s vertical axis reading
 `width`, which survived all 1292 tests because every fixture but one was 8×8, and that one
