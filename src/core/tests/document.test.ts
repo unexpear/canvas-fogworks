@@ -32,6 +32,7 @@ import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, 
          visibleCells, cellAt, TILE_EMPTY,
          flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D } from "../document/Tilemap";
 import { withTiles, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
+import { resolveTilemaps } from "../document/Components";
 import { emptyTilemap } from "../document/Tilemap";
 import { TileTool, TileBrush } from "../../editor/tools/TileTool";
 import { BucketTool } from "../../editor/tools/BucketTool";
@@ -4558,9 +4559,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 61→62 landed, adding
-        // `Tilemap.flips`, how each cell of a map is turned.)
-        expect(() => migrateIfNeeded(legacy, "63")).toThrow('Migration not implemented for document schema "62"');
+        // time a real migration is added — most recently when 62→63 landed, adding
+        // `Tilemap.terrain`, the question an autotiled grid is the answer to.)
+        expect(() => migrateIfNeeded(legacy, "64")).toThrow('Migration not implemented for document schema "63"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -27809,5 +27810,153 @@ describe("Adjust — the colour edits, and the half-steps that make them reversi
         expect(at(b, 2, 1)).toEqual([10, 20, 30, 0]);
         // A MAP THAT CHANGES NOTHING reports nothing, so no undo step is left behind.
         expect(mapColours(b, (r, g, bl) => [r, g, bl])).toBe(0);
+    });
+});
+
+describe("Terrain — the question a tile grid is the answer to (schema 63)", () => {
+    /** A 3x2 terrain — NON-SQUARE — where the top-left four cells are grass (material 1). */
+    const CELLS = [
+        1, 1, 0,
+        1, 0, 0
+    ];
+    /** One tile per symmetry class, which is what an artist actually draws. */
+    const ART = [
+        { mask: 0, index: 10 },    // empty
+        { mask: 1, index: 11 },    // one corner
+        { mask: 3, index: 12 },    // two adjacent
+        { mask: 5, index: 13 },    // two adjacent, the other way
+        { mask: 9, index: 14 },    // two diagonal
+        { mask: 7, index: 15 },    // three corners
+        { mask: 15, index: 16 }    // full
+    ];
+    const sheet = { image: "t.png", tileWidth: 8, tileHeight: 8, columns: 4, margin: 0, spacing: 0 };
+    // NON-SQUARE CELLS, 16 by 8. A square cell hides a half-cell offset that reads the wrong
+    // axis, which is exactly what a surviving mutant found here: the first version of this fixture
+    // used 16 by 16 and TR1 walked straight through it.
+    const terrainMap = (over: Record<string, unknown> = {}) => ({
+        cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
+        tiles: new Array(6).fill(TILE_EMPTY),
+        terrain: { cells: [...CELLS], material: 1, art: ART },
+        ...over
+    });
+    const docWith = (map: unknown) => {
+        const d = createEmptyDocument();
+        d.nodes.set("T", { id: "T", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 100, y: 40, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, tilemap: map } as Node);
+        d.rootNodeUuids = ["T"];
+        return d;
+    };
+
+    test("terrain is sized by the GRID, so two dimensions cannot disagree", () => {
+        expect(tilemapError(terrainMap())).toBeNull();
+        // The one rule that matters: `cells` is `cols * rows`. A terrain with its own width and
+        // height would be a second size to keep in step, and a mismatch shows as a coastline
+        // sheared by one cell per row — which reads as art placed by hand.
+        expect(tilemapError(terrainMap({ terrain: { cells: [1, 1, 0], material: 1, art: ART } })))
+            .toContain("must hold exactly cols * rows (6) entries, got 3");
+        // MATERIAL 0 IS RESERVED for "nothing", so a layer drawing it would autotile the holes.
+        expect(tilemapError(terrainMap({ terrain: { cells: [...CELLS], material: 0, art: ART } })))
+            .toContain("material must be a whole number >= 1");
+        // A mask outside the sixteen is art filed under a neighbourhood that cannot occur.
+        expect(tilemapError(terrainMap({ terrain: { cells: [...CELLS], material: 1,
+            art: [{ mask: 16, index: 3 }] } }))).toContain("mask must be a whole number 0..15");
+        expect(tilemapError(terrainMap({ terrain: { cells: [...CELLS], material: 1,
+            art: [{ mask: 2, index: -1 }] } }))).toContain("index must be a whole number >= 0");
+        // A material id is an id, not an index into anything here — but it is still a whole number.
+        expect(tilemapError(terrainMap({ terrain: { cells: [1, 1, 0, 1, 0, -1], material: 1, art: ART } })))
+            .toContain("cells must be whole numbers >= 0");
+    });
+
+    test("a stored grid and a derived one are two pictures, so terrain forbids stored tiles", () => {
+        // Without this a file can carry both, and "is this layer autotiled?" becomes a guess from
+        // whichever happens to be non-empty. The rule is what makes the question have one answer.
+        // ONE STORED TILE AMONG FIVE EMPTIES, which is the fixture that tells `some` from `every`:
+        // a grid where every cell is filled is refused by both, and the first version of this test
+        // used exactly that — TR6 survived it.
+        const withTiles = terrainMap({ tiles: [TILE_EMPTY, TILE_EMPTY, 7, TILE_EMPTY, TILE_EMPTY, TILE_EMPTY] });
+        expect(tilemapError(withTiles)).toContain("must store no tiles");
+        expect(tilemapError(terrainMap({ tiles: [0, 0, 0, 0, 0, 0] }))).toContain("must store no tiles");
+        // …and an ordinary map without terrain is unaffected, or this would ban tilemaps.
+        expect(tilemapError({ cols: 3, rows: 2, tileWidth: 16, tileHeight: 16, sheet,
+            tiles: [0, 1, 2, 3, 4, 5] })).toBeNull();
+    });
+
+    test("resolving grows the box by one cell and moves it half a cell, both axes", () => {
+        const doc = docWith(terrainMap());
+        const resolved = resolveTilemaps(doc);
+        const node = resolved.nodes.get("T")!;
+        // THE HALF-CELL OFFSET AND THE EXTRA ROW AND COLUMN are the dual grid's whole cost, and the
+        // reason terrain cannot live on the node whose box it measures: the two boxes differ. Cells
+        // are 16 BY 8 here, so the box moves 8 left and 4 up, and grows by 16 and 8. Hand-derived,
+        // and the two axes differ so a shift reading the wrong one cannot pass.
+        expect(node.geometry).toEqual({ x: 100 - 8, y: 40 - 4, width: 48 + 16, height: 16 + 8 });
+        expect(node.tilemap!.cols).toBe(4);
+        expect(node.tilemap!.rows).toBe(3);
+        expect(node.tilemap!.tiles).toHaveLength(12);
+        // NON-SQUARE ON PURPOSE: 3x2 in, 4x3 out. A square terrain could not tell a transposed
+        // derivation from a correct one.
+        expect(node.tilemap!.cols).not.toBe(node.tilemap!.rows);
+        // THE TERRAIN IS GONE from the result, so nothing downstream can derive a second time.
+        expect(node.tilemap!.terrain).toBeUndefined();
+        // The sheet and cell size are the STORED ones — only the grid and the box are derived.
+        expect(node.tilemap!.sheet).toEqual(sheet);
+        expect(node.tilemap!.tileWidth).toBe(16);
+        expect(node.tilemap!.tileHeight).toBe(8);
+    });
+
+    test("the derived tiles are the ones the terrain asks for, corner by corner", () => {
+        const node = resolveTilemaps(docWith(terrainMap())).nodes.get("T")!;
+        const tiles = node.tilemap!.tiles;
+        const at = (col: number, row: number) => tiles[row * node.tilemap!.cols + col];
+        // Display (0,0) sits over the corner where terrain (-1,-1), (0,-1), (-1,0) and (0,0) meet.
+        // Only (0,0) is grass and it is the BOTTOM-RIGHT of that corner, so the mask is CORNER_BR
+        // = 8 — a two-diagonal class's orbit member, turned. Hand-derived from `dualMask`.
+        expect(at(0, 0)).toBe(11);
+        // Display (1,1) sits over four grass cells except (1,1), which is 0: three corners.
+        expect(at(1, 1)).toBe(15);
+        // The far corner is over nothing at all — the empty class.
+        expect(at(3, 2)).toBe(10);
+        // OFF THE TERRAIN IS NOT THE MATERIAL, which is what puts a coastline at the map's edge
+        // rather than continuing the land forever. The whole last column is edge or empty.
+        expect(at(3, 0)).toBe(10);
+    });
+
+    test("a document with no terrain comes back BY REFERENCE", () => {
+        // Every document today. The scan is one boolean per node, and a derivation that rebuilt the
+        // map anyway would cost every frame of every project that has never seen a tilemap.
+        const plain = createEmptyDocument();
+        plain.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 4, height: 4 }, style: { fill: "#fff", opacity: 1 }, layout: {} } as Node);
+        expect(resolveTilemaps(plain)).toBe(plain);
+        // …and an ordinary tilemap with no terrain is left alone too, box and all.
+        const ordinary = docWith({ cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
+            tiles: [0, 1, 2, 3, 4, 5] });
+        expect(resolveTilemaps(ordinary)).toBe(ordinary);
+    });
+
+    test("the SCENE resolves terrain, which is what makes every consumer see the picture", () => {
+        // The seam the renderer, the geometry engine, picking and the exporter all read. A
+        // derivation nothing calls is the state the feature audit exists to find.
+        const scene = resolveScene(docWith(terrainMap()));
+        const node = scene.nodes.get("T")!;
+        expect(node.tilemap!.cols).toBe(4);
+        expect(node.tilemap!.terrain).toBeUndefined();
+        // AND THE GEOMETRY ENGINE SEES THE GROWN BOX, which is the reason this resolves last: a
+        // node whose box changed must not be measured at its stored size by layout or picking.
+        const computed = computeGeometry(scene);
+        expect(computed.nodes.get("T")!.bounds.width).toBe(64);
+    });
+
+    test("a stored terrain survives a round trip through the file", () => {
+        const doc = docWith(terrainMap());
+        const reloaded = deserializeDocument(serializeDocument(doc));
+        const map = reloaded.nodes.get("T")!.tilemap!;
+        expect(map.terrain!.cells).toEqual(CELLS);
+        expect(map.terrain!.material).toBe(1);
+        expect(map.terrain!.art).toHaveLength(ART.length);
+        // THE STORED FILE HOLDS THE QUESTION, not the picture — the tiles are still empty in it.
+        expect(map.tiles.every((t: number) => t === TILE_EMPTY)).toBe(true);
+        expect(() => validateDocumentIntegrity(reloaded)).not.toThrow();
     });
 });

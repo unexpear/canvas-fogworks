@@ -104,6 +104,40 @@ export interface Tilemap {
      * instead of one with three invisible bits on top. Absent is the common case and costs nothing.
      */
     flips?: number[];
+    /**
+     * TERRAIN (schema 63): what the author MEANT, from which `tiles` is derived.
+     *
+     * THE QUESTION INSTEAD OF THE ANSWER, which is the reason `core.tilemap` exists at all. A map
+     * drawn tile by tile stores only the picture; terrain stores which cells are grass and lets
+     * `Autotile` decide which of the sixteen silhouettes each corner shows. Change one cell and the
+     * eight tiles around it re-derive — the same bargain a gradient makes by storing stops rather
+     * than a midpoint colour.
+     *
+     * `cells` IS SIZED BY THIS GRID, `cols * rows`, and that is deliberate rather than a separate
+     * pair of dimensions: two sizes that must agree are two things that can disagree, and the
+     * disagreement would only appear as a sheared coastline. So the node's own box measures the
+     * TERRAIN, and the DISPLAY grid — one larger each way, offset half a cell — is what the
+     * derivation produces. That is why a stored terrain node's `tiles` must be empty: the picture
+     * does not live here.
+     */
+    terrain?: TerrainField;
+}
+
+/** The authored half of an autotiled layer: which cells, which material, and the six drawn tiles. */
+export interface TerrainField {
+    /** `cols * rows` material ids, row-major. 0 is "nothing", so an empty grid needs no special case. */
+    cells: number[];
+    /** Which material THIS layer draws. One material per layer, as `Autotile`'s header argues. */
+    material: number;
+    /**
+     * The art: one tile per SYMMETRY CLASS, as `autotileClasses` names them.
+     *
+     * SIX ENTRIES, NOT SIXTEEN, because the other ten are the same shapes turned — storing the full
+     * table would be storing a derivation, and an author who redrew one corner would have to
+     * remember to update three more. `rotatedTable` expands this, and its own tests check that each
+     * expanded flip really does map the class's mask onto the mask it is filed under.
+     */
+    art: { mask: number; index: number }[];
 }
 
 export interface ReadonlyTilemap {
@@ -114,6 +148,11 @@ export interface ReadonlyTilemap {
     readonly sheet: Readonly<TileSheet>;
     readonly tiles: readonly number[];
     readonly flips?: readonly number[];
+    readonly terrain?: {
+        readonly cells: readonly number[];
+        readonly material: number;
+        readonly art: readonly { readonly mask: number; readonly index: number }[];
+    };
 }
 
 /** What is wrong with a tilemap, or null. */
@@ -154,6 +193,56 @@ export function tilemapError(map: unknown): string | null {
             if (!Number.isInteger(f) || (f as number) < 0 || (f as number) > FLIP_MAX) {
                 return `tilemap.flips must be whole numbers 0..${FLIP_MAX}`;
             }
+        }
+    }
+    const bad = terrainError(m.terrain, cells);
+    if (bad) return bad;
+    // A STORED GRID AND A DERIVED ONE ARE TWO PICTURES, and a file carrying both can carry two
+    // different ones. Terrain means the tiles are computed, so the stored array must be empty —
+    // which also makes "is this layer autotiled?" a question with one answer rather than a guess
+    // from whichever of the two happens to be non-empty.
+    if (m.terrain !== undefined && (m.tiles as number[]).some(t => t !== TILE_EMPTY)) {
+        return "a tilemap with terrain must store no tiles; the grid is derived from the terrain";
+    }
+    return null;
+}
+
+/**
+ * What is wrong with a terrain field, or null. `cells` is the grid's own `cols * rows`.
+ *
+ * THE LENGTH IS CHECKED AGAINST THE GRID rather than against a pair of dimensions of its own,
+ * because terrain has none: the node's box measures the TERRAIN and the display grid is derived one
+ * larger. Two sizes that must agree are two things that can disagree, and the disagreement would
+ * surface as a coastline sheared by one cell per row — art placed by hand, to look at.
+ */
+export function terrainError(terrain: unknown, cells: number): string | null {
+    if (terrain === undefined) return null;
+    if (terrain === null || typeof terrain !== "object" || Array.isArray(terrain)) {
+        return "tilemap.terrain must be an object";
+    }
+    const t = terrain as Record<string, unknown>;
+    if (!Array.isArray(t.cells)) return "tilemap.terrain.cells must be an array";
+    if (t.cells.length !== cells) {
+        return `tilemap.terrain.cells must hold exactly cols * rows (${cells}) entries, got ${t.cells.length}`;
+    }
+    for (const c of t.cells as unknown[]) {
+        // A MATERIAL IS AN ID, NOT AN INDEX INTO ANYTHING HERE, so the only rule is that it is a
+        // whole number and not negative — 0 means "nothing", which is what an empty grid holds.
+        if (!Number.isInteger(c) || (c as number) < 0) return "tilemap.terrain.cells must be whole numbers >= 0";
+    }
+    if (!Number.isInteger(t.material) || (t.material as number) < 1) {
+        // MATERIAL 0 IS RESERVED for "nothing", so a layer drawing it would autotile the holes.
+        return "tilemap.terrain.material must be a whole number >= 1";
+    }
+    if (!Array.isArray(t.art)) return "tilemap.terrain.art must be an array";
+    for (const entry of t.art as unknown[]) {
+        if (entry === null || typeof entry !== "object") return "a terrain art entry must be an object";
+        const e = entry as Record<string, unknown>;
+        if (!Number.isInteger(e.mask) || (e.mask as number) < 0 || (e.mask as number) >= 16) {
+            return "a terrain art entry's mask must be a whole number 0..15";
+        }
+        if (!Number.isInteger(e.index) || (e.index as number) < 0) {
+            return "a terrain art entry's index must be a whole number >= 0";
         }
     }
     return null;

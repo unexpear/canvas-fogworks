@@ -43,6 +43,7 @@ import { resolveBooleanPaths } from "../geometry/Resolve";
 import { normalizePathNode } from "../geometry/PathBuilder";
 import { applyFrame } from "./Timeline";
 import { isFlatMesh, isIdentityMesh, warpCommands, skinMesh, ReadonlyMesh } from "./Mesh";
+import { rotatedTable, autotile } from "./Autotile";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
  *  Reserved: a stored node id may not contain it (checked on the edit AND load paths). */
@@ -727,10 +728,14 @@ export function resolveScene(doc: ReadonlyDocument): ReadonlyDocument {
     // SKINNING NEEDS THE POSE THE ART WAS DRAWN IN, which is this same chain without the two
     // steps that move things: the frame and the IK solve. Passed as a thunk because it is a second
     // full derivation, and an unskinned document — every document today — must never pay for it.
-    return resolveMeshes(
+    // TERRAIN RESOLVES LAST, and the position is not arbitrary: it changes a node's BOX, so
+    // everything that reads a box — layout, picking, snapping, culling — must see the result rather
+    // than the terrain's own smaller one. It is also the cheapest place, because by here the
+    // instances are expanded, so a component containing an autotiled layer resolves each copy.
+    return resolveTilemaps(resolveMeshes(
         resolveBooleans(expandInstances(applyActiveState(applyIk(applyFrame(dropHidden(doc), doc.frame))))),
         () => resolveBooleans(expandInstances(applyActiveState(dropHidden(doc))))
-    );
+    ));
 }
 
 /**
@@ -850,6 +855,57 @@ export function posedMesh(
             return null;
         }
     );
+}
+
+/**
+ * Terrain in, tiles out — the derivation that makes an autotiled layer a picture (schema 63).
+ *
+ * THE SAME SHAPE AS `resolveMeshes`, deliberately: a stored node carries the QUESTION (which cells
+ * are grass) and this produces the node the rest of the engine sees, carrying the ANSWER. Nothing
+ * downstream — geometry, picking, culling, the three backends, the exporter — learns that terrain
+ * exists, exactly as nothing downstream learned about meshes.
+ *
+ * THE BOX GROWS AND MOVES, and that is the whole difficulty. `Autotile` puts the display grid HALF A
+ * CELL off the terrain grid so each tile sits over the corner where four cells meet, which makes it
+ * one larger in each direction: a stored node measuring the terrain resolves to a node measuring the
+ * display, shifted up and left by half a cell and grown by one. That is why the terrain cannot live
+ * on the node whose box it measures without this step — the two boxes are different boxes.
+ *
+ * THE TERRAIN IS DROPPED FROM THE RESULT, so nothing can derive twice. A resolved node is an
+ * ordinary tilemap and says so.
+ *
+ * BY REFERENCE WHEN NOTHING HAS TERRAIN, which is every document today: the scan is one boolean per
+ * node and the map is not rebuilt. The same courtesy `resolveMeshes` pays.
+ */
+export function resolveTilemaps(doc: ReadonlyDocument): ReadonlyDocument {
+    let any = false;
+    doc.nodes.forEach(n => { if (n.tilemap?.terrain) any = true; });
+    if (!any) return doc;
+
+    const nodes = new Map<string, Node>();
+    doc.nodes.forEach((n, id) => {
+        const map = n.tilemap;
+        const terrain = map?.terrain;
+        if (!map || !terrain) { nodes.set(id, n as Node); return; }
+        const table = rotatedTable(new Map(terrain.art.map(a => [a.mask, a.index])));
+        const grid = autotile(
+            { cols: map.cols, rows: map.rows, cells: terrain.cells }, terrain.material, table);
+        // THE STORED SHEET AND CELL SIZE SURVIVE — only the grid and the box are derived. A
+        // derivation that rebuilt the sheet would be a second place the tileset is described.
+        const { terrain: _dropped, ...rest } = map;
+        nodes.set(id, {
+            ...(n as Node),
+            geometry: {
+                ...n.geometry,
+                x: n.geometry.x - map.tileWidth / 2,
+                y: n.geometry.y - map.tileHeight / 2,
+                width: n.geometry.width + map.tileWidth,
+                height: n.geometry.height + map.tileHeight
+            },
+            tilemap: { ...rest, cols: grid.cols, rows: grid.rows, tiles: grid.tiles, flips: grid.flips }
+        });
+    });
+    return { ...(doc as ProjectDocument), nodes } as ReadonlyDocument;
 }
 
 export function resolveMeshes(doc: ReadonlyDocument, restOf?: () => ReadonlyDocument): ReadonlyDocument {

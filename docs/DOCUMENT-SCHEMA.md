@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 
-> 🔒 Frozen contract · schema v62 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v63 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -1184,6 +1184,33 @@ Absent is the common case and costs nothing. **Transpose first, then mirror**: T
 is not commutative, stated once in `flipMatrix` and shared by every backend that takes a matrix. The
 GPU cannot take one, so it turns the within-cell coordinate instead — reading the three bits out of
 the index texture's otherwise-unused **blue byte**, which costs no second texture or upload.
+
+**TERRAIN: the question the grid answers (schema 63).** A `Tilemap` may carry `terrain` — which
+cells hold a material, which material this layer draws, and one tile per SYMMETRY CLASS — and
+`resolveTilemaps` derives the picture from it in the same chain `resolveMeshes` runs in. The document
+then stores what the author MEANT rather than what the screen shows, so changing one cell re-derives
+the eight tiles around it. The same bargain a gradient makes by storing stops instead of a midpoint
+colour, and the reason `core.tilemap` exists at all.
+
+**`terrain.cells` is sized by the GRID's own `cols * rows`**, not by dimensions of its own: two sizes
+that must agree are two things that can disagree, and the disagreement shows as a coastline sheared
+by one cell per row — which reads as art placed by hand rather than as a bad file.
+
+**A terrain layer stores NO tiles**, and `tilemapError` refuses one that does. A stored grid and a
+derived grid are two pictures that can differ, and the rule is what makes "is this layer autotiled?"
+a question with one answer instead of a guess from whichever happens to be non-empty.
+
+**Resolving MOVES AND GROWS the node's box.** The display grid sits half a cell off the terrain grid
+so each tile covers the corner where four cells meet, which makes it one larger in each direction: a
+stored node measuring the terrain resolves to a node measuring the display, shifted up and left by
+half a cell. That is why terrain cannot live on the node whose box it measures without the
+derivation — the two boxes are different boxes — and why `resolveTilemaps` runs LAST in the chain,
+after everything that reads a box.
+
+**Opening a 63 document in a 62 build loses the picture, not a detail of it.** The older validator
+never heard of `terrain` so the file passes, and the stored tiles are all empty *by the rule above* —
+so an autotiled layer comes back blank with nothing to say why. The loudest reason yet for a version
+to move.
 
 **A tilemap is born with a grid**, as a raster is born with its surface: `Integrity` refuses a
 `core.tilemap` without one, so a node created without one could be made and never saved. The

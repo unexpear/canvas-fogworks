@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1650;
+const EXPECTED_TESTS = 1657;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -602,6 +602,45 @@ const MUTANTS = [
       from: "    if (hueShift === 0 && saturationScale === 1 && valueScale === 1) return 0;",
       to: "    if (hueShift === 0 && valueScale === 1) return 0;",
       note: "a saturation-only adjustment is treated as a no-op and silently does nothing" },
+
+    // TERRAIN (schema 63). The dual grid's half-cell offset is the classic one to get wrong, and
+    // wrong by half a cell still looks like a map — just one that does not line up with anything.
+    { id: "TR1", file: "src/core/document/Components.ts",
+      from: "                x: n.geometry.x - map.tileWidth / 2,",
+      to: "                x: n.geometry.x - map.tileHeight / 2,",
+      note: "the horizontal shift uses the cell's HEIGHT — invisible on a square cell" },
+    { id: "TR2", file: "src/core/document/Components.ts",
+      from: "                y: n.geometry.y - map.tileHeight / 2,",
+      to: "                y: n.geometry.y + map.tileHeight / 2,",
+      note: "the display grid is offset the wrong way, so every tile sits a cell off its corner" },
+    { id: "TR3", file: "src/core/document/Components.ts",
+      from: "                width: n.geometry.width + map.tileWidth,",
+      to: "                width: n.geometry.width,",
+      note: "the box does not grow, so the extra column the dual grid needs falls outside it" },
+    // TR4 WAS REMOVED, and the reason belongs here rather than in a commit nobody will find. It
+    // mutated the line that DROPS the terrain from a resolved node, and it could not be written in
+    // a form that compiles: `map` is a `ReadonlyTilemap`, so a `terrain` carried through cannot be
+    // assigned into a mutable `Tilemap`. The type system already refuses the defect, which leaves a
+    // mutation battery nothing to catch — and a mutant that cannot compile reports UNVERIFIED,
+    // which is neither a kill nor a survivor and would make the summary line a lie. The behaviour
+    // is still asserted (the resolved node's terrain is undefined); it simply has two guards, one
+    // of which runs at compile time.
+    { id: "TR5", file: "src/core/document/Components.ts",
+      from: "            { cols: map.cols, rows: map.rows, cells: terrain.cells }, terrain.material, table);",
+      to: "            { cols: map.rows, rows: map.cols, cells: terrain.cells }, terrain.material, table);",
+      note: "the terrain is transposed — invisible on a square grid, a sheared coast otherwise" },
+    { id: "TR6", file: "src/core/document/Tilemap.ts",
+      from: "    if (m.terrain !== undefined && (m.tiles as number[]).some(t => t !== TILE_EMPTY)) {",
+      to: "    if (m.terrain !== undefined && (m.tiles as number[]).every(t => t !== TILE_EMPTY)) {",
+      note: "a file may carry a stored picture AND a derived one, which can disagree" },
+    { id: "TR7", file: "src/core/document/Tilemap.ts",
+      from: "    if (t.cells.length !== cells) {",
+      to: "    if (t.cells.length > cells) {",
+      note: "a SHORT terrain passes, and every row after the first reads from the wrong place" },
+    { id: "TR8", file: "src/core/document/Tilemap.ts",
+      from: "    if (!Number.isInteger(t.material) || (t.material as number) < 1) {",
+      to: "    if (!Number.isInteger(t.material) || (t.material as number) < 0) {",
+      note: "material 0 is allowed, so a layer autotiles the holes rather than the land" },
 
     // PLACING an object: the arithmetic between "what the file says" and "where the node goes".
     { id: "OP1", file: "src/core/import/TiledMap.ts",

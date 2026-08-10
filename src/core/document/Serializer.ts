@@ -361,6 +361,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "59") { raw = migrate_59_to_60(raw); version = "60"; }
     if (version === "60") { raw = migrate_60_to_61(raw); version = "61"; }
     if (version === "61") { raw = migrate_61_to_62(raw); version = "62"; }
+    if (version === "62") { raw = migrate_62_to_63(raw); version = "63"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -928,6 +929,22 @@ function migrate_60_to_61(raw: any): any {
  */
 function migrate_61_to_62(raw: any): any {
     return { ...raw, version: "62" };
+}
+
+/**
+ * Schema 63 — `Tilemap.terrain`, the question a tile grid is the answer to.
+ *
+ * A pass-through: no document before this had terrain, and one written after it still holds a
+ * complete `tiles` array for every layer that is not autotiled.
+ *
+ * THE BUMP IS THE LOUD KIND, unlike 62's. A 63 document opened in a 62 build loses the whole
+ * picture of an autotiled layer rather than a detail of it: the older `tilemapError` never heard of
+ * `terrain`, so it validates — and the stored `tiles` are all empty BY THE RULE THIS SCHEMA ADDS,
+ * because the grid is derived. The layer therefore comes back blank with nothing to say why. That is
+ * the strongest reason yet for the version to move.
+ */
+function migrate_62_to_63(raw: any): any {
+    return { ...raw, version: "63" };
 }
 
 function migrate_54_to_55(raw: any): any {
