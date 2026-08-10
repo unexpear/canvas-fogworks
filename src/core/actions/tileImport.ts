@@ -106,10 +106,12 @@ export function tileImportActions(
     for (const t of placements) {
         const id = generateUUID();
         ids.push(id);
-        // A TILE LAYER IS NOT INSIDE AN OBJECT LAYER, and closing the group here is what says so.
-        // Without it, a map that interleaves the two would hand the next grid to the previous object
-        // group, and the grid would inherit that layer's opacity — a dimmed map with no visible
-        // cause. Only an `object` stays inside; a `group` opens the next one below.
+        // A TILE LAYER ENDS THE OBJECT LAYER ABOVE IT, and what that protects is the placements
+        // AFTER it, not the grid itself: a `tilemap` is added with an explicit null parent, so it
+        // could never have been adopted. The mutant that deleted this line SURVIVED, and the reason
+        // was a comment claiming the wrong effect — what actually breaks without it is an `object`
+        // that follows a tile layer, which would be handed to a frame two layers up and inherit an
+        // opacity from a group it is not in. Only an `object` stays inside; a `group` opens the next.
         if (t.kind === "tilemap" || t.kind === "image") openGroup = null;
         if (t.kind === "tilemap") {
             // THE GRID IS A CREATION FIELD, not a patch: `Integrity` refuses a tilemap node without

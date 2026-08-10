@@ -14809,6 +14809,30 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(after.nodes.get(zoneId)!.type).toBe("core.ellipse");
     });
 
+    test("a tile layer ENDS the object layer above it, for what comes after", () => {
+        // Found by a SURVIVING mutant. The test above places [group, object, object, tilemap] and
+        // asserts the grid is a root — which it always is, because a tilemap is added with an
+        // explicit null parent, so deleting the line that closes the group changed nothing it could
+        // see. What the line actually protects is the other order: an object AFTER a tile layer
+        // must not be handed to a frame two layers up and inherit an opacity from a group it is
+        // not in.
+        const doc = createEmptyDocument();
+        const placements: TilePlacement[] = [
+            { kind: "group", x: 0, y: 0, width: 64, height: 64, name: "props", opacity: 0.5, hidden: false },
+            { kind: "tilemap", x: 0, y: 0, width: 32, height: 32, src: "sheet.png",
+              map: emptyTilemap(), name: "ground", opacity: 1, hidden: false },
+            { kind: "object", shape: "rectangle", x: 1, y: 2, width: 3, height: 4, name: "after",
+              src: null, sourceRect: null, transform: null, path: null }
+        ];
+        const { actions, ids } = tileImportActions(doc, placements);
+        const dispatcher = new ActionDispatcher(doc);
+        expect(dispatcher.dispatchAction(new TransactionAction(doc, "import", actions)).success).toBe(true);
+        const after = dispatcher.getDocument();
+        const [frameId, , strayId] = ids;
+        expect(after.nodes.get(strayId)!.parent ?? null).toBeNull();
+        expect(after.nodes.get(frameId)!.children).toHaveLength(0);
+    });
+
     test("Tiled 1.9's `class` is read as well as 1.8's `type`", () => {
         // One field renamed mid-format. The corpus is entirely 1.8, so this is the guard that stops
         // the newer spelling being dropped the day a newer file arrives.
