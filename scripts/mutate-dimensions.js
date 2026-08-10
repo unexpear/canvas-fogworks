@@ -460,10 +460,15 @@ const MUTANTS = [
       from: "                    segments.push({ x1: runStart, y1: edgeY, x2: x, y2: edgeY });",
       to: "                    segments.push({ x1: runStart, y1: edgeY, x2: x - 1, y2: edgeY });",
       note: "a horizontal run ends one short — a single pixel's outline becomes zero-length lines" },
+    // OL3 REPLACED. Its first form mutated a `y < y1` guard in the vertical scan and SURVIVED,
+    // because the guard was dead: the bounds are tight, so the row one past them holds nothing, and
+    // `isSelected` answers false off the mask anyway. The guard is gone rather than documented — a
+    // check that cannot fail is not a check — and this mutates the line's load-bearing half instead:
+    // the neighbour a left or right edge is tested against.
     { id: "OL3", file: "src/core/paint/SelectionOutline.ts",
-      from: "                const edge = y < y1 && isSelected(mask, x, y)",
-      to: "                const edge = x < x1 && isSelected(mask, x, y)",
-      note: "the vertical scan bounds the WRONG axis — invisible on a square selection" },
+      from: "!isSelected(mask, x + (side === 0 ? -1 : 1), y);",
+      to: "!isSelected(mask, x + (side === 0 ? 1 : -1), y);",
+      note: "left and right edges are detected against the wrong neighbour" },
     { id: "OL4", file: "src/core/paint/SelectionOutline.ts",
       from: "            for (let y = y0; y <= y1; y++) {",
       to: "            for (let y = y0; y < y1; y++) {",

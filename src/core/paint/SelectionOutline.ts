@@ -56,11 +56,15 @@ export function maskOutline(mask: SelectionMask): MaskSegment[] {
         for (const side of [0, 1]) {
             const edgeY = y + side;                 // 0 = the top edge, 1 = the bottom
             let runStart: number | null = null;
+            // ONE PAST THE BOX, so a run reaching the last column is flushed rather than dropped. It
+            // needs no `x < x1` guard, and the guard it once had was DEAD CODE: the bounds are tight,
+            // so column x1 holds no selected pixel anywhere, and `isSelected` answers false past the
+            // mask as well. A mutation battery found it — the mutant that broke the guard changed
+            // nothing, which is the signature of a check that was never load-bearing.
             for (let x = x0; x <= x1; x++) {
-                const edge = x < x1 && isSelected(mask, x, y) && !isSelected(mask, x, y + (side === 0 ? -1 : 1));
+                const edge = isSelected(mask, x, y) && !isSelected(mask, x, y + (side === 0 ? -1 : 1));
                 if (edge && runStart === null) runStart = x;
-                // FLUSHED ON THE FIRST NON-EDGE, and the loop runs one past the box so a run that
-                // reaches the last column is flushed rather than dropped.
+                // FLUSHED ON THE FIRST NON-EDGE.
                 if (!edge && runStart !== null) {
                     segments.push({ x1: runStart, y1: edgeY, x2: x, y2: edgeY });
                     runStart = null;
@@ -75,7 +79,7 @@ export function maskOutline(mask: SelectionMask): MaskSegment[] {
             const edgeX = x + side;                 // 0 = the left edge, 1 = the right
             let runStart: number | null = null;
             for (let y = y0; y <= y1; y++) {
-                const edge = y < y1 && isSelected(mask, x, y) && !isSelected(mask, x + (side === 0 ? -1 : 1), y);
+                const edge = isSelected(mask, x, y) && !isSelected(mask, x + (side === 0 ? -1 : 1), y);
                 if (edge && runStart === null) runStart = y;
                 if (!edge && runStart !== null) {
                     segments.push({ x1: edgeX, y1: runStart, x2: edgeX, y2: y });
