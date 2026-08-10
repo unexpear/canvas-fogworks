@@ -631,7 +631,7 @@ const MUTANTS = [
     { id: "OP7", file: "src/core/actions/tileImport.ts",
       from: '        if (t.kind === "tilemap" || t.kind === "image") openGroup = null;',
       to: '        if (t.kind === "image") openGroup = null;',
-      note: "a tile layer is adopted by the object layer above it and inherits its opacity" },
+      note: "an object AFTER a tile layer is adopted by the frame two layers up (the grid itself never was)" },
     { id: "OP8", file: "src/core/actions/tileImport.ts",
       from: '            if (t.shape !== "image") {',
       to: '            if (t.shape === "image") {',
