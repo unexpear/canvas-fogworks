@@ -389,23 +389,42 @@ export function tileIndexAt(sheet: Readonly<TileSheet>, x: number, y: number): n
  */
 
 /**
+ * Which cell a point in the node's LOCAL space falls in, WHETHER OR NOT the grid has that cell —
+ * so `col` may be negative or past the last column. Null only when the tile size is unusable.
+ *
+ * FLOOR, NOT ROUND. A cell owns the half-open range `[n*size, (n+1)*size)`, so a point one unit
+ * inside a cell's left edge is in that cell rather than half in its neighbour.
+ *
+ * THE OFF-GRID ANSWER IS THE USEFUL ONE FOR A DRAG that is not painting cell by cell. A rectangle
+ * gesture pulled past the map's edge should keep its other corner following the pointer and clamp
+ * only where the grid runs out — which `rectCells` already does — while a rectangle told "no cell"
+ * would freeze in BOTH axes, so filling the last column would mean stopping exactly inside it.
+ */
+export function cellCoordAt(
+    map: { cols: number; rows: number; tileWidth: number; tileHeight: number }, x: number, y: number
+): { col: number; row: number } | null {
+    if (!(map.tileWidth > 0) || !(map.tileHeight > 0)) return null;
+    return { col: Math.floor(x / map.tileWidth), row: Math.floor(y / map.tileHeight) };
+}
+
+/**
  * Which cell a point in the node's LOCAL space falls in, or null when it falls outside the grid.
  *
  * The single-point twin of `visibleCells`, and here beside it so the two cannot round differently:
  * a renderer that culled by one rule while a tool picked by another would paint the cell next to the
  * one under the cursor along every boundary.
  *
- * FLOOR, NOT ROUND. A cell owns the half-open range `[n*size, (n+1)*size)`, so a point one unit
- * inside a cell's left edge is in that cell rather than half in its neighbour.
+ * DERIVED FROM `cellCoordAt`, which is the same bargain `surfaceToWorld` makes with its corner: two
+ * copies of one floor can disagree by a cell at some coordinates, and this pair is asked the same
+ * question by the same gesture — one call apart, when a rectangle drag crosses the map's edge.
  */
 export function cellAt(
     map: ReadonlyTilemap, x: number, y: number
 ): { col: number; row: number } | null {
-    if (!(map.tileWidth > 0) || !(map.tileHeight > 0)) return null;
-    const col = Math.floor(x / map.tileWidth);
-    const row = Math.floor(y / map.tileHeight);
-    if (col < 0 || row < 0 || col >= map.cols || row >= map.rows) return null;
-    return { col, row };
+    const cell = cellCoordAt(map, x, y);
+    if (!cell) return null;
+    if (cell.col < 0 || cell.row < 0 || cell.col >= map.cols || cell.row >= map.rows) return null;
+    return cell;
 }
 
 /**

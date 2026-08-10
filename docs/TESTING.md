@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v63 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1524) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8) = 1676 tests.
+> 🔒 Frozen contract · schema v63 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1532) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8) = 1684 tests.
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1676 tests
+npm test                                   # jest (ts-jest), 1684 tests
 npm run header-claims                      # ADVISORY: module-header sentences with a shelf life
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
@@ -58,7 +58,7 @@ node scripts/menu-command.js "Zoom to Fit"
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1676 tests)
+## What is covered (1684 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -460,8 +460,8 @@ The checklist, applied when the fixture is written:
 This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
 cannot see — over the paint modules, the Tiled reader, the mesh, nine-slice, the tile grid, the tile
-brush and the autotiler, exiting non-zero on a survivor: currently **167 mutants, 167 killed**
-(full run at 1,676 tests, nothing NOT APPLIED and nothing AMBIGUOUS). The exporter's ten are
+brush and the autotiler, exiting non-zero on a survivor: currently **172 mutants, 172 killed**
+(full run at 1,684 tests, nothing NOT APPLIED and nothing AMBIGUOUS). The exporter's ten are
 checked by the ROUND TRIP: a real map imported, exported and imported again, compared cell by
 cell — so a mutation has to survive a reader that was written against files Tiled itself wrote.
 Six cover `SurfaceSpace`, where the convenient fixture is not
@@ -471,6 +471,16 @@ equally). Three cover `TiledMap`, where it is **a map that offsets only one axis
 invisible), **a map that always states the attribute** (so a missing default is invisible), and
 **a corpus where only one render order ever occurs** (so an inverted condition is invisible —
 all 20 maps in the tree use `right-down`).
+
+**RUN THE PRE-FLIGHT AFTER ANY REFACTOR: `MUTANT_CHECK=1 npm run mutate:dimensions`.** It answers
+one question — does every mutant's `from` still match its file, exactly once? — in about a second,
+with no tests run at all. Until 2026-08-10 the only way to learn that a `from` had drifted was a
+full battery, which is twenty minutes, and that is backwards: `NOT APPLIED` is the verdict a
+REFACTOR causes, so the moment to look is right after the refactor. Deriving `cellAt` from a new
+`cellCoordAt` and `terrainCellAt` from `terrainCoordAt` moved five mutants' lines out from under
+them (`TE4`, `TE5`, `TT2`, `TB1`, `TB2`) — found in one second, and all five re-authored and
+killing before the change was committed. Three earlier ones (`TT2`, `SS5`, `RW2`) had each been
+discovered the slow way.
 
 **AND A FOURTH: `AMBIGUOUS`.** A `from` that appears TWICE in its file mutates whichever site
 comes first, because `String.replace` takes the first — so the mutant silently tests a line its note

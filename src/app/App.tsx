@@ -548,7 +548,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     // where a wrong guess is silent and a stroke without one is the honest refusal.
     const [tileIndex, setTileIndex] = useState(0);
     const [tileFlip, setTileFlip] = useState(0);
-    const [tileMode, setTileMode] = useState<"paint" | "fill">("paint");
+    const [tileMode, setTileMode] = useState<"paint" | "fill" | "rect">("paint");
     const [tileErasing, setTileErasing] = useState(false);
     // TERRAIN (schema 63): the same brush over a different question — which cells are grass rather
     // than which tile is drawn. Material 1 by default because 0 is the eraser, so a first stroke
@@ -2842,6 +2842,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                     onClick={() => { setTileMode("paint"); setTileErasing(false); }} />
                                                 <ToolButton icon="◍" label="Fill" active={tileMode === "fill" && !tileErasing}
                                                     onClick={() => { setTileMode("fill"); setTileErasing(false); }} />
+                                                <ToolButton icon="▣" label="Rect" active={tileMode === "rect" && !tileErasing}
+                                                    onClick={() => { setTileMode("rect"); setTileErasing(false); }} />
                                                 <ToolButton icon="⌫" label="Erase" active={tileErasing}
                                                     onClick={() => setTileErasing(v => !v)} />
                                                 <span style={{ color: "#888", fontSize: 11, marginLeft: 4 }}>

@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1676;
+const EXPECTED_TESTS = 1684;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -215,12 +215,12 @@ const MUTANTS = [
       to: "        for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1]] as const) {",
       note: "a fill spreads diagonally and leaks through a wall drawn as a diagonal" },
     { id: "TE4", file: "src/core/document/Tilemap.ts",
-      from: "    const row = Math.floor(y / map.tileHeight);",
-      to: "    const row = Math.round(y / map.tileHeight);",
+      from: "row: Math.floor(y / map.tileHeight)",
+      to: "row: Math.round(y / map.tileHeight)",
       note: "a cell is picked by ROUNDING — every boundary picks its neighbour" },
     { id: "TE5", file: "src/core/document/Tilemap.ts",
-      from: "    const col = Math.floor(x / map.tileWidth);",
-      to: "    const col = Math.floor(x / map.tileHeight);",
+      from: "col: Math.floor(x / map.tileWidth)",
+      to: "col: Math.floor(x / map.tileHeight)",
       note: "the column divides by the cell's HEIGHT — invisible on a square cell" },
     { id: "TE6", file: "src/core/actions/SetTilemapAction.ts",
       from: "        if (sameMap(node.tilemap, this.next)) return false;",
@@ -242,8 +242,8 @@ const MUTANTS = [
       to: "        this.write(nodeId, [cell].map(c => [c.col, c.row] as [number, number])",
       note: "the gaps between pointer samples are NOT filled — a stroke comes out as beads" },
     { id: "TT2", file: "src/editor/tools/TileTool.ts",
-      from: "            : cellAt(map, local.x, local.y);",
-      to: "            : cellAt(map, w.x, w.y);",
+      from: "return loose ? cellCoordAt(map, local.x, local.y) : cellAt(map, local.x, local.y);",
+      to: "return loose ? cellCoordAt(map, w.x, w.y) : cellAt(map, w.x, w.y);",
       note: "the cell is picked in WORLD space — a moved or nested map paints the wrong cell" },
     { id: "TT3", file: "src/editor/tools/TileTool.ts",
       from: "        if (e.altKey) {",
@@ -634,12 +634,12 @@ const MUTANTS = [
       to: "    if (a.art.length !== b.art.length) return true;",
       note: "ASSIGNING a class that had none reads as no change — the six pickers cannot be used" },
     { id: "TB1", file: "src/core/document/Autotile.ts",
-      from: "    const col = Math.floor((localX - map.tileWidth / 2) / map.tileWidth);",
-      to: "    const col = Math.floor(localX / map.tileWidth);",
+      from: "col: Math.floor((localX - map.tileWidth / 2) / map.tileWidth)",
+      to: "col: Math.floor(localX / map.tileWidth)",
       note: "the terrain brush does not undo the half-cell offset — it paints the neighbour" },
     { id: "TB2", file: "src/core/document/Autotile.ts",
-      from: "    const row = Math.floor((localY - map.tileHeight / 2) / map.tileHeight);",
-      to: "    const row = Math.floor((localY - map.tileWidth / 2) / map.tileHeight);",
+      from: "row: Math.floor((localY - map.tileHeight / 2) / map.tileHeight)",
+      to: "row: Math.floor((localY - map.tileWidth / 2) / map.tileHeight)",
       note: "the vertical offset subtracts the cell's WIDTH — invisible on a square cell" },
     { id: "TB3", file: "src/core/document/TilemapEdit.ts",
       from: "    if (map.terrain) return null;\n    const tiles = map.tiles.slice();",
@@ -793,6 +793,29 @@ const MUTANTS = [
       from: "        const mirror: StrokeSession = { ...s.stroke, points: [from] };",
       to: "        const mirror: StrokeSession = { ...s.stroke, points: [from], clip: undefined };",
       note: "a symmetry mirror escapes the selection — paint where the author is not pointing" },
+    // THE RECTANGLE GESTURE (2026-08-10). Its shape differs from every other tool here in one
+    // way — it recomputes from the map as it was at the PRESS — and that is the part a convenient
+    // fixture cannot see, because a rectangle only ever dragged outward looks identical either way.
+    { id: "RC1", file: "src/editor/tools/TileTool.ts",
+      from: "const next = this.edited(rect.base, cells) ?? rect.base;",
+      to: "const next = this.edited(doc.nodes.get(nodeId)!.tilemap!, cells) ?? rect.base;",
+      note: "each frame paints onto the LIVE map, so a rectangle pulled back in keeps the high-water mark and can only grow" },
+    { id: "RC2", file: "src/editor/tools/TileTool.ts",
+      from: "const corner = this.cellUnder(e, canvasRect, nodeId, true);",
+      to: "const corner = this.cellUnder(e, canvasRect, nodeId, false);",
+      note: "the far corner is asked for strictly, so a drag off the map freezes in BOTH axes and the last column cannot be filled" },
+    { id: "RC3", file: "src/editor/tools/TileTool.ts",
+      from: "if (rect && rect.dispatched && rect.netZero) {",
+      to: "if (rect && rect.dispatched && !rect.netZero) {",
+      note: "the release throws away a rectangle that painted something and keeps the undo step of one that painted nothing" },
+    { id: "RC4", file: "src/editor/tools/TileTool.ts",
+      from: "new SetTilemapAction(doc, nodeId, next), { coalesce: rect.dispatched }",
+      to: "new SetTilemapAction(doc, nodeId, next), { coalesce: false }",
+      note: "every frame of the drag is its own undo step — undoing one rectangle takes as many presses as the pointer had samples" },
+    { id: "RC5", file: "src/editor/tools/TileTool.ts",
+      from: "        if (!result.success) return;\n        rect.dispatched = true;",
+      to: "        rect.dispatched = true;\n        if (!result.success) return;",
+      note: "a REFUSED first frame still opens the step, so the rectangle coalesces into whatever the author did before it" },
 ];
 
 function runSuite() {
@@ -832,6 +855,39 @@ const selected = only ? MUTANTS.filter(m => only.test(m.id)) : MUTANTS;
 if (only && selected.length === 0) {
     console.error(`No mutant id matches ${process.env.MUTANT_ONLY}`);
     process.exit(2);
+}
+
+/**
+ * How many times a mutant's `from` occurs in its file — 0 is NOT APPLIED, more than 1 is AMBIGUOUS.
+ *
+ * Shared by the pre-flight and the run so the two cannot disagree about what matches, including the
+ * line-ending normalisation that has already cost five guards.
+ */
+function matchCount(mut) {
+    const source = fs.readFileSync(path.join(ROOT, mut.file), "utf8").replace(/\r\n/g, "\n");
+    return source.split(mut.from).length - 1;
+}
+
+/**
+ * `MUTANT_CHECK=1 npm run mutate:dimensions` — do every mutant still MATCH? No tests, ~a second.
+ *
+ * A full run is twenty minutes, and until now that was also how long it took to learn that a `from`
+ * had drifted out from under the code it guards. Which is backwards: NOT APPLIED is the verdict a
+ * refactor causes, so the moment to find it is right after the refactor, not after a battery. Three
+ * mutants (TT2, SS5, RW2) were re-authored in one sitting for exactly this, each discovered late.
+ *
+ * The run below keeps its own checks — this exits before reaching them, so they stay live for a
+ * file that changes underfoot, and both ask `matchCount`.
+ */
+if (process.env.MUTANT_CHECK) {
+    const bad = selected
+        .map(mut => ({ mut, n: matchCount(mut) }))
+        .filter(({ n }) => n !== 1);
+    for (const { mut, n } of bad) {
+        console.log(`${mut.id}  ${n === 0 ? "NOT APPLIED" : `AMBIGUOUS (${n} sites)`} — ${mut.file}`);
+    }
+    console.log(`\n${selected.length - bad.length}/${selected.length} mutants still match their code.`);
+    process.exit(bad.length > 0 ? 1 : 0);
 }
 
 let survivors = 0;

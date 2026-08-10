@@ -1595,6 +1595,20 @@ writing to the swatch, so it leaves no history entry. It is checked BEFORE the m
 in fill mode rather than being a trap. **ERASING also straightens the cell**, or an emptied cell
 would keep an orientation nothing can see and hold the whole `flips` array alive.
 
+**A RECTANGLE is the third gesture** (`mode: "rect"`), and the one that could not be a stroke:
+press one corner, drag the other, release. `rectCells` had done its arithmetic since the grid landed
+with no caller outside its own tests — which is to say it was not a feature.
+
+Its preview is the document, like every gesture here, but each frame is computed from the map **as
+it was at the press** rather than layered onto the last one. That is the whole difference between a
+rectangle and a stroke: a stroke only ever adds, so painting onto what is there is right, while a
+rectangle pulled back in must UNPAINT what the larger one covered — applied to the live map it
+leaves the high-water mark behind and can only grow. The far corner is asked for LOOSELY
+(`cellCoordAt`) so a drag off the map keeps following the pointer, and **a gesture that ends up
+changing nothing rolls back to the checkpoint it took at the press** — this is the one tool here
+that can reach "no change" AFTER having committed, and an undo step that undoes nothing reads as a
+press of undo being ignored. Escape does the same thing mid-drag.
+
 **Leaving the grid mid-stroke drops the anchor**, so coming back paints where the pointer is rather
 than striping a line across the map from where it left. **A press off the grid starts nothing.**
 
@@ -2178,6 +2192,13 @@ function visibleCells(map, localRect): { col0; row0; col1; row1 } | null;   // i
 // renderer culling by one rule while a tool picks by another paints the neighbouring cell along
 // every boundary. FLOOR, so a cell owns [n*size, (n+1)*size).
 function cellAt(map, localX, localY): { col; row } | null;
+// The SAME floor WITHOUT the bounds test, so `col` may be negative or past the last column; null
+// only when the tile size is unusable. `cellAt` is DERIVED from it, which is the bargain
+// `surfaceToWorld` makes with its corner — two copies of one floor disagree by a cell somewhere,
+// and these two are asked the same question one call apart. Wanted only by a RECTANGLE drag, which
+// must keep following the pointer past the map's edge and let `rectCells` clamp; told "no cell" it
+// would freeze in BOTH axes, so the last column could only be filled by stopping exactly inside it.
+function cellCoordAt(map, x, y): { col; row } | null;
 // EDITING one (`document/TilemapEdit`). Pure, whole-map in and out, and NULL MEANS NOTHING CHANGED
 // in every one of them — an action that succeeded without changing anything puts an undo step on the
 // stack that undoes nothing, which reads as undo being ignored.
@@ -2196,8 +2217,16 @@ function asTerrain(map, material: number, art): Tilemap | null;
 // dual grid's half-cell offset. Every consumer reads geometry from `computeGeometry`, which
 // resolves internally, so a tool is answered in the DISPLAY grid and terrain lives in the other.
 function terrainCellAt(map, localX: number, localY: number): { col: number; row: number } | null;
+// Its unbounded twin, for the same caller and the same reason as `cellCoordAt`; `terrainCellAt` is
+// derived from it so the half-cell offset exists ONCE. That offset already went wrong the one time
+// it was written twice, in a tool.
+function terrainCoordAt(map, localX: number, localY: number): { col: number; row: number } | null;
 function rectCells(map, a, b): { col; row }[];                         // either corner first, clamped
 function fillRegion(map, col, row): { col; row }[];                    // FOUR-connected, matches on index alone
+// An independent copy, taken through the same rebuild every edit here uses so it cannot forget a
+// field a hand-written clone would (terrain was added to this module AFTER that rebuild existed).
+// What wants one: a gesture holding the map as it was BEFORE the gesture — the rectangle drag.
+function copyTilemap(map: ReadonlyTilemap): Tilemap;
 function resizeTilemap(map, cols, rows): Tilemap | null;               // keeps cells by COORDINATE
 // `withTiles` and `resizeTilemap` are the ONLY places `flips` is built, and both drop the array when
 // nothing is turned — the absent-when-unturned invariant on `Tilemap.flips` would otherwise last

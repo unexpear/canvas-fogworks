@@ -25997,6 +25997,138 @@ describe("The tile brush, as a gesture", () => {
         expect(filled(h.cells())).toEqual([]);
     });
 
+    test("a RECTANGLE fills between its corners, dragged either way", () => {
+        // `rectCells` did this arithmetic from the day the grid landed and had no caller outside its
+        // own tests — which is to say it was not a feature. This is the gesture that makes it one.
+        const h = harness({ mode: "rect" });
+        h.tool.onMouseDown(at(1, 1), CANVAS);
+        h.tool.onMouseMove(at(3, 2), CANVAS);
+        h.tool.onMouseUp();
+        const block = ["1,1=3", "2,1=3", "3,1=3", "1,2=3", "2,2=3", "3,2=3"];
+        expect(filled(h.cells())).toEqual(block);
+        // ONE UNDO STEP for the whole drag, however many frames it committed — the same bargain the
+        // stroke makes, and the reason every frame after the first coalesces.
+        h.dispatcher.undo();
+        expect(filled(h.cells())).toEqual([]);
+
+        // DRAGGED FROM THE OPPOSITE CORNER it is the same rectangle. A gesture that only worked
+        // down-and-right would look correct to anyone who only ever tested it that way.
+        const back = harness({ mode: "rect" });
+        back.tool.onMouseDown(at(3, 2), CANVAS);
+        back.tool.onMouseMove(at(1, 1), CANVAS);
+        back.tool.onMouseUp();
+        expect(filled(back.cells())).toEqual(block);
+    });
+
+    test("a rectangle PULLED BACK IN unpaints what the larger one covered", () => {
+        // THE BUG THIS SHAPE EXISTS TO PREVENT. Every other gesture here layers onto the live map,
+        // which is right for a stroke because a stroke only ever adds. A rectangle can shrink, so
+        // each frame is computed from the map AS IT WAS AT THE PRESS; applying to the live map
+        // instead leaves the high-water mark behind and the rectangle can only grow.
+        const h = harness({ mode: "rect" });
+        h.tool.onMouseDown(at(1, 1), CANVAS);
+        h.tool.onMouseMove(at(5, 3), CANVAS);
+        expect(filled(h.cells())).toHaveLength(15);          // 5 columns x 3 rows, live under the cursor
+        h.tool.onMouseMove(at(2, 2), CANVAS);
+        h.tool.onMouseUp();
+        expect(filled(h.cells())).toEqual(["1,1=3", "2,1=3", "1,2=3", "2,2=3"]);
+    });
+
+    test("a rectangle dragged OFF THE MAP clamps, and keeps following the pointer", () => {
+        // The corner is asked for LOOSELY here and nowhere else: told "no cell", the rectangle would
+        // freeze in BOTH axes the moment the pointer left the grid, so filling the last column would
+        // mean releasing exactly inside it. `rectCells` is what clamps.
+        const h = harness({ mode: "rect" });
+        h.tool.onMouseDown(at(2, 1), CANVAS);
+        h.tool.onMouseMove(at(4, 1), CANVAS);                // still on the grid
+        h.tool.onMouseMove(at(12, 3), CANVAS);               // past the right edge, four columns out
+        h.tool.onMouseUp();
+        const out = filled(h.cells());
+        expect(out).toHaveLength(18);                        // columns 2..7 by rows 1..3
+        expect(out).toContain("7,3=3");                      // the last column really is reached
+        // …and the ROW followed the pointer while the column was clamped, which a frozen corner
+        // could not do: rows 2 and 3 exist at all only because the off-grid sample was used.
+        expect(out).toContain("2,3=3");
+    });
+
+    test("a rectangle that ends up changing NOTHING leaves no undo step", () => {
+        // It can reach that state after having committed, which no other gesture here can: drag out
+        // over cells that already hold the brush, pull back to the anchor, release. An undo step
+        // that undoes nothing reads as a press of undo that was ignored.
+        const h = harness({ mode: "rect" });
+        const map0 = h.dispatcher.getDocument().nodes.get("T")!.tilemap!;
+        h.dispatcher.dispatchAction(new SetTilemapAction(h.dispatcher.getDocument(), "T",
+            withTiles(map0, [{ col: 1, row: 1, index: 3, flip: 0 }])!));
+        expect(filled(h.cells())).toEqual(["1,1=3"]);
+
+        h.tool.onMouseDown(at(1, 1), CANVAS);                // the anchor already holds the brush
+        h.tool.onMouseMove(at(4, 3), CANVAS);                // …so this frame is the one that commits
+        expect(filled(h.cells())).toHaveLength(12);
+        h.tool.onMouseMove(at(1, 1), CANVAS);                // and back to where it started
+        h.tool.onMouseUp();
+        expect(filled(h.cells())).toEqual(["1,1=3"]);
+        // ONE UNDO REACHES PAST THE GESTURE to the edit before it. If the rectangle had left an
+        // entry, this undo would spend itself on the round trip and leave "1,1=3" standing.
+        h.dispatcher.undo();
+        expect(filled(h.cells())).toEqual([]);
+    });
+
+    test("ESCAPE abandons a rectangle, leaving neither paint nor history", () => {
+        const h = harness({ mode: "rect" });
+        expect(h.dispatcher.canUndo()).toBe(false);
+        h.tool.onMouseDown(at(1, 1), CANVAS);
+        h.tool.onMouseMove(at(5, 3), CANVAS);
+        expect(filled(h.cells())).toHaveLength(15);
+        h.tool.onKeyDown({ key: "Escape", preventDefault() { } } as unknown as KeyboardEvent);
+        expect(filled(h.cells())).toEqual([]);
+        // NO TRACE, which is the difference between cancelling and undoing — the rotate handle's
+        // bargain, and the reason the checkpoint is taken at the press.
+        expect(h.dispatcher.canUndo()).toBe(false);
+        // …and the release that follows an Escape does not resurrect the gesture.
+        h.tool.onMouseUp();
+        expect(filled(h.cells())).toEqual([]);
+    });
+
+    test("a rectangle whose FIRST frame changes nothing still opens its own undo step", () => {
+        // RC5 survived the test above, and the reason is worth keeping: there, the gesture ended
+        // back at the base and the release rolled it back, so the damage — coalescing into the
+        // PREVIOUS edit — was hidden behind a rollback that swallowed everything anyway. It shows
+        // only when a refused first frame is followed by a real one.
+        const h = harness({ mode: "rect" });
+        const map0 = h.dispatcher.getDocument().nodes.get("T")!.tilemap!;
+        h.dispatcher.dispatchAction(new SetTilemapAction(h.dispatcher.getDocument(), "T",
+            withTiles(map0, [{ col: 1, row: 1, index: 3, flip: 0 }])!));
+        expect(filled(h.cells())).toEqual(["1,1=3"]);
+
+        h.tool.onMouseDown(at(1, 1), CANVAS);                // refused: the anchor already holds it
+        h.tool.onMouseMove(at(3, 2), CANVAS);                // the first frame that really commits
+        h.tool.onMouseUp();
+        expect(filled(h.cells())).toHaveLength(6);
+        // ONE UNDO TAKES THE RECTANGLE AND LEAVES THE EDIT BEFORE IT. Counting a refused frame as
+        // "dispatched" would open the step with coalescing already on, merging the whole rectangle
+        // into whatever the author did last — and this undo would swallow both.
+        h.dispatcher.undo();
+        expect(filled(h.cells())).toEqual(["1,1=3"]);
+    });
+
+    test("an ERASING rectangle clears the block, through the same one decision", () => {
+        // The stroke and the rectangle ask `edited` what the brush writes, so they cannot disagree
+        // about what erasing means — the second copy of that decision is what would rot.
+        const h = harness({ mode: "rect" });
+        const map0 = h.dispatcher.getDocument().nodes.get("T")!.tilemap!;
+        h.dispatcher.dispatchAction(new SetTilemapAction(h.dispatcher.getDocument(), "T",
+            withTiles(map0, [0, 1, 2, 3].map(i => ({ col: i, row: 1, index: 7, flip: 0 })))!));
+        expect(filled(h.cells())).toHaveLength(4);
+
+        const e = new TileTool(h.dispatcher, h.es, () => { },
+            () => ({ index: 3, flip: 0, mode: "rect" as const, erasing: true, terrain: false, material: 1 }),
+            () => { });
+        e.onMouseDown(at(1, 1), CANVAS);
+        e.onMouseMove(at(2, 1), CANVAS);
+        e.onMouseUp();
+        expect(filled(h.cells())).toEqual(["0,1=7", "3,1=7"]);
+    });
+
     test("a DRAG fills the gaps between samples — a stroke, not beads", () => {
         // The difference between this and the weight brush: a cell is one tile wide, so a pointer at
         // 60Hz crossing a map skips several between events. Two samples five columns apart must
@@ -28068,6 +28200,39 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         expect(painted.tiles.every(t => t === TILE_EMPTY)).toBe(true);
     });
 
+    test("a terrain RECTANGLE paints the question over a block", () => {
+        // The same gesture over the other question, and it goes through the same `edited` — so the
+        // rectangle cannot decide that terrain means tiles, which is the one way these two could
+        // drift apart. The grid is 3x2 with 16x8 cells: NON-SQUARE, so a transposed corner shows.
+        const dispatcher = new ActionDispatcher(docWith(terrainMap()));
+        const es = createEditorState();
+        es.selectedNodeIds = ["T"];
+        const tool = new TileTool(dispatcher, es, () => { },
+            () => ({ index: 0, flip: 0, mode: "rect" as const, erasing: false, terrain: true, material: 2 }),
+            () => { });
+        const rect = { left: 0, top: 0 } as DOMRect;
+        const at = (col: number, row: number) => ({
+            clientX: 100 + col * 16 + 8, clientY: 40 + row * 8 + 4,
+            button: 0, buttons: 1, preventDefault() { }, target: { getAttribute: () => null }
+        } as unknown as MouseEvent);
+        tool.onMouseDown(at(1, 0), rect);
+        tool.onMouseMove(at(2, 1), rect);
+        tool.onMouseUp();
+        // Columns 1..2 of both rows, over a field that began [1, 1, 0, 1, 0, 0] — so the block
+        // covers cells that were already grass AND cells that were not, and a rectangle that only
+        // ever wrote to empty ones would look the same on a field of all zeros.
+        expect(dispatcher.getDocument().nodes.get("T")!.tilemap!.terrain!.cells)
+            .toEqual([1, 2, 2, 1, 2, 2]);
+        // THE TILES ARE UNTOUCHED, because an autotiled layer's picture is derived — the rectangle
+        // painted the question, exactly as the stroke does.
+        expect(dispatcher.getDocument().nodes.get("T")!.tilemap!.tiles.every((t: number) => t === TILE_EMPTY))
+            .toBe(true);
+        // …and one undo takes the whole block.
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.get("T")!.tilemap!.terrain!.cells)
+            .toEqual([1, 1, 0, 1, 0, 0]);
+    });
+
     test("the terrain BRUSH paints the question, and one drag is one undo step", () => {
         // The gesture, driven the way the tile brush's own tests drive it: a press and a drag over
         // the STORED box, which is what makes a click land in one terrain cell rather than
@@ -28123,7 +28288,10 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // rather than leaving an author to wonder why the map is blank.
         expect(app).toMatch(/a shape with no tile draws nothing/);
         const tool = readFileSync(resolve(__dirname, "../../editor/tools/TileTool.ts"), "utf8");
-        expect(tool).toMatch(/withTerrain\(map, edits\)/);
+        expect(tool).toMatch(/withTerrain\(base, edits\)/);
+        // …and the RECTANGLE is a door of its own, offered beside paint and fill.
+        expect(app).toMatch(/label="Rect"/);
+        expect(app).toMatch(/setTileMode\("rect"\)/);
     });
 
     test("a stored terrain survives a round trip through the file", () => {

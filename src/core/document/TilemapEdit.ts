@@ -250,6 +250,19 @@ export function resizeTilemap(map: ReadonlyTilemap, cols: number, rows: number):
 }
 
 /**
+ * An independent copy of `map` — the identity edit, taken through `rebuild` so it cannot forget a
+ * field the way a spread would. Terrain was added to this module after `rebuild` existed and every
+ * function here kept working; a hand-written clone beside them would have dropped it silently.
+ *
+ * WHAT WANTS ONE is a gesture that must keep the map as it was BEFORE the gesture and hand it back
+ * later — the rectangle drag, which recomputes each frame from the press rather than from the frame
+ * before it. The document hands out readonly maps, and the value it must be given back is mutable.
+ */
+export function copyTilemap(map: ReadonlyTilemap): Tilemap {
+    return rebuild(map, map.tiles.slice(), map.flips ? map.flips.slice() : null);
+}
+
+/**
  * A new map carrying `tiles`/`flips`, with the flip array dropped when nothing is turned.
  *
  * THE ONE PLACE THE ABSENT-WHEN-UNTURNED INVARIANT IS KEPT. Every function above goes through it,

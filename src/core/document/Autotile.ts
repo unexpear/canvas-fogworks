@@ -197,12 +197,31 @@ export function terrainCellAt(
     map: { cols: number; rows: number; tileWidth: number; tileHeight: number },
     localX: number, localY: number
 ): { col: number; row: number } | null {
-    const col = Math.floor((localX - map.tileWidth / 2) / map.tileWidth);
-    const row = Math.floor((localY - map.tileHeight / 2) / map.tileHeight);
+    const cell = terrainCoordAt(map, localX, localY);
+    if (!cell) return null;
     // `cols`/`rows` here are the STORED grid's — the terrain's own — because that is what a tool
     // reads out of the document. The display grid is one larger and is not what is being painted.
-    if (col < 0 || row < 0 || col >= map.cols || row >= map.rows) return null;
-    return { col, row };
+    if (cell.col < 0 || cell.row < 0 || cell.col >= map.cols || cell.row >= map.rows) return null;
+    return cell;
+}
+
+/**
+ * The terrain cell a point falls in WITHOUT the grid's bounds — the twin of `Tilemap.cellCoordAt`,
+ * and here for the same reason: a rectangle drag pulled off the map has to keep following the
+ * pointer, and `rectCells` is what clamps it. Null only when the tile size is unusable.
+ *
+ * `terrainCellAt` is derived from this so the half-cell offset exists ONCE. It is the arithmetic
+ * that already went wrong once by being written a second time, in a tool.
+ */
+export function terrainCoordAt(
+    map: { cols: number; rows: number; tileWidth: number; tileHeight: number },
+    localX: number, localY: number
+): { col: number; row: number } | null {
+    if (!(map.tileWidth > 0) || !(map.tileHeight > 0)) return null;
+    return {
+        col: Math.floor((localX - map.tileWidth / 2) / map.tileWidth),
+        row: Math.floor((localY - map.tileHeight / 2) / map.tileHeight)
+    };
 }
 
 /** A resolved display grid: one larger than the terrain in each direction, offset half a cell. */

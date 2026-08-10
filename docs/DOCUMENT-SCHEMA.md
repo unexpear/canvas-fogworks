@@ -1,6 +1,9 @@
 # Document Schema
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-08-10 after the rectangle gesture: accurate. `cellCoordAt`, `terrainCoordAt`
+     and `copyTilemap` are functions the gesture needed, not fields — the schema is unchanged
+     at v63, and a rectangle stores exactly what a stroke stores. -->
 
 > 🔒 Frozen contract · schema v63 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 

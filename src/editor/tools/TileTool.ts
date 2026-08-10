@@ -30,6 +30,23 @@
  * cursor becomes the brush, orientation included. It writes to the BRUSH, not the document, so it
  * leaves no history entry — the same shape as the eyedropper writing to the swatch.
  *
+ * A RECTANGLE IS THE THIRD GESTURE, and it is the one that could not be a stroke: `rectCells` had
+ * done the arithmetic since the grid landed and had no caller outside its own tests, which is to say
+ * it was not a feature. Filling a room by dragging its two corners is the commonest thing an author
+ * does to a tile map, and doing it by stroke means painting every row.
+ *
+ * ITS PREVIEW IS THE DOCUMENT, like every other gesture here — but it recomputes from the map AS IT
+ * WAS AT THE PRESS rather than layering onto the last frame. That is the whole difference between a
+ * rectangle and a stroke: a stroke only ever adds, so painting onto what is there is right, while a
+ * rectangle that is dragged out and then pulled back in must UNPAINT what the larger one covered.
+ * Applying each frame to the live map would leave the high-water mark behind, and the author would
+ * see a rectangle that can only grow.
+ *
+ * A GESTURE THAT ENDS UP CHANGING NOTHING LEAVES NO HISTORY, which needs saying because this one can
+ * reach that state after having committed: drag a rectangle out over cells that already hold the
+ * brush, pull it back to the anchor, release. Every other tool here simply never dispatches in that
+ * case. This one rolls back to the checkpoint it took at the press, which is also what Escape does.
+ *
  * NO DOM. Events and a rect in, actions out, so the whole gesture is drivable from a test.
  */
 
@@ -37,9 +54,9 @@ import { Tool } from "./ToolController";
 import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
 import { EditorState, screenToWorld } from "../EditorState";
 import { SetTilemapAction } from "../../core/actions/SetTilemapAction";
-import { withTiles, withTerrain, fillRegion, TileEdit, TerrainEdit } from "../../core/document/TilemapEdit";
-import { cellAt, tileAt, flipAt, TILE_EMPTY } from "../../core/document/Tilemap";
-import { terrainCellAt } from "../../core/document/Autotile";
+import { withTiles, withTerrain, fillRegion, rectCells, copyTilemap, TileEdit, TerrainEdit } from "../../core/document/TilemapEdit";
+import { cellAt, cellCoordAt, tileAt, flipAt, ReadonlyTilemap, Tilemap, TILE_EMPTY } from "../../core/document/Tilemap";
+import { terrainCellAt, terrainCoordAt } from "../../core/document/Autotile";
 import { computeGeometry, toLocal } from "../../core/geometry/GeometryEngine";
 import { linePoints } from "../../core/paint/PixelBuffer";
 
@@ -49,8 +66,11 @@ export interface TileBrush {
     index: number;
     /** 0..7 — the three flip bits, as `Tilemap` stores them. */
     flip: number;
-    /** `paint` strokes cell by cell; `fill` replaces the connected run of whatever was clicked. */
-    mode: "paint" | "fill";
+    /**
+     * `paint` strokes cell by cell; `fill` replaces the connected run of whatever was clicked;
+     * `rect` fills the rectangle between the press and the release.
+     */
+    mode: "paint" | "fill" | "rect";
     /** Whether a stroke clears cells instead of writing `index`. */
     erasing: boolean;
     /**
@@ -66,10 +86,29 @@ export interface TileBrush {
     material: number;
 }
 
+/** A rectangle gesture in flight: what it started from, and what it has committed so far. */
+interface RectDrag {
+    /** The cell the press landed in. The other corner follows the pointer. */
+    anchor: { col: number; row: number };
+    /**
+     * THE MAP AS IT WAS AT THE PRESS. Every frame is computed from this, not from the last one, so
+     * pulling the rectangle back in unpaints what the larger one covered.
+     */
+    base: Tilemap;
+    /** The history head before the first preview, so Escape — or a net-zero release — leaves no trace. */
+    checkpoint: string;
+    /** Whether any preview has been committed, which is what decides `coalesce`. */
+    dispatched: boolean;
+    /** Whether the last preview came out identical to `base`. */
+    netZero: boolean;
+}
+
 export class TileTool implements Tool {
     private painting = false;
     /** The last cell this stroke reached, so the next sample can fill the gap to it. */
     private last: { col: number; row: number } | null = null;
+    /** The rectangle gesture in flight, or null. */
+    private rect: RectDrag | null = null;
 
     constructor(
         private dispatcher: ActionDispatcher,
@@ -88,8 +127,16 @@ export class TileTool implements Tool {
         return node?.type === "core.tilemap" && node.tilemap ? selected[0] : null;
     }
 
-    /** Which cell a screen point is over, in the target's own grid. */
-    private cellUnder(e: MouseEvent, canvasRect: DOMRect, nodeId: string): { col: number; row: number } | null {
+    /**
+     * Which cell a screen point is over, in the target's own grid.
+     *
+     * `loose` keeps the answer when the point is off the grid, which only the rectangle gesture
+     * wants — see `cellCoordAt`. Every other caller wants "no cell", because painting a clamped one
+     * would smear the map's edge with whatever the pointer did outside it.
+     */
+    private cellUnder(
+        e: MouseEvent, canvasRect: DOMRect, nodeId: string, loose = false
+    ): { col: number; row: number } | null {
         const doc = this.dispatcher.getDocument();
         const map = doc.nodes.get(nodeId)?.tilemap;
         if (!map) return null;
@@ -106,9 +153,10 @@ export class TileTool implements Tool {
         // all along the last row and column.
         const local = toLocal(computeGeometry(doc), nodeId, w.x, w.y);
         if (!local) return null;
-        return map.terrain
-            ? terrainCellAt(map, local.x, local.y)
-            : cellAt(map, local.x, local.y);
+        if (map.terrain) {
+            return loose ? terrainCoordAt(map, local.x, local.y) : terrainCellAt(map, local.x, local.y);
+        }
+        return loose ? cellCoordAt(map, local.x, local.y) : cellAt(map, local.x, local.y);
     }
 
     onMouseDown(e: MouseEvent, canvasRect?: DOMRect): void {
@@ -127,8 +175,19 @@ export class TileTool implements Tool {
             this.refresh();
             return;
         }
-        if (this.brush().mode === "fill") {
+        const mode = this.brush().mode;
+        if (mode === "fill") {
             this.bucket(nodeId, cell);
+            return;
+        }
+        if (mode === "rect") {
+            // THE PRESS ITSELF PAINTS ONE CELL, so a click with no drag is a single-cell fill rather
+            // than a gesture that appears to do nothing until the pointer moves.
+            this.rect = {
+                anchor: cell, base: copyTilemap(map), checkpoint: this.dispatcher.getHistoryCheckpoint(),
+                dispatched: false, netZero: true
+            };
+            this.previewRect(nodeId, cell);
             return;
         }
         this.painting = true;
@@ -137,7 +196,18 @@ export class TileTool implements Tool {
     }
 
     onMouseMove(e: MouseEvent, canvasRect?: DOMRect): void {
-        if (!this.painting || !canvasRect) return;
+        if (!canvasRect) return;
+        if (this.rect) {
+            const nodeId = this.target();
+            if (!nodeId) { this.rect = null; return; }
+            // LOOSE, so a drag past the map's edge keeps following the pointer in the axis that is
+            // still on it; `rectCells` clamps. A null here means the point could not be placed at
+            // all, and the rectangle simply holds its last corner.
+            const corner = this.cellUnder(e, canvasRect, nodeId, true);
+            if (corner) this.previewRect(nodeId, corner);
+            return;
+        }
+        if (!this.painting) return;
         const nodeId = this.target();
         if (!nodeId) { this.painting = false; return; }
         const cell = this.cellUnder(e, canvasRect, nodeId);
@@ -157,6 +227,54 @@ export class TileTool implements Tool {
     onMouseUp(): void {
         this.painting = false;
         this.last = null;
+        const rect = this.rect;
+        this.rect = null;
+        // A RECTANGLE THAT COMMITTED AND THEN CAME BACK TO WHERE IT STARTED leaves the checkpoint
+        // behind it, because the alternative is an undo step that undoes nothing — the same thing
+        // `SetTilemapAction.validate` refuses when a single edit changes nothing, reached here by a
+        // path that goes through several edits to arrive at no change.
+        if (rect && rect.dispatched && rect.netZero) {
+            this.dispatcher.rollbackToCheckpoint(rect.checkpoint);
+            this.refresh();
+        }
+    }
+
+    /** Escape abandons the rectangle, leaving neither paint nor history — as the rotate handle does. */
+    onKeyDown(e: KeyboardEvent): void {
+        if (e.key !== "Escape" || !this.rect) return;
+        const rect = this.rect;
+        this.rect = null;
+        e.preventDefault();
+        if (rect.dispatched) this.dispatcher.rollbackToCheckpoint(rect.checkpoint);
+        this.refresh();
+    }
+
+    /**
+     * Commit the rectangle between the anchor and `corner`, computed from the map at the press.
+     *
+     * Dispatch decides for itself whether this is a change: an invalid action (which is what a
+     * no-op is) returns `success: false` rather than throwing, so the frame where the pointer moves
+     * within one cell costs a validate and nothing else.
+     */
+    private previewRect(nodeId: string, corner: { col: number; row: number }): void {
+        const rect = this.rect;
+        if (!rect) return;
+        const doc = this.dispatcher.getDocument();
+        const cells = rectCells(rect.base, rect.anchor, corner);
+        // NULL MEANS "THE SAME AS BASE", so this reads as: the rectangle covers nothing the base did
+        // not already have. Falling back to `base` is what UNPAINTS a larger rectangle dragged out
+        // a moment ago — dispatching the base map is a real change when the preview is on screen,
+        // and a refused no-op when it is not.
+        const next = this.edited(rect.base, cells) ?? rect.base;
+        rect.netZero = next === rect.base;
+        const result = this.dispatcher.dispatchAction(
+            new SetTilemapAction(doc, nodeId, next), { coalesce: rect.dispatched }
+        );
+        // ONLY A COMMITTED FRAME OPENS THE STEP. Counting a refused one would coalesce the first
+        // real edit into whatever the author did before the gesture.
+        if (!result.success) return;
+        rect.dispatched = true;
+        this.refresh();
     }
 
     /** Replace the connected run of whatever was clicked — one click, one history entry. */
@@ -171,17 +289,15 @@ export class TileTool implements Tool {
     }
 
     /**
-     * Write cells, and dispatch only if something changed.
+     * `base` with `cells` painted by the current brush, or null when nothing changes.
      *
-     * `coalesce` is false for the first commit of a gesture and true after, so a stroke is ONE undo
-     * step — the bargain the rotate handle, the raster brush and the weight brush all make. Opening
-     * with a coalescing commit would merge the stroke into whatever the author did before it.
+     * THE ONE PLACE THAT DECIDES WHAT A BRUSH WRITES, so the stroke and the rectangle cannot come to
+     * different conclusions about what erasing means or which question terrain asks. It takes the
+     * map to paint ONTO rather than reading the document, which is what lets the rectangle compute
+     * every frame from the map as it was at the press.
      */
-    private write(nodeId: string, cells: readonly { col: number; row: number }[], coalesce: boolean): void {
+    private edited(base: ReadonlyTilemap, cells: readonly { col: number; row: number }[]): Tilemap | null {
         const brush = this.brush();
-        const doc = this.dispatcher.getDocument();
-        const map = doc.nodes.get(nodeId)?.tilemap;
-        if (!map || cells.length === 0) return;
         // TERRAIN IS A DIFFERENT QUESTION, so it takes a different edit — and the tiles are left
         // exactly alone, because on an autotiled layer they are derived and `withTiles` refuses to
         // touch them at all.
@@ -189,11 +305,7 @@ export class TileTool implements Tool {
             const edits: TerrainEdit[] = cells.map(c => ({
                 col: c.col, row: c.row, material: brush.erasing ? 0 : brush.material
             }));
-            const painted = withTerrain(map, edits);
-            if (!painted) return;
-            this.dispatcher.dispatchAction(new SetTilemapAction(doc, nodeId, painted), { coalesce });
-            this.refresh();
-            return;
+            return withTerrain(base, edits);
         }
         const index = brush.erasing ? TILE_EMPTY : brush.index;
         // AN ERASED CELL IS ALSO STRAIGHTENED. An empty cell that kept an orientation is a stored
@@ -202,7 +314,21 @@ export class TileTool implements Tool {
         // to be able to reach that state.
         const flip = brush.erasing ? 0 : brush.flip;
         const edits: TileEdit[] = cells.map(c => ({ col: c.col, row: c.row, index, flip }));
-        const next = withTiles(map, edits);
+        return withTiles(base, edits);
+    }
+
+    /**
+     * Write cells onto the LIVE map, and dispatch only if something changed.
+     *
+     * `coalesce` is false for the first commit of a gesture and true after, so a stroke is ONE undo
+     * step — the bargain the rotate handle, the raster brush and the weight brush all make. Opening
+     * with a coalescing commit would merge the stroke into whatever the author did before it.
+     */
+    private write(nodeId: string, cells: readonly { col: number; row: number }[], coalesce: boolean): void {
+        const doc = this.dispatcher.getDocument();
+        const map = doc.nodes.get(nodeId)?.tilemap;
+        if (!map || cells.length === 0) return;
+        const next = this.edited(map, cells);
         // NULL MEANS NOTHING CHANGED, and nothing is dispatched: a stroke over cells that already
         // hold the brush must not fill the undo stack with steps that undo nothing.
         if (!next) return;
