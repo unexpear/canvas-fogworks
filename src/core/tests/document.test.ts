@@ -39,6 +39,7 @@ import { BucketTool } from "../../editor/tools/BucketTool";
 import { PixelSelectTool, PixelSelectMode, wandMatcher, WAND_TOLERANCE_MAX } from "../../editor/tools/PixelSelectTool";
 import { MaskSegment, maskOutline } from "../paint/SelectionOutline";
 import { surfaceEditAction, quantizeAction } from "../actions/surfaceEdit";
+import { exportTiledMap, encodeGid, tilemapCsv } from "../export/ExportTiled";
 import { MID, POSTERIZE_MIN, POSTERIZE_MAX, mapColours, adjustBrightness, adjustContrast,
     rgbToHsv, hsvToRgb, adjustHsv, desaturate, invertColours, posterize, replaceColour } from "../paint/Adjust";
 import { SelectionMask, SELECTED, selectionMaskError, emptyMask, fullMask, isSelected,
@@ -28135,5 +28136,246 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // THE STORED FILE HOLDS THE QUESTION, not the picture — the tiles are still empty in it.
         expect(map.tiles.every((t: number) => t === TILE_EMPTY)).toBe(true);
         expect(() => validateDocumentIntegrity(reloaded)).not.toThrow();
+    });
+});
+
+describe("Exporting a .tmx — the round trip is the oracle", () => {
+    // The same inflater the reader's own tests use: a compressed layer is real data, and
+    // injecting the decompressor is what keeps `parseTiledMap` pure.
+    const inflate = (d: Uint8Array) => new Uint8Array(inflateSync(Buffer.from(d)));
+    const sheet = { columns: 4, tileWidth: 8, tileHeight: 8, spacing: 0, margin: 0 };
+    /** A document holding one tilemap node. NON-SQUARE grid and NON-SQUARE cells throughout. */
+    const docWith = (maps: { name: string; map: unknown; opacity?: number; hidden?: boolean }[]) => {
+        const d = createEmptyDocument();
+        maps.forEach((m, i) => {
+            d.nodes.set(`L${i}`, { id: `L${i}`, type: "core.tilemap", parent: null, children: [],
+                geometry: { x: 0, y: 0, width: 48, height: 16 },
+                style: { fill: "none", opacity: m.opacity ?? 1 }, layout: {},
+                name: m.name, hidden: m.hidden, tilemap: m.map } as Node);
+            d.rootNodeUuids.push(`L${i}`);
+        });
+        return d;
+    };
+    const grid = (tiles: number[], flips?: number[]) => ({
+        cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, sheet, tiles, ...(flips ? { flips } : {})
+    });
+
+    test("a gid carries the tile AND its flips, and EMPTY is the 0 that leaves", () => {
+        // `firstgid` is why a tile's id is not its index: a .tmx numbers across every set in the
+        // map, so the first tile is 1 and 0 means nothing at all. Forgetting it draws every tile one
+        // place off in the sheet.
+        expect(encodeGid(0, 0, 1)).toBe(1);
+        expect(encodeGid(6, 0, 1)).toBe(7);
+        expect(encodeGid(TILE_EMPTY, 0, 1)).toBe(0);
+        // The three flags, each on its own and all together — and every one is UNSIGNED, because the
+        // top bit makes a signed 32-bit integer negative and no reader accepts "-2147483641".
+        expect(encodeGid(6, FLIP_H, 1)).toBe(2147483655);
+        expect(encodeGid(6, FLIP_V, 1)).toBe(1073741831);
+        expect(encodeGid(6, FLIP_D, 1)).toBe(536870919);
+        expect(encodeGid(6, FLIP_H | FLIP_V | FLIP_D, 1)).toBe(3758096391);
+        for (const flip of [0, FLIP_H, FLIP_V, FLIP_D, FLIP_H | FLIP_D]) {
+            expect(encodeGid(6, flip, 1)).toBeGreaterThan(0);
+        }
+        // AND IT IS THE INVERSE OF THE READER, which is the only claim that matters: `decodeGid` was
+        // written against files Tiled itself wrote, so agreeing with it is evidence rather than a
+        // tautology.
+        for (const [index, flip] of [[0, 0], [6, FLIP_H], [31, FLIP_D], [12, FLIP_H | FLIP_V]] as const) {
+            const back = decodeGid(encodeGid(index, flip, 1));
+            expect(back.gid - 1).toBe(index);
+            expect((back.flipH ? FLIP_H : 0) | (back.flipV ? FLIP_V : 0) | (back.flipD ? FLIP_D : 0)).toBe(flip);
+        }
+    });
+
+    test("a document goes out as a .tmx and comes back the same map", () => {
+        // THE ORACLE. Not "the XML looks right" — the reader that has only ever met files Tiled
+        // wrote reads this one and finds the same cells.
+        const doc = docWith([{ name: "ground", map: grid([0, 1, -1, 2, 3, 4]) }]);
+        const out = exportTiledMap(doc, "tiles.png");
+        expect(out.notes).toEqual([]);
+        const back = parseTiledMap(out.xml);
+        expect(back).toMatchObject({ width: 3, height: 2, tileWidth: 16, tileHeight: 8,
+            orientation: "orthogonal" });
+        expect(back.layers).toHaveLength(1);
+        expect(back.layers[0].name).toBe("ground");
+        expect(back.layers[0].cells.map(c => c.gid)).toEqual([1, 2, 0, 3, 4, 5]);
+        // The tileset it declares is the sheet the document held, and it names the image the caller
+        // asked for — this module will not invent a path, because a .tmx pointing at a file that is
+        // not there opens as an error dialog.
+        expect(back.tilesets).toHaveLength(1);
+        expect(back.tilesets[0]).toMatchObject({ tileWidth: 8, tileHeight: 8, columns: 4,
+            image: "tiles.png", firstGid: 1 });
+        // …and the reader had nothing to complain about, which is a stronger claim than "it parsed".
+        expect(back.notes).toEqual([]);
+    });
+
+    test("flips survive the trip, which is what the top three bits are for", () => {
+        // 820 of the corpus's cells are flipped across 14 of its 20 maps, so a round trip that lost
+        // them would come back subtly rearranged with nothing to say why.
+        const doc = docWith([{ name: "turned",
+            map: grid([1, 1, 1, 1, 1, 1], [0, FLIP_H, FLIP_V, FLIP_D, FLIP_H | FLIP_V, FLIP_H | FLIP_D]) }]);
+        const back = parseTiledMap(exportTiledMap(doc, "t.png").xml);
+        const cells = back.layers[0].cells;
+        expect(cells.map(c => c.gid)).toEqual([2, 2, 2, 2, 2, 2]);
+        expect(cells.map(c => [c.flipH, c.flipV, c.flipD])).toEqual([
+            [false, false, false], [true, false, false], [false, true, false],
+            [false, false, true], [true, true, false], [true, false, true]
+        ]);
+    });
+
+    test("a layer's opacity and visibility travel, and only when they differ", () => {
+        const doc = docWith([
+            { name: "a", map: grid([1, 1, 1, 1, 1, 1]) },
+            { name: "dim", map: grid([2, 2, 2, 2, 2, 2]), opacity: 0.4 },
+            { name: "off", map: grid([3, 3, 3, 3, 3, 3]), hidden: true }
+        ]);
+        const out = exportTiledMap(doc, "t.png");
+        const back = parseTiledMap(out.xml);
+        expect(back.layers.map(l => [l.name, l.opacity, l.visible])).toEqual([
+            ["a", 1, true], ["dim", 0.4, true], ["off", 1, false]
+        ]);
+        // WRITTEN ONLY WHEN THEY DIFFER from the default, which is what Tiled does — a round trip
+        // through Tiled itself then leaves the file alone rather than rewriting every layer.
+        expect(out.xml).not.toMatch(/name="a"[^>]*opacity/);
+        expect(out.xml).toMatch(/name="dim"[^>]*opacity="0.4"/);
+        expect(out.xml).toMatch(/name="off"[^>]*visible="0"/);
+    });
+
+    test("a layer the format cannot hold is REPORTED, not squeezed in", () => {
+        // A .tmx has one size and one tile size for every layer; a document has neither rule. The
+        // first layer sets the map and the rest are measured against it — silently dropping one is
+        // the kind of export somebody discovers a week later.
+        const doc = docWith([
+            { name: "ground", map: grid([1, 1, 1, 1, 1, 1]) },
+            { name: "bigger", map: { cols: 4, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
+                tiles: [1, 1, 1, 1, 1, 1, 1, 1] } },
+            { name: "coarser", map: { cols: 3, rows: 2, tileWidth: 32, tileHeight: 8, sheet,
+                tiles: [1, 1, 1, 1, 1, 1] } }
+        ]);
+        const out = exportTiledMap(doc, "t.png");
+        expect(parseTiledMap(out.xml).layers.map(l => l.name)).toEqual(["ground"]);
+        expect(out.notes).toHaveLength(2);
+        expect(out.notes[0]).toContain('layer "bigger" is 4x2');
+        expect(out.notes[1]).toContain('layer "coarser" is 3x2 at 32x8');
+        // …and the reason names both sizes, because "did not fit" cannot be acted on.
+        expect(out.notes[0]).toContain("the map is 3x2 at 16x8");
+        // A document with nothing to export says so rather than writing an empty map.
+        expect(exportTiledMap(createEmptyDocument(), "t.png").notes)
+            .toEqual(["there is no tilemap node to export"]);
+    });
+
+    test("an AUTOTILED layer exports the picture its terrain derives", () => {
+        // The layer this engine is proudest of stores terrain and NO tiles at all, so exporting the
+        // stored document would write an empty map for exactly those layers. Tiled has no dual-grid
+        // terrain of its own, so the derived picture is the honest export.
+        const d = createEmptyDocument();
+        d.nodes.set("T", { id: "T", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "terrain",
+            tilemap: { cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
+                tiles: new Array(6).fill(TILE_EMPTY),
+                terrain: { cells: [1, 1, 0, 1, 0, 0], material: 1,
+                    art: [{ mask: 0, index: 0 }, { mask: 15, index: 5 }] } } } as Node);
+        d.rootNodeUuids = ["T"];
+        const back = parseTiledMap(exportTiledMap(d, "t.png").xml);
+        // THE DISPLAY GRID, one larger each way — which is what the dual grid draws and therefore
+        // what a .tmx must hold.
+        expect(back.width).toBe(4);
+        expect(back.height).toBe(3);
+        expect(back.layers[0].cells).toHaveLength(12);
+        // …and it is not empty, which is the whole point: the stored node has no tiles at all.
+        expect(back.layers[0].cells.some(c => c.gid !== 0)).toBe(true);
+    });
+
+    test("a REAL Kenney map survives import, export and import again", () => {
+        // The claim this module exists to make. An unmodified asset from the tree — cells, flips and
+        // all — compared cell by cell rather than "it parsed". `zlib-embedded.tmx` is the one to use
+        // because its tileset is EMBEDDED: the other real maps name an external `.tsx` the fixtures
+        // folder does not carry, so nothing could resolve their gids without a filesystem.
+        const source = readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "zlib-embedded.tmx"), "utf8");
+        const original = parseTiledMap(source, { inflate });
+        const fit = tilemapForLayer(original, original.layers[0], original.tilesets);
+        expect(fit.layer).not.toBeNull();
+        const d = createEmptyDocument();
+        d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 32, height: 32 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: original.layers[0].name,
+            tilemap: fit.layer!.tilemap } as Node);
+        d.rootNodeUuids = ["L"];
+
+        const out = exportTiledMap(d, "sheet.png");
+        expect(out.notes).toEqual([]);
+        const back = parseTiledMap(out.xml);
+        expect(back.notes).toEqual([]);
+        // EVERY CELL, not a count: a re-import that dropped a row would still have the right total
+        // if it doubled another.
+        const before = fit.layer!.tilemap;
+        expect(back.layers[0].cells).toHaveLength(before.cols * before.rows);
+        back.layers[0].cells.forEach((cell, i) => {
+            const expectedGid = before.tiles[i] === TILE_EMPTY ? 0 : before.tiles[i] + 1;
+            expect(cell.gid).toBe(expectedGid);
+            const flip = before.flips ? before.flips[i] : 0;
+            expect(cell.flipH).toBe((flip & FLIP_H) !== 0);
+            expect(cell.flipV).toBe((flip & FLIP_V) !== 0);
+            expect(cell.flipD).toBe((flip & FLIP_D) !== 0);
+        });
+    });
+
+    test("XML entities survive both ways, which the exporter is what exposed", () => {
+        // The reader never decoded them, and nothing noticed because no map in the corpus holds an
+        // ampersand — Tiled escapes layer names, object names, class names and every custom property
+        // value. A layer called `Rocks & Dirt` came back as `Rocks &amp; Dirt`: a name that looks
+        // almost right and only reveals itself when somebody searches for it.
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" orientation="orthogonal" width="1" height="1" tilewidth="8" tileheight="8">
+ <objectgroup id="1" name="A &amp; B">
+  <object id="1" name="say &quot;hi&quot;" type="a&apos;b" x="0" y="0" width="8" height="8">
+   <properties>
+    <property name="path" value="a&lt;b&gt;c"/>
+    <property name="lit" value="&amp;lt;not markup&amp;gt;"/>
+    <property name="num" value="&#65;&#x42;"/>
+   </properties>
+  </object>
+ </objectgroup>
+</map>`;
+        const group = parseTiledMap(xml).objectGroups[0];
+        expect(group.name).toBe("A & B");
+        expect(group.objects[0].name).toBe('say "hi"');
+        expect(group.objects[0].className).toBe("a'b");
+        expect(group.objects[0].properties[0].value).toBe("a<b>c");
+        // AMPERSAND IS UNDONE LAST, which is the one ordering rule: doing it first turns `&amp;lt;`
+        // — a file that means the literal text `&lt;` — into a `<`, inventing markup the author
+        // escaped on purpose.
+        expect(group.objects[0].properties[1].value).toBe("&lt;not markup&gt;");
+        // Numeric references too, decimal and hex, because Tiled writes them for anything outside
+        // its encoding.
+        expect(group.objects[0].properties[2].value).toBe("AB");
+    });
+
+    test("the exporter is REACHABLE, which is what makes it a feature", () => {
+        // A .tmx writer nothing can invoke is arithmetic, not an export — the state the feature
+        // audit exists to find, and the one `floodFill`, `Palette` and `Adjust` were each in.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/data-export-tmx="1"/);
+        expect(app).toMatch(/exportTiledMap\(getDocument\(\), "tiles.png"\)/);
+        expect(app).toMatch(/writeIntoFolder\(folder, "map.tmx", out.xml\)/);
+        // WHAT COULD NOT BE WRITTEN REACHES THE PERSON, rather than being swallowed by a success
+        // message: a map that quietly lost a layer is discovered a week later.
+        expect(app).toMatch(/out\.notes\.length > 0 \? ` · \$\{out\.notes\[0\]\}` : ""/);
+    });
+
+    test("the CSV is a file a person can read", () => {
+        // The format allows base64 and the corpus uses both; a .tmx is a file people open, diff and
+        // hand-edit, and a wall of base64 is the version that cannot be reviewed.
+        const doc = docWith([{ name: "g", map: grid([0, 1, 2, 3, 4, -1]) }]);
+        const xml = exportTiledMap(doc, "t.png").xml;
+        expect(xml).toContain('<data encoding="csv">');
+        expect(xml).toContain("1,2,3," + String.fromCharCode(10) + "4,5,0");
+        // XML's five characters are escaped, or a layer named `A & B` writes a file that will not
+        // parse — including in the image path, which arrives from a caller.
+        const named = docWith([{ name: 'A & <B>', map: grid([1, 1, 1, 1, 1, 1]) }]);
+        const escaped = exportTiledMap(named, 'a&b.png').xml;
+        expect(escaped).toContain("A &amp; &lt;B&gt;");
+        expect(escaped).toContain('source="a&amp;b.png"');
+        expect(parseTiledMap(escaped).layers[0].name).toBe("A & <B>");
     });
 });

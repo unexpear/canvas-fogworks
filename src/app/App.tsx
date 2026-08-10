@@ -101,6 +101,7 @@ import { NineSliceInsets } from "../core/geometry/NineSlice";
 import { clampSides, POLYGON_DEFAULT_SIDES, POLYGON_MIN_SIDES, POLYGON_MAX_SIDES } from "../core/geometry/Polygon";
 import { scanCapabilities, Capability } from "../core/scan/CapabilityScan";
 import { exportSVG, TextLines } from "../core/export/ExportSVG";
+import { exportTiledMap } from "../core/export/ExportTiled";
 import { planSheet, sheetAtlas, sheetTooLarge, drawSheet, SheetPlan } from "../core/export/SpriteSheet";
 import { sliceGrid, sliceCells, sliceTrack, blankCells } from "../core/import/SheetSlice";
 import { parseTextureAtlas, atlasError, AtlasEntry } from "../core/import/TextureAtlas";
@@ -4932,6 +4933,33 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                         disabled={busy}
                         style={DRAWER_BUTTON}
                     >{busy ? "Writing…" : "Export SVG to a folder…"}</button>
+
+                    {/* A MAP CAN LEAVE AGAIN (2026-08-10). VDE reads a Tiled map, turns each layer
+                        into one grid, places its objects and authors terrain — and until now
+                        nothing went the other way, which made this tool a one-way door for art.
+                        The sheet is named rather than copied: a `.tmx` states a relative path, and
+                        only the person choosing the folder knows what is beside it. */}
+                    <button
+                        data-export-tmx="1"
+                        onClick={async () => {
+                            const folder = await api.pickFolder();
+                            if (!folder) return;
+                            setBusy(true);
+                            try {
+                                // The SAME pure exporter the round-trip test exercises; the main
+                                // process only writes.
+                                const out = exportTiledMap(getDocument(), "tiles.png");
+                                if (out.xml === "") { setExported(out.notes[0] ?? "nothing to export"); return; }
+                                const written = await api.writeIntoFolder(folder, "map.tmx", out.xml);
+                                // WHAT COULD NOT BE WRITTEN IS SAID, not swallowed: a .tmx holds one
+                                // size for every layer, and a map that quietly lost one is the kind
+                                // of export somebody discovers a week later.
+                                setExported(written + (out.notes.length > 0 ? ` · ${out.notes[0]}` : ""));
+                            } finally { setBusy(false); }
+                        }}
+                        disabled={busy}
+                        style={DRAWER_BUTTON}
+                    >{busy ? "Writing…" : "Export the tile layers as .tmx…"}</button>
                     <input
                         type="text"
                         placeholder="…or paste a folder path and press Enter"

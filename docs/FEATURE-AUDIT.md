@@ -144,4 +144,8 @@ broke a test whose subject was still true. Both are fixed.
    objects, points, and an object layer's parallax factor.
 5. **A tileset as editable content**, which is what unlocks Pixelorama's Manual/Auto/Stack modes and
    tile-level rotation. This is a schema change and should follow the terrain field.
-6. **TMX export**, so a map authored here can leave.
+6. ~~**TMX export**~~ — DONE 2026-08-10 (`core/export/ExportTiled`). Tile layers go out as a
+   `.tmx`, an autotiled layer exports the picture its terrain DERIVES, and a layer the format
+   cannot hold (one map size, one tile size) is reported rather than dropped. The oracle is the
+   round trip: a real Kenney map imported, exported and imported again, compared cell by cell.
+   Still absent: exporting OBJECT layers, and copying the sheet beside the file.

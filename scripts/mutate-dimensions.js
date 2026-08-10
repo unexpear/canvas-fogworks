@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1663;
+const EXPECTED_TESTS = 1673;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -716,6 +716,49 @@ const MUTANTS = [
       from: '            if (t.shape !== "image") {',
       to: '            if (t.shape === "image") {',
       note: "a collision volume gets no stroke and no fill — a node that exists and draws nothing" },
+
+    // EXPORTING a .tmx. The round trip is the oracle, so most of these are caught by reading the
+    // file back with a parser that has only ever met files Tiled itself wrote.
+    { id: "EX1", file: "src/core/export/ExportTiled.ts",
+      from: "    let gid = index + firstGid;",
+      to: "    let gid = index;",
+      note: "the tileset's firstgid is dropped, so every exported tile is one place off in the sheet" },
+    { id: "EX2", file: "src/core/export/ExportTiled.ts",
+      from: "    if (index === TILE_EMPTY) return 0;",
+      to: "    if (index === TILE_EMPTY) return firstGid;",
+      note: "an empty cell exports as tile 0 — a map with no holes in it" },
+    { id: "EX3", file: "src/core/export/ExportTiled.ts",
+      from: "    return gid >>> 0;",
+      to: "    return gid;",
+      note: "a flipped gid stays SIGNED, so the file holds a negative number no reader accepts" },
+    { id: "EX4", file: "src/core/export/ExportTiled.ts",
+      from: "            const at = row * map.cols + col;\n            cells.push(String(encodeGid",
+      to: "            const at = col * map.rows + row;\n            cells.push(String(encodeGid",
+      note: "the CSV is written column-major — invisible on a square grid" },
+    { id: "EX5", file: "src/core/export/ExportTiled.ts",
+      from: "    for (let row = 0; row < map.rows; row++) {\n        const cells: string[] = [];",
+      to: "    for (let row = 0; row < map.cols; row++) {\n        const cells: string[] = [];",
+      note: "the row loop counts COLUMNS — invisible on a square grid" },
+    { id: "EX6", file: "src/core/export/ExportTiled.ts",
+      from: "            && m.tileWidth === first.tileWidth && m.tileHeight === first.tileHeight) return true;",
+      to: "            && m.tileWidth === first.tileWidth) return true;",
+      note: "a layer with a different cell HEIGHT is written anyway, into a map that cannot hold it" },
+    { id: "EX7", file: "src/core/export/ExportTiled.ts",
+      from: '    return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")',
+      to: '    return value.replace(/</g, "&lt;").replace(/>/g, "&gt;")',
+      note: "an ampersand is written raw, so a layer named `A & B` produces a file that will not parse" },
+    { id: "EX8", file: "src/core/export/ExportTiled.ts",
+      from: "        if (l.opacity < 1) attrs.push(`opacity=\"${l.opacity}\"`);",
+      to: "        if (l.opacity <= 1) attrs.push(`opacity=\"${l.opacity}\"`);",
+      note: "every layer states an opacity, so a round trip through Tiled rewrites the whole file" },
+    { id: "EX9", file: "src/core/export/ExportTiled.ts",
+      from: "    const resolved = resolveTilemaps(doc);",
+      to: "    const resolved = doc;",
+      note: "an autotiled layer exports the empty grid it STORES rather than the picture it derives" },
+    { id: "EX10", file: "src/core/import/TiledMap.ts",
+      from: '        .replace(/&#(\\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))\n        .replace(/&amp;/g, "&");',
+      to: '        .replace(/&amp;/g, "&")\n        .replace(/&#(\\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));',
+      note: "the ampersand is undone FIRST, so `&amp;lt;` becomes markup the author escaped on purpose" },
 
     // THE SHADERS, which nothing in the gate compiles: tsc sees a string, the bundler sees a string,
     // jest sees a string, and the first reader that knows the language is a driver on a machine

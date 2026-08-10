@@ -271,8 +271,32 @@ export interface TiledMapResult {
  */
 function attributes(tag: string): Record<string, string> {
     const out: Record<string, string> = {};
-    for (const m of tag.matchAll(/([A-Za-z_][\w:.-]*)\s*=\s*(["'])(.*?)\2/g)) out[m[1]] = m[3];
+    for (const m of tag.matchAll(/([A-Za-z_][\w:.-]*)\s*=\s*(["'])(.*?)\2/g)) out[m[1]] = unescapeXml(m[3]);
     return out;
+}
+
+/**
+ * An attribute's value as the file MEANT it, with XML's escapes undone.
+ *
+ * THIS WAS MISSING, and nothing noticed for a simple reason: no map in the corpus contains an
+ * ampersand. Tiled escapes layer names, object names, class names and every custom property value,
+ * so a map with a layer called `Rocks & Dirt` read back as `Rocks &amp; Dirt` — a name that looks
+ * almost right, survives a save, and only reveals itself when somebody searches for it. Found when
+ * the EXPORTER started escaping properly and the round trip did not close.
+ *
+ * AMPERSAND LAST, which is the one ordering rule here: undoing it first would turn `&amp;lt;` — a
+ * file that means the literal text `&lt;` — into a `<`, inventing markup the author escaped on
+ * purpose. Numeric references are decoded too, because Tiled writes them for anything outside its
+ * encoding.
+ */
+function unescapeXml(value: string): string {
+    if (!value.includes("&")) return value;
+    return value
+        .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+        .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+        .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
+        .replace(/&amp;/g, "&");
 }
 
 const num = (v: string | undefined, fallback: number): number => {
