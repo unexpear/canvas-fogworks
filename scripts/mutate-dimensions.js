@@ -541,8 +541,25 @@ if (dirty) {
     process.exit(2);
 }
 
+/**
+ * ONE FAMILY AT A TIME — `MUTANT_ONLY=^OL npm run mutate:dimensions`.
+ *
+ * A full run is a full suite per mutant, so it is ~20 minutes; fixing one survivor and re-running
+ * all 105 to check the fix is a bad trade, and the alternative reached for the first time was
+ * commenting out the rest of the array by hand — which is how a battery loses a mutant permanently.
+ *
+ * A FILTERED RUN SAYS SO IN ITS SUMMARY, loudly, because that line is what gets copied into
+ * docs/TESTING.md: "6/6 killed" from a filtered run would be a true sentence about a false thing.
+ */
+const only = process.env.MUTANT_ONLY ? new RegExp(process.env.MUTANT_ONLY) : null;
+const selected = only ? MUTANTS.filter(m => only.test(m.id)) : MUTANTS;
+if (only && selected.length === 0) {
+    console.error(`No mutant id matches ${process.env.MUTANT_ONLY}`);
+    process.exit(2);
+}
+
 let survivors = 0;
-for (const mut of MUTANTS) {
+for (const mut of selected) {
     const file = path.join(ROOT, mut.file);
     const original = fs.readFileSync(file, "utf8");
     // LINE ENDINGS ARE NOT PART OF A MUTATION, and this is subtler than it looks. Every `from`
@@ -567,5 +584,6 @@ for (const mut of MUTANTS) {
     console.log(`${mut.id}  ${res.v.padEnd(28)} (${res.total} tests)  ${mut.note}`);
 }
 
-console.log(`\n${MUTANTS.length - survivors}/${MUTANTS.length} killed.`);
+console.log(`\n${selected.length - survivors}/${selected.length} killed.`
+    + (only ? `  — PARTIAL RUN (MUTANT_ONLY=${process.env.MUTANT_ONLY}); the battery holds ${MUTANTS.length}.` : ""));
 process.exit(survivors > 0 ? 1 : 0);
