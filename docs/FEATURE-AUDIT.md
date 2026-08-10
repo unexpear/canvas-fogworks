@@ -1,6 +1,9 @@
 # Feature audit — VDE against Pixelorama and Tiled
 
 <!-- describes: src/editor/tools, src/core/paint, src/core/import, src/core/export -->
+<!-- re-read 2026-08-09 after the selection slices: the two selection rows and ranking item 2 are
+     updated above. Verified against the running app, not just the source — the marquee, the
+     clipped stroke and the refused bucket click were all driven over CDP. -->
 
 > Measured 2026-08-09 against **Pixelorama** (the build in `possable tools/`, feature surface read
 > out of `Pixelorama.pck`) and **Tiled** (the `.tmx`/`.tsx` format, against what
