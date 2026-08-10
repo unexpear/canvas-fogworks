@@ -10,7 +10,7 @@
 import { ReadonlyDocument } from "../core/document/Document";
 import { renderSVG, clearRenderState } from "./SVGRenderer";
 import { renderCanvas } from "./CanvasRenderer";
-import { renderWebGL } from "./WebGLRenderer";
+import { renderWebGL, GL_FALLBACK_ATTR } from "./WebGLRenderer";
 import { RendererState } from "./RendererState";
 
 export type RenderBackend = "svg" | "canvas" | "webgl";
@@ -27,6 +27,12 @@ export function renderScene(
         clearRenderState(container);
         container.innerHTML = "";
         container.dataset.vdeBackend = backend;
+        // AND THE GPU FALLBACK NOTE, which belongs to the backend that left. Without this, leaving a
+        // fallen-back WebGL for SVG keeps "WebGL unavailable" on screen while SVG draws perfectly
+        // well — a warning about a state the app is no longer in, which is how a warning stops being
+        // read at all. `renderWebGL` re-stamps it on the very same frame if it still cannot run, so
+        // clearing here cannot hide a live problem.
+        delete container.dataset[GL_FALLBACK_ATTR];
     }
     // `onAsyncReady` repaints when a lazily-loaded resource finishes decoding. ALL THREE want it
     // now: the SVG backend used to hand a whole image straight to the browser and never care
