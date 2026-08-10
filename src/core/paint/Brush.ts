@@ -15,7 +15,7 @@
  * biased consistently down-right for EVEN ones, so a brush never drifts as its size changes.
  */
 
-import { PixelBuffer, Rgba, setPixel } from "./PixelBuffer";
+import { PixelBuffer, Rgba, setPixel, PixelClip } from "./PixelBuffer";
 
 /** The widest brush this builds. Beyond this a "brush" is a fill with extra steps. */
 export const BRUSH_MAX_SIZE = 256;
@@ -160,13 +160,25 @@ export function pickFace(brush: Brush, roll: number): Brush {
     return faces[i];
 }
 
-/** Stamp a brush once, centred on `(x, y)`. */
-export function stampBrush(buffer: PixelBuffer, brush: Brush, x: number, y: number, colour: Rgba): void {
+/**
+ * Stamp a brush once, centred on `(x, y)`.
+ *
+ * THE CLIP IS TESTED PER DAB, which is the only place a selection can be honoured exactly. Clipping
+ * the stamp's CENTRE instead would make a 9-pixel brush paint entirely inside or entirely outside the
+ * marquee depending on where its middle fell — the boundary would then be brush-sized and ragged
+ * rather than the line the author drew.
+ */
+export function stampBrush(
+    buffer: PixelBuffer, brush: Brush, x: number, y: number, colour: Rgba, clip?: PixelClip
+): void {
     const cx = Math.round(x), cy = Math.round(y);
     // `setPixel` bounds each dot itself, so a stamp near an edge is clipped rather than wrapped —
     // the same guard, not a second copy of it that could disagree.
     // A dab's OWN colour wins when it has one: that is what makes a stamp a picture.
-    for (const d of brush.dabs) setPixel(buffer, cx + d.dx, cy + d.dy, d.colour ?? colour);
+    for (const d of brush.dabs) {
+        if (clip && !clip(cx + d.dx, cy + d.dy)) continue;
+        setPixel(buffer, cx + d.dx, cy + d.dy, d.colour ?? colour);
+    }
 }
 
 /**
@@ -198,15 +210,18 @@ export function brushBounds(
  */
 export function strokePath(
     buffer: PixelBuffer, brush: Brush, points: readonly [number, number][], colour: Rgba,
-    line: (x0: number, y0: number, x1: number, y1: number) => [number, number][]
+    line: (x0: number, y0: number, x1: number, y1: number) => [number, number][],
+    clip?: PixelClip
 ): void {
     if (points.length === 0) return;
     // A single point is a CLICK, and a click with a pencil leaves a mark.
-    if (points.length === 1) { stampBrush(buffer, brush, points[0][0], points[0][1], colour); return; }
+    if (points.length === 1) { stampBrush(buffer, brush, points[0][0], points[0][1], colour, clip); return; }
     for (let i = 1; i < points.length; i++) {
         const [x0, y0] = points[i - 1];
         const [x1, y1] = points[i];
-        for (const [x, y] of line(x0, y0, x1, y1)) stampBrush(buffer, brush, x, y, colour);
+        // THE LINE IS WALKED IN FULL and each stamp clips itself, rather than stopping the walk at
+        // the boundary: a stroke that crosses out of a selection and back in must paint both ends.
+        for (const [x, y] of line(x0, y0, x1, y1)) stampBrush(buffer, brush, x, y, colour, clip);
     }
 }
 

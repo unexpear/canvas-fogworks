@@ -34,6 +34,19 @@ export interface PixelBuffer {
 /** One colour, 0..255 per channel. */
 export type Rgba = [number, number, number, number];
 
+/**
+ * Which pixels an operation is ALLOWED to touch — a selection, expressed as a predicate.
+ *
+ * A PREDICATE RATHER THAN A MASK, so nothing down here has to know what a selection is. `Selection`
+ * owns the mask, its four operators and its shapes; the paint primitives only ever ask one question
+ * per pixel, and asking it through a function means a future clip (a layer's own alpha, a symmetry
+ * half, a tile boundary) needs no change here at all.
+ *
+ * ABSENT MEANS UNCONSTRAINED, which is why every clip parameter is optional: the common case is no
+ * selection, and a caller that had to pass `() => true` would eventually pass `() => false`.
+ */
+export type PixelClip = (x: number, y: number) => boolean;
+
 /** What went wrong, or null. */
 export function pixelBufferError(width: unknown, height: unknown): string | null {
     if (!Number.isInteger(width) || !Number.isInteger(height)) return "a surface must have whole dimensions";
@@ -159,10 +172,21 @@ function sameColour(a: Rgba, b: Rgba): boolean {
  * the join an artist uses to enclose a shape.
  *
  * Returns how many pixels changed, so a caller can tell a fill that did nothing from one that did.
+ *
+ * `clip` IS A WALL, NOT A FILTER, and that distinction is the whole of it. A fill that painted only
+ * inside the selection but still SPREAD through the pixels outside it would tunnel under the boundary
+ * and surface again on the far side — so a click inside a selected patch of sky would fill the sky
+ * on the other side of a wall the selection was drawn to exclude. The clip is therefore tested where
+ * neighbours are queued, not where pixels are written, and the seed is tested too.
  */
-export function floodFill(buffer: PixelBuffer, x: number, y: number, colour: Rgba): number {
+export function floodFill(
+    buffer: PixelBuffer, x: number, y: number, colour: Rgba, clip?: PixelClip
+): number {
     const start = getPixel(buffer, x, y);
     if (!start) return 0;
+    // A SEED OUTSIDE THE SELECTION FILLS NOTHING, rather than starting a run that the clip then
+    // stops one pixel later — a click outside the marquee must do nothing at all.
+    if (clip && !clip(x, y)) return 0;
     // FILLING WITH THE COLOUR ALREADY THERE would never terminate on its own — every pixel it
     // painted would still match the seed and be queued again by its neighbours.
     if (sameColour(start, colour)) return 0;
@@ -183,6 +207,9 @@ export function floodFill(buffer: PixelBuffer, x: number, y: number, colour: Rgb
         const neighbours: [number, number][] = [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]];
         for (const [nx, ny] of neighbours) {
             if (!inBounds(buffer, nx, ny)) continue;
+            // NOT QUEUED AT ALL when the clip refuses it — see the header: skipping the WRITE
+            // instead would let the fill walk straight through the boundary.
+            if (clip && !clip(nx, ny)) continue;
             const key = ny * buffer.width + nx;
             if (seen[key]) continue;
             seen[key] = 1;

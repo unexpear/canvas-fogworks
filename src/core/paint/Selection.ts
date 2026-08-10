@@ -25,7 +25,7 @@
  * this file mean" depend on where the marquee happened to be.
  */
 
-import { PIXEL_MAX_SIDE } from "./PixelBuffer";
+import { PIXEL_MAX_SIDE, PixelBuffer, PixelClip } from "./PixelBuffer";
 
 /** The only truthy value a mask byte may hold. */
 export const SELECTED = 255;
@@ -332,6 +332,59 @@ export function borderSelection(mask: SelectionMask, by: number): SelectionMask 
         if (mask.data[i] !== 0 && inner.data[i] === 0) out.data[i] = SELECTED;
     }
     return out;
+}
+
+/**
+ * The mask as the predicate the paint primitives take, or undefined when it constrains nothing.
+ *
+ * ONE PLACE DECIDES WHAT AN EMPTY SELECTION MEANS, and it is here. "Nothing selected" has to read as
+ * "no constraint" — an author who has never drawn a marquee must be able to paint — and if each
+ * consumer answered that for itself, one of them would eventually clip everything to nothing. So the
+ * conversion returns UNDEFINED for an empty mask, and `undefined` is exactly what every clip parameter
+ * treats as unconstrained.
+ */
+export function selectionClip(mask: SelectionMask | null | undefined): PixelClip | undefined {
+    if (!mask || isEmptySelection(mask)) return undefined;
+    return (x, y) => isSelected(mask, x, y);
+}
+
+/**
+ * Put back every pixel a whole-surface edit changed OUTSIDE the selection. Returns how many it undid.
+ *
+ * THE ONE PLACE A MASK IS HONOURED AFTER THE FACT, and it exists because a whole-surface edit —
+ * quantise, an adjustment, anything `surfaceEditAction` is handed — is a STRANGER'S FUNCTION. A clip
+ * predicate can be threaded through code this project owns; it cannot be threaded through a callback
+ * whose only contract is "mutate the buffer and say how many you touched". Restoring afterwards is
+ * exact for the same reason a patch is: `before` holds the bytes that were there.
+ *
+ * IT RESTORES THE BUFFER, NOT THE PATCH, so the tool's live copy keeps agreeing with the document. A
+ * version that clipped only the dispatched patch would leave the caller holding a buffer showing paint
+ * the document never received, and the next edit would build on it.
+ *
+ * `before` is a WHOLE-SURFACE region as `readRegion(buffer, 0, 0, w, h)` returns it. A mask or a
+ * before-image whose size disagrees with the buffer restores nothing rather than shearing rows.
+ */
+export function restoreUnselected(
+    buffer: PixelBuffer, before: Uint8ClampedArray, mask: SelectionMask
+): number {
+    if (mask.width !== buffer.width || mask.height !== buffer.height) return 0;
+    if (before.length !== buffer.data.length) return 0;
+    let undone = 0;
+    for (let i = 0; i < mask.data.length; i++) {
+        if (mask.data[i] !== 0) continue;
+        const at = i * 4;
+        // COUNTED BY PIXEL, NOT BY BYTE, and only where something actually differs: an edit that
+        // never touched the unselected half must report zero restored, or a caller cannot tell "the
+        // mask did work" from "the mask was there".
+        if (buffer.data[at] === before[at] && buffer.data[at + 1] === before[at + 1]
+            && buffer.data[at + 2] === before[at + 2] && buffer.data[at + 3] === before[at + 3]) continue;
+        buffer.data[at] = before[at];
+        buffer.data[at + 1] = before[at + 1];
+        buffer.data[at + 2] = before[at + 2];
+        buffer.data[at + 3] = before[at + 3];
+        undone++;
+    }
+    return undone;
 }
 
 /** The complement — every pixel the mask does not hold. */

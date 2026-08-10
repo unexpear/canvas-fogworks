@@ -16,7 +16,7 @@
  * known before the painting starts rather than accumulated as it goes.
  */
 
-import { PixelBuffer, Rgba } from "./PixelBuffer";
+import { PixelBuffer, Rgba, PixelClip } from "./PixelBuffer";
 import { Brush, strokePath, strokeBounds } from "./Brush";
 import { PixelPatch, EMPTY_PATCH, capturePatch, readRegion } from "./PixelPatch";
 
@@ -29,6 +29,15 @@ export interface StrokeSession {
     /** The clipped box the stroke may touch, and the bytes it held before anything was drawn. */
     region: { x: number; y: number; width: number; height: number };
     before: Uint8ClampedArray;
+    /**
+     * Which pixels this stroke may touch — a selection, captured with everything else at the press.
+     *
+     * ON THE SESSION RATHER THAN PASSED PER CALL, and that is deliberate. A stroke paints from three
+     * places — the press's dot, each move's segment, and the mirrors — and a clip handed to some of
+     * them and not the others is a selection the brush half-obeys. Held here, there is one answer for
+     * the whole gesture, and it cannot change halfway through because the author clicked a panel.
+     */
+    clip?: PixelClip;
 }
 
 /** A rectangle clipped to a surface, or null when none of it lands. */
@@ -51,7 +60,8 @@ function clipToSurface(
  * not free: paint outside the captured region cannot be undone.
  */
 export function beginStroke(
-    buffer: PixelBuffer, brush: Brush, x: number, y: number, colour: Rgba, reach: number
+    buffer: PixelBuffer, brush: Brush, x: number, y: number, colour: Rgba, reach: number,
+    clip?: PixelClip
 ): StrokeSession | null {
     const box = strokeBounds(brush, [[x, y]]);
     if (!box) return null;
@@ -65,7 +75,11 @@ export function beginStroke(
         brush, colour, points: [[x, y]],
         region,
         // BEFORE ANY PAINT. This is the line the whole module exists to get right.
-        before: readRegion(buffer, region.x, region.y, region.width, region.height)
+        before: readRegion(buffer, region.x, region.y, region.width, region.height),
+        // THE REGION IS NOT NARROWED TO THE CLIP, on purpose: the region is what can be UNDONE, and
+        // a selection is not a promise about what will change — the clip is checked per dab, so a
+        // region matching the selection's box would only make the two able to disagree.
+        clip
     };
 }
 
@@ -81,7 +95,7 @@ export function extendStroke(
 ): void {
     const last = session.points[session.points.length - 1];
     session.points.push([x, y]);
-    strokePath(buffer, session.brush, [last, [x, y]], session.colour, line);
+    strokePath(buffer, session.brush, [last, [x, y]], session.colour, line, session.clip);
 }
 
 /**
@@ -96,7 +110,7 @@ export function endStroke(
     line: (x0: number, y0: number, x1: number, y1: number) => [number, number][]
 ): PixelPatch {
     if (session.points.length === 1) {
-        strokePath(buffer, session.brush, session.points, session.colour, line);
+        strokePath(buffer, session.brush, session.points, session.colour, line, session.clip);
     }
     const patch = capturePatch(buffer, session.before,
         session.region.x, session.region.y, session.region.width, session.region.height);

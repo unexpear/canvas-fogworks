@@ -22,7 +22,8 @@
 
 import { Tool } from "./ToolController";
 import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
-import { EditorState, screenToWorld } from "../EditorState";
+import { EditorState, screenToWorld, pixelMaskFor } from "../EditorState";
+import { selectionClip } from "../../core/paint/Selection";
 import { PaintSurfaceAction } from "../../core/actions/PaintSurfaceAction";
 import { ComputedState } from "../../core/geometry/GeometryEngine";
 import { decodeSurface } from "../../core/paint/PixelCodec";
@@ -81,7 +82,11 @@ export class BucketTool implements Tool {
         e.preventDefault();
 
         const before = readRegion(buffer, 0, 0, buffer.width, buffer.height);
-        const filled = floodFill(buffer, p[0], p[1], this.colour());
+        // THE SELECTION IS A WALL FOR A FILL, not merely a filter on what gets painted — see
+        // `floodFill`'s header. A click outside the marquee fills nothing at all, which is why the
+        // clip is handed to the fill rather than applied to the patch afterwards.
+        const clip = selectionClip(pixelMaskFor(this.editorState, this.dispatcher.getDocument(), found.nodeId));
+        const filled = floodFill(buffer, p[0], p[1], this.colour(), clip);
         // NOTHING CHANGED means nothing is dispatched — clicking a region that already holds the
         // colour must not leave an undo step that undoes nothing.
         //

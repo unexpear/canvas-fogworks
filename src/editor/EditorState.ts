@@ -7,6 +7,7 @@ import { Easing } from "../core/document/Prototype";
 import { Geometry, PathCommand } from "../core/document/Node";
 import { SnapGuide } from "../core/geometry/Snapping";
 import { Mat2D } from "../core/geometry/Matrix";
+import { SelectionMask, isEmptySelection } from "../core/paint/Selection";
 
 export interface EditorState {
     selectedNodeIds: string[];
@@ -50,6 +51,23 @@ export interface EditorState {
      * a mesh that reaches this far, rather than trusting a stale pair.
      */
     meshPoint?: { nodeId: string; index: number };
+    /**
+     * The PIXEL SELECTION: which pixels of which raster an edit may touch.
+     *
+     * NOT `marqueeRect`, WHICH SELECTS NODES. The two words collide and the things do not: one is a
+     * box being dragged over the canvas to pick objects, this is a mask over one surface's pixels.
+     * Naming it `pixelSelection` rather than `selection` is the same choice `maskBounds` made against
+     * the geometry engine's `selectionBounds`.
+     *
+     * EDITOR STATE, NOT DOCUMENT STATE, and `Selection`'s header argues it: a selection is what the
+     * author is pointing at, not content, so it never enters the schema and never survives a save.
+     *
+     * HELD WITH THE NODE IT BELONGS TO, because a mask is meaningless without one — its coordinates
+     * are that surface's pixels. Read it through `pixelMaskFor`, which re-checks that the node still
+     * exists and still has a surface of the same size, for the reason `pickedMeshPoint` validates on
+     * read: a resize, a delete or an undo would each otherwise have to remember to clear this.
+     */
+    pixelSelection?: { nodeId: string; mask: SelectionMask } | null;
     /** Whether the TIMELINE is running (distinct from `playing`, which is the prototype). */
     playingTimeline?: boolean;
     /**
@@ -279,6 +297,39 @@ export function pickedMeshPoint(
     return pick;
 }
 
+/**
+ * The mask an edit to `nodeId` must respect, or null when it may touch every pixel.
+ *
+ * VALIDATED ON READ, exactly like `pickedMeshPoint` and for the same reason: a mask can be invalidated
+ * by selecting another node, by deleting the one it was drawn on, by an undo that removes the surface,
+ * or by a resize that changes how many pixels there are — four sites that would each have to remember
+ * to clear it, and a fifth arriving with the next feature. Asking here means a stale mask is
+ * impossible to observe, whoever forgot.
+ *
+ * THE SIZE CHECK IS THE ONE THAT MATTERS. A mask captured on a 32x32 surface and read against a 64x64
+ * one indexes every row after the first from the wrong place, so a brush would be clipped to a sheared
+ * ghost of what the author drew — visible, baffling, and impossible to attribute to a resize that
+ * happened ten actions ago.
+ *
+ * AN EMPTY MASK IS NO CONSTRAINT, and that is `Selection`'s rule rather than one invented here — see
+ * `selectionClip`, which every consumer goes through.
+ */
+export function pixelMaskFor(
+    es: Pick<EditorState, "pixelSelection">,
+    doc: { nodes: { get(id: string): { surface?: { width: number; height: number } } | undefined } },
+    nodeId: string
+): SelectionMask | null {
+    const sel = es.pixelSelection;
+    // ONLY FOR THE NODE ASKED ABOUT: a mask drawn on one sprite must not clip a stroke on another,
+    // which is what a single global mask would do the moment the author selected a different canvas.
+    if (!sel || sel.nodeId !== nodeId) return null;
+    const surface = doc.nodes.get(nodeId)?.surface;
+    if (!surface) return null;
+    if (sel.mask.width !== surface.width || sel.mask.height !== surface.height) return null;
+    if (isEmptySelection(sel.mask)) return null;
+    return sel.mask;
+}
+
 export function createEditorState(): EditorState {
     return {
         selectedNodeIds: [],
@@ -291,6 +342,7 @@ export function createEditorState(): EditorState {
         frame: undefined,
         onion: undefined,
         meshPoint: undefined,
+        pixelSelection: null,
         viewportTransition: null,
         playReturnViewport: null,
         transition: null,

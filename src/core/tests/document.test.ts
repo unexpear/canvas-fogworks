@@ -38,12 +38,12 @@ import { surfaceEditAction, quantizeAction } from "../actions/surfaceEdit";
 import { SelectionMask, SELECTED, selectionMaskError, emptyMask, fullMask, isSelected,
     isEmptySelection, selectedCount, maskBounds, combineSelection, rectSelection,
     ellipseSelection, lassoSelection, wandSelection, growSelection, borderSelection,
-    invertSelection } from "../paint/Selection";
+    invertSelection, selectionClip, restoreUnselected } from "../paint/Selection";
 import { Terrain, AutotileTable, AUTOTILE_MASKS, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR,
     flipMask, autotileClasses, rotatedTable, dualMask, autotile, autotileTableError } from "../document/Autotile";
 import { SetTilemapAction } from "../actions/SetTilemapAction";
 import { EyedropperTool } from "../../editor/tools/EyedropperTool";
-import { frameOnLoad, pickedMeshPoint } from "../../editor/EditorState";
+import { frameOnLoad, pickedMeshPoint, pixelMaskFor } from "../../editor/EditorState";
 import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, AUTO_BIND_MAX_BONES, paintWeights, PAINT_STRENGTH } from "../document/MeshEdit";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
@@ -26437,6 +26437,65 @@ describe("Selection — which pixels an edit may touch, and the rounding in ever
         expect(maskBounds(emptyMask(W, H))).toBeNull();
     });
 
+    test("an empty mask is NO CONSTRAINT, and one place decides that", () => {
+        // The rule every consumer depends on: an author who has never drawn a marquee must be able
+        // to paint. If each tool answered this for itself, one of them would eventually clip
+        // everything to nothing — so the conversion is the single place it is decided.
+        expect(selectionClip(emptyMask(W, H))).toBeUndefined();
+        expect(selectionClip(null)).toBeUndefined();
+        expect(selectionClip(undefined)).toBeUndefined();
+        const box = rectSelection(W, H, { x: 1, y: 1 }, { x: 2, y: 2 });
+        const clip = selectionClip(box)!;
+        expect(clip).toBeDefined();
+        // AND IT AGREES WITH `isSelected` EVERYWHERE, including outside the mask — a predicate that
+        // answered true off the surface would let an edit run past the border.
+        for (let y = -1; y <= H; y++) {
+            for (let x = -1; x <= W; x++) expect(clip(x, y)).toBe(isSelected(box, x, y));
+        }
+    });
+
+    test("restoring the unselected half puts back BYTES, and counts PIXELS", () => {
+        const buffer = createPixelBuffer(W, H);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) setPixel(buffer, x, y, [10, 20, 30, 255]);
+        const before = readRegion(buffer, 0, 0, W, H);
+        // A whole-surface edit: every pixel changed, which is what quantise or an adjustment does.
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) setPixel(buffer, x, y, [200, 210, 220, 255]);
+        const box = rectSelection(W, H, { x: 1, y: 1 }, { x: 2, y: 2 });   // 2x2 = 4 selected
+        expect(selectedCount(box)).toBe(4);
+        // 24 pixels, 4 selected → 20 put back. Hand-derived: the count is PER PIXEL, so a version
+        // counting bytes would say 80 and a version counting rows would say 4.
+        expect(restoreUnselected(buffer, before, box)).toBe(20);
+        expect(getPixel(buffer, 1, 1)).toEqual([200, 210, 220, 255]);   // inside: the edit stands
+        expect(getPixel(buffer, 0, 0)).toEqual([10, 20, 30, 255]);      // outside: back as it was
+        expect(getPixel(buffer, 3, 1)).toEqual([10, 20, 30, 255]);
+        // ALL FOUR CHANNELS, which a fixture whose alpha never moved could not show: an edit that
+        // only changed alpha must be undone outside the selection too.
+        const alpha = createPixelBuffer(W, H);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) setPixel(alpha, x, y, [9, 9, 9, 255]);
+        const alphaBefore = readRegion(alpha, 0, 0, W, H);
+        setPixel(alpha, 0, 0, [9, 9, 9, 128]);
+        expect(restoreUnselected(alpha, alphaBefore, box)).toBe(1);
+        expect(getPixel(alpha, 0, 0)).toEqual([9, 9, 9, 255]);
+        // NOTHING TO RESTORE reports zero, so a caller can tell "the mask did work" from "the mask
+        // was there" — the second call finds the buffer already put back.
+        expect(restoreUnselected(buffer, before, box)).toBe(0);
+
+        // A MASK OR A BEFORE-IMAGE OF THE WRONG SIZE restores nothing rather than shearing rows.
+        // Checked against a FRESH dirty buffer, because a buffer that has already been put back
+        // returns zero whatever the guard does — the assertion would pass for the wrong reason.
+        const dirty = createPixelBuffer(W, H);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) setPixel(dirty, x, y, [10, 20, 30, 255]);
+        const dirtyBefore = readRegion(dirty, 0, 0, W, H);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) setPixel(dirty, x, y, [200, 210, 220, 255]);
+        expect(restoreUnselected(dirty, dirtyBefore, emptyMask(H, W))).toBe(0);
+        // AND ONE OF THE SAME WIDTH BUT THE WRONG HEIGHT, which is the case a guard checking only
+        // the width lets through: an empty mask of the wrong size would otherwise restore everything
+        // and read as "the edit changed nothing".
+        expect(restoreUnselected(dirty, dirtyBefore, emptyMask(W, H + 1))).toBe(0);
+        expect(restoreUnselected(dirty, dirtyBefore.slice(0, 8), fullMask(W, H))).toBe(0);
+        expect(getPixel(dirty, 0, 0)).toEqual([200, 210, 220, 255]);   // nothing was put back
+    });
+
     test("off the mask is NOT selected, so an edit clips at the border", () => {
         const all = fullMask(W, H);
         expect(isSelected(all, 0, 0)).toBe(true);
@@ -26447,5 +26506,262 @@ describe("Selection — which pixels an edit may touch, and the rounding in ever
         expect(isSelected(all, 0, -1)).toBe(false);
         expect(isSelected(all, W, 0)).toBe(false);
         expect(isSelected(all, 0, H)).toBe(false);
+    });
+});
+
+describe("A selection nothing honours changes nothing — the brush, the bucket and the panel", () => {
+    const RED: Rgba = [255, 0, 0, 255];
+    const BLUE: Rgba = [0, 0, 255, 255];
+    /** 6x4 — NON-SQUARE, so a transposed mask index shows — filled solid RED. */
+    const SW = 6, SH = 4;
+    const solid = () => {
+        const b = createPixelBuffer(SW, SH);
+        for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) setPixel(b, x, y, RED);
+        return b;
+    };
+    /** One raster at the origin, one world unit per surface pixel, plus a rectangle to refuse. */
+    const docWith = (buffer: PixelBuffer) => {
+        const d = createEmptyDocument();
+        d.nodes.set("R", { id: "R", type: "core.raster", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: SW, height: SH }, style: { fill: "none", opacity: 1 }, layout: {},
+            surface: { data: encodeSurface(buffer).data, width: SW, height: SH } } as Node);
+        d.nodes.set("Q", { id: "Q", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: SW, height: SH }, style: { fill: "#123456", opacity: 1 }, layout: {} } as Node);
+        d.rootNodeUuids = ["R", "Q"];
+        return d;
+    };
+    const CANVAS = { left: 0, top: 0, width: 800, height: 600 } as DOMRect;
+    const at = (x: number, y: number) => ({ clientX: x + 0.5, clientY: y + 0.5, button: 0, buttons: 1,
+        preventDefault() { }, target: { getAttribute: () => null } } as unknown as MouseEvent);
+    const pixelsOf = (d: ActionDispatcher) => {
+        const s = d.getDocument().nodes.get("R")!.surface!;
+        return decodeSurface(s.data, s.width, s.height)!;
+    };
+    const countOf = (b: PixelBuffer, c: Rgba) => {
+        let n = 0;
+        for (let y = 0; y < b.height; y++) for (let x = 0; x < b.width; x++) {
+            const p = getPixel(b, x, y)!;
+            if (p[0] === c[0] && p[1] === c[1] && p[2] === c[2] && p[3] === c[3]) n++;
+        }
+        return n;
+    };
+    /**
+     * TWO DISJOINT SELECTED PATCHES with unselected ground between them — columns 0-1 and 4-5.
+     *
+     * This is the fixture the whole wall-or-filter question needs. A single connected marquee cannot
+     * tell the two apart: a fill clipped only at the WRITE would spread through the unselected middle
+     * and paint the far patch as well, and every assertion about the near patch would still pass.
+     * Eight pixels against sixteen is the difference.
+     */
+    const splitMask = () => {
+        const left = rectSelection(SW, SH, { x: 0, y: 0 }, { x: 1, y: SH - 1 });
+        const right = rectSelection(SW, SH, { x: 4, y: 0 }, { x: 5, y: SH - 1 });
+        return combineSelection(left, right, "add")!;
+    };
+
+    test("a FILL treats the selection as a WALL, not a filter on what gets painted", () => {
+        const dispatcher = new ActionDispatcher(docWith(solid()));
+        const es = createEditorState();
+        es.selectedNodeIds = ["R"];
+        es.pixelSelection = { nodeId: "R", mask: splitMask() };
+        expect(selectedCount(es.pixelSelection.mask)).toBe(16);
+        const tool = new BucketTool(dispatcher, es, () => { }, () => BLUE);
+        tool.onMouseDown(at(0, 0), CANVAS, computeGeometry(dispatcher.getDocument()));
+        const after = pixelsOf(dispatcher);
+        // THE NEAR PATCH ONLY: 2 columns x 4 rows. A clip applied at the write instead of at the
+        // queue would give 16 — the far patch reached by tunnelling under the boundary.
+        expect(countOf(after, BLUE)).toBe(8);
+        expect(getPixel(after, 0, 0)).toEqual(BLUE);
+        expect(getPixel(after, 1, 3)).toEqual(BLUE);
+        expect(getPixel(after, 2, 0)).toEqual(RED);   // unselected ground
+        expect(getPixel(after, 4, 0)).toEqual(RED);   // the FAR patch, selected but unreachable
+        expect(getPixel(after, 5, 3)).toEqual(RED);
+    });
+
+    test("a click OUTSIDE the selection fills nothing, and leaves no history entry", () => {
+        const dispatcher = new ActionDispatcher(docWith(solid()));
+        const es = createEditorState();
+        es.selectedNodeIds = ["R"];
+        es.pixelSelection = { nodeId: "R", mask: splitMask() };
+        const tool = new BucketTool(dispatcher, es, () => { }, () => BLUE);
+        const before = serializeDocument(dispatcher.getDocument());
+        tool.onMouseDown(at(2, 0), CANVAS, computeGeometry(dispatcher.getDocument()));
+        expect(countOf(pixelsOf(dispatcher), RED)).toBe(SW * SH);
+        // Asked of the DOCUMENT rather than the pixels: an action that succeeded while changing
+        // nothing would leave a step that undoes nothing, and pixels cannot tell that from a no-op.
+        dispatcher.undo();
+        expect(serializeDocument(dispatcher.getDocument())).toBe(before);
+    });
+
+    test("a BRUSH clips per dab, so a wide brush stops on the line the author drew", () => {
+        // A 3px square brush stamped at (1,1): its dabs span columns 0-2, and only 0-1 are selected.
+        // Clipping the stamp's CENTRE instead would paint all nine — the boundary would then be
+        // brush-sized and ragged rather than the line the marquee shows.
+        const dispatcher = new ActionDispatcher(docWith(createPixelBuffer(SW, SH)));
+        const es = createEditorState();
+        es.selectedNodeIds = ["R"];
+        es.pixelSelection = { nodeId: "R", mask: splitMask() };
+        const tool = new RasterTool(dispatcher, es, () => { }, () => BLUE,
+            () => makeBrush(3, false), () => NO_SYMMETRY);
+        tool.onMouseDown(at(1, 1), CANVAS, computeGeometry(dispatcher.getDocument()));
+        tool.onMouseUp();
+        const after = pixelsOf(dispatcher);
+        // Columns 0-1 of rows 0-2: SIX pixels, hand-counted from the 3x3 stamp minus column 2.
+        expect(countOf(after, BLUE)).toBe(6);
+        expect(getPixel(after, 0, 0)).toEqual(BLUE);
+        expect(getPixel(after, 1, 2)).toEqual(BLUE);
+        expect(getPixel(after, 2, 1)).toEqual([0, 0, 0, 0]);
+    });
+
+    test("a stroke that leaves the selection and comes back paints BOTH ends", () => {
+        // The line is walked in full and each stamp clips itself. Stopping the walk at the boundary
+        // instead would lose the far end entirely, which is what a drag across a gap looks like.
+        const dispatcher = new ActionDispatcher(docWith(createPixelBuffer(SW, SH)));
+        const es = createEditorState();
+        es.selectedNodeIds = ["R"];
+        es.pixelSelection = { nodeId: "R", mask: splitMask() };
+        const tool = new RasterTool(dispatcher, es, () => { }, () => BLUE,
+            () => makeBrush(1, false), () => NO_SYMMETRY);
+        const computed = computeGeometry(dispatcher.getDocument());
+        tool.onMouseDown(at(0, 1), CANVAS, computed);
+        tool.onMouseMove(at(5, 1), CANVAS);
+        tool.onMouseUp();
+        const after = pixelsOf(dispatcher);
+        // Row 1, columns 0,1 and 4,5 — four pixels, and the two in the middle refused.
+        expect(countOf(after, BLUE)).toBe(4);
+        expect(getPixel(after, 0, 1)).toEqual(BLUE);
+        expect(getPixel(after, 1, 1)).toEqual(BLUE);
+        expect(getPixel(after, 2, 1)).toEqual([0, 0, 0, 0]);
+        expect(getPixel(after, 3, 1)).toEqual([0, 0, 0, 0]);
+        expect(getPixel(after, 4, 1)).toEqual(BLUE);
+        expect(getPixel(after, 5, 1)).toEqual(BLUE);
+    });
+
+    test("a MIRRORED dab is clipped too, because the mask says which pixels may change", () => {
+        // Symmetry paints through a throwaway session spread from the real one, so the clip travels
+        // with it. A mirror that ignored the selection would be the one path that escaped — and it
+        // paints where the author is not even pointing, so it is the hardest to notice.
+        const dispatcher = new ActionDispatcher(docWith(createPixelBuffer(SW, SH)));
+        const es = createEditorState();
+        es.selectedNodeIds = ["R"];
+        // Only the LEFT patch is selected, and HORIZONTAL symmetry is the left/right one — it mirrors
+        // column 0 to column `SW - 1 - 0` = 5, which is outside the mask. `vertical` would mirror
+        // top/bottom, landing at (0, 2), which is INSIDE the patch and would prove nothing; my first
+        // version of this test used it and the tool was right.
+        es.pixelSelection = { nodeId: "R", mask: rectSelection(SW, SH, { x: 0, y: 0 }, { x: 1, y: SH - 1 }) };
+        const tool = new RasterTool(dispatcher, es, () => { }, () => BLUE,
+            () => makeBrush(1, false), () => ({ vertical: false, horizontal: true }));
+        tool.onMouseDown(at(0, 1), CANVAS, computeGeometry(dispatcher.getDocument()));
+        tool.onMouseUp();
+        const after = pixelsOf(dispatcher);
+        expect(getPixel(after, 0, 1)).toEqual(BLUE);
+        // The mirror at column 5 is refused. Without the clip on the session this is BLUE and the
+        // count is two.
+        expect(getPixel(after, 5, 1)).toEqual([0, 0, 0, 0]);
+        expect(countOf(after, BLUE)).toBe(1);
+    });
+
+    test("the mask is read through ONE validated door, so a stale one is unobservable", () => {
+        const doc = docWith(solid());
+        const es = createEditorState();
+        const mask = rectSelection(SW, SH, { x: 0, y: 0 }, { x: 1, y: 1 });
+        // Nothing selected at all.
+        expect(pixelMaskFor(es, doc, "R")).toBeNull();
+        // A mask drawn on ANOTHER node must not clip an edit to this one — which is what a single
+        // global mask would do the moment the author picked a different canvas.
+        es.pixelSelection = { nodeId: "other", mask };
+        expect(pixelMaskFor(es, doc, "R")).toBeNull();
+        // A node with no surface, and a node that is gone.
+        es.pixelSelection = { nodeId: "Q", mask };
+        expect(pixelMaskFor(es, doc, "Q")).toBeNull();
+        es.pixelSelection = { nodeId: "ghost", mask };
+        expect(pixelMaskFor(es, doc, "ghost")).toBeNull();
+        // THE SIZE CHECK, which is the one that matters: a mask captured before a resize indexes
+        // every row after the first from the wrong place, so it would clip to a sheared ghost.
+        es.pixelSelection = { nodeId: "R", mask: rectSelection(SH, SW, { x: 0, y: 0 }, { x: 1, y: 1 }) };
+        expect(pixelMaskFor(es, doc, "R")).toBeNull();
+        // BOTH SIDES OF IT: a mask of the right width and the wrong height is the case a guard that
+        // checks one dimension lets through, and it shears every row after the first.
+        es.pixelSelection = { nodeId: "R", mask: rectSelection(SW, SH + 1, { x: 0, y: 0 }, { x: 1, y: 1 }) };
+        expect(pixelMaskFor(es, doc, "R")).toBeNull();
+        es.pixelSelection = { nodeId: "R", mask: rectSelection(SW + 1, SH, { x: 0, y: 0 }, { x: 1, y: 1 }) };
+        expect(pixelMaskFor(es, doc, "R")).toBeNull();
+        // An EMPTY mask is no constraint, per Selection's rule.
+        es.pixelSelection = { nodeId: "R", mask: emptyMask(SW, SH) };
+        expect(pixelMaskFor(es, doc, "R")).toBeNull();
+        // …and a live one comes back, or every check above would just be a ban on selections.
+        es.pixelSelection = { nodeId: "R", mask };
+        expect(pixelMaskFor(es, doc, "R")).toBe(mask);
+    });
+
+    test("a stale mask does not quietly clip a stroke — it does not clip at all", () => {
+        // The consequence of the door above, at the gesture. The surface is 6x4 and the mask is 4x6,
+        // which is a selection the author drew before a resize. A tool that trusted it would paint a
+        // sheared subset of the stroke; the only safe reading is that there is no selection.
+        const dispatcher = new ActionDispatcher(docWith(createPixelBuffer(SW, SH)));
+        const es = createEditorState();
+        es.selectedNodeIds = ["R"];
+        es.pixelSelection = { nodeId: "R", mask: fullMask(SH, SW) };
+        const tool = new RasterTool(dispatcher, es, () => { }, () => BLUE,
+            () => makeBrush(1, false), () => NO_SYMMETRY);
+        tool.onMouseDown(at(3, 2), CANVAS, computeGeometry(dispatcher.getDocument()));
+        tool.onMouseUp();
+        expect(getPixel(pixelsOf(dispatcher), 3, 2)).toEqual(BLUE);
+    });
+
+    test("a whole-canvas edit is confined by putting back what fell outside", () => {
+        const dispatcher = new ActionDispatcher(docWith(solid()));
+        const doc = dispatcher.getDocument();
+        const mask = rectSelection(SW, SH, { x: 0, y: 0 }, { x: 1, y: 1 });   // 2x2 = 4 pixels
+        const action = surfaceEditAction(doc, "R", buffer => {
+            // A STRANGER'S FUNCTION that respects nothing — which is the case this exists for: a
+            // clip predicate cannot be threaded through a callback whose only contract is "mutate".
+            for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) setPixel(buffer, x, y, BLUE);
+            return SW * SH;
+        }, mask)!;
+        expect(action).not.toBeNull();
+        expect(dispatcher.dispatchAction(action).success).toBe(true);
+        const after = pixelsOf(dispatcher);
+        expect(countOf(after, BLUE)).toBe(4);
+        expect(countOf(after, RED)).toBe(SW * SH - 4);
+        // ONE undo restores the four, because the patch was captured AFTER the restore — a patch
+        // taken first would record the whole canvas and undo would repaint everything.
+        dispatcher.undo();
+        expect(countOf(pixelsOf(dispatcher), RED)).toBe(SW * SH);
+    });
+
+    test("an edit whose every change fell outside the selection is not an undo step", () => {
+        const doc = docWith(solid());
+        const mask = rectSelection(SW, SH, { x: 0, y: 0 }, { x: 0, y: 0 });
+        // The edit truthfully reports two changed pixels, and both are outside the mask. The count
+        // guard passes and the patch is empty — the second guard is what stops a history entry that
+        // undoes nothing.
+        expect(surfaceEditAction(doc, "R", buffer => {
+            setPixel(buffer, 3, 3, BLUE);
+            setPixel(buffer, 4, 3, BLUE);
+            return 2;
+        }, mask)).toBeNull();
+        // A MASK THAT DOES NOT FIT THE SURFACE refuses the whole edit rather than editing
+        // everything: an author who selected a corner and pressed a panel button must not have the
+        // entire canvas changed because their selection was stale.
+        let called = 0;
+        expect(surfaceEditAction(doc, "R", buffer => {
+            called++;
+            setPixel(buffer, 0, 0, BLUE);
+            return 1;
+        }, emptyMask(SH, SW))).toBeNull();
+        // And refused BEFORE anything was edited, which is the difference between cheap and wasteful.
+        expect(called).toBe(0);
+    });
+
+    test("the tools READ the mask, which is the difference between a marquee and a decoration", () => {
+        // The audit's own lesson applied to itself: arithmetic with no consumer is not a feature.
+        // These assert both paint gestures go through the validated read and hand the clip on.
+        const raster = readFileSync(resolve(__dirname, "../../editor/tools/RasterTool.ts"), "utf8");
+        expect(raster).toMatch(/selectionClip\(pixelMaskFor\(this\.editorState/);
+        expect(raster).toMatch(/STROKE_REACH, clip\)/);
+        const bucket = readFileSync(resolve(__dirname, "../../editor/tools/BucketTool.ts"), "utf8");
+        expect(bucket).toMatch(/selectionClip\(pixelMaskFor\(this\.editorState/);
+        expect(bucket).toMatch(/floodFill\(buffer, p\[0\], p\[1\], this\.colour\(\), clip\)/);
     });
 });

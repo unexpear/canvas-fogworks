@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1592;
+const EXPECTED_TESTS = 1604;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -399,6 +399,53 @@ const MUTANTS = [
       from: "    const cells = (m.width as number) * (m.height as number);",
       to: "    const cells = (m.width as number) + (m.height as number);",
       note: "the mask length check adds instead of multiplying" },
+
+    // HONOURING the mask. A marquee that changes nothing is a decoration, and every one of these is
+    // a way for the clip to be present in the source and absent in the picture.
+    { id: "MK1", file: "src/core/paint/Brush.ts",
+      from: "        if (clip && !clip(cx + d.dx, cy + d.dy)) continue;",
+      to: "        if (clip && !clip(cx, cy)) continue;",
+      note: "the clip is tested at the stamp's CENTRE, so a wide brush lands whole or not at all" },
+    { id: "MK2", file: "src/core/paint/PixelBuffer.ts",
+      from: "            if (clip && !clip(nx, ny)) continue;\n            const key = ny * buffer.width + nx;",
+      to: "            const key = ny * buffer.width + nx;",
+      note: "a fill spreads through unselected pixels — the boundary stops being a wall" },
+    { id: "MK3", file: "src/core/paint/PixelBuffer.ts",
+      from: "    if (clip && !clip(x, y)) return 0;",
+      to: "    if (clip && !clip(y, x)) return 0;",
+      note: "the seed's clip test is transposed — invisible on a square, symmetric selection" },
+    { id: "MK4", file: "src/core/paint/Selection.ts",
+      from: "        if (mask.data[i] !== 0) continue;",
+      to: "        if (mask.data[i] === 0) continue;",
+      note: "restoreUnselected puts back the SELECTED half, confining the edit to its inverse" },
+    { id: "MK5", file: "src/core/paint/Selection.ts",
+      from: "    if (mask.width !== buffer.width || mask.height !== buffer.height) return 0;",
+      to: "    if (mask.width !== buffer.width) return 0;",
+      note: "a mask of the right width and wrong height is honoured against a sheared index" },
+    { id: "MK6", file: "src/core/actions/surfaceEdit.ts",
+      from: "    if (mask && (mask.width !== buffer.width || mask.height !== buffer.height)) return null;",
+      to: "    if (mask && (mask.width !== buffer.width || mask.height !== buffer.height)) mask = undefined;",
+      note: "a stale selection is IGNORED, so a panel button edits the whole canvas instead" },
+    { id: "MK7", file: "src/core/actions/surfaceEdit.ts",
+      from: "    if (mask) restoreUnselected(buffer, before, mask);\n    const patch = capturePatch(buffer, before, 0, 0, buffer.width, buffer.height);",
+      to: "    const patch = capturePatch(buffer, before, 0, 0, buffer.width, buffer.height);\n    if (mask) restoreUnselected(buffer, before, mask);",
+      note: "the diff is taken BEFORE the restore, so the patch carries the pixels it put back" },
+    { id: "MK8", file: "src/editor/EditorState.ts",
+      from: "    if (sel.mask.width !== surface.width || sel.mask.height !== surface.height) return null;",
+      to: "    if (sel.mask.width !== surface.width) return null;",
+      note: "a mask that survived a resize on one axis clips a stroke to a sheared ghost" },
+    { id: "MK9", file: "src/editor/EditorState.ts",
+      from: "    if (!sel || sel.nodeId !== nodeId) return null;",
+      to: "    if (!sel) return null;",
+      note: "a mask drawn on one canvas clips an edit to another" },
+    { id: "MK10", file: "src/core/paint/Selection.ts",
+      from: "    if (!mask || isEmptySelection(mask)) return undefined;",
+      to: "    if (!mask) return undefined;",
+      note: "an empty selection becomes a clip that refuses everything — paint stops working" },
+    { id: "MK11", file: "src/editor/tools/RasterTool.ts",
+      from: "        const mirror: StrokeSession = { ...s.stroke, points: [from] };",
+      to: "        const mirror: StrokeSession = { ...s.stroke, points: [from], clip: undefined };",
+      note: "a symmetry mirror escapes the selection — paint where the author is not pointing" },
 ];
 
 function runSuite() {

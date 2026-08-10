@@ -31,8 +31,9 @@
 import { ActionDispatcher } from "../../core/actions/ActionDispatcher";
 import { PaintSurfaceAction } from "../../core/actions/PaintSurfaceAction";
 import { ComputedState } from "../../core/geometry/GeometryEngine";
-import { EditorState, screenToWorld } from "../EditorState";
+import { EditorState, screenToWorld, pixelMaskFor } from "../EditorState";
 import { Tool } from "./ToolController";
+import { selectionClip } from "../../core/paint/Selection";
 import { Rgba, PixelBuffer, linePoints } from "../../core/paint/PixelBuffer";
 import { Brush } from "../../core/paint/Brush";
 import { decodeSurface } from "../../core/paint/PixelCodec";
@@ -119,7 +120,12 @@ export class RasterTool implements Tool {
         const p = worldToSurface(found.space, w.x, w.y);
         if (!p) return;
 
-        const stroke = beginStroke(buffer, this.brush(), p[0], p[1], this.colour(), STROKE_REACH);
+        // THE SELECTION IS CAPTURED WITH THE SPACE, at the press, and for the same reason: a mask
+        // that changed mid-stroke would clip the first half of a drag differently from the second,
+        // and the author would have no way to see why. `pixelMaskFor` is what makes a stale mask
+        // unobservable; `selectionClip` is what makes an empty one mean "no constraint".
+        const clip = selectionClip(pixelMaskFor(this.editorState, this.dispatcher.getDocument(), found.nodeId));
+        const stroke = beginStroke(buffer, this.brush(), p[0], p[1], this.colour(), STROKE_REACH, clip);
         // A press that lands nowhere near the surface has no region to capture, and starting a
         // session without one would paint marks no undo could reach.
         if (!stroke) return;
