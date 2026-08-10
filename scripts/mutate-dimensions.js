@@ -756,8 +756,8 @@ const MUTANTS = [
       to: "    const resolved = doc;",
       note: "an autotiled layer exports the empty grid it STORES rather than the picture it derives" },
     { id: "EX10", file: "src/core/import/TiledMap.ts",
-      from: '        .replace(/&#(\\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))\n        .replace(/&amp;/g, "&");',
-      to: '        .replace(/&amp;/g, "&")\n        .replace(/&#(\\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));',
+      from: '    return value\n        .replace(/&lt;/g, "<")',
+      to: '    return value\n        .replace(/&amp;/g, "&")\n        .replace(/&lt;/g, "<")',
       note: "the ampersand is undone FIRST, so `&amp;lt;` becomes markup the author escaped on purpose" },
 
     // THE SHADERS, which nothing in the gate compiles: tsc sees a string, the bundler sees a string,

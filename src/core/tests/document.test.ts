@@ -28249,13 +28249,19 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
             { name: "bigger", map: { cols: 4, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
                 tiles: [1, 1, 1, 1, 1, 1, 1, 1] } },
             { name: "coarser", map: { cols: 3, rows: 2, tileWidth: 32, tileHeight: 8, sheet,
+                tiles: [1, 1, 1, 1, 1, 1] } },
+            // DIFFERING ONLY IN HEIGHT, which is the fixture the height check needs: with cells of
+            // 32x8 above, the WIDTH check alone refuses it and the height check goes unexercised.
+            // A surviving mutant found exactly that.
+            { name: "taller", map: { cols: 3, rows: 2, tileWidth: 16, tileHeight: 24, sheet,
                 tiles: [1, 1, 1, 1, 1, 1] } }
         ]);
         const out = exportTiledMap(doc, "t.png");
         expect(parseTiledMap(out.xml).layers.map(l => l.name)).toEqual(["ground"]);
-        expect(out.notes).toHaveLength(2);
+        expect(out.notes).toHaveLength(3);
         expect(out.notes[0]).toContain('layer "bigger" is 4x2');
         expect(out.notes[1]).toContain('layer "coarser" is 3x2 at 32x8');
+        expect(out.notes[2]).toContain('layer "taller" is 3x2 at 16x24');
         // …and the reason names both sizes, because "did not fit" cannot be acted on.
         expect(out.notes[0]).toContain("the map is 3x2 at 16x8");
         // A document with nothing to export says so rather than writing an empty map.
