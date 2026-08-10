@@ -59,6 +59,14 @@ for an edit that changes nothing; this checks that what arrived can be *stored*.
 opens as corrupt art), a node that is not a `core.tilemap`, and a **no-op** — where "no-op" counts an
 all-zero `flips` array as equal to no array at all, which is what makes that invariant enforceable.
 
+**"No-op" had to learn about TERRAIN (schema 63), and its absence was a silent refusal.** An
+autotiled layer's tiles are empty *by rule* — the picture is derived — so a terrain stroke changes no
+tile, and a `sameMap` that stopped at the tiles saw every terrain edit as nothing and `validate()`
+rejects those. The field, the validator and the derivation were all correct while the only action
+that could write terrain refused every edit there is. Found by asking what the brush would do before
+writing the brush; the art counts too, because reassigning a class's tile repaints every cell in that
+class's orbit.
+
 ## 1. The Action contract
 
 `Action` (`Action.ts`) is abstract. Every mutation is a subclass.
