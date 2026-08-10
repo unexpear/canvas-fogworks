@@ -28357,6 +28357,119 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
         expect(group.objects[0].properties[2].value).toBe("AB");
     });
 
+    test("an object layer goes out as an objectgroup, and comes back the same shapes", () => {
+        // Objects came IN and could not go out, so a document imported from a map full of entities
+        // exported as tile layers alone — every door, spawn point and collision volume gone, with
+        // nothing saying so. The round trip is the oracle here too.
+        const d = createEmptyDocument();
+        d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "ground",
+            tilemap: grid([1, 1, 1, 1, 1, 1]) } as Node);
+        d.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["R", "E", "P", "T"],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 0.5 }, layout: {}, name: "things" } as Node);
+        d.nodes.set("R", { id: "R", type: "core.rectangle", parent: "F", children: [],
+            geometry: { x: 2, y: 3, width: 10, height: 20 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "wall" } as Node);
+        d.nodes.set("E", { id: "E", type: "core.ellipse", parent: "F", children: [],
+            geometry: { x: 5, y: 6, width: 7, height: 8 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "zone" } as Node);
+        d.nodes.set("P", { id: "P", type: "core.path", parent: "F", children: [],
+            geometry: { x: 1, y: 2, width: 10, height: 10 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "ramp",
+            path: [{ c: "M", x: 0, y: 0 }, { c: "L", x: 10, y: 0 }, { c: "L", x: 10, y: 10 }, { c: "Z" }] } as Node);
+        // A TILE OBJECT: an image whose source rect names a tile of the map's own sheet. The sheet is
+        // 8x8 tiles in 4 columns, so (8, 8) is column 1, row 1 — tile 5, and gid 6.
+        d.nodes.set("T", { id: "T", type: "core.image", parent: "F", children: [],
+            geometry: { x: 30, y: 40, width: 8, height: 8 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "hero", src: "tiles.png",
+            sourceRect: { x: 8, y: 8, width: 8, height: 8 } } as Node);
+        d.rootNodeUuids = ["L", "F"];
+
+        const out = exportTiledMap(d, "tiles.png");
+        expect(out.notes).toEqual([]);
+        const back = parseTiledMap(out.xml);
+        expect(back.notes).toEqual([]);
+        expect(back.objectGroups).toHaveLength(1);
+        const group = back.objectGroups[0];
+        expect(group).toMatchObject({ name: "things", opacity: 0.5, visible: true });
+        expect(group.objects.map(o => o.kind)).toEqual(["rectangle", "ellipse", "polygon", "tile"]);
+
+        // THE BOXES SURVIVE, which for a plain object means x/y are the top-left it went out as.
+        expect(objectBox(group.objects[0])).toEqual({ x: 2, y: 3, width: 10, height: 20 });
+        expect(objectBox(group.objects[1])).toEqual({ x: 5, y: 6, width: 7, height: 8 });
+
+        // THE TILE OBJECT'S ANCHORING IS REVERSED ON THE WAY OUT and undone on the way back: the
+        // file states y = 48 (its bottom) and the box comes back at 40. Writing the top-left would
+        // put every entity an object-height too high, which is the same bug the reader guards
+        // against in the other direction and just as invisible in the file.
+        const tile = group.objects[3];
+        expect(tile.y).toBe(48);
+        expect(objectBox(tile)).toEqual({ x: 30, y: 40, width: 8, height: 8 });
+        expect(tile.cell!.gid).toBe(6);
+
+        // A POLYGON'S POINTS come back relative to the object, closed as they went out.
+        expect(group.objects[2].points).toEqual([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]);
+        expect(objectPlacement(group.objects[2], []).placement!.path!.some(c => c.c === "Z")).toBe(true);
+    });
+
+    test("a rotation goes out in DEGREES, and the sign is not flipped", () => {
+        const d = createEmptyDocument();
+        d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "g",
+            tilemap: grid([1, 1, 1, 1, 1, 1]) } as Node);
+        d.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["A", "B"],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "turned" } as Node);
+        d.nodes.set("A", { id: "A", type: "core.rectangle", parent: "F", children: [],
+            geometry: { x: 0, y: 0, width: 4, height: 4 }, style: { fill: "none", opacity: 1 },
+            layout: {}, name: "quarter", transform: { rotation: Math.PI / 2 } } as Node);
+        // NEGATIVE, because "clockwise" is where a sign flip would hide: the format's degrees and
+        // this engine's radians are both clockwise on a y-down screen, so neither side corrects.
+        d.nodes.set("B", { id: "B", type: "core.rectangle", parent: "F", children: [],
+            geometry: { x: 8, y: 0, width: 4, height: 4 }, style: { fill: "none", opacity: 1 },
+            layout: {}, name: "back", transform: { rotation: -Math.PI / 6 } } as Node);
+        d.rootNodeUuids = ["L", "F"];
+        const objects = parseTiledMap(exportTiledMap(d, "t.png").xml).objectGroups[0].objects;
+        expect(objects[0].rotation).toBeCloseTo(90, 6);
+        expect(objects[1].rotation).toBeCloseTo(-30, 6);
+        expect(objectTransform(objects[1]).rotation).toBeCloseTo(-Math.PI / 6, 10);
+    });
+
+    test("an object the format cannot hold is COUNTED, not dropped in silence", () => {
+        const d = createEmptyDocument();
+        d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "g",
+            tilemap: grid([1, 1, 1, 1, 1, 1]) } as Node);
+        d.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["W", "S", "X"],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "mixed" } as Node);
+        // A WHOLE IMAGE has no tile to be, and an image from ANOTHER sheet has no gid in this map's
+        // tileset — both are entities that would vanish without a word.
+        d.nodes.set("W", { id: "W", type: "core.image", parent: "F", children: [],
+            geometry: { x: 0, y: 0, width: 16, height: 16 }, style: { fill: "none", opacity: 1 },
+            layout: {}, name: "photo", src: "photo.png" } as Node);
+        d.nodes.set("S", { id: "S", type: "core.image", parent: "F", children: [],
+            geometry: { x: 0, y: 0, width: 8, height: 8 }, style: { fill: "none", opacity: 1 },
+            layout: {}, name: "elsewhere", src: "other.png",
+            sourceRect: { x: 999, y: 999, width: 8, height: 8 } } as Node);
+        d.nodes.set("X", { id: "X", type: "core.text", parent: "F", children: [],
+            geometry: { x: 0, y: 0, width: 8, height: 8 }, style: { fill: "none", opacity: 1 },
+            layout: {}, name: "label" } as Node);
+        d.rootNodeUuids = ["L", "F"];
+        const out = exportTiledMap(d, "t.png");
+        expect(out.notes).toHaveLength(3);
+        expect(out.notes[0]).toContain("draws a whole image rather than a tile");
+        expect(out.notes[1]).toContain("does not declare");
+        expect(out.notes[2]).toContain("core.text");
+        // …and a group whose every object was refused writes NO objectgroup, rather than an empty
+        // one that reads as a layer somebody emptied on purpose.
+        expect(parseTiledMap(out.xml).objectGroups).toHaveLength(0);
+    });
+
     test("the exporter is REACHABLE, which is what makes it a feature", () => {
         // A .tmx writer nothing can invoke is arithmetic, not an export — the state the feature
         // audit exists to find, and the one `floodFill`, `Palette` and `Adjust` were each in.

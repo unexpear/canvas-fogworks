@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1673;
+const EXPECTED_TESTS = 1676;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -759,6 +759,23 @@ const MUTANTS = [
       from: '    return value\n        .replace(/&lt;/g, "<")',
       to: '    return value\n        .replace(/&amp;/g, "&")\n        .replace(/&lt;/g, "<")',
       note: "the ampersand is undone FIRST, so `&amp;lt;` becomes markup the author escaped on purpose" },
+
+    { id: "EX11", file: "src/core/export/ExportTiled.ts",
+      from: '        attrs.push(`gid="${index + firstGid}"`, `x="${g.x}"`, `y="${g.y + g.height}"`,',
+      to: '        attrs.push(`gid="${index + firstGid}"`, `x="${g.x}"`, `y="${g.y}"`,',
+      note: "a tile object is written from its TOP-left, so every entity lands an object-height high" },
+    { id: "EX12", file: "src/core/export/ExportTiled.ts",
+      from: '        const tag = commands.some(c => c.c === "Z") ? "polygon" : "polyline";',
+      to: '        const tag = commands.some(c => c.c === "Z") ? "polyline" : "polygon";',
+      note: "a closed path exports as a polyline and an open one as a polygon — the two, swapped" },
+    { id: "EX13", file: "src/core/export/ExportTiled.ts",
+      from: "        if (written.length === 0) return;",
+      to: "        if (written.length === -1) return;",
+      note: "a group whose every object was refused writes an EMPTY objectgroup, which reads as a layer somebody emptied" },
+    { id: "EX14", file: "src/core/export/ExportTiled.ts",
+      from: '`width="${g.width}"`, `height="${g.height}"`);\n        if (rotation !== 0)',
+      to: '`width="${g.width}"`, `height="${g.height}"`);\n        if (rotation === 0)',
+      note: "a tile object never states its rotation, so every turned entity exports upright" },
 
     // THE SHADERS, which nothing in the gate compiles: tsc sees a string, the bundler sees a string,
     // jest sees a string, and the first reader that knows the language is a driver on a machine

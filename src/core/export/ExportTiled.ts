@@ -22,6 +22,16 @@
  * the map, and every layer that disagrees is REPORTED and dropped rather than squeezed in — a map
  * that silently lost a layer is the kind of export somebody discovers a week later.
  *
+ * OBJECT LAYERS GO OUT TOO, and the reason is the same silent-nothing this codebase keeps finding:
+ * a document imported from a map full of entities would otherwise export as tile layers alone, with
+ * every door, spawn point and collision volume gone and no line saying so. What cannot be written is
+ * counted instead — an image node drawing from a sheet this map does not declare has no gid to be.
+ *
+ * THE ANCHORING IS REVERSED HERE. A tile object's (x, y) is its BOTTOM-LEFT in the format and its
+ * top-left in this engine, so exporting adds the height back that `objectBox` took off. Reading and
+ * writing disagreeing about that would be invisible in the file and obvious on the screen, one
+ * object-height down, which is exactly how it looks when an importer gets it wrong.
+ *
  * CSV, NOT BASE64. The format allows both and the corpus uses both, but a `.tmx` is a file people
  * open, diff and hand-edit; a wall of base64 is the version that cannot be reviewed. It costs bytes
  * and buys a file that a person can read, which is the same trade `PixelCodec` refused for pixels
@@ -29,7 +39,7 @@
  */
 
 import { ReadonlyDocument } from "../document/Document";
-import { ReadonlyTilemap, TILE_EMPTY, FLIP_H, FLIP_V, FLIP_D } from "../document/Tilemap";
+import { ReadonlyTilemap, TILE_EMPTY, FLIP_H, FLIP_V, FLIP_D, tileIndexAt } from "../document/Tilemap";
 import { resolveTilemaps } from "../document/Components";
 
 /** What an export could not represent, alongside the file itself. */
@@ -84,6 +94,56 @@ export function tilemapCsv(map: ReadonlyTilemap, firstGid: number): string {
         rows.push(cells.join(",") + (row === map.rows - 1 ? "" : ","));
     }
     return rows.join("\n");
+}
+
+/** One object as a `.tmx` element, or null with the reason it cannot be written. */
+function objectXml(
+    node: { type: string; name?: string; geometry: { x: number; y: number; width: number; height: number };
+            transform?: { rotation?: number; origin?: { x: number; y: number } };
+            src?: string; sourceRect?: { x: number; y: number; width: number; height: number } | null;
+            path?: readonly { c: string; x?: number; y?: number }[] },
+    id: number, sheet: ReadonlyTilemap["sheet"], firstGid: number
+): { xml: string; why: null } | { xml: null; why: string } {
+    const g = node.geometry;
+    const name = node.name ?? "";
+    const attrs: string[] = [`id="${id}"`];
+    if (name) attrs.push(`name="${escapeXml(name)}"`);
+    // DEGREES, and the sign is not flipped — the format's rotation is clockwise on a y-down screen
+    // and so are this engine's radians, which is the same agreement `objectTransform` states going
+    // the other way.
+    const rotation = node.transform?.rotation ?? 0;
+
+    if (node.type === "core.image") {
+        const rect = node.sourceRect ?? null;
+        if (!rect) return { xml: null, why: `object "${name || id}" draws a whole image rather than a tile` };
+        const index = tileIndexAt(sheet, rect.x, rect.y);
+        if (index === null) {
+            return { xml: null, why: `object "${name || id}" draws from a sheet this map does not declare` };
+        }
+        // THE HEIGHT GOES BACK ON: a tile object is anchored at its bottom-left in the file.
+        attrs.push(`gid="${index + firstGid}"`, `x="${g.x}"`, `y="${g.y + g.height}"`,
+            `width="${g.width}"`, `height="${g.height}"`);
+        if (rotation !== 0) attrs.push(`rotation="${rotation * 180 / Math.PI}"`);
+        return { xml: `  <object ${attrs.join(" ")}/>`, why: null };
+    }
+
+    attrs.push(`x="${g.x}"`, `y="${g.y}"`, `width="${g.width}"`, `height="${g.height}"`);
+    if (rotation !== 0) attrs.push(`rotation="${rotation * 180 / Math.PI}"`);
+    if (node.type === "core.ellipse") {
+        return { xml: `  <object ${attrs.join(" ")}>\n   <ellipse/>\n  </object>`, why: null };
+    }
+    if (node.type === "core.path") {
+        const commands = node.path ?? [];
+        const points = commands.filter(c => c.c === "M" || c.c === "L")
+            .map(c => `${c.x ?? 0},${c.y ?? 0}`).join(" ");
+        if (points === "") return { xml: null, why: `object "${name || id}" is a path with no points` };
+        // A CLOSED path is a polygon and an open one is a polyline — the only thing that tells the
+        // two apart once both are paths, and the same distinction the reader makes coming in.
+        const tag = commands.some(c => c.c === "Z") ? "polygon" : "polyline";
+        return { xml: `  <object ${attrs.join(" ")}>\n   <${tag} points="${points}"/>\n  </object>`, why: null };
+    }
+    if (node.type === "core.rectangle") return { xml: `  <object ${attrs.join(" ")}/>`, why: null };
+    return { xml: null, why: `object "${name || id}" is a ${node.type}, which a .tmx has no shape for` };
 }
 
 /**
@@ -150,17 +210,40 @@ export function exportTiledMap(doc: ReadonlyDocument, image: string): TiledExpor
             + tilemapCsv(l.map, 1) + `\n</data>\n </layer>`;
     }).join("\n");
 
+    // OBJECT LAYERS: a frame with children is one, and its children are its objects. That is the
+    // shape the importer builds, so a map that came in this way goes back out the same.
+    let nextObjectId = 1;
+    const objectGroups: string[] = [];
+    resolved.nodes.forEach(node => {
+        if (node.type !== "core.rectangle" || node.children.length === 0) return;
+        const written: string[] = [];
+        for (const childId of node.children) {
+            const child = resolved.nodes.get(childId);
+            if (!child) continue;
+            const one = objectXml(child as never, nextObjectId, sheet, 1);
+            if (one.xml === null) { notes.push(one.why); continue; }
+            nextObjectId++;
+            written.push(one.xml);
+        }
+        if (written.length === 0) return;
+        const attrs = [`id="${fitting.length + objectGroups.length + 1}"`,
+            `name="${escapeXml(node.name ?? "")}"`];
+        if ((node.style.opacity ?? 1) < 1) attrs.push(`opacity="${node.style.opacity}"`);
+        if (node.hidden === true) attrs.push(`visible="0"`);
+        objectGroups.push(` <objectgroup ${attrs.join(" ")}>\n${written.join("\n")}\n </objectgroup>`);
+    });
+
     const xml = `<?xml version="1.0" encoding="UTF-8"?>\n`
         + `<map version="1.10" orientation="orthogonal" renderorder="right-down" `
         + `width="${first.cols}" height="${first.rows}" `
         + `tilewidth="${first.tileWidth}" tileheight="${first.tileHeight}" `
-        + `infinite="0" nextlayerid="${fitting.length + 1}" nextobjectid="1">\n`
+        + `infinite="0" nextlayerid="${fitting.length + objectGroups.length + 1}" nextobjectid="${nextObjectId}">\n`
         + ` <tileset firstgid="1" name="tiles" tilewidth="${sheet.tileWidth}" tileheight="${sheet.tileHeight}"`
         + (sheet.spacing !== 0 ? ` spacing="${sheet.spacing}"` : "")
         + (sheet.margin !== 0 ? ` margin="${sheet.margin}"` : "")
         + ` tilecount="${tileCount}" columns="${sheet.columns}">\n`
         + `  <image source="${escapeXml(image)}"/>\n`
         + ` </tileset>\n`
-        + body + `\n</map>\n`;
+        + body + (objectGroups.length > 0 ? "\n" + objectGroups.join("\n") : "") + `\n</map>\n`;
     return { xml, notes };
 }

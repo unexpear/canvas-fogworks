@@ -148,4 +148,4 @@ broke a test whose subject was still true. Both are fixed.
    `.tmx`, an autotiled layer exports the picture its terrain DERIVES, and a layer the format
    cannot hold (one map size, one tile size) is reported rather than dropped. The oracle is the
    round trip: a real Kenney map imported, exported and imported again, compared cell by cell.
-   Still absent: exporting OBJECT layers, and copying the sheet beside the file.
+   Object layers go out too, as objectgroups with their shapes, rotations and the bottom-left anchoring reversed. Still absent: copying the sheet beside the file, and an object's class and custom properties (they have no field to come from).
