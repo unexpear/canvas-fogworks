@@ -27,6 +27,16 @@
 const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
+
+// DECLARED HERE, ABOVE EVERY USE, and that is not tidiness: `restorePendingMutation` is
+// called before the dirty-tree check near the top of this file, and a `const` declared
+// further down is in its temporal dead zone at that moment. The script threw on every run
+// and `node --check` passed, because it is a runtime fault and not a syntax one.
+/** The page a browser tab watches — see `writeProgressPage`. */
+const PROGRESS_PAGE = path.join(os.tmpdir(), "vde-mutation-progress.html");
+/** Written before a file is mutated and deleted after it is restored — see `restorePendingMutation`. */
+const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 
 const ROOT = path.resolve(__dirname, "..");
 
@@ -1008,6 +1018,11 @@ function verdict(out) {
     return { v: failed ? `KILLED (${failed} failing)` : "SURVIVED", total, ok: !!failed };
 }
 
+// BEFORE THE DIRTY-TREE CHECK, and the ordering IS the point: a killed run leaves a MUTATED
+// file behind, which makes the tree dirty, which makes every later run refuse to start — so a
+// restore placed after the check could never once have fired. Heal first, then judge.
+restorePendingMutation();
+
 const dirty = execSync("git status --porcelain", { cwd: ROOT, encoding: "utf8" }).trim();
 if (dirty) {
     console.error("Refusing to run: the tree has uncommitted changes.\n" + dirty);
@@ -1078,6 +1093,80 @@ if (process.env.MUTANT_CHECK) {
  * THE ESTIMATE IS MEASURED, NOT ASSUMED: the first mutant to finish sets the pace and every one
  * after refines it, so the first line appears only once there is something real to say.
  */
+/**
+ * A PAGE THAT SHOWS THE RUN, because the terminal bar is invisible to anyone not watching that
+ * terminal — and this script is usually started in the background, where its only trace is a log
+ * file nobody is tailing.
+ *
+ * NO SERVER, NO DEPENDENCY, NO CORS. The file is rewritten after every mutant with the current
+ * state baked in and a `<meta http-equiv="refresh">` in the head, so a browser tab reloads it on a
+ * timer. `fetch` against `file://` is blocked, which rules out the obvious JSON-and-poll design;
+ * baking the state into the document sidesteps the question entirely.
+ *
+ * IT WRITES ITS OWN LAST-UPDATED TIME, so a run that DIED shows as a page that has stopped moving
+ * rather than as one that is merely slow. That distinction matters here: killing this script leaves
+ * a mutated source file on disk (see `restorePendingMutation`).
+ */
+function writeProgressPage(state) {
+    const pct = state.total === 0 ? 0 : Math.round((state.done / state.total) * 100);
+    const rows = state.recent.map(r =>
+        `<tr><td class="id">${esc(r.id)}</td><td class="${r.ok ? "ok" : "bad"}">${esc(r.verdict)}</td>`
+        + `<td class="note">${esc(r.note)}</td></tr>`).join("");
+    fs.writeFileSync(PROGRESS_PAGE, `<!doctype html><html><head><meta charset="utf-8">
+<title>${state.done}/${state.total} — mutation battery</title>
+${state.finished ? "" : '<meta http-equiv="refresh" content="2">'}
+<style>
+ body{background:#0d0d16;color:#ccc;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0;padding:22px}
+ h1{font-size:15px;font-weight:600;margin:0 0 14px;color:#fff}
+ .bar{height:22px;background:#12121f;border:1px solid #2a2a4a;border-radius:4px;overflow:hidden}
+ .fill{height:100%;width:${pct}%;background:${state.survivors > 0 ? "#b4443a" : "#3a7d5c"};transition:width .4s}
+ .n{display:flex;justify-content:space-between;margin:8px 0 18px;color:#888}
+ table{border-collapse:collapse;width:100%}
+ td{padding:2px 8px 2px 0;vertical-align:top;border-bottom:1px solid #1c1c30}
+ .id{color:#7aa2d0;white-space:nowrap}.ok{color:#5f9e78;white-space:nowrap}.bad{color:#d4655a;white-space:nowrap}
+ .note{color:#6d6d80}
+ .done{color:${state.survivors > 0 ? "#d4655a" : "#5f9e78"};font-size:15px;margin-top:16px}
+ .stale{color:#8a7a3a;margin-top:14px}
+</style></head><body>
+<h1>${esc(state.title)}</h1>
+<div class="bar"><div class="fill"></div></div>
+<div class="n"><span>${state.done} / ${state.total} &nbsp; (${pct}%)</span>
+ <span>${esc(state.elapsed)} elapsed &middot; ${esc(state.eta)}</span></div>
+${state.finished
+        ? `<div class="done">${state.total - state.survivors}/${state.total} killed &mdash; ${esc(state.elapsed)} total, ${esc(state.pace)} per mutant.</div>`
+        : `<div class="stale">Updated ${esc(state.at)}. If this stops changing, the run has stopped.</div>`}
+<table>${rows}</table>
+</body></html>`, "utf8");
+}
+
+const esc = (t) => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/**
+ * Put back a file a PREVIOUS run was killed in the middle of mutating.
+ *
+ * THIS IS NOT HYPOTHETICAL AND IT IS NOT COSMETIC. The restore below lives in a `finally`, which a
+ * hard kill skips — so an interrupted run leaves a MUTATED source file in the working tree. It
+ * happened twice in ten minutes: once leaving `node.tilemap = node.tilemap` in the tilemap write
+ * path, once leaving `width - 1 - y` in the vertical mirror. Both compile, both are wrong, and both
+ * would have been committed by anyone who did not think to check `git status` first.
+ *
+ * So the original is written to disk BEFORE the mutation and cleared after, and the next run puts
+ * back anything it finds. Self-healing rather than a warning nobody reads.
+ */
+function restorePendingMutation() {
+    if (!fs.existsSync(PENDING)) return;
+    try {
+        const held = JSON.parse(fs.readFileSync(PENDING, "utf8"));
+        if (held && typeof held.file === "string" && typeof held.original === "string") {
+            fs.writeFileSync(held.file, held.original, "utf8");
+            console.log(`Restored ${held.file}, which a killed run left mutated.`);
+        }
+    } catch (e) {
+        console.error(`Could not restore a pending mutation: ${String(e)}`);
+    }
+    fs.unlinkSync(PENDING);
+}
+
 const WATCHING = process.stdout.isTTY === true;
 const startedAt = Date.now();
 const BAR_WIDTH = 24;
@@ -1118,7 +1207,41 @@ function showProgress(nextId) {
     }
 }
 
+/** What the page shows. `recent` is newest-first and bounded — a log, not a transcript. */
+const page = { title: "", total: selected.length, done: 0, survivors: 0, recent: [],
+    elapsed: "0s", eta: "measuring…", pace: "", at: "", finished: false };
+page.title = only
+    ? `Mutation battery — PARTIAL RUN (MUTANT_ONLY=${process.env.MUTANT_ONLY}) of ${MUTANTS.length}`
+    : "Mutation battery";
+
+/** Push the current numbers into the page. Cheap: one small file, once per mutant. */
+function refreshPage() {
+    const ms = Date.now() - startedAt;
+    page.done = done;
+    page.survivors = survivors;
+    page.elapsed = humanTime(ms);
+    page.eta = done > 0 ? `~${humanTime((ms / done) * (selected.length - done))} left` : "measuring…";
+    page.pace = humanTime(ms / Math.max(1, done));
+    page.at = new Date().toTimeString().slice(0, 8);
+    writeProgressPage(page);
+}
+
 console.log(`${selected.length} mutants, one full test suite each.`);
+console.log(`Progress page: ${PROGRESS_PAGE}`);
+writeProgressPage(page);
+// AUTO-OPENED ONLY WHEN ASKED. A run started in the background should not throw a window at
+// somebody; a run somebody is waiting on should. `MUTANT_POPUP=1` is that difference.
+if (process.env.MUTANT_POPUP) {
+    try {
+        require("child_process").spawn(
+            process.platform === "win32" ? "cmd" : "open",
+            process.platform === "win32" ? ["/c", "start", "", PROGRESS_PAGE] : [PROGRESS_PAGE],
+            { detached: true, stdio: "ignore" }
+        ).unref();
+    } catch (e) {
+        console.error(`Could not open the progress page: ${String(e)}`);
+    }
+}
 
 let survivors = 0;
 for (const mut of selected) {
@@ -1140,6 +1263,8 @@ for (const mut of selected) {
         say(`${mut.id}  NOT APPLIED — 'from' no longer matches ${mut.file}`);
         survivors++;
         done++;
+        page.recent.unshift({ id: mut.id, verdict: "NOT APPLIED", note: mut.file, ok: false });
+        refreshPage();
         continue;
     }
     if (occurrences > 1) {
@@ -1152,19 +1277,31 @@ for (const mut of selected) {
             + "add context so it names one");
         survivors++;
         done++;
+        page.recent.unshift({ id: mut.id, verdict: "AMBIGUOUS", note: mut.file, ok: false });
+        refreshPage();
         continue;
     }
+    // WRITTEN DOWN BEFORE THE FILE IS TOUCHED, so a killed run can be undone by the next one.
+    fs.writeFileSync(PENDING, JSON.stringify({ file, original }), "utf8");
     fs.writeFileSync(file, source.replace(mut.from, mut.to), "utf8");
     let res;
-    try { res = verdict(runSuite()); } finally { fs.writeFileSync(file, original, "utf8"); }
+    try { res = verdict(runSuite()); } finally {
+        fs.writeFileSync(file, original, "utf8");
+        if (fs.existsSync(PENDING)) fs.unlinkSync(PENDING);
+    }
     if (!res.ok) survivors++;
     done++;
     say(`${mut.id}  ${res.v.padEnd(28)} (${res.total} tests)  ${mut.note}`);
+    page.recent.unshift({ id: mut.id, verdict: res.v, note: mut.note, ok: res.ok });
+    page.recent.length = Math.min(page.recent.length, 40);
+    refreshPage();
 }
 
 clearBar();
 console.log(`\n${selected.length - survivors}/${selected.length} killed.`
     + (only ? `  — PARTIAL RUN (MUTANT_ONLY=${process.env.MUTANT_ONLY}); the battery holds ${MUTANTS.length}.` : ""));
+page.finished = true;
+refreshPage();
 // THE PACE, so the next run can be planned rather than waited out.
 console.log(`${humanTime(Date.now() - startedAt)} total, ${humanTime((Date.now() - startedAt) / Math.max(1, selected.length))} per mutant.`);
 process.exit(survivors > 0 ? 1 : 0);

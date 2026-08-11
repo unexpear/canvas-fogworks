@@ -1,6 +1,9 @@
 # Coding Standards
 
 <!-- describes: src/core/document/Document.ts -->
+<!-- re-read 2026-08-11 after schema 66: accurate, and it earned its keep. `copyTerrainMaterial`
+     exists because of the rule stated here — a record rebuilt field by field drops the field added
+     last, which this project has paid for three times. One copier, four callers. -->
 <!-- re-read 2026-08-10 after schema 65: accurate. The 64->65 step is the first CONTENT-REWRITING
      migration in a while and follows the stated rule — it rewrites only nodes it must, passes
      already-migrated ones through untouched, and the guard for that has its own mutant. -->

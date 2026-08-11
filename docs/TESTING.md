@@ -485,6 +485,23 @@ invisible), **a map that always states the attribute** (so a missing default is 
 **a corpus where only one render order ever occurs** (so an inverted condition is invisible —
 all 20 maps in the tree use `right-down`).
 
+**WATCH IT IN A BROWSER TAB.** Every run writes `%TEMP%/vde-mutation-progress.html` — a bar, the
+count, elapsed, an ETA and the last forty verdicts — rewritten after each mutant with a
+`<meta http-equiv="refresh">` in its head, so the tab reloads itself. No server and no
+dependency: `fetch` against `file://` is blocked, which rules out the obvious poll-a-JSON
+design, so the state is baked into the document instead. It prints its own last-updated time,
+which is what distinguishes a run that DIED from one that is merely slow. `MUTANT_POPUP=1`
+opens it automatically; a background run should not throw a window at anybody, so that is opt-in.
+
+**A KILLED RUN HEALS ITSELF ON THE NEXT ONE.** The restore lives in a `finally`, which a hard
+kill skips — so an interrupted run used to leave a MUTATED source file in the working tree. That
+happened twice in ten minutes on 2026-08-11, once leaving `node.tilemap = node.tilemap` in the
+tilemap write path and once `width - 1 - y` in the vertical mirror; both compile, both are
+wrong, and both would have been committed by anyone who did not check `git status`. The original
+is now written to `%TEMP%/vde-mutation-pending.json` BEFORE the file is touched and cleared
+after, and the next run puts back whatever it finds — **before** the dirty-tree check, because a
+leftover mutant makes the tree dirty and a restore placed after that check could never fire.
+
 **RUN THE PRE-FLIGHT AFTER ANY REFACTOR: `MUTANT_CHECK=1 npm run mutate:dimensions`.** It answers
 one question — does every mutant's `from` still match its file, exactly once? — in about a second,
 with no tests run at all. Until 2026-08-10 the only way to learn that a `from` had drifted was a

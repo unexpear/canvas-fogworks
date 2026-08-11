@@ -1,6 +1,8 @@
 # Action System
 
 <!-- describes: src/core/actions -->
+<!-- re-read 2026-08-11 after schema 66: accurate. The no-op check now also compares a material's
+     NAME and swatch, because a rename leaves the picture identical and would otherwise be refused. -->
 <!-- re-read 2026-08-10 after schema 65: accurate. `SetTilemapAction`'s no-op check now compares a
      terrain's material LIST position by position, because reordering two materials redraws every
      shore while touching no cell — an edit a set-comparison would refuse as nothing. -->
