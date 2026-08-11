@@ -26966,6 +26966,51 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
             .not.toBeNull();
     });
 
+    test("the .unitypackage reader is REACHABLE, at both ends of the door", () => {
+        // It shipped with NO caller, which this project treats as a defect rather than a milestone —
+        // and the reader's own header said so. These assert the door stays open: the main process
+        // offers the channels, the preload exposes them, and the panel uses them.
+        const main = readFileSync(resolve(__dirname, "../../electron/main.js"), "utf8");
+        expect(main).toMatch(/ipcMain\.handle\("read-unity-folder"/);
+        expect(main).toMatch(/ipcMain\.handle\("read-unity-package"/);
+        // CONFINED to the folder the user picked, like every other path from outside. Verified live
+        // as well as here: reading C:/Windows/win.ini through it is refused.
+        //
+        // SCOPED TO THIS HANDLER, and that is the whole assertion. Matching the refusal string
+        // against the WHOLE FILE passed while the check was deleted, because `resolveTiledAsset`
+        // carries the same sentence — a mutant removing the confinement from this door survived a
+        // test that looked like it covered it.
+        const unityDoor = main.slice(main.indexOf('ipcMain.handle("read-unity-package"'),
+            main.indexOf('ipcMain.on("gunzip-sync"'));
+        expect(unityDoor).toMatch(/Refusing to read outside the chosen folder/);
+        expect(unityDoor).toMatch(/target\.startsWith\(root \+ path\.sep\)/);
+        expect(unityDoor).toMatch(/Not a Unity package/);
+        // A SEPARATE CHANNEL FROM `inflate-sync`, not a widening of it. A `.unitypackage` is GZIP,
+        // which carries a header `zlib.inflateSync` will not accept — and widening the inflate
+        // channel would make its name a lie about what came through it, the same reason the palette
+        // channel is separate from the Tiled one.
+        expect(main).toMatch(/ipcMain\.on\("gunzip-sync"/);
+        expect(main).toMatch(/zlib\.gunzipSync\(/);
+        expect(main).toMatch(/maxOutputLength: INFLATE_MAX_BYTES/);
+
+        const preload = readFileSync(resolve(__dirname, "../../electron/preload.js"), "utf8");
+        expect(preload).toMatch(/readUnityFolder:/);
+        expect(preload).toMatch(/readUnityPackage:/);
+        expect(preload).toMatch(/gunzipSync:/);
+
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/data-unity-btn="1"/);
+        expect(app).toMatch(/data-unity-list="1"/);
+        // THE INJECTION POINT IS USED — the parser takes a gunzip it calls DURING the parse, which
+        // is what keeps it pure and testable with no decompressor present. Passing an expanded
+        // archive instead would have quietly retired that design.
+        expect(app).toMatch(/parseUnityPackage\(bytes, \{/);
+        expect(app).toMatch(/gunzip: d => \{/);
+        // …and a recovered file can actually be placed, which is what makes it an import rather
+        // than a listing.
+        expect(app).toMatch(/aria-label=\{`Place \${a\.path}`\}/);
+    });
+
     test("the palette panel and the quantiser are REACHABLE, which is the point", () => {
         // `paint/Palette` and `paint/Quantize` had NO importer outside the tests — the audit's second
         // and third built-but-unreachable entries. These assert the door stays open, at both ends:

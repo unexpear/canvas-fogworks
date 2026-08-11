@@ -68,6 +68,7 @@ import { SetTilemapAction } from "../core/actions/SetTilemapAction";
 import { resizeTilemap, withTerrainArt, asTerrain, withTerrain } from "../core/document/TilemapEdit";
 import { autotileClasses, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR } from "../core/document/Autotile";
 import { caveCells } from "../core/document/CaveTerrain";
+import { parseUnityPackage, UnityAsset } from "../core/import/UnityPackage";
 import { rngFrom, seedFrom } from "../core/random/Rng";
 import { Tilemap, tileSourceRect as sheetTileRect, tileIndexAt,
     FLIP_H, FLIP_V, FLIP_D } from "../core/document/Tilemap";
@@ -359,8 +360,12 @@ declare global {
             readTiledMap: (folder: string, mapPath: string) => Promise<string>;
             readTiledTileset: (folder: string, mapPath: string, relative: string) => Promise<string>;
             readTiledImage: (folder: string, mapPath: string, relative: string) => Promise<string>;
+            readUnityFolder: (folder: string) => Promise<{ path: string; name: string; bytes: number; relative: string }[]>;
+            readUnityPackage: (folder: string, filePath: string) => Promise<string>;
             /** The one SYNCHRONOUS channel — see the preload. Returns base64, or an error to show. */
             inflateSync: (base64: string) => { ok: boolean; data?: string; error?: string };
+            /** Its GZIP sibling: a `.unitypackage` carries a header `inflateSync` will not accept. */
+            gunzipSync: (base64: string) => { ok: boolean; data?: string; error?: string };
         };
     }
 }
@@ -3891,6 +3896,9 @@ const INSPECTOR_LABEL: React.CSSProperties = { color: "#aaa", display: "block", 
 const ADJUST_ROW: React.CSSProperties = {
     display: "flex", alignItems: "center", gap: 4, marginTop: 4, flexWrap: "wrap"
 };
+/** What a package holds that this engine can place. The rest is counted, not hidden. */
+const UNITY_IMAGE = /\.(png|jpg|jpeg|gif|webp|svg)$/i;
+
 const ADJUST_BUTTON: React.CSSProperties = {
     fontSize: 10, padding: "2px 6px", background: "transparent", color: "#ccc",
     border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer"
@@ -4367,6 +4375,10 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     const [fonts, setFonts] = useState<FontInfo[]>(registeredFonts());
     const [tiledFolder, setTiledFolder] = useState<string | null>(null);
     const [tiledMaps, setTiledMaps] = useState<{ path: string; name: string; relative: string }[]>([]);
+    const [unityFolder, setUnityFolder] = useState<string | null>(null);
+    const [unityPacks, setUnityPacks] = useState<{ path: string; name: string; bytes: number; relative: string }[]>([]);
+    /** What the chosen package holds — images are placeable, everything else is counted. */
+    const [unityAssets, setUnityAssets] = useState<UnityAsset[]>([]);
     const [importNote, setImportNote] = useState<string | null>(null);
     const [exported, setExported] = useState<string | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
@@ -4988,6 +5000,94 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                             <option value="">Place a map…</option>
                             {tiledMaps.map(m => <option key={m.path} value={m.path}>{m.relative}</option>)}
                         </select>
+                    )}
+
+                    {/* A `.unitypackage` is a gzipped tar of GUID folders, and nothing here could
+                        open one — seven sit in this tree. This is the door: the reader was written
+                        first and left deliberately unreachable, which is a state this project
+                        treats as a defect rather than a milestone. */}
+                    <button
+                        data-unity-btn="1"
+                        disabled={busy}
+                        onClick={async () => {
+                            const folder = await api.pickFolder();
+                            if (!folder) return;
+                            setBusy(true);
+                            try {
+                                const packs = await api.readUnityFolder(folder);
+                                setUnityFolder(folder);
+                                setUnityPacks(packs);
+                                setUnityAssets([]);
+                                setImportNote(packs.length === 0
+                                    ? "No .unitypackage files in that folder."
+                                    : `${packs.length} package${packs.length === 1 ? "" : "s"} found`);
+                            } finally { setBusy(false); }
+                        }}
+                        style={DRAWER_BUTTON}
+                    >{busy ? "Reading…" : "Find Unity packages…"}</button>
+                    {unityPacks.length > 0 && unityFolder && (
+                        <select
+                            data-unity-list="1"
+                            defaultValue=""
+                            onChange={async e => {
+                                const pkgPath = e.target.value;
+                                if (!pkgPath) return;
+                                setBusy(true);
+                                try {
+                                    const b64 = await api.readUnityPackage(unityFolder, pkgPath);
+                                    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                                    // THE INJECTION POINT, used at last: the parser takes a gunzip
+                                    // it calls during the parse, which is what keeps it pure and
+                                    // testable with no decompressor present.
+                                    const held = parseUnityPackage(bytes, {
+                                        gunzip: d => {
+                                            let bin = "";
+                                            for (let i = 0; i < d.length; i++) bin += String.fromCharCode(d[i]);
+                                            const r = api.gunzipSync(btoa(bin));
+                                            if (!r.ok || !r.data) throw new Error(r.error ?? "gunzip failed");
+                                            return Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
+                                        }
+                                    });
+                                    setUnityAssets(held.assets);
+                                    const images = held.assets.filter(a => UNITY_IMAGE.test(a.path)).length;
+                                    setImportNote(`${held.assets.length} files, ${images} placeable`
+                                        + (held.notes.length > 0 ? ` — ${held.notes.length} not read` : ""));
+                                } catch (err) {
+                                    setImportNote(String(err instanceof Error ? err.message : err));
+                                } finally { setBusy(false); }
+                            }}
+                            style={{ width: "100%", fontSize: 11, marginBottom: 6, background: UI.raised,
+                                color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3 }}
+                        >
+                            <option value="">Open a package…</option>
+                            {unityPacks.map(u => (
+                                <option key={u.path} value={u.path}>
+                                    {u.relative} ({Math.round(u.bytes / 1024)}KB)
+                                </option>
+                            ))}
+                        </select>
+                    )}
+                    {unityAssets.length > 0 && (
+                        <div data-unity-assets="1" style={{ maxHeight: 180, overflowY: "auto", marginBottom: 6 }}>
+                            {unityAssets.filter(a => UNITY_IMAGE.test(a.path)).map(a => (
+                                <button
+                                    key={a.guid}
+                                    title={a.path}
+                                    aria-label={`Place ${a.path}`}
+                                    onClick={() => {
+                                        // BYTES TO A DATA URL, because that is what a `core.image`
+                                        // holds — a package's files never touch the disk, so nothing
+                                        // is unpacked anywhere the author did not ask for.
+                                        let bin = "";
+                                        for (let i = 0; i < a.bytes.length; i++) bin += String.fromCharCode(a.bytes[i]);
+                                        const ext = a.path.split(".").pop()!.toLowerCase();
+                                        onPlaceImage(`data:image/${ext === "jpg" ? "jpeg" : ext};base64,${btoa(bin)}`,
+                                            a.path.split("/").pop() ?? a.path);
+                                    }}
+                                    style={{ ...DRAWER_BUTTON, textAlign: "left", width: "100%", marginBottom: 2 }}
+                                >{a.path.split("/").pop()}</button>
+                            ))}
+                        </div>
                     )}
 
                     {importNote && <div style={{ color: "#6a9", wordBreak: "break-all" }}>{importNote}</div>}

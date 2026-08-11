@@ -254,6 +254,7 @@ const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
 // `FontFace` accepts. Two narrow doors beat one that lies about what came through it.
 const FONT_EXT = /\.(ttf|otf)$/i;
 const TILED_EXT = /\.tmx$/i;
+const UNITY_EXT = /\.unitypackage$/i;
 // PALETTES are `.json`, which is the widest pattern here and deliberately not narrowed further:
 // there is no palette extension to match on, and guessing by filename would miss every palette not
 // called `Palette.json`. What keeps this honest is that `parsePaletteFile` returns null for a file
@@ -448,6 +449,58 @@ ipcMain.handle("read-tiled-image", async (event, folder, mapPath, relative) => {
     const ext = path.extname(target).slice(1).toLowerCase();
     const mime = ext === "svg" ? "svg+xml" : ext === "jpg" ? "jpeg" : ext;
     return `data:image/${mime};base64,${fs.readFileSync(target).toString("base64")}`;
+});
+
+/** The `.unitypackage` files under a folder, for the Unity importer. */
+ipcMain.handle("read-unity-folder", async (event, folder) => {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    return walkDir(folder, name => UNITY_EXT.test(name), SCAN_MAX_FILES).map(full => ({
+        path: full,
+        name: path.basename(full),
+        bytes: fs.statSync(full).size,
+        relative: path.relative(folder, full).replace(/\\/g, "/")
+    }));
+});
+
+/**
+ * One package, as base64 — CONFINED to the folder the user picked, like every other path channel.
+ *
+ * The path comes from the renderer, which got it from a scan, and nothing about that chain is a
+ * promise. Same rule as `resolveTiledAsset`; the difference is that a package names no paths of its
+ * own, so only the file itself has to be checked.
+ */
+ipcMain.handle("read-unity-package", async (event, folder, filePath) => {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    if (!filePath || typeof filePath !== "string") throw new Error("Invalid package path.");
+    const root = path.resolve(folder);
+    const target = path.resolve(filePath);
+    if (target !== root && !target.startsWith(root + path.sep)) {
+        throw new Error("Refusing to read outside the chosen folder.");
+    }
+    if (!UNITY_EXT.test(target)) throw new Error("Not a Unity package.");
+    return fs.readFileSync(target).toString("base64");
+});
+
+/**
+ * SYNCHRONOUS gunzip, the sibling of `inflate-sync` and deliberately NOT a widening of it.
+ *
+ * A `.unitypackage` is GZIP, which carries a header `zlib.inflateSync` will not accept, so the two
+ * are different calls however similar they look. Widening the inflate channel to take both would
+ * make its name a lie about what came through it — the same reason the palette channel is separate
+ * from the Tiled one.
+ *
+ * Measured on the largest package in this tree: 2.8MB in, 9.5MB out, about 25ms including both
+ * base64 conversions. That is a one-off during an import, which is what `sendSync` is for.
+ */
+ipcMain.on("gunzip-sync", (event, base64) => {
+    try {
+        if (typeof base64 !== "string") throw new Error("Invalid data.");
+        const out = zlib.gunzipSync(Buffer.from(base64, "base64"), { maxOutputLength: INFLATE_MAX_BYTES });
+        event.returnValue = { ok: true, data: out.toString("base64") };
+    } catch (err) {
+        // RETURNED, not thrown: a throw inside a sendSync handler leaves the renderer blocked.
+        event.returnValue = { ok: false, error: String(err && err.message ? err.message : err) };
+    }
 });
 
 /**

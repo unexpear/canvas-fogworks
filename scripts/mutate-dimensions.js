@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1713;
+const EXPECTED_TESTS = 1714;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -932,6 +932,17 @@ const MUTANTS = [
       from: "export function worldToScreen(\n    vp: EditorState[\"viewport\"],\n    canvasRect: { left: number; top: number },\n    worldX: number,\n    worldY: number\n): { x: number; y: number } {\n    const zoom = Math.max(0.01, vp.zoom);",
       to: "export function worldToScreen(\n    vp: EditorState[\"viewport\"],\n    canvasRect: { left: number; top: number },\n    worldX: number,\n    worldY: number\n): { x: number; y: number } {\n    const zoom = vp.zoom;",
       note: "the zoom floor stops matching its inverse's, so the round trip fails below 0.01 for a reason that has nothing to do with either function" },
+
+    // THE UNITY DOOR. A reader with no caller is not a feature — this is the pair that opens it,
+    // and the confinement is the part a panel cannot be trusted to respect.
+    { id: "UD7", file: "src/electron/main.js",
+      from: "    if (target !== root && !target.startsWith(root + path.sep)) {\n        throw new Error(\"Refusing to read outside the chosen folder.\");\n    }\n    if (!UNITY_EXT.test(target)) throw new Error(\"Not a Unity package.\");",
+      to: "    if (!UNITY_EXT.test(target)) throw new Error(\"Not a Unity package.\");",
+      note: "a package path escapes the folder the user picked, so anything on disk named .unitypackage can be read" },
+    { id: "UD8", file: "src/electron/preload.js",
+      from: "    gunzipSync: (base64) => ipcRenderer.sendSync(\"gunzip-sync\", base64),",
+      to: "    gunzipSyncMissing: (base64) => ipcRenderer.sendSync(\"gunzip-sync\", base64),",
+      note: "the gzip channel is not exposed, so the panel is a button that cannot open anything" },
 ];
 
 function runSuite() {

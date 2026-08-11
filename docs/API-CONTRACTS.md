@@ -2241,6 +2241,10 @@ function lerpViewport(a, b, t, size: { width; height }): viewport;
 interface UnityAsset { path: string; guid: string; bytes: Uint8Array }
 function unityPackageError(bytes: Uint8Array): string | null;   // gzip magic, BEFORE expanding
 function parseUnityPackage(bytes, opts?: { gunzip? }): { assets: UnityAsset[]; folders: string[]; notes: string[] };
+// REACHED FROM THE FOLDERS DRAWER via `read-unity-folder` + `read-unity-package` (confined to
+// the picked folder) and a `gunzip-sync` channel — a SIBLING of `inflate-sync`, not a widening:
+// a package is gzip, whose header `zlib.inflateSync` will not accept, and widening the inflate
+// channel would make its name a lie about what came through it.
 // Verified on all 7 packages here: 523 files, 27.7 MB, zero notes. It does NOT read `.meta` sprite
 // rects (every sprite in this tree is spriteMode 0 with none) or prefabs (binary type-trees).
 

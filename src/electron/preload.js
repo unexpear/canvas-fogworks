@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     readPaletteFile: (folder, filePath) => ipcRenderer.invoke("read-palette-file", folder, filePath),
     readTiledFolder: (folder) => ipcRenderer.invoke("read-tiled-folder", folder),
     readTiledMap: (folder, mapPath) => ipcRenderer.invoke("read-tiled-map", folder, mapPath),
+    readUnityFolder: (folder) => ipcRenderer.invoke("read-unity-folder", folder),
+    readUnityPackage: (folder, filePath) => ipcRenderer.invoke("read-unity-package", folder, filePath),
     readTiledTileset: (folder, mapPath, relative) =>
         ipcRenderer.invoke("read-tiled-tileset", folder, mapPath, relative),
     readTiledImage: (folder, mapPath, relative) =>
@@ -48,5 +50,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     // The ONE synchronous channel. Both `parseTiledMap` and `parseAseprite` call their `inflate`
     // during the parse, which is what keeps them pure; an async bridge cannot satisfy that.
     inflateSync: (base64) => ipcRenderer.sendSync("inflate-sync", base64),
+    // The gzip sibling — a `.unitypackage` carries a header `inflateSync` will not accept.
+    gunzipSync: (base64) => ipcRenderer.sendSync("gunzip-sync", base64),
     writeIntoFolder: (folder, filename, content) => ipcRenderer.invoke("write-into-folder", folder, filename, content)
 });
