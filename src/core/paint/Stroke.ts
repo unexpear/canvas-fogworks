@@ -18,6 +18,7 @@
 
 import { PixelBuffer, Rgba, PixelClip } from "./PixelBuffer";
 import { Brush, strokePath, strokeBounds } from "./Brush";
+import { rollAt, seedFrom } from "../random/Rng";
 import { PixelPatch, EMPTY_PATCH, capturePatch, readRegion } from "./PixelPatch";
 
 /** A stroke in progress: where it will paint, and what was there first. */
@@ -38,6 +39,25 @@ export interface StrokeSession {
      * the whole gesture, and it cannot change halfway through because the author clicked a panel.
      */
     clip?: PixelClip;
+    /**
+     * What this stroke's random faces follow from — the PRESS POINT, hashed.
+     *
+     * NOT A CLOCK AND NOT A COUNTER. The same drag has to leave the same marks, or a stroke could
+     * not be replayed; two different drags should differ, or a variant brush would stamp one face
+     * forever. The press point gives both for free and stores nothing: it is already part of the
+     * gesture, and no two strokes start in the same place unless the author meant them to.
+     */
+    seed: number;
+    /**
+     * How many dabs this stroke has laid, which is the INDEX the next face is drawn at.
+     *
+     * COUNTED RATHER THAN STREAMED, because the symmetry mirrors are walked as separate passes over
+     * COPIES of this session — `{ ...session, points: [from] }`. A copy takes this number by value,
+     * so a mirror re-walks the same indices as the primary and lands on the same faces. A shared
+     * stream would have advanced, and a symmetric stroke would come out with a different face on
+     * each side.
+     */
+    dabs: number;
 }
 
 /** A rectangle clipped to a surface, or null when none of it lands. */
@@ -74,6 +94,10 @@ export function beginStroke(
     return {
         brush, colour, points: [[x, y]],
         region,
+        // HASHED FROM WHERE THE PRESS LANDED — see `seed`. `seedFrom` is reused rather than a second
+        // hash written here, so there is one answer to "what number does this text mean".
+        seed: seedFrom(`${x},${y}`),
+        dabs: 0,
         // BEFORE ANY PAINT. This is the line the whole module exists to get right.
         before: readRegion(buffer, region.x, region.y, region.width, region.height),
         // THE REGION IS NOT NARROWED TO THE CLIP, on purpose: the region is what can be UNDONE, and
@@ -95,7 +119,12 @@ export function extendStroke(
 ): void {
     const last = session.points[session.points.length - 1];
     session.points.push([x, y]);
-    strokePath(buffer, session.brush, [last, [x, y]], session.colour, line, session.clip);
+    // THE COUNTER ADVANCES ON THIS SESSION and is read through a closure, so a mirror — which holds
+    // a COPY of `dabs` — re-walks the same indices and picks the same faces.
+    let at = session.dabs;
+    strokePath(buffer, session.brush, [last, [x, y]], session.colour, line, session.clip,
+        () => rollAt(session.seed, at++));
+    session.dabs = at;
 }
 
 /**

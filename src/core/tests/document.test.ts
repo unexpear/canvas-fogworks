@@ -123,7 +123,7 @@ import { capturePatch, applyPatch, revertPatch, invertPatch, readRegion, isEmpty
     patchCost, EMPTY_PATCH } from "../paint/PixelPatch";
 import { makeBrush, brushError, stampBrush, brushBounds, strokePath, strokeBounds,
     BRUSH_MAX_SIZE, brushFromImage, brushWithVariants, pickFace } from "../paint/Brush";
-import { rngFrom, seedFrom } from "../random/Rng";
+import { rngFrom, seedFrom, rollAt } from "../random/Rng";
 import { parseUnityPackage, unityPackageError } from "../import/UnityPackage";
 import { gzipSync, gunzipSync } from "zlib";
 import { caveCells } from "../document/CaveTerrain";
@@ -28481,6 +28481,28 @@ describe("Rng — reproducible randomness, and the port that had to be checked",
         for (const bad of [0, -3, 1.5, NaN, Infinity]) expect(rngFrom(1).int(bad)).toBe(0);
     });
 
+    test("rollAt is indexed, and (seed, index) is not just their SUM", () => {
+        // Stable, and both inputs matter.
+        expect(rollAt(7, 3)).toBe(rollAt(7, 3));
+        expect(rollAt(7, 3)).not.toBe(rollAt(7, 4));
+        expect(rollAt(7, 3)).not.toBe(rollAt(8, 3));
+        for (let i = 0; i < 500; i++) {
+            const v = rollAt(99, i);
+            expect(v).toBeGreaterThanOrEqual(0);
+            expect(v).toBeLessThan(1);
+        }
+
+        // THE COLLISION THE MIXING EXISTS FOR. Combine the two by ADDING and dab 5 of a stroke
+        // seeded 100 is the same draw as dab 0 of a stroke seeded 105 — two strokes laying the same
+        // faces, offset against each other. It is exact rather than statistical, which is why it is
+        // worth removing: measured over 20,000 dabs, the additive form is otherwise indistinguishable
+        // (adjacent dabs match 33.4% of the time against 33.2%, both chance), so a distribution test
+        // cannot see this and a test of the sums can.
+        for (const [seed, index] of [[100, 5], [7, 1], [1234, 42]]) {
+            expect(rollAt(seed, index)).not.toBe(rollAt(seed + index, 0));
+        }
+    });
+
     test("seedFrom turns a word into a stream, and the empty word is still a word", () => {
         // Checked against an independent BigInt FNV-1a, like the generator itself.
         expect(seedFrom("")).toBe(2166136261);          // the offset basis, untouched
@@ -28493,6 +28515,122 @@ describe("Rng — reproducible randomness, and the port that had to be checked",
         expect(seedFrom("cave")).not.toBe(seedFrom("cavf"));
         // …including words that differ only by ORDER, which a sum-of-characters hash would collide.
         expect(seedFrom("ab")).not.toBe(seedFrom("ba"));
+    });
+});
+
+describe("Brush faces — the variant brush that had no supplier", () => {
+    // `brushFromImage`, `brushWithVariants` and `pickFace` were written together and NONE of them had
+    // a caller: the whole image-brush feature existed and could not be reached from anywhere.
+    const face = (colour: [number, number, number, number]) =>
+        ({ width: 1, height: 1, round: false, variants: [], dabs: [{ dx: 0, dy: 0, colour }] });
+    const RED: [number, number, number, number] = [255, 0, 0, 255];
+    const GREEN: [number, number, number, number] = [0, 255, 0, 255];
+    const BLUE: [number, number, number, number] = [0, 0, 255, 255];
+    const variantBrush = brushWithVariants([face(RED), face(GREEN), face(BLUE)])!;
+
+    /**
+     * The SEQUENCE OF FACES a stroke lays, read back off the pixels — "R", "G", "B" per dab.
+     *
+     * THE SEQUENCE, NOT THE PICTURE, and that distinction is what three surviving mutants taught.
+     * Comparing whole buffers cannot see which face went where: two strokes at different positions
+     * differ in their pixels whatever faces they used, so a generator that ignored its seed passed.
+     */
+    const faceSeq = (buf: PixelBuffer, y: number) => {
+        const out: string[] = [];
+        for (let x = 0; x < buf.width; x++) {
+            const at = (y * buf.width + x) * 4;
+            if (buf.data[at + 3] === 0) continue;
+            out.push(buf.data[at] === 255 ? "R" : buf.data[at + 1] === 255 ? "G" : "B");
+        }
+        return out.join("");
+    };
+
+    /** One stroke, `x0`..`x1`, as its face sequence. Optionally broken into two segments. */
+    const strokeFaces = (x0: number, x1: number, via?: number) => {
+        const buf = createPixelBuffer(40, 9);
+        const session = beginStroke(buf, variantBrush, x0, 4, [0, 0, 0, 255], 0)!;
+        if (via !== undefined) extendStroke(buf, session, via, 4, linePoints);
+        extendStroke(buf, session, x1, 4, linePoints);
+        return faceSeq(buf, 4);
+    };
+
+    test("a stroke picks a face PER DAB, and the same drag paints the same marks", () => {
+        const once = strokeFaces(2, 20);
+        expect(once.length).toBeGreaterThan(10);
+        // MORE THAN ONE FACE IS USED — a brush that ignored its variants would lay one letter.
+        expect(new Set(once.split("")).size).toBeGreaterThan(1);
+        // ALL THREE, over a stroke this long. A roll that clustered — because the index was ADDED
+        // to the seed rather than mixed into it, and neighbouring seeds give related draws in this
+        // generator — would use two faces and look plausible.
+        expect(new Set(once.split("")).size).toBe(3);
+        // REPLAYABLE: the seed is the press point, so the identical drag is identical paint.
+        expect(strokeFaces(2, 20)).toBe(once);
+        // AND A DIFFERENT PRESS LAYS A DIFFERENT SEQUENCE — compared as sequences, because the same
+        // stroke moved along the row differs in its PIXELS whatever faces it used.
+        expect(strokeFaces(5, 23)).not.toBe(once);
+    });
+
+    test("a second segment CONTINUES the sequence rather than restarting it", () => {
+        // A stroke is many segments — one per pointer move — and the dab index runs across all of
+        // them. Restart it and the stroke repeats its opening faces every time the pointer moves,
+        // which reads as a pattern rather than as variation. One segment cannot see this at all,
+        // which is why the first version of these tests missed it.
+        const broken = strokeFaces(2, 20, 11);
+        // THE SEQUENCE DOES NOT RESTART AT THE JOIN. With the index reset per segment, the run
+        // after the join would be the run at the start, letter for letter.
+        expect(broken.slice(10, 16)).not.toBe(broken.slice(0, 6));
+
+        // AND THE JOIN POINT IS STAMPED TWICE, which is worth writing down rather than asserting
+        // away: each segment is walked including BOTH endpoints, so the shared point consumes two
+        // rolls. Invisible in the PIXELS — the second dab overwrites the first at the same x, which
+        // is why the sequences above are the same length — and visible in the dab count. Inherent
+        // rather than wrong: a drag sampled at 60Hz and the same drag at 30Hz differ anyway.
+        const buf = createPixelBuffer(40, 9);
+        const twoStep = beginStroke(buf, variantBrush, 2, 4, [0, 0, 0, 255], 0)!;
+        extendStroke(buf, twoStep, 11, 4, linePoints);
+        extendStroke(buf, twoStep, 20, 4, linePoints);
+        const oneStep = beginStroke(createPixelBuffer(40, 9), variantBrush, 2, 4, [0, 0, 0, 255], 0)!;
+        extendStroke(createPixelBuffer(40, 9), oneStep, 20, 4, linePoints);
+        expect(twoStep.dabs).toBe(oneStep.dabs + 1);
+    });
+
+    test("a MIRROR picks the same faces as the stroke it mirrors", () => {
+        // The mirrors are walked as separate passes over COPIES of the session — exactly what
+        // `RasterTool` does — so a shared stream would have advanced and the two sides would come
+        // out with different faces: symmetry that is not symmetric. The dab INDEX is what fixes it.
+        const buf = createPixelBuffer(24, 9);
+        const primary = beginStroke(buf, variantBrush, 2, 4, [0, 0, 0, 255], 0)!;
+        const copy = { ...primary, points: [[2, 4]] as [number, number][] };
+        extendStroke(buf, primary, 10, 4, linePoints);
+        const mirrorBuf = createPixelBuffer(24, 9);
+        extendStroke(mirrorBuf, copy, 10, 4, linePoints);
+        // Same faces, dab for dab, because both passes started from the same `dabs` count.
+        expect(Array.from(mirrorBuf.data)).toEqual(Array.from(buf.data));
+        // …and both passes walked the SAME indices: the copy started where the primary did, which is
+        // the whole mechanism. (Both end equal, because each advanced its own copy of the count —
+        // asserting the mirror ends at 0 would be asserting that it never painted.)
+        expect(primary.dabs).toBeGreaterThan(0);
+        expect(copy.dabs).toBe(primary.dabs);
+    });
+
+    test("the image brush is REACHABLE, which is what makes it a feature", () => {
+        // Three functions, written together, none with a caller. The panel is the door.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/aria-label="Add brush face"/);
+        expect(app).toMatch(/aria-label="Clear brush faces"/);
+        expect(app).toMatch(/brushFromImage\(buffer\)/);
+        // AND THE TOOL READS THEM, which is the half that would otherwise be a list nothing paints.
+        expect(app).toMatch(/brushWithVariants\(brushFacesRef\.current\)/);
+    });
+
+    test("a brush with no variants consumes no rolls", () => {
+        // Adding a second face to a brush must not shift every later dab of every OTHER stroke onto
+        // a different draw — which is what happens if the roll is drawn unconditionally.
+        const plain = face(RED);
+        const buf = createPixelBuffer(8, 3);
+        const session = beginStroke(buf, plain, 1, 1, [0, 0, 0, 255], 0)!;
+        extendStroke(buf, session, 5, 1, linePoints);
+        expect(session.dabs).toBe(0);
     });
 });
 

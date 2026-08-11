@@ -8,11 +8,11 @@
  * marks when an action is re-applied. It has never had a caller, because nothing here could supply
  * a roll that would come out the same twice.
  *
- * ITS FIRST CALLER IS THE CAVE GENERATOR, and `pickFace` is STILL UNWIRED — said plainly because
- * the alternative is a header claiming a connection that does not exist, which is the defect this
- * project keeps finding rather than a way of describing intent. Wiring the brush is a slice of its
- * own: a roll has to be drawn per DAB and carried on the stroke session, so that a re-applied
- * action re-draws the same sequence, and that is a change to the stroke path rather than to this.
+ * ITS CALLERS ARE THE CAVE GENERATOR AND THE BRUSH. `pickFace` is wired now, through `rollAt`: a
+ * stroke draws one roll per DAB, indexed rather than streamed, so the symmetry mirrors — which are
+ * walked as separate passes over copies of the session — land on the same faces as the stroke they
+ * mirror. This header said UNWIRED for a day, which was worth writing down at the time rather than
+ * claiming a connection that did not exist.
  *
  * A GENERATED MAP THAT CHANGES WHEN REOPENED IS NOT A DOCUMENT, which is the sharper form of the
  * same rule. A cave generated from seed 7 must be the same cave in this process, in the next one,
@@ -68,6 +68,38 @@ export function rngFrom(seed: number): Rng {
         next,
         int: (bound: number) => (Number.isInteger(bound) && bound > 0 ? Math.floor(next() * bound) : 0)
     };
+}
+
+/**
+ * ONE draw for a given (seed, index), with no stream and no state.
+ *
+ * A STREAM IS THE WRONG SHAPE FOR A STROKE, and that is the whole reason this exists beside
+ * `rngFrom`. A brush stroke paints from three places — the press's dot, each segment, and the
+ * symmetry mirrors — and the mirrors are walked as SEPARATE passes over copies of the session. Draw
+ * from a shared stream and the mirror consumes different values than the primary did, so a
+ * symmetric stroke comes out with different faces on each side: symmetry that is not symmetric.
+ *
+ * Indexed by the DAB, every pass computes the same value for the same dab, and a mirror is a mirror.
+ * It also makes a stroke replayable without storing anything: the seed and the dab number are enough.
+ *
+ * THE INDEX IS MIXED RATHER THAN ADDED, and the reason is a COLLISION, not a correlation. I first
+ * wrote that `seed + index` would make neighbouring dabs pick neighbouring faces, then measured it:
+ * over 20,000 dabs the two are indistinguishable — adjacent dabs match 33.4% of the time against
+ * 33.2% for the mix, both exactly chance. That justification was wrong.
+ *
+ * What `seed + index` really does is make the pair AMBIGUOUS: dab 5 of a stroke seeded 100 and dab 0
+ * of a stroke seeded 105 are the same draw, so two strokes whose press points hash close together
+ * lay the same faces offset against each other. Rare, since `seedFrom` disperses, and exact when it
+ * happens — a structural collision rather than a statistical wobble, which is the kind worth three
+ * multiplies to remove.
+ */
+export function rollAt(seed: number, index: number): number {
+    // SplitMix32's finaliser, which is what turns a counter into something that looks nothing like
+    // a counter. Then one mulberry32 draw from the result.
+    let h = (Math.imul(index, 0x9E3779B9) ^ seed) | 0;
+    h = Math.imul(h ^ (h >>> 16), 0x85EBCA6B);
+    h = Math.imul(h ^ (h >>> 13), 0xC2B2AE35);
+    return rngFrom((h ^ (h >>> 16)) >>> 0).next();
 }
 
 /**

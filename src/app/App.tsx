@@ -45,7 +45,8 @@ import { RasterTool } from "../editor/tools/RasterTool";
 import { Rgba, PixelBuffer } from "../core/paint/PixelBuffer";
 import { adjustBrightness, adjustContrast, adjustHsv, desaturate, invertColours, posterize,
     replaceColour, POSTERIZE_MIN, POSTERIZE_MAX } from "../core/paint/Adjust";
-import { makeBrush, BRUSH_MAX_SIZE } from "../core/paint/Brush";
+import { makeBrush, BRUSH_MAX_SIZE, brushWithVariants, brushFromImage, Brush } from "../core/paint/Brush";
+import { decodeSurface } from "../core/paint/PixelCodec";
 import { SymmetryMode, NO_SYMMETRY } from "../core/paint/Symmetry";
 import { FrameSelectionAction } from "../core/actions/FrameSelectionAction";
 import { alignAction, distributeAction } from "../core/actions/alignActions";
@@ -591,6 +592,16 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const [adjFrom, setAdjFrom] = useState("#000000");
     const [adjTolerance, setAdjTolerance] = useState(0);
     const [brushRound, setBrushRound] = useState(false);
+    /**
+     * Images the brush stamps instead of a disc, one picked per dab.
+     *
+     * `brushFromImage`, `brushWithVariants` and `pickFace` were all written together and NONE of
+     * them had a caller — the whole image-brush feature existed and could not be reached. This is
+     * the state that reaches it.
+     */
+    const [brushFaces, setBrushFaces] = useState<Brush[]>([]);
+    const brushFacesRef = useRef<Brush[]>([]);
+    brushFacesRef.current = brushFaces;
     const brushRoundRef = useRef(false);
     brushRoundRef.current = brushRound;
     const [symmetry, setSymmetry] = useState<SymmetryMode>(NO_SYMMETRY);
@@ -755,7 +766,12 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             marquee: new PixelSelectTool(dispatcher, es, refresh, () => selectConfigRef.current),
             paint: new RasterTool(dispatcher, es, refresh,
                 () => erasingRef.current ? [0, 0, 0, 0] : hexToRgba(paintColourRef.current),
-                () => makeBrush(brushSizeRef.current, brushRoundRef.current),
+                () => (brushFacesRef.current.length > 0
+                    // FACES WIN WHEN THERE ARE ANY, and the size/round controls go on describing the
+                    // procedural brush they replace rather than being disabled — the author gets the
+                    // disc back by clearing the faces, which is one button and no lost setting.
+                    ? brushWithVariants(brushFacesRef.current) ?? makeBrush(brushSizeRef.current, brushRoundRef.current)
+                    : makeBrush(brushSizeRef.current, brushRoundRef.current)),
                 () => symmetryRef.current)
         };
         toolController.setTool(toolsRef.current.select);
@@ -2089,6 +2105,37 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                         </label>
                         <ToolButton icon="●" label="Round" active={brushRound}
                             onClick={() => setBrushRound(v => !v)} />
+                        {/* AN IMAGE AS THE STAMP. Several become VARIANTS: one is picked per dab,
+                            from the press point, so the same drag leaves the same marks and two
+                            drags differ. This is what `pickFace` has been waiting for since it was
+                            written. */}
+                        <button
+                            aria-label="Add brush face"
+                            title="Use the selected canvas as a brush stamp. Add several and each dab picks one."
+                            disabled={!selectedRasterId}
+                            onClick={() => {
+                                const node = selectedRasterId
+                                    ? dispatcher.getDocument().nodes.get(selectedRasterId) : undefined;
+                                const stored = node?.surface;
+                                if (!stored) return;
+                                const buffer = decodeSurface(stored.data, stored.width, stored.height);
+                                if (!buffer) return;
+                                const face = brushFromImage(buffer);
+                                // AN EMPTY CANVAS IS NOT A BRUSH: every pixel transparent means no
+                                // dabs, and a stroke with it paints nothing while looking armed.
+                                if (face.dabs.length === 0) return;
+                                setBrushFaces(f => [...f, face]);
+                            }}
+                            style={ADJUST_BUTTON}
+                        >+ face</button>
+                        {brushFaces.length > 0 && (
+                            <button
+                                aria-label="Clear brush faces"
+                                title="Back to the round or square brush"
+                                onClick={() => setBrushFaces([])}
+                                style={ADJUST_BUTTON}
+                            >{brushFaces.length} face{brushFaces.length === 1 ? "" : "s"} ×</button>
+                        )}
                         {/* Mirrored drawing: one stroke paints two, four, or one. */}
                         <ToolButton icon="⇋" label="Mirror H" active={symmetry.horizontal}
                             onClick={() => setSymmetry(m => ({ ...m, horizontal: !m.horizontal }))} />

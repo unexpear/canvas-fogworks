@@ -71,6 +71,7 @@ broke a test whose subject was still true. Both are fixed.
 | Import Krita, Photoshop | **absent** | Pixelorama parses both |
 | Reference images | **absent** | |
 | Tile mode (seamless-texture preview with offsets and masking) | **absent** | a different feature from tilemaps |
+| Brush VARIANTS (a stamp per dab) | **have** | `brushFromImage` + `brushWithVariants` + `pickFace` were written together and NONE had a caller. Reachable now: any canvas becomes a face, several become variants, and a stroke picks one per dab from `rollAt(seed, index)` — seeded by the PRESS POINT, so the same drag repeats and two drags differ. Indexed rather than streamed so the symmetry mirrors pick the same faces |
 | Brush dynamics (pressure / velocity) | **absent** | |
 | Audio layers, 3D layers and cels | **absent** | see *deliberately not building* |
 

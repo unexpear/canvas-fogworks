@@ -211,17 +211,24 @@ export function brushBounds(
 export function strokePath(
     buffer: PixelBuffer, brush: Brush, points: readonly [number, number][], colour: Rgba,
     line: (x0: number, y0: number, x1: number, y1: number) => [number, number][],
-    clip?: PixelClip
+    clip?: PixelClip,
+    roll?: () => number
 ): void {
     if (points.length === 0) return;
+    // ONE ROLL PER DAB, and only when the brush has faces to choose between — a brush with no
+    // variants must consume no rolls at all, or adding a second face to a brush would silently
+    // shift every later dab of every stroke onto a different draw.
+    const face = brush.variants.length > 0 && roll
+        ? () => pickFace(brush, roll())
+        : () => brush;
     // A single point is a CLICK, and a click with a pencil leaves a mark.
-    if (points.length === 1) { stampBrush(buffer, brush, points[0][0], points[0][1], colour, clip); return; }
+    if (points.length === 1) { stampBrush(buffer, face(), points[0][0], points[0][1], colour, clip); return; }
     for (let i = 1; i < points.length; i++) {
         const [x0, y0] = points[i - 1];
         const [x1, y1] = points[i];
         // THE LINE IS WALKED IN FULL and each stamp clips itself, rather than stopping the walk at
         // the boundary: a stroke that crosses out of a selection and back in must paint both ends.
-        for (const [x, y] of line(x0, y0, x1, y1)) stampBrush(buffer, brush, x, y, colour, clip);
+        for (const [x, y] of line(x0, y0, x1, y1)) stampBrush(buffer, face(), x, y, colour, clip);
     }
 }
 

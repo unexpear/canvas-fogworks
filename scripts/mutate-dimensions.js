@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1720;
+const EXPECTED_TESTS = 1726;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1000,6 +1000,29 @@ const MUTANTS = [
       from: "        if (m.color !== undefined && (typeof m.color !== \"string\" || !TERRAIN_COLOR.test(m.color))) {",
       to: "        if (m.color !== undefined && typeof m.color !== \"string\") {",
       note: "any string is accepted as a colour, so a swatch the panel cannot show is stored and the control silently falls back" },
+
+    // THE VARIANT BRUSH. Every one of these still paints a stroke — what changes is WHICH face each
+    // dab uses, which no test that only asks "did paint land" can see.
+    { id: "BF1", file: "src/core/paint/Stroke.ts",
+      from: "        () => rollAt(session.seed, at++));",
+      to: "        () => rollAt(session.seed, at));",
+      note: "every dab of a segment draws the SAME index, so a variant brush stamps one face for the whole stroke" },
+    { id: "BF2", file: "src/core/paint/Stroke.ts",
+      from: "        seed: seedFrom(`${x},${y}`),",
+      to: "        seed: 0,",
+      note: "every stroke shares one seed, so two different drags lay the identical sequence of faces" },
+    { id: "BF3", file: "src/core/paint/Stroke.ts",
+      from: "    let at = session.dabs;",
+      to: "    let at = 0;",
+      note: "each segment restarts the index, so a stroke repeats its first faces every time the pointer moves" },
+    { id: "BF4", file: "src/core/paint/Brush.ts",
+      from: "    const face = brush.variants.length > 0 && roll",
+      to: "    const face = roll",
+      note: "a brush with no variants consumes a roll anyway, so adding a face shifts every later dab of every stroke" },
+    { id: "BF5", file: "src/core/random/Rng.ts",
+      from: "    let h = (Math.imul(index, 0x9E3779B9) ^ seed) | 0;",
+      to: "    let h = (index + seed) | 0;",
+      note: "(seed, index) collapses to their SUM, so dab 5 of one stroke and dab 0 of a stroke seeded five higher are the same draw" },
 ];
 
 function runSuite() {
