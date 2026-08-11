@@ -28634,6 +28634,84 @@ describe("Brush faces — the variant brush that had no supplier", () => {
     });
 });
 
+describe("rotatedTable — a drawn tile beats a turned one", () => {
+    // THE DEFECT THIS FIXES WAS LIVE AND SILENT. The single pass this replaced let the FIRST entry of
+    // a symmetry orbit fill the whole orbit, so every later entry for a mask already covered was
+    // discarded. Sixteen entries have been schema-legal since terrain landed — `terrainError` accepts
+    // any mask 0..15 and `withTerrainArt` writes any of them — so this was art the document could
+    // hold and the derivation quietly threw away.
+    test("art for all sixteen masks is USED, not reduced to six", () => {
+        const art = new Map<number, number>();
+        for (let mask = 0; mask < AUTOTILE_MASKS; mask++) art.set(mask, 100 + mask);
+        const table = rotatedTable(art);
+        // Every mask draws the tile drawn FOR it, and none of them is turned — a tile that exists
+        // for this exact neighbourhood is never a rotation of a different one.
+        for (let mask = 0; mask < AUTOTILE_MASKS; mask++) {
+            expect(table[mask]).toEqual({ index: 100 + mask });
+        }
+    });
+
+    test("the table is a function of the ART, not of the order it is stored in", () => {
+        // The old pass gave a different picture for the same art depending on the document array's
+        // order — two files holding the same six tiles could draw differently, with nothing to say
+        // why. Ten of sixteen entries moved when the array was reversed.
+        const art = new Map<number, number>();
+        for (let mask = 0; mask < AUTOTILE_MASKS; mask++) art.set(mask, 100 + mask);
+        const reversed = new Map([...art].reverse());
+        expect(rotatedTable(reversed)).toEqual(rotatedTable(art));
+
+        // …and for a PARTIAL set too, where the gaps really are filled by turning something.
+        const sparse = new Map([[1, 7], [3, 9], [15, 4]]);
+        expect(rotatedTable(new Map([...sparse].reverse()))).toEqual(rotatedTable(sparse));
+
+        // THE CASE THAT ACTUALLY DISTINGUISHES THEM, and neither fixture above reaches it: order can
+        // only matter for a gap reachable from TWO drawn tiles, which needs two entries in ONE orbit.
+        // Masks 1 and 2 are such a pair, and masks 4 and 8 are the gaps they both reach — stored
+        // descending, so the array's order and ascending order genuinely disagree. Without the sort,
+        // mask 4 draws tile 90 here and tile 91 the other way round.
+        const twin = new Map([[2, 90], [1, 91]]);
+        const flipped = new Map([...twin].reverse());
+        expect(rotatedTable(flipped)).toEqual(rotatedTable(twin));
+        expect(rotatedTable(twin)[4]).toMatchObject({ index: 91 });
+        expect(rotatedTable(twin)[8]).toMatchObject({ index: 91 });
+    });
+
+    test("a gap is still filled by turning a drawn tile — the six-class set is unchanged", () => {
+        // The whole point of the six classes: an artist draws six shapes and gets ten more turned.
+        // That must keep working exactly as before, or this fix would have cost the feature it is
+        // built on.
+        const six = new Map(autotileClasses().map((mask, i) => [mask, 200 + i]));
+        const table = rotatedTable(six);
+        expect(table.filter(e => e !== null)).toHaveLength(AUTOTILE_MASKS);
+        // Six drawn, ten turned — and every turned entry's flip really does map its own class's mask
+        // onto the mask it is filed under, which is the property the whole scheme rests on.
+        expect(table.filter(e => e && e.flip === undefined)).toHaveLength(6);
+        expect(table.filter(e => e && e.flip !== undefined)).toHaveLength(10);
+        for (let mask = 0; mask < AUTOTILE_MASKS; mask++) {
+            const cell = table[mask]!;
+            const drawnFor = autotileClasses()[cell.index - 200];
+            expect(flipMask(cell.flip ?? 0, drawnFor)).toBe(mask);
+        }
+    });
+
+    test("an EXACT entry wins over one that would have been turned into place", () => {
+        // The mixed case, which is what importing a real tileset produces: a corner wangset gives a
+        // material a tile for around thirteen of the fifteen non-empty masks, DRAWN rather than
+        // turned, with the rest still needing a flip.
+        //
+        // Mask 1 and mask 2 are in one orbit. Give art for both, and the old pass would have let
+        // mask 1's tile claim mask 2 and discarded mask 2's own.
+        const art = new Map([[1, 50], [2, 51], [15, 52]]);
+        const table = rotatedTable(art);
+        expect(table[1]).toEqual({ index: 50 });
+        expect(table[2]).toEqual({ index: 51 });      // its OWN tile, not a turned 50
+        expect(table[15]).toEqual({ index: 52 });
+        // …and mask 4, which has no art, is still reached by turning one that does.
+        expect(table[4]).toMatchObject({ index: 50 });
+        expect(table[4]!.flip).toBeGreaterThan(0);
+    });
+});
+
 describe("CaveTerrain — cellular automata over the question, not the picture", () => {
     // NON-SQUARE ON PURPOSE, everywhere below. A 40x25 grid cannot hide a row/col transposition,
     // and this project has been caught by a square fixture twice.

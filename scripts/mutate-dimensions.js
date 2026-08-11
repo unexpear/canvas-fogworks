@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1726;
+const EXPECTED_TESTS = 1730;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1023,6 +1023,16 @@ const MUTANTS = [
       from: "    let h = (Math.imul(index, 0x9E3779B9) ^ seed) | 0;",
       to: "    let h = (index + seed) | 0;",
       note: "(seed, index) collapses to their SUM, so dab 5 of one stroke and dab 0 of a stroke seeded five higher are the same draw" },
+    // THE EXPANDER. It threw away art the document was already allowed to hold: given a tile for all
+    // sixteen masks it kept six, and WHICH six depended on the order of the stored array.
+    { id: "RT1", file: "src/core/document/Autotile.ts",
+      from: "    for (const [mask, index] of art) {\n        if (Number.isInteger(mask) && mask >= 0 && mask < AUTOTILE_MASKS) table[mask] = { index };\n    }",
+      to: "",
+      note: "the exact-entry pass is gone, so a tile drawn FOR a mask loses to a turned one from the same orbit — sixteen entries collapse to six again" },
+    { id: "RT2", file: "src/core/document/Autotile.ts",
+      from: "    const entries = [...art].sort((a, b) => a[0] - b[0]);",
+      to: "    const entries = [...art];",
+      note: "gap-filling follows the STORED order again, so the same art in a different array order draws a different map" },
 ];
 
 function runSuite() {

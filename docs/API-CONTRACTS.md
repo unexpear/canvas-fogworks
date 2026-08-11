@@ -2327,6 +2327,11 @@ type AutotileTable = readonly (AutotileCell | null)[];            // 16 entries,
 function autotileTableError(table: unknown): string | null;
 function flipMask(flip: number, mask: number): number;            // ties the two conventions together
 function autotileClasses(): number[];                             // the six orbits, DERIVED not listed
+// TWO PASSES: an EXACT entry is authoritative, and only then are gaps filled by TURNING a drawn
+// tile — by ASCENDING mask, so the table is a function of the art and not of its array order.
+// The single pass this replaced let the first entry of an orbit claim the whole orbit: art for
+// all sixteen masks kept SIX, and which six depended on how the document happened to store it.
+// Sixteen entries have been schema-legal since terrain landed; only the expander refused them.
 function rotatedTable(art: ReadonlyMap<number, number>): AutotileTable;   // 6 tiles -> all 16
 function dualMask(terrain, material, col, row): number;
 function autotile(terrain, material, table): { cols; rows; tiles: number[]; flips?: number[] };

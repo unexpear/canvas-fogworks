@@ -138,14 +138,38 @@ export function autotileClasses(): number[] {
  */
 export function rotatedTable(art: ReadonlyMap<number, number>): AutotileTable {
     const table: (AutotileCell | null)[] = new Array(AUTOTILE_MASKS).fill(null);
-    for (const [classMask, index] of art) {
-        for (let mask = 0; mask < AUTOTILE_MASKS; mask++) {
-            if (table[mask] !== null) continue;
+    // PASS ONE — A TILE DRAWN FOR THIS EXACT MASK IS AUTHORITATIVE, and it has to be claimed before
+    // any orbit is expanded. The single pass this replaces let the FIRST entry of a symmetry orbit
+    // fill the whole orbit, so every later entry for a mask already covered was discarded: given art
+    // for all sixteen masks with sixteen distinct tiles, six survived and ten vanished with no
+    // diagnostic. Worse, WHICH six depended on the order of the document's array, so two files
+    // holding the same art drew differently.
+    //
+    // Sixteen entries have been schema-legal since terrain landed — `terrainError` accepts any mask
+    // 0..15 and `withTerrainArt` writes any of them — so this was art the document could hold and
+    // the derivation threw away. It is also exactly what importing a real tileset produces: a corner
+    // wangset gives a material a tile for around thirteen of the fifteen non-empty masks, drawn
+    // rather than turned.
+    for (const [mask, index] of art) {
+        if (Number.isInteger(mask) && mask >= 0 && mask < AUTOTILE_MASKS) table[mask] = { index };
+    }
+    // PASS TWO — and only now are the gaps filled by TURNING a tile that was drawn.
+    //
+    // BY ASCENDING MASK rather than in the array's order, so the result is a function of the art and
+    // not of how it happens to be stored. The flip search stays ascending too: flip 0 first, which
+    // is the same preference the format calls "prefer untransformed".
+    const entries = [...art].sort((a, b) => a[0] - b[0]);
+    for (let mask = 0; mask < AUTOTILE_MASKS; mask++) {
+        if (table[mask] !== null) continue;
+        let placed = false;
+        for (const [classMask, index] of entries) {
             for (let flip = 0; flip <= FLIP_MAX; flip++) {
                 if (flipMask(flip, classMask) !== mask) continue;
                 table[mask] = flip === 0 ? { index } : { index, flip };
+                placed = true;
                 break;
             }
+            if (placed) break;
         }
     }
     return table;
