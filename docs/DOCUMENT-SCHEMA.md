@@ -1,6 +1,10 @@
 # Document Schema
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-08-11 after the rotatedTable fix: accurate, and NO field moved. Art for all
+     sixteen masks was already legal here — terrainError accepts any mask 0..15 — and only the
+     derivation refused to use it. What the schema says a document may hold is now what the
+     picture is derived from. -->
 <!-- re-read 2026-08-10 after the cave generator: accurate, and NO field moved. The generator
      writes `Tilemap.terrain.cells` through the same edit path a brush stroke uses, which is the
      clearest evidence schema 63's split (store the question, derive the picture) was the right
