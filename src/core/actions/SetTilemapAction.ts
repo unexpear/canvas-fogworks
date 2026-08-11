@@ -122,6 +122,10 @@ function sameTerrain(a: ReadonlyTilemap["terrain"], b: ReadonlyTilemap["terrain"
     for (let i = 0; i < a.materials.length; i++) {
         const am = a.materials[i], bm = b.materials[i];
         if (am.id !== bm.id) return false;
+        // A RENAME OR A NEW SWATCH IS AN EDIT. Nothing derives from either — they are labels — which
+        // is exactly why they would be forgotten here: the picture is identical, so a comparison
+        // that only asked about the picture would refuse the edit and the panel would not update.
+        if (am.name !== bm.name || am.color !== bm.color) return false;
         if (am.art.length !== bm.art.length) return false;
         for (let k = 0; k < am.art.length; k++) {
             if (am.art[k].mask !== bm.art[k].mask || am.art[k].index !== bm.art[k].index) return false;

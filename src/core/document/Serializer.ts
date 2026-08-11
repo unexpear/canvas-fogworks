@@ -364,6 +364,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "62") { raw = migrate_62_to_63(raw); version = "63"; }
     if (version === "63") { raw = migrate_63_to_64(raw); version = "64"; }
     if (version === "64") { raw = migrate_64_to_65(raw); version = "65"; }
+    if (version === "65") { raw = migrate_65_to_66(raw); version = "66"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -979,6 +980,19 @@ function migrate_63_to_64(raw: any): any {
  * `material` to be a whole number and would refuse the file outright rather than mis-draw it. That
  * is the better failure of the two, and it is why the version is the thing that says so.
  */
+/**
+ * 65 -> 66: a terrain material may carry a NAME and a swatch COLOUR.
+ *
+ * NOTHING TO REWRITE — both are optional and a 65 document simply has neither, so a migrated file is
+ * byte-identical apart from the version. The version moves for the reason 63 -> 64 moved: a 65 build
+ * that opens a 66 document and saves it writes back a file with every name and swatch GONE, silently,
+ * because the picture is unchanged and nothing warns. Names are the only thing telling four materials
+ * apart in a list, so losing them is not cosmetic even though nothing derives from them.
+ */
+function migrate_65_to_66(raw: any): any {
+    return { ...raw, version: "66" };
+}
+
 function migrate_64_to_65(raw: any): any {
     const nodes = raw?.document?.nodes;
     if (!nodes || typeof nodes !== "object") return { ...raw, version: "65" };

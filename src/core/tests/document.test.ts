@@ -30,7 +30,7 @@ import { clipsContentError, BLEND_MODES, blendModeError } from "../document/Node
 import { pickColorAt, rampT } from "../geometry/Eyedropper";
 import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, tileSourceRect as sheetTileRect, tileIndexAt,
          visibleCells, cellAt, TILE_EMPTY,
-         flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D , TERRAIN_MATERIALS_MAX} from "../document/Tilemap";
+         flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D , TERRAIN_MATERIALS_MAX, TERRAIN_NAME_MAX} from "../document/Tilemap";
 import { withTiles, withTerrain, withTerrainArt, asTerrain, rectCells, fillRegion, resizeTilemap , withTerrainMaterials} from "../document/TilemapEdit";
 import { resolveTilemaps } from "../document/Components";
 import { emptyTilemap } from "../document/Tilemap";
@@ -4570,9 +4570,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 64→65 landed, turning a terrain
-        // layer's single material into a LIST of them in paint order.)
-        expect(() => migrateIfNeeded(legacy, "66")).toThrow('Migration not implemented for document schema "65"');
+        // time a real migration is added — most recently when 65→66 landed, giving a terrain
+        // material a NAME and a swatch colour.)
+        expect(() => migrateIfNeeded(legacy, "67")).toThrow('Migration not implemented for document schema "66"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -28844,6 +28844,75 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         expect(new SetTilemapAction(dispatcher.getDocument(), "T", appended as never).validate()).toBe(true);
     });
 
+    test("a material's NAME and SWATCH survive every edit that is not about them", () => {
+        // THE BUG THIS EXISTS TO PREVENT HAS BEEN PAID FOR THREE TIMES ALREADY: a control that
+        // rebuilds a record field by field silently drops the field added last. `Mesh.points` lost
+        // its bones that way, `UpdateNodeContentAction` lost its nine-slice, and `rebuild` lost the
+        // terrain. Four separate paths rebuild a material list, so all four are walked here.
+        const named = withTerrainMaterials(terrainMap() as never as Tilemap, [
+            { id: 1, name: "Cobblestone", color: "#0000ff", art: ART },
+            { id: 2, name: "Dirt", color: "#ff7700", art: ART }
+        ])!;
+        const labels = (m: Tilemap) =>
+            m.terrain!.materials.map(x => `${x.id}:${x.name ?? "-"}:${x.color ?? "-"}`);
+        expect(labels(named)).toEqual(["1:Cobblestone:#0000ff", "2:Dirt:#ff7700"]);
+
+        // 1. AN UNRELATED EDIT — painting a cell, which goes through `rebuild`, the path that runs
+        //    on every edit and is therefore the one most likely to quietly drop something.
+        expect(labels(withTerrain(named, [{ col: 2, row: 1, material: 2 }])!)).toEqual(labels(named));
+        // 2. AN ART ASSIGNMENT on one material must not strip the OTHER one's label either.
+        expect(labels(withTerrainArt(named, 15, 42, 1)!)).toEqual(labels(named));
+        // 3. A REORDER carries them along rather than to their old positions.
+        const swapped = withTerrainMaterials(named,
+            [...named.terrain!.materials].reverse().map(m => ({ ...m, art: [...m.art] })))!;
+        expect(labels(swapped)).toEqual(["2:Dirt:#ff7700", "1:Cobblestone:#0000ff"]);
+        // 4. AND A ROUND TRIP THROUGH THE FILE, since an optional field is exactly what a serializer
+        //    drops without anyone noticing.
+        const doc = docWith(named);
+        const reloaded = deserializeDocument(serializeDocument(doc));
+        expect(labels(reloaded.nodes.get("T")!.tilemap! as Tilemap)).toEqual(labels(named));
+
+        // AN ABSENT NAME STAYS ABSENT rather than becoming `undefined`, which does not round-trip
+        // through JSON as the same thing.
+        const bare = withTerrainMaterials(named, [{ id: 1, art: ART }])!;
+        expect("name" in bare.terrain!.materials[0]).toBe(false);
+        expect("color" in bare.terrain!.materials[0]).toBe(false);
+    });
+
+    test("a name and a swatch are validated, and a RENAME is an edit", () => {
+        const ok = (materials: unknown) =>
+            tilemapError(terrainMap({ terrain: { cells: [...CELLS], materials } }));
+        expect(ok([{ id: 1, name: "Cobblestone", color: "#0000ff", art: ART }])).toBeNull();
+        // MEASURED: every wangcolor in the installed Tiled's examples is `#rrggbb`. The three-digit
+        // form is allowed too because it is what this engine already means by a hex colour.
+        expect(ok([{ id: 1, color: "#f70", art: ART }])).toBeNull();
+        expect(ok([{ id: 1, color: "red", art: ART }])).toContain("#rgb or #rrggbb");
+        expect(ok([{ id: 1, color: "#ff00", art: ART }])).toContain("#rgb or #rrggbb");
+        expect(ok([{ id: 1, color: "#gggggg", art: ART }])).toContain("#rgb or #rrggbb");
+        expect(ok([{ id: 1, name: "", art: ART }])).toContain("non-empty");
+        expect(ok([{ id: 1, name: "x".repeat(TERRAIN_NAME_MAX + 1), art: ART }]))
+            .toContain(`at most ${TERRAIN_NAME_MAX}`);
+        // TWO MATERIALS MAY SHARE A NAME. The id is the identity; a name is a label, and refusing a
+        // duplicate would be a rule with nothing behind it.
+        expect(ok([{ id: 1, name: "Rock", art: ART }, { id: 2, name: "Rock", art: ART }])).toBeNull();
+
+        // A RENAME IS AN EDIT even though the picture is identical — which is exactly why an action
+        // layer that compared only what the picture depends on would refuse it.
+        const doc = docWith(terrainMap());
+        const dispatcher = new ActionDispatcher(doc);
+        const base = withTerrainMaterials(dispatcher.getDocument().nodes.get("T")!.tilemap!,
+            [{ id: 1, name: "Rock", art: ART }])!;
+        expect(dispatcher.dispatchAction(new SetTilemapAction(dispatcher.getDocument(), "T", base)).success)
+            .toBe(true);
+        const renamed = withTerrainMaterials(dispatcher.getDocument().nodes.get("T")!.tilemap!,
+            [{ id: 1, name: "Stone", art: ART }])!;
+        expect(new SetTilemapAction(dispatcher.getDocument(), "T", renamed).validate()).toBe(true);
+        // …and so is only changing the swatch.
+        const recoloured = withTerrainMaterials(dispatcher.getDocument().nodes.get("T")!.tilemap!,
+            [{ id: 1, name: "Rock", color: "#123456", art: ART }])!;
+        expect(new SetTilemapAction(dispatcher.getDocument(), "T", recoloured).validate()).toBe(true);
+    });
+
     test("REORDERING materials is an edit, not a no-op", () => {
         // It is the one edit that redraws every shore without touching a single painted cell — so
         // an action layer comparing only ids-as-a-set, or comparing lengths, refuses it and the
@@ -29085,6 +29154,13 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // is what decides the shore, so moving one has to be a gesture rather than a rebuild.
         expect(app).toMatch(/data-terrain-materials="1"/);
         expect(app).toMatch(/aria-label="Add material"/);
+        // A NAME AND A SWATCH (schema 66) — four materials in a list all read as numbers
+        // otherwise, and every real wangcolor carries both.
+        expect(app).toMatch(/aria-label=\{`Colour for material \${m\.id}`\}/);
+        expect(app).toMatch(/placeholder=\{`material \${m\.id}`\}/);
+        // CLEARED BACK TO ABSENT rather than stored empty, so a file only mentions a name
+        // somebody actually typed.
+        expect(app).toMatch(/if \(trimmed === ""\) \{ delete copy\.name; return copy; \}/);
         expect(app).toMatch(/aria-label=\{`Move material \${m\.id} later`\}/);
         expect(app).toMatch(/aria-label=\{`Remove material \${m\.id}`\}/);
         expect(app).toMatch(/terrain: tileTerrain, material: tileMaterial/);

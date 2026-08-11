@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1718;
+const EXPECTED_TESTS = 1720;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -666,8 +666,8 @@ const MUTANTS = [
       to: "    const next = rebuild(map, map.tiles.slice(), null);",
       note: "becoming a terrain layer keeps its tiles, which `tilemapError` then refuses" },
     { id: "TB8", file: "src/core/document/TilemapEdit.ts",
-      from: "                id: m.id, art: m.art.map(a => ({ mask: a.mask, index: a.index }))",
-      to: "                id: 0, art: m.art.map(a => ({ mask: a.mask, index: a.index }))",
+      from: "        id: m.id,\n        ...(m.name !== undefined",
+      to: "        id: 0,\n        ...(m.name !== undefined",
       note: "terrain survives an unrelated edit with its material reset to the ERASER" },
 
     { id: "TR5", file: "src/core/document/Components.ts",
@@ -971,6 +971,25 @@ const MUTANTS = [
       from: "        if (!terrain || terrain.materials !== undefined) { out[id] = node; continue; }",
       to: "        if (!terrain) { out[id] = node; continue; }",
       note: "an ALREADY-migrated terrain is migrated again, wrapping its material list in a material whose id is undefined" },
+
+    // A MATERIAL'S NAME AND SWATCH (schema 66). Nothing derives from either, which is exactly why
+    // they are easy to drop: the picture is identical whether they survive an edit or not.
+    { id: "MN1", file: "src/core/document/TilemapEdit.ts",
+      from: "        ...(m.name !== undefined ? { name: m.name } : {}),",
+      to: "",
+      note: "a material's NAME is dropped by the one function that copies one, so every edit that is not about it quietly erases it" },
+    { id: "MN2", file: "src/core/document/TilemapEdit.ts",
+      from: "        ...(m.color !== undefined ? { color: m.color } : {}),",
+      to: "        color: m.color,",
+      note: "an ABSENT swatch is written as undefined, which does not round-trip through JSON as a material that never had one" },
+    { id: "MN3", file: "src/core/actions/SetTilemapAction.ts",
+      from: "        if (am.name !== bm.name || am.color !== bm.color) return false;",
+      to: "",
+      note: "renaming a material, or picking a new swatch, reads as a no-op — the panel moves and the document does not" },
+    { id: "MN4", file: "src/core/document/Tilemap.ts",
+      from: "        if (m.color !== undefined && (typeof m.color !== \"string\" || !TERRAIN_COLOR.test(m.color))) {",
+      to: "        if (m.color !== undefined && typeof m.color !== \"string\") {",
+      note: "any string is accepted as a colour, so a swatch the panel cannot show is stored and the control silently falls back" },
 ];
 
 function runSuite() {

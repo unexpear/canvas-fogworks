@@ -2270,7 +2270,10 @@ function caveCells(cols, rows, material, rng: Rng, options?): { cells: number[];
 function cellCoordAt(map, x, y): { col; row } | null;
 
 // MULTI-MATERIAL TERRAIN (schema 65). A layer holds a LIST of materials IN PAINT ORDER, not one.
-interface TerrainMaterial { id: number; art: { mask: number; index: number }[] }   // id >= 1; 0 is "nothing"
+interface TerrainMaterial { id: number; name?: string; color?: string; art: {mask;index}[] }  // id >= 1
+// `name` and `color` are LABELS (schema 66) — nothing derives from them, which is why they are easy
+// to drop. `copyTerrainMaterial` is the one place a material is copied; four paths rebuild the list.
+// `color` is #rgb or #rrggbb (every wangcolor measured is #rrggbb). TERRAIN_NAME_MAX = 60.
 // The order IS the rule: a display cell sits on four terrain corners and they can belong to two
 // different materials — a shore is exactly that cell — and one cell shows ONE tile, so something has
 // to win. Later draws over earlier: no extra field, already understood from layers, and reorderable

@@ -2962,13 +2962,50 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                         <label style={INSPECTOR_LABEL}>Materials, in paint order</label>
                                                         {mats.map((m, i) => (
                                                             <div key={m.id} style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 2 }}>
+                                                                {/* A SWATCH, because four materials
+                                                                    in a list all read as numbers
+                                                                    otherwise. Nothing renders it —
+                                                                    the picture comes from the art —
+                                                                    it is how a person tells them
+                                                                    apart. Every real wangcolor has
+                                                                    one. */}
+                                                                <input
+                                                                    type="color"
+                                                                    aria-label={`Colour for material ${m.id}`}
+                                                                    value={m.color ?? "#888888"}
+                                                                    onChange={e => setMap(withTerrainMaterials(map,
+                                                                        mats.map(x => (x.id === m.id
+                                                                            ? { ...x, art: [...x.art], color: e.target.value }
+                                                                            : { ...x, art: [...x.art] }))))}
+                                                                    style={{ width: 20, height: 18, padding: 0, border: `1px solid ${UI.line}`,
+                                                                        background: "transparent", borderRadius: 3 }}
+                                                                />
                                                                 <button
                                                                     aria-label={`Edit material ${m.id}`}
                                                                     title={`Paint and assign art for material ${m.id}`}
                                                                     onClick={() => setTileMaterial(m.id)}
-                                                                    style={{ ...ADJUST_BUTTON, flex: 1, textAlign: "left",
+                                                                    style={{ ...ADJUST_BUTTON, width: 22, textAlign: "center",
                                                                         outline: m.id === activeMat?.id ? "1px solid #4a90d9" : "none" }}
-                                                                >{i + 1}. material {m.id} — {m.art.length}/6 drawn</button>
+                                                                >{i + 1}</button>
+                                                                {/* THE NAME, which is the whole
+                                                                    point: "Cobblestone", not
+                                                                    "material 3". Cleared back to
+                                                                    absent rather than stored empty,
+                                                                    so a file only mentions a name
+                                                                    somebody typed. */}
+                                                                <TextInput
+                                                                    value={m.name ?? ""}
+                                                                    placeholder={`material ${m.id}`}
+                                                                    onChange={v => setMap(withTerrainMaterials(map,
+                                                                        mats.map(x => {
+                                                                            const copy = { ...x, art: [...x.art] };
+                                                                            if (x.id !== m.id) return copy;
+                                                                            const trimmed = v.trim();
+                                                                            if (trimmed === "") { delete copy.name; return copy; }
+                                                                            return { ...copy, name: trimmed };
+                                                                        })))}
+                                                                />
+                                                                <span style={{ color: UI.textFaint, fontSize: 9 }}>{m.art.length}/6</span>
                                                                 <button
                                                                     aria-label={`Move material ${m.id} later`}
                                                                     title="Draw this one over the others"

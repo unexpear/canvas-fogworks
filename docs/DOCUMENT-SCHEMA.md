@@ -9,7 +9,7 @@
 <!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
      below. The earlier note stands — the rectangle gesture added no field. -->
 
-> 🔒 Frozen contract · schema v65 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v66 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -1212,6 +1212,8 @@ saved again is the map that was opened. `className` is NOT `node.type`: that one
 draws (`core.rectangle`) and is a closed set it switches on, while this is the author's word for what
 the thing IS — two different questions the format happens to spell the same, so the one the renderer
 does not read is the one that moved.
+
+**A MATERIAL HAS A NAME AND A SWATCH (schema 66), both optional.** Nothing derives from either — the id is the identity and the picture comes from `art` — they are what tells four materials apart in a list where all of them would otherwise read as a number. Every `wangcolor` in a real tileset carries both. `copyTerrainMaterial` is the ONE place a material is copied, because four separate paths rebuild the list and a record rebuilt field by field is how this codebase has lost a field three times before.
 
 **A TERRAIN LAYER DRAWS A LIST OF MATERIALS, IN PAINT ORDER (schema 65).** `TerrainField.materials`
 replaced the single `material` + `art` pair. The order is the RULE, not presentation: a display cell

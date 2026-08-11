@@ -19,8 +19,32 @@
  */
 
 import {
-    ReadonlyTilemap, Tilemap, TileSheet, TILE_EMPTY, TILEMAP_MAX_CELLS, FLIP_MAX, tileAt, flipAt, TERRAIN_MATERIALS_MAX
+    ReadonlyTilemap, Tilemap, TileSheet, TILE_EMPTY, TILEMAP_MAX_CELLS, FLIP_MAX, tileAt, flipAt, TERRAIN_MATERIALS_MAX, TerrainMaterial
 } from "./Tilemap";
+
+/**
+ * An independent copy of one material.
+ *
+ * THE ONE PLACE A MATERIAL IS COPIED, and it exists because of a bug this codebase has already paid
+ * for three times: a control that rebuilds a record field by field silently drops the field added
+ * last. `Mesh.points` lost its bones that way, `UpdateNodeContentAction` lost its nine-slice, and
+ * `rebuild` lost the terrain. Four separate paths here rebuild a material list — an art assignment,
+ * a reorder, an unrelated edit, and the panel — so the copy is written once and they all call it.
+ *
+ * `name` and `color` are OMITTED WHEN ABSENT rather than written as undefined: a document that says
+ * `"name": undefined` does not round-trip through JSON as one that never had a name.
+ */
+export function copyTerrainMaterial(m: {
+    id: number; name?: string; color?: string;
+    art: readonly { mask: number; index: number }[];
+}): TerrainMaterial {
+    return {
+        id: m.id,
+        ...(m.name !== undefined ? { name: m.name } : {}),
+        ...(m.color !== undefined ? { color: m.color } : {}),
+        art: m.art.map(a => ({ mask: a.mask, index: a.index }))
+    };
+}
 
 /** What one cell becomes. */
 export interface TileEdit {
@@ -138,7 +162,8 @@ export function withTerrainArt(
     if (slot >= 0) art[slot] = { mask, index };
     else art.push({ mask, index });
     const next = rebuild(map, map.tiles.slice(), map.flips ? map.flips.slice() : null);
-    const materials = next.terrain!.materials.map((m, i) => (i === at ? { id: m.id, art } : m));
+    const materials = next.terrain!.materials.map((m, i) =>
+        (i === at ? { ...copyTerrainMaterial(m), art } : copyTerrainMaterial(m)));
     return { ...next, terrain: { ...next.terrain!, materials } };
 }
 
@@ -182,7 +207,11 @@ export function asTerrain(map: ReadonlyTilemap, material: number, art: readonly 
  * again, which is recoverable; erasing the cells is not.
  */
 export function withTerrainMaterials(
-    map: ReadonlyTilemap, materials: readonly { id: number; art: readonly { mask: number; index: number }[] }[]
+    map: ReadonlyTilemap,
+    materials: readonly {
+        id: number; name?: string; color?: string;
+        art: readonly { mask: number; index: number }[];
+    }[]
 ): Tilemap | null {
     const terrain = map.terrain;
     if (!terrain) return null;
@@ -202,7 +231,7 @@ export function withTerrainMaterials(
         ...next,
         terrain: {
             ...next.terrain!,
-            materials: materials.map(m => ({ id: m.id, art: m.art.map(a => ({ mask: a.mask, index: a.index })) }))
+            materials: materials.map(copyTerrainMaterial)
         }
     };
 }
@@ -335,9 +364,7 @@ function rebuild(
         // is: a caller holding the old map must keep seeing the old terrain.
         ...(map.terrain ? { terrain: {
             cells: map.terrain.cells.slice(),
-            materials: map.terrain.materials.map(m => ({
-                id: m.id, art: m.art.map(a => ({ mask: a.mask, index: a.index }))
-            }))
+            materials: map.terrain.materials.map(copyTerrainMaterial)
         } } : {})
     };
 }

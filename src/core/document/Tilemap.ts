@@ -132,10 +132,39 @@ export interface Tilemap {
     terrain?: TerrainField;
 }
 
+/** The most characters a material's name may hold — a hand-editable label, bounded like every other. */
+export const TERRAIN_NAME_MAX = 60;
+
+/**
+ * `#rgb` or `#rrggbb`, the same pair `Prototype.parseHex` accepts.
+ *
+ * MEASURED: all ten `wangcolor` swatches in the installed Tiled's examples are `#rrggbb` exactly —
+ * no shorthand, no alpha — and an `<input type="color">` emits the same. The three-digit form is
+ * allowed anyway because it is what this engine already means by a hex colour, and being stricter
+ * than the rest of the codebase for one label field would be a rule nobody could predict.
+ */
+const TERRAIN_COLOR = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+
 /** One material a terrain layer draws, and the art it draws it with. */
 export interface TerrainMaterial {
     /** The id that appears in `TerrainField.cells`. Never 0 — that is "nothing". */
     id: number;
+    /**
+     * What the author calls it — "Cobblestone", not "material 3" (schema 66).
+     *
+     * A LABEL, AND NOTHING DERIVES FROM IT. The id is the identity: two materials may share a name
+     * without anything breaking, and renaming one changes no cell. Absent is ordinary — a layer
+     * converted in one click has a material and no name yet.
+     */
+    name?: string;
+    /**
+     * A swatch for the panel, `#rgb` or `#rrggbb` (schema 66).
+     *
+     * NOT PAINT. Nothing renders this: the picture comes from `art`, and this is how a person tells
+     * two materials apart in a list where both would otherwise read as a number. Every real
+     * `wangcolor` carries one, which is what made its absence worth fixing.
+     */
+    color?: string;
     /**
      * The art: one tile per SYMMETRY CLASS, as `autotileClasses` names them.
      *
@@ -179,6 +208,8 @@ export interface ReadonlyTilemap {
         readonly cells: readonly number[];
         readonly materials: readonly {
             readonly id: number;
+            readonly name?: string;
+            readonly color?: string;
             readonly art: readonly { readonly mask: number; readonly index: number }[];
         }[];
     };
@@ -281,6 +312,20 @@ export function terrainError(terrain: unknown, cells: number): string | null {
         // same material.
         if (seen.has(m.id as number)) return `terrain material ${m.id} appears more than once`;
         seen.add(m.id as number);
+        // A NAME AND A SWATCH ARE OPTIONAL AND BOUNDED. The rule is written out here rather than
+        // borrowed from `variantNameError` because `Node` imports THIS module — reaching back for it
+        // would be a cycle, and one small duplicated bound is cheaper than inverting that.
+        if (m.name !== undefined) {
+            if (typeof m.name !== "string" || m.name.length === 0) {
+                return "a terrain material's name must be a non-empty string";
+            }
+            if ((m.name as string).length > TERRAIN_NAME_MAX) {
+                return `a terrain material's name must be at most ${TERRAIN_NAME_MAX} characters`;
+            }
+        }
+        if (m.color !== undefined && (typeof m.color !== "string" || !TERRAIN_COLOR.test(m.color))) {
+            return "a terrain material's color must be #rgb or #rrggbb";
+        }
         if (!Array.isArray(m.art)) return "a terrain material's art must be an array";
         for (const entry2 of m.art as unknown[]) {
             if (entry2 === null || typeof entry2 !== "object") return "a terrain art entry must be an object";
