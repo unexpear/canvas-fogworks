@@ -918,9 +918,13 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const placeAsset = useCallback((dataUrl: string, name: string) => {
         const el = canvasRef.current;
         const w = 200, h = 150;
-        const zoom = Math.max(0.01, es.viewport.zoom);
-        const cx = (es.viewport.x + (el ? el.clientWidth : 800) / 2) / zoom - w / 2;
-        const cy = (es.viewport.y + (el ? el.clientHeight : 600) / 2) / zoom - h / 2;
+        // THROUGH THE SANCTIONED CONVERSION, not a second copy of it. This restated
+        // `(vp.x + screen) / zoom` by hand — the inverse transform, written out in a file that
+        // already imports the function for it, with its own zoom floor to keep in step.
+        const centre = screenToWorld(es.viewport, { left: 0, top: 0 },
+            (el ? el.clientWidth : 800) / 2, (el ? el.clientHeight : 600) / 2);
+        const cx = centre.x - w / 2;
+        const cy = centre.y - h / 2;
         const doc = dispatcher.getDocument();
         const action = new AddNodeAction(doc, "core.image", cx, cy, w, h, "none", undefined, null, { src: dataUrl });
         if (dispatcher.dispatchAction(action).success) {
@@ -1255,7 +1259,13 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             if (es.playing && es.viewportTransition) {
                 const vt = es.viewportTransition;
                 const k = easingAt(vt.easing, (Date.now() - vt.startedAt) / vt.duration);
-                Object.assign(es.viewport, lerpViewport(vt.from, vt.to, k));
+                // THE SIZE SAYS WHICH POINT STAYS STILL — the world point under the screen
+                // CENTRE. Without it the offsets moved linearly under a geometric zoom and
+                // the focused frame swung out and back, by more the further from the world
+                // origin it sat. A null ref means a canvas that has not measured yet, which
+                // degrades to holding the screen origin rather than to the old defect.
+                Object.assign(es.viewport, lerpViewport(vt.from, vt.to, k,
+                    { width: canvasRef.current?.clientWidth ?? 0, height: canvasRef.current?.clientHeight ?? 0 }));
                 if (Date.now() - vt.startedAt >= vt.duration) es.viewportTransition = null;
             }
             const pendingKeys = new Set(es.pendingGeometry ? [...es.pendingGeometry.keys()] : []);

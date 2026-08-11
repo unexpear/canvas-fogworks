@@ -169,7 +169,7 @@ import { TEXT_ALIGNS, FONT_FAMILY_MAX } from "../document/Node";
 import { blendColor, blendStates, easingAt, interactionFor, interactionsError, Interaction, Trigger, TRANSITION_MAX_MS, INTERACTIONS_MAX } from "../document/Prototype";
 import { applyActiveState } from "../document/Components";
 import { SetInteractionsAction } from "../actions/SetInteractionsAction";
-import { viewportToFit, lerpViewport, FIT_PADDING_PX, overlayTransform } from "../../editor/EditorState";
+import { viewportToFit, lerpViewport, FIT_PADDING_PX, overlayTransform, worldToScreen } from "../../editor/EditorState";
 import { compileScript, snapshotFor, actionRequestError, SCRIPT_MAX_REQUESTS } from "../script/ScriptApi";
 import { WORKER_BOOTSTRAP } from "../../editor/ScriptRunner";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
@@ -12178,17 +12178,87 @@ describe("Prototype navigation", () => {
         expect(viewportToFit({ x: 0, y: 0, width: 1, height: 1 }, { width: 800, height: 600 }, 0, 1).zoom).toBeLessThanOrEqual(20);
     });
 
-    test("a viewport blend moves the offsets linearly and the zoom GEOMETRICALLY", () => {
-        const a = { x: 0, y: 0, zoom: 1 }, b = { x: 100, y: 200, zoom: 4 };
-        expect(lerpViewport(a, b, 0)).toEqual(a);
-        expect(lerpViewport(a, b, 1)).toEqual(b);
-        const mid = lerpViewport(a, b, 0.5);
-        expect(mid.x).toBe(50);
-        expect(mid.y).toBe(100);
-        // Geometric: the halfway point of 1→4 is 2, not 2.5. Linear zoom spends most of a big
+    test("a viewport blend HOLDS THE FOCUSED POINT, and zooms geometrically", () => {
+        // THE TEST THIS REPLACES WAS BLIND TWICE OVER, and both ways are worth naming. Its viewport
+        // was `{x: 0, y: 0}` — the world ORIGIN, the one place the defect it missed is exactly zero
+        // — and it asserted the MECHANISM ("mid.x is 50") rather than the effect ("the point you
+        // are looking at stays where you are looking"), so moving it off the origin would not have
+        // helped. The defect: offsets moving linearly under a geometric zoom swing the focused
+        // point out and back, by more the further from the origin you are.
+        const SIZE = { width: 800, height: 600 };
+        /** The world point under the screen centre — what a navigation is actually about. */
+        const focus = (vp: { x: number; y: number; zoom: number }) => ({
+            x: (SIZE.width / 2 + vp.x) / vp.zoom,
+            y: (SIZE.height / 2 + vp.y) / vp.zoom
+        });
+        /** A viewport centred on a world point at a given zoom. */
+        const at = (cx: number, cy: number, zoom: number) =>
+            ({ x: zoom * cx - SIZE.width / 2, y: zoom * cy - SIZE.height / 2, zoom });
+
+        // FAR FROM THE ORIGIN, because that is where the defect lived: 430px of swing at 5,000 on
+        // these numbers, and 1,721px at 20,000.
+        const a = at(5000, 3000, 1), b = at(5000, 3000, 2);
+        for (let t = 0; t <= 1; t += 0.05) {
+            const f = focus(lerpViewport(a, b, t, SIZE));
+            expect(f.x).toBeCloseTo(5000, 6);
+            expect(f.y).toBeCloseTo(3000, 6);
+        }
+        // …AND WHEN IT ALSO TRAVELS, the focused point walks a straight line rather than bowing.
+        const c = at(0, 0, 1), d = at(4000, 0, 4);
+        for (let t = 0; t <= 1; t += 0.05) {
+            expect(focus(lerpViewport(c, d, t, SIZE)).x).toBeCloseTo(4000 * t, 6);
+        }
+
+        // THE ENDS ARE STILL EXACT, which is what the offsets moving linearly used to buy.
+        expect(lerpViewport(a, b, 0, SIZE)).toEqual(a);
+        expect(lerpViewport(a, b, 1, SIZE)).toEqual(b);
+        expect(lerpViewport(a, b, 1.5, SIZE)).toEqual(b);      // clamped, like the state blend
+        expect(lerpViewport(a, b, -1, SIZE)).toEqual(a);
+
+        // GEOMETRIC ZOOM: the halfway point of 1→4 is 2, not 2.5. Linear zoom spends most of a big
         // range barely moving and then lurches.
-        expect(mid.zoom).toBeCloseTo(2, 10);
-        expect(lerpViewport(a, b, 1.5)).toEqual(b);   // clamped, like the state blend
+        expect(lerpViewport(c, d, 0.5, SIZE).zoom).toBeCloseTo(2, 10);
+
+        // A NON-POSITIVE ZOOM has no geometric path — the ratio is undefined — so the destination
+        // is taken whole rather than producing NaN offsets that would blank the canvas.
+        expect(lerpViewport({ x: 1, y: 2, zoom: 0 }, b, 0.5, SIZE)).toEqual(b);
+        expect(lerpViewport(a, { x: 1, y: 2, zoom: -1 }, 0.5, SIZE)).toEqual({ x: 1, y: 2, zoom: -1 });
+
+        // A ZERO SIZE — a canvas that has not measured yet — holds the screen ORIGIN instead of its
+        // centre. Still bounded, which is the point: the old behaviour was unbounded in the
+        // distance from the world origin, and this is off by a fraction of one screen.
+        const unsized = lerpViewport(a, b, 0.5, { width: 0, height: 0 });
+        expect(Math.abs(focus(unsized).x - 5000) * unsized.zoom).toBeLessThan(SIZE.width / 2);
+    });
+
+    test("worldToScreen is screenToWorld's exact inverse, across a zoom sweep", () => {
+        // THE PAIR IS THE ORACLE, and it is what `lerpViewport` never had: a relationship only ever
+        // travelled in one direction cannot be checked against anything. A round trip can.
+        const rect = { left: 37, top: 11 };
+        for (const zoom of [0.01, 0.1, 0.5, 1, 1.7, 4, 16, 64]) {
+            for (const vp of [{ x: 0, y: 0, zoom }, { x: -250, y: 400, zoom }, { x: 9000, y: -7000, zoom }]) {
+                for (const [wx, wy] of [[0, 0], [1, -1], [1234.5, -987.25], [-50000, 50000]]) {
+                    const s = worldToScreen(vp, rect, wx, wy);
+                    const back = screenToWorld(vp, rect, s.x, s.y);
+                    expect(back.x).toBeCloseTo(wx, 6);
+                    expect(back.y).toBeCloseTo(wy, 6);
+                }
+            }
+        }
+        // AND THE OTHER WAY, since a pair of functions can agree on a round trip while both being
+        // wrong about which direction the canvas offset applies.
+        const vp = { x: 120, y: -60, zoom: 2 };
+        const world = screenToWorld(vp, rect, 500, 300);
+        const screen = worldToScreen(vp, rect, world.x, world.y);
+        expect(screen.x).toBeCloseTo(500, 6);
+        expect(screen.y).toBeCloseTo(300, 6);
+        // A concrete value, hand-computed: screen = zoom*world - vp + rect.left.
+        expect(worldToScreen({ x: 100, y: 50, zoom: 3 }, { left: 10, top: 20 }, 7, 9))
+            .toEqual({ x: 3 * 7 - 100 + 10, y: 3 * 9 - 50 + 20 });
+        // The zoom FLOOR matches its inverse's, or the round trip would fail below 0.01 for a
+        // reason that has nothing to do with either function.
+        expect(worldToScreen({ x: 0, y: 0, zoom: 0.000001 }, { left: 0, top: 0 }, 100, 0).x)
+            .toBeCloseTo(worldToScreen({ x: 0, y: 0, zoom: 0.01 }, { left: 0, top: 0 }, 100, 0).x, 10);
     });
 
     test("a click NAVIGATES: the viewport ends up fitting the target", () => {
@@ -12242,7 +12312,11 @@ describe("Prototype navigation", () => {
 
     test("stopping play clears a running navigation, and the app drives it on the LIVE viewport", () => {
         const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
-        expect(src).toMatch(/Object\.assign\(es\.viewport, lerpViewport\(vt\.from, vt\.to, k\)\)/);
+        expect(src).toMatch(/Object\.assign\(es\.viewport, lerpViewport\(vt\.from, vt\.to, k,/);
+        // …AND THE SIZE IS PASSED, which is what decides that the focused point stays still.
+        // Reading it from the live canvas rather than a stored number matters: a window
+        // resized mid-navigation would otherwise hold the wrong point for the rest of it.
+        expect(src).toMatch(/width: canvasRef\.current\?\.clientWidth \?\? 0/);
         // The rAF loop must stay alive while EITHER transition runs, or a navigation with no
         // state change would render one frame and stop halfway.
         expect(src).toMatch(/es\.playing && \(es\.transition \|\| es\.viewportTransition\)/);

@@ -2221,6 +2221,18 @@ function parseProperties(body: string): { props: TiledProperty[]; unread: string
 // only emit what the validator accepts, and reports every skip. Last wins on a duplicate name.
 function userDataFor(props: readonly TiledProperty[]): { data: UserData; unread: string[] };
 
+// THE VIEWPORT PAIR. `screen = z*world - vp`, and both directions are written down so the
+// relationship can be CHECKED — a round trip over a zoom sweep is the oracle neither had alone.
+function screenToWorld(vp, canvasRect, clientX, clientY): { x; y };
+function worldToScreen(vp, canvasRect, worldX, worldY): { x; y };   // same 0.01 zoom floor
+// A navigation holds the world point under the screen CENTRE on a straight line, which is why the
+// SIZE is required: you cannot interpolate two viewports without saying which point stays still.
+// Interpolating the offsets linearly under a geometric zoom (what this did until 2026-08-10) swings
+// that point out and back by the arithmetic-over-geometric mean — 430px at world x=5000 on an 800px
+// canvas, 1,721px at x=20,000, 12,098px for a 1->10 zoom, and exactly 0 at the origin, which is
+// where the fixture sat. A zero size degrades to holding the screen ORIGIN: bounded, not exact.
+function lerpViewport(a, b, t, size: { width; height }): viewport;
+
 // A `.unitypackage` (`core/import/UnityPackage`) — gzip + tar, one GUID folder per asset holding
 // `asset`, `asset.meta` and `pathname`. DECOMPRESSION IS INJECTED, as TiledMap and Aseprite inject
 // theirs. The tar header's CHECKSUM is verified, because a bad size field is read as an entry of

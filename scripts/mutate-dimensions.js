@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1712;
+const EXPECTED_TESTS = 1713;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -908,6 +908,30 @@ const MUTANTS = [
       from: "    assets.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));",
       to: "    assets.sort((a, b) => (a.path > b.path ? -1 : a.path < b.path ? 1 : 0));",
       note: "the listing comes out reversed, so a diff of what a package holds shows changes that are not there" },
+
+    // THE VIEWPORT PAIR. The defect these guard was live and shipped: offsets moving linearly under
+    // a geometric zoom swing the focused point out and back, by MORE the further from the world
+    // origin — and the test that covered it used a viewport at the origin, where it is exactly zero.
+    { id: "VP1", file: "src/editor/EditorState.ts",
+      from: "        x: zoom * (ax + (bx - ax) * k) - halfW,",
+      to: "        x: a.x + (b.x - a.x) * k,",
+      note: "the offsets go back to moving linearly under a geometric zoom, so the focused point bows away and returns — 430px at world x=5000, and 0px at the origin where the old fixture sat" },
+    { id: "VP2", file: "src/editor/EditorState.ts",
+      from: "    const bx = (halfW + b.x) / b.zoom, by = (halfH + b.y) / b.zoom;",
+      to: "    const bx = (halfW + b.x) / a.zoom, by = (halfH + b.y) / a.zoom;",
+      note: "the destination's focus is measured at the SOURCE's zoom, so a navigation ends somewhere else entirely" },
+    { id: "VP3", file: "src/editor/EditorState.ts",
+      from: "    if (!(a.zoom > 0) || !(b.zoom > 0)) return { x: b.x, y: b.y, zoom: b.zoom };",
+      to: "    if (!(a.zoom > 0) && !(b.zoom > 0)) return { x: b.x, y: b.y, zoom: b.zoom };",
+      note: "one non-positive zoom slips past the guard, and dividing by it puts NaN in the viewport — a blank canvas with nothing to say why" },
+    { id: "VP4", file: "src/editor/EditorState.ts",
+      from: "        x: zoom * worldX - vp.x + canvasRect.left,",
+      to: "        x: zoom * worldX + vp.x + canvasRect.left,",
+      note: "worldToScreen adds the viewport instead of subtracting it, so it is no longer screenToWorld's inverse and the round trip lands at twice the offset" },
+    { id: "VP5", file: "src/editor/EditorState.ts",
+      from: "export function worldToScreen(\n    vp: EditorState[\"viewport\"],\n    canvasRect: { left: number; top: number },\n    worldX: number,\n    worldY: number\n): { x: number; y: number } {\n    const zoom = Math.max(0.01, vp.zoom);",
+      to: "export function worldToScreen(\n    vp: EditorState[\"viewport\"],\n    canvasRect: { left: number; top: number },\n    worldX: number,\n    worldY: number\n): { x: number; y: number } {\n    const zoom = vp.zoom;",
+      note: "the zoom floor stops matching its inverse's, so the round trip fails below 0.01 for a reason that has nothing to do with either function" },
 ];
 
 function runSuite() {

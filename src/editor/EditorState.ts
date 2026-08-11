@@ -177,16 +177,51 @@ export function viewportToFit(
 /**
  * A viewport part-way between two others — the frame a NAVIGATION is currently on.
  *
- * Zoom interpolates GEOMETRICALLY (a constant ratio per unit time), which is what makes a zoom
- * feel even: linear interpolation from 0.1 to 10 spends most of its run barely moving and then
- * lurches. The offsets follow linearly, so the two ends are exact.
+ * ZOOM INTERPOLATES GEOMETRICALLY (a constant ratio per unit time), which is what makes a zoom feel
+ * even: linear interpolation from 0.1 to 10 spends most of its run barely moving and then lurches.
+ *
+ * THE OFFSETS DO NOT, AND THAT WAS A BUG. Interpolating `x` and `y` linearly alongside a geometric
+ * zoom looks obviously right and is obviously wrong the moment the two are written down together:
+ * this engine's transform is `screen = z·world − vp`, so the world point under a given pixel is
+ * `(pixel + vp)/z`. Move `vp` linearly while `z` moves geometrically and that quotient is a
+ * straight line over a curve — the arithmetic mean divided by the geometric mean, which exceeds 1
+ * everywhere between the ends. The focused point SWINGS OUT AND COMES BACK, both ends exact.
+ *
+ * IT IS PROPORTIONAL TO DISTANCE FROM THE WORLD ORIGIN, which is why it went unnoticed: measured on
+ * an 800px canvas over a 1→2 zoom, the peak excursion is 0 at the origin, 86px at x=1000, 430px at
+ * x=5000 and 1,721px at x=20,000 — and 12,098px for a 1→10 zoom at x=5000. The test that covered
+ * this function used a viewport at {x: 0, y: 0}, where the defect is exactly zero, and asserted the
+ * MECHANISM ("mid.x is 50") rather than the effect ("the focused point stays focused"), so it would
+ * have passed anywhere.
+ *
+ * WHAT IS INTERPOLATED NOW is the world point under the screen CENTRE, linearly, with `vp` derived
+ * from it — which holds that point on a straight line and is exact at 0 for every distance and every
+ * zoom ratio. That needs the viewport's SIZE, and requiring it is the honest signature: you cannot
+ * interpolate between two viewports without saying which point is meant to stay still. A zero size
+ * degrades to holding the screen ORIGIN, which is bounded (24.6px on those numbers) rather than
+ * unbounded, so a caller whose canvas has not measured yet is merely imprecise.
  */
-export function lerpViewport(a: EditorState["viewport"], b: EditorState["viewport"], t: number): EditorState["viewport"] {
+export function lerpViewport(
+    a: EditorState["viewport"],
+    b: EditorState["viewport"],
+    t: number,
+    size: { width: number; height: number }
+): EditorState["viewport"] {
     const k = t <= 0 ? 0 : t >= 1 ? 1 : t;
+    // A NON-POSITIVE ZOOM HAS NO GEOMETRIC PATH — the ratio is undefined — so the destination is
+    // taken whole, as it was before. Copied rather than returned, since the caller assigns onto the
+    // live viewport.
+    if (!(a.zoom > 0) || !(b.zoom > 0)) return { x: b.x, y: b.y, zoom: b.zoom };
+    const zoom = a.zoom * Math.pow(b.zoom / a.zoom, k);
+    const halfW = size.width / 2;
+    const halfH = size.height / 2;
+    // The world point under the screen centre at each end, which is what a navigation is ABOUT.
+    const ax = (halfW + a.x) / a.zoom, ay = (halfH + a.y) / a.zoom;
+    const bx = (halfW + b.x) / b.zoom, by = (halfH + b.y) / b.zoom;
     return {
-        x: a.x + (b.x - a.x) * k,
-        y: a.y + (b.y - a.y) * k,
-        zoom: a.zoom > 0 && b.zoom > 0 ? a.zoom * Math.pow(b.zoom / a.zoom, k) : b.zoom
+        x: zoom * (ax + (bx - ax) * k) - halfW,
+        y: zoom * (ay + (by - ay) * k) - halfH,
+        zoom
     };
 }
 
@@ -239,6 +274,33 @@ export function overlayTransform(world: Mat2D, vp: EditorState["viewport"]): str
  * transform `screen = z·world − vp`. The single sanctioned conversion, shared by every
  * tool so the picking math can't drift (zoom is floored like `clampViewport`'s minimum).
  */
+/**
+ * WORLD coordinates → canvas-relative SCREEN pixels — the exact forward of `screenToWorld`, and here
+ * beside it so the two cannot drift.
+ *
+ * WRITTEN BECAUSE THE PAIR IS THE ORACLE. `screenToWorld` calls itself the single sanctioned
+ * conversion and is right to; what it had no way to state was that it inverts anything, because
+ * there was nothing to invert it against. A round trip over a zoom sweep is a test the relationship
+ * could not have before — and the defect it was written for, `lerpViewport` swinging the focused
+ * point out and back, is exactly the kind that survives when a relationship is only ever travelled
+ * in one direction.
+ *
+ * The zoom floor matches `screenToWorld`'s, or the round trip would fail below 0.01 for a reason
+ * that has nothing to do with either function.
+ */
+export function worldToScreen(
+    vp: EditorState["viewport"],
+    canvasRect: { left: number; top: number },
+    worldX: number,
+    worldY: number
+): { x: number; y: number } {
+    const zoom = Math.max(0.01, vp.zoom);
+    return {
+        x: zoom * worldX - vp.x + canvasRect.left,
+        y: zoom * worldY - vp.y + canvasRect.top
+    };
+}
+
 export function screenToWorld(
     vp: EditorState["viewport"],
     canvasRect: { left: number; top: number },
