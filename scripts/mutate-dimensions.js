@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1705;
+const EXPECTED_TESTS = 1712;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -892,6 +892,22 @@ const MUTANTS = [
       from: "        cells[i] = cur[i] === 1 ? material : 0;",
       to: "        cells[i] = cur[i] === 1 ? 1 : 0;",
       note: "the automaton's working value is stored instead of the material, so a layer drawing material 3 fills with 1s it cannot see" },
+
+    // THE .unitypackage READER. Seven real packages parse with no notes, which is exactly why the
+    // tests build their own archive: every entry Unity writes is alphabetical, so the real files
+    // cannot reach half of these branches.
+    { id: "UP1", file: "src/core/import/UnityPackage.ts",
+      from: "    if (!Number.isFinite(stated) || stated !== sum) return \"corrupt\";",
+      to: "    if (!Number.isFinite(stated)) return \"corrupt\";",
+      note: "a corrupt header is read as a valid one, so a truncated archive becomes a very strange package instead of a reported one" },
+    { id: "UP2", file: "src/core/import/UnityPackage.ts",
+      from: "        sum += (i >= at + 148 && i < at + 156) ? 0x20 : bytes[i];",
+      to: "        sum += bytes[i];",
+      note: "the checksum counts its own field instead of spaces, so every header in every archive fails" },
+    { id: "UP4", file: "src/core/import/UnityPackage.ts",
+      from: "    assets.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));",
+      to: "    assets.sort((a, b) => (a.path > b.path ? -1 : a.path < b.path ? 1 : 0));",
+      note: "the listing comes out reversed, so a diff of what a package holds shows changes that are not there" },
 ];
 
 function runSuite() {

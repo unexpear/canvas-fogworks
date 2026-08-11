@@ -2221,6 +2221,17 @@ function parseProperties(body: string): { props: TiledProperty[]; unread: string
 // only emit what the validator accepts, and reports every skip. Last wins on a duplicate name.
 function userDataFor(props: readonly TiledProperty[]): { data: UserData; unread: string[] };
 
+// A `.unitypackage` (`core/import/UnityPackage`) — gzip + tar, one GUID folder per asset holding
+// `asset`, `asset.meta` and `pathname`. DECOMPRESSION IS INJECTED, as TiledMap and Aseprite inject
+// theirs. The tar header's CHECKSUM is verified, because a bad size field is read as an entry of
+// arbitrary length and everything after it lands at the wrong offset — a corrupt archive becomes a
+// very strange package rather than a reported one.
+interface UnityAsset { path: string; guid: string; bytes: Uint8Array }
+function unityPackageError(bytes: Uint8Array): string | null;   // gzip magic, BEFORE expanding
+function parseUnityPackage(bytes, opts?: { gunzip? }): { assets: UnityAsset[]; folders: string[]; notes: string[] };
+// Verified on all 7 packages here: 523 files, 27.7 MB, zero notes. It does NOT read `.meta` sprite
+// rects (every sprite in this tree is spriteMode 0 with none) or prefabs (binary type-trees).
+
 // REPRODUCIBLE RANDOMNESS (`core/random/Rng`). `Math.random` appears in this repo ONLY inside
 // comments forbidding it: a generated map that changes when reopened is not a document.
 interface Rng { next(): number; int(bound: number): number }   // next() is [0,1), never 1

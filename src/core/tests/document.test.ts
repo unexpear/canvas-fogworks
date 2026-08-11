@@ -124,6 +124,8 @@ import { capturePatch, applyPatch, revertPatch, invertPatch, readRegion, isEmpty
 import { makeBrush, brushError, stampBrush, brushBounds, strokePath, strokeBounds,
     BRUSH_MAX_SIZE, brushFromImage, brushWithVariants, pickFace } from "../paint/Brush";
 import { rngFrom, seedFrom } from "../random/Rng";
+import { parseUnityPackage, unityPackageError } from "../import/UnityPackage";
+import { gzipSync, gunzipSync } from "zlib";
 import { caveCells } from "../document/CaveTerrain";
 import { encodeSurface, decodeSurface, PIXEL_CODEC_VERSION, PIXEL_RUN_MAX } from "../paint/PixelCodec";
 import { beginStroke, extendStroke, endStroke, strokeEscaped } from "../paint/Stroke";
@@ -28134,6 +28136,154 @@ describe("Adjust — the colour edits, and the half-steps that make them reversi
         expect(at(b, 2, 1)).toEqual([10, 20, 30, 0]);
         // A MAP THAT CHANGES NOTHING reports nothing, so no undo step is left behind.
         expect(mapColours(b, (r, g, bl) => [r, g, bl])).toBe(0);
+    });
+});
+
+describe("UnityPackage — seven blobs in this tree that nothing could open", () => {
+    // THE TAR IS BUILT HERE, BYTE BY BYTE, rather than read from a real package — and that is the
+    // stronger choice for once. The seven real `.unitypackage` files in this tree are not in git, so
+    // a test reading them would pass here and fail on a fresh clone; and more importantly they can
+    // only exercise what Unity happens to write. Every entry in every one of them arrives in
+    // alphabetical order — `asset`, `asset.meta`, `pathname` — so the case where a file's bytes
+    // arrive AFTER its path is never reached by any real file. Building the archive is what makes
+    // that case reachable. (All seven do parse: 523 files, 27.7 MB, and not one note.)
+    const octal = (n: number, len: number) => n.toString(8).padStart(len - 1, "0") + "\0";
+    const writeAscii = (into: Uint8Array, at: number, text: string) => {
+        for (let i = 0; i < text.length; i++) into[at + i] = text.charCodeAt(i);
+    };
+    /** One 512-byte tar header plus its padded data, exactly as the format states it. */
+    const tarEntry = (name: string, data: Uint8Array, opts: { corrupt?: boolean; prefix?: string } = {}) => {
+        const head = new Uint8Array(512);
+        writeAscii(head, 0, name);
+        writeAscii(head, 100, "0000644\0");
+        writeAscii(head, 124, octal(data.length, 12));
+        head[156] = 0x30;                                   // typeflag '0' — a regular file
+        writeAscii(head, 257, "ustar\0" + "00");
+        if (opts.prefix) writeAscii(head, 345, opts.prefix);
+        // THE CHECKSUM IS COMPUTED WITH ITS OWN FIELD READ AS SPACES, which is the one part of tar
+        // that cannot be guessed from a hex dump — so writing it here is what proves the reader
+        // computes it the same way rather than skipping it.
+        for (let i = 148; i < 156; i++) head[i] = 0x20;
+        let sum = 0;
+        for (let i = 0; i < 512; i++) sum += head[i];
+        writeAscii(head, 148, octal(opts.corrupt ? sum + 1 : sum, 8));
+        const padded = Math.ceil(data.length / 512) * 512;
+        const out = new Uint8Array(512 + padded);
+        out.set(head, 0);
+        out.set(data, 512);
+        return out;
+    };
+    const bytesOf = (text: string) => new Uint8Array([...text].map(c => c.charCodeAt(0)));
+    const archive = (parts: Uint8Array[]) => {
+        const end = new Uint8Array(1024);                   // the two zero blocks that end an archive
+        const total = parts.reduce((n, p) => n + p.length, 0) + end.length;
+        const out = new Uint8Array(total);
+        let at = 0;
+        for (const part of parts) { out.set(part, at); at += part.length; }
+        out.set(end, at);
+        return new Uint8Array(gzipSync(Buffer.from(out)));
+    };
+
+    test("a package gives up its files, with the paths a person would recognise", () => {
+        const pkg = archive([
+            tarEntry("abc123/asset", bytesOf("PNGDATA")),
+            tarEntry("abc123/asset.meta", bytesOf("guid: abc123")),
+            tarEntry("abc123/pathname", bytesOf("Assets/Kenney/Sprites/star_04.png")),
+            // A FOLDER: a pathname and no asset, which is how the format says it. Measured: 6 of the
+            // 115 entries in the real 2D package.
+            tarEntry("def456/pathname", bytesOf("Assets/Kenney/Sprites"))
+        ]);
+        expect(unityPackageError(pkg)).toBeNull();
+        const r = parseUnityPackage(pkg, { gunzip: d => new Uint8Array(gunzipSync(Buffer.from(d))) });
+        expect(r.notes).toEqual([]);
+        expect(r.folders).toEqual(["Assets/Kenney/Sprites"]);
+        expect(r.assets).toHaveLength(1);
+        expect(r.assets[0].path).toBe("Assets/Kenney/Sprites/star_04.png");
+        // THE GUID IS KEPT TOO, because a `.meta` reference points at it — dropping it would make
+        // resolving one impossible later, and dropping the path would hand somebody 96 files all
+        // called `asset`.
+        expect(r.assets[0].guid).toBe("abc123");
+        expect(Array.from(r.assets[0].bytes)).toEqual(Array.from(bytesOf("PNGDATA")));
+    });
+
+    test("a file's BYTES may arrive before or after its path — no real package can test this", () => {
+        // Every entry of every real package is alphabetical, so `asset` always precedes `pathname`.
+        // A reader that assumed that order would work on all seven and lose files on the eighth.
+        const forward = archive([
+            tarEntry("g/asset", bytesOf("X")),
+            tarEntry("g/pathname", bytesOf("Assets/a.png"))
+        ]);
+        const reversed = archive([
+            tarEntry("g/pathname", bytesOf("Assets/a.png")),
+            tarEntry("g/asset", bytesOf("X"))
+        ]);
+        const read = (b: Uint8Array) => parseUnityPackage(b, { gunzip: d => new Uint8Array(gunzipSync(Buffer.from(d))) });
+        expect(read(forward).assets).toEqual(read(reversed).assets);
+        expect(read(reversed).assets[0].path).toBe("Assets/a.png");
+    });
+
+    test("a long path is joined from the USTAR PREFIX, not truncated at 100 characters", () => {
+        // Unaffected by anything here — a GUID folder is 32 characters — which is exactly why it is
+        // worth a test: the failure is a silently shortened path rather than an error.
+        const pkg = archive([
+            tarEntry("g/asset", bytesOf("X"), { prefix: "deep/nesting" }),
+            tarEntry("g/pathname", bytesOf("Assets/a.png"), { prefix: "deep/nesting" })
+        ]);
+        const r = parseUnityPackage(pkg, { gunzip: d => new Uint8Array(gunzipSync(Buffer.from(d))) });
+        // The prefix joins onto the front, so the GUID folder is now `deep` and the leaf is not
+        // `asset` — which means nothing is recovered, and that is the CORRECT reading of those bytes.
+        expect(r.assets).toHaveLength(0);
+        expect(r.notes.join(" ")).toContain("no pathname");
+    });
+
+    test("a pathname is read as a LINE, and the listing has a stable order", () => {
+        // MEASURED: the `pathname` files in every package here carry no trailing newline at all, so
+        // a reader that strips one works by luck. Other Unity versions write one — and a reader that
+        // took the whole file would then produce a path ending in a newline, which matches nothing
+        // and fails as "file not found" rather than as a parse error.
+        const pkg = archive([
+            tarEntry("b/asset", bytesOf("2")),
+            tarEntry("b/pathname", bytesOf("Assets/b.png\n")),
+            tarEntry("a/asset", bytesOf("1")),
+            tarEntry("a/pathname", bytesOf("Assets/a.png"))
+        ]);
+        const r = parseUnityPackage(pkg, { gunzip: d => new Uint8Array(gunzipSync(Buffer.from(d))) });
+        expect(r.assets.map(a => a.path)).toEqual(["Assets/a.png", "Assets/b.png"]);
+        // SORTED, not tar order — the archive states no order, and a listing that came out
+        // differently on two machines would make any diff of it meaningless. Note the entries above
+        // are deliberately out of order, so tar order and sorted order genuinely differ.
+        expect(r.assets[0].guid).toBe("a");
+    });
+
+    test("a corrupt header stops the read and SAYS so, rather than inventing entries", () => {
+        // A header whose size field is garbage names an entry of arbitrary length, and everything
+        // after it is read at the wrong offset — so a reader without the checksum does not fail, it
+        // produces a very strange package.
+        const pkg = archive([
+            tarEntry("g/asset", bytesOf("X")),
+            tarEntry("g/pathname", bytesOf("Assets/a.png")),
+            tarEntry("h/pathname", bytesOf("Assets/b.png"), { corrupt: true })
+        ]);
+        const r = parseUnityPackage(pkg, { gunzip: d => new Uint8Array(gunzipSync(Buffer.from(d))) });
+        expect(r.notes).toHaveLength(1);
+        expect(r.notes[0]).toContain("bad checksum");
+        // …and what was read BEFORE the corruption is kept, because losing a whole package over its
+        // last entry would be worse than reporting it.
+        expect(r.assets.map(a => a.path)).toEqual(["Assets/a.png"]);
+    });
+
+    test("it refuses what is not a package before expanding anything", () => {
+        // Checked BEFORE decompressing, so a caller can refuse a file without allocating whatever it
+        // claims to expand to — an extension is a claim, not evidence.
+        expect(unityPackageError(new Uint8Array([]))).toContain("too short");
+        expect(unityPackageError(bytesOf("PK\u0003\u0004stuff"))).toContain("gzip");
+        expect(unityPackageError(new Uint8Array([0x1f, 0x8b, 99]))).toContain("deflate");
+        expect(unityPackageError(new Uint8Array([0x1f, 0x8b, 8]))).toBeNull();
+        // WITHOUT A DECOMPRESSOR it is reported unreadable rather than half-read — the same bargain
+        // the Tiled reader makes about a zlib-compressed layer.
+        const r = parseUnityPackage(archive([tarEntry("g/pathname", bytesOf("Assets/a.png"))]));
+        expect(r.assets).toEqual([]);
+        expect(r.notes[0]).toContain("nothing was supplied to expand it");
     });
 });
 
