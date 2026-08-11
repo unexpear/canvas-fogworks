@@ -224,6 +224,43 @@ export function terrainCoordAt(
     };
 }
 
+/**
+ * Every material's grid, composited in PAINT ORDER — the derivation of a multi-material layer.
+ *
+ * A DISPLAY CELL SHOWS ONE TILE and has four corners, and those corners can belong to two different
+ * materials: a shore IS that cell. So something has to win, and later-drawn wins, which is the rule
+ * an author already understands from layers and the only one that needs no extra field. Reordering
+ * the array reorders the shore without touching a single cell.
+ *
+ * A MATERIAL DRAWS ONLY WHERE IT HAS PRESENCE, which is what makes compositing work at all: mask 0
+ * has no entry in any table, so `autotile` leaves `TILE_EMPTY` there and the material below shows
+ * through. Nothing here has to know which cells are empty — that falls out of the masks.
+ */
+export function autotileLayers(
+    terrain: Terrain,
+    materials: readonly { id: number; art: readonly { mask: number; index: number }[] }[]
+): AutotileResult {
+    const cols = terrain.cols + 1;
+    const rows = terrain.rows + 1;
+    const tiles: number[] = new Array(cols * rows).fill(TILE_EMPTY);
+    const flips: number[] = new Array(cols * rows).fill(0);
+    let turned = false;
+    for (const material of materials) {
+        const table = rotatedTable(new Map(material.art.map(a => [a.mask, a.index])));
+        const layer = autotile(terrain, material.id, table);
+        for (let at = 0; at < tiles.length; at++) {
+            // ONLY WHERE THIS MATERIAL DREW. Copying unconditionally would let a later material's
+            // empty cells erase an earlier one's tiles, which is the whole shore gone.
+            if (layer.tiles[at] === TILE_EMPTY) continue;
+            tiles[at] = layer.tiles[at];
+            const flip = layer.flips ? layer.flips[at] : 0;
+            flips[at] = flip;
+            if (flip !== 0) turned = true;
+        }
+    }
+    return turned ? { cols, rows, tiles, flips } : { cols, rows, tiles };
+}
+
 /** A resolved display grid: one larger than the terrain in each direction, offset half a cell. */
 export interface AutotileResult {
     cols: number;

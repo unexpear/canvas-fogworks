@@ -65,13 +65,13 @@ import { SelectionMask, emptyMask, fullMask, invertSelection, growSelection, bor
 import { Palette, parsePaletteFile, paletteAt } from "../core/paint/Palette";
 import { quantizeAction, surfaceEditAction } from "../core/actions/surfaceEdit";
 import { SetTilemapAction } from "../core/actions/SetTilemapAction";
-import { resizeTilemap, withTerrainArt, asTerrain, withTerrain } from "../core/document/TilemapEdit";
+import { resizeTilemap, withTerrainArt, asTerrain, withTerrain , withTerrainMaterials} from "../core/document/TilemapEdit";
 import { autotileClasses, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR } from "../core/document/Autotile";
 import { caveCells } from "../core/document/CaveTerrain";
 import { parseUnityPackage, UnityAsset } from "../core/import/UnityPackage";
 import { rngFrom, seedFrom } from "../core/random/Rng";
 import { Tilemap, tileSourceRect as sheetTileRect, tileIndexAt,
-    FLIP_H, FLIP_V, FLIP_D } from "../core/document/Tilemap";
+    FLIP_H, FLIP_V, FLIP_D , TERRAIN_MATERIALS_MAX} from "../core/document/Tilemap";
 import { EyedropperTool } from "../editor/tools/EyedropperTool";
 import { SetLightingAction } from "../core/actions/SetLightingAction";
 import { restMesh, MESH_MAX_DIVISIONS, copyMeshPoint, Mesh, ReadonlyMesh } from "../core/document/Mesh";
@@ -2850,8 +2850,12 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                      * sixteen neighbourhoods.
                                      */
                                     const classes = autotileClasses();
+                                    // WHICH MATERIAL'S ART is now a question — a layer can draw
+                                    // several, in paint order — so the panel edits the one selected.
+                                    const mats = map.terrain?.materials ?? [];
+                                    const activeMat = mats.find(m => m.id === tileMaterial) ?? mats[0];
                                     const artFor = (mask: number) =>
-                                        map.terrain?.art.find(a => a.mask === mask)?.index ?? null;
+                                        activeMat?.art.find(a => a.mask === mask)?.index ?? null;
                                     /** A 2x2 picture of which corners a class holds — the mask, drawn. */
                                     const maskSwatch = (mask: number) => (
                                         <span style={{ display: "grid", gridTemplateColumns: "6px 6px",
@@ -2948,6 +2952,61 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                         SEED is a word, so the same cave comes back
                                                         tomorrow. A generated map that changes when
                                                         reopened is not a document. */}
+                                                    {/* THE MATERIALS THIS LAYER DRAWS, in PAINT
+                                                        ORDER (schema 65). Where two meet, the later
+                                                        one wins — a shore is exactly that cell — so
+                                                        the order is an edit in its own right and
+                                                        moving one redraws every boundary without
+                                                        touching a single painted cell. */}
+                                                    <div data-terrain-materials="1" style={{ marginTop: 6 }}>
+                                                        <label style={INSPECTOR_LABEL}>Materials, in paint order</label>
+                                                        {mats.map((m, i) => (
+                                                            <div key={m.id} style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 2 }}>
+                                                                <button
+                                                                    aria-label={`Edit material ${m.id}`}
+                                                                    title={`Paint and assign art for material ${m.id}`}
+                                                                    onClick={() => setTileMaterial(m.id)}
+                                                                    style={{ ...ADJUST_BUTTON, flex: 1, textAlign: "left",
+                                                                        outline: m.id === activeMat?.id ? "1px solid #4a90d9" : "none" }}
+                                                                >{i + 1}. material {m.id} — {m.art.length}/6 drawn</button>
+                                                                <button
+                                                                    aria-label={`Move material ${m.id} later`}
+                                                                    title="Draw this one over the others"
+                                                                    disabled={i === mats.length - 1}
+                                                                    onClick={() => {
+                                                                        const next = mats.map(x => ({ id: x.id, art: [...x.art] }));
+                                                                        next.splice(i + 1, 0, next.splice(i, 1)[0]);
+                                                                        setMap(withTerrainMaterials(map, next));
+                                                                    }}
+                                                                    style={{ ...ADJUST_BUTTON, padding: "0 5px" }}
+                                                                >↓</button>
+                                                                <button
+                                                                    aria-label={`Remove material ${m.id}`}
+                                                                    title="Stop drawing this material. The cells that hold it are LEFT ALONE — they draw as nothing until a material claims that id again."
+                                                                    disabled={mats.length <= 1}
+                                                                    onClick={() => setMap(withTerrainMaterials(map,
+                                                                        mats.filter(x => x.id !== m.id).map(x => ({ id: x.id, art: [...x.art] }))))}
+                                                                    style={{ ...ADJUST_BUTTON, padding: "0 5px" }}
+                                                                >×</button>
+                                                            </div>
+                                                        ))}
+                                                        <button
+                                                            aria-label="Add material"
+                                                            title="Draw a second thing in this layer — rock and water, grass and path. It draws over the ones above it."
+                                                            disabled={mats.length >= TERRAIN_MATERIALS_MAX}
+                                                            onClick={() => {
+                                                                // THE NEXT FREE ID, so a new material never collides
+                                                                // with one already painted into the cells.
+                                                                const used = new Set(mats.map(x => x.id));
+                                                                let id = 1;
+                                                                while (used.has(id)) id++;
+                                                                setMap(withTerrainMaterials(map,
+                                                                    [...mats.map(x => ({ id: x.id, art: [...x.art] })), { id, art: [] }]));
+                                                                setTileMaterial(id);
+                                                            }}
+                                                            style={ADJUST_BUTTON}
+                                                        >Add material</button>
+                                                    </div>
                                                     <div data-cave="1" style={{ display: "flex", gap: 4, marginTop: 6, alignItems: "center" }}>
                                                         <TextInput value={caveSeed} placeholder="seed word"
                                                             onChange={setCaveSeed} />
@@ -2956,7 +3015,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                             title="Fill this layer's terrain with a cave: cellular automata over which cells are the material. The same seed always gives the same cave."
                                                             onClick={() => {
                                                                 const grid = caveCells(map.cols, map.rows,
-                                                                    map.terrain!.material,
+                                                                    activeMat?.id ?? 1,
                                                                     rngFrom(seedFrom(caveSeed)));
                                                                 if (grid.cells.length === 0) return;
                                                                 // THROUGH THE SAME EDIT PATH A BRUSH USES, so the
@@ -2979,7 +3038,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                             <button
                                                                 key={mask}
                                                                 title={`Assign tile ${tileIndex} to this shape (mask ${mask})`}
-                                                                onClick={() => setMap(withTerrainArt(map, mask, tileIndex))}
+                                                                onClick={() => setMap(withTerrainArt(map, mask, tileIndex, activeMat?.id))}
                                                                 style={{ display: "flex", flexDirection: "column",
                                                                     alignItems: "center", gap: 2, padding: "3px 4px",
                                                                     background: "transparent", cursor: "pointer",

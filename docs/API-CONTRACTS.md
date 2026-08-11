@@ -2268,6 +2268,22 @@ function caveCells(cols, rows, material, rng: Rng, options?): { cells: number[];
 // corners off the terrain and can never read as full rock.
 
 function cellCoordAt(map, x, y): { col; row } | null;
+
+// MULTI-MATERIAL TERRAIN (schema 65). A layer holds a LIST of materials IN PAINT ORDER, not one.
+interface TerrainMaterial { id: number; art: { mask: number; index: number }[] }   // id >= 1; 0 is "nothing"
+// The order IS the rule: a display cell sits on four terrain corners and they can belong to two
+// different materials — a shore is exactly that cell — and one cell shows ONE tile, so something has
+// to win. Later draws over earlier: no extra field, already understood from layers, and reorderable
+// without touching a painted cell. `sameTerrain` therefore compares the list POSITION BY POSITION,
+// or the one edit that redraws every shore would be refused as a no-op.
+function autotileLayers(terrain, materials): AutotileResult;   // composites; a material draws only
+                                                               // where its mask is non-zero
+function withTerrainMaterials(map, materials): Tilemap | null;  // add / remove / REORDER
+function withTerrainArt(map, mask, index, material?): Tilemap | null;   // defaults to the first
+const TERRAIN_MATERIALS_MAX = 16;
+// REMOVING A MATERIAL LEAVES ITS CELLS ALONE, holding an id nothing draws. The cells are what the
+// author MEANT; rewriting them to 0 would destroy the shape of a region on the way to changing how
+// it looks. It draws as nothing until a material claims that id again, which is recoverable.
 // EDITING one (`document/TilemapEdit`). Pure, whole-map in and out, and NULL MEANS NOTHING CHANGED
 // in every one of them — an action that succeeded without changing anything puts an undo step on the
 // stack that undoes nothing, which reads as undo being ignored.

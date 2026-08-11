@@ -112,14 +112,20 @@ function sameMap(a: ReadonlyTilemap, b: ReadonlyTilemap): boolean {
  */
 function sameTerrain(a: ReadonlyTilemap["terrain"], b: ReadonlyTilemap["terrain"]): boolean {
     if (a === undefined || b === undefined) return a === b;
-    if (a.material !== b.material) return false;
     if (a.cells.length !== b.cells.length) return false;
     for (let i = 0; i < a.cells.length; i++) if (a.cells[i] !== b.cells[i]) return false;
-    // THE ART COUNTS TOO: assigning a different tile to a class changes every cell in its orbit, so
-    // an edit that only repainted the art would otherwise be refused as a no-op.
-    if (a.art.length !== b.art.length) return false;
-    for (let i = 0; i < a.art.length; i++) {
-        if (a.art[i].mask !== b.art[i].mask || a.art[i].index !== b.art[i].index) return false;
+    // THE MATERIALS COUNT TOO, ORDER INCLUDED. Assigning a different tile to a class changes every
+    // cell in its orbit, and REORDERING two materials changes every cell where they meet — so an
+    // edit that only repainted the art, or only moved a material up the list, would otherwise be
+    // refused as a no-op. Compared position by position for exactly that reason.
+    if (a.materials.length !== b.materials.length) return false;
+    for (let i = 0; i < a.materials.length; i++) {
+        const am = a.materials[i], bm = b.materials[i];
+        if (am.id !== bm.id) return false;
+        if (am.art.length !== bm.art.length) return false;
+        for (let k = 0; k < am.art.length; k++) {
+            if (am.art[k].mask !== bm.art[k].mask || am.art[k].index !== bm.art[k].index) return false;
+        }
     }
     return true;
 }

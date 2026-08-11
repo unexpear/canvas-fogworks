@@ -19,7 +19,7 @@
  */
 
 import {
-    ReadonlyTilemap, Tilemap, TileSheet, TILE_EMPTY, TILEMAP_MAX_CELLS, FLIP_MAX, tileAt, flipAt
+    ReadonlyTilemap, Tilemap, TileSheet, TILE_EMPTY, TILEMAP_MAX_CELLS, FLIP_MAX, tileAt, flipAt, TERRAIN_MATERIALS_MAX
 } from "./Tilemap";
 
 /** What one cell becomes. */
@@ -119,18 +119,27 @@ export function withTerrain(map: ReadonlyTilemap, edits: readonly TerrainEdit[])
  * orbit under the symmetries of a square. Passing the whole table would make the caller responsible
  * for a derivation `rotatedTable` already owns.
  */
-export function withTerrainArt(map: ReadonlyTilemap, mask: number, index: number): Tilemap | null {
+export function withTerrainArt(
+    map: ReadonlyTilemap, mask: number, index: number, material?: number
+): Tilemap | null {
     const terrain = map.terrain;
     if (!terrain) return null;
     if (!Number.isInteger(mask) || mask < 0 || mask >= 16) return null;
     if (!Number.isInteger(index) || index < 0) return null;
-    const art = terrain.art.map(a => ({ mask: a.mask, index: a.index }));
-    const at = art.findIndex(a => a.mask === mask);
-    if (at >= 0 && art[at].index === index) return null;
-    if (at >= 0) art[at] = { mask, index };
+    // WHICH MATERIAL'S ART, defaulting to the first. The default is what keeps every existing caller
+    // meaning what it meant when a layer could only draw one thing, and naming one is what a panel
+    // showing several does.
+    const which = material === undefined ? terrain.materials[0]?.id : material;
+    const at = terrain.materials.findIndex(m => m.id === which);
+    if (at < 0) return null;
+    const art = terrain.materials[at].art.map(a => ({ mask: a.mask, index: a.index }));
+    const slot = art.findIndex(a => a.mask === mask);
+    if (slot >= 0 && art[slot].index === index) return null;
+    if (slot >= 0) art[slot] = { mask, index };
     else art.push({ mask, index });
     const next = rebuild(map, map.tiles.slice(), map.flips ? map.flips.slice() : null);
-    return { ...next, terrain: { ...next.terrain!, art } };
+    const materials = next.terrain!.materials.map((m, i) => (i === at ? { id: m.id, art } : m));
+    return { ...next, terrain: { ...next.terrain!, materials } };
 }
 
 /**
@@ -153,8 +162,47 @@ export function asTerrain(map: ReadonlyTilemap, material: number, art: readonly 
         ...next,
         terrain: {
             cells: new Array(map.cols * map.rows).fill(0),
-            material,
-            art: art.map(a => ({ mask: a.mask, index: a.index }))
+            // ONE MATERIAL TO START, because that is what turning a layer autotiled means; a second
+            // is an authoring step of its own (`withTerrainMaterial`), not something this guesses.
+            materials: [{ id: material, art: art.map(a => ({ mask: a.mask, index: a.index })) }]
+        }
+    };
+}
+
+/**
+ * A material added, removed, or MOVED in the paint order — or null when nothing changes.
+ *
+ * ORDER IS AN EDIT, which is the part that needs saying. Moving a material later redraws every cell
+ * where it meets another one and touches no cell at all, so it has to be a real change the way an
+ * art assignment is; `sameTerrain` compares the list position by position for that reason.
+ *
+ * REMOVING A MATERIAL LEAVES ITS CELLS ALONE, holding an id nothing draws. That is deliberate: the
+ * cells are what the author MEANT, and silently rewriting them to 0 would destroy the shape of a
+ * region on the way to changing how it looks. It draws as nothing until a material claims that id
+ * again, which is recoverable; erasing the cells is not.
+ */
+export function withTerrainMaterials(
+    map: ReadonlyTilemap, materials: readonly { id: number; art: readonly { mask: number; index: number }[] }[]
+): Tilemap | null {
+    const terrain = map.terrain;
+    if (!terrain) return null;
+    if (materials.length === 0 || materials.length > TERRAIN_MATERIALS_MAX) return null;
+    const seen = new Set<number>();
+    for (const m of materials) {
+        if (!Number.isInteger(m.id) || m.id < 1) return null;
+        if (seen.has(m.id)) return null;
+        seen.add(m.id);
+        for (const a of m.art) {
+            if (!Number.isInteger(a.mask) || a.mask < 0 || a.mask >= 16) return null;
+            if (!Number.isInteger(a.index) || a.index < 0) return null;
+        }
+    }
+    const next = rebuild(map, map.tiles.slice(), map.flips ? map.flips.slice() : null);
+    return {
+        ...next,
+        terrain: {
+            ...next.terrain!,
+            materials: materials.map(m => ({ id: m.id, art: m.art.map(a => ({ mask: a.mask, index: a.index })) }))
         }
     };
 }
@@ -287,8 +335,9 @@ function rebuild(
         // is: a caller holding the old map must keep seeing the old terrain.
         ...(map.terrain ? { terrain: {
             cells: map.terrain.cells.slice(),
-            material: map.terrain.material,
-            art: map.terrain.art.map(a => ({ mask: a.mask, index: a.index }))
+            materials: map.terrain.materials.map(m => ({
+                id: m.id, art: m.art.map(a => ({ mask: a.mask, index: a.index }))
+            }))
         } } : {})
     };
 }

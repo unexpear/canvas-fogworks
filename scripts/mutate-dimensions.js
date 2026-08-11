@@ -31,7 +31,7 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1714;
+const EXPECTED_TESTS = 1718;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -290,17 +290,21 @@ const MUTANTS = [
       to: "        | (has(col, row - 1) ? CORNER_BL : 0)",
       note: "the cell above names the wrong corner — invisible to a symmetric blob of terrain" },
     { id: "AT4", file: "src/core/document/Autotile.ts",
-      from: "    const cols = terrain.cols + 1;",
-      to: "    const cols = terrain.cols;",
+      from: "    const cols = terrain.cols + 1;\n    const rows = terrain.rows + 1;\n    const tiles: number[] = new Array(cols * rows);",
+      to: "    const cols = terrain.cols;\n    const rows = terrain.rows + 1;\n    const tiles: number[] = new Array(cols * rows);",
       note: "the display grid is NOT one larger — the last terrain column is never fully drawn" },
     { id: "AT5", file: "src/core/document/Autotile.ts",
       from: "        if (c < 0 || r < 0 || c >= terrain.cols || r >= terrain.rows) return false;",
       to: "        if (c < 0 || r < 0 || c >= terrain.cols || r >= terrain.rows) return true;",
       note: "off the terrain counts AS the material — no coastline at the map's edge" },
     { id: "AT6", file: "src/core/document/Autotile.ts",
-      from: "    return turned ? { cols, rows, tiles, flips } : { cols, rows, tiles };",
-      to: "    return { cols, rows, tiles, flips };",
+      from: "    // keeps — a derived grid that always carried a flip array would break it from the other side.\n    return turned ? { cols, rows, tiles, flips } : { cols, rows, tiles };",
+      to: "    // keeps — a derived grid that always carried a flip array would break it from the other side.\n    return { cols, rows, tiles, flips };",
       note: "flips always present — the absent-when-unturned invariant, broken from the derived side" },
+    { id: "MM6", file: "src/core/document/Autotile.ts",
+      from: "            if (flip !== 0) turned = true;\n        }\n    }\n    return turned ? { cols, rows, tiles, flips } : { cols, rows, tiles };",
+      to: "            if (flip !== 0) turned = true;\n        }\n    }\n    return { cols, rows, tiles, flips };",
+      note: "the COMPOSITED grid always carries flips, so a multi-material layer breaks the same invariant its single-material twin keeps" },
     { id: "AT7", file: "src/core/document/Autotile.ts",
       from: "        return terrain.cells[r * terrain.cols + c] === material;",
       to: "        return terrain.cells[r * terrain.cols + c] !== 0;",
@@ -630,8 +634,8 @@ const MUTANTS = [
       to: "    return true;",
       note: "a terrain edit reads as a no-op and is REFUSED — the brush silently does nothing" },
     { id: "TR10", file: "src/core/actions/SetTilemapAction.ts",
-      from: "    if (a.art.length !== b.art.length) return false;",
-      to: "    if (a.art.length !== b.art.length) return true;",
+      from: "        if (am.art.length !== bm.art.length) return false;",
+      to: "        if (am.art.length !== bm.art.length) return true;",
       note: "ASSIGNING a class that had none reads as no change — the six pickers cannot be used" },
     { id: "TB1", file: "src/core/document/Autotile.ts",
       from: "col: Math.floor((localX - map.tileWidth / 2) / map.tileWidth)",
@@ -654,21 +658,21 @@ const MUTANTS = [
       to: "        if (!Number.isInteger(edit.material) || edit.material < -1) continue;",
       note: "a negative material is stored, which `terrainError` would refuse on the next load" },
     { id: "TB6", file: "src/core/document/TilemapEdit.ts",
-      from: "    if (at >= 0 && art[at].index === index) return null;",
-      to: "    if (at >= 0) return null;",
+      from: "    if (slot >= 0 && art[slot].index === index) return null;",
+      to: "    if (slot >= 0) return null;",
       note: "a class's tile can never be REASSIGNED, so the six pickers are write-once" },
     { id: "TB7", file: "src/core/document/TilemapEdit.ts",
       from: "    const next = rebuild(map, new Array(map.cols * map.rows).fill(TILE_EMPTY), null);",
       to: "    const next = rebuild(map, map.tiles.slice(), null);",
       note: "becoming a terrain layer keeps its tiles, which `tilemapError` then refuses" },
     { id: "TB8", file: "src/core/document/TilemapEdit.ts",
-      from: "            material: map.terrain.material,",
-      to: "            material: 0,",
+      from: "                id: m.id, art: m.art.map(a => ({ mask: a.mask, index: a.index }))",
+      to: "                id: 0, art: m.art.map(a => ({ mask: a.mask, index: a.index }))",
       note: "terrain survives an unrelated edit with its material reset to the ERASER" },
 
     { id: "TR5", file: "src/core/document/Components.ts",
-      from: "            { cols: map.cols, rows: map.rows, cells: terrain.cells }, terrain.material, table);",
-      to: "            { cols: map.rows, rows: map.cols, cells: terrain.cells }, terrain.material, table);",
+      from: "            { cols: map.cols, rows: map.rows, cells: terrain.cells },",
+      to: "            { cols: map.rows, rows: map.cols, cells: terrain.cells },",
       note: "the terrain is transposed — invisible on a square grid, a sheared coast otherwise" },
     { id: "TR6", file: "src/core/document/Tilemap.ts",
       from: "    if (m.terrain !== undefined && (m.tiles as number[]).some(t => t !== TILE_EMPTY)) {",
@@ -679,8 +683,8 @@ const MUTANTS = [
       to: "    if (t.cells.length > cells) {",
       note: "a SHORT terrain passes, and every row after the first reads from the wrong place" },
     { id: "TR8", file: "src/core/document/Tilemap.ts",
-      from: "    if (!Number.isInteger(t.material) || (t.material as number) < 1) {",
-      to: "    if (!Number.isInteger(t.material) || (t.material as number) < 0) {",
+      from: "        if (!Number.isInteger(m.id) || (m.id as number) < 1) {",
+      to: "        if (!Number.isInteger(m.id) || (m.id as number) < 0) {",
       note: "material 0 is allowed, so a layer autotiles the holes rather than the land" },
 
     // PLACING an object: the arithmetic between "what the file says" and "where the node goes".
@@ -943,6 +947,30 @@ const MUTANTS = [
       from: "    gunzipSync: (base64) => ipcRenderer.sendSync(\"gunzip-sync\", base64),",
       to: "    gunzipSyncMissing: (base64) => ipcRenderer.sendSync(\"gunzip-sync\", base64),",
       note: "the gzip channel is not exposed, so the panel is a button that cannot open anything" },
+
+    // MULTI-MATERIAL TERRAIN (schema 65). Every one of these still draws a plausible map — which is
+    // the difficulty: the rule is about what happens WHERE TWO MATERIALS MEET, and a fixture whose
+    // materials never touch cannot see any of them.
+    { id: "MM1", file: "src/core/document/Autotile.ts",
+      from: "            if (layer.tiles[at] === TILE_EMPTY) continue;",
+      to: "            if (layer.tiles[at] === TILE_EMPTY && false) continue;",
+      note: "a later material's EMPTY cells overwrite an earlier one's tiles, so only the last material drawn survives anywhere" },
+    { id: "MM2", file: "src/core/document/Autotile.ts",
+      from: "    for (const material of materials) {\n        const table = rotatedTable",
+      to: "    for (const material of [...materials].reverse()) {\n        const table = rotatedTable",
+      note: "paint order is reversed, so the material an author put on top is drawn underneath at every shore" },
+    { id: "MM3", file: "src/core/document/Tilemap.ts",
+      from: "        if (seen.has(m.id as number)) return `terrain material ${m.id} appears more than once`;",
+      to: "        if (false) return `terrain material ${m.id} appears more than once`;",
+      note: "one id may appear twice, so a cell has two answers about which art draws it and paint order cannot break the tie" },
+    { id: "MM4", file: "src/core/actions/SetTilemapAction.ts",
+      from: "        if (am.id !== bm.id) return false;",
+      to: "        if (false) return false;",
+      note: "REORDERING materials reads as a no-op, so the one edit that redraws every shore without touching a cell is refused" },
+    { id: "MM5", file: "src/core/document/Serializer.ts",
+      from: "        if (!terrain || terrain.materials !== undefined) { out[id] = node; continue; }",
+      to: "        if (!terrain) { out[id] = node; continue; }",
+      note: "an ALREADY-migrated terrain is migrated again, wrapping its material list in a material whose id is undefined" },
 ];
 
 function runSuite() {
@@ -1017,8 +1045,65 @@ if (process.env.MUTANT_CHECK) {
     process.exit(bad.length > 0 ? 1 : 0);
 }
 
+/**
+ * HOW LONG THIS WILL TAKE, because a run is a full test suite per mutant and there was no way to
+ * tell twenty minutes in whether it was halfway or nearly done.
+ *
+ * TWO SHAPES, DECIDED BY WHETHER ANYONE IS WATCHING. On a terminal it is one line rewritten in
+ * place, which is what a progress bar is for. REDIRECTED TO A FILE it must not be: a bar drawn with
+ * carriage returns turns a log into a single unreadable line, and this script's output is read from
+ * a file more often than from a terminal — every count quoted in `docs/TESTING.md` came out of one.
+ * So a redirected run gets an occasional plain line instead, and the per-mutant verdicts it already
+ * prints carry the rest.
+ *
+ * THE ESTIMATE IS MEASURED, NOT ASSUMED: the first mutant to finish sets the pace and every one
+ * after refines it, so the first line appears only once there is something real to say.
+ */
+const WATCHING = process.stdout.isTTY === true;
+const startedAt = Date.now();
+const BAR_WIDTH = 24;
+let barDrawn = false;
+let done = 0;
+
+const humanTime = (ms) => {
+    const s = Math.round(ms / 1000);
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
+};
+
+/** Erase the live bar, so whatever prints next starts on a clean line. */
+function clearBar() {
+    if (!WATCHING || !barDrawn) return;
+    process.stdout.write(`\r${" ".repeat(78)}\r`);
+    barDrawn = false;
+}
+
+/** Everything the loop prints goes through here, so a verdict never lands on top of the bar. */
+function say(line) {
+    clearBar();
+    console.log(line);
+}
+
+function showProgress(nextId) {
+    const elapsed = Date.now() - startedAt;
+    const left = selected.length - done;
+    // ONLY ONCE A MUTANT HAS FINISHED is there a pace to extrapolate from; before that the estimate
+    // would be a number invented to fill the space.
+    const eta = done > 0 ? `~${humanTime((elapsed / done) * left)} left` : "measuring…";
+    if (WATCHING) {
+        const filled = Math.round((done / selected.length) * BAR_WIDTH);
+        process.stdout.write(`\r[${"#".repeat(filled)}${"-".repeat(BAR_WIDTH - filled)}] `
+            + `${String(done).padStart(3)}/${selected.length}  ${humanTime(elapsed)} · ${eta}  ${nextId}   `);
+        barDrawn = true;
+    } else if (done > 0 && done % 10 === 0) {
+        console.log(`… ${done}/${selected.length} · ${humanTime(elapsed)} elapsed · ${eta}`);
+    }
+}
+
+console.log(`${selected.length} mutants, one full test suite each.`);
+
 let survivors = 0;
 for (const mut of selected) {
+    showProgress(mut.id);
     const file = path.join(ROOT, mut.file);
     const original = fs.readFileSync(file, "utf8");
     // LINE ENDINGS ARE NOT PART OF A MUTATION, and this is subtler than it looks. Every `from`
@@ -1033,8 +1118,9 @@ for (const mut of selected) {
     if (occurrences === 0) {
         // NOT a survivor and NOT a kill: the code moved out from under the mutation, so the
         // battery is testing nothing. Re-author it against the code as it now stands.
-        console.log(`${mut.id}  NOT APPLIED — 'from' no longer matches ${mut.file}`);
+        say(`${mut.id}  NOT APPLIED — 'from' no longer matches ${mut.file}`);
         survivors++;
+        done++;
         continue;
     }
     if (occurrences > 1) {
@@ -1043,18 +1129,23 @@ for (const mut of selected) {
         // while its note goes on describing the other. Not hypothetical: reading object layers gave
         // `visible: a.visible === undefined ? ...` a second home, and TM4 silently re-aimed from a
         // tile layer to an object — still reporting a kill, for a guard nothing was testing.
-        console.log(`${mut.id}  AMBIGUOUS — 'from' matches ${occurrences} places in ${mut.file}; `
+        say(`${mut.id}  AMBIGUOUS — 'from' matches ${occurrences} places in ${mut.file}; `
             + "add context so it names one");
         survivors++;
+        done++;
         continue;
     }
     fs.writeFileSync(file, source.replace(mut.from, mut.to), "utf8");
     let res;
     try { res = verdict(runSuite()); } finally { fs.writeFileSync(file, original, "utf8"); }
     if (!res.ok) survivors++;
-    console.log(`${mut.id}  ${res.v.padEnd(28)} (${res.total} tests)  ${mut.note}`);
+    done++;
+    say(`${mut.id}  ${res.v.padEnd(28)} (${res.total} tests)  ${mut.note}`);
 }
 
+clearBar();
 console.log(`\n${selected.length - survivors}/${selected.length} killed.`
     + (only ? `  — PARTIAL RUN (MUTANT_ONLY=${process.env.MUTANT_ONLY}); the battery holds ${MUTANTS.length}.` : ""));
+// THE PACE, so the next run can be planned rather than waited out.
+console.log(`${humanTime(Date.now() - startedAt)} total, ${humanTime((Date.now() - startedAt) / Math.max(1, selected.length))} per mutant.`);
 process.exit(survivors > 0 ? 1 : 0);

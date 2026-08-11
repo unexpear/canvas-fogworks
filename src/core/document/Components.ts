@@ -43,7 +43,7 @@ import { resolveBooleanPaths } from "../geometry/Resolve";
 import { normalizePathNode } from "../geometry/PathBuilder";
 import { applyFrame } from "./Timeline";
 import { isFlatMesh, isIdentityMesh, warpCommands, skinMesh, ReadonlyMesh } from "./Mesh";
-import { rotatedTable, autotile } from "./Autotile";
+import { rotatedTable, autotile, autotileLayers } from "./Autotile";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
  *  Reserved: a stored node id may not contain it (checked on the edit AND load paths). */
@@ -887,9 +887,9 @@ export function resolveTilemaps(doc: ReadonlyDocument): ReadonlyDocument {
         const map = n.tilemap;
         const terrain = map?.terrain;
         if (!map || !terrain) { nodes.set(id, n as Node); return; }
-        const table = rotatedTable(new Map(terrain.art.map(a => [a.mask, a.index])));
-        const grid = autotile(
-            { cols: map.cols, rows: map.rows, cells: terrain.cells }, terrain.material, table);
+        const grid = autotileLayers(
+            { cols: map.cols, rows: map.rows, cells: terrain.cells },
+            terrain.materials.map(m => ({ id: m.id, art: m.art })));
         // THE STORED SHEET AND CELL SIZE SURVIVE — only the grid and the box are derived. A
         // derivation that rebuilt the sheet would be a second place the tileset is described.
         const { terrain: _dropped, ...rest } = map;

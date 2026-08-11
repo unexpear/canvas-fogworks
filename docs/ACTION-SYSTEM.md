@@ -1,6 +1,9 @@
 # Action System
 
 <!-- describes: src/core/actions -->
+<!-- re-read 2026-08-10 after schema 65: accurate. `SetTilemapAction`'s no-op check now compares a
+     terrain's material LIST position by position, because reordering two materials redraws every
+     shore while touching no cell — an edit a set-comparison would refuse as nothing. -->
 
 > 🔒 Frozen contract · schema v63 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Code in `src/core/actions/`.
 

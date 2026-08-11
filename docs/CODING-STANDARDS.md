@@ -1,6 +1,9 @@
 # Coding Standards
 
 <!-- describes: src/core/document/Document.ts -->
+<!-- re-read 2026-08-10 after schema 65: accurate. The 64->65 step is the first CONTENT-REWRITING
+     migration in a while and follows the stated rule — it rewrites only nodes it must, passes
+     already-migrated ones through untouched, and the guard for that has its own mutant. -->
 <!-- re-read 2026-08-10 after schema 64: accurate. The new fields follow the stated rules —
      one validator shared by the load and edit paths, and a header that says WHY the value is
      text rather than what it is. -->

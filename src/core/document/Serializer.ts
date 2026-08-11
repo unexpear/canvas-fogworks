@@ -363,6 +363,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "61") { raw = migrate_61_to_62(raw); version = "62"; }
     if (version === "62") { raw = migrate_62_to_63(raw); version = "63"; }
     if (version === "63") { raw = migrate_63_to_64(raw); version = "64"; }
+    if (version === "64") { raw = migrate_64_to_65(raw); version = "65"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -963,6 +964,48 @@ function migrate_62_to_63(raw: any): any {
  */
 function migrate_63_to_64(raw: any): any {
     return { ...raw, version: "64" };
+}
+
+/**
+ * 64 -> 65: a terrain layer's single `material` + `art` become a LIST of materials in paint order.
+ *
+ * THIS ONE REWRITES CONTENT, unlike the last several, and that is the whole reason the version has
+ * to move rather than the field being made optional. A 64 document's terrain says `material: 1` and
+ * carries one `art` array; a 65 document says `materials: [{ id: 1, art }]`. Nothing about the
+ * PICTURE changes — one material composited over an empty grid is that material — so a migrated
+ * file draws identically, which is what makes this safe to do without asking.
+ *
+ * A 65 DOCUMENT OPENED BY A 64 BUILD is the loud direction: the older `terrainError` requires
+ * `material` to be a whole number and would refuse the file outright rather than mis-draw it. That
+ * is the better failure of the two, and it is why the version is the thing that says so.
+ */
+function migrate_64_to_65(raw: any): any {
+    const nodes = raw?.document?.nodes;
+    if (!nodes || typeof nodes !== "object") return { ...raw, version: "65" };
+    const out: any = {};
+    for (const [id, node] of Object.entries<any>(nodes)) {
+        const terrain = node?.tilemap?.terrain;
+        // ALREADY MIGRATED, OR NOT TERRAIN AT ALL, passes through untouched — a migration that
+        // rebuilt every node would be a migration that can corrupt one it did not need to read.
+        if (!terrain || terrain.materials !== undefined) { out[id] = node; continue; }
+        out[id] = {
+            ...node,
+            tilemap: {
+                ...node.tilemap,
+                terrain: {
+                    cells: terrain.cells,
+                    materials: [{
+                        // `material` was required to be >= 1, so a missing one is a file that the
+                        // 64 loader would already have refused; 1 keeps it openable rather than
+                        // throwing during a migration, where there is nothing useful to say.
+                        id: typeof terrain.material === "number" ? terrain.material : 1,
+                        art: Array.isArray(terrain.art) ? terrain.art : []
+                    }]
+                }
+            }
+        };
+    }
+    return { ...raw, document: { ...raw.document, nodes: out }, version: "65" };
 }
 
 function migrate_54_to_55(raw: any): any {

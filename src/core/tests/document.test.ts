@@ -30,8 +30,8 @@ import { clipsContentError, BLEND_MODES, blendModeError } from "../document/Node
 import { pickColorAt, rampT } from "../geometry/Eyedropper";
 import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, tileSourceRect as sheetTileRect, tileIndexAt,
          visibleCells, cellAt, TILE_EMPTY,
-         flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D } from "../document/Tilemap";
-import { withTiles, withTerrain, withTerrainArt, asTerrain, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
+         flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D , TERRAIN_MATERIALS_MAX} from "../document/Tilemap";
+import { withTiles, withTerrain, withTerrainArt, asTerrain, rectCells, fillRegion, resizeTilemap , withTerrainMaterials} from "../document/TilemapEdit";
 import { resolveTilemaps } from "../document/Components";
 import { emptyTilemap } from "../document/Tilemap";
 import { TileTool, TileBrush } from "../../editor/tools/TileTool";
@@ -47,7 +47,7 @@ import { SelectionMask, SELECTED, selectionMaskError, emptyMask, fullMask, isSel
     ellipseSelection, lassoSelection, wandSelection, growSelection, borderSelection,
     invertSelection, selectionClip, restoreUnselected } from "../paint/Selection";
 import { Terrain, AutotileTable, AUTOTILE_MASKS, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR,
-    flipMask, autotileClasses, rotatedTable, dualMask, autotile, autotileTableError } from "../document/Autotile";
+    flipMask, autotileClasses, rotatedTable, dualMask, autotile, autotileTableError , autotileLayers} from "../document/Autotile";
 import { SetTilemapAction } from "../actions/SetTilemapAction";
 import { EyedropperTool } from "../../editor/tools/EyedropperTool";
 import { frameOnLoad, pickedMeshPoint, pixelMaskFor } from "../../editor/EditorState";
@@ -4570,9 +4570,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 63→64 landed, adding
-        // `Node.className` and `Node.userData`, the metadata this engine carries without reading.)
-        expect(() => migrateIfNeeded(legacy, "65")).toThrow('Migration not implemented for document schema "64"');
+        // time a real migration is added — most recently when 64→65 landed, turning a terrain
+        // layer's single material into a LIST of them in paint order.)
+        expect(() => migrateIfNeeded(legacy, "66")).toThrow('Migration not implemented for document schema "65"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -28692,7 +28692,7 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
     const terrainMap = (over: Record<string, unknown> = {}) => ({
         cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
         tiles: new Array(6).fill(TILE_EMPTY),
-        terrain: { cells: [...CELLS], material: 1, art: ART },
+        terrain: { cells: [...CELLS], materials: [{ id: 1, art: ART }] },
         ...over
     });
     const docWith = (map: unknown) => {
@@ -28709,18 +28709,18 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // The one rule that matters: `cells` is `cols * rows`. A terrain with its own width and
         // height would be a second size to keep in step, and a mismatch shows as a coastline
         // sheared by one cell per row — which reads as art placed by hand.
-        expect(tilemapError(terrainMap({ terrain: { cells: [1, 1, 0], material: 1, art: ART } })))
+        expect(tilemapError(terrainMap({ terrain: { cells: [1, 1, 0], materials: [{ id: 1, art: ART }] } })))
             .toContain("must hold exactly cols * rows (6) entries, got 3");
         // MATERIAL 0 IS RESERVED for "nothing", so a layer drawing it would autotile the holes.
-        expect(tilemapError(terrainMap({ terrain: { cells: [...CELLS], material: 0, art: ART } })))
-            .toContain("material must be a whole number >= 1");
+        expect(tilemapError(terrainMap({ terrain: { cells: [...CELLS], materials: [{ id: 0, art: ART }] } })))
+            .toContain("id must be a whole number >= 1");
         // A mask outside the sixteen is art filed under a neighbourhood that cannot occur.
-        expect(tilemapError(terrainMap({ terrain: { cells: [...CELLS], material: 1,
-            art: [{ mask: 16, index: 3 }] } }))).toContain("mask must be a whole number 0..15");
-        expect(tilemapError(terrainMap({ terrain: { cells: [...CELLS], material: 1,
-            art: [{ mask: 2, index: -1 }] } }))).toContain("index must be a whole number >= 0");
+        expect(tilemapError(terrainMap({ terrain: { cells: [...CELLS], materials: [{ id: 1,
+            art: [{ mask: 16, index: 3 }] }] } }))).toContain("mask must be a whole number 0..15");
+        expect(tilemapError(terrainMap({ terrain: { cells: [...CELLS], materials: [{ id: 1,
+            art: [{ mask: 2, index: -1 }] }] } }))).toContain("index must be a whole number >= 0");
         // A material id is an id, not an index into anything here — but it is still a whole number.
-        expect(tilemapError(terrainMap({ terrain: { cells: [1, 1, 0, 1, 0, -1], material: 1, art: ART } })))
+        expect(tilemapError(terrainMap({ terrain: { cells: [1, 1, 0, 1, 0, -1], materials: [{ id: 1, art: ART }] } })))
             .toContain("cells must be whole numbers >= 0");
     });
 
@@ -28829,7 +28829,8 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // in that class's orbit, so an edit that only touched the art must not read as nothing.
         const current = dispatcher.getDocument().nodes.get("T")!.tilemap!;
         const reArt = { ...current, terrain: { ...current.terrain!,
-            art: current.terrain!.art.map((a, i) => (i === 0 ? { mask: a.mask, index: 99 } : a)) } };
+            materials: current.terrain!.materials.map(m => ({ ...m,
+                art: m.art.map((a, i) => (i === 0 ? { mask: a.mask, index: 99 } : a)) })) } };
         expect(new SetTilemapAction(dispatcher.getDocument(), "T", reArt as never).validate()).toBe(true);
 
         // AND SO DOES ASSIGNING A CLASS THAT HAD NONE, which is a change in the art's LENGTH rather
@@ -28838,8 +28839,34 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // what the panel's six pickers do the first time each is clicked.
         const sparse = dispatcher.getDocument().nodes.get("T")!.tilemap!;
         const appended = { ...sparse, terrain: { ...sparse.terrain!,
-            art: [...sparse.terrain!.art, { mask: 6, index: 21 }] } };
+            materials: sparse.terrain!.materials.map(m => ({ ...m,
+                art: [...m.art, { mask: 6, index: 21 }] })) } };
         expect(new SetTilemapAction(dispatcher.getDocument(), "T", appended as never).validate()).toBe(true);
+    });
+
+    test("REORDERING materials is an edit, not a no-op", () => {
+        // It is the one edit that redraws every shore without touching a single painted cell — so
+        // an action layer comparing only ids-as-a-set, or comparing lengths, refuses it and the
+        // author sees the panel move and the map not. `sameTerrain` compares position by position.
+        const doc = docWith(terrainMap());
+        const dispatcher = new ActionDispatcher(doc);
+        const two = withTerrainMaterials(dispatcher.getDocument().nodes.get("T")!.tilemap!,
+            [{ id: 1, art: ART }, { id: 2, art: ART }])!;
+        expect(dispatcher.dispatchAction(new SetTilemapAction(dispatcher.getDocument(), "T", two)).success)
+            .toBe(true);
+
+        const now = dispatcher.getDocument().nodes.get("T")!.tilemap!;
+        const swapped = withTerrainMaterials(now, [...now.terrain!.materials].reverse()
+            .map(m => ({ id: m.id, art: [...m.art] })))!;
+        // THE SAME MATERIALS, THE SAME CELLS, A DIFFERENT PICTURE.
+        expect(swapped.terrain!.materials.map(m => m.id)).toEqual([2, 1]);
+        expect(new SetTilemapAction(dispatcher.getDocument(), "T", swapped).validate()).toBe(true);
+        // …and putting them back the way they were is a change again, not a no-op against the first.
+        expect(dispatcher.dispatchAction(new SetTilemapAction(dispatcher.getDocument(), "T", swapped)).success)
+            .toBe(true);
+        const back = withTerrainMaterials(dispatcher.getDocument().nodes.get("T")!.tilemap!,
+            [{ id: 1, art: ART }, { id: 2, art: ART }])!;
+        expect(new SetTilemapAction(dispatcher.getDocument(), "T", back).validate()).toBe(true);
     });
 
     test("PAINTING terrain re-derives the picture, which is the whole point", () => {
@@ -28884,12 +28911,12 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // ART. One class at a time, because that is how an artist draws — and reassigning the same
         // tile to the same class changes nothing.
         const reArt = withTerrainArt(map, 15, 42);
-        expect(reArt!.terrain!.art.find(a => a.mask === 15)!.index).toBe(42);
+        expect(reArt!.terrain!.materials[0].art.find(a => a.mask === 15)!.index).toBe(42);
         expect(withTerrainArt(map, 15, 16)).toBeNull();
         // A class with no art yet is APPENDED rather than ignored, or six pickers could only ever
         // edit the classes that already had tiles.
         const fresh = withTerrainArt(map, 6, 77);
-        expect(fresh!.terrain!.art.find(a => a.mask === 6)!.index).toBe(77);
+        expect(fresh!.terrain!.materials[0].art.find(a => a.mask === 6)!.index).toBe(77);
         expect(withTerrainArt(map, 16, 3)).toBeNull();   // not one of the sixteen
 
         // BECOMING a terrain layer throws the tiles away, which is why it is a deliberate act and
@@ -28903,7 +28930,8 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         expect(tilemapError(converted)).toBeNull();
         // A fresh terrain layer draws NOTHING until it is painted, rather than guessing the map was
         // all one material.
-        expect(converted.terrain!.material).toBe(1);
+        expect(converted.terrain!.materials).toHaveLength(1);
+        expect(converted.terrain!.materials[0].id).toBe(1);
         expect(asTerrain(converted, 1, [])).toBeNull();          // already terrain
         expect(asTerrain(ordinary, 0, [])).toBeNull();           // material 0 is "nothing"
     });
@@ -28918,8 +28946,8 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // …while an edit that IS about terrain keeps everything else intact, sheet included.
         const painted = withTerrain(map, [{ col: 2, row: 1, material: 1 }])!;
         expect(painted.sheet).toEqual(map.sheet);
-        expect(painted.terrain!.material).toBe(1);
-        expect(painted.terrain!.art).toEqual(map.terrain!.art);
+        expect(painted.terrain!.materials[0].id).toBe(1);
+        expect(painted.terrain!.materials).toEqual(map.terrain!.materials);
         expect(painted.tiles.every(t => t === TILE_EMPTY)).toBe(true);
     });
 
@@ -29050,7 +29078,15 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         expect(app).toMatch(/data-terrain-start="1"/);
         expect(app).toMatch(/asTerrain\(map, tileMaterial \|\| 1,/);
         expect(app).toMatch(/data-terrain-art="1"/);
-        expect(app).toMatch(/withTerrainArt\(map, mask, tileIndex\)/);
+        // NAMING WHICH MATERIAL'S ART (schema 65) — a layer draws several now, so a picker that
+        // did not say which one would edit the first and look like it had done nothing.
+        expect(app).toMatch(/withTerrainArt\(map, mask, tileIndex, activeMat\?\.id\)/);
+        // AND THE MATERIALS THEMSELVES ARE AUTHORABLE: added, reordered, removed. Paint order
+        // is what decides the shore, so moving one has to be a gesture rather than a rebuild.
+        expect(app).toMatch(/data-terrain-materials="1"/);
+        expect(app).toMatch(/aria-label="Add material"/);
+        expect(app).toMatch(/aria-label=\{`Move material \${m\.id} later`\}/);
+        expect(app).toMatch(/aria-label=\{`Remove material \${m\.id}`\}/);
         expect(app).toMatch(/terrain: tileTerrain, material: tileMaterial/);
         // WITHOUT ART A TERRAIN LAYER DRAWS NOTHING, so the panel says which classes are unassigned
         // rather than leaving an author to wonder why the map is blank.
@@ -29062,13 +29098,147 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         expect(app).toMatch(/setTileMode\("rect"\)/);
     });
 
+    test("two materials COMPOSITE in paint order, and reordering redraws the shore", () => {
+        // THE FIXTURE HAS TO HAVE A SHORE. Two materials that never touch composite identically
+        // whichever order they are in, so the rule under test would be unobservable — the same trap
+        // as a viewport at the origin. These meet along a whole column.
+        //
+        // Cells, 3x2: material 1 on the left column, material 2 on the middle, nothing on the right.
+        //     1 2 0
+        //     1 2 0
+        const cells = [1, 2, 0, 1, 2, 0];
+        // MASK 0 GETS NO ART, which is what "draws only where it has presence" MEANS — the empty
+        // neighbourhood is a class like any other, and assigning it a tile makes EVERY cell in the
+        // grid draw something. That is how the first version of this fixture hid the compositing
+        // rule completely: nothing was ever empty, so nothing could ever show through.
+        const artOf = (index: number) =>
+            autotileClasses().filter(mask => mask !== 0).map(mask => ({ mask, index }));
+        const rock = { id: 1, art: artOf(10) };
+        const water = { id: 2, art: artOf(20) };
+        const terrain = { cols: 3, rows: 2, cells };
+
+        const rockFirst = autotileLayers(terrain, [rock, water]);
+        const waterFirst = autotileLayers(terrain, [water, rock]);
+        // THE DISPLAY GRID IS ONE LARGER EACH WAY — 4x3 — because a display cell sits on the corners
+        // of four terrain cells.
+        expect(rockFirst.cols).toBe(4);
+        expect(rockFirst.rows).toBe(3);
+
+        // WHERE THEY MEET, THE LATER ONE WINS, and swapping the array swaps the answer. That column
+        // is the whole test: everywhere else the two agree, so a composite that ignored order would
+        // pass every other assertion here.
+        expect(rockFirst.tiles).not.toEqual(waterFirst.tiles);
+        // AN ABSOLUTE ANSWER, NOT JUST A DIFFERENT ONE. Comparing the two orderings against EACH
+        // OTHER cannot see the order being reversed inside the composite — both results swap and
+        // they still differ. So: name a cell where they meet and say which tile must be there.
+        // WHICH CELL matters and the first choice was wrong: at display (2,1) only material 2 has
+        // any presence, so order cannot decide anything there. The cell where BOTH do is display
+        // (1,1), whose four corners are terrain (0,0) (1,0) (0,1) (1,1) — materials 1, 2, 1, 2. Two
+        // corners each, both masks non-zero, so the later draw owns it.
+        const meet = 1 * rockFirst.cols + 1;
+        expect(rockFirst.tiles[meet]).toBe(20);      // water drawn last
+        expect(waterFirst.tiles[meet]).toBe(10);     // rock drawn last
+        const differing = rockFirst.tiles.filter((t, i) => t !== waterFirst.tiles[i]).length;
+        expect(differing).toBeGreaterThan(0);
+        for (let i = 0; i < rockFirst.tiles.length; i++) {
+            if (rockFirst.tiles[i] === waterFirst.tiles[i]) continue;
+            // Every disagreement is exactly the two materials trading places — not a third value
+            // appearing from a composite that blended or dropped something.
+            expect([10, 20]).toContain(rockFirst.tiles[i]);
+            expect([10, 20]).toContain(waterFirst.tiles[i]);
+        }
+
+        // A MATERIAL DRAWS ONLY WHERE IT HAS PRESENCE, which is what makes compositing work at all:
+        // the far right of the grid touches neither material, so it stays empty rather than being
+        // painted by whichever layer ran last.
+        expect(rockFirst.tiles[3]).toBe(TILE_EMPTY);          // display col 3, row 0
+        // FLIPS ARE ABSENT WHEN NOTHING IS TURNED, the invariant `Tilemap.flips` states — and the
+        // composite has to keep it as carefully as `autotile` does, because it builds a flips array
+        // of its own. An EMPTY terrain is what makes that observable, and it took two tries to find:
+        // giving art for all sixteen masks directly does NOT avoid flips, because `rotatedTable`
+        // still reaches the ten non-class masks by flipping a class. With nothing painted, every
+        // display cell is mask 0 — nothing drawn, nothing turned.
+        const unturned = autotileLayers({ cols: 3, rows: 2, cells: [0, 0, 0, 0, 0, 0] }, [rock, water]);
+        expect(unturned.flips).toBeUndefined();
+        expect(unturned.tiles.every(t => t === TILE_EMPTY)).toBe(true);
+        // …while the painted grid above DOES turn tiles, so the absence is a real answer rather
+        // than something that happens to be true of every input.
+        expect(rockFirst.flips).toBeDefined();
+
+        // …and one material alone is exactly what it was before there were two.
+        expect(autotileLayers(terrain, [rock]).tiles)
+            .toEqual(autotile(terrain, 1, rotatedTable(new Map(rock.art.map(a => [a.mask, a.index])))).tiles);
+    });
+
+    test("a material list is validated: at least one, no duplicate ids, and a cap", () => {
+        const ok = (materials: unknown) =>
+            tilemapError(terrainMap({ terrain: { cells: [...CELLS], materials } }));
+        expect(ok([{ id: 1, art: ART }])).toBeNull();
+        expect(ok([{ id: 1, art: ART }, { id: 2, art: ART }])).toBeNull();
+        // A LAYER THAT DRAWS NOTHING reads as a broken import rather than as a choice.
+        expect(ok([])).toContain("at least one material");
+        // TWICE IS AMBIGUOUS, not redundant: two entries with one id give a cell two answers about
+        // which art draws it, and paint order cannot break that tie because both ARE the material.
+        expect(ok([{ id: 1, art: ART }, { id: 1, art: ART }])).toContain("appears more than once");
+        expect(ok(Array.from({ length: TERRAIN_MATERIALS_MAX + 1 }, (_, i) => ({ id: i + 1, art: ART }))))
+            .toContain(`at most ${TERRAIN_MATERIALS_MAX}`);
+        expect(ok("not an array")).toContain("must be an array");
+    });
+
+    test("a 64 document's single material MIGRATES to a list of one, and draws the same", () => {
+        // THE FIRST CONTENT-REWRITING MIGRATION IN A WHILE, so it is checked by round-tripping a
+        // real 64 file rather than by reading the function.
+        const old64 = {
+            version: "64",
+            document: {
+                metadata: {}, rootNodeUuids: ["T"], variables: {},
+                nodes: {
+                    T: {
+                        id: "T", type: "core.tilemap", parent: null, children: [],
+                        geometry: { x: 0, y: 0, width: 48, height: 16 },
+                        style: { fill: "none", opacity: 1 }, layout: {}, name: "g",
+                        tilemap: {
+                            cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
+                            tiles: new Array(6).fill(TILE_EMPTY),
+                            terrain: { cells: [...CELLS], material: 4, art: ART }
+                        }
+                    }
+                }
+            }
+        };
+        const migrated = migrateIfNeeded(old64 as never);
+        expect(migrated.version).toBe(SCHEMA_VERSION);
+        const node = (migrated as never as { document: { nodes: Record<string, { tilemap: Tilemap }> } })
+            .document.nodes.T;
+        expect(node.tilemap.terrain!.materials).toEqual([{ id: 4, art: ART }]);
+        // THE OLD FIELDS ARE GONE, not left beside the new one — a document carrying both would let
+        // a reader pick either and be right half the time.
+        expect((node.tilemap.terrain as never as { material?: number }).material).toBeUndefined();
+        expect((node.tilemap.terrain as never as { art?: unknown }).art).toBeUndefined();
+        // AND IT LOADS, which is the assertion that matters — the older shape would now be refused.
+        expect(tilemapError(node.tilemap)).toBeNull();
+
+        // A FILE THAT SAYS 64 AND IS ALREADY MIGRATED, which is the case the guard exists for and
+        // the only one that reaches it. Re-running `migrateIfNeeded` on the OUTPUT does not: it is
+        // stamped 65 and returns untouched, so the first version of this assertion tested nothing —
+        // a mutant deleting the guard survived it. A hand-edited version field, or a chain that
+        // re-enters, produces exactly this input, and without the guard the material LIST would be
+        // wrapped inside a material whose id is undefined: a document that opens and draws nothing.
+        const halfDone = JSON.parse(JSON.stringify(old64));
+        halfDone.document.nodes.T.tilemap.terrain = { cells: [...CELLS], materials: [{ id: 4, art: ART }] };
+        const again = migrateIfNeeded(halfDone as never);
+        expect((again as never as { document: { nodes: Record<string, { tilemap: Tilemap }> } })
+            .document.nodes.T.tilemap.terrain!.materials).toEqual([{ id: 4, art: ART }]);
+    });
+
     test("a stored terrain survives a round trip through the file", () => {
         const doc = docWith(terrainMap());
         const reloaded = deserializeDocument(serializeDocument(doc));
         const map = reloaded.nodes.get("T")!.tilemap!;
         expect(map.terrain!.cells).toEqual(CELLS);
-        expect(map.terrain!.material).toBe(1);
-        expect(map.terrain!.art).toHaveLength(ART.length);
+        expect(map.terrain!.materials).toHaveLength(1);
+        expect(map.terrain!.materials[0].id).toBe(1);
+        expect(map.terrain!.materials[0].art).toHaveLength(ART.length);
         // THE STORED FILE HOLDS THE QUESTION, not the picture — the tiles are still empty in it.
         expect(map.tiles.every((t: number) => t === TILE_EMPTY)).toBe(true);
         expect(() => validateDocumentIntegrity(reloaded)).not.toThrow();
@@ -29215,8 +29385,8 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
             style: { fill: "none", opacity: 1 }, layout: {}, name: "terrain",
             tilemap: { cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
                 tiles: new Array(6).fill(TILE_EMPTY),
-                terrain: { cells: [1, 1, 0, 1, 0, 0], material: 1,
-                    art: [{ mask: 0, index: 0 }, { mask: 15, index: 5 }] } } } as Node);
+                terrain: { cells: [1, 1, 0, 1, 0, 0], materials: [{ id: 1,
+                    art: [{ mask: 0, index: 0 }, { mask: 15, index: 5 }] }] } } } as Node);
         d.rootNodeUuids = ["T"];
         const back = parseTiledMap(exportTiledMap(d, "t.png").xml);
         // THE DISPLAY GRID, one larger each way — which is what the dual grid draws and therefore

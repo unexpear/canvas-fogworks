@@ -43,6 +43,15 @@
  */
 export const TILEMAP_MAX_CELLS = 1_048_576;
 
+/**
+ * The most materials one terrain layer may draw (schema 65).
+ *
+ * A bound for the same reason every other hand-editable array here has one. Sixteen is well past
+ * anything an artist draws — a tileset with sixteen autotiled terrains in one layer would need
+ * ninety-six drawn tiles — and it still refuses the file that would otherwise derive forever.
+ */
+export const TERRAIN_MATERIALS_MAX = 16;
+
 /** The index that means "nothing here" — not tile zero, which is a real tile. */
 export const TILE_EMPTY = -1;
 
@@ -123,12 +132,10 @@ export interface Tilemap {
     terrain?: TerrainField;
 }
 
-/** The authored half of an autotiled layer: which cells, which material, and the six drawn tiles. */
-export interface TerrainField {
-    /** `cols * rows` material ids, row-major. 0 is "nothing", so an empty grid needs no special case. */
-    cells: number[];
-    /** Which material THIS layer draws. One material per layer, as `Autotile`'s header argues. */
-    material: number;
+/** One material a terrain layer draws, and the art it draws it with. */
+export interface TerrainMaterial {
+    /** The id that appears in `TerrainField.cells`. Never 0 — that is "nothing". */
+    id: number;
     /**
      * The art: one tile per SYMMETRY CLASS, as `autotileClasses` names them.
      *
@@ -138,6 +145,26 @@ export interface TerrainField {
      * expanded flip really does map the class's mask onto the mask it is filed under.
      */
     art: { mask: number; index: number }[];
+}
+
+/** The authored half of an autotiled layer: which cells hold which material, and how each is drawn. */
+export interface TerrainField {
+    /** `cols * rows` material ids, row-major. 0 is "nothing", so an empty grid needs no special case. */
+    cells: number[];
+    /**
+     * The materials this layer draws (schema 65), IN PAINT ORDER.
+     *
+     * AN ARRAY BECAUSE THE ORDER IS THE RULE. A display cell has four corners and they can belong to
+     * two different materials — a shore is exactly that — and one cell can show ONE tile, so
+     * something has to win. Later draws over earlier, which is the only rule that needs no extra
+     * field, is what an author already understands from layers, and is reorderable without touching
+     * a cell. The alternative, a map keyed by id, would leave the tie to whatever order the runtime
+     * happened to iterate in.
+     *
+     * ONE ENTRY IS THE ORDINARY CASE and was the only case until 65. A generator wanting rock AND
+     * water is what made a second necessary — see `CaveTerrain`.
+     */
+    materials: TerrainMaterial[];
 }
 
 export interface ReadonlyTilemap {
@@ -150,8 +177,10 @@ export interface ReadonlyTilemap {
     readonly flips?: readonly number[];
     readonly terrain?: {
         readonly cells: readonly number[];
-        readonly material: number;
-        readonly art: readonly { readonly mask: number; readonly index: number }[];
+        readonly materials: readonly {
+            readonly id: number;
+            readonly art: readonly { readonly mask: number; readonly index: number }[];
+        }[];
     };
 }
 
@@ -230,19 +259,38 @@ export function terrainError(terrain: unknown, cells: number): string | null {
         // whole number and not negative — 0 means "nothing", which is what an empty grid holds.
         if (!Number.isInteger(c) || (c as number) < 0) return "tilemap.terrain.cells must be whole numbers >= 0";
     }
-    if (!Number.isInteger(t.material) || (t.material as number) < 1) {
-        // MATERIAL 0 IS RESERVED for "nothing", so a layer drawing it would autotile the holes.
-        return "tilemap.terrain.material must be a whole number >= 1";
+    if (!Array.isArray(t.materials)) return "tilemap.terrain.materials must be an array";
+    if ((t.materials as unknown[]).length === 0) {
+        // A LAYER THAT DRAWS NOTHING is a layer whose picture is empty by rule, which reads as a
+        // broken import rather than as a choice. `asTerrain` always makes one.
+        return "tilemap.terrain.materials must hold at least one material";
     }
-    if (!Array.isArray(t.art)) return "tilemap.terrain.art must be an array";
-    for (const entry of t.art as unknown[]) {
-        if (entry === null || typeof entry !== "object") return "a terrain art entry must be an object";
-        const e = entry as Record<string, unknown>;
-        if (!Number.isInteger(e.mask) || (e.mask as number) < 0 || (e.mask as number) >= 16) {
-            return "a terrain art entry's mask must be a whole number 0..15";
+    if ((t.materials as unknown[]).length > TERRAIN_MATERIALS_MAX) {
+        return `tilemap.terrain.materials must hold at most ${TERRAIN_MATERIALS_MAX} materials`;
+    }
+    const seen = new Set<number>();
+    for (const entry of t.materials as unknown[]) {
+        if (entry === null || typeof entry !== "object") return "a terrain material must be an object";
+        const m = entry as Record<string, unknown>;
+        if (!Number.isInteger(m.id) || (m.id as number) < 1) {
+            // MATERIAL 0 IS RESERVED for "nothing", so a layer drawing it would autotile the holes.
+            return "a terrain material's id must be a whole number >= 1";
         }
-        if (!Number.isInteger(e.index) || (e.index as number) < 0) {
-            return "a terrain art entry's index must be a whole number >= 0";
+        // TWICE IS AMBIGUOUS, not redundant: two entries with one id give a cell two answers about
+        // which art draws it, and the paint-order rule cannot break the tie because both are the
+        // same material.
+        if (seen.has(m.id as number)) return `terrain material ${m.id} appears more than once`;
+        seen.add(m.id as number);
+        if (!Array.isArray(m.art)) return "a terrain material's art must be an array";
+        for (const entry2 of m.art as unknown[]) {
+            if (entry2 === null || typeof entry2 !== "object") return "a terrain art entry must be an object";
+            const e = entry2 as Record<string, unknown>;
+            if (!Number.isInteger(e.mask) || (e.mask as number) < 0 || (e.mask as number) >= 16) {
+                return "a terrain art entry's mask must be a whole number 0..15";
+            }
+            if (!Number.isInteger(e.index) || (e.index as number) < 0) {
+                return "a terrain art entry's index must be a whole number >= 0";
+            }
         }
     }
     return null;

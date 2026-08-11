@@ -9,7 +9,7 @@
 <!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
      below. The earlier note stands — the rectangle gesture added no field. -->
 
-> 🔒 Frozen contract · schema v64 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v65 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -1212,6 +1212,13 @@ saved again is the map that was opened. `className` is NOT `node.type`: that one
 draws (`core.rectangle`) and is a closed set it switches on, while this is the author's word for what
 the thing IS — two different questions the format happens to spell the same, so the one the renderer
 does not read is the one that moved.
+
+**A TERRAIN LAYER DRAWS A LIST OF MATERIALS, IN PAINT ORDER (schema 65).** `TerrainField.materials`
+replaced the single `material` + `art` pair. The order is the RULE, not presentation: a display cell
+sits on four terrain corners, those corners can belong to two different materials — a shore is exactly
+that cell — and one cell shows one tile, so something must win. Later draws over earlier. Removing a
+material LEAVES ITS CELLS ALONE, holding an id nothing draws: the cells are what the author meant, and
+rewriting them to 0 would destroy a region's shape on the way to changing how it looks.
 
 **TERRAIN: the question the grid answers (schema 63).** A `Tilemap` may carry `terrain` — which
 cells hold a material, which material this layer draws, and one tile per SYMMETRY CLASS — and
