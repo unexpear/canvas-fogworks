@@ -16,6 +16,13 @@ const OUT = "C:/Users/micha/Documents/code projects/f1/New folder/src/app/theme/
 /**
  * The choice, and the reason for each. Hotspots are the measured opaque extremity toward the tool's
  * working end — decoded from the alpha, not eyeballed.
+ *
+ * THE FIRST FIELD IS A TOOL NAME AND NOTHING ELSE. It is looked up as `TOOL_CURSORS[toolName]`, so a
+ * key that is merely a good description of a tool matches no tool and the cursor never fires. This
+ * shipped wrong once: the marquee's entry was called `pixelSelect` — the name of its TOOL CLASS, not
+ * of the tool — and six of the seven cursors worked while nobody could see which one did not. The
+ * live set is the union of every `tools:` array in `WORKSPACES` (App.tsx), and a test asserts every
+ * key below is in it.
  */
 const CHOSEN = [
     ["paint", "drawing_brush", 1, 16, "the brush's bristles, bottom-left of the sprite"],
@@ -24,7 +31,7 @@ const CHOSEN = [
     ["pen", "drawing_pen", 5, 4, "the nib"],
     ["tiles", "drawing_pencil", 6, 4, "the pencil's tip — a tile brush draws one cell at a time"],
     ["weights", "drawing_spray", 4, 4, "a soft falloff brush, which is what a weight brush is"],
-    ["pixelSelect", "cross_large", 15, 15, "a marquee is aimed from its centre"],
+    ["marquee", "cross_large", 15, 15, "a marquee is aimed from its centre"],
 ];
 
 const rows = [];

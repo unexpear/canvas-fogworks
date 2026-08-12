@@ -1786,9 +1786,17 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     // `TOOL_CURSORS` covers the tools whose ART EXISTS — brush, bucket, picker, pen, pencil, spray,
     // marquee — and the rest keep their native keyword deliberately: `grab` already says "move" to
     // everybody, and no drawn cursor would say it better.
+    // EVERY NAME HERE MUST BE ONE `setTool` CAN RECEIVE, which a test now checks — because a name
+    // that is merely a good description of a tool matches nothing and the chain ends in a working
+    // `default`, so it cannot fail loudly. `TOOL_CURSORS.pixelSelect` was named after the marquee's
+    // tool CLASS and fired for months without firing.
+    //
+    // ALL EIGHT SHAPE KINDS, not just the rectangle. `setTool` is called with the KIND — the flyout
+    // passes `rectangle`, `ellipse`, `text` and so on, and `"shapes"` is only the toolbar SLOT — so
+    // naming one kind gave a crosshair to the rectangle and left the other seven on the arrow.
     const canvasCursor = es.hoverCursor
         ?? TOOL_CURSORS[toolName]
-        ?? (toolName === "rectangle"
+        ?? ((SHAPE_KINDS as readonly string[]).includes(toolName)
             ? "crosshair"
             : toolName === "move"
                 ? (es.isDragging ? "grabbing" : "grab")

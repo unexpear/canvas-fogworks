@@ -167,6 +167,7 @@ import { resolveBooleans } from "../document/Components";
 import { BooleanOp, booleanOpError } from "../document/Node";
 import { TEXT_ALIGNS, FONT_FAMILY_MAX, TextAlign } from "../document/Node";
 import { alignBars, ALIGN_ICON_BOX } from "../../app/theme/AlignIcons";
+import { TOOL_CURSORS } from "../../app/theme/Cursors";
 import { blendColor, blendStates, easingAt, interactionFor, interactionsError, Interaction, Trigger, TRANSITION_MAX_MS, INTERACTIONS_MAX } from "../document/Prototype";
 import { applyActiveState } from "../document/Components";
 import { SetInteractionsAction } from "../actions/SetInteractionsAction";
@@ -27012,21 +27013,51 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         expect(app).toMatch(/aria-label=\{`Place \${a\.path}`\}/);
     });
 
-    test("the tool CURSORS are wired, and every one names a hotspot", () => {
-        // Eight tools shared one arrow: the toolbar knew which was active and the pointer did not.
-        // Verified live as well — the brush, bucket, eyedropper and tile tools each hand the canvas
-        // a themed cursor in the running app.
+    test("every cursor key is a TOOL NAME, so the cursor can actually fire", () => {
+        // THIS IS THE ASSERTION THE OLD ONE WAS MISSING, and it cost a shipped bug. The old test
+        // checked seven hand-copied names appeared in the generated module — true of ANY names —
+        // and never asked whether a name was a tool. `pixelSelect` was the marquee's tool CLASS,
+        // matched nothing, and could not fail loudly, because the chain ends in a working
+        // `default`. A cursor is reached by `TOOL_CURSORS[toolName]`, so the rule is: every key
+        // must be a name `setTool` can actually receive.
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         expect(app).toMatch(/\?\? TOOL_CURSORS\[toolName\]/);
-        const gen = readFileSync(resolve(__dirname, "../../app/theme/Cursors.ts"), "utf8");
-        for (const tool of ["paint", "bucket", "eyedropper", "pen", "tiles", "weights", "pixelSelect"]) {
-            expect(gen).toContain(`${tool}: "url(data:image/png;base64,`);
+
+        // The live set, derived rather than restated — a second hand-written list is what went
+        // wrong the first time. It is NOT simply the workspaces' `tools` arrays: `"shapes"` there
+        // is a toolbar SLOT the flyout intercepts, and what it calls `setTool` with is a SHAPE
+        // KIND. Getting this wrong in the obvious direction is what made the first attempt at this
+        // fix a regression — it moved the fallback onto `"shapes"`, which no tool is ever named.
+        const tools = new Set<string>(SHAPE_KINDS);
+        for (const row of app.match(/tools: \[[^\]]*\]/g) ?? []) {
+            for (const q of row.match(/"[a-zA-Z]+"/g) ?? []) tools.add(q.slice(1, -1));
         }
+        expect(tools.size).toBeGreaterThanOrEqual(16);     // the parse found the arrays, not nothing
+        expect(tools).toContain("marquee");                // …the key that was wrong
+        tools.delete("shapes");                            // …and the slot that is not a tool
+
+        for (const key of Object.keys(TOOL_CURSORS)) {
+            expect({ key, isATool: tools.has(key) }).toEqual({ key, isATool: true });
+        }
+        // THE FALLBACK CHAIN IS HELD TO THE SAME RULE, since that is the other half of the lookup.
+        const chain = app.slice(app.indexOf("const canvasCursor ="), app.indexOf(": \"default\");") + 14);
+        const named = (chain.match(/toolName === "([a-zA-Z]+)"/g) ?? [])
+            .map(q => q.slice(q.indexOf('"') + 1, -1));
+        for (const name of named) {
+            expect({ name, isATool: tools.has(name) }).toEqual({ name, isATool: true });
+        }
+        // …and the chain must genuinely name a tool, or the loop above asserts nothing at all.
+        expect(named).toContain("move");
+        // EVERY SHAPE KIND GETS THE CROSSHAIR, not just the one that used to be named. A shape tool
+        // aims at a point; seven of the eight kinds were drawing under a plain arrow.
+        expect(chain).toContain("SHAPE_KINDS as readonly string[]).includes(toolName)");
+
+        const gen = readFileSync(resolve(__dirname, "../../app/theme/Cursors.ts"), "utf8");
         // A HOTSPOT IS NOT OPTIONAL. `url(...)` with no coordinates puts the point at the sprite's
         // top-left corner, which for a brush drawn pointing up-left is close by luck and for the
         // bucket is a whole cursor away from its lip. Every entry states two numbers.
         const entries = gen.match(/url\(data:image\/png;base64,[^)]+\) \d+ \d+, crosshair/g) ?? [];
-        expect(entries).toHaveLength(7);
+        expect(entries).toHaveLength(Object.keys(TOOL_CURSORS).length);
         // …and the fallback is a PRECISE pointer, not `default`: if a data URI is ever refused, a
         // tool that paints one pixel should still get a crosshair.
         expect(gen).not.toMatch(/\) \d+ \d+, default/);
