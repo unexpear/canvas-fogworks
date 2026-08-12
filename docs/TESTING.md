@@ -456,7 +456,16 @@ The checklist, applied when the fixture is written:
    The shape of the question: when a branch writes its own output, the fixture has to walk *that*
    branch, not a sibling that resembles it; and when two checks guard one line, each needs an input
    the other would let through.
-8. **Is this code REACHED by anything the app runs?** The sibling of question 6, and it has the same
+8. **Does the assertion state the RULE, or just accept the output?** A test can be true of every
+   implementation and still be worthless. `rotatedTable`'s entries were checked with "this
+   flip lands on the right mask" — which holds for ANY search order, because every one of the
+   sixteen masks has more than one valid flip and masks 0 and 15 accept all eight. A mutant
+   reversing the search survived a full battery (AT9, 2026-08-11). The rule is that the
+   SMALLEST valid flip wins, so the least-turned tile does; stating that kills it, and stating
+   it as a property rather than as sixteen pinned literals survives the class order changing.
+   The question generalises: if you can imagine two different implementations both passing,
+   the assertion is describing a symptom rather than the rule.
+9. **Is this code REACHED by anything the app runs?** The sibling of question 6, and it has the same
    signature: a green test over code nothing calls. Escape's cancel was the case (2026-08-10). Seven
    tools implement an Escape branch — rotate, resize, marquee, move, pen, pixel-selection, the tile
    rectangle — and *not one of them could be reached*, because `App` resolved the DESELECT shortcut
