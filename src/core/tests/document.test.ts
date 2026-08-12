@@ -30,7 +30,7 @@ import { clipsContentError, BLEND_MODES, blendModeError } from "../document/Node
 import { pickColorAt, rampT } from "../geometry/Eyedropper";
 import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, tileSourceRect as sheetTileRect, tileIndexAt,
          visibleCells, cellAt, TILE_EMPTY,
-         flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D , TERRAIN_MATERIALS_MAX, TERRAIN_NAME_MAX} from "../document/Tilemap";
+         flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D , TERRAIN_MATERIALS_MAX, TERRAIN_NAME_MAX, FLIP_MAX} from "../document/Tilemap";
 import { withTiles, withTerrain, withTerrainArt, asTerrain, rectCells, fillRegion, resizeTilemap , withTerrainMaterials} from "../document/TilemapEdit";
 import { resolveTilemaps } from "../document/Components";
 import { emptyTilemap } from "../document/Tilemap";
@@ -28691,6 +28691,16 @@ describe("rotatedTable — a drawn tile beats a turned one", () => {
             const cell = table[mask]!;
             const drawnFor = autotileClasses()[cell.index - 200];
             expect(flipMask(cell.flip ?? 0, drawnFor)).toBe(mask);
+            // AND IT IS THE LEAST TRANSFORMATION THAT WORKS. Every one of the sixteen masks has more
+            // than one valid flip — mask 0 and mask 15 accept all eight — so "a flip that lands on
+            // the right mask" is far too weak a claim: it passes for any search order, and two flips
+            // that agree on the mask still render a non-symmetric tile differently. The rule is that
+            // the flips are tried in ASCENDING order, so the least-turned tile wins. Saying only
+            // "some valid flip" is what let a mutant reverse that search and survive.
+            const valid: number[] = [];
+            for (let f = 0; f <= FLIP_MAX; f++) if (flipMask(f, drawnFor) === mask) valid.push(f);
+            expect(valid.length).toBeGreaterThan(1);
+            expect(cell.flip ?? 0).toBe(Math.min(...valid));
         }
     });
 
