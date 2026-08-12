@@ -69,6 +69,7 @@ import { SetTilemapAction } from "../core/actions/SetTilemapAction";
 import { resizeTilemap, withTerrainArt, asTerrain, withTerrain , withTerrainMaterials} from "../core/document/TilemapEdit";
 import { autotileClasses, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR } from "../core/document/Autotile";
 import { caveCells } from "../core/document/CaveTerrain";
+import { TOOL_CURSORS } from "./theme/Cursors";
 import { parseUnityPackage, UnityAsset } from "../core/import/UnityPackage";
 import { rngFrom, seedFrom } from "../core/random/Rng";
 import { Tilemap, tileSourceRect as sheetTileRect, tileIndexAt,
@@ -1778,7 +1779,14 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const vp = es.viewport;
 
     // A hovered resize/rotate handle wins (both backends); otherwise the tool's cursor.
+    //
+    // THE POINTER SAYS WHICH TOOL IS IN YOUR HAND. Eight tools used to share one arrow: the toolbar
+    // knew which was active and the pointer did not, which is the one place a person is looking.
+    // `TOOL_CURSORS` covers the tools whose ART EXISTS — brush, bucket, picker, pen, pencil, spray,
+    // marquee — and the rest keep their native keyword deliberately: `grab` already says "move" to
+    // everybody, and no drawn cursor would say it better.
     const canvasCursor = es.hoverCursor
+        ?? TOOL_CURSORS[toolName]
         ?? (toolName === "rectangle"
             ? "crosshair"
             : toolName === "move"

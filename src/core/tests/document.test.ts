@@ -27011,6 +27011,26 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         expect(app).toMatch(/aria-label=\{`Place \${a\.path}`\}/);
     });
 
+    test("the tool CURSORS are wired, and every one names a hotspot", () => {
+        // Eight tools shared one arrow: the toolbar knew which was active and the pointer did not.
+        // Verified live as well — the brush, bucket, eyedropper and tile tools each hand the canvas
+        // a themed cursor in the running app.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/\?\? TOOL_CURSORS\[toolName\]/);
+        const gen = readFileSync(resolve(__dirname, "../../app/theme/Cursors.ts"), "utf8");
+        for (const tool of ["paint", "bucket", "eyedropper", "pen", "tiles", "weights", "pixelSelect"]) {
+            expect(gen).toContain(`${tool}: "url(data:image/png;base64,`);
+        }
+        // A HOTSPOT IS NOT OPTIONAL. `url(...)` with no coordinates puts the point at the sprite's
+        // top-left corner, which for a brush drawn pointing up-left is close by luck and for the
+        // bucket is a whole cursor away from its lip. Every entry states two numbers.
+        const entries = gen.match(/url\(data:image\/png;base64,[^)]+\) \d+ \d+, crosshair/g) ?? [];
+        expect(entries).toHaveLength(7);
+        // …and the fallback is a PRECISE pointer, not `default`: if a data URI is ever refused, a
+        // tool that paints one pixel should still get a crosshair.
+        expect(gen).not.toMatch(/\) \d+ \d+, default/);
+    });
+
     test("the palette panel and the quantiser are REACHABLE, which is the point", () => {
         // `paint/Palette` and `paint/Quantize` had NO importer outside the tests — the audit's second
         // and third built-but-unreachable entries. These assert the door stays open, at both ends:
