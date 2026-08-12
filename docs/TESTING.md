@@ -485,7 +485,7 @@ This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
 cannot see — over the paint modules, the Tiled reader, the mesh, nine-slice, the tile grid, the tile
 brush and the autotiler, exiting non-zero on a survivor: currently **215 mutants, 215 killed**
-(full run at 1,730 tests, nothing NOT APPLIED and nothing AMBIGUOUS). The exporter's ten are
+(full run 2026-08-12 at 1,734 tests: **56m20s, 16s per mutant**, nothing NOT APPLIED and nothing AMBIGUOUS). The exporter's ten are
 checked by the ROUND TRIP: a real map imported, exported and imported again, compared cell by
 cell — so a mutation has to survive a reader that was written against files Tiled itself wrote.
 Six cover `SurfaceSpace`, where the convenient fixture is not
@@ -516,7 +516,7 @@ leftover mutant makes the tree dirty and a restore placed after that check could
 **RUN THE PRE-FLIGHT AFTER ANY REFACTOR: `MUTANT_CHECK=1 npm run mutate:dimensions`.** It answers
 one question — does every mutant's `from` still match its file, exactly once? — in about a second,
 with no tests run at all. Until 2026-08-10 the only way to learn that a `from` had drifted was a
-full battery, which is twenty minutes, and that is backwards: `NOT APPLIED` is the verdict a
+full battery, which is nearly an hour now, and that is backwards: `NOT APPLIED` is the verdict a
 REFACTOR causes, so the moment to look is right after the refactor. Deriving `cellAt` from a new
 `cellCoordAt` and `terrainCellAt` from `terrainCoordAt` moved five mutants' lines out from under
 them (`TE4`, `TE5`, `TT2`, `TB1`, `TB2`) — found in one second, and all five re-authored and
@@ -578,6 +578,25 @@ which is the re-read it exists to force.
 It cannot tell you prose is wrong; nothing can. It targets the failure that actually
 occurred: editing one section and never re-reading the rest, so drift accumulated where
 nobody was looking.
+
+**Ancestry alone passed a lie, so there are two more checks.** A doc committed a dozen
+times still carries whatever banner nobody re-read: five of the seven stamped docs said
+`schema v63` against a live 66 and every one was green. So a doc that *states* the schema
+version must state the current one, read from `SCHEMA_VERSION` rather than restated here.
+`schema vNN` is the stamp; `schema NN` without the `v` is a historical citation — the docs
+make those constantly and correctly, and flagging them would be noise, which is what gets
+switched off.
+
+**And it refuses to pass vacuously, in two ways**, because the failure mode of a
+pattern-matching check is matching nothing and reporting that all is well. A doc with a
+frozen banner and no stamp is reported. So is a watched doc that declares no `describes:`
+at all — `MILESTONES.md` and `PLANNED-FIXES.md` were both named in the script and neither
+had a directive, so for its whole existence it looked them up, found nothing and moved on
+without a word. They sat three weeks at a status line with **seven** milestones marked
+not-started that had shipped. Being skipped is indistinguishable from passing.
+
+All three conditions are verified by reintroducing them against the live tree and watching
+each fire: a stamp reverted to v63, a `describes:` deleted, a stamp removed from a banner.
 
 **Measured on first run against real history — 3 flags, 2 true positives:**
 

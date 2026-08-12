@@ -1,7 +1,12 @@
 # PLANNED-FIXES.md — Reconciled (fix-all pass complete)
 
-> **Status as of 2026-07-23.** Gate: `npm run check` (typecheck of app + tests,
-> **97 tests**, production build) — **green**.
+> **A HISTORICAL RECORD of the fix-all pass completed 2026-07-23**, kept for what it
+> decided and why. Its numbers are that pass's numbers — the gate was green at **97
+> tests** then — and are deliberately NOT updated: rewriting them would destroy the
+> record while pretending to maintain it. For where the project stands now see
+> [MILESTONES.md](MILESTONES.md) and [docs/README.md](docs/README.md).
+
+<!-- describes: src/core/document -->
 
 ## ⚠️ Identifier namespaces — read first
 

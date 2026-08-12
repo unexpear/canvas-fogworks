@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document/Document.ts, src/core/tests -->
 
-> **Frozen contracts · schema v63 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins).**
+> **Frozen contracts · schema v66 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins).**
 > These documents describe the *current, verified* implementation and lock the
 > contracts the rest of the engine builds on. See [`../MILESTONES.md`](../MILESTONES.md)
 > for the roadmap and where each layer fits.
@@ -46,7 +46,7 @@ This is the primary defense against architectural drift.
 
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
-- **Verify everything:** `npm run check` (typecheck app + tests + build).
+- **Verify everything:** `npm run check` (typecheck + lint + test + build).
 - **Tests:** 1734 — `src/core/tests/document.test.ts` (1582) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8).  <!-- re-read 2026-08-12 after the cursor-key fix: accurate. -->
 - **Verify the tests themselves:** `npm run mutate:dimensions` (215/215) — breaks the paint arithmetic
   on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
@@ -59,7 +59,7 @@ src/
   core/
     document/   ProjectDocument, Node, Serializer,     (the source of truth)
                 Integrity, SceneGraph, Components,
-                Timeline (39), Depth (41), Mesh (41), Light (42),
+                Timeline (39), Depth (40), Mesh (41), Light (42),
                 Bezier (44), Clips (46), Demos (the classic exercises)
     actions/    Action + commands, Dispatcher,         (the only write path)
                 HistoryManager, applyMutations, types
@@ -95,7 +95,7 @@ src/
   editor/       EditorState + tools/ (Select/Move/Shape/Pen/Raster,
                 ToolController)
   app/          App.tsx — the shell: workspace tabs (Design/Paint/
-                Animate), a 48px tool strip, a fixed-height tool
+                Animate/Map), a 48px tool strip, a fixed-height tool
                 options row, Layers + Inspector, status bar. The
                 native menu owns File/Edit/View/Developer/Help and
                 reaches the renderer through ONE `menu-command`
@@ -114,5 +114,7 @@ scripts/{check-module-headers,check-doc-drift}.js   lint + doc-staleness tripwir
 scripts/menu-command.js   fire a native menu item in the running app (main-process
                           inspector); the only reliable way — an accelerator never
                           reaches the renderer, and CDP key injection needs focus
-scripts/mutate-dimensions.js   mutation battery over core/paint + TiledMap (18/18)
+scripts/mutate-dimensions.js   mutation battery over the paint modules, the Tiled reader, the mesh,
+                               nine-slice, the tile grid, the tile brush and the autotiler
+                               (count in Quick facts above)
 ```

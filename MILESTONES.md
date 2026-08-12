@@ -2,7 +2,14 @@
 
 > The engine is built in **layers**, where each milestone proves **one new
 > architectural capability** before the next begins. This is the canonical roadmap.
-> Status current as of **2026-07-23**, engine **v0.0.5**.
+> Status current as of **2026-08-12**, engine **v0.0.5**, schema **66**.
+>
+> **Seven rows below said ⬜ for capabilities that had shipped.** They said it for three weeks
+> because this file declared no `describes:` directive: `check-doc-drift` named it, looked it
+> up, found nothing and moved on without a word. Being skipped is indistinguishable from
+> passing, which is now itself a reported condition.
+
+<!-- describes: src/core, src/editor, src/renderer -->
 
 ## Legend
 
@@ -27,13 +34,13 @@ M4  Editor                   ✅*  pan/zoom + box-select + DOM-free handles + ro
       │
 M5  Variables & Tokens       ✅*  typed store + light/dark themes + $token references + aliases; radius/fontSize tokens live (schema 20); layout-side spacing tokens deferred
 M6  Components                🚧   masters + instances + resolution + per-instance overrides (schema 22); variants/slots next
-M7  States                    ⬜
-M8  Animation Engine          ⬜
-M9  Interaction Graph         ⬜
-M10 Drawing System            ⬜
-M11 Assets                    ⬜
-M12 Text Engine               ⬜
-M13 Export                    ⬜
+M7  States                    ✅   `Node.states` + `activeState` (schema 30, the first SANITIZING migration) + `SetStateAction`
+M8  Animation Engine          ✅   timeline + keyframes + cubic-Bézier easing + HOLDS (cel) + onion skin — `Timeline` (407), `Bezier` (172), `Clips` (105)
+M9  Interaction Graph         ✅*  `Node.interactions`: trigger → state, with duration/easing, plus NAVIGATE to a node (schema 36), and a Play mode that fires them. A state machine, not a node GRAPH — the name overpromises
+M10 Drawing System            ✅   12 paint modules / 2,107 lines: buffer, patch, brush, stroke, fill, selection + outline, symmetry, palette, quantize, adjust, codec, surface space — with a Paint workspace and its tools
+M11 Assets                    ✅*  15 importers / 4,397 lines: Tiled (maps, tilesets, objects), SVG, fonts, atlases, `.unitypackage`, sheets. FOUR are built and NOT reachable — Aseprite and Sequence are wireable; glTF and OBJ are blocked on a node type that holds a mesh (10,937 files in the tree waiting). See FEATURE-AUDIT.md
+M12 Text Engine               ✅*  typesetting, wrapping and on-canvas editing, shared by all three backends and the exporter. ONE style per node — no per-run styling
+M13 Export                    ✅*  SVG, Tiled `.tmx` (tile AND object layers), sprite sheet (`sheet.json` + `sheet.png`). No PNG or PDF of the canvas
 M14 AI Integration            ⬜
 M15 Plugins                   ⬜
 M16 Collaboration             ⬜
