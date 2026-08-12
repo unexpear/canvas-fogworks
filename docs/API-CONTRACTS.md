@@ -2272,7 +2272,9 @@ function cellCoordAt(map, x, y): { col; row } | null;
 // MULTI-MATERIAL TERRAIN (schema 65). A layer holds a LIST of materials IN PAINT ORDER, not one.
 interface TerrainMaterial { id: number; name?: string; color?: string; art: {mask;index}[] }  // id >= 1
 // `name` and `color` are LABELS (schema 66) — nothing derives from them, which is why they are easy
-// to drop. `copyTerrainMaterial` is the one place a material is copied; four paths rebuild the list.
+// to drop. `copyTerrainMaterial` is the one place a material is copied — and every path that rebuilds
+// the list is now INSIDE this module, which is the part that had to change: the copier cannot protect
+// a list a stranger assembled, and for two commits the panel assembled one.
 // `color` is #rgb or #rrggbb (every wangcolor measured is #rrggbb). TERRAIN_NAME_MAX = 60.
 // The order IS the rule: a display cell sits on four terrain corners and they can belong to two
 // different materials — a shore is exactly that cell — and one cell shows ONE tile, so something has
@@ -2281,7 +2283,19 @@ interface TerrainMaterial { id: number; name?: string; color?: string; art: {mas
 // or the one edit that redraws every shore would be refused as a no-op.
 function autotileLayers(terrain, materials): AutotileResult;   // composites; a material draws only
                                                                // where its mask is non-zero
-function withTerrainMaterials(map, materials): Tilemap | null;  // add / remove / REORDER
+function withTerrainMaterials(map, materials): Tilemap | null;  // the whole list, stated by a caller
+// THE THREE LIST-SHAPING EDITS TAKE A MAP, NOT A LIST, and that is the contract rather than a
+// convenience. A caller who assembles the list is a caller who can drop a field from it, and that is
+// precisely what the panel did: three `{ id: x.id, art: [...] }` expressions, each silently losing
+// `name` and `color`. `copyTerrainMaterial` could not help — `withTerrainMaterials` already applies
+// it to every entry, so it guards against THAT function dropping a field, not against being handed
+// entries already stripped. These derive the list from `map.terrain.materials` instead, so nothing
+// outside the module ever rebuilds a material.
+function reorderTerrainMaterial(map, id, delta): Tilemap | null;   // off either end is REFUSED, not clamped
+function removeTerrainMaterial(map, id): Tilemap | null;           // the last one is refused by the empty-list rule
+function addTerrainMaterial(map): { map: Tilemap; id: number } | null;
+// The id comes BACK because the caller needs it — a panel that adds a material selects it, and one
+// left to guess "the count plus one" adopts the cells a removed material left behind.
 function withTerrainArt(map, mask, index, material?): Tilemap | null;   // defaults to the first
 const TERRAIN_MATERIALS_MAX = 16;
 // REMOVING A MATERIAL LEAVES ITS CELLS ALONE, holding an id nothing draws. The cells are what the

@@ -28,8 +28,15 @@ import {
  * THE ONE PLACE A MATERIAL IS COPIED, and it exists because of a bug this codebase has already paid
  * for three times: a control that rebuilds a record field by field silently drops the field added
  * last. `Mesh.points` lost its bones that way, `UpdateNodeContentAction` lost its nine-slice, and
- * `rebuild` lost the terrain. Four separate paths here rebuild a material list — an art assignment,
- * a reorder, an unrelated edit, and the panel — so the copy is written once and they all call it.
+ * `rebuild` lost the terrain.
+ *
+ * IT ONLY PROTECTS A LIST THIS MODULE BUILT, which is the limit worth writing down, because the
+ * fourth instance of that bug found it: this header used to claim the panel was one of four paths
+ * calling it, and the panel was in fact hand-rolling `{ id, art }` beside it. `withTerrainMaterials`
+ * applies this to every entry it is handed, so it guards against ITSELF dropping a field — a caller
+ * that arrives with `name` and `color` already gone gets a faithful copy of the loss. That is why
+ * `reorderTerrainMaterial`, `removeTerrainMaterial` and `addTerrainMaterial` take a MAP: so no
+ * caller is ever in a position to assemble a list at all.
  *
  * `name` and `color` are OMITTED WHEN ABSENT rather than written as undefined: a document that says
  * `"name": undefined` does not round-trip through JSON as one that never had a name.
