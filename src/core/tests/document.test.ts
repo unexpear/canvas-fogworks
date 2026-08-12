@@ -165,7 +165,8 @@ import { booleanAction, makeBooleanNodeAction } from "../actions/booleanActions"
 import { SetBooleanOpAction } from "../actions/SetBooleanOpAction";
 import { resolveBooleans } from "../document/Components";
 import { BooleanOp, booleanOpError } from "../document/Node";
-import { TEXT_ALIGNS, FONT_FAMILY_MAX } from "../document/Node";
+import { TEXT_ALIGNS, FONT_FAMILY_MAX, TextAlign } from "../document/Node";
+import { alignBars, ALIGN_ICON_BOX } from "../../app/theme/AlignIcons";
 import { blendColor, blendStates, easingAt, interactionFor, interactionsError, Interaction, Trigger, TRANSITION_MAX_MS, INTERACTIONS_MAX } from "../document/Prototype";
 import { applyActiveState } from "../document/Components";
 import { SetInteractionsAction } from "../actions/SetInteractionsAction";
@@ -27029,6 +27030,43 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         // …and the fallback is a PRECISE pointer, not `default`: if a data URI is ever refused, a
         // tool that paints one pixel should still get a crosshair.
         expect(gen).not.toMatch(/\) \d+ \d+, default/);
+    });
+
+    test("text alignment no longer borrows the glyphs that MOVE a node", () => {
+        // THE COLLISION, which is what a survey of somebody else's icon set surfaced: `⇤ ⇹ ⇥` were
+        // the object-align row (push the selection to an edge) AND the text-align row (set the
+        // ragged side of a paragraph). Two operations, one set of glyphs, one inspector.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const row = app.slice(app.indexOf("{TEXT_ALIGNS.map(a =>"), app.indexOf("Line height (× size)"));
+        expect(row).toContain("<AlignIcon align={a} />");
+        // Sliced to the ROW, not searched in the whole file — the object row legitimately keeps
+        // these arrows, so a whole-file search would pass while the text row still used them.
+        for (const arrow of ["⇤", "⇹", "⇥", "≡"]) expect(row).not.toContain(arrow);
+        // …and the arrows are still where they belong, so this cannot pass by deleting both rows.
+        expect(app).toContain(`["center-h", "⇹", "Align horizontal centres"]`);
+    });
+
+    test("the four alignment icons are TOLD APART, which is the only thing they must do", () => {
+        // Four bars in a box will always render; what makes them an icon is that the SHORT lines
+        // sit somewhere different in each. Asserting "it drew four rects" would pass for four
+        // identical icons, which is the bug this replaces rather than a fix for it.
+        const box = ALIGN_ICON_BOX.width;
+        const short = (a: TextAlign) => alignBars(a).filter(b => b.width < box);
+        expect(short("left").map(b => b.x)).toEqual([0, 0]);
+        expect(short("right").map(b => b.x)).toEqual([box - 8, box - 8]);
+        expect(short("center").map(b => b.x)).toEqual([(box - 8) / 2, (box - 8) / 2]);
+        // JUSTIFIED TEXT HAS NO RAGGED EDGE — the icon says so by having no short line at all.
+        expect(short("justify")).toHaveLength(0);
+        // Every alignment draws the same four lines; only their offsets and lengths differ.
+        for (const a of TEXT_ALIGNS) {
+            expect(alignBars(a)).toHaveLength(4);
+            // NOTHING LEAVES THE BOX, or the row's neighbours get clipped into.
+            for (const b of alignBars(a)) expect(b.x + b.width).toBeLessThanOrEqual(box);
+        }
+        // The four are pairwise DISTINCT, stated as the rule rather than as four hand-checked
+        // offsets: a change that made any two identical is the failure this catches.
+        const drawn = TEXT_ALIGNS.map(a => JSON.stringify(alignBars(a)));
+        expect(new Set(drawn).size).toBe(TEXT_ALIGNS.length);
     });
 
     test("the palette panel and the quantiser are REACHABLE, which is the point", () => {

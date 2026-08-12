@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v66 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1578) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8) = 1730 tests.
+> 🔒 Frozen contract · schema v66 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1581) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8) = 1733 tests.
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1730 tests
+npm test                                   # jest (ts-jest), 1733 tests
 npm run header-claims                      # ADVISORY: module-header sentences with a shelf life
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
@@ -58,7 +58,7 @@ node scripts/menu-command.js "Zoom to Fit"
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1730 tests)
+## What is covered (1733 tests)
 
 | Area | Representative cases |
 |------|----------------------|
@@ -181,6 +181,7 @@ node scripts/menu-command.js "Zoom to Fit"
 | **Ray casting through a heightfield** | a raised edge shadows the ground BESIDE it (which the ground's own normal calls fully lit); the same point is clear when the light moves to the other side; the ray CLIMBS, so a steep light clears a low bump and a shallow one does not; a surface lit exactly along its OWN SLOPE is grazed rather than blacked out (the `>` vs `>=` case, which the flat-surface test cannot reach because the short-circuit returns first); a flat surface never shadows itself under any direction; a light at or below the HORIZON is refused, including the direction that would otherwise march backwards into a wall; the miss on a spike thinner than the step spacing is asserted, so the stated limit cannot be quietly narrowed. On the GPU path: the term is per vertex and binary, the HIGHEST vertex is lit (the assertion that survives an inversion, which "some dark, some light" does not), and it is empty for no surface / no light / no relief / a light below the horizon |
 | **Cast shadows + the boolean fix** | a caster throws a SHORTER shadow onto a raised receiver than onto the page (the gap between them, not its own height — invisible with only one raised shape, which is why it shipped wrong and the suite stayed green); one shape's shadow lands on another only where they OVERLAP, and misses cleanly when the throw carries it past; only a STRICTLY nearer shape casts (equal depth is the same plane, which is also what stops self-shadowing); the patch is spliced ABOVE its receiver and below its caster, unpickable and idless; an unlit document does no quadratic work at all. **The booleans**: union and intersection of two axis-aligned rectangles at the same `y`, two rectangles merely TOUCHING, and a shape unioned with ITSELF — every one returned empty before, every one asserted by area now — while the non-degenerate case is asserted EQUAL to the old classifier's output, so the replacement is pinned as a fix rather than a change |
 | **Per-fragment normals** | a triangle's three RAW normals, averaged and normalised, match the surface's own normal to **12 digits**, where the same done with unit normals is off by degrees — the faceting, measured rather than asserted; the raw length does not depend on **where in the box** it was sampled (the rim's step is half the inland one); a COLLAPSED cell never reaches the GPU as a zero normal, because normalising zero in a shader is NaN |
+| **The chrome says which tool you hold** | The seven themed CURSORS are asserted REACHED (`?? TOOL_CURSORS[toolName]` in the shell, not merely present in a generated module), every entry carries two hotspot numbers — `url(...)` with none puts the point at the sprite's top-left, a whole cursor from the bucket's lip — and the fallback is `crosshair`, not `default`. The four TEXT-ALIGN icons pin a glyph COLLISION that a survey of somebody else's icon set surfaced: `⇤ ⇹ ⇥` were the object-align row (push the selection to an edge) *and* the text-align row (set the ragged side), so the test slices the text row out of the source before asserting the arrows are gone — searching the whole file would pass while the row still used them — and asserts the object row still has them, so deleting both cannot pass. The geometry is a pure function precisely so the assertion can state the RULE: the SHORT bars sit at a different `x` in each of left/centre/right, JUSTIFY HAS NONE, no bar leaves the box, and all four are pairwise distinct. "It drew four rects" would pass for four identical icons, which is the bug rather than the fix |
 
 ## The API-surface pin
 

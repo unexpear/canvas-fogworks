@@ -70,6 +70,7 @@ import { resizeTilemap, withTerrainArt, asTerrain, withTerrain , withTerrainMate
 import { autotileClasses, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR } from "../core/document/Autotile";
 import { caveCells } from "../core/document/CaveTerrain";
 import { TOOL_CURSORS } from "./theme/Cursors";
+import { AlignIcon } from "./theme/AlignIcons";
 import { parseUnityPackage, UnityAsset } from "../core/import/UnityPackage";
 import { rngFrom, seedFrom } from "../core/random/Rng";
 import { Tilemap, tileSourceRect as sheetTileRect, tileIndexAt,
@@ -3396,9 +3397,14 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                 onClick={() => { editSelected({ style: { textAlign: a } }); refresh(); }}
                                                 style={{
                                                     ...ALIGN_BUTTON_STYLE, flex: 1,
+                                                    display: "flex", alignItems: "center", justifyContent: "center",
+                                                    // THE ACTIVE ONE IS COLOURED, not only outlined: the icon draws in
+                                                    // `currentColor`, so the state reaches the bars themselves and not
+                                                    // just the border a narrow button nearly hides.
+                                                    color: (node.style.textAlign ?? "left") === a ? "#00bfff" : "#ccc",
                                                     borderColor: (node.style.textAlign ?? "left") === a ? "#00bfff" : "#2a2a4a"
                                                 }}
-                                            >{a === "left" ? "⇤" : a === "center" ? "⇹" : a === "right" ? "⇥" : "≡"}</button>
+                                            ><AlignIcon align={a} /></button>
                                         ))}
                                     </div>
                                     <label style={INSPECTOR_LABEL}>Line height (× size)</label>

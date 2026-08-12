@@ -47,7 +47,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck app + tests + build).
-- **Tests:** 1730 — `src/core/tests/document.test.ts` (1578) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8).  <!-- re-read 2026-08-11 after the rotatedTable fix: accurate. -->
+- **Tests:** 1733 — `src/core/tests/document.test.ts` (1581) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8).  <!-- re-read 2026-08-12 after the theme pass: accurate. -->
 - **Verify the tests themselves:** `npm run mutate:dimensions` (215/215) — breaks the paint arithmetic
   on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
   and it refuses a dirty tree. See TESTING.md § Fixture design.
@@ -105,6 +105,9 @@ src/
                 renderScene selector (SVG/Canvas/WebGL — all three agree pixel-for-pixel
                 on gradients, nine-slice, clipping and blend modes)
   app/          App.tsx + React bootstrap
+  app/theme/    Cursors (generated: the tool in your hand, as the
+                pointer) + AlignIcons (four bars, so text alignment
+                stops borrowing the glyphs that MOVE a node)
   electron/     main.js (main process), preload.js (contextBridge)
 scripts/build.js   three esbuild builds -> dist/{app,electron}
 scripts/{check-module-headers,check-doc-drift}.js   lint + doc-staleness tripwire
