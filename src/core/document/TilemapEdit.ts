@@ -237,6 +237,72 @@ export function withTerrainMaterials(
 }
 
 /**
+ * The three ways the LIST ITSELF changes — reorder, remove, add.
+ *
+ * THEY EXIST BECAUSE `withTerrainMaterials` COULD NOT SAVE THE PANEL FROM ITSELF. It copies every
+ * entry through `copyTerrainMaterial`, which is the guard against *it* dropping a field — but a
+ * caller that hands it `{ id, art }` has already thrown the name and the colour away, and the copy
+ * faithfully preserves the loss. The guard was downstream of the damage.
+ *
+ * So these take a MAP and derive the new list from `map.terrain.materials`, which is the only shape
+ * that cannot lose a field: nothing outside this module ever rebuilds a material. That is also why
+ * they live here rather than in the panel. The bug was three `.map(x => ({ id: x.id, art: [...] }))`
+ * expressions inside JSX, where no test that watches a real edit can reach them — the fourth time
+ * this codebase has paid for rebuilding a record field by field, after `Mesh.points` lost its bones,
+ * `UpdateNodeContentAction` lost its nine-slice, and `rebuild` lost the terrain.
+ *
+ * NULL MEANS NOTHING CHANGED, as everywhere here: a button at the end of the order, or on the last
+ * remaining material, must not put an undo step on the stack that undoes nothing.
+ */
+export function reorderTerrainMaterial(map: ReadonlyTilemap, id: number, delta: number): Tilemap | null {
+    const mats = map.terrain?.materials;
+    if (!mats) return null;
+    const at = mats.findIndex(m => m.id === id);
+    if (at < 0 || !Number.isInteger(delta) || delta === 0) return null;
+    const to = at + delta;
+    // OFF EITHER END IS NOT CLAMPED, it is refused. Clamping makes the first button and the last
+    // one commit an identical list, which `sameTerrain` reports as a change and undo cannot explain.
+    if (to < 0 || to >= mats.length) return null;
+    const next = mats.map(copyTerrainMaterial);
+    next.splice(to, 0, next.splice(at, 1)[0]);
+    return withTerrainMaterials(map, next);
+}
+
+/**
+ * One material dropped from the paint order. Its CELLS ARE LEFT ALONE — see `withTerrainMaterials`.
+ *
+ * REMOVING THE LAST ONE IS REFUSED BY `withTerrainMaterials`, which rejects an empty list, so there
+ * is no length check here. A local copy of that rule would be a second statement of it that no test
+ * can tell from the first — a mutation removing it survives, which is how this one was found.
+ */
+export function removeTerrainMaterial(map: ReadonlyTilemap, id: number): Tilemap | null {
+    const mats = map.terrain?.materials;
+    // AN ID THAT IS NOT THERE is a no-op, and this is the only guard that catches it: filtering
+    // nothing out yields the same list, which `withTerrainMaterials` would happily accept as a
+    // change and put on the undo stack.
+    if (!mats || !mats.some(m => m.id === id)) return null;
+    return withTerrainMaterials(map, mats.filter(m => m.id !== id).map(copyTerrainMaterial));
+}
+
+/**
+ * A new material appended to the paint order, with the id it was given.
+ *
+ * THE ID IS AN OUTPUT because the caller needs it — a panel that adds a material selects it, and a
+ * caller left to guess "probably the length plus one" would collide with a painted id the moment
+ * anything had been removed.
+ */
+export function addTerrainMaterial(map: ReadonlyTilemap): { map: Tilemap; id: number } | null {
+    const mats = map.terrain?.materials;
+    if (!mats || mats.length >= TERRAIN_MATERIALS_MAX) return null;
+    // THE NEXT FREE ID, so a new material never adopts cells someone else painted.
+    const used = new Set(mats.map(m => m.id));
+    let id = 1;
+    while (used.has(id)) id++;
+    const next = withTerrainMaterials(map, [...mats.map(copyTerrainMaterial), { id, art: [] }]);
+    return next === null ? null : { map: next, id };
+}
+
+/**
  * The rectangle of cells between two corners, inclusive, clamped to the grid — or null when the
  * rectangle misses the map entirely.
  *

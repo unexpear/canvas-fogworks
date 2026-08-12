@@ -66,7 +66,10 @@ import { SelectionMask, emptyMask, fullMask, invertSelection, growSelection, bor
 import { Palette, parsePaletteFile, paletteAt } from "../core/paint/Palette";
 import { quantizeAction, surfaceEditAction } from "../core/actions/surfaceEdit";
 import { SetTilemapAction } from "../core/actions/SetTilemapAction";
-import { resizeTilemap, withTerrainArt, asTerrain, withTerrain , withTerrainMaterials} from "../core/document/TilemapEdit";
+import {
+    resizeTilemap, withTerrainArt, asTerrain, withTerrain, withTerrainMaterials,
+    reorderTerrainMaterial, removeTerrainMaterial, addTerrainMaterial
+} from "../core/document/TilemapEdit";
 import { autotileClasses, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR } from "../core/document/Autotile";
 import { caveCells } from "../core/document/CaveTerrain";
 import { TOOL_CURSORS } from "./theme/Cursors";
@@ -3074,19 +3077,14 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                                     aria-label={`Move material ${m.id} later`}
                                                                     title="Draw this one over the others"
                                                                     disabled={i === mats.length - 1}
-                                                                    onClick={() => {
-                                                                        const next = mats.map(x => ({ id: x.id, art: [...x.art] }));
-                                                                        next.splice(i + 1, 0, next.splice(i, 1)[0]);
-                                                                        setMap(withTerrainMaterials(map, next));
-                                                                    }}
+                                                                    onClick={() => setMap(reorderTerrainMaterial(map, m.id, 1))}
                                                                     style={{ ...ADJUST_BUTTON, padding: "0 5px" }}
                                                                 >↓</button>
                                                                 <button
                                                                     aria-label={`Remove material ${m.id}`}
                                                                     title="Stop drawing this material. The cells that hold it are LEFT ALONE — they draw as nothing until a material claims that id again."
                                                                     disabled={mats.length <= 1}
-                                                                    onClick={() => setMap(withTerrainMaterials(map,
-                                                                        mats.filter(x => x.id !== m.id).map(x => ({ id: x.id, art: [...x.art] }))))}
+                                                                    onClick={() => setMap(removeTerrainMaterial(map, m.id))}
                                                                     style={{ ...ADJUST_BUTTON, padding: "0 5px" }}
                                                                 >×</button>
                                                             </div>
@@ -3096,14 +3094,13 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                             title="Draw a second thing in this layer — rock and water, grass and path. It draws over the ones above it."
                                                             disabled={mats.length >= TERRAIN_MATERIALS_MAX}
                                                             onClick={() => {
-                                                                // THE NEXT FREE ID, so a new material never collides
-                                                                // with one already painted into the cells.
-                                                                const used = new Set(mats.map(x => x.id));
-                                                                let id = 1;
-                                                                while (used.has(id)) id++;
-                                                                setMap(withTerrainMaterials(map,
-                                                                    [...mats.map(x => ({ id: x.id, art: [...x.art] })), { id, art: [] }]));
-                                                                setTileMaterial(id);
+                                                                // THE ID COMES BACK from the edit rather than being
+                                                                // guessed here — the panel needs it to select the new
+                                                                // material, and guessing collides with a painted id.
+                                                                const added = addTerrainMaterial(map);
+                                                                if (!added) return;
+                                                                setMap(added.map);
+                                                                setTileMaterial(added.id);
                                                             }}
                                                             style={ADJUST_BUTTON}
                                                         >Add material</button>

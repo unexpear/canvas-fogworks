@@ -135,7 +135,7 @@ import { TiledMapResult, TiledTileset, TiledTileImage, TiledLayer, TiledCell, pa
     tilemapForLayer, TiledTilemapLayer, TiledTilemapFit,
     TiledObject, TiledObjectGroup, TiledProperty, objectBox, objectTransform,
     TILED_MAX_CELLS, TILED_MAX_LAYERS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
-import { Tilemap, emptyTilemap, cellAt, FLIP_D } from "../document/Tilemap";
+import { Tilemap, TerrainMaterial, emptyTilemap, cellAt, FLIP_D } from "../document/Tilemap";
 import { GlbContainer, GltfJson, GltfNode, GltfResult, GltfMeshInstance, GltfPrimitive,
     parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GLTF_IGNORABLE_REQUIRED, GLTF_MAX_VERTICES, GLTF_MAX_PRIMITIVES, GLTF_MAX_NODE_DEPTH,
@@ -179,7 +179,8 @@ import { SetTilemapAction } from "../actions/SetTilemapAction";
 import { Terrain, AutotileCell, AutotileTable, AUTOTILE_MASKS, CORNER_TL, CORNER_TR, CORNER_BL,
     CORNER_BR, flipMask, autotileClasses, rotatedTable, dualMask, autotile,
     autotileTableError } from "../document/Autotile";
-import { TileEdit, withTiles, rectCells, fillRegion, resizeTilemap } from "../document/TilemapEdit";
+import { TileEdit, withTiles, rectCells, fillRegion, resizeTilemap, copyTerrainMaterial,
+    reorderTerrainMaterial, removeTerrainMaterial, addTerrainMaterial } from "../document/TilemapEdit";
 import { SetLightingAction } from "../actions/SetLightingAction";
 
 /**
@@ -1169,6 +1170,14 @@ export function __apiSurfacePin(): void {
     expectType<{ col: number; row: number }[]>(rectCells(emptyTilemap(), { col: 0, row: 0 }, { col: 1, row: 1 }));
     expectType<{ col: number; row: number }[]>(fillRegion(emptyTilemap(), 0, 0));
     expectType<Tilemap | null>(resizeTilemap(emptyTilemap(), 4, 3));
+    // THE MATERIAL LIST is reshaped by these three and by nothing outside the module. They take a
+    // MAP, not a list, which is the contract that matters: a caller who assembles the list is a
+    // caller who can drop a field from it, and that is exactly what the panel did to `name` and
+    // `color`. `addTerrainMaterial` gives the id BACK because the caller cannot safely guess it.
+    expectType<Tilemap | null>(reorderTerrainMaterial(emptyTilemap(), 1, 1));
+    expectType<Tilemap | null>(removeTerrainMaterial(emptyTilemap(), 1));
+    expectType<{ map: Tilemap; id: number } | null>(addTerrainMaterial(emptyTilemap()));
+    expectType<TerrainMaterial>(copyTerrainMaterial({ id: 1, art: [] }));
     // AUTOTILING (no schema field yet): terrain in, display tiles out. The CONTRACT is the pair of
     // asymmetries — the display grid is ONE LARGER in each direction and offset half a cell, and a
     // table is exactly `AUTOTILE_MASKS` entries indexed BY MASK rather than a list to search.

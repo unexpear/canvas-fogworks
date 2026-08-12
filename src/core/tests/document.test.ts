@@ -31,7 +31,8 @@ import { pickColorAt, rampT } from "../geometry/Eyedropper";
 import { Tilemap, TileSheet, tilemapError, tileAt, tileSourceRect as sheetRect, tileSourceRect as sheetTileRect, tileIndexAt,
          visibleCells, cellAt, TILE_EMPTY,
          flipAt, flipMatrix, FLIP_H, FLIP_V, FLIP_D , TERRAIN_MATERIALS_MAX, TERRAIN_NAME_MAX, FLIP_MAX} from "../document/Tilemap";
-import { withTiles, withTerrain, withTerrainArt, asTerrain, rectCells, fillRegion, resizeTilemap , withTerrainMaterials} from "../document/TilemapEdit";
+import { withTiles, withTerrain, withTerrainArt, asTerrain, rectCells, fillRegion, resizeTilemap,
+    withTerrainMaterials, reorderTerrainMaterial, removeTerrainMaterial, addTerrainMaterial } from "../document/TilemapEdit";
 import { resolveTilemaps } from "../document/Components";
 import { emptyTilemap } from "../document/Tilemap";
 import { TileTool, TileBrush } from "../../editor/tools/TileTool";
@@ -29192,6 +29193,88 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         const bare = withTerrainMaterials(named, [{ id: 1, art: ART }])!;
         expect("name" in bare.terrain!.materials[0]).toBe(false);
         expect("color" in bare.terrain!.materials[0]).toBe(false);
+    });
+
+    test("REORDER, REMOVE and ADD keep the names and swatches — the panel's own three", () => {
+        // WHY THIS EXISTS BESIDE THE TEST ABOVE, which claims to walk all four paths. Its step 3
+        // REORDERS BY BUILDING THE REORDER ITSELF — `[...materials].reverse().map(m => ({...m}))` —
+        // and a spread preserves every field by construction. So it asserted that a reorder written
+        // in the test kept the labels, while the reorder written in the PANEL rebuilt each entry as
+        // `{ id, art }` and dropped them. A fixture that simulates the operation cannot see a bug
+        // in the operation. These call what the app calls.
+        //
+        // `copyTerrainMaterial` could not have saved it either: `withTerrainMaterials` already runs
+        // every entry through it, so it guarded against that function dropping a field, not against
+        // a caller handing it entries already stripped. The guard was downstream of the damage,
+        // which is why these three take a MAP and derive the list themselves.
+        const named = withTerrainMaterials(terrainMap() as never as Tilemap, [
+            { id: 1, name: "Cobblestone", color: "#0000ff", art: ART },
+            { id: 2, name: "Dirt", color: "#ff7700", art: ART },
+            { id: 3, name: "Water", color: "#3399ff", art: ART }
+        ])!;
+        const labels = (m: Tilemap) =>
+            m.terrain!.materials.map(x => `${x.id}:${x.name ?? "-"}:${x.color ?? "-"}`);
+
+        // REORDER — the order changes and NOTHING ELSE does. Asserting the labels merely "still
+        // exist" would pass for a reorder that moved the names off their materials, so the check is
+        // the full labelled order.
+        const moved = reorderTerrainMaterial(named, 1, 1)!;
+        expect(labels(moved)).toEqual(["2:Dirt:#ff7700", "1:Cobblestone:#0000ff", "3:Water:#3399ff"]);
+        expect(reorderTerrainMaterial(named, 1, -1)).toBeNull();       // already first
+        expect(reorderTerrainMaterial(named, 3, 1)).toBeNull();        // already last
+        expect(reorderTerrainMaterial(named, 9, 1)).toBeNull();        // no such material
+        expect(reorderTerrainMaterial(named, 1, 0)).toBeNull();        // a move of nowhere
+        expect(labels(reorderTerrainMaterial(named, 1, 2)!))           // …and it can move further
+            .toEqual(["2:Dirt:#ff7700", "3:Water:#3399ff", "1:Cobblestone:#0000ff"]);
+
+        // REMOVE — the survivors keep theirs, and the cells are left alone holding the dead id,
+        // which is the documented behaviour and the reason removal is recoverable.
+        const fewer = removeTerrainMaterial(named, 2)!;
+        expect(labels(fewer)).toEqual(["1:Cobblestone:#0000ff", "3:Water:#3399ff"]);
+        expect(fewer.terrain!.cells).toEqual(named.terrain!.cells);
+        expect(removeTerrainMaterial(named, 9)).toBeNull();            // no such material
+        const one = removeTerrainMaterial(fewer, 3)!;
+        expect(removeTerrainMaterial(one, 1)).toBeNull();              // never down to none
+
+        // ADD — the EXISTING labels survive the append, which is the half the panel broke; the new
+        // one has none, because nobody has typed one.
+        const more = addTerrainMaterial(named)!;
+        expect(labels(more.map)).toEqual([
+            "1:Cobblestone:#0000ff", "2:Dirt:#ff7700", "3:Water:#3399ff", "4:-:-"
+        ]);
+        expect(more.id).toBe(4);
+        // THE ID IS THE FIRST FREE ONE, not the count: adding after a removal must not adopt the
+        // cells the removed material left behind. Here 2 is gone, so the next material is 2.
+        const reused = addTerrainMaterial(fewer)!;
+        expect(reused.id).toBe(2);
+        expect(labels(reused.map)).toEqual(["1:Cobblestone:#0000ff", "3:Water:#3399ff", "2:-:-"]);
+
+        // …and the cap is honoured rather than silently exceeded.
+        let full: Tilemap = named;
+        for (let i = 0; i < TERRAIN_MATERIALS_MAX; i++) {
+            const step = addTerrainMaterial(full);
+            if (step === null) break;
+            full = step.map;
+        }
+        expect(full.terrain!.materials).toHaveLength(TERRAIN_MATERIALS_MAX);
+        expect(addTerrainMaterial(full)).toBeNull();
+        expect(labels(full).slice(0, 3)).toEqual(labels(named));       // …still theirs, 13 adds later
+
+        // A MAP WITH NO TERRAIN is refused by all three rather than given some.
+        const plain = terrainMap({ terrain: undefined }) as never as Tilemap;
+        expect(reorderTerrainMaterial(plain, 1, 1)).toBeNull();
+        expect(removeTerrainMaterial(plain, 1)).toBeNull();
+        expect(addTerrainMaterial(plain)).toBeNull();
+
+        // AND THE PANEL ACTUALLY CALLS THEM. This is not belt-and-braces: `copyTerrainMaterial` was
+        // correct, tested, and bypassed — the panel hand-rolled the list beside it for two commits.
+        // A function that is right and unreached is the bug, not the fix for it.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/setMap\(reorderTerrainMaterial\(map, m\.id, 1\)\)/);
+        expect(app).toMatch(/setMap\(removeTerrainMaterial\(map, m\.id\)\)/);
+        expect(app).toMatch(/addTerrainMaterial\(map\)/);
+        // …and no path there rebuilds a material by hand any more, which is the shape of the bug.
+        expect(app).not.toMatch(/\{\s*id: x\.id,\s*art:/);
     });
 
     test("a name and a swatch are validated, and a RENAME is an edit", () => {
