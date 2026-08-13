@@ -1033,6 +1033,39 @@ const MUTANTS = [
       from: "        .sort((a, b) => a.mask - b.mask);",
       to: "        ;",
       note: "gap-filling follows the STORED order again, so the same art in a different array order draws a different map" },
+
+    // THE EXPORTER, once a document could hold more than one tileset. Every one of these still
+    // writes a `.tmx` that PARSES and opens in Tiled — what changes is which picture a cell draws
+    // from, which is why the fixtures re-IMPORT the file and ask `tilemapForLayer` rather than
+    // reading the XML back with a regex.
+    { id: "EX1", file: "src/core/export/ExportTiled.ts",
+      from: "+ tilemapCsv(l.map, gidOf.get(l.map.tilesetId) ?? 1)",
+      to: "+ tilemapCsv(l.map, 1)",
+      note: "every layer's cells are numbered from the FIRST set's firstgid — the exact bug this change closed: right places, wrong pictures" },
+    { id: "EX2", file: "src/core/export/ExportTiled.ts",
+      from: "        const mine = fitting.filter(x => x.map.tilesetId === l.map.tilesetId);",
+      to: "        const mine = fitting;",
+      note: "a set's tilecount is the highest index anywhere in the MAP, so a small set inherits a large one's count and every set after it starts at the wrong gid" },
+    { id: "EX3", file: "src/core/export/ExportTiled.ts",
+      from: "        if (gidOf.has(l.map.tilesetId)) return true;",
+      to: "        if (gidOf.has(l.name)) return true;",
+      note: "a set is entered once per LAYER rather than once per set, so one tileset is written twice and everything after it is renumbered" },
+    { id: "EX4", file: "src/core/export/ExportTiled.ts",
+      from: "        const firstGid = used.reduce((n, u) => n + u.tileCount, 1);",
+      to: "        const firstGid = 1;",
+      note: "every set claims firstgid 1, so their gid ranges overlap and a reader resolves every cell to the first set" },
+    { id: "EX5", file: "src/core/export/ExportTiled.ts",
+      from: "    const setFor = (src: string | undefined) => used.find(u => u.set.src === src) ?? used[0];",
+      to: "    const setFor = (src: string | undefined) => used.find(u => u.set.id === src) ?? used[0];",
+      note: "a tile object's picture is matched against the set's ID instead of its src, so every object falls back to the first set and draws the wrong tile" },
+    { id: "EX6", file: "src/core/export/ExportTiled.ts",
+      from: "            image: used.length === 0 ? image : `${safeFileName(set.name)}.png`",
+      to: "            image: used.length < 1 ? image : `${safeFileName(set.name)}.png`",
+      note: "THE CONTROL — an equivalent rewrite that SHOULD survive. A run where everything dies cannot tell a real kill from a harness that fails every time" },
+    { id: "EX7", file: "src/core/export/ExportTiled.ts",
+      from: "        if (!set?.sheet) {",
+      to: "        if (!set) {",
+      note: "a COLLECTION set is written as though it had a sheet, so a layer whose tiles are separate files exports as a tileset with no image instead of leaving with a reason" },
 ];
 
 function runSuite() {
