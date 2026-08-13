@@ -396,6 +396,36 @@ Both regression tests were proven to fail on the unfixed code. *Reinforces: the 
 fuzz cannot see a bug that is uniformly wrong across incremental and full — an adversarial
 review can.*
 
+### Reading a mutation run: three ways a verdict lies
+
+A survivor is usually a blind fixture (below). But a *run* can be wrong before any fixture is,
+and each of these cost real time on 2026-08-13 alone.
+
+**THE FILTER IS PART OF THE FIXTURE.** `jest -t "…"` matches against the full test name, and a
+pattern that reaches fewer tests than you think reports SURVIVED with total confidence. This
+happened **three times in one session** — `-t "schema 67"` reached one of three tileset tests, and
+four mutants read as survivors that were covered all along. The fix is not a better pattern: the
+scripts now run the **whole suite per mutant**. Twenty-five seconds against a verdict you cannot
+trust is not a trade.
+
+**A MUTANT MUST COMPILE.** `if (false) …`, deleting a required field, assigning `null` to a
+non-nullable — each of these fails `tsc`, the suite never runs, and the mutant "dies" having proved
+only that the type checker works. The tell is a test count far below the real one (`152 total` when
+the suite is 1,754). Every mutant should be the regression that would actually *ship*: a prop wired
+to a no-op rather than deleted, a wrong default rather than a missing one.
+
+**AN EQUIVALENT MUTANT IS NOT A GAP.** Some rewrites cannot change behaviour, and no fixture will
+ever kill them — appending to a list instead of assigning it, when a `break` means the list is
+written once either way; a bounds check the surrounding arithmetic already makes unreachable. When
+one survives, decide which it is before writing a test: if it is equivalent, RETARGET the mutant at
+whatever actually enforces the rule (the `break`, not the assignment) or record it in the code as
+unkillable. Two are recorded that way — the row-bounds check in `composeFrame` and the
+`?? "light"` default in `hydrateDocument`.
+
+**AND KEEP ONE CONTROL that should survive.** A run where everything dies cannot distinguish a real
+kill from a harness that fails every time — a stale anchor, a concurrent run, a broken revert. One
+deliberately equivalent mutant per script is the cheapest possible check on the check.
+
 ### Fixture design: the assertion must be able to SEE the mutation
 
 Across the paint modules, roughly ten of every mutation survivor had the same cause, and it
