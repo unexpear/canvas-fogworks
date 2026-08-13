@@ -17,6 +17,12 @@
  * `resolveTilemaps` is what turns the question back into the answer, and the answer is what `.tmx`
  * can hold — Tiled has no dual-grid terrain of its own, so the picture is the honest export.
  *
+ * ONE `<tileset>` PER DISTINCT SET, each with its own `firstgid`. A document has been able to hold
+ * several since schema 67 and this wrote one, so every other layer's cells indexed the first set's
+ * picture: right places, wrong pictures, in a file that parses, opens in Tiled and reads as an art
+ * mistake rather than as an export bug. A set declares the tile count ITS OWN layers reach — count
+ * across the map and a small set inherits a large one's, which moves every set after it.
+ *
  * ONE MAP SIZE, ONE TILE SIZE, which is the format's rule and not this module's. A document may hold
  * tilemap nodes of different grids and different cell sizes; a `.tmx` cannot. So the first layer sets
  * the map, and every layer that disagrees is REPORTED and dropped rather than squeezed in — a map
@@ -40,7 +46,7 @@
 
 import { ReadonlyDocument } from "../document/Document";
 import { ReadonlyTilemap, TileSheet, TILE_EMPTY, FLIP_H, FLIP_V, FLIP_D, tileIndexAt } from "../document/Tilemap";
-import { findTileset } from "../document/Tileset";
+import { findTileset, Tileset } from "../document/Tileset";
 import { resolveTilemaps } from "../document/Components";
 
 /** What an export could not represent, alongside the file itself. */
@@ -48,6 +54,20 @@ export interface TiledExport {
     xml: string;
     /** One line per layer that could not be written, and why. Empty when everything fit. */
     notes: string[];
+}
+
+/**
+ * A tileset's name as a filename, for the `<image source>` of every set after the first.
+ *
+ * THE FIRST SET KEEPS THE CALLER'S NAME because that is what the `image` argument has always meant;
+ * the rest are named from the set so two of them do not collide on one path. NOTHING HERE WRITES AN
+ * IMAGE — this function produces XML, and the caller was already responsible for putting the sheet
+ * beside the `.tmx`. That was true when there was one and is merely more visible now there can be
+ * several.
+ */
+function safeFileName(name: string): string {
+    const safe = name.replace(/[^\w.\- ]+/g, "_").trim();
+    return safe.length > 0 ? safe : "tiles";
 }
 
 /** The three flags Tiled packs into the top of a gid — the encode half of `decodeGid`. */
@@ -245,51 +265,74 @@ export function exportTiledMap(doc: ReadonlyDocument, image: string): TiledExpor
             + "a .tmx has one size for every layer, so it was not written");
         return false;
     });
-    // A DIFFERENT TILESET IS ALSO A PROBLEM, and a quieter one: the cells would land in the right
-    // places holding the wrong pictures. One tileset is written, so a second cannot be.
+    // ONE `<tileset>` PER DISTINCT SET, each with its own `firstgid` — which is what the format
+    // wanted all along and what schema 67 finally made expressible. Before it, one tileset was
+    // written and every other layer's cells indexed the first one's picture: right places, wrong
+    // pictures, reported in a note nobody could act on because the document could not hold a second
+    // set anyway.
     //
-    // COMPARED BY IDENTITY NOW (schema 67), which fixes a false negative this could not see before:
-    // it compared the SHEET GEOMETRY, so two DIFFERENT images cut on the same grid — the common
-    // case, since a pack's sheets usually share a tile size — compared equal and exported silently
-    // wrong. Naming the tileset makes the question exact.
-    //
-    // WORTH DOING NEXT: the document can now hold several tilesets, so this could write one
-    // `<tileset>` element per distinct set with its own `firstgid` and stop being a limitation at
-    // all. That is a bigger change than this one and is not smuggled in here.
-    const firstSet = findTileset(doc.tilesets, first.tilesetId);
-    const sheet = firstSet?.sheet ?? null;
-    if (!sheet) {
-        // REFUSED RATHER THAN HALF-WRITTEN. Every number below is derived from the sheet — the tile
-        // count, the gids, the tileset element — so continuing without one produces a `.tmx` that
-        // looks complete and indexes nothing. A COLLECTION tileset lands here too, and writing one
-        // properly means a `<tile><image>` per tile, which is the follow-up noted above.
-        // NOTHING WRITTEN, WITH THE REASON — the same shape as "there is no tilemap node", because
-        // it is the same outcome: every number below is derived from the sheet (the tile count, the
-        // gids, the tileset element), so continuing without one produces a `.tmx` that looks
-        // complete and indexes nothing.
-        notes.push("the first tile layer's tileset has no sheet to write — a collection tileset, or "
-            + "an id naming nothing");
+    // IN FIRST-SEEN ORDER, so the file lists them the way the layers introduce them and a round trip
+    // does not reshuffle. A set is entered once however many layers name it.
+    const used: { set: Tileset; firstGid: number; tileCount: number; image: string }[] = [];
+    const gidOf = new Map<string, number>();
+    const writable = fitting.filter(l => {
+        if (gidOf.has(l.map.tilesetId)) return true;
+        const set = findTileset(doc.tilesets, l.map.tilesetId) as Tileset | null;
+        if (!set?.sheet) {
+            // A COLLECTION SET lands here too: writing one means a `<tile><image>` per tile, which
+            // this does not do yet. Dropped WITH THE REASON rather than written as an empty grid.
+            notes.push(`layer "${l.name}" draws from a tileset with no sheet to write `
+                + "(a collection tileset, or an id naming nothing), so it was not written");
+            return false;
+        }
+        // THE HIGHEST INDEX ANY LAYER OF THIS SET USES decides how many tiles it must declare — a
+        // set claiming fewer than a layer references is a file Tiled refuses to open. Counted per
+        // set, not across all of them, or a small set inherits a large one's count.
+        const mine = fitting.filter(x => x.map.tilesetId === l.map.tilesetId);
+        const highest = Math.max(0, ...mine.flatMap(x => x.map.tiles.filter(t => t !== TILE_EMPTY)));
+        const count = set.sheet.columns * Math.max(1, Math.ceil((highest + 1) / set.sheet.columns));
+        const firstGid = used.reduce((n, u) => n + u.tileCount, 1);
+        gidOf.set(set.id, firstGid);
+        used.push({
+            set, firstGid, tileCount: count,
+            // THE FIRST SET KEEPS THE CALLER'S NAME, because that is what every caller means by the
+            // argument today; the rest are named from the set so two files do not collide. NEITHER
+            // IS WRITTEN by this function — it produces XML, and the images were already the
+            // caller's problem before there were several of them.
+            image: used.length === 0 ? image : `${safeFileName(set.name)}.png`
+        });
+        return true;
+    });
+    if (writable.length === 0) {
+        notes.push("no tile layer has a tileset with a sheet to write");
         return { xml: "", notes };
     }
-    for (const l of fitting.slice(1)) {
-        if (l.map.tilesetId === first.tilesetId) continue;
-        notes.push(`layer "${l.name}" draws from a different tileset; one tileset is written, so its `
-            + "cells will index the first layer's");
-    }
 
-    const tileCount = sheet.columns * Math.max(1, Math.ceil(
-        // The highest index any layer actually uses decides how many tiles the set must declare —
-        // a set that claims fewer than a layer references is a file Tiled refuses to open.
-        (Math.max(0, ...fitting.flatMap(l => l.map.tiles.filter(t => t !== TILE_EMPTY))) + 1) / sheet.columns));
-    const body = fitting.map((l, i) => {
+    /**
+     * Which written set a tile object draws from, by the picture it names.
+     *
+     * AN IMAGE NODE HAS NO `tilesetId` — it carries a `src` and a `sourceRect`, because it is an
+     * image and not a cell. So the picture is the only identity it has, and matching on it is what
+     * lets an object in a two-set map get the gid of the set it actually came from.
+     *
+     * IT FALLS BACK TO THE FIRST SET, which is exactly what this did when there could only be one.
+     * The fallback is not a guess that succeeds quietly: `tileIndexAt` refuses a rect that is not a
+     * cell of the sheet it is given, and the object leaves with "draws from a sheet this map does
+     * not declare" rather than a gid pointing at the wrong picture.
+     */
+    const setFor = (src: string | undefined) => used.find(u => u.set.src === src) ?? used[0];
+
+    const body = writable.map((l, i) => {
         const attrs = [`id="${i + 1}"`, `name="${escapeXml(l.name || `layer ${i + 1}`)}"`,
             `width="${l.map.cols}"`, `height="${l.map.rows}"`];
         // WRITTEN ONLY WHEN THEY DIFFER FROM THE DEFAULT, which is what Tiled does and what keeps a
         // round trip through it from rewriting every line of the file.
         if (l.opacity < 1) attrs.push(`opacity="${l.opacity}"`);
         if (l.hidden) attrs.push(`visible="0"`);
+        // EACH LAYER'S OWN SET'S `firstgid`, which is the whole point of writing several: a cell
+        // stores an index into ITS set, and the file numbers tiles across all of them.
         return ` <layer ${attrs.join(" ")}>\n  <data encoding="csv">\n`
-            + tilemapCsv(l.map, 1) + `\n</data>\n </layer>`;
+            + tilemapCsv(l.map, gidOf.get(l.map.tilesetId) ?? 1) + `\n</data>\n </layer>`;
     }).join("\n");
 
     // OBJECT LAYERS: a frame with children is one, and its children are its objects. That is the
@@ -302,14 +345,15 @@ export function exportTiledMap(doc: ReadonlyDocument, image: string): TiledExpor
         for (const childId of node.children) {
             const child = resolved.nodes.get(childId);
             if (!child) continue;
-            const one = objectXml(child as never, nextObjectId, sheet, 1);
+            const from = setFor((child as { src?: string }).src);
+            const one = objectXml(child as never, nextObjectId, from.set.sheet!, from.firstGid);
             notes.push(...one.notes);
             if (one.xml === null) { notes.push(one.why); continue; }
             nextObjectId++;
             written.push(one.xml);
         }
         if (written.length === 0) return;
-        const attrs = [`id="${fitting.length + objectGroups.length + 1}"`,
+        const attrs = [`id="${writable.length + objectGroups.length + 1}"`,
             `name="${escapeXml(node.name ?? "")}"`];
         if ((node.style.opacity ?? 1) < 1) attrs.push(`opacity="${node.style.opacity}"`);
         if (node.hidden === true) attrs.push(`visible="0"`);
@@ -320,13 +364,15 @@ export function exportTiledMap(doc: ReadonlyDocument, image: string): TiledExpor
         + `<map version="1.10" orientation="orthogonal" renderorder="right-down" `
         + `width="${first.cols}" height="${first.rows}" `
         + `tilewidth="${first.tileWidth}" tileheight="${first.tileHeight}" `
-        + `infinite="0" nextlayerid="${fitting.length + objectGroups.length + 1}" nextobjectid="${nextObjectId}">\n`
-        + ` <tileset firstgid="1" name="tiles" tilewidth="${sheet.tileWidth}" tileheight="${sheet.tileHeight}"`
-        + (sheet.spacing !== 0 ? ` spacing="${sheet.spacing}"` : "")
-        + (sheet.margin !== 0 ? ` margin="${sheet.margin}"` : "")
-        + ` tilecount="${tileCount}" columns="${sheet.columns}">\n`
-        + `  <image source="${escapeXml(image)}"/>\n`
-        + ` </tileset>\n`
+        + `infinite="0" nextlayerid="${writable.length + objectGroups.length + 1}" nextobjectid="${nextObjectId}">\n`
+        // ONE ELEMENT PER SET, in first-seen order and each with its own `firstgid`.
+        + used.map(u => ` <tileset firstgid="${u.firstGid}" name="${escapeXml(u.set.name)}"`
+            + ` tilewidth="${u.set.sheet!.tileWidth}" tileheight="${u.set.sheet!.tileHeight}"`
+            + (u.set.sheet!.spacing !== 0 ? ` spacing="${u.set.sheet!.spacing}"` : "")
+            + (u.set.sheet!.margin !== 0 ? ` margin="${u.set.sheet!.margin}"` : "")
+            + ` tilecount="${u.tileCount}" columns="${u.set.sheet!.columns}">\n`
+            + `  <image source="${escapeXml(u.image)}"/>\n`
+            + ` </tileset>\n`).join("")
         + body + (objectGroups.length > 0 ? "\n" + objectGroups.join("\n") : "") + `\n</map>\n`;
     return { xml, notes };
 }

@@ -1,6 +1,9 @@
 # Feature audit — VDE against Pixelorama and Tiled
 
 <!-- describes: src/editor/tools, src/core/paint, src/core/import, src/core/export -->
+<!-- re-read 2026-08-13 after schema 67: four rows were wrong, and the oldest by four schemas —
+     autotiling was still listed as having no stored field. Tileset-as-content moved absent →
+     partial, probability absent → have, tile user data absent → partial. -->
 <!-- re-read 2026-08-10 after Escape's routing: accurate, and one row moved (the tilemap
      rectangle-fill is no longer absent). The Escape finding is not a feature row — every
      cancel it unblocked was already listed as had; they simply did not work. -->
@@ -57,7 +60,7 @@ broke a test whose subject was still true. Both are fixed.
 | Line / rectangle / ellipse **on pixels** | **absent** | `drawLine` exists and is NOT what a tool wants — a tool must stamp the BRUSH, which is `strokePath`+`linePoints`. Needs an ellipse rasteriser that does not exist |
 | Palette panel | **have** | loaded from a folder, drawn in the palette’s OWN grid with holes; closed 2026-08-09. No create/EDIT yet |
 | Quantise to a palette | **have** | `surfaceEdit.quantizeAction`, one button, one history entry — closed 2026-08-09 |
-| Autotiling / terrain | **have** | `document/Autotile` (the dual grid, 16 masks from 6 drawn tiles) + `Tilemap.terrain` and `resolveTilemaps` (schema 63, 2026-08-10). The document stores WHICH CELLS ARE GRASS and derives the picture. Authored by a BRUSH: the tile tool has a terrain mode, and the inspector converts a layer and assigns one tile per symmetry class, and a RECTANGLE fills a block of it. MULTI-MATERIAL since schema 65: a layer holds a LIST of materials in paint order, and where two meet the later one wins — reorderable in the panel without touching a painted cell. Still absent: a tileset as editable content |
+| Autotiling / terrain | **have** | `document/Autotile` (the dual grid, 16 masks from 6 drawn tiles) + `Tilemap.terrain` and `resolveTilemaps` (schema 63, 2026-08-10). The document stores WHICH CELLS ARE GRASS and derives the picture. Authored by a BRUSH: the tile tool has a terrain mode, and the inspector converts a layer and assigns one tile per symmetry class, and a RECTANGLE fills a block of it. MULTI-MATERIAL since schema 65: a layer holds a LIST of materials in paint order, and where two meet the later one wins — reorderable in the panel without touching a painted cell. A TILESET IS THE DOCUMENT'S since schema 67, so several layers share one and a mask may hold several tiles chosen by weight. Still absent: painting pixels into a tile |
 | **Pixel selection** — rect, ellipse, lasso, magic wand, colour select | **have** | `paint/Selection` + `PixelSelectTool`, closed 2026-08-09. A binary MASK, four operators from the modifiers, marching ants drawn from `SelectionOutline`. EDITOR state, not schema. HONOURED by the brush (per dab), the bucket (as a WALL) and quantise (by restoring what fell outside) |
 | Modify selection (grow / shrink / border / invert) | **have** | buttons on the marquee row, closed 2026-08-09. `growSelection` takes a negative to shrink; `borderSelection` is derived from it, so the two cannot disagree about the edge — and the border of a FULL selection is consequently empty, which is documented rather than fixed |
 | Crop | **absent** | listed in PLANNED-FIXES and never built |
@@ -86,12 +89,12 @@ broke a test whose subject was still true. Both are fixed.
 | Import a `.tmx` as one node per layer | **have** | 45 of the corpus's 53 layers fit; the rest fall back per layer with a reason |
 | Paint / bucket / erase tiles, pick from the sheet | **have** | `TileTool`, Map workspace |
 | Resize the grid | **have** | keeps cells by coordinate |
-| Dual-grid autotiling arithmetic | **have** (no field yet) | `document/Autotile`; terrain is not yet a stored field |
-| **Tileset as a document object** — add, duplicate, edit, delete a tile | **absent** | VDE's sheet is an image plus a slicing rule; Pixelorama's tileset is editable content |
+| Dual-grid autotiling arithmetic | **have** | `document/Autotile`, STORED as `Tilemap.terrain` since schema 63 — the row said "no field yet" for four schemas after it shipped. A mask holds a LIST of candidates (schema 67), chosen deterministically by weight and cell position |
+| **Tileset as a document object** | **partial** (schema 67) | `Document.tilesets` — a set is the DOCUMENT's, so any number of layers name one, which ended a measured 2.5x image duplication. Sheet-backed OR collection; sparse per-tile records carry `probability` and `userData`. The panel retargets a layer, renames a set and sets a tile's weight, through `SetTilesetsAction`. STILL ABSENT: adding, duplicating or deleting a TILE, and a collection set is representable but not yet drawable |
 | **Paint PIXELS on a tilemap layer** (Manual / Auto / Stack) | **absent** | Pixelorama's headline tilemap feature: draw pixels and the tileset updates or grows |
 | Autotiling bits painted per tile | **absent** | Pixelorama has a tool for exactly this; VDE's table is authored, not painted |
-| Tile probability / random variants | **absent** | |
-| Tile user data | **absent** | |
+| Tile probability / random variants | **have** | `TilesetTile.probability` (schema 67), un-normalised as Tiled writes it, READ by the autotiler: a mask with several drawn tiles picks among them by weight, seeded by the cell and the material so a derived picture does not shimmer as you pan |
+| Tile user data | **partial** | `TilesetTile.userData` (schema 67) round-trips and validates by the same `userDataError` a node's does; no panel field edits it yet |
 | Rotate / flip a tile in the tileset (not the cell) | **absent** | VDE turns CELLS, not tiles |
 | Export a tileset (image, Godot `.tres`) | **absent** | |
 | Hexagonal and staggered maps | **absent** | reported by the importer, not placed |
@@ -154,8 +157,11 @@ broke a test whose subject was still true. Both are fixed.
    them — that is what a `core.entity` schema change would be for, and it should be designed against
    imported maps rather than ahead of them), template references (`.tx` files are not opened), text
    objects, points, and an object layer's parallax factor.
-5. **A tileset as editable content**, which is what unlocks Pixelorama's Manual/Auto/Stack modes and
-   tile-level rotation. This is a schema change and should follow the terrain field.
+5. ~~**A tileset as editable content**~~ — DONE 2026-08-13 as schema 67. `Document.tilesets`, a
+   panel, `SetTilesetsAction`, per-tile weights the autotiler READS, and an exporter that writes one
+   `<tileset>` per distinct set. What it does not yet do is what Pixelorama's Manual/Auto/Stack
+   modes need: adding or growing a TILE, painting pixels into one, and drawing a COLLECTION set
+   (the renderer needs a per-tile image path).
 6. ~~**TMX export**~~ — DONE 2026-08-10 (`core/export/ExportTiled`). Tile layers go out as a
    `.tmx`, an autotiled layer exports the picture its terrain DERIVES, and a layer the format
    cannot hold (one map size, one tile size) is reported rather than dropped. The oracle is the

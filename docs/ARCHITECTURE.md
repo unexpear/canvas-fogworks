@@ -1097,6 +1097,15 @@ and the index texture is sampled NEAREST because an interpolated tile index is n
 sample into the sheet is inset by half a texel on each side, which is the standard atlas-bleeding
 fix — `CLAMP_TO_EDGE` guards the sheet's outer edge and does nothing for a rect inside it.
 
+**THE SHEET IS RESOLVED ONCE, IN THE RENDER MODEL (schema 67).** A tilemap layer names a tileset
+the DOCUMENT holds; `RenderModel` looks it up and hands each backend an `href` and a `sheet` exactly
+as it hands any image an href, so all three stay ignorant of tilesets entirely and cannot disagree
+about which picture a layer draws from. That resolution is the whole reason a document may hold
+several sets without the backends changing at all. A dangling `tilesetId` yields null and draws
+NOTHING while the file still opens — the inert-reference rule this schema follows everywhere — and a
+COLLECTION set yields null too, because it has no single sheet to cut: the renderer still needs a
+per-tile image path, which is a second derivation and deliberately not smuggled into that change.
+
 **A CELL CAN BE TURNED (schema 62)**, three bits per cell — horizontal, vertical, and a diagonal
 that is a transpose. Measured before building: 820 of the corpus's 22,808 non-empty cells are
 flipped across 14 of its 20 maps, all eight combinations appear, and the node-per-cell importer

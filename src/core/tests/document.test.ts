@@ -30732,6 +30732,154 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
         });
     });
 
+    // TWO SHEETS CUT DIFFERENTLY, so a layer that resolved to the wrong one is VISIBLE rather than
+    // merely wrong by an index. Both are 16x8 because a re-import refuses a set whose tiles are not
+    // the grid's cell size — the same rule five real layers in the corpus fail.
+    const wide = { columns: 4, tileWidth: 16, tileHeight: 8, spacing: 0, margin: 0 };
+    const other = { columns: 2, tileWidth: 16, tileHeight: 8, spacing: 0, margin: 0 };
+    /**
+     * Two sets: one the caller names, one named from itself.
+     *
+     * THE `&` IS DELIBERATE. The second set's image is DERIVED from its name, and the name goes into
+     * an attribute — so one fixture asks both whether the derivation sanitises and whether the
+     * attribute escapes.
+     */
+    const twoSets = () => [
+        { id: "ts", name: "T", src: "t.png", sheet: wide, tiles: [], offsetX: 0, offsetY: 0 },
+        { id: "ts2", name: "Cliffs & Rocks", src: "cliffs.png", sheet: other,
+            tiles: [], offsetX: 0, offsetY: 0 }
+    ];
+
+    test("TWO tilesets go out as two <tileset>s, each with its own firstgid", () => {
+        // THE DEFECT THIS CLOSES, and it outlived the schema change that made it reachable: a
+        // document can hold several sets since 67, and this wrote ONE. Every other layer's cells
+        // then indexed the first set's picture — right places, wrong pictures, in a file that
+        // parses, opens in Tiled and looks like an art mistake.
+        const d = docWith([
+            { name: "ground", map: grid([0, 1, -1, 2, 3, 4]) },
+            { name: "cliffs", map: { ...grid([0, 1, 2, 3, -1, 1]), tilesetId: "ts2" } }
+        ]);
+        d.tilesets = twoSets();
+        const out = exportTiledMap(d, "t.png");
+        expect(out.notes).toEqual([]);
+        const back = parseTiledMap(out.xml);
+        expect(back.notes).toEqual([]);
+        expect(back.layers.map(l => l.name)).toEqual(["ground", "cliffs"]);
+        // IN FIRST-SEEN ORDER, each starting after the one before it, and each declaring only its
+        // OWN tiles — the second set's 4 rather than a count borrowed from the first.
+        expect(back.tilesets.map(t => [t.name, t.firstGid, t.columns, t.tileCount, t.image])).toEqual([
+            ["T", 1, 4, 8, "t.png"],
+            ["Cliffs & Rocks", 9, 2, 4, "Cliffs _ Rocks.png"]
+        ]);
+
+        // THE ORACLE IS THE IMPORT, as everywhere else in this module: `tilemapForLayer` finds a
+        // cell's set BY GID RANGE, so re-reading the file answers "which picture" without being
+        // told. Both halves matter — the indices say the arithmetic is right, the sheet says the
+        // layer landed on the set it came from.
+        const fit = (i: number) =>
+            tilemapForLayer(back, back.layers[i], back.tilesets, s => `id${s.firstGid}`).layer!;
+        expect(fit(0).tilemap.tiles).toEqual([0, 1, TILE_EMPTY, 2, 3, 4]);
+        expect(fit(1).tilemap.tiles).toEqual([0, 1, 2, 3, TILE_EMPTY, 1]);
+        expect(fit(0).sheet.columns).toBe(4);
+        expect(fit(1).sheet.columns).toBe(2);
+        // …and they come back as two DISTINCT sets, which is what the duplication measurement was
+        // about: one id per set, however many layers name it.
+        expect([fit(0).tilemap.tilesetId, fit(1).tilemap.tilesetId]).toEqual(["id1", "id9"]);
+
+        // A THIRD LAYER NAMING THE FIRST SET AGAIN ADDS NO ELEMENT, and does not renumber anything.
+        // A set entered once per LAYER rather than once per SET would write "T" twice and give the
+        // cliffs a firstgid nine tiles too high.
+        const three = docWith([
+            { name: "ground", map: grid([0, 1, -1, 2, 3, 4]) },
+            { name: "cliffs", map: { ...grid([0, 1, 2, 3, -1, 1]), tilesetId: "ts2" } },
+            { name: "detail", map: grid([4, -1, -1, -1, -1, 0]) }
+        ]);
+        three.tilesets = twoSets();
+        const backThree = parseTiledMap(exportTiledMap(three, "t.png").xml);
+        expect(backThree.tilesets.map(t => t.firstGid)).toEqual([1, 9]);
+        expect(backThree.layers).toHaveLength(3);
+        expect(tilemapForLayer(backThree, backThree.layers[2], backThree.tilesets, () => "x")
+            .layer!.tilemap.tiles).toEqual([4, TILE_EMPTY, TILE_EMPTY, TILE_EMPTY, TILE_EMPTY, 0]);
+    });
+
+    test("a layer whose tileset has no sheet is dropped WITH THE REASON", () => {
+        // A COLLECTION SET — tiles as separate files, 1,207 of them in the measured corpus — became
+        // representable in schema 67 and is still not writable here: a `.tmx` wants a `<tile>` with
+        // its own `<image>` for every one. It leaves with a line saying so, which is the difference
+        // between a layer somebody can chase and a layer that was never mentioned.
+        const collection = { id: "coll", name: "Props", src: null, sheet: null, offsetX: 0, offsetY: 0,
+            tiles: [{ id: 0, src: "a.png", width: 8, height: 8 },
+                { id: 1, src: "b.png", width: 8, height: 8 }] };
+        expect(tilesetError(collection)).toBeNull();
+        const d = docWith([
+            { name: "ground", map: grid([1, 1, 1, 1, 1, 1]) },
+            { name: "props", map: { ...grid([0, 1, 0, 1, 0, 1]), tilesetId: "coll" } },
+            // AN ID NAMING NOTHING lands in the same place, and it is not a hypothetical: a layer
+            // outliving the set it drew from is one deletion away.
+            { name: "orphan", map: { ...grid([1, 1, 1, 1, 1, 1]), tilesetId: "gone" } }
+        ]);
+        d.tilesets = [twoSets()[0], collection];
+        const out = exportTiledMap(d, "t.png");
+        const back = parseTiledMap(out.xml);
+        expect(back.layers.map(l => l.name)).toEqual(["ground"]);
+        // THE MAP STILL WRITES ONE TILESET, so what survived is a file that opens.
+        expect(back.tilesets).toHaveLength(1);
+        expect(out.notes).toHaveLength(2);
+        expect(out.notes[0]).toContain('layer "props"');
+        expect(out.notes[0]).toContain("no sheet to write");
+        expect(out.notes[1]).toContain('layer "orphan"');
+
+        // AND WHEN NOTHING IS WRITABLE, the export says so and writes no file — a map declaring a
+        // layer and no tileset is one Tiled opens as an error dialog.
+        const none = docWith([{ name: "props", map: { ...grid([0, 1, 0, 1, 0, 1]), tilesetId: "coll" } }]);
+        none.tilesets = [collection];
+        const empty = exportTiledMap(none, "t.png");
+        expect(empty.xml).toBe("");
+        expect(empty.notes[empty.notes.length - 1])
+            .toBe("no tile layer has a tileset with a sheet to write");
+    });
+
+    test("a tile object gets the gid of the set it draws FROM", () => {
+        // AN IMAGE NODE HAS NO TILESET — it names a picture and a rect, because it is an image and
+        // not a cell. So the picture is its only identity, and encoding every object against the
+        // first set's `firstgid` would put a cliff where a door should be: an object that parses,
+        // places and draws the wrong tile.
+        const d = docWith([
+            { name: "ground", map: grid([0, 1, 2, 3, 4, 5]) },
+            { name: "cliffs", map: { ...grid([0, 1, 2, 3, -1, 1]), tilesetId: "ts2" } }
+        ]);
+        d.tilesets = twoSets();
+        d.nodes.set("F", { id: "F", type: "core.rectangle", parent: null, children: ["I", "G"],
+            geometry: { x: 0, y: 0, width: 48, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "entities" } as Node);
+        // THE SECOND SET'S PICTURE, second cell: a 2-column sheet of 16x8, so (16, 0) is index 1.
+        d.nodes.set("I", { id: "I", type: "core.image", parent: "F", children: [],
+            geometry: { x: 16, y: 24, width: 16, height: 8 }, style: { fill: "none", opacity: 1 },
+            layout: {}, name: "rock", src: "cliffs.png",
+            sourceRect: { x: 16, y: 0, width: 16, height: 8 } } as Node);
+        // …AND ONE FROM THE FIRST, in the same group, or a fixture where every object belongs to the
+        // last set would pass with the sets simply swapped.
+        d.nodes.set("G", { id: "G", type: "core.image", parent: "F", children: [],
+            geometry: { x: 0, y: 8, width: 16, height: 8 }, style: { fill: "none", opacity: 1 },
+            layout: {}, name: "grass", src: "t.png",
+            sourceRect: { x: 16, y: 8, width: 16, height: 8 } } as Node);
+        d.rootNodeUuids.push("F");
+
+        const out = exportTiledMap(d, "t.png");
+        expect(out.notes).toEqual([]);
+        const back = parseTiledMap(out.xml);
+        expect(back.notes).toEqual([]);
+        const objects = back.objectGroups[0].objects;
+        // 9 + 1 for the cliff, and 1 + 5 for the grass (a 4-column sheet, so (16, 8) is index 5).
+        expect(objects.map(o => o.cell!.gid)).toEqual([10, 6]);
+        // AND THE READER RESOLVES EACH TO ITS OWN SET, which is the claim a gid number alone does
+        // not make: `tilesetFor` picks by range, so the gid is what decides the picture.
+        expect(objects.map(o => tilesetFor(back.tilesets, o.cell!.gid)!.name))
+            .toEqual(["Cliffs & Rocks", "T"]);
+        expect(tileSourceRect(tilesetFor(back.tilesets, objects[0].cell!.gid)!, objects[0].cell!.gid))
+            .toEqual({ x: 16, y: 0, width: 16, height: 8 });
+    });
+
     test("XML entities survive both ways, which the exporter is what exposed", () => {
         // The reader never decoded them, and nothing noticed because no map in the corpus holds an
         // ampersand — Tiled escapes layer names, object names, class names and every custom property

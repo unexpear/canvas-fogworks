@@ -1,6 +1,11 @@
 # API Contracts
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
+<!-- re-read 2026-08-13 after schema 67 and the multi-tileset exporter: THREE signatures here had
+     drifted. `tilemapForLayer` gained its identity FUNCTION; `AutotileTable` holds a LIST per mask
+     and `rotatedTable` takes an array, not a Map; and autotiling was still described as having "no
+     schema field yet", four schemas after `Tilemap.terrain` shipped. The `document/Tileset` surface
+     was missing entirely. -->
 <!-- re-read 2026-08-10 after the object-layer slices and the OP7 fix: accurate. The wrong
      sentence about a grid inheriting an object layer's opacity lived in the code comment, the
      mutant note and ACTION-SYSTEM.md — not here; `TilePlacement` is not part of this surface. -->
@@ -1161,8 +1166,12 @@ interface TiledObjectPlacement {
   path: PathCommand[] | null; name: string;
 }
 function objectPlacement(obj: TiledObject, tilesets: readonly TiledTileset[]): { placement: TiledObjectPlacement | null; why: string | null };
+// The 4th argument is an identity FUNCTION, not an id (schema 67): deduplication is the CALLER's,
+// because only the caller sees every layer at once and can tell that six of them name one set.
+// It also means no `Tilemap` ever exists carrying an empty id awaiting a fix-up.
 function tilemapForLayer(map: { orientation: string; tileWidth: number; tileHeight: number },
-                         layer: TiledLayer, tilesets: readonly TiledTileset[]): TiledTilemapFit;
+                         layer: TiledLayer, tilesets: readonly TiledTileset[],
+                         tilesetIdFor: (set: TiledTileset) => string): TiledTilemapFit;
 ```
 
 **`tilemapForLayer` is why `core.tilemap` exists.** A whole tile layer becomes ONE node holding
@@ -2375,11 +2384,35 @@ function resizeTilemap(map, cols, rows): Tilemap | null;               // keeps 
 // `withTiles` and `resizeTilemap` are the ONLY places `flips` is built, and both drop the array when
 // nothing is turned — the absent-when-unturned invariant on `Tilemap.flips` would otherwise last
 // exactly one edit, and every file saved after would carry a zero per cell.
-// AUTOTILING (`document/Autotile`) — terrain in, tiles out, and no schema field for it yet.
+// TILESETS (`document/Tileset`, schema 67) — a tileset is the DOCUMENT's, so any number of layers
+// may name one. It replaced a slicing rule stapled to one image on one node, which cost a measured
+// 2.5x image duplication, made a COLLECTION set (1,207 per-tile images in the corpus)
+// unrepresentable, and left per-tile data with no home.
+interface TilesetTile { id: number; src?; width?; height?; probability?; userData? }  // SPARSE
+interface Tileset { id: string; name: string; src: string | null; sheet: TileSheet | null;
+                    tiles: TilesetTile[]; offsetX: number; offsetY: number }
+const TILESETS_MAX = 256;  TILESET_TILES_MAX = 65_536;  TILESET_NAME_MAX = 120;
+// EITHER SHEET-BACKED OR A COLLECTION, never both (two answers to "where does tile 7 come from")
+// and never neither (a tileset that can draw nothing is a name). `probability` is NOT normalised,
+// because Tiled does not normalise it either and rescaling would break a round trip.
+function tilesetError(set: unknown): string | null;              // shared load + edit
+function tilesetsError(sets: unknown): string | null;            // the table: cap + unique ids
+// NULL RATHER THAN A THROW: a reference that stops resolving is INERT, so deleting a set a layer
+// still names leaves an empty grid somebody can re-point, not a file that will not open.
+function findTileset<T extends { id: string }>(sets: readonly T[] | undefined, id: string | undefined): T | null;
+function tilesetTile<T extends { id: number }>(set: { tiles: readonly T[] } | null, id: number): T | null;
+function copyTileset(t: Tileset): Tileset;                       // the ONE place a set is copied
+// A WEIGHT OF 1 STORES NO RECORD, because 1 is what an unmentioned tile already means — and a tile
+// left with nothing else to say drops out of `tiles` entirely.
+function withTileWeight(set: Tileset, id: number, weight: number): TilesetTile[];
+// AUTOTILING (`document/Autotile`) — terrain in, tiles out. STORED as `Tilemap.terrain` since
+// schema 63; a layer that has it holds no tiles at all, because the picture is derived.
 const AUTOTILE_MASKS = 16;   CORNER_TL = 1  CORNER_TR = 2  CORNER_BL = 4  CORNER_BR = 8
 interface Terrain { cols; rows; cells: readonly number[] }        // one MATERIAL id per cell, 0 = none
 interface AutotileCell { index: number; flip?: number }
-type AutotileTable = readonly (AutotileCell | null)[];            // 16 entries, indexed BY MASK
+// A LIST PER MASK, not one tile: the measured sets ship 185 tiles for 74 corner configurations,
+// because an artist draws several tiles for one neighbourhood so the ground does not repeat.
+type AutotileTable = readonly (readonly AutotileCell[] | null)[]; // 16 entries, indexed BY MASK
 function autotileTableError(table: unknown): string | null;
 function flipMask(flip: number, mask: number): number;            // ties the two conventions together
 function autotileClasses(): number[];                             // the six orbits, DERIVED not listed
@@ -2388,9 +2421,17 @@ function autotileClasses(): number[];                             // the six orb
 // The single pass this replaced let the first entry of an orbit claim the whole orbit: art for
 // all sixteen masks kept SIX, and which six depended on how the document happened to store it.
 // Sixteen entries have been schema-legal since terrain landed; only the expander refused them.
-function rotatedTable(art: ReadonlyMap<number, number>): AutotileTable;   // 6 tiles -> all 16
+function rotatedTable(art: readonly { mask: number; index: number }[]): AutotileTable;  // 6 -> 16
 function dualMask(terrain, material, col, row): number;
-function autotile(terrain, material, table): { cols; rows; tiles: number[]; flips?: number[] };
+// HOW A CELL CHOOSES among the tiles that all satisfy its mask. Weights are INJECTED, because this
+// module knows masks and the TILESET knows what a tile weighs; `resolveTilemaps` holds both and
+// supplies them only when a set actually says something, so an existing document derives
+// byte-identically. Deterministic: seeded by the cell's own position AND the material, or a
+// derived picture would shimmer as you pan. Weight 0 EXCLUDES; all-zero falls back to the first.
+interface AutotileChoice { weightOf?: (index: number) => number; seed?: number }
+function autotile(terrain, material, table, opts?: AutotileChoice): AutotileResult;
+function autotileLayers(terrain, materials, opts?: AutotileChoice): AutotileResult;  // paint order
+interface AutotileResult { cols; rows; tiles: number[]; flips?: number[] }
 ```
 
 **THE DUAL GRID IS THE CHEAP SCHEME.** Put the display grid half a cell off the terrain grid and every

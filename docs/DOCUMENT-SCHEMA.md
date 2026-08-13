@@ -1814,5 +1814,21 @@ that is not there.
   model validates them; `RenderModel` resolves a null sheet for one, so the layer draws nothing. The
   renderer needs a per-tile image path, which is a second derivation and deliberately not smuggled
   into this change.
-- **The exporter writes ONE tileset.** The document can hold several now, so it could write one
-  `<tileset>` element per distinct set with its own `firstgid`.
+- **~~The exporter writes ONE tileset.~~ DONE — one `<tileset>` per distinct set.** Each carries its
+  own `firstgid`, in first-seen order, and a set is entered once however many layers name it. The
+  bug it closes is one the schema change made reachable and then left standing: with a single
+  element written, every other layer's cells indexed the FIRST set's picture — right places, wrong
+  pictures, in a file that parses and opens in Tiled and reads as an art mistake. A set declares the
+  tile count ITS OWN layers reach, not the map's highest, or a small set inherits a large one's
+  count and every set after it starts at the wrong gid.
+
+  **A tile object follows the picture it names.** An image node has no `tilesetId` — it carries a
+  `src` and a `sourceRect`, because it is an image and not a cell — so the `src` is matched against
+  each written set's. It falls back to the first set, which is what it did when there could only be
+  one, and the fallback is not a silent guess: `tileIndexAt` refuses a rect that is not a cell of
+  the sheet it is handed, so the object leaves with a note rather than a gid pointing elsewhere.
+
+  **A layer whose set has no sheet is dropped WITH THE REASON**, which is where a collection set
+  lands: writing one means a `<tile><image>` per tile, and that is the same gap the renderer has.
+  When nothing is writable the export says so and writes no file, because a map declaring a layer
+  and no tileset is one Tiled opens as an error dialog.

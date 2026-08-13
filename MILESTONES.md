@@ -10,6 +10,9 @@
 > passing, which is now itself a reported condition.
 
 <!-- describes: src/core, src/editor, src/renderer -->
+<!-- re-read 2026-08-13 after schema 67: M11 said Aseprite was BUILT AND UNREACHABLE and that a
+     tileset was not a thing the document holds. Both had stopped being true, one of them the same
+     day. M13 records the multi-tileset export. -->
 
 ## Legend
 
@@ -38,9 +41,9 @@ M7  States                    ✅   `Node.states` + `activeState` (schema 30, th
 M8  Animation Engine          ✅   timeline + keyframes + cubic-Bézier easing + HOLDS (cel) + onion skin — `Timeline` (407), `Bezier` (172), `Clips` (105)
 M9  Interaction Graph         ✅*  `Node.interactions`: trigger → state, with duration/easing, plus NAVIGATE to a node (schema 36), and a Play mode that fires them. A state machine, not a node GRAPH — the name overpromises
 M10 Drawing System            ✅   12 paint modules / 2,107 lines: buffer, patch, brush, stroke, fill, selection + outline, symmetry, palette, quantize, adjust, codec, surface space — with a Paint workspace and its tools
-M11 Assets                    ✅*  15 importers / 4,397 lines: Tiled (maps, tilesets, objects), SVG, fonts, atlases, `.unitypackage`, sheets, numbered frame runs. Aseprite is BUILT AND UNREACHABLE (343 tested lines, no importer); glTF and OBJ are BLOCKED rather than unwired — every `NODE_TYPE` is 2D, so there is no node to import a mesh into, and 10,937 files here are waiting on that. A TILESET is still not a thing the document holds — it is a slicing rule stapled to one image on one node, which costs a measured 2.5x duplication, makes collection sets (1,207 tiles in the corpus) unrepresentable, and leaves per-tile data homeless. Designed as schema 67 in docs/DOCUMENT-SCHEMA.md, not built. See FEATURE-AUDIT.md
+M11 Assets                    ✅*  16 importers: Tiled (maps, tilesets, objects), SVG, fonts, atlases, `.unitypackage`, sheets, numbered frame runs, and now ASEPRITE — a file arrives as one node that plays, with the file's own timing and its tags as clips, through a confined bytes channel. glTF and OBJ are BLOCKED rather than unwired — every `NODE_TYPE` is 2D, so there is no node to import a mesh into, and 10,937 files here are waiting on that. A TILESET IS NOW A THING THE DOCUMENT HOLDS (schema 67, 2026-08-13): shared by every layer that names it, which ends a measured 2.5x duplication; collection sets are representable and not yet drawable. See FEATURE-AUDIT.md
 M12 Text Engine               ✅*  typesetting, wrapping and on-canvas editing, shared by all three backends and the exporter. ONE style per node — no per-run styling
-M13 Export                    ✅*  SVG, Tiled `.tmx` (tile AND object layers), sprite sheet (`sheet.json` + `sheet.png`). No PNG or PDF of the canvas
+M13 Export                    ✅*  SVG, Tiled `.tmx` (tile AND object layers, one `<tileset>` per distinct set with its own `firstgid`), sprite sheet (`sheet.json` + `sheet.png`). No PNG or PDF of the canvas
 M14 AI Integration            ⬜
 M15 Plugins                   ⬜
 M16 Collaboration             ⬜

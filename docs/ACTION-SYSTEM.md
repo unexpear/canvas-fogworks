@@ -1,6 +1,10 @@
 # Action System
 
 <!-- describes: src/core/actions -->
+<!-- re-read 2026-08-13 after schema 67: the catalogue was missing SIX actions — SetTilesetsAction
+     and SetClipsAction (both new, and both the write path a shipped field had gone without), plus
+     SetLightingAction, SetMeshAction, SetInteractionsAction and SetNodeFlagsAction, which had been
+     absent since they landed. Added; the rest re-read and accurate. -->
 <!-- re-read 2026-08-11 after schema 66: accurate. The no-op check now also compares a material's
      NAME and swatch, because a rename leaves the picture identical and would otherwise be refused. -->
 <!-- re-read 2026-08-10 after schema 65: accurate. `SetTilemapAction`'s no-op check now compares a
@@ -131,6 +135,12 @@ abstract class Action {
 | `SetVariableAction` | `{ kind: "variables", variables, activeTheme }` — upsert one design token (M5); validated via the shared `variableStoreError` |
 | `DeleteVariableAction` | `{ kind: "variables", … }` — remove one token; dangling references stay valid (they resolve to the visible fallback) |
 | `SetActiveThemeAction` | `{ kind: "variables", … }` — switch the persisted light/dark theme |
+| `SetTilesetsAction` | `{ kind: "tilesets", tilesets }` under `documentDeltaKey("tilesets")` — the only write path to `Document.tilesets` (schema 67). Document-level, because a tileset is shared by every layer that names it. WHOLE-VALUE like `SetClipsAction`: the table is validated as a SET (`tilesetsError` refuses duplicate ids), so a per-entry edit would re-validate all of it anyway, and last-wins composes correctly in a transaction. `undefined` removes the table. Deleting a set a layer still uses is ALLOWED — a dangling reference in this schema is inert, and the alternative is a file that will not open because of a deletion. It was missing for an hour after the field shipped, which is the second time this exact gap has appeared here |
+| `SetClipsAction` | `{ kind: "clips", clips }` under `DOCUMENT_DELTA_KEY` — the only write path to `Document.clips`, which arrived at schema 46 validated, serialised, migrated, read by `Rig` and read by the SPRITE-SHEET EXPORTER, with nothing able to set it: every sheet ever exported carried an empty clip list. Document-level (a clip names frames of the document's clock) and whole-value (clips are identified by NAME and validated as a set). Validated against the timeline the document WILL have, because an Aseprite import sets both in one transaction |
+| `SetLightingAction` | `{ kind: "lighting", lights, ambient }` under `DOCUMENT_DELTA_KEY` — the scene's LIGHTS and ambient floor (schema 42). Both fields move together because they are one decision: an ambient floor without lights is a dimmer, and lights without a floor put every unlit face at pure black. Validated by the shared `lightsError`/`ambientError` |
+| `SetMeshAction` | `{ kind: "patch", mesh }` — a node's deformation GRID (schema 41), or `undefined` to clear it and make the shape rigid again. Validated by the shared `meshError`, which is where the point count is checked against the grid: every `warpPoint` lookup indexes by row and column, and a short array reads `undefined` as a coordinate |
+| `SetInteractionsAction` | `{ kind: "patch", interactions }` — a node's prototype interactions (M7, schema 35). A whole-array replace, like `UpdateNodePathAction`, because a list is edited as a list; an emptied one is stored ABSENT rather than `[]`, so a node whose last interaction was removed compares equal to one that never had any |
+| `SetNodeFlagsAction` | `{ kind: "patch", hidden?/locked? }` — the layer flags (schema 31). One action for both, and the patch is PARTIAL so toggling `hidden` never disturbs `locked`. `false` is stored as ABSENT, so a document where they were toggled on and off again stays byte-identical to one that never used them |
 | `TransactionAction` | merges multiple actions into one atomic result + one revision |
 
 The `"variables"` delta is DOCUMENT-level: it replaces the whole store + active theme
