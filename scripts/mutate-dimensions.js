@@ -1026,8 +1026,8 @@ const MUTANTS = [
     // THE EXPANDER. It threw away art the document was already allowed to hold: given a tile for all
     // sixteen masks it kept six, and WHICH six depended on the order of the stored array.
     { id: "RT1", file: "src/core/document/Autotile.ts",
-      from: "        const had = table[mask];",
-      to: "        const had = null;",
+      from: "        if (had) { if (!had.some(c => c.index === index)) had.push({ index }); }\n        else table[mask] = [{ index }];",
+      to: "        table[mask] = [{ index }];",
       note: "the exact-entry pass stops accumulating, so a mask keeps only its LAST drawn tile — which is what the Map it replaced did, discarding an artist's variants at the door. RETARGETED: the pass builds a LIST per mask now, since a real set ships 185 tiles for 74 configurations" },
     { id: "RT2", file: "src/core/document/Autotile.ts",
       from: "        .sort((a, b) => a.mask - b.mask);",
