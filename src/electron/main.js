@@ -8,6 +8,9 @@
 
 const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
 const path = require("path");
+// THE SECURITY BOUNDARY, in its own module because this file cannot be required by a test —
+// it is an Electron entry point. See src/electron/confine.js and its junction test.
+const { resolveConfined } = require("./confine");
 const fs = require("fs");
 const zlib = require("zlib");
 const pkg = require("../../package.json");
@@ -377,19 +380,12 @@ ipcMain.handle("read-tiled-folder", async (event, folder) => {
  * against nothing would hand back whatever the file asked for.
  */
 function resolveTiledAsset(folder, mapPath, relative) {
-    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
     if (!mapPath || typeof mapPath !== "string") throw new Error("Invalid map path.");
-    if (!relative || typeof relative !== "string") throw new Error("Invalid asset path.");
-    const root = path.resolve(folder);
-    const map = path.resolve(mapPath);
-    if (map !== root && !map.startsWith(root + path.sep)) {
-        throw new Error("Refusing to read a map outside the chosen folder.");
-    }
-    const target = path.resolve(path.dirname(map), relative);
-    if (target !== root && !target.startsWith(root + path.sep)) {
-        throw new Error("Refusing to read outside the chosen folder.");
-    }
-    return target;
+    // THE MAP ITSELF IS CONFINED FIRST, then whatever it points at RELATIVE TO ITS OWN DIRECTORY —
+    // still measured against the folder the user picked, because real packs reference
+    // `../Spritesheet/sheet.png` and a check against the map's directory would refuse every one.
+    const map = resolveConfined(folder, path.dirname(path.resolve(mapPath)), path.basename(mapPath), "a map");
+    return resolveConfined(folder, path.dirname(map), relative, "an asset");
 }
 
 /** One map, as text. The renderer parses it — the parser is pure and stays that way. */
@@ -420,13 +416,7 @@ ipcMain.handle("read-palette-folder", async (event, folder) => {
 });
 
 ipcMain.handle("read-palette-file", async (event, folder, filePath) => {
-    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
-    if (!filePath || typeof filePath !== "string") throw new Error("Invalid palette path.");
-    const root = path.resolve(folder);
-    const target = path.resolve(filePath);
-    if (target !== root && !target.startsWith(root + path.sep)) {
-        throw new Error("Refusing to read a palette outside the chosen folder.");
-    }
+    const target = resolveConfined(folder, folder, filePath, "a palette");
     if (!PALETTE_EXT.test(target)) throw new Error("Not a palette file.");
     // BOUNDED like every other read here. A palette is a few kilobytes; a multi-megabyte `.json`
     // under the same folder is something else, and `JSON.parse` on it would block the main process.
@@ -470,13 +460,7 @@ ipcMain.handle("read-unity-folder", async (event, folder) => {
  * own, so only the file itself has to be checked.
  */
 ipcMain.handle("read-unity-package", async (event, folder, filePath) => {
-    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
-    if (!filePath || typeof filePath !== "string") throw new Error("Invalid package path.");
-    const root = path.resolve(folder);
-    const target = path.resolve(filePath);
-    if (target !== root && !target.startsWith(root + path.sep)) {
-        throw new Error("Refusing to read outside the chosen folder.");
-    }
+    const target = resolveConfined(folder, folder, filePath, "a package");
     if (!UNITY_EXT.test(target)) throw new Error("Not a Unity package.");
     return fs.readFileSync(target).toString("base64");
 });

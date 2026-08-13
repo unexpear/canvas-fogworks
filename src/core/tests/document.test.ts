@@ -27305,8 +27305,13 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         // test that looked like it covered it.
         const unityDoor = main.slice(main.indexOf('ipcMain.handle("read-unity-package"'),
             main.indexOf('ipcMain.on("gunzip-sync"'));
-        expect(unityDoor).toMatch(/Refusing to read outside the chosen folder/);
-        expect(unityDoor).toMatch(/target\.startsWith\(root \+ path\.sep\)/);
+        // CONFINED THROUGH THE SHARED GUARD. This used to grep for the refusal MESSAGE, which is
+        // the weakness the guard's own history proves: the message was present and correct the
+        // whole time the check was escapable by a directory junction. The behaviour is tested for
+        // real in src/electron/confine.test.ts, against an actual junction on an actual disk.
+        expect(unityDoor).toMatch(/resolveConfined\(folder, folder, filePath, "a package"\)/);
+        // The prefix arithmetic this used to assert INLINE now lives in `confine.js`, where a
+        // junction test can reach it. Restating it here would pin a copy that no longer exists.
         expect(unityDoor).toMatch(/Not a Unity package/);
         // A SEPARATE CHANNEL FROM `inflate-sync`, not a widening of it. A `.unitypackage` is GZIP,
         // which carries a header `zlib.inflateSync` will not accept — and widening the inflate
@@ -27429,7 +27434,9 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         expect(main).toMatch(/ipcMain\.handle\("read-palette-folder"/);
         expect(main).toMatch(/ipcMain\.handle\("read-palette-file"/);
         // CONFINED to the folder the user picked, like every other path that arrives from outside.
-        expect(main).toMatch(/Refusing to read a palette outside the chosen folder/);
+        // Confined through the same shared guard as every other renderer-supplied path — see the
+        // note on the Unity door above, and confine.test.ts for the behaviour itself.
+        expect(main).toMatch(/resolveConfined\(folder, folder, filePath, "a palette"\)/);
         const preload = readFileSync(resolve(__dirname, "../../electron/preload.js"), "utf8");
         expect(preload).toMatch(/readPaletteFolder:/);
         expect(preload).toMatch(/readPaletteFile:/);
