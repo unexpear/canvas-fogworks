@@ -1628,3 +1628,136 @@ Serializer.save(doc): SaveResult   // { status: "saved" } | { status: "failed"; 
 
 - Storage key `"vde-document"`; a corrupt payload is preserved to
   `"vde-document.corrupt-backup"` and logged, never silently dropped.
+
+---
+
+## PLANNED — schema 67: a tileset as a thing the document holds
+
+> **NOT IMPLEMENTED. Nothing below exists in the code.** This section is a design, written
+> against measurements, so that whoever builds it does not have to re-derive the evidence. Every
+> number here came from counting the corpus on 2026-08-13; the counting script is in the session
+> scratchpad as `measure-tilesets.py` and is worth re-running before starting, because a corpus
+> that has grown may have changed the answer.
+
+### What a tileset is today, and why that is the defect
+
+A tileset is not a thing. It is a **slicing rule stapled to one image on one node**: a
+`core.tilemap` node carries the picture as its own `src`, and `Tilemap.sheet` (`columns`,
+`tileWidth`, `tileHeight`, `spacing`, `margin`) says how to cut it. Nothing else can refer to it,
+nothing can be said about an individual tile, and a set whose tiles are separate files cannot be
+described at all.
+
+Three defects follow, each measured rather than asserted:
+
+**1. Every layer carries its own copy of the sheet.** Tiled's own examples hold 41 tile layers
+drawing from 12 distinct tilesets, so importing them produces 41 copies of 12 images —
+**1,003 KB where 407 KB would do, a 2.5x duplication**, and that is before the ~1.37x that base64
+adds on the way into the document. One map (`rule_006.tmx`) is six layers of one tileset: six
+copies.
+
+**2. A COLLECTION tileset cannot be represented.** Tiled allows a set whose tiles are separate
+image files rather than cells of one sheet, and this is not an edge case — it is the dominant
+per-tile feature in the corpus by three orders of magnitude:
+
+| feature | files | occurrences |
+|---|---|---|
+| collection `<tile><image>` | 7 | **1,207** |
+| per-tile `probability` | 2 | 25 |
+| `<tileoffset>` | 8 | 8 |
+| `<grid>` (isometric set) | 6 | 6 |
+| `<wangsets>` | 3 | 3 |
+| per-tile `<properties>` | 1 | 3 |
+| per-tile `<animation>` | — | **0** |
+| per-tile `<objectgroup>` (collision) | — | **0** |
+| per-tile `class`/`type` | — | **0** |
+| `<terraintypes>` (legacy), `<transformations>` | — | **0** |
+
+`TiledMap` already *parses* collection sets into `TiledTileImage[]`; there is nowhere in the
+document to put them, so they fall back to the node-per-cell path.
+
+**3. Per-tile data has no home.** Across 63 files a `<tile>` element carries exactly two
+attributes — `id` (1,235 of them) and `probability` (25) — and 1,210 have a body, of which 1,207
+are a collection image and 3 are properties. So the per-tile payload worth modelling is small,
+sparse, and precisely known.
+
+### The shape
+
+`Document.tilesets`, a document-level table like `variables` and `clips`, with tilemap nodes
+referring to an entry by id.
+
+```ts
+interface TilesetTile {
+    id: number;                  // the tile's id WITHIN the set
+    src?: string;                // a COLLECTION set's own image for this tile
+    width?: number;              // its natural size; a collection tile is not on a grid
+    height?: number;
+    probability?: number;        // weight when a brush picks among equivalent tiles (25 in the corpus)
+    userData?: UserData;         // the same shape a node carries (schema 64) — 3 in the corpus
+}
+
+interface Tileset {
+    id: string;                  // what a tilemap node names
+    name: string;
+    src: string | null;          // ONE image cut by a grid, or null for a collection set
+    sheet: TileSheet | null;     // the existing slicing rule, null for a collection set
+    tiles: TilesetTile[];        // SPARSE — only tiles that say something appear
+    offsetX: number;             // <tileoffset>: a tall tile hanging above its cell (8 files)
+    offsetY: number;
+}
+```
+
+and on the node: `Tilemap.tilesetId: string` replacing the node's own `src` + `sheet`.
+
+Four decisions worth stating, because each is the corpus talking rather than taste:
+
+- **Document-level, not per-node**, because 41 layers share 12 sets. Deduplication is the largest
+  measured win and it cannot be had while the picture lives on the node.
+- **`tiles` is SPARSE.** 28 of 1,235 tiles say anything at all. A dense array of 1,235 records to
+  carry 25 numbers and 3 property bags would be a hundredfold of nothing, and would make every
+  tileset's serialised size proportional to its tile count rather than to what an author authored.
+- **A set is EITHER sheet-backed OR a collection**, never both — Tiled enforces that and the
+  corpus contains no counterexample. `src`/`sheet` both null with a non-empty `tiles` is the
+  collection case; the validator should refuse the mixture rather than pick one.
+- **NO animation, collision, class or terrain fields.** All four are absent from the entire
+  corpus. This project's own rule is that a field designed against nothing is a field that will be
+  wrong when something finally arrives — the `sourceRect` history is the precedent. Add them when
+  a file that uses them exists.
+
+### The migration, 66 -> 67
+
+Not a pass-through. For each `core.tilemap` node holding a `src`:
+
+1. Key it by `(src, sheet.columns, sheet.tileWidth, sheet.tileHeight, sheet.spacing, sheet.margin)`
+   — the src alone is not the key, because two nodes can cut one image differently and folding them
+   would silently re-slice a layer.
+2. Create the tileset on first sight of a key, reuse it after. This is where the 2.5x collapses.
+3. Set `tilemap.tilesetId`, and REMOVE the node's `src` and `tilemap.sheet`.
+
+Name each from the node's own name, deduplicated — a document with two sets called `Terrain` is a
+picker nobody can use.
+
+The reverse is not possible, which is the usual asymmetry and worth saying out loud: a 66 build
+opening a 67 document sees tilemap nodes with no picture. That is what the version gate is for.
+
+### What has to move with it
+
+The freeze rule means these land in the same change, not after:
+
+- **`Integrity`/`tilemapError`** — `sheet` stops being required on the node; a `tilesetId` must
+  resolve; a dangling one must be INERT rather than fatal, per `dangling-references-are-inert`.
+- **`RenderModel`** — reads `href` from the resolved tileset instead of `node.src`. One resolver,
+  used by every backend, so the three cannot disagree.
+- **`tileImport`** — emits one tileset per Tiled tileset instead of one `src` per layer. This is
+  where the measured 2.5x actually gets collected.
+- **`ExportTiled`** — writes `<tileset>` once and references it, which is what the format wanted
+  in the first place.
+- **A panel** — otherwise this is a schema change nobody can reach, which this project treats as a
+  defect rather than a milestone.
+
+### The thing to be careful about
+
+`Tilemap.sheet` is load-bearing in `tileSourceRect`, in all three backends and in the exporter. The
+temptation is to add `tilesetId` and leave `sheet` in place as a fallback, so nothing breaks. That
+is the built-and-unreachable pattern this project keeps paying for: two sources of truth for one
+picture, and the new one optional means the old one is what actually runs. The migration must MOVE
+the data, and `sheet` must leave the node in the same change.
