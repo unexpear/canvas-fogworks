@@ -4,7 +4,7 @@
  * inspector, and status bar.
  */
 
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { ActionDispatcher } from "../core/actions/ActionDispatcher";
 import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document";
 import { Node, Shadow, flatFill, UserData } from "../core/document/Node";
@@ -113,6 +113,8 @@ import { exportSVG, TextLines } from "../core/export/ExportSVG";
 import { exportTiledMap } from "../core/export/ExportTiled";
 import { planSheet, sheetAtlas, sheetTooLarge, drawSheet, SheetPlan } from "../core/export/SpriteSheet";
 import { sliceGrid, sliceCells, sliceTrack, blankCells } from "../core/import/SheetSlice";
+import { groupSequences, sequenceTrack } from "../core/import/Sequence";
+import { sequenceImportActions } from "../core/actions/sequenceImport";
 import { parseTextureAtlas, atlasError, AtlasEntry } from "../core/import/TextureAtlas";
 import { parseSvgDocument, svgDocumentError } from "../core/import/SvgDocument";
 import { svgNodeSpecs, SvgNodeSpec } from "../core/import/SvgNodes";
@@ -227,6 +229,17 @@ const SELECT_STYLE: React.CSSProperties = {
     fontSize: 11, padding: "2px 4px", background: "#12121f", color: "#ccc",
     border: "1px solid #2a2a4a", borderRadius: 3, boxSizing: "border-box"
 };
+
+/**
+ * The most frames an asset folder may be imported as ONE animation.
+ *
+ * NOT A MEMORY BOUND — a guard against the commonest false positive there is. A tileset exported
+ * one file per tile (`tile_0000.png` … `tile_9999.png`) is a numbered run by every rule a name
+ * reader has, and it is not an animation. Measured in the pack sitting beside this app: 11,846
+ * files under one stem. 240 frames is ten seconds at 24fps, which is longer than any sprite cycle
+ * and far short of a sheet.
+ */
+export const SEQUENCE_IMPORT_MAX = 240;
 
 const ALIGN_BUTTON_STYLE: React.CSSProperties = {
     fontSize: 12, padding: "3px 6px", background: "transparent", color: "#ccc",
@@ -1612,6 +1625,32 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
      * remove it — and a node whose commands arrived in a later action would be an empty path if the
      * import were interrupted between the two, which is the trap the pen tool already avoids.
      */
+    /**
+     * A folder of numbered images as one animated node.
+     *
+     * THE ACTIONS ARE `sequenceImportActions`, and that is not a stylistic split — it is the same
+     * reason `importTiles` uses `tileImportActions`. A node created inside a transaction exists in
+     * no document yet, so it cannot be reached through `nodeEdit`'s router; and everything left in
+     * this handler is verifiable only by reading it, because `window.electronAPI` is frozen, so the
+     * native folder dialog this import starts with can be neither driven nor stubbed from a probe.
+     * What lives here is therefore only the placement — where on the canvas, at what size.
+     */
+    const importSequence = useCallback((name: string, first: string, track: Keyframe[]) => {
+        const el = canvasRef.current;
+        const w = 200, h = 150;
+        const centre = screenToWorld(es.viewport, { left: 0, top: 0 },
+            (el ? el.clientWidth : 800) / 2, (el ? el.clientHeight : 600) / 2);
+        const doc = dispatcher.getDocument();
+        const { actions, id } = sequenceImportActions(doc, {
+            name, first, track, x: centre.x - w / 2, y: centre.y - h / 2, width: w, height: h
+        });
+        if (actions.length === 0) return;
+        if (dispatcher.dispatchAction(new TransactionAction(doc, "import-sequence", actions)).success) {
+            es.selectedNodeIds = [id];
+        }
+        refresh();
+    }, [dispatcher, es, refresh]);
+
     const importSvg = useCallback((specs: SvgNodeSpec[]) => {
         if (specs.length === 0) return;
         const doc = dispatcher.getDocument();
@@ -2576,6 +2615,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                             selectedImage={node && node.type === "core.image" && node.src
                                 ? { id: node.id, src: node.src } : null}
                             onImportTrack={importTrack}
+                            onImportSequence={importSequence}
                             onImportSvg={importSvg}
                             editContentFont={family => { editSelected({ style: { fontFamily: family } }); refresh(); }}
                             onImportTiles={importTiles}
@@ -4504,8 +4544,11 @@ const LAYER_ICONS: Record<string, string> = {
  * so rather than showing controls that do nothing.
  */
 function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion, onImportSvg,
-    editContentFont, onImportTiles, paintColour, onPickColour, selectedRasterId, onQuantize }: {
+    editContentFont, onImportTiles, paintColour, onPickColour, selectedRasterId, onQuantize,
+    onImportSequence }: {
     onPlaceImage: (dataUrl: string, name: string) => void;
+    /** A numbered run of files as one animated node: its name, frame zero's data URL, its track. */
+    onImportSequence: (name: string, first: string, track: Keyframe[]) => void;
     getDocument: () => ReadonlyDocument;
     /** The selected node when it is an image with a source — what a SHEET import acts ON. */
     selectedImage: { id: string; src: string } | null;
@@ -4552,6 +4595,19 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     const [findings, setFindings] = useState<Capability[] | null>(null);
     const [assets, setAssets] = useState<{ path: string; name: string; relative: string }[]>([]);
     const [busy, setBusy] = useState(false);
+
+    /**
+     * The numbered runs in the listed folder — computed from the NAMES the folder read already
+     * returned, which is why this costs a picker rather than a new IPC channel.
+     *
+     * A ONE-FRAME RUN IS NOT AN ANIMATION. `groupSequences` groups by stem and reports singletons
+     * faithfully, so a folder of unrelated `icon_1.png`, `logo_2.png` would otherwise offer a row
+     * per file that does nothing a click on the file itself does not.
+     */
+    const sequences = useMemo(
+        () => groupSequences(assets.map(a => a.name)).filter(s => s.frames.length > 1),
+        [assets]
+    );
 
     // Drawn in an effect rather than in the click handler because the canvas does not exist yet
     // when the plan is computed — React mounts it on the render that follows. Drawing straight
@@ -5427,6 +5483,50 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                         {busy ? "Reading…" : "Choose an asset folder…"}
                     </button>
                     {assetFolder && <div style={{ color: "#666", margin: "6px 0", wordBreak: "break-all" }}>{assetFolder}</div>}
+                    {sequences.length > 0 && (
+                        <>
+                            <label style={INSPECTOR_LABEL}>Numbered runs in this folder</label>
+                            <div style={{ marginBottom: 8 }}>
+                                {sequences.map(s => {
+                                    const tooMany = s.frames.length > SEQUENCE_IMPORT_MAX;
+                                    return (
+                                        <button
+                                            key={s.name}
+                                            data-sequence={s.name}
+                                            disabled={busy || tooMany}
+                                            title={tooMany
+                                                // THE TILESET CASE, which is most of what a real folder holds: a sheet
+                                                // exported as `tile_0000.png … tile_9999.png` is a numbered run by every
+                                                // rule this reader has, and it is not an animation. Measured here: one
+                                                // pack groups to 11,846 frames. Refusing loudly beats reading eleven
+                                                // thousand images into data URLs to build an eight-minute "animation".
+                                                ? `${s.frames.length} frames — too many to be an animation. This is `
+                                                  + `almost certainly a tileset exported one file per tile; slice the `
+                                                  + `sheet instead.`
+                                                : `Import ${s.frames.length} frames as one animated node`}
+                                            onClick={async () => {
+                                                setBusy(true);
+                                                try {
+                                                    const byName = new Map(assets.map(a => [a.name, a.path]));
+                                                    const hrefs = new Map<string, string>();
+                                                    for (const f of s.frames) {
+                                                        const p = byName.get(f.file);
+                                                        if (p) hrefs.set(f.file, await api.readImageDataUrl(p));
+                                                    }
+                                                    const track = sequenceTrack(s, { hrefFor: f => hrefs.get(f) ?? f });
+                                                    const first = hrefs.get(s.frames[0].file);
+                                                    if (!first) { setImportNote("Could not read the first frame."); return; }
+                                                    onImportSequence(s.name || "sequence", first, track);
+                                                    setImportNote(`${s.name || "sequence"}: ${s.frames.length} frames.`);
+                                                } finally { setBusy(false); }
+                                            }}
+                                            style={{ ...DRAWER_BUTTON, textAlign: "left", opacity: tooMany ? 0.5 : 1 }}
+                                        >{s.name || "(unnamed)"} — {s.frames.length} frames</button>
+                                    );
+                                })}
+                            </div>
+                        </>
+                    )}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
                         {assets.slice(0, 300).map(a => (
                             <button

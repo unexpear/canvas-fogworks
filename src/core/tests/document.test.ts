@@ -169,6 +169,8 @@ import { BooleanOp, booleanOpError } from "../document/Node";
 import { TEXT_ALIGNS, FONT_FAMILY_MAX, TextAlign } from "../document/Node";
 import { alignBars, ALIGN_ICON_BOX } from "../../app/theme/AlignIcons";
 import { TOOL_CURSORS } from "../../app/theme/Cursors";
+import { SEQUENCE_IMPORT_MAX } from "../../app/App";
+import { sequenceImportActions, SEQUENCE_DEFAULT_FPS } from "../actions/sequenceImport";
 import { blendColor, blendStates, easingAt, interactionFor, interactionsError, Interaction, Trigger, TRANSITION_MAX_MS, INTERACTIONS_MAX } from "../document/Prototype";
 import { applyActiveState } from "../document/Components";
 import { SetInteractionsAction } from "../actions/SetInteractionsAction";
@@ -18460,6 +18462,118 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // Groups keep the order their first file appeared, so a listing's own order survives.
         expect(groupSequences(["z_1.png", "a_1.png"]).map(g => g.name)).toEqual(["z", "a"]);
         expect(SEQUENCE_MAX).toBeGreaterThan(100);
+    });
+
+    test("the sequence reader is REACHED, and the tileset it would misread is refused", () => {
+        // `Sequence` was one of four importers with no production caller: written, tested, pinned in
+        // apiSurface, and unopenable from the app. A green suite proves behaviour, never that
+        // anything runs it — see the cursor key, the terrain copier, and Escape before them.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/from "\.\.\/core\/import\/Sequence"/);
+        expect(app).toMatch(/groupSequences\(assets\.map\(a => a\.name\)\)/);
+        expect(app).toMatch(/onImportSequence=\{importSequence\}/);
+        expect(app).toMatch(/sequenceTrack\(s, \{ hrefFor:/);
+
+        // THE HANDLER HOLDS ONLY THE PLACEMENT. Everything else is `sequenceImportActions`, whose
+        // behaviour the test below actually runs — because this handler cannot be run by anything:
+        // `window.electronAPI` is frozen, so the native folder dialog it starts with can be neither
+        // driven nor stubbed. Code that can only be read should be as small as it can be.
+        const handler = app.slice(app.indexOf("const importSequence = useCallback"),
+            app.indexOf("const importSvg = useCallback"));
+        expect(handler).toContain("sequenceImportActions(doc, {");
+        expect(handler).toContain('new TransactionAction(doc, "import-sequence", actions)');
+        // NOT `importTrack`, which reads `selectedNodeId` from a closure this render has not
+        // rebuilt — the track would land on whatever was selected BEFORE the import.
+        expect(handler).not.toContain("importTrack(");
+        // The id is not minted here: it comes back from the actions, because the node it names is
+        // created inside the transaction and exists for nothing to look up until that commits.
+        expect(handler).not.toContain("generateUUID()");
+        expect(handler).toContain("const { actions, id } =");
+
+        // THE GUARD IS LOAD-BEARING, not decoration. A tileset exported one file per tile is a
+        // numbered run by every rule this reader has. Built here the way the real pack is named,
+        // and asserted to blow past the cap — if `groupSequences` ever stopped grouping them, this
+        // fixture would quietly stop testing the thing it exists for.
+        const tiles = Array.from({ length: 300 }, (_, i) => `tile_${String(i).padStart(4, "0")}.png`);
+        const asRuns = groupSequences(tiles);
+        expect(asRuns).toHaveLength(1);
+        expect(asRuns[0].name).toBe("tile");
+        expect(asRuns[0].frames.length).toBeGreaterThan(SEQUENCE_IMPORT_MAX);
+        expect(SEQUENCE_IMPORT_MAX).toBeGreaterThan(60);        // a sprite cycle must still fit
+        expect(app).toMatch(/s\.frames\.length > SEQUENCE_IMPORT_MAX/);
+        expect(app).toMatch(/disabled=\{busy \|\| tooMany\}/);
+
+        // A ONE-FRAME RUN IS NOT AN ANIMATION, and the reader reports singletons faithfully — so
+        // the filtering is the panel's job and this pins it.
+        expect(groupSequences(["icon_1.png", "logo_2.png"]).every(s => s.frames.length === 1)).toBe(true);
+        expect(app).toMatch(/\.filter\(s => s\.frames\.length > 1\)/);
+    });
+
+    test("a folder of frames becomes ONE node that plays, and ONE undo removes it", () => {
+        // THE ACTIONS THEMSELVES, not a description of them. The handler in App.tsx is unreachable
+        // from any harness — `window.electronAPI` is frozen and non-configurable, so the native
+        // folder dialog cannot be driven or stubbed from CDP — so everything worth asserting was
+        // moved into a function a test can call, exactly as `tileImportActions` was.
+        const seq = groupSequences(["run_0.png", "run_1.png", "run_2.png", "run_3.png"])[0];
+        const track = sequenceTrack(seq, { step: 3, hrefFor: f => `data:image/png;base64,${f}` });
+        const d = new ActionDispatcher(createEmptyDocument());
+        const before = d.getDocument().nodes.size;
+        const { actions, id } = sequenceImportActions(d.getDocument(),
+            { name: seq.name, first: track[0].values.src as string, track, x: 10, y: 20, width: 64, height: 48 });
+        expect(d.dispatchAction(new TransactionAction(d.getDocument(), "import-sequence", actions)).success).toBe(true);
+
+        const node = d.getDocument().nodes.get(id)!;
+        expect(node.type).toBe("core.image");
+        // NAMED AFTER THE RUN. A folder holds a dozen of these and "Image" twelve times is a panel
+        // nobody can read.
+        expect(node.name).toBe("run");
+        // FRAME ZERO IS ALSO THE NODE'S OWN src — without it the node is blank until the playhead
+        // moves, and blank forever in a document that never gets a timeline.
+        expect(node.src).toBe("data:image/png;base64,run_0.png");
+        expect(node.track!.map(k => k.frame)).toEqual([0, 3, 6, 9]);
+        expect(node.track!.map(k => k.values.src)).toEqual(
+            ["run_0.png", "run_1.png", "run_2.png", "run_3.png"].map(f => `data:image/png;base64,${f}`));
+        // THE TIMELINE REACHES THE LAST KEYFRAME. `frame` is an index, so 9 needs 10 frames — the
+        // off-by-one that leaves the final drawing unplayable and looks like a dropped frame.
+        expect(d.getDocument().timeline!.frames).toBe(10);
+        expect(d.getDocument().timeline!.fps).toBe(SEQUENCE_DEFAULT_FPS);
+
+        // ONE UNDO, which is what "one transaction" MEANS and the only assertion that shows it. A
+        // node, a name, a track and a timeline arriving as four steps would need four undos, and
+        // the three in between are documents nobody authored.
+        expect(d.undo()).not.toBeNull();
+        expect(d.getDocument().nodes.size).toBe(before);
+        expect(d.getDocument().nodes.has(id)).toBe(false);
+        // …and the timeline it created went with it, or "undo" left half an import behind.
+        expect(d.getDocument().timeline).toBeUndefined();
+
+        // AN EXISTING TIMELINE THAT IS ALREADY LONG ENOUGH is left entirely alone — never SHRUNK to
+        // fit, which would truncate whatever else the document animates.
+        const d2 = new ActionDispatcher(createEmptyDocument());
+        expect(d2.dispatchAction(new SetTimelineAction(d2.getDocument(), { frames: 200, fps: 12 })).success).toBe(true);
+        const wide = sequenceImportActions(d2.getDocument(),
+            { name: "run", first: "a", track, x: 0, y: 0, width: 8, height: 8 });
+        expect(d2.dispatchAction(new TransactionAction(d2.getDocument(), "s", wide.actions)).success).toBe(true);
+        expect(d2.getDocument().timeline!.frames).toBe(200);
+
+        // A SHORT ONE IS GROWN AND KEEPS ITS OWN FPS — and this case exists because the one above
+        // could not see it. With 200 frames the growth branch never runs at all, so the expression
+        // that reads `fps` is never evaluated: a mutant resetting it to the default SURVIVED against
+        // a fixture that asserted `fps` was still 12. The timeline has to be too SHORT for the
+        // assertion to mean anything.
+        const d3 = new ActionDispatcher(createEmptyDocument());
+        expect(d3.dispatchAction(new SetTimelineAction(d3.getDocument(), { frames: 3, fps: 12 })).success).toBe(true);
+        const grown = sequenceImportActions(d3.getDocument(),
+            { name: "run", first: "a", track, x: 0, y: 0, width: 8, height: 8 });
+        expect(d3.dispatchAction(new TransactionAction(d3.getDocument(), "s", grown.actions)).success).toBe(true);
+        expect(d3.getDocument().timeline!.frames).toBe(10);
+        expect(d3.getDocument().timeline!.fps).toBe(12);
+        expect(SEQUENCE_DEFAULT_FPS).not.toBe(12);          // …or the assertion above proves nothing
+
+        // AN EMPTY TRACK IS NOT A STILL IMAGE. "Import an animation" that quietly produced one
+        // frame is a half-success with nothing to undo.
+        expect(sequenceImportActions(createEmptyDocument(),
+            { name: "x", first: "a", track: [], x: 0, y: 0, width: 8, height: 8 }).actions).toHaveLength(0);
     });
 
     test("a sequence becomes an UNHELD track whose src steps", () => {

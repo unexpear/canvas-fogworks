@@ -47,7 +47,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck + lint + test + build).
-- **Tests:** 1734 — `src/core/tests/document.test.ts` (1582) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8).  <!-- re-read 2026-08-12 after the cursor-key fix: accurate. -->
+- **Tests:** 1736 — `src/core/tests/document.test.ts` (1584) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (60) + `src/renderer/emitSVG.test.ts` (8).  <!-- re-read 2026-08-12 after wiring the sequence importer: accurate. -->
 - **Verify the tests themselves:** `npm run mutate:dimensions` (215/215) — breaks the paint arithmetic
   on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
   and it refuses a dirty tree. See TESTING.md § Fixture design.
@@ -62,7 +62,12 @@ src/
                 Timeline (39), Depth (40), Mesh (41), Light (42),
                 Bezier (44), Clips (46), Demos (the classic exercises)
     actions/    Action + commands, Dispatcher,         (the only write path)
-                HistoryManager, applyMutations, types
+                HistoryManager, applyMutations, types,
+                tileImport / sequenceImport — an import's
+                actions, where a test can REACH them: a
+                panel's onClick cannot be run at all,
+                since `electronAPI` is frozen and the
+                native folder dialog cannot be stubbed
     geometry/   Matrix, GeometryEngine (M1),           (intent -> computed results)
                 LayoutEngine (M2 auto-layout),
                 PathBoolean, Resolve, StrokeOutline,

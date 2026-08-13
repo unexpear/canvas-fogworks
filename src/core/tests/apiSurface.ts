@@ -123,6 +123,7 @@ import { IkConstraint, ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../
 import { Cell, SheetPlan, SheetAtlas, planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, drawSheet, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
 import { SliceGrid, SliceOptions, sliceGrid, sliceCells, sliceTrack, blankCells, SLICE_MAX_CELLS } from "../import/SheetSlice";
 import { Sequence, SequenceFrame, parseFrameName, groupSequences, sequenceTrack, SEQUENCE_MAX } from "../import/Sequence";
+import { SequencePlacement, sequenceImportActions, SEQUENCE_DEFAULT_FPS } from "../actions/sequenceImport";
 import { Trim, TrimBox, trimmedPlacement, inkUnion } from "../import/Trim";
 import { Atlas, AtlasEntry, parseTextureAtlas, atlasError, atlasEntry, atlasPlacement, ATLAS_MAX_ENTRIES } from "../import/TextureAtlas";
 import { parseSvgPath, svgPathError, SVG_PATH_MAX_COMMANDS } from "../import/SvgPath";
@@ -797,6 +798,13 @@ export function __apiSurfacePin(): void {
     expectType<SequenceFrame[]>(sequences[0].frames);
     expectType<Keyframe[]>(sequenceTrack(sequences[0], { start: 0, step: 2, hrefFor: f => f }));
     expectType<number>(SEQUENCE_MAX);
+    // …AND THE ACTIONS IT BECOMES. The id comes back because the caller cannot mint it afterwards:
+    // the node is created inside a transaction and does not exist for anything to look up.
+    const placement: SequencePlacement = { name: "run", first: "data:,", track: [], x: 0, y: 0, width: 8, height: 8 };
+    expectType<{ actions: Action[]; id: string }>(sequenceImportActions(createEmptyDocument(), {
+        name: "run", first: "data:,", track: [], x: 0, y: 0, width: 8, height: 8
+    }));
+    expectType<number>(SEQUENCE_DEFAULT_FPS);
 
     // TRIMMING: a rectangle AND a placement, never a rectangle alone — narrowing the source is paid
     // for by moving the destination, so the ink does not shift. Measuring needs pixels and lives in
