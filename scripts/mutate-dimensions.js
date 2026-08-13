@@ -950,9 +950,9 @@ const MUTANTS = [
     // THE UNITY DOOR. A reader with no caller is not a feature — this is the pair that opens it,
     // and the confinement is the part a panel cannot be trusted to respect.
     { id: "UD7", file: "src/electron/main.js",
-      from: "    if (target !== root && !target.startsWith(root + path.sep)) {\n        throw new Error(\"Refusing to read outside the chosen folder.\");\n    }\n    if (!UNITY_EXT.test(target)) throw new Error(\"Not a Unity package.\");",
-      to: "    if (!UNITY_EXT.test(target)) throw new Error(\"Not a Unity package.\");",
-      note: "a package path escapes the folder the user picked, so anything on disk named .unitypackage can be read" },
+      from: "    const target = resolveConfined(folder, folder, filePath, \"a package\");",
+      to: "    const target = path.resolve(filePath);",
+      note: "a package path escapes the folder the user picked, so anything on disk named .unitypackage can be read. RETARGETED: this mutated the INLINE prefix check, which moved into confine.js when a directory junction was found to walk straight through it — same defect, different home" },
     { id: "UD8", file: "src/electron/preload.js",
       from: "    gunzipSync: (base64) => ipcRenderer.sendSync(\"gunzip-sync\", base64),",
       to: "    gunzipSyncMissing: (base64) => ipcRenderer.sendSync(\"gunzip-sync\", base64),",
