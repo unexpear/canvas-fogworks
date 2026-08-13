@@ -1062,10 +1062,18 @@ const MUTANTS = [
       from: "            image: used.length === 0 ? image : `${safeFileName(set.name)}.png`",
       to: "            image: used.length < 1 ? image : `${safeFileName(set.name)}.png`",
       note: "THE CONTROL — an equivalent rewrite that SHOULD survive. A run where everything dies cannot tell a real kill from a harness that fails every time" },
+    // THE SHEET CHECK ITSELF CANNOT BE MUTATED, and that is a finding rather than a gap: `!set` in
+    // place of `!set?.sheet` does not COMPILE, because `Tileset.sheet` is `TileSheet | null` and
+    // `used[]` cannot be built from a set without one. tsc enforces the guard's existence, so what
+    // needs a fixture is the REASON — a silent drop is the failure this codebase keeps finding.
     { id: "EX21", file: "src/core/export/ExportTiled.ts",
-      from: "        if (!set?.sheet) {",
-      to: "        if (!set) {",
-      note: "a COLLECTION set is written as though it had a sheet, so a layer whose tiles are separate files exports as a tileset with no image instead of leaving with a reason" },
+      from: "            notes.push(`layer \"${l.name}\" draws from a tileset with no sheet to write `\n                + \"(a collection tileset, or an id naming nothing), so it was not written\");\n            return false;",
+      to: "            return false;",
+      note: "a layer whose tileset has no sheet is dropped IN SILENCE, so a collection-set layer leaves the export with nothing said and the .tmx simply lacks it" },
+    { id: "EX22", file: "src/core/export/ExportTiled.ts",
+      from: "    if (writable.length === 0) {",
+      to: "    if (writable.length < 0) {",
+      note: "a document whose every layer draws from an unwritable set exports a map with no tileset at all — a file Tiled opens as an error dialog — instead of saying so and writing nothing" },
 ];
 
 function runSuite() {
