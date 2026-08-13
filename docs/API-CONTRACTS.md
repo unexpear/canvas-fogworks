@@ -853,6 +853,10 @@ function asepriteError(bytes: Uint8Array): string | null;
 function parseAseprite(bytes: Uint8Array, opts?: { inflate?: (d: Uint8Array) => Uint8Array }): AseFile;
 function asepriteClips(file: AseFile): { name: string; from: number; to: number; loop: boolean }[];
 function asepriteTimeline(file: AseFile): { frames: number; fps: number };
+
+interface AseFrame { width: number; height: number; rgba: Uint8Array; notes: string[] }
+const ASE_BLEND_NORMAL: number;
+function composeFrame(file: AseFile, frame: number): AseFrame | null;   // null past the end
 ```
 
 - THE TAGS ARE CLIPS. `{ name, from, to }` is `Clip` field for field (schema 46), so the import is a
@@ -862,6 +866,19 @@ function asepriteTimeline(file: AseFile): { frames: number; fps: number };
 - The SHORTEST frame duration sets the rate — the only choice that expresses every frame as a whole
   number of ticks, where an average rounds the quick ones away.
 - Indexed/greyscale depths, tilemap cels and truncation are NAMED in the error, never half-read.
+- `composeFrame` IS THE HALF THAT MAKES AN IMAGE. `celRgba` converts one cel; a frame is every
+  visible layer's cel stacked, and without this the reader could describe a file in perfect detail
+  and produce nothing — which is why nothing called it for months. It returns STRAIGHT (non-premultiplied)
+  RGBA and composites source-over with the division by composited alpha, not the `src*a + dst*(1-a)`
+  shortcut, which is right only over an opaque destination and elsewhere darkens every anti-aliased
+  edge toward black.
+- Layer order is FILE order, bottom first. A hidden GROUP hides its children — the tree is a flat
+  list plus a `childLevel`, so skipping only the group still draws what the artist switched off.
+  Layer and cel opacity MULTIPLY. Linked cels are resolved, or every held frame composites to
+  nothing. A cel may hang off the canvas and is clipped, never wrapped.
+- Blend modes other than NORMAL are drawn as normal and NAMED in `notes`: refusing outright would
+  reject most real pixel art, and drawing one silently is the plausible-wrong-picture this module's
+  header argues against.
 
 ### `core/import/SvgDocument` — a whole SVG file as flat, transformed shapes
 

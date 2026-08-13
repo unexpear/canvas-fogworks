@@ -341,3 +341,104 @@ export function asepriteTimeline(file: AseFile): { frames: number; fps: number }
     const fps = Math.max(1, Math.min(240, Math.round(1000 / shortest)));
     return { frames: file.frames.length, fps };
 }
+
+/** What a frame composited to, plus anything the compositor could not honour. */
+export interface AseFrame {
+    width: number;
+    height: number;
+    /** Straight (non-premultiplied) RGBA, `width * height * 4` bytes. */
+    rgba: Uint8Array;
+    /** Layers drawn with the wrong blend mode, named rather than dropped in silence. */
+    notes: string[];
+}
+
+/** Aseprite's blend-mode enumeration; only NORMAL is composited faithfully. */
+export const ASE_BLEND_NORMAL = 0;
+
+/**
+ * One frame, composited from every visible layer — the picture an export would have produced.
+ *
+ * THIS IS THE HALF THE MODULE WAS MISSING. `celRgba` converts ONE cel; a frame is every layer's cel
+ * at that frame, stacked. Without it the reader could describe a file in perfect detail and not
+ * produce a single image, which is why nothing called it for months.
+ *
+ * SOURCE-OVER ON STRAIGHT ALPHA, written out rather than eyeballed, because the shortcut is wrong in
+ * a way that looks nearly right: `out.rgb = src.rgb * a + dst.rgb * (1 - a)` is only correct when the
+ * DESTINATION is opaque. Over a transparent pixel it darkens every edge toward black, which reads as
+ * a dark fringe on exactly the anti-aliased outline pixel art is made of. The real formula divides by
+ * the composited alpha, and this codebase has already paid for the other one on the GPU.
+ *
+ * A HIDDEN GROUP HIDES ITS CHILDREN. Aseprite stores the layer tree as a flat list plus a
+ * `childLevel`, so a group's visibility is not on the layers it contains — skipping only the group
+ * itself would draw the very layers an artist switched off, and groups are how they switch off
+ * several at once.
+ *
+ * LAYER ORDER IS FILE ORDER, bottom first. A reverse would put the background over the character,
+ * which is obvious in a preview and invisible in any test that only counts non-transparent pixels.
+ *
+ * BLEND MODES OTHER THAN NORMAL ARE DRAWN AS NORMAL AND NAMED. Refusing the file outright would
+ * reject most real pixel art — a shading layer set to Multiply is routine — but drawing one silently
+ * produces a plausible wrong picture, which this module's header argues is the worse failure. So the
+ * caller is told, in the same spirit as `TiledMap`'s notes.
+ */
+export function composeFrame(file: AseFile, frame: number): AseFrame | null {
+    if (!Number.isInteger(frame) || frame < 0 || frame >= file.frames.length) return null;
+    if (file.width <= 0 || file.height <= 0) return null;
+    const rgba = new Uint8Array(file.width * file.height * 4);
+    const notes: string[] = [];
+
+    /** A group's own switch, applied to everything nested inside it. */
+    let hiddenAbove: number | null = null;
+    for (let li = 0; li < file.layers.length; li++) {
+        const layer = file.layers[li];
+        if (hiddenAbove !== null && layer.childLevel > hiddenAbove) continue;
+        hiddenAbove = null;
+        if (!layer.visible) { hiddenAbove = layer.childLevel; continue; }
+        if (layer.type !== 0) continue;                     // a group holds no pixels of its own
+
+        let cel = file.cels.find(c => c.layer === li && c.frame === frame);
+        // A LINKED CEL BORROWS the image from the same layer at another frame, which is how the
+        // format stores a held drawing. Resolved here, or every held frame composites to nothing.
+        if (cel && cel.linkedFrom !== null) {
+            const source = file.cels.find(c => c.layer === li && c.frame === cel!.linkedFrom);
+            if (source) cel = { ...source, frame, x: cel.x, y: cel.y, linkedFrom: null };
+        }
+        if (!cel) continue;
+        const src = celRgba(file, cel);
+        if (!src) continue;
+        if (layer.blendMode !== ASE_BLEND_NORMAL) {
+            notes.push(`layer "${layer.name}" uses blend mode ${layer.blendMode}, drawn as normal`);
+        }
+        const layerAlpha = (layer.opacity / 255) * (cel.opacity / 255);
+        if (layerAlpha <= 0) continue;
+
+        for (let y = 0; y < cel.height; y++) {
+            const dy = cel.y + y;
+            // BOTH BOUNDS ARE EXPLICIT, and the row one is DEFENSIVE rather than load-bearing: with
+            // the column check in place, an out-of-range row always computes an index outside the
+            // buffer, and a typed array ignores those writes. A mutant deleting this line therefore
+            // SURVIVED, and no fixture can kill it — recorded here instead of pretended about. It
+            // stays because the alternative is a hot loop whose correctness rests on a silent
+            // language behaviour, which is a fact about JavaScript and not about compositing.
+            if (dy < 0 || dy >= file.height) continue;
+            for (let x = 0; x < cel.width; x++) {
+                const dx = cel.x + x;
+                // THIS ONE IS LOAD-BEARING: without it a negative column wraps onto the previous
+                // row, which draws a stripe down the opposite edge.
+                if (dx < 0 || dx >= file.width) continue;
+                const s = (y * cel.width + x) * 4;
+                const sa = (src[s + 3] / 255) * layerAlpha;
+                if (sa <= 0) continue;
+                const d = (dy * file.width + dx) * 4;
+                const da = rgba[d + 3] / 255;
+                const out = sa + da * (1 - sa);
+                if (out <= 0) continue;
+                for (let c = 0; c < 3; c++) {
+                    rgba[d + c] = Math.round((src[s + c] * sa + rgba[d + c] * da * (1 - sa)) / out);
+                }
+                rgba[d + 3] = Math.round(out * 255);
+            }
+        }
+    }
+    return { width: file.width, height: file.height, rgba, notes };
+}

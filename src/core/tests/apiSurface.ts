@@ -147,7 +147,8 @@ import { ObjResult, ObjMaterial, parseObj, objError, parseMtl, mtlError, resolve
 import { MeshPrimitive, MeshInstance, MESH_IDENTITY } from "../import/MeshData";
 import { registerFont, registeredFonts, clearFonts } from "../../renderer/FontCache";
 import { AseFile, AseLayer, AseCel, AseTag, parseAseprite, asepriteError, asepriteClips, asepriteTimeline,
-    aseBytesPerPixel, celRgba, ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
+    aseBytesPerPixel, celRgba, composeFrame, AseFrame, ASE_BLEND_NORMAL,
+    ASE_MAX_FRAMES, ASE_MAX_LAYERS, ASE_MAX_CELS, ASE_MAX_CANVAS } from "../import/Aseprite";
 import { DEMOS, bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb } from "../document/Demos";
 import { Sample, Velocity, Timing, traceMotion, traceVelocity, traceTiming, traceDigest, TRACE_MAX_SAMPLES } from "../diagnostics/MotionTrace";
 import { JournalEntry, recordAction, journal, journalDropped, clearJournal, JOURNAL_MAX } from "../diagnostics/ActionJournal";
@@ -1039,6 +1040,12 @@ export function __apiSurfacePin(): void {
     expectType<number>(aseBytesPerPixel(8));
     expectType<Uint8Array | null>(celRgba(ase, { frame: 0, layer: 0, x: 0, y: 0, width: 0, height: 0,
         opacity: 255, pixels: null, compressed: null, linkedFrom: null }));
+    // AND THE FRAME THEY STACK INTO. `celRgba` converts ONE cel; a frame is every visible layer's
+    // cel composited, and without this the reader could describe a file perfectly and produce no
+    // image at all — which is why nothing called it for months. Null past the end, so a caller
+    // looping cannot fill an animation with blanks.
+    expectType<AseFrame | null>(composeFrame(ase, 0));
+    expectType<number>(ASE_BLEND_NORMAL);
 
     // WHICH END A NON-INTERPOLATABLE VALUE TAKES is the CALLER's question (schema 54). A timeline
     // steps so a drawing appears on its own keyframe; a state transition switches so a hover means

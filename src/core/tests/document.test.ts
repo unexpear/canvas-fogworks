@@ -146,7 +146,8 @@ import { parseSvgGradients } from "../import/SvgGradient";
 import { PasteNodesAction } from "../actions/PasteNodesAction";
 import { RasterTool } from "../../editor/tools/RasterTool";
 import { SymmetryMode } from "../paint/Symmetry";
-import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES } from "../import/Aseprite";
+import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, celRgba, aseBytesPerPixel, ASE_MAX_FRAMES,
+    composeFrame, AseFrame, ASE_BLEND_NORMAL } from "../import/Aseprite";
 import { normalisedUV } from "../../renderer/emitWebGL";
 import { ikError, applyIk, IK_TARGET_MAX, IK_CHAIN_MAX } from "../document/Rig";
 import { planSheet, sheetAtlas, sheetClipFrames, sheetTooLarge, SHEET_MAX_PIXELS } from "../export/SpriteSheet";
@@ -14166,25 +14167,30 @@ describe("Mesh — bending a shape (schema 41)", () => {
         for (const c of chunks) { out.set(c, at); at += c.length; }
         return out;
     };
-    const aseLayer = (name: string, opts?: { visible?: boolean; level?: number; opacity?: number }) => {
+    const aseLayer = (name: string,
+        opts?: { visible?: boolean; level?: number; opacity?: number; type?: number; blend?: number }) => {
         const nameBytes = aseString(name);
         const body = new Uint8Array(16 + nameBytes.length);
         const v = new DataView(body.buffer);
         v.setUint16(0, opts?.visible === false ? 0 : 1, true);   // flags: bit 0 = visible
-        v.setUint16(2, 0, true);                                  // type: image
+        // TYPE and BLEND are settable because the COMPOSITOR turns on them: a group (type 1) holds
+        // no pixels but hides its children, and a non-normal blend must be reported rather than
+        // drawn as normal in silence. A fixture that could not express either could not see them.
+        v.setUint16(2, opts?.type ?? 0, true);                    // 0 image, 1 group, 2 tilemap
         v.setUint16(4, opts?.level ?? 0, true);
-        v.setUint16(10, 0, true);                                 // blend mode
+        v.setUint16(10, opts?.blend ?? 0, true);                  // blend mode
         body[12] = opts?.opacity ?? 255;
         body.set(nameBytes, 16);
         return aseChunk(0x2004, body);
     };
-    const aseCel = (layer: number, x: number, y: number, w: number, h: number, pixels: Uint8Array) => {
+    const aseCel = (layer: number, x: number, y: number, w: number, h: number, pixels: Uint8Array,
+        opacity = 255) => {
         const body = new Uint8Array(20 + pixels.length);
         const v = new DataView(body.buffer);
         v.setUint16(0, layer, true);
         v.setInt16(2, x, true);
         v.setInt16(4, y, true);
-        body[6] = 255;
+        body[6] = opacity;
         v.setUint16(7, 0, true);          // cel type 0 = raw
         v.setUint16(16, w, true);
         v.setUint16(18, h, true);
@@ -14274,6 +14280,124 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // No stated durations gets the editor's default rather than a division by zero.
         const silent = parseAseprite(aseFile(aseHeader(1), [aseFrame(0, [])]));
         expect(asepriteTimeline(silent)).toEqual({ frames: 1, fps: 10 });
+    });
+
+    test("a frame COMPOSITES, and each trap has a fixture that can see it", () => {
+        /** A solid block of one colour, `n` pixels of it. */
+        const solid = (r: number, g: number, b: number, a: number, n: number) => {
+            const out = new Uint8Array(n * 4);
+            for (let i = 0; i < n; i++) { out[i * 4] = r; out[i * 4 + 1] = g; out[i * 4 + 2] = b; out[i * 4 + 3] = a; }
+            return out;
+        };
+        const at = (f: AseFrame, x: number, y: number) => {
+            const i = (y * f.width + x) * 4;
+            return [f.rgba[i], f.rgba[i + 1], f.rgba[i + 2], f.rgba[i + 3]];
+        };
+
+        // ORDER IS FILE ORDER, BOTTOM FIRST. Red underneath, green on top, overlapping at (1,1).
+        // Asserted by COLOUR: any test that counted opaque pixels would pass with the stack
+        // reversed, which is the mistake that puts a background over a character.
+        const stacked = parseAseprite(aseFile(aseHeader(1, 4, 4), [aseFrame(100, [
+            aseLayer("under"), aseLayer("over"),
+            aseCel(0, 0, 0, 2, 2, solid(255, 0, 0, 255, 4)),
+            aseCel(1, 1, 1, 2, 2, solid(0, 255, 0, 255, 4))
+        ])]));
+        const f0 = composeFrame(stacked, 0)!;
+        expect(f0.width).toBe(4);
+        expect(at(f0, 0, 0)).toEqual([255, 0, 0, 255]);        // red alone
+        expect(at(f0, 1, 1)).toEqual([0, 255, 0, 255]);        // green WINS where they overlap
+        expect(at(f0, 2, 2)).toEqual([0, 255, 0, 255]);        // green alone
+        expect(at(f0, 3, 3)).toEqual([0, 0, 0, 0]);            // untouched stays transparent
+        expect(f0.notes).toEqual([]);
+
+        // SOURCE-OVER ONTO NOTHING. Half-transparent white over a transparent pixel must stay
+        // WHITE at half alpha. The shortcut `src*a + dst*(1-a)` gives 128 grey here, a dark fringe
+        // on precisely the anti-aliased outline pixel art is made of — and it is invisible to any
+        // assertion that only checks alpha.
+        const fringe = parseAseprite(aseFile(aseHeader(1, 2, 2), [aseFrame(100, [
+            aseLayer("soft"), aseCel(0, 0, 0, 1, 1, solid(255, 255, 255, 128, 1))
+        ])]));
+        expect(at(composeFrame(fringe, 0)!, 0, 0)).toEqual([255, 255, 255, 128]);
+
+        // A HIDDEN GROUP HIDES ITS CHILDREN. The group holds no pixels, so skipping only the group
+        // itself still draws the layer inside it — which is the whole point of grouping.
+        const grouped = parseAseprite(aseFile(aseHeader(1, 2, 2), [aseFrame(100, [
+            aseLayer("folder", { type: 1, visible: false }),
+            aseLayer("inside", { level: 1 }),
+            aseCel(1, 0, 0, 1, 1, solid(255, 0, 0, 255, 1))
+        ])]));
+        expect(at(composeFrame(grouped, 0)!, 0, 0)).toEqual([0, 0, 0, 0]);
+        // …and a VISIBLE group draws its children, or the rule above is just "draw nothing".
+        const shown = parseAseprite(aseFile(aseHeader(1, 2, 2), [aseFrame(100, [
+            aseLayer("folder", { type: 1 }),
+            aseLayer("inside", { level: 1 }),
+            aseCel(1, 0, 0, 1, 1, solid(255, 0, 0, 255, 1))
+        ])]));
+        expect(at(composeFrame(shown, 0)!, 0, 0)).toEqual([255, 0, 0, 255]);
+
+        // A GROUP HOLDS NO PIXELS EVEN IF THE FILE SAYS OTHERWISE. In a well-formed file a group
+        // simply has no cel, so the type check never fires and a mutant deleting it SURVIVED — the
+        // fixture could not reach the branch. This one hands a group a cel, which only a malformed
+        // writer produces, and that is exactly when a guard has to hold.
+        const liar = parseAseprite(aseFile(aseHeader(1, 2, 2), [aseFrame(100, [
+            aseLayer("folder", { type: 1 }),
+            aseCel(0, 0, 0, 1, 1, solid(7, 7, 7, 255, 1))
+        ])]));
+        expect(at(composeFrame(liar, 0)!, 0, 0)).toEqual([0, 0, 0, 0]);
+
+        // OPACITY MULTIPLIES: layer 50% and cel 50% is a quarter, not a half and not either one.
+        const faded = parseAseprite(aseFile(aseHeader(1, 2, 2), [aseFrame(100, [
+            aseLayer("dim", { opacity: 128 }),
+            aseCel(0, 0, 0, 1, 1, solid(255, 255, 255, 255, 1), 128)
+        ])]));
+        expect(at(composeFrame(faded, 0)!, 0, 0)[3]).toBe(64);
+
+        // A CEL HANGING OFF THE CANVAS IS CLIPPED, never wrapped. A negative origin is legal in
+        // this format, and the wrap shows up as a stripe on the opposite edge.
+        const spilling = parseAseprite(aseFile(aseHeader(1, 2, 2), [aseFrame(100, [
+            aseLayer("big"), aseCel(0, -1, -1, 2, 2, solid(0, 0, 255, 255, 4))
+        ])]));
+        const clipped = composeFrame(spilling, 0)!;
+        expect(at(clipped, 0, 0)).toEqual([0, 0, 255, 255]);   // the one corner that lands
+        expect(at(clipped, 1, 1)).toEqual([0, 0, 0, 0]);       // and nothing wrapped round
+        expect(at(clipped, 1, 0)).toEqual([0, 0, 0, 0]);
+
+        // …AND THE OVERHANG HAS TO BE BELOW THE TOP ROW to prove anything. The fixture above hangs
+        // off at row 0, where the wrapped index computes NEGATIVE and a typed array drops it — so a
+        // mutant deleting the `dx < 0` half SURVIVED against it. One row down, `dy * width - 1`
+        // lands inside the buffer, on the last pixel of the row ABOVE: the stripe, made visible.
+        const stripe = parseAseprite(aseFile(aseHeader(1, 3, 3), [aseFrame(100, [
+            aseLayer("hang"), aseCel(0, -1, 1, 2, 2, solid(0, 255, 255, 255, 4))
+        ])]));
+        const held2 = composeFrame(stripe, 0)!;
+        expect(at(held2, 0, 1)).toEqual([0, 255, 255, 255]);   // the column that lands
+        expect(at(held2, 0, 2)).toEqual([0, 255, 255, 255]);
+        expect(at(held2, 2, 0)).toEqual([0, 0, 0, 0]);         // NOT the top-right corner
+        expect(at(held2, 2, 1)).toEqual([0, 0, 0, 0]);
+
+        // A LINKED CEL borrows its image, which is how a HELD drawing is stored. Without resolving
+        // it every held frame composites to nothing — an animation that blinks.
+        const held = parseAseprite(aseFile(aseHeader(2, 2, 2), [
+            aseFrame(100, [aseLayer("a"), aseCel(0, 0, 0, 1, 1, solid(9, 9, 9, 255, 1))]),
+            aseFrame(100, [aseLinkedCel(0, 0)])
+        ]));
+        expect(at(composeFrame(held, 1)!, 0, 0)).toEqual([9, 9, 9, 255]);
+
+        // A BLEND MODE THIS CANNOT HONOUR IS NAMED. Drawing it as normal is the lesser evil against
+        // refusing most real pixel art — but doing it silently is the failure the module's own
+        // header argues against.
+        const multiplied = parseAseprite(aseFile(aseHeader(1, 2, 2), [aseFrame(100, [
+            aseLayer("shade", { blend: 3 }), aseCel(0, 0, 0, 1, 1, solid(1, 2, 3, 255, 1))
+        ])]));
+        const noted = composeFrame(multiplied, 0)!;
+        expect(noted.notes).toHaveLength(1);
+        expect(noted.notes[0]).toContain("shade");
+        expect(at(noted, 0, 0)).toEqual([1, 2, 3, 255]);       // …and it still drew
+
+        // A FRAME THAT IS NOT THERE is null, not an empty picture — a caller looping past the end
+        // would otherwise fill an animation with blanks.
+        expect(composeFrame(stacked, 1)).toBeNull();
+        expect(composeFrame(stacked, -1)).toBeNull();
     });
 
     test("layers and cels come back with the positions that make padding unnecessary", () => {
