@@ -38,7 +38,7 @@ M7  States                    ✅   `Node.states` + `activeState` (schema 30, th
 M8  Animation Engine          ✅   timeline + keyframes + cubic-Bézier easing + HOLDS (cel) + onion skin — `Timeline` (407), `Bezier` (172), `Clips` (105)
 M9  Interaction Graph         ✅*  `Node.interactions`: trigger → state, with duration/easing, plus NAVIGATE to a node (schema 36), and a Play mode that fires them. A state machine, not a node GRAPH — the name overpromises
 M10 Drawing System            ✅   12 paint modules / 2,107 lines: buffer, patch, brush, stroke, fill, selection + outline, symmetry, palette, quantize, adjust, codec, surface space — with a Paint workspace and its tools
-M11 Assets                    ✅*  15 importers / 4,397 lines: Tiled (maps, tilesets, objects), SVG, fonts, atlases, `.unitypackage`, sheets. FOUR are built and NOT reachable — Aseprite and Sequence are wireable; glTF and OBJ are blocked on a node type that holds a mesh (10,937 files in the tree waiting). See FEATURE-AUDIT.md
+M11 Assets                    ✅*  15 importers / 4,397 lines: Tiled (maps, tilesets, objects), SVG, fonts, atlases, `.unitypackage`, sheets, numbered frame runs. Aseprite is BUILT AND UNREACHABLE (343 tested lines, no importer); glTF and OBJ are BLOCKED rather than unwired — every `NODE_TYPE` is 2D, so there is no node to import a mesh into, and 10,937 files here are waiting on that. See FEATURE-AUDIT.md
 M12 Text Engine               ✅*  typesetting, wrapping and on-canvas editing, shared by all three backends and the exporter. ONE style per node — no per-run styling
 M13 Export                    ✅*  SVG, Tiled `.tmx` (tile AND object layers), sprite sheet (`sheet.json` + `sheet.png`). No PNG or PDF of the canvas
 M14 AI Integration            ⬜
