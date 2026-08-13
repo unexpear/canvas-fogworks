@@ -68,7 +68,7 @@ import { quantizeAction, surfaceEditAction } from "../core/actions/surfaceEdit";
 import { SetTilemapAction } from "../core/actions/SetTilemapAction";
 import {
     resizeTilemap, withTerrainArt, asTerrain, withTerrain, withTerrainMaterials,
-    reorderTerrainMaterial, removeTerrainMaterial, addTerrainMaterial
+    reorderTerrainMaterial, removeTerrainMaterial, addTerrainMaterial, withTilesetId
 } from "../core/document/TilemapEdit";
 import { autotileClasses, CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR } from "../core/document/Autotile";
 import { caveCells } from "../core/document/CaveTerrain";
@@ -116,7 +116,8 @@ import { sliceGrid, sliceCells, sliceTrack, blankCells } from "../core/import/Sh
 import { groupSequences, sequenceTrack } from "../core/import/Sequence";
 import { sequenceImportActions } from "../core/actions/sequenceImport";
 import { asepriteImportActions, AsepritePlacement } from "../core/actions/asepriteImport";
-import { Tileset, findTileset } from "../core/document/Tileset";
+import { Tileset, findTileset, tilesetTile, copyTileset, withTileWeight } from "../core/document/Tileset";
+import { SetTilesetsAction } from "../core/actions/SetTilesetsAction";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, composeFrame } from "../core/import/Aseprite";
 
 /** What the drawer hands the shell: everything but where on the canvas it lands. */
@@ -1715,11 +1716,19 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
      * VIRTUAL ids, which an import never has; moving the construction to a module that can be tested
      * satisfies it honestly instead of by exemption.
      */
-    const importTiles = useCallback((placements: TilePlacement[]) => {
+    const importTiles = useCallback((placements: TilePlacement[], tilesets: Tileset[] = []) => {
         if (placements.length === 0) return;
         const doc = dispatcher.getDocument();
         const { actions, ids } = tileImportActions(doc, placements);
-        dispatcher.dispatchAction(new TransactionAction(doc, "import-tiles", actions));
+        // THE TILESETS GO IN THE SAME TRANSACTION as the layers that name them, and they go FIRST.
+        // Without this the import produced nodes naming sets the document did not have, so every
+        // imported layer drew nothing — which is exactly what shipped for an hour, because the
+        // importer built the list and dropped it on the floor. Setting them separately would also
+        // be wrong: two undo steps for one import, with a document in between that no author made.
+        const withSets = tilesets.length > 0
+            ? [new SetTilesetsAction(doc, [...(doc.tilesets ?? []) as Tileset[], ...tilesets]), ...actions]
+            : actions;
+        dispatcher.dispatchAction(new TransactionAction(doc, "import-tiles", withSets));
         es.selectedNodeIds = ids.slice(0, 1);
         refresh();
     }, [dispatcher, es, refresh]);
@@ -3032,8 +3041,85 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                         dispatcher.dispatchAction(new TransactionAction(doc, "tilemap-size", actions));
                                         refresh();
                                     };
+                                    // THE TILESET SECTION (schema 67). Without it the table is
+                                    // reachable only by importing a map — a field a person can hold
+                                    // and not touch, which is the state this project treats as a
+                                    // defect rather than a milestone.
+                                    const doc67 = dispatcher.getDocument();
+                                    const allSets = (doc67.tilesets ?? []) as readonly Tileset[];
+                                    const mySet = findTileset(allSets, map.tilesetId);
+                                    const writeSets = (next: Tileset[]) => {
+                                        const d = dispatcher.getDocument();
+                                        dispatcher.dispatchAction(new SetTilesetsAction(d, next));
+                                        refresh();
+                                    };
                                     return (
                                         <div style={{ marginTop: 8 }}>
+                                            <label style={INSPECTOR_LABEL}>Tileset</label>
+                                            <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 6 }}>
+                                                {/* RETARGETING A LAYER is the edit the schema
+                                                    change exists for: two layers naming one set is
+                                                    the whole point, and until now nothing could
+                                                    point a layer anywhere. */}
+                                                <select
+                                                    data-tileset-pick="1"
+                                                    aria-label="Tileset for this layer"
+                                                    value={map.tilesetId}
+                                                    onChange={e => {
+                                                        const next = withTilesetId(map, e.target.value);
+                                                        if (next) setMap(next);
+                                                    }}
+                                                    style={{ ...SELECT_STYLE, flex: 1 }}
+                                                >
+                                                    {/* THE EMPTY OPTION IS A REAL STATE, not a
+                                                        placeholder: "none chosen yet" is what an
+                                                        unset `src` used to mean, and a layer can
+                                                        legitimately sit there waiting for art. */}
+                                                    <option value="">(no tileset)</option>
+                                                    {allSets.map(t => (
+                                                        <option key={t.id} value={t.id}>{t.name}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            {mySet && (
+                                                <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 6 }}>
+                                                    <span style={{ color: UI.textFaint, fontSize: 10 }}>name</span>
+                                                    <TextInput
+                                                        value={mySet.name}
+                                                        placeholder="tileset"
+                                                        onChange={v => {
+                                                            const trimmed = v.trim();
+                                                            if (trimmed.length === 0) return;
+                                                            writeSets(allSets.map(t => t.id === mySet.id
+                                                                ? { ...copyTileset(t), name: trimmed } : copyTileset(t)));
+                                                        }}
+                                                    />
+                                                    <span style={{ color: UI.textFaint, fontSize: 9 }}>
+                                                        {mySet.sheet ? "sheet" : `${mySet.tiles.length} tiles`}
+                                                    </span>
+                                                </div>
+                                            )}
+                                            {/* PER-TILE PROBABILITY, the second thing the corpus
+                                                asked for — 25 values across two files. It weights
+                                                a chooser picking among equivalent tiles, and it is
+                                                stored un-normalised because Tiled stores it that
+                                                way and a round trip must not disagree. */}
+                                            {mySet && tileIndex >= 0 && (
+                                                <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 6 }}>
+                                                    <span style={{ color: UI.textFaint, fontSize: 10 }}>
+                                                        tile {tileIndex} weight
+                                                    </span>
+                                                    <NumInput
+                                                        value={tilesetTile(mySet, tileIndex)?.probability ?? 1}
+                                                        onChange={v => {
+                                                            const weight = Math.max(0, v);
+                                                            writeSets(allSets.map(t => t.id !== mySet.id
+                                                                ? copyTileset(t)
+                                                                : { ...copyTileset(t), tiles: withTileWeight(t, tileIndex, weight) }));
+                                                        }}
+                                                    />
+                                                </div>
+                                            )}
                                             <label style={INSPECTOR_LABEL}>Tile brush</label>
                                             <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
                                                 <ToolButton icon="✏" label="Paint" active={tileMode === "paint" && !tileErasing}
@@ -4602,7 +4688,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     onImportSvg: (specs: SvgNodeSpec[]) => void;
     /** Apply a registered family to the selected node — the point of loading one. */
     editContentFont: (family: string) => void;
-    onImportTiles: (placements: TilePlacement[]) => void;
+    onImportTiles: (placements: TilePlacement[], tilesets?: Tileset[]) => void;
     /** The swatch a palette click writes to, and what it currently holds. */
     paintColour: string;
     onPickColour: (hex: string) => void;
@@ -5280,7 +5366,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                             + `${TILE_PLACE_MAX} this will place at once.`);
                                         return;
                                     }
-                                    onImportTiles(tiles);
+                                    onImportTiles(tiles, newTilesets);
                                     const grids = tiles.filter(t => t.kind === "tilemap").length;
                                     const loose = tiles.length - grids;
                                     setImportNote(`${grids} grid${grids === 1 ? "" : "s"} from `

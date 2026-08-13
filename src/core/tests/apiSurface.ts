@@ -139,7 +139,9 @@ import { TiledMapResult, TiledTileset, TiledTileImage, TiledLayer, TiledCell, pa
     TILED_MAX_CELLS, TILED_MAX_LAYERS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
 import { Tilemap, TileSheet, TerrainMaterial, emptyTilemap, cellAt, FLIP_D } from "../document/Tilemap";
 import { Tileset, TilesetTile, tilesetError, tilesetsError, findTileset, tilesetTile,
+    copyTileset, withTileWeight,
     TILESETS_MAX, TILESET_TILES_MAX, TILESET_NAME_MAX } from "../document/Tileset";
+import { SetTilesetsAction } from "../actions/SetTilesetsAction";
 import { GlbContainer, GltfJson, GltfNode, GltfResult, GltfMeshInstance, GltfPrimitive,
     parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GLTF_IGNORABLE_REQUIRED, GLTF_MAX_VERTICES, GLTF_MAX_PRIMITIVES, GLTF_MAX_NODE_DEPTH,
@@ -185,7 +187,7 @@ import { SetTilemapAction } from "../actions/SetTilemapAction";
 import { Terrain, AutotileCell, AutotileTable, AUTOTILE_MASKS, CORNER_TL, CORNER_TR, CORNER_BL,
     CORNER_BR, flipMask, autotileClasses, rotatedTable, dualMask, autotile,
     autotileTableError } from "../document/Autotile";
-import { TileEdit, withTiles, rectCells, fillRegion, resizeTilemap, copyTerrainMaterial,
+import { TileEdit, withTiles, rectCells, fillRegion, resizeTilemap, copyTerrainMaterial, withTilesetId,
     reorderTerrainMaterial, removeTerrainMaterial, addTerrainMaterial } from "../document/TilemapEdit";
 import { SetLightingAction } from "../actions/SetLightingAction";
 
@@ -1221,6 +1223,18 @@ export function __apiSurfacePin(): void {
     expectType<number>(TILESETS_MAX);
     expectType<number>(TILESET_TILES_MAX);
     expectType<number>(TILESET_NAME_MAX);
+
+    // THE WRITE PATH, which did not exist when the table shipped — the importer built a list and
+    // dropped it, so every imported layer named a set the document did not have.
+    expectType<Action>(new SetTilesetsAction(createEmptyDocument(), [oneSet]));
+    // COPIED WHOLE, never field by field: the panel maps over the table, so every entry it does
+    // NOT edit passes through a rebuild — where a terrain material's name and swatch were lost.
+    expectType<Tileset>(copyTileset(oneSet));
+    // A WEIGHT OF 1 STORES NOTHING, because 1 is what an unmentioned tile already means.
+    expectType<TilesetTile[]>(withTileWeight(oneSet, 3, 0.5));
+    // Retargeting a layer lives with the other tilemap edits, where `rebuild` already turns a
+    // readonly map into a fresh one.
+    expectType<Tilemap | null>(withTilesetId(emptyTilemap(), "t"));
     // THE MATERIAL LIST is reshaped by these three and by nothing outside the module. They take a
     // MAP, not a list, which is the contract that matters: a caller who assembles the list is a
     // caller who can drop a field from it, and that is exactly what the panel did to `name` and

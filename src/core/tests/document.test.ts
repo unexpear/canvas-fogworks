@@ -175,7 +175,10 @@ import { resolveBooleans } from "../document/Components";
 import { BooleanOp, booleanOpError } from "../document/Node";
 import { TEXT_ALIGNS, FONT_FAMILY_MAX, TextAlign } from "../document/Node";
 import { alignBars, ALIGN_ICON_BOX } from "../../app/theme/AlignIcons";
-import { tilesetError, tilesetsError, findTileset, tilesetTile, Tileset } from "../document/Tileset";
+import { tilesetError, tilesetsError, findTileset, tilesetTile, copyTileset, withTileWeight,
+    Tileset } from "../document/Tileset";
+import { withTilesetId } from "../document/TilemapEdit";
+import { SetTilesetsAction } from "../actions/SetTilesetsAction";
 import { TOOL_CURSORS } from "../../app/theme/Cursors";
 import { SEQUENCE_IMPORT_MAX } from "../../app/App";
 import { sequenceImportActions, SEQUENCE_DEFAULT_FPS } from "../actions/sequenceImport";
@@ -19978,6 +19981,102 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const orphanShape = orphan.shape as { href: string | null; sheet: unknown };
         expect(orphanShape.href).toBeNull();
         expect(orphanShape.sheet).toBeNull();
+    });
+
+    test("the tileset table is WRITABLE and the panel reaches it", () => {
+        // THE GAP THIS CLOSES SHIPPED AN HOUR EARLIER, in the commit that added the table: nothing
+        // could write `Document.tilesets`. The migration wrote one, the importer BUILT a list and
+        // dropped it on the floor, and every imported layer named a set the document did not have —
+        // so it drew nothing. Second time this exact gap has appeared here, after `Document.clips`.
+        const sheet = { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 };
+        const sets: Tileset[] = [{ id: "a", name: "Ground", src: "g.png", sheet, tiles: [], offsetX: 0, offsetY: 0 }];
+        const d = new ActionDispatcher(createEmptyDocument());
+        expect(d.dispatchAction(new SetTilesetsAction(d.getDocument(), sets)).success).toBe(true);
+        expect(d.getDocument().tilesets).toEqual(sets);
+        // …and they survive the file, which is what makes storing them mean anything.
+        expect(deserializeDocument(serializeDocument(d.getDocument())).tilesets).toEqual(sets);
+        // THE SHARED VALIDATOR, so this cannot author a table a reload refuses.
+        expect(new SetTilesetsAction(d.getDocument(),
+            [sets[0], { ...sets[0], name: "Other" }]).validate()).toBe(false);
+        // DOCUMENT-LEVEL: no node id leaks into the geometry dirty-set.
+        expect(new SetTilesetsAction(d.getDocument(), sets).execute().updatedNodeIds.size).toBe(0);
+        expect(d.dispatchAction(new SetTilesetsAction(d.getDocument(), undefined)).success).toBe(true);
+        expect(d.getDocument().tilesets).toBeUndefined();
+        expect(d.undo()).not.toBeNull();
+        expect(d.getDocument().tilesets).toEqual(sets);
+
+        // ONE TRANSACTION carries the tilesets AND the layers that name them, which is what an
+        // import is. Two steps would leave a document in between that no author made — and setting
+        // them second would mean the layers momentarily name nothing.
+        const fresh = new ActionDispatcher(createEmptyDocument());
+        const map = { cols: 1, rows: 1, tileWidth: 16, tileHeight: 16, tilesetId: "a", tiles: [0] };
+        expect(fresh.dispatchAction(new TransactionAction(fresh.getDocument(), "import", [
+            new SetTilesetsAction(fresh.getDocument(), sets),
+            new AddNodeAction(fresh.getDocument(), "core.tilemap", 0, 0, 16, 16, "none", "L", null,
+                { tilemap: map as never })
+        ])).success).toBe(true);
+        expect(fresh.getDocument().tilesets).toHaveLength(1);
+        expect(fresh.getDocument().nodes.get("L")!.tilemap!.tilesetId).toBe("a");
+
+        // AND THE PANEL REACHES ALL THREE EDITS. A schema change nobody can touch is the state this
+        // project treats as a defect, and the table was in exactly that state when it shipped.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/new SetTilesetsAction\(/);
+        expect(app).toMatch(/data-tileset-pick="1"/);
+        expect(app).toMatch(/withTilesetId\(map, e\.target\.value\)/);
+        expect(app).toMatch(/withTileWeight\(t, tileIndex, weight\)/);
+        // …and the IMPORTER's tilesets actually reach the document, which is the bug above.
+        expect(app).toMatch(/onImportTiles\(tiles, newTilesets\)/);
+        expect(app).toMatch(/new SetTilesetsAction\(doc, \[\.\.\.\(doc\.tilesets \?\? \[\]\)/);
+    });
+
+    test("retargeting a layer, and a tile weight that knows what 1 means", () => {
+        const sheet = { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 };
+        const set: Tileset = { id: "a", name: "G", src: "g.png", sheet, tiles: [], offsetX: 0, offsetY: 0 };
+        const map = { cols: 2, rows: 1, tileWidth: 16, tileHeight: 16, tilesetId: "a", tiles: [0, 1] };
+
+        // RETARGETING is the edit the whole schema change exists for: two layers naming one set.
+        const moved = withTilesetId(map, "b")!;
+        expect(moved.tilesetId).toBe("b");
+        expect(moved.tiles).toEqual([0, 1]);
+        // COPIED, not shared — the caller holding the old map must keep seeing the old one.
+        expect(moved.tiles).not.toBe(map.tiles);
+        // NULL WHEN NOTHING CHANGES, or a picker set to what it already shows adds an undo step
+        // that undoes nothing.
+        expect(withTilesetId(map, "a")).toBeNull();
+        // THE EMPTY STRING IS A REAL STATE: "no tileset chosen yet".
+        expect(withTilesetId(map, "")!.tilesetId).toBe("");
+
+        // A WEIGHT OF 1 STORES NOTHING, because 1 is what an unmentioned tile already means. The
+        // alternative makes a file grow with every tile somebody merely looked at, and turns
+        // `tiles` from "what an author authored" into "what a panel was pointed at".
+        expect(withTileWeight(set, 3, 1)).toEqual([]);
+        expect(withTileWeight(set, 3, 0.25)).toEqual([{ id: 3, probability: 0.25 }]);
+        // Setting it back to 1 REMOVES the record again rather than storing the default.
+        const weighted: Tileset = { ...set, tiles: [{ id: 3, probability: 0.25 }] };
+        expect(withTileWeight(weighted, 3, 1)).toEqual([]);
+        // …BUT A RECORD SAYING SOMETHING ELSE SURVIVES, or the panel becomes a way to lose
+        // properties by nudging a number back to its default.
+        const alsoProps: Tileset = { ...set,
+            tiles: [{ id: 3, probability: 0.25, userData: { kind: { type: "string", value: "wall" } } }] };
+        const kept = withTileWeight(alsoProps, 3, 1);
+        expect(kept).toHaveLength(1);
+        expect(kept[0].probability).toBeUndefined();
+        expect(kept[0].userData).toEqual({ kind: { type: "string", value: "wall" } });
+        // ORDERED BY ID, so a file does not reshuffle every time a weight is touched.
+        const two = withTileWeight({ ...set, tiles: [{ id: 7, probability: 2 }] }, 2, 3);
+        expect(two.map(t => t.id)).toEqual([2, 7]);
+        // NONSENSE IS REFUSED without dropping what was there.
+        expect(withTileWeight(weighted, -1, 2)).toEqual(weighted.tiles);
+        expect(withTileWeight(weighted, 3, -1)).toEqual(weighted.tiles);
+
+        // COPIED WHOLE. `copyTileset` exists because the panel maps over the table, so every entry
+        // it does NOT edit passes through a rebuild — which is precisely where a terrain material's
+        // name and swatch were lost.
+        const copy = copyTileset(alsoProps);
+        expect(copy).toEqual(alsoProps);
+        expect(copy.tiles[0]).not.toBe(alsoProps.tiles[0]);
+        expect(copy.sheet).not.toBe(alsoProps.sheet);
     });
 
     test("a tileset is either a SHEET or a COLLECTION, and per-tile data is sparse", () => {

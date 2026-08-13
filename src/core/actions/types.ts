@@ -14,6 +14,7 @@ import { Mesh } from "../document/Mesh";
 import { Tilemap } from "../document/Tilemap";
 import { Light } from "../document/Light";
 import { Clip } from "../document/Clips";
+import { Tileset } from "../document/Tileset";
 
 /**
  * The reserved `propertyDeltas` key a DOCUMENT-LEVEL delta (kind "variables") travels
@@ -165,7 +166,11 @@ export type NodeDelta =
     /** NAMED RANGES of the clock (schema 46). Whole-value under `DOCUMENT_DELTA_KEY`, like the
      *  timeline it indexes into. `undefined` removes them. The field existed and was validated,
      *  serialised and EXPORTED from for four schema versions with no delta that could set it. */
-    | { kind: "clips"; clips: Clip[] | undefined };
+    | { kind: "clips"; clips: Clip[] | undefined }
+    /** The TILESET TABLE (schema 67). Whole-value under its own document key, like the clips and
+     *  the clock. `undefined` removes it. A tileset is shared by every layer that names it, so it
+     *  belongs to the file rather than to a node. */
+    | { kind: "tilesets"; tilesets: Tileset[] | undefined };
 
 /** The result of an action execution. Communicates changes without coupling services. */
 export interface MutationResult {

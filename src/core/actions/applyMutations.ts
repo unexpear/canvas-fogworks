@@ -189,6 +189,11 @@ export function applyMutationsToDocument(
                 doc.clips = delta.clips;
                 return;
             }
+            case "tilesets": {
+                // The tileset table (schema 67). Whole-value, and shared by every layer naming one.
+                doc.tilesets = delta.tilesets;
+                return;
+            }
             case "activeState": {
                 // Document-level state (M7): which named state everything resolves against.
                 doc.activeState = delta.activeState;

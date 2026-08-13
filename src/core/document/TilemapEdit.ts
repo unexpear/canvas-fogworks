@@ -310,6 +310,26 @@ export function addTerrainMaterial(map: ReadonlyTilemap): { map: Tilemap; id: nu
 }
 
 /**
+ * `map` pointed at a different tileset, or null when it already names that one (schema 67).
+ *
+ * HERE RATHER THAN IN `Tileset`, because it is an edit to a MAP and `rebuild` already solves the
+ * only hard part: turning a `ReadonlyTilemap` into a fresh `Tilemap` with every array copied. A
+ * second copy of that conversion written by hand is the field-by-field rebuild this codebase has
+ * paid for five times.
+ *
+ * NULL MEANS NOTHING CHANGED, as everywhere here: retargeting a layer to the set it already uses
+ * must not put an undo step on the stack that undoes nothing.
+ *
+ * THE EMPTY STRING IS ACCEPTED, because "no tileset chosen yet" is a real state — the one an unset
+ * `src` used to hold — and a picker has to be able to express it.
+ */
+export function withTilesetId(map: ReadonlyTilemap, tilesetId: string): Tilemap | null {
+    if (typeof tilesetId !== "string" || map.tilesetId === tilesetId) return null;
+    const next = rebuild(map, map.tiles.slice(), map.flips ? map.flips.slice() : null);
+    return { ...next, tilesetId };
+}
+
+/**
  * The rectangle of cells between two corners, inclusive, clamped to the grid — or null when the
  * rectangle misses the map entirely.
  *

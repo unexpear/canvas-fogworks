@@ -1788,11 +1788,16 @@ that is not there.
 
 ### What is still open
 
-- **A panel.** The table is reachable through the importer and the migration but nothing lets a
-  person rename a tileset, retarget a layer, or set a tile's probability. That is the reachability
-  rule this project applies to everything else, and it is not yet met here.
-- **Per-tile data is carried but unread.** `probability` and `userData` round-trip; nothing consumes
-  them. The autotiler is the obvious first reader.
+- **~~A panel.~~ DONE.** The inspector's Tileset section retargets a layer, renames a set and sets a
+  tile's weight, through `SetTilesetsAction` — which did not exist when this schema shipped. That
+  was the defect the panel work found: **nothing could write `Document.tilesets` at all**, the
+  importer built a list and dropped it, and every imported layer named a set the document did not
+  have. Second time this exact gap has appeared here, after `Document.clips`. A field with no write
+  path is not a feature with a gap; it is a feature that does not exist.
+- **Per-tile data is WRITABLE but still unread.** `probability` round-trips and the panel sets it;
+  nothing consumes it yet. The autotiler is the obvious first reader. A weight of 1 stores NO
+  record, because 1 is what an unmentioned tile already means — otherwise a file grows with every
+  tile somebody merely looked at.
 - **Collection tilesets are representable and not yet drawable.** The importer builds them and the
   model validates them; `RenderModel` resolves a null sheet for one, so the layer draws nothing. The
   renderer needs a per-tile image path, which is a second derivation and deliberately not smuggled

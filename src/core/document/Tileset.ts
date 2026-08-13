@@ -183,3 +183,49 @@ export function tilesetTile<T extends { id: number }>(
     if (!set) return null;
     return set.tiles.find(t => t.id === id) ?? null;
 }
+
+/**
+ * An independent copy of one tileset.
+ *
+ * THE ONE PLACE A TILESET IS COPIED, for the reason `copyTerrainMaterial` exists and then failed:
+ * a control that rebuilds a record field by field silently drops the field added last, and this
+ * codebase has now paid for that five times. The panel edits a table by mapping over it, so every
+ * entry it does NOT edit still passes through a rebuild — which is exactly where `name` and `color`
+ * were lost from a terrain material.
+ *
+ * AND IT TAKES A TILESET, NOT PARTS OF ONE. `copyTerrainMaterial` could be handed an object whose
+ * fields had already been dropped and would faithfully copy the loss; taking the whole record and
+ * spreading it means there is no shape a caller can assemble that omits something.
+ */
+export function copyTileset(t: Tileset): Tileset {
+    return { ...t, sheet: t.sheet ? { ...t.sheet } : null, tiles: t.tiles.map(x => ({ ...x })) };
+}
+
+/**
+ * A set's sparse tile records with one tile's WEIGHT set — added, changed, or removed.
+ *
+ * A WEIGHT OF 1 REMOVES THE RECORD rather than storing it, because 1 is what a tile with no record
+ * already means: every chooser weights an unmentioned tile as one. Storing it would make a file's
+ * size grow with every tile somebody merely looked at, and would turn `tiles` from "what an author
+ * authored" into "what a panel was pointed at" — which is the difference sparse was chosen for.
+ *
+ * A RECORD CARRYING ANYTHING ELSE SURVIVES. Removing the weight from a tile that also has
+ * `userData` must keep the properties, or the panel becomes a way to lose them.
+ */
+export function withTileWeight(set: Tileset, id: number, weight: number): TilesetTile[] {
+    if (!Number.isInteger(id) || id < 0 || !Number.isFinite(weight) || weight < 0) {
+        return set.tiles.map(t => ({ ...t }));
+    }
+    const out = set.tiles.filter(t => t.id !== id).map(t => ({ ...t }));
+    const had = set.tiles.find(t => t.id === id);
+    if (weight === 1) {
+        // The default: keep the record only if it still says something else.
+        if (had) {
+            const { probability: _dropped, ...rest } = had;
+            if (Object.keys(rest).length > 1) out.push({ ...rest });
+        }
+    } else {
+        out.push({ ...(had ?? {}), id, probability: weight });
+    }
+    return out.sort((a, b) => a.id - b.id);
+}
