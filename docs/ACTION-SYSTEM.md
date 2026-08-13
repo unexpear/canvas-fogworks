@@ -357,6 +357,21 @@ close, an `object` following a tile layer would be handed to a frame two layers 
 opacity from a group it is not in. A surviving mutant found this, because the comment beside the code
 claimed the other effect and no test could see the real one.
 
+**`sequenceImport.sequenceImportActions` is the second of these, and it sharpened the reason.**
+A folder of numbered frames becomes one `core.image` — added, named, given a track, and given a
+timeline long enough to reach the last keyframe — as ONE transaction, so one undo removes all of it
+rather than leaving three intermediate documents nobody authored. The id is minted inside, for the
+reason above; placing the node and then calling the panel's existing `importTrack` would read
+`selectedNodeId` from a closure the render has not rebuilt, so the track would land on whatever was
+selected *before* the import.
+
+What the second one added to the argument is a measurement: **a panel's `onClick` cannot be run by
+any harness at all.** `window.electronAPI` is frozen and non-configurable, so the native folder
+dialog every importer opens with can be neither driven nor stubbed from CDP — assignment silently
+no-ops and `Object.defineProperty` throws. Code that lives in a handler is verifiable only by
+reading it. That is not an argument for testing panels; it is an argument for panels containing
+almost nothing, and it is why the handler here holds the placement and hands off everything else.
+
 ## 6. Why this matters downstream
 
 Because every change is a validated, serializable, reversible Action funnelled through

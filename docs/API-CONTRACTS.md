@@ -1341,6 +1341,31 @@ function sequenceTrack(seq: Sequence, opts?: { start?: number; step?: number; hr
 - The emitted keyframes are UNHELD, which is only safe because a keyframed `src` STEPS (schema 53).
   `hold` would freeze the whole node, so a running character could not both cycle and move.
 
+### `actions/sequenceImport` — the actions a numbered run becomes
+
+```ts
+interface SequencePlacement { name: string; first: string; track: readonly Keyframe[];
+                              x: number; y: number; width: number; height: number }
+const SEQUENCE_DEFAULT_FPS: number;                                     // 24, for a document with no timeline
+function sequenceImportActions(doc, p: SequencePlacement): { actions: Action[]; id: string };
+```
+
+- **ONE TRANSACTION or nothing.** Every action after the first names the node the first creates, so
+  the list only works inside a `TransactionAction` — and that is the point: one undo removes the
+  node, its name, its track and its timeline together.
+- **The id comes back** because it cannot be looked up: the node exists in no document until the
+  transaction commits. Minting it afterwards is what makes a track land on the wrong node.
+- **`first` is written TWICE** — as the node's `src` and as the track's head — so the node draws
+  before the playhead has moved, and in a document that never gets a timeline.
+- **The timeline is GROWN, never shrunk**, to `lastFrame + 1`, and an existing one keeps its own
+  `fps`. Shrinking would truncate whatever else the document animates; resetting the fps would
+  re-time it.
+- **An empty track yields NO actions.** "Import an animation" that quietly produced a still frame
+  is a half-success with nothing to undo.
+- It exists as a module for the reason `tileImportActions` does, plus one that was measured: a
+  panel's `onClick` cannot be exercised at all, since `window.electronAPI` is frozen and the native
+  folder dialog cannot be stubbed. See ACTION-SYSTEM.md § 5.
+
 ### `document/Timeline` — animation over frames (schema 39; CHANNELS schema 47)
 
 ```ts
