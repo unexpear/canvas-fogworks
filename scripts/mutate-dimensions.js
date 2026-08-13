@@ -1038,31 +1038,31 @@ const MUTANTS = [
     // writes a `.tmx` that PARSES and opens in Tiled — what changes is which picture a cell draws
     // from, which is why the fixtures re-IMPORT the file and ask `tilemapForLayer` rather than
     // reading the XML back with a regex.
-    { id: "EX1", file: "src/core/export/ExportTiled.ts",
+    { id: "EX15", file: "src/core/export/ExportTiled.ts",
       from: "+ tilemapCsv(l.map, gidOf.get(l.map.tilesetId) ?? 1)",
       to: "+ tilemapCsv(l.map, 1)",
       note: "every layer's cells are numbered from the FIRST set's firstgid — the exact bug this change closed: right places, wrong pictures" },
-    { id: "EX2", file: "src/core/export/ExportTiled.ts",
+    { id: "EX16", file: "src/core/export/ExportTiled.ts",
       from: "        const mine = fitting.filter(x => x.map.tilesetId === l.map.tilesetId);",
       to: "        const mine = fitting;",
       note: "a set's tilecount is the highest index anywhere in the MAP, so a small set inherits a large one's count and every set after it starts at the wrong gid" },
-    { id: "EX3", file: "src/core/export/ExportTiled.ts",
+    { id: "EX17", file: "src/core/export/ExportTiled.ts",
       from: "        if (gidOf.has(l.map.tilesetId)) return true;",
       to: "        if (gidOf.has(l.name)) return true;",
       note: "a set is entered once per LAYER rather than once per set, so one tileset is written twice and everything after it is renumbered" },
-    { id: "EX4", file: "src/core/export/ExportTiled.ts",
+    { id: "EX18", file: "src/core/export/ExportTiled.ts",
       from: "        const firstGid = used.reduce((n, u) => n + u.tileCount, 1);",
       to: "        const firstGid = 1;",
       note: "every set claims firstgid 1, so their gid ranges overlap and a reader resolves every cell to the first set" },
-    { id: "EX5", file: "src/core/export/ExportTiled.ts",
+    { id: "EX19", file: "src/core/export/ExportTiled.ts",
       from: "    const setFor = (src: string | undefined) => used.find(u => u.set.src === src) ?? used[0];",
       to: "    const setFor = (src: string | undefined) => used.find(u => u.set.id === src) ?? used[0];",
       note: "a tile object's picture is matched against the set's ID instead of its src, so every object falls back to the first set and draws the wrong tile" },
-    { id: "EX6", file: "src/core/export/ExportTiled.ts",
+    { id: "EX20", file: "src/core/export/ExportTiled.ts",
       from: "            image: used.length === 0 ? image : `${safeFileName(set.name)}.png`",
       to: "            image: used.length < 1 ? image : `${safeFileName(set.name)}.png`",
       note: "THE CONTROL — an equivalent rewrite that SHOULD survive. A run where everything dies cannot tell a real kill from a harness that fails every time" },
-    { id: "EX7", file: "src/core/export/ExportTiled.ts",
+    { id: "EX21", file: "src/core/export/ExportTiled.ts",
       from: "        if (!set?.sheet) {",
       to: "        if (!set) {",
       note: "a COLLECTION set is written as though it had a sheet, so a layer whose tiles are separate files exports as a tileset with no image instead of leaving with a reason" },
@@ -1105,6 +1105,23 @@ if (dirty) {
  * A FILTERED RUN SAYS SO IN ITS SUMMARY, loudly, because that line is what gets copied into
  * docs/TESTING.md: "6/6 killed" from a filtered run would be a true sentence about a false thing.
  */
+/**
+ * NO TWO MUTANTS MAY SHARE AN ID, checked before anything runs.
+ *
+ * Written after adding EX1–EX7 to a battery that already had EX1–EX14: `MUTANT_ONLY=^EX` then
+ * reported "21 mutants" for what the author believed were seven, and a run of `^EX1$` would have
+ * silently exercised one of the two. An id is how a survivor is named in a commit message and in
+ * docs/TESTING.md, so two mutants answering to one id makes both records ambiguous — which is the
+ * same class of fault as the `-t` filter reaching fewer tests than assumed.
+ */
+const byId = new Map();
+for (const mut of MUTANTS) byId.set(mut.id, (byId.get(mut.id) ?? 0) + 1);
+const dupes = [...byId].filter(([, n]) => n > 1).map(([id]) => id);
+if (dupes.length > 0) {
+    console.error(`Refusing to run: duplicate mutant id(s) — ${dupes.join(", ")}`);
+    process.exit(2);
+}
+
 const only = process.env.MUTANT_ONLY ? new RegExp(process.env.MUTANT_ONLY) : null;
 const selected = only ? MUTANTS.filter(m => only.test(m.id)) : MUTANTS;
 if (only && selected.length === 0) {
