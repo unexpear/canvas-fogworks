@@ -78,6 +78,8 @@ import { resolveRings, insideRule, crossingCount, FILL_RULES, FillRule, resolveB
 import { applyFrame, trackError, timelineError, onionFrames, keyframesAt, TIMELINE_MAX_FRAMES, FPS_MAX } from "../document/Timeline";
 import { SetTrackAction } from "../actions/SetTrackAction";
 import { SetTimelineAction } from "../actions/SetTimelineAction";
+import { SetClipsAction } from "../actions/SetClipsAction";
+import { isDocumentDeltaKey, documentDeltaKey } from "../actions/types";
 import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyParallax, DEPTH_MIN, DEPTH_MAX } from "../document/Depth";
 import { Mesh, meshError, restMesh, warpPoint, isIdentityMesh, MESH_MAX_DIVISIONS } from "../document/Mesh";
 import { meshHandles, meshHandleAtPoint, meshIndexOf, meshPointFromWorld } from "../geometry/SelectionHandles";
@@ -1099,8 +1101,12 @@ describe("variableStoreError / variableError", () => {
             new UpdateNodeStyleAction(d, "n", { fill: "$color/x" })
         ]));
         expect(r.success).toBe(true);
-        expect([...r.updatedNodeIds]).toEqual(["n"]); // the sentinel must not seed the geometry dirty-set
-        expect(r.propertyDeltas.has("__document__")).toBe(true); // …but the doc delta itself is present
+        expect([...r.updatedNodeIds]).toEqual(["n"]); // no document key may seed the geometry dirty-set
+        // …but the doc delta itself is present. Keyed BY KIND now that several may coexist, so this
+        // asks the predicate rather than a literal — a bare `has("__document__")` would have gone
+        // quietly false the moment the key gained its suffix, and asserted nothing thereafter.
+        expect([...r.propertyDeltas.keys()].filter(isDocumentDeltaKey)).toEqual(["__document__:variables"]);
+        expect([...r.updatedNodeIds].some(isDocumentDeltaKey)).toBe(false);
     });
 });
 
@@ -19713,6 +19719,58 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(SHEET_MAX_PIXELS).toBeGreaterThan(0);
     });
 
+    test("clips can now be WRITTEN — the field was unreachable for four schema versions", () => {
+        // THE GAP THIS CLOSES is not a wrong behaviour, which is why nothing caught it. `doc.clips`
+        // arrived at schema 46 and was validated on every load, serialised, migrated, read by `Rig`
+        // and read by the SPRITE-SHEET EXPORTER — with no action anywhere that could set it. So
+        // every sheet ever exported carried an empty clip list, and the test beside this one proved
+        // an Aseprite file's tags are valid clips without ever being able to store one.
+        const d = new ActionDispatcher(createEmptyDocument());
+        const tl = { frames: 12, fps: 24 };
+        expect(d.dispatchAction(new SetTimelineAction(d.getDocument(), tl)).success).toBe(true);
+        const clips: Clip[] = [{ name: "idle", from: 0, to: 5 }, { name: "walk", from: 6, to: 11, loop: false }];
+        expect(d.dispatchAction(new SetClipsAction(d.getDocument(), clips)).success).toBe(true);
+        expect(d.getDocument().clips).toEqual(clips);
+
+        // …AND THEY SURVIVE THE FILE, which is the half that makes storing them mean anything.
+        const reloaded = deserializeDocument(serializeDocument(d.getDocument()));
+        expect(reloaded.clips).toEqual(clips);
+
+        // THE SHARED VALIDATOR, not a second copy: a range past the last frame is refused here
+        // exactly as the loader refuses it, so this cannot author a file it could not reopen.
+        expect(new SetClipsAction(d.getDocument(), [{ name: "over", from: 0, to: 99 }]).validate()).toBe(false);
+        expect(new SetClipsAction(d.getDocument(),
+            [{ name: "a", from: 0, to: 1 }, { name: "a", from: 2, to: 3 }]).validate()).toBe(false);
+        // A DOCUMENT-LEVEL action names NO node — leaking a sentinel id would seed the geometry
+        // dirty-tracker with a ghost.
+        expect(new SetClipsAction(d.getDocument(), clips).execute().updatedNodeIds.size).toBe(0);
+
+        // UNDO puts them back, and `undefined` removes them — which is how a document stops having
+        // named ranges and serialises as one that never did.
+        expect(d.dispatchAction(new SetClipsAction(d.getDocument(), undefined)).success).toBe(true);
+        expect(d.getDocument().clips).toBeUndefined();
+        expect(d.undo()).not.toBeNull();
+        expect(d.getDocument().clips).toEqual(clips);
+
+        // THE CASE THE `against` PARAMETER EXISTS FOR, and the reason it is not decoration: in a
+        // TRANSACTION the clock and the clips arrive together, and an import does exactly that.
+        // Validated against the document's CURRENT timeline these clips are illegal — there is no
+        // timeline at all — so without the override the whole import fails at its second step.
+        const fresh = new ActionDispatcher(createEmptyDocument());
+        expect(fresh.getDocument().timeline).toBeUndefined();
+        expect(new SetClipsAction(fresh.getDocument(), clips).validate()).toBe(false);
+        expect(fresh.dispatchAction(new TransactionAction(fresh.getDocument(), "import", [
+            new SetTimelineAction(fresh.getDocument(), tl),
+            new SetClipsAction(fresh.getDocument(), clips, tl)
+        ])).success).toBe(true);
+        expect(fresh.getDocument().clips).toEqual(clips);
+        expect(fresh.getDocument().timeline).toEqual(tl);
+        // ONE undo removes both, or "one import" was three steps wearing a coat.
+        expect(fresh.undo()).not.toBeNull();
+        expect(fresh.getDocument().clips).toBeUndefined();
+        expect(fresh.getDocument().timeline).toBeUndefined();
+    });
+
     test("CLIPS name ranges over the one timeline (schema 46)", () => {
         // A character is a dozen animations, not one. Until clips existed a document held exactly
         // one timeline, so idle, walk and jump could not live in the same file — which is the
@@ -20761,30 +20819,54 @@ describe("Timeline — cutout, frame-by-frame, tweening, onion skinning (schema 
         expect((after.track as unknown[]).length).toBe(1);
     });
 
-    test("a transaction carrying TWO document-level changes is refused, not half-applied", () => {
-        // The variable store, the active state and the clock all travel under one key, so only one
-        // can occupy it. Losing the others would be invisible — the dispatch would report success
-        // and the document would simply not say what it was told to. The guard existed for two
-        // claimants and had no test; the timeline is the third, and a pairwise comparison would
-        // have quietly stopped covering them all the moment it arrived.
+    test("a transaction may carry SEVERAL document-level changes, and loses none of them", () => {
+        // THIS TEST USED TO ASSERT THE OPPOSITE, and the change is deliberate. It read: "the
+        // variable store, the active state and the clock all travel under ONE key, so only one can
+        // occupy it. Losing the others would be invisible" — and refusing was the right answer
+        // while that was true. It is no longer true: document deltas are keyed BY KIND, so the
+        // collision the guard existed to prevent cannot happen, and refusing would only forbid a
+        // legitimate edit. A clock and the named ranges that index INTO it are one act, which is
+        // exactly what an Aseprite import performs.
+        //
+        // The property that mattered is unchanged and is what this now asserts: NOTHING IS SILENTLY
+        // LOST.
         const d = doc(node("A", 0));
         const dispatcher = new ActionDispatcher(d);
         const live = dispatcher.getDocument();
-        const both = new TransactionAction(live, "two document deltas", [
+        expect(dispatcher.dispatchAction(new TransactionAction(live, "two document deltas", [
             new SetActiveStateAction(live, "hover"),
             new SetTimelineAction(live, { frames: 24, fps: 12 })
-        ]);
-        expect(dispatcher.dispatchAction(both).success).toBe(false);
-        // …and NEITHER landed: a refusal that half-applied would be worse than the loss it prevents.
+        ])).success).toBe(true);
+        // BOTH landed. Asserting only the second would pass for a shared slot, which is the bug.
+        expect(dispatcher.getDocument().timeline).toEqual({ frames: 24, fps: 12 });
+        expect(dispatcher.getDocument().activeState).toBe("hover");
+
+        // ONE UNDO removes both, because it was one transaction.
+        expect(dispatcher.undo()).not.toBeNull();
         expect(dispatcher.getDocument().timeline).toBeUndefined();
         expect(dispatcher.getDocument().activeState).toBeUndefined();
-        // ONE of them inside a transaction is fine — the guard bounds the collision, it does not
-        // ban document-level changes from transactions altogether.
-        const single = dispatcher.getDocument();
-        expect(dispatcher.dispatchAction(new TransactionAction(single, "one document delta", [
-            new SetTimelineAction(single, { frames: 24, fps: 12 })
+
+        // TWO OF THE SAME KIND still collapse LAST-WINS, which is not a loss but the documented
+        // composition: each action builds its delta from the working document, so the later one
+        // already carries the earlier. A slot per KIND, not per action.
+        const again = dispatcher.getDocument();
+        expect(dispatcher.dispatchAction(new TransactionAction(again, "two clocks", [
+            new SetTimelineAction(again, { frames: 10, fps: 12 }),
+            new SetTimelineAction(again, { frames: 99, fps: 30 })
         ])).success).toBe(true);
-        expect(dispatcher.getDocument().timeline).toEqual({ frames: 24, fps: 12 });
+        expect(dispatcher.getDocument().timeline).toEqual({ frames: 99, fps: 30 });
+
+        // A FAILING STEP still applies NOTHING — the atomicity the old refusal also protected.
+        const before = dispatcher.getDocument().timeline;
+        const bad = dispatcher.getDocument();
+        expect(dispatcher.dispatchAction(new TransactionAction(bad, "one good one bad", [
+            new SetTimelineAction(bad, { frames: 30, fps: 24 }),
+            // A CLOCK OF ZERO FRAMES, which `timelineError` refuses. The first attempt used a "bad"
+            // state NAME — and every string is a legal state name, so the step SUCCEEDED and the
+            // assertion tested nothing. A fixture for a failing step has to actually fail.
+            new SetTimelineAction(bad, { frames: 0, fps: 24 })
+        ])).success).toBe(false);
+        expect(dispatcher.getDocument().timeline).toEqual(before);
     });
 
     test("ONION SKINNING picks the neighbours and never the current frame", () => {

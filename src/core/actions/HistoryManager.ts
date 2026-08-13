@@ -27,7 +27,26 @@ function cloneDocument(doc: ReadonlyDocument): DocumentSnapshot {
     }));
 }
 
-/** Reconstructs Map instances after JSON deserialization. */
+/**
+ * Reconstructs Map instances after JSON deserialization.
+ *
+ * IT SPREADS, IT DOES NOT ENUMERATE, and that is the whole of the fix. This function used to name
+ * the document-level fields one by one — `activeState`, `timeline`, `frame` — beside a comment
+ * claiming that listing them "is what makes the compiler catch the next one". It does not: every
+ * one of those fields is OPTIONAL, so a field left out of this literal is silently absent rather
+ * than a type error, and the compiler has nothing to say. Two fields were already missing.
+ *
+ * `clips` (schema 46) was one, which is how a document could hold named ranges that undo threw
+ * away. `lights` and `ambient` (schema 42) were the other, and that one was reachable by anybody:
+ * turn the light on, draw a rectangle, press undo, and the scene goes dark with no way back except
+ * setting it again. Neither is exotic. Both had shipped.
+ *
+ * So nothing is listed. The spread carries every field the snapshot holds, including the ones added
+ * after this was written, and only the two that CANNOT survive JSON are rebuilt: `nodes` is a Map
+ * and `metadata.date` is a Date. This is the fifth time this codebase has paid for rebuilding a
+ * record field by field — after `Mesh.points` losing its bones, `UpdateNodeContentAction` losing
+ * its nine-slice, `rebuild` losing the terrain, and the terrain panel losing a material's name.
+ */
 function hydrateDocument(raw: DocumentSnapshot): ProjectDocument {
     // Deep-clone the stored snapshot before handing it back. The dispatcher
     // mutates the restored document in place (Object.assign on geometry/style,
@@ -37,20 +56,19 @@ function hydrateDocument(raw: DocumentSnapshot): ProjectDocument {
     const source: DocumentSnapshot = JSON.parse(JSON.stringify(raw));
 
     const doc: ProjectDocument = {
-        version: source.version,
+        ...(source as unknown as ProjectDocument),
         metadata: {
             ...source.metadata,
             date: new Date(source.metadata.date)
         },
+        // The two that JSON cannot carry, rebuilt — and NOTHING else restated.
         nodes: new Map<string, Node>(),
-        rootNodeUuids: source.rootNodeUuids,
-        variables: source.variables,
-        activeTheme: source.activeTheme ?? "light",
-        // …and the same fields have to survive an UNDO. Restoring a snapshot that had forgotten
-        // them would quietly un-animate a document the moment you pressed undo.
-        activeState: source.activeState,
-        timeline: source.timeline,
-        frame: source.frame
+        // A snapshot taken before the field existed hydrates as the default rather than undefined.
+        // UNREACHABLE AND KEPT: history lives in memory only, and `cloneDocument` spreads a live
+        // document whose `activeTheme` is always set, so no snapshot can arrive without one — a
+        // mutation changing this default SURVIVES and no fixture can kill it. Recorded rather than
+        // dressed in a test that would only assert the fallback calls itself.
+        activeTheme: source.activeTheme ?? "light"
     };
 
     for (const [key, value] of Object.entries(source.nodes || {})) {

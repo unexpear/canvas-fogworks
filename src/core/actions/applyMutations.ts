@@ -184,6 +184,11 @@ export function applyMutationsToDocument(
                 doc.timeline = delta.timeline;
                 return;
             }
+            case "clips": {
+                // Named ranges of the clock (schema 46). Whole-value like the clock itself.
+                doc.clips = delta.clips;
+                return;
+            }
             case "activeState": {
                 // Document-level state (M7): which named state everything resolves against.
                 doc.activeState = delta.activeState;

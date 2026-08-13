@@ -9,7 +9,8 @@
 import { Action } from "./Action";
 import { ProjectDocument, ReadonlyDocument } from "../document/Document";
 import { Node } from "../document/Node";
-import { MutationResult, ActionPayload, NodeDelta, DOCUMENT_DELTA_KEY } from "./types";
+import { MutationResult, ActionPayload, NodeDelta, DOCUMENT_DELTA_KEY,
+    documentDeltaKey, isDocumentDeltaKey } from "./types";
 import { applyMutationsToDocument } from "./applyMutations";
 
 /** Deep, independent copy of a document for in-transaction simulation. */
@@ -116,6 +117,10 @@ export class TransactionAction extends Action {
         let activeStateDelta: Extract<NodeDelta, { kind: "activeState" }> | null = null;
         let timelineDelta: Extract<NodeDelta, { kind: "timeline" }> | null = null;
         let lightingDelta: Extract<NodeDelta, { kind: "lighting" }> | null = null;
+        // LAST WINS, like every other document-level value here: each action builds its delta
+        // from the working document, so an import that sets the clock and then the clips it
+        // indexes into composes in the order it was written.
+        let clipsDelta: Extract<NodeDelta, { kind: "clips" }> | null = null;
 
         for (const action of this.componentActions) {
             action.rebind(working);
@@ -148,6 +153,8 @@ export class TransactionAction extends Action {
                     timelineDelta = delta;
                 } else if (delta.kind === "lighting") {
                     lightingDelta = delta;
+                } else if (delta.kind === "clips") {
+                    clipsDelta = delta;
                 } else {
                     const prev = propertyEdits.get(nodeId) ?? { kind: "patch" as const };
                     propertyEdits.set(nodeId, mergePatch(prev, delta));
@@ -178,21 +185,26 @@ export class TransactionAction extends Action {
             if (everAdded.has(id)) continue; // created and destroyed within the transaction
             finalDeltas.set(id, { kind: "delete" });
         }
-        // The net document-level state (variables / active state / the clock), if any component
-        // touched it. They all travel under ONE key, so only one can occupy it, and a transaction
-        // doing more than one is REFUSED rather than silently losing the others — a wrong answer
-        // there would be invisible. Counted rather than compared pairwise: the pairwise test was
-        // right for two claimants and would have quietly stopped covering them all the moment a
-        // third arrived, which is what the timeline is.
-        const documentDeltas = [variablesDelta, activeStateDelta, timelineDelta, lightingDelta].filter(d => d !== null);
-        if (documentDeltas.length > 1) return { updatedNodeIds: new Set(), propertyDeltas: new Map(), success: false };
-        if (documentDeltas.length === 1) finalDeltas.set(DOCUMENT_DELTA_KEY, documentDeltas[0] as NodeDelta);
+        // The net document-level state, one slot PER KIND. This used to be one slot in total, and
+        // a transaction touching two document-level things was REFUSED — the right call while the
+        // alternative was losing one silently, but it made a legitimate edit impossible: a clock
+        // and the named ranges that index INTO it are one act, and an Aseprite import performs
+        // exactly that. Keying by kind lets them coexist without reintroducing the loss, because
+        // two deltas of the SAME kind still collapse last-wins, which is what they always did.
+        //
+        // `applyMutations` was already indifferent — "the key is ignored, the KIND carries the
+        // meaning" — so the change is confined to who may share the map.
+        const documentDeltas = [variablesDelta, activeStateDelta, timelineDelta, lightingDelta,
+            clipsDelta].filter(d => d !== null);
+        for (const delta of documentDeltas) {
+            finalDeltas.set(documentDeltaKey((delta as NodeDelta & { kind: string }).kind), delta as NodeDelta);
+        }
 
         return {
-            // The document-delta sentinel is NOT a node id — leaking it would seed the
-            // geometry dirty-tracker with a ghost and break the variables-delta contract
-            // ("updatedNodeIds stays empty for doc-level changes").
-            updatedNodeIds: new Set([...finalDeltas.keys()].filter(k => k !== DOCUMENT_DELTA_KEY)),
+            // The document-delta keys are NOT node ids — leaking one would seed the geometry
+            // dirty-tracker with a ghost and break the variables-delta contract ("updatedNodeIds
+            // stays empty for doc-level changes"). Matched by PREFIX now that there are several.
+            updatedNodeIds: new Set([...finalDeltas.keys()].filter(k => !isDocumentDeltaKey(k))),
             propertyDeltas: finalDeltas,
             success: true
         };

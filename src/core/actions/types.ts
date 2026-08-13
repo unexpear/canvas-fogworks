@@ -13,6 +13,7 @@ import { Keyframe } from "../document/Timeline";
 import { Mesh } from "../document/Mesh";
 import { Tilemap } from "../document/Tilemap";
 import { Light } from "../document/Light";
+import { Clip } from "../document/Clips";
 
 /**
  * The reserved `propertyDeltas` key a DOCUMENT-LEVEL delta (kind "variables") travels
@@ -22,6 +23,32 @@ import { Light } from "../document/Light";
  * collide with it in a transaction's merged delta map.
  */
 export const DOCUMENT_DELTA_KEY: string = RESERVED_NODE_ID;
+
+/**
+ * The key one document-level delta travels under, one slot PER KIND.
+ *
+ * A transaction may touch more than one document-level thing — an import sets the clock and the
+ * named ranges that index into it, which is one act — and a single shared slot could hold only one
+ * of them. It used to REFUSE that transaction outright, which was the right answer while the
+ * alternative was losing one silently, and the wrong answer once a legitimate edit needed both.
+ *
+ * Two deltas of the SAME kind still collapse last-wins, exactly as they always did: the slot is per
+ * kind, not per action.
+ */
+export function documentDeltaKey(kind: string): string {
+    return `${DOCUMENT_DELTA_KEY}:${kind}`;
+}
+
+/**
+ * Whether a delta-map key names the DOCUMENT rather than a node.
+ *
+ * Prefix-matched, and the separator is what makes that safe: `RESERVED_NODE_ID` is refused as a
+ * stored node id by both `AddNodeAction` and `Integrity`, so no real node can produce a key that
+ * begins this way.
+ */
+export function isDocumentDeltaKey(key: string): boolean {
+    return key === DOCUMENT_DELTA_KEY || key.startsWith(`${DOCUMENT_DELTA_KEY}:`);
+}
 
 /**
  * What one action wants done to one node.
@@ -134,7 +161,11 @@ export type NodeDelta =
     | { kind: "timeline"; timeline: { frames: number; fps: number } | undefined }
     /** The scene's LIGHTING (schema 42). Whole-value, and the two fields travel together
      *  because they are one decision. Also under `DOCUMENT_DELTA_KEY`. */
-    | { kind: "lighting"; lights: Light[] | undefined; ambient: number | undefined };
+    | { kind: "lighting"; lights: Light[] | undefined; ambient: number | undefined }
+    /** NAMED RANGES of the clock (schema 46). Whole-value under `DOCUMENT_DELTA_KEY`, like the
+     *  timeline it indexes into. `undefined` removes them. The field existed and was validated,
+     *  serialised and EXPORTED from for four schema versions with no delta that could set it. */
+    | { kind: "clips"; clips: Clip[] | undefined };
 
 /** The result of an action execution. Communicates changes without coupling services. */
 export interface MutationResult {
@@ -167,13 +198,21 @@ export interface DocumentSnapshot {
     /**
      * The rest of the document-level state, so UNDO restores it.
      *
-     * `cloneDocument` spreads the whole document and therefore always captured these; it was
-     * `hydrateDocument` that listed fields by hand and quietly dropped whatever it had not been
-     * told about. Naming them here is what makes the compiler catch the next one.
+     * `cloneDocument` spreads the whole document and therefore always captured these. It was
+     * `hydrateDocument` that listed fields by hand and dropped whatever it had not been told
+     * about — and the claim that used to sit here, that naming them "is what makes the compiler
+     * catch the next one", was FALSE: every field below is optional, so one left out of that
+     * literal was silently absent, not a type error. Two were missing when this was written
+     * down. `hydrateDocument` now SPREADS instead of enumerating, which is what actually makes
+     * the next field safe; this list is documentation of what a snapshot carries, and nothing
+     * depends on it being complete.
      */
     activeState?: ProjectDocument["activeState"];
     timeline?: ProjectDocument["timeline"];
     frame?: ProjectDocument["frame"];
+    clips?: ProjectDocument["clips"];
+    lights?: ProjectDocument["lights"];
+    ambient?: ProjectDocument["ambient"];
 }
 
 /** The serialized payload needed to store history for Undo/Redo */

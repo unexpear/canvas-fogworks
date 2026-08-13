@@ -81,7 +81,8 @@ import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, DEFAULT_BO
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, GridCell, breakFlexLines, FlexLine, resolveMargin, expandDirtyForLayout, isLayoutContainer, isAbsolute, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { Mat2D, Rect, IDENTITY, multiply, translation, invert, compose, applyToPoint, transformRectToAABB, unionRect, toMatrixString, parseSvgTransform, isTranslationOnly } from "../geometry/Matrix";
 import { Action } from "../actions/Action";
-import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot, DOCUMENT_DELTA_KEY } from "../actions/types";
+import { MutationResult, NodeDelta, ActionPayload, Revision, DocumentSnapshot, DOCUMENT_DELTA_KEY,
+    documentDeltaKey, isDocumentDeltaKey } from "../actions/types";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
 import { expandInstances, componentError, overridesError, isVirtualId, virtualId, splitVirtualId, ownerInstanceOf, InstanceOverride, VIRTUAL_ID_SEP, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES } from "../document/Components";
@@ -175,6 +176,7 @@ import { worldCommandsOf, booleanAction, makeBooleanNodeAction } from "../action
 import { strokeWidthOf, outlineStrokeAction } from "../actions/outlineStrokeActions";
 import { SetTrackAction } from "../actions/SetTrackAction";
 import { SetTimelineAction } from "../actions/SetTimelineAction";
+import { SetClipsAction } from "../actions/SetClipsAction";
 import { SetDepthAction } from "../actions/SetDepthAction";
 import { SetMeshAction } from "../actions/SetMeshAction";
 import { SetTilemapAction } from "../actions/SetTilemapAction";
@@ -1169,6 +1171,15 @@ export function __apiSurfacePin(): void {
     expectType<Action | null>(outlineStrokeAction(doc, computed, [], ["new-id"], "outer"));
     expectType<Action>(new SetTrackAction(doc, "id", [keyframe]));
     expectType<Action>(new SetTimelineAction(doc, timeline));
+    // NAMED RANGES over that clock (schema 46) — the only write path to `Document.clips`, which had
+    // none for four schema versions while being validated, serialised and EXPORTED from.
+    expectType<Action>(new SetClipsAction(doc, [{ name: "idle", from: 0, to: 3 }]));
+    // The timeline may be stated EXPLICITLY, for the transaction where the clock this list indexes
+    // into is arriving in the same batch and the document does not have it yet.
+    expectType<Action>(new SetClipsAction(doc, undefined, { frames: 4, fps: 24 }));
+    // Document-level delta keys: one slot PER KIND, so a transaction may carry several.
+    expectType<string>(documentDeltaKey("clips"));
+    expectType<boolean>(isDocumentDeltaKey(DOCUMENT_DELTA_KEY));
     expectType<Action>(new SetDepthAction(doc, "id", 1));
     expectType<Action>(new SetMeshAction(doc, "id", mesh));
     // A TILE EDIT is a whole-grid replace, unlike a stroke's patch — see `SetTilemapAction`'s header
