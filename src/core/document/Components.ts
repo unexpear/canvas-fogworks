@@ -44,6 +44,7 @@ import { normalizePathNode } from "../geometry/PathBuilder";
 import { applyFrame } from "./Timeline";
 import { isFlatMesh, isIdentityMesh, warpCommands, skinMesh, ReadonlyMesh } from "./Mesh";
 import { rotatedTable, autotile, autotileLayers } from "./Autotile";
+import { findTileset, tilesetTile } from "./Tileset";
 
 /** Separator between an instance path and the master node id in a VIRTUAL node id.
  *  Reserved: a stored node id may not contain it (checked on the edit AND load paths). */
@@ -887,9 +888,20 @@ export function resolveTilemaps(doc: ReadonlyDocument): ReadonlyDocument {
         const map = n.tilemap;
         const terrain = map?.terrain;
         if (!map || !terrain) { nodes.set(id, n as Node); return; }
+        // THE WEIGHTS COME FROM THE TILESET (schema 67), and this is the only place that can supply
+        // them: the autotiler knows about masks and corners, the tileset knows what a tile weighs,
+        // and only the resolver holds the layer AND the set it names. `probability` round-tripped
+        // for a commit with nothing reading it — this is its first consumer.
+        const set = findTileset(doc.tilesets, map.tilesetId);
         const grid = autotileLayers(
             { cols: map.cols, rows: map.rows, cells: terrain.cells },
-            terrain.materials.map(m => ({ id: m.id, art: m.art })));
+            terrain.materials.map(m => ({ id: m.id, art: m.art })),
+            // ONLY WHEN THE SET SAYS SOMETHING. With no weighted tiles this is undefined and the
+            // picker takes the plain path — every candidate weighing 1, which is what it meant
+            // before weights existed, so an existing document derives byte-identically.
+            set && set.tiles.some(t => t.probability !== undefined)
+                ? { weightOf: (index: number) => tilesetTile(set, index)?.probability ?? 1 }
+                : undefined);
         // THE STORED SHEET AND CELL SIZE SURVIVE — only the grid and the box are derived. A
         // derivation that rebuilt the sheet would be a second place the tileset is described.
         const { terrain: _dropped, ...rest } = map;

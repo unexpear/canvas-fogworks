@@ -41,6 +41,7 @@
  */
 
 import { TILE_EMPTY, FLIP_H, FLIP_V, FLIP_D, FLIP_MAX } from "./Tilemap";
+import { rollAt } from "../random/Rng";
 
 /** How many neighbourhoods a dual-grid tile can sit over: four corners, two states each. */
 export const AUTOTILE_MASKS = 16;
@@ -64,8 +65,15 @@ export interface AutotileCell {
     flip?: number;
 }
 
-/** Sixteen entries, indexed BY MASK; `null` where the mask draws nothing. */
-export type AutotileTable = readonly (AutotileCell | null)[];
+/**
+ * Sixteen entries, indexed BY MASK; `null` where the mask draws nothing.
+ *
+ * EACH ENTRY IS A LIST because a real tileset ships VARIANTS: the measured sets carry 185 tiles for
+ * 74 corner configurations, so a mask routinely has several tiles that all satisfy it and an artist
+ * drew them so the ground would not repeat. One candidate is the common case and the list is then
+ * one long; `autotile` picks among them by weight, deterministically.
+ */
+export type AutotileTable = readonly (readonly AutotileCell[] | null)[];
 
 /** What is wrong with a table, or null. */
 export function autotileTableError(table: unknown): string | null {
@@ -75,12 +83,26 @@ export function autotileTableError(table: unknown): string | null {
     }
     for (const entry of table as unknown[]) {
         if (entry === null) continue;
-        if (entry === undefined || typeof entry !== "object") return "an autotile entry must be an object or null";
-        const e = entry as Record<string, unknown>;
-        if (!Number.isInteger(e.index) || (e.index as number) < 0) return "an autotile entry's index must be a whole number >= 0";
-        if (e.flip !== undefined) {
-            if (!Number.isInteger(e.flip) || (e.flip as number) < 0 || (e.flip as number) > FLIP_MAX) {
-                return `an autotile entry's flip must be a whole number 0..${FLIP_MAX}`;
+        // A LIST OF CANDIDATES, and an EMPTY one is refused rather than treated as null: "this mask
+        // draws nothing" is already spelled `null`, and two spellings of one state is how a caller
+        // ends up handling only the one it thought of.
+        if (!Array.isArray(entry)) return "an autotile entry must be an array of cells or null";
+        if (entry.length === 0) return "an autotile entry must hold at least one cell — use null for none";
+        const seen = new Set<number>();
+        for (const cell of entry as unknown[]) {
+            if (cell === null || cell === undefined || typeof cell !== "object") {
+                return "an autotile cell must be an object";
+            }
+            const e = cell as Record<string, unknown>;
+            if (!Number.isInteger(e.index) || (e.index as number) < 0) return "an autotile entry's index must be a whole number >= 0";
+            // THE SAME TILE TWICE IS NOT TWO VARIANTS; it would double that tile's weight through
+            // the back door, which is a weight nobody wrote.
+            if (seen.has(e.index as number)) return `an autotile entry lists tile ${e.index} twice`;
+            seen.add(e.index as number);
+            if (e.flip !== undefined) {
+                if (!Number.isInteger(e.flip) || (e.flip as number) < 0 || (e.flip as number) > FLIP_MAX) {
+                    return `an autotile entry's flip must be a whole number 0..${FLIP_MAX}`;
+                }
             }
         }
     }
@@ -136,8 +158,8 @@ export function autotileClasses(): number[] {
  * class's own mask onto it, and "first" is not arbitrary: the flips are tried in ascending order, so
  * an unturned tile always wins over a turned one that looks the same.
  */
-export function rotatedTable(art: ReadonlyMap<number, number>): AutotileTable {
-    const table: (AutotileCell | null)[] = new Array(AUTOTILE_MASKS).fill(null);
+export function rotatedTable(art: readonly { mask: number; index: number }[]): AutotileTable {
+    const table: (AutotileCell[] | null)[] = new Array(AUTOTILE_MASKS).fill(null);
     // PASS ONE — A TILE DRAWN FOR THIS EXACT MASK IS AUTHORITATIVE, and it has to be claimed before
     // any orbit is expanded. The single pass this replaces let the FIRST entry of a symmetry orbit
     // fill the whole orbit, so every later entry for a mask already covered was discarded: given art
@@ -150,22 +172,36 @@ export function rotatedTable(art: ReadonlyMap<number, number>): AutotileTable {
     // the derivation threw away. It is also exactly what importing a real tileset produces: a corner
     // wangset gives a material a tile for around thirteen of the fifteen non-empty masks, drawn
     // rather than turned.
-    for (const [mask, index] of art) {
-        if (Number.isInteger(mask) && mask >= 0 && mask < AUTOTILE_MASKS) table[mask] = { index };
+    // A LIST, NOT A LAST-WINS SLOT. This took a `Map<mask, index>`, which cannot hold two tiles for
+    // one mask at all — so an artist's variants were discarded at the door, before any of the
+    // reasoning below could see them. The document has always been able to express them:
+    // `TerrainMaterial.art` is an ARRAY and `terrainError` never forbade a repeated mask.
+    for (const { mask, index } of art) {
+        if (!Number.isInteger(mask) || mask < 0 || mask >= AUTOTILE_MASKS) continue;
+        if (!Number.isInteger(index) || index < 0) continue;
+        const had = table[mask];
+        // DUPLICATE INDICES COLLAPSE. The same tile listed twice for one mask is not two variants;
+        // it would just double that tile's weight through the back door.
+        if (had) { if (!had.some(c => c.index === index)) had.push({ index }); }
+        else table[mask] = [{ index }];
     }
     // PASS TWO — and only now are the gaps filled by TURNING a tile that was drawn.
     //
     // BY ASCENDING MASK rather than in the array's order, so the result is a function of the art and
     // not of how it happens to be stored. The flip search stays ascending too: flip 0 first, which
     // is the same preference the format calls "prefer untransformed".
-    const entries = [...art].sort((a, b) => a[0] - b[0]);
+    const entries = [...art].filter(a => Number.isInteger(a.mask) && a.mask >= 0 && a.mask < AUTOTILE_MASKS)
+        .sort((a, b) => a.mask - b.mask);
     for (let mask = 0; mask < AUTOTILE_MASKS; mask++) {
         if (table[mask] !== null) continue;
         let placed = false;
-        for (const [classMask, index] of entries) {
+        for (const { mask: classMask, index } of entries) {
             for (let flip = 0; flip <= FLIP_MAX; flip++) {
                 if (flipMask(flip, classMask) !== mask) continue;
-                table[mask] = flip === 0 ? { index } : { index, flip };
+                // ONE TURNED TILE, not every one that could be turned into place. A gap filled by
+                // rotation is a substitute for art nobody drew, and offering several of those as
+                // "variants" would make a mask an artist never addressed look deliberately varied.
+                table[mask] = [flip === 0 ? { index } : { index, flip }];
                 placed = true;
                 break;
             }
@@ -262,7 +298,8 @@ export function terrainCoordAt(
  */
 export function autotileLayers(
     terrain: Terrain,
-    materials: readonly { id: number; art: readonly { mask: number; index: number }[] }[]
+    materials: readonly { id: number; art: readonly { mask: number; index: number }[] }[],
+    opts?: AutotileChoice
 ): AutotileResult {
     const cols = terrain.cols + 1;
     const rows = terrain.rows + 1;
@@ -270,8 +307,8 @@ export function autotileLayers(
     const flips: number[] = new Array(cols * rows).fill(0);
     let turned = false;
     for (const material of materials) {
-        const table = rotatedTable(new Map(material.art.map(a => [a.mask, a.index])));
-        const layer = autotile(terrain, material.id, table);
+        const table = rotatedTable(material.art);
+        const layer = autotile(terrain, material.id, table, opts);
         for (let at = 0; at < tiles.length; at++) {
             // ONLY WHERE THIS MATERIAL DREW. Copying unconditionally would let a later material's
             // empty cells erase an earlier one's tiles, which is the whole shore gone.
@@ -301,7 +338,60 @@ export interface AutotileResult {
  * places the node: `x - tileWidth / 2`, `y - tileHeight / 2`. Returning the dimensions rather than
  * assuming the caller derives them is what keeps the two from disagreeing.
  */
-export function autotile(terrain: Terrain, material: number, table: AutotileTable): AutotileResult {
+/**
+ * How a cell chooses among the tiles that all satisfy its mask.
+ *
+ * WEIGHTS ARE INJECTED, not looked up. This module knows about masks and corners; where a tile's
+ * weight comes from is the document's business, and the caller is the only thing holding both the
+ * layer and the tileset it names. That is the same seam `TiledMap` uses for `inflate` and
+ * `blankCells` for its ink test.
+ */
+export interface AutotileChoice {
+    /** A tile's relative weight, defaulting to 1 — which is what an unmentioned tile means. */
+    weightOf?: (index: number) => number;
+    /** Varies the whole picture without changing the art. Same terrain + same seed = same map. */
+    seed?: number;
+}
+
+/**
+ * One of `candidates`, chosen by weight and by WHERE THE CELL IS.
+ *
+ * DETERMINISTIC, and that is the requirement rather than a nicety: the picture is DERIVED, so it is
+ * recomputed on every open, every undo and every scroll that changes the visible window. A stream of
+ * random numbers would give a cell a different tile each time anything else moved — grass that
+ * shimmers as you pan. Seeding by the cell's own position makes the choice a function of the map.
+ *
+ * A WEIGHT OF ZERO EXCLUDES a tile, which is what zero means; if every candidate is zero the first
+ * is used, because drawing nothing where an artist supplied art would be a worse answer than
+ * ignoring the weights.
+ */
+function pickVariant(
+    candidates: readonly AutotileCell[], material: number, at: number, opts?: AutotileChoice
+): AutotileCell {
+    if (candidates.length === 1) return candidates[0];
+    const weightOf = opts?.weightOf;
+    // THE COMMON CASE COSTS NOTHING: with no weights supplied every candidate weighs 1, and the
+    // roll is a plain index into the list.
+    const weights = candidates.map(c => {
+        const w = weightOf ? weightOf(c.index) : 1;
+        return Number.isFinite(w) && w > 0 ? w : 0;
+    });
+    const total = weights.reduce((a, b) => a + b, 0);
+    if (total <= 0) return candidates[0];
+    // SEEDED BY THE MATERIAL as well as the cell, so two materials meeting on one map do not pick
+    // the same variant index at every shared coordinate — which reads as a pattern rather than as
+    // scatter.
+    let roll = rollAt((opts?.seed ?? 0) ^ Math.imul(material, 0x9E3779B9), at) * total;
+    for (let i = 0; i < candidates.length; i++) {
+        roll -= weights[i];
+        if (roll < 0) return candidates[i];
+    }
+    return candidates[candidates.length - 1];
+}
+
+export function autotile(
+    terrain: Terrain, material: number, table: AutotileTable, opts?: AutotileChoice
+): AutotileResult {
     const cols = terrain.cols + 1;
     const rows = terrain.rows + 1;
     const tiles: number[] = new Array(cols * rows);
@@ -309,8 +399,9 @@ export function autotile(terrain: Terrain, material: number, table: AutotileTabl
     let turned = false;
     for (let row = 0; row < rows; row++) {
         for (let col = 0; col < cols; col++) {
-            const entry = table[dualMask(terrain, material, col, row)] ?? null;
+            const candidates = table[dualMask(terrain, material, col, row)] ?? null;
             const at = row * cols + col;
+            const entry = candidates ? pickVariant(candidates, material, at, opts) : null;
             tiles[at] = entry ? entry.index : TILE_EMPTY;
             const flip = entry?.flip ?? 0;
             flips[at] = flip;

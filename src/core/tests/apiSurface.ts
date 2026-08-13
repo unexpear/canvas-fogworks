@@ -184,7 +184,7 @@ import { SetClipsAction } from "../actions/SetClipsAction";
 import { SetDepthAction } from "../actions/SetDepthAction";
 import { SetMeshAction } from "../actions/SetMeshAction";
 import { SetTilemapAction } from "../actions/SetTilemapAction";
-import { Terrain, AutotileCell, AutotileTable, AUTOTILE_MASKS, CORNER_TL, CORNER_TR, CORNER_BL,
+import { Terrain, AutotileCell, AutotileTable, AutotileChoice, AutotileResult, AUTOTILE_MASKS, CORNER_TL, CORNER_TR, CORNER_BL,
     CORNER_BR, flipMask, autotileClasses, rotatedTable, dualMask, autotile,
     autotileTableError } from "../document/Autotile";
 import { TileEdit, withTiles, rectCells, fillRegion, resizeTilemap, copyTerrainMaterial, withTilesetId,
@@ -1250,8 +1250,12 @@ export function __apiSurfacePin(): void {
     expectType<number>(dualMask(terrain, 1, 0, 0));
     expectType<number>(flipMask(FLIP_D, CORNER_TL | CORNER_BR));
     expectType<number[]>(autotileClasses());
-    const table: AutotileTable = rotatedTable(new Map(autotileClasses().map((m, i) => [m, i])));
-    expectType<AutotileCell | null>(table[CORNER_TR | CORNER_BL] ?? null);
+    const table: AutotileTable = rotatedTable(autotileClasses().map((m, i) => ({ mask: m, index: i })));
+    // A LIST PER MASK, because a real set ships VARIANTS: 185 tiles for 74 corner
+    // configurations in the measured sets, so a mask routinely has several tiles.
+    expectType<readonly AutotileCell[] | null>(table[CORNER_TR | CORNER_BL] ?? null);
+    // Weights are INJECTED — this module knows masks, the document knows what a tile weighs.
+    expectType<AutotileResult>(autotile(terrain, 1, table, { weightOf: () => 1, seed: 7 }));
     expectType<string | null>(autotileTableError(table));
     const drawn = autotile(terrain, 1, table);
     expectType<number>(drawn.cols); expectType<number>(drawn.rows);

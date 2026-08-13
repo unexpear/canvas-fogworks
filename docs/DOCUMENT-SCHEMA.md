@@ -1794,10 +1794,22 @@ that is not there.
   importer built a list and dropped it, and every imported layer named a set the document did not
   have. Second time this exact gap has appeared here, after `Document.clips`. A field with no write
   path is not a feature with a gap; it is a feature that does not exist.
-- **Per-tile data is WRITABLE but still unread.** `probability` round-trips and the panel sets it;
-  nothing consumes it yet. The autotiler is the obvious first reader. A weight of 1 stores NO
-  record, because 1 is what an unmentioned tile already means — otherwise a file grows with every
-  tile somebody merely looked at.
+- **~~Per-tile data is WRITABLE but still unread.~~ DONE — the autotiler reads it.** A weight of 1
+  stores NO record, because 1 is what an unmentioned tile already means. Making it readable meant
+  giving the autotiler something to weight: `AutotileTable` entries are now a LIST of candidates per
+  mask, because the measured sets ship **185 tiles for 74 corner configurations** — an artist draws
+  several tiles for one neighbourhood so the ground does not repeat. Those variants were being
+  discarded at the door: `rotatedTable` took a `Map<mask, index>`, which cannot hold two tiles for
+  one mask at all, while `TerrainMaterial.art` has always been an ARRAY that could.
+
+  The choice is **deterministic**, seeded by the cell's own position and the material — the picture
+  is DERIVED, so it is recomputed on every open, undo and scroll, and a stream of random numbers
+  would give grass that shimmers as you pan. Weights are INJECTED (`weightOf`), because this module
+  knows masks and the tileset knows what a tile weighs; `resolveTilemaps` is the only thing holding
+  both, and it supplies them only when a set actually says something — so an existing document
+  derives byte-identically. A gap filled by TURNING a tile gets exactly one candidate: a rotation
+  substitutes for art nobody drew, and offering several would make a mask the artist never addressed
+  look deliberately varied.
 - **Collection tilesets are representable and not yet drawable.** The importer builds them and the
   model validates them; `RenderModel` resolves a null sheet for one, so the layer draws nothing. The
   renderer needs a per-tile image path, which is a second derivation and deliberately not smuggled

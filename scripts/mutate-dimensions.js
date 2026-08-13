@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1752;
+const EXPECTED_TESTS = 1754;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",

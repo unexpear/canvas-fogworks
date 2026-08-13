@@ -27297,7 +27297,7 @@ describe("Autotile — terrain in, tiles out, and six shapes standing in for six
     test("a six-tile table fills all sixteen masks, and every entry is a TURN of its own art", () => {
         // Six tiles, one per class, numbered so a wrong entry is obvious.
         const classes = autotileClasses();
-        const art = new Map(classes.map((mask, i) => [mask, 10 + i]));
+        const art = classes.map((mask, i) => ({ mask, index: 10 + i }));
         const table = rotatedTable(art);
         expect(autotileTableError(table)).toBeNull();
         expect(table.filter(e => e !== null)).toHaveLength(16);
@@ -27305,18 +27305,21 @@ describe("Autotile — terrain in, tiles out, and six shapes standing in for six
         // THE CHECK THAT MATTERS: an entry's flip, applied to the mask its own art was drawn for,
         // must give the mask it is filed under. That is the whole contract, and it cannot be
         // satisfied by a table that merely looks populated.
-        const classOfIndex = new Map([...art].map(([mask, index]) => [index, mask]));
+        const classOfIndex = new Map(art.map(a => [a.index, a.mask]));
         for (let mask = 0; mask < 16; mask++) {
-            const entry = table[mask]!;
+            // ONE CANDIDATE HERE, because this art draws each mask once — the list is a list
+            // so an artist's VARIANTS survive, not because every mask has several.
+            const entry = table[mask]![0];
+            expect(table[mask]).toHaveLength(1);
             expect(flipMask(entry.flip ?? 0, classOfIndex.get(entry.index)!)).toBe(mask);
         }
         // A CLASS'S OWN MASK gets its tile UNTURNED — the flips are tried in ascending order, so an
         // unturned tile wins over a turned one that would look the same.
-        for (const [mask, index] of art) {
-            expect(table[mask]).toEqual({ index });
+        for (const { mask, index } of art) {
+            expect(table[mask]).toEqual([{ index }]);
         }
         // ART FOR ONLY SOME CLASSES leaves the other orbits empty rather than guessing.
-        const partial = rotatedTable(new Map([[classes[1], 7]]));
+        const partial = rotatedTable([{ mask: classes[1], index: 7 }]);
         expect(partial.filter(e => e !== null)).toHaveLength(4);   // one corner: an orbit of four
         expect(partial[classes[0]]).toBeNull();
     });
@@ -27350,7 +27353,7 @@ describe("Autotile — terrain in, tiles out, and six shapes standing in for six
 
     test("the display grid is ONE LARGER in each direction, and empty terrain draws nothing", () => {
         const classes = autotileClasses();
-        const table = rotatedTable(new Map(classes.map((mask, i) => [mask, 10 + i])));
+        const table = rotatedTable(classes.map((mask, i) => ({ mask: mask, index: 10 + i })));
         // 5x3 terrain -> 6x4 display: terrain cell (4,2) needs a tile past its right and bottom
         // edges to be drawn at all, which is the half-cell offset the caller has to honour.
         const t = terrainOf(5, 3, new Array(15).fill(0));
@@ -27359,7 +27362,7 @@ describe("Autotile — terrain in, tiles out, and six shapes standing in for six
         expect(empty.tiles).toHaveLength(24);
         // Mask 0 is the empty class, whose art here is tile 10 — so "nothing there" is still a TILE,
         // which is what a table wanting a void tile means. With no art for that class it is empty.
-        const voidless = rotatedTable(new Map(classes.slice(1).map((mask, i) => [mask, 20 + i])));
+        const voidless = rotatedTable(classes.slice(1).map((mask, i) => ({ mask: mask, index: 20 + i })));
         expect(autotile(t, 1, voidless).tiles.every(x => x === TILE_EMPTY)).toBe(true);
 
         // A 2x1 BLOCK of material, and the silhouette it produces. The display grid is 6x4 and the
@@ -27375,11 +27378,11 @@ describe("Autotile — terrain in, tiles out, and six shapes standing in for six
         // The corners of the run are single-corner masks and the middles are two-adjacent ones —
         // asserted through the TABLE, so a wrong mask would name a different tile.
         const at = (col: number, row: number) => drawn.tiles[row * drawn.cols + col];
-        const cornerTile = voidless[CORNER_BR]!.index;
-        const edgeTile = voidless[CORNER_BL | CORNER_BR]!.index;
+        const cornerTile = voidless[CORNER_BR]![0].index;
+        const edgeTile = voidless[CORNER_BL | CORNER_BR]![0].index;
         expect(at(1, 1)).toBe(cornerTile);                        // top-left of the block
         expect(at(2, 1)).toBe(edgeTile);                          // between the two cells, above
-        expect(at(3, 1)).toBe(voidless[CORNER_BL]!.index);        // top-right
+        expect(at(3, 1)).toBe(voidless[CORNER_BL]![0].index);        // top-right
     });
 
     test("flips are ABSENT when nothing is turned, and present when something is", () => {
@@ -27387,16 +27390,110 @@ describe("Autotile — terrain in, tiles out, and six shapes standing in for six
         // derived grid that always carried a flip array would break it from the other end.
         const classes = autotileClasses();
         // A table with NO flips at all: sixteen separate tiles, one per mask.
-        const flat: AutotileTable = Array.from({ length: 16 }, (_, mask) => ({ index: 40 + mask }));
+        const flat: AutotileTable = Array.from({ length: 16 }, (_, mask) => [{ index: 40 + mask }]);
         const t = terrainOf(3, 2, [0, 1, 0, 0, 1, 0]);
         expect(autotile(t, 1, flat).flips).toBeUndefined();
         expect("flips" in autotile(t, 1, flat)).toBe(false);
         // …and the six-tile table DOES turn things, so the same terrain comes back with flips.
-        const rotated = rotatedTable(new Map(classes.map((mask, i) => [mask, 10 + i])));
+        const rotated = rotatedTable(classes.map((mask, i) => ({ mask: mask, index: 10 + i })));
         const turned = autotile(t, 1, rotated);
         expect(turned.flips).toBeDefined();
         expect(turned.flips!.some(f => f !== 0)).toBe(true);
         expect(turned.flips!).toHaveLength(turned.tiles.length);
+    });
+
+    test("VARIANTS: a mask may hold several tiles, chosen by weight and by WHERE the cell is", () => {
+        // WHAT THE CORPUS ASKED FOR. The measured sets ship 185 tiles for 74 corner configurations —
+        // an artist draws several tiles for one neighbourhood so the ground does not repeat. The
+        // table used to be built from a `Map<mask, index>`, which cannot hold two tiles for one mask
+        // at all, so those variants were discarded at the door. The document could always express
+        // them: `TerrainMaterial.art` is an ARRAY and no rule forbade a repeated mask.
+        const art = [{ mask: 15, index: 1 }, { mask: 15, index: 2 }, { mask: 15, index: 3 }];
+        const table = rotatedTable(art);
+        expect(table[15]).toEqual([{ index: 1 }, { index: 2 }, { index: 3 }]);
+
+        // A BIG FIELD OF SOLID GROUND, where every interior cell has the same mask — so any variety
+        // in the result came from the choice and not from the terrain.
+        const cells = new Array(20 * 20).fill(1);
+        const terrain = { cols: 20, rows: 20, cells };
+        const drawn = autotile(terrain, 1, table).tiles.filter(t => t !== TILE_EMPTY);
+        expect(drawn.length).toBeGreaterThan(200);
+        // ALL THREE APPEAR. A picker that always took the first would give one, and "it drew
+        // something" cannot tell the two apart.
+        expect(new Set(drawn).size).toBe(3);
+
+        // DETERMINISTIC, which is the requirement rather than a nicety: the picture is DERIVED, so
+        // it is recomputed on every open, every undo and every scroll that changes the visible
+        // window. A stream of random numbers would give a cell a different tile each time anything
+        // else moved — grass that shimmers as you pan.
+        expect(autotile(terrain, 1, table).tiles).toEqual(autotile(terrain, 1, table).tiles);
+
+        // WEIGHTS SHIFT THE MIX. Tile 3 at ten times the others must dominate — asserted as a
+        // PROPORTION, because "it appeared" is true of an unweighted picker too.
+        const weighted = autotile(terrain, 1, table,
+            { weightOf: (i: number) => (i === 3 ? 10 : 1) }).tiles.filter(t => t !== TILE_EMPTY);
+        const share = weighted.filter(t => t === 3).length / weighted.length;
+        expect(share).toBeGreaterThan(0.7);
+        expect(share).toBeLessThan(0.95);
+
+        // A WEIGHT OF ZERO EXCLUDES a tile, which is what zero means.
+        const without = autotile(terrain, 1, table,
+            { weightOf: (i: number) => (i === 2 ? 0 : 1) }).tiles.filter(t => t !== TILE_EMPTY);
+        expect(without).not.toContain(2);
+        expect(new Set(without).size).toBe(2);
+
+        // …BUT ALL-ZERO FALLS BACK to the first rather than drawing nothing: leaving a hole where an
+        // artist supplied art is a worse answer than ignoring weights nobody can satisfy.
+        const allZero = autotile(terrain, 1, table, { weightOf: () => 0 }).tiles.filter(t => t !== TILE_EMPTY);
+        expect(new Set(allZero)).toEqual(new Set([1]));
+
+        // THE SEED VARIES THE WHOLE PICTURE without changing the art — same terrain, same tiles,
+        // different arrangement.
+        const a = autotile(terrain, 1, table, { seed: 1 }).tiles;
+        const b = autotile(terrain, 1, table, { seed: 2 }).tiles;
+        expect(a).not.toEqual(b);
+        expect(new Set(a.filter(t => t !== TILE_EMPTY))).toEqual(new Set(b.filter(t => t !== TILE_EMPTY)));
+
+        // ONE CANDIDATE COSTS NOTHING AND CHANGES NOTHING: a set with no variants derives exactly as
+        // it did before any of this existed, which is what keeps every existing document identical.
+        const plain = rotatedTable([{ mask: 15, index: 7 }]);
+        expect(autotile(terrain, 1, plain).tiles)
+            .toEqual(autotile(terrain, 1, plain, { weightOf: () => 0.5, seed: 99 }).tiles);
+    });
+
+    test("the tileset's weights reach the autotiler through the resolver", () => {
+        // `probability` round-tripped for a commit with NOTHING reading it. This is its first
+        // consumer, and the seam is the point: the autotiler knows masks, the tileset knows what a
+        // tile weighs, and only the resolver holds the layer AND the set it names.
+        const sheet = { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 };
+        const cells = new Array(16 * 16).fill(1);
+        const build = (probability?: number) => {
+            const d = createEmptyDocument();
+            d.tilesets = [{ id: "ts", name: "T", src: "t.png", sheet,
+                tiles: probability === undefined ? [] : [{ id: 2, probability }],
+                offsetX: 0, offsetY: 0 }];
+            d.nodes.set("T", { id: "T", type: "core.tilemap", parent: null, children: [],
+                geometry: { x: 0, y: 0, width: 256, height: 256 },
+                style: { fill: "none", opacity: 1 }, layout: {}, name: "ground",
+                tilemap: { cols: 16, rows: 16, tileWidth: 16, tileHeight: 16, tilesetId: "ts",
+                    tiles: new Array(256).fill(TILE_EMPTY),
+                    terrain: { cells, materials: [{ id: 1, art:
+                        [{ mask: 15, index: 1 }, { mask: 15, index: 2 }] }] } } } as Node);
+            d.rootNodeUuids = ["T"];
+            return resolveTilemaps(d);
+        };
+        const share = (doc: ReadonlyDocument) => {
+            const t = doc.nodes.get("T")!.tilemap!.tiles.filter(x => x !== TILE_EMPTY);
+            return t.filter(x => x === 2).length / t.length;
+        };
+        // Unweighted, the two variants split roughly evenly.
+        const even = share(build());
+        expect(even).toBeGreaterThan(0.3);
+        expect(even).toBeLessThan(0.7);
+        // Weighted at 9, tile 2 dominates — through the document, not by calling the autotiler.
+        expect(share(build(9))).toBeGreaterThan(0.8);
+        // …and at zero it vanishes, which is what a weight of zero means.
+        expect(share(build(0))).toBe(0);
     });
 
     test("a table is refused unless it is exactly sixteen storable entries", () => {
@@ -27405,15 +27502,28 @@ describe("Autotile — terrain in, tiles out, and six shapes standing in for six
         expect(autotileTableError(new Array(17).fill(null))).toMatch(/got 17/);
         const ok: unknown[] = new Array(16).fill(null);
         expect(autotileTableError(ok)).toBeNull();
-        ok[3] = { index: 2, flip: FLIP_D };
+        // AN ENTRY IS A LIST OF CANDIDATES now, because a real set ships variants for one mask.
+        ok[3] = [{ index: 2, flip: FLIP_D }];
+        expect(autotileTableError(ok)).toBeNull();
+        ok[3] = [{ index: 2 }, { index: 5 }, { index: 9 }];
         expect(autotileTableError(ok)).toBeNull();
         // The same bounds `tilemapError` puts on a cell, because these values become cells.
-        ok[3] = { index: -1 };
+        ok[3] = [{ index: -1 }];
         expect(autotileTableError(ok)).toMatch(/index must be a whole number/);
-        ok[3] = { index: 2, flip: 99 };
+        ok[3] = [{ index: 2, flip: 99 }];
         expect(autotileTableError(ok)).toMatch(/flip must be a whole number 0\.\.7/);
-        ok[3] = { index: 2.5 };
+        ok[3] = [{ index: 2.5 }];
         expect(autotileTableError(ok)).toMatch(/index must be a whole number/);
+        // A BARE CELL is no longer a table entry — the shape changed and saying so is the point.
+        ok[3] = { index: 2 };
+        expect(autotileTableError(ok)).toMatch(/must be an array of cells or null/);
+        // AN EMPTY LIST IS REFUSED: "draws nothing" is already spelled `null`, and two spellings of
+        // one state is how a caller ends up handling only the one it thought of.
+        ok[3] = [];
+        expect(autotileTableError(ok)).toMatch(/at least one cell/);
+        // THE SAME TILE TWICE IS NOT TWO VARIANTS — it would double that tile's weight silently.
+        ok[3] = [{ index: 2 }, { index: 2 }];
+        expect(autotileTableError(ok)).toMatch(/lists tile 2 twice/);
     });
 });
 
@@ -29424,13 +29534,12 @@ describe("rotatedTable — a drawn tile beats a turned one", () => {
     // any mask 0..15 and `withTerrainArt` writes any of them — so this was art the document could
     // hold and the derivation quietly threw away.
     test("art for all sixteen masks is USED, not reduced to six", () => {
-        const art = new Map<number, number>();
-        for (let mask = 0; mask < AUTOTILE_MASKS; mask++) art.set(mask, 100 + mask);
+        const art = Array.from({ length: AUTOTILE_MASKS }, (_, mask) => ({ mask, index: 100 + mask }));
         const table = rotatedTable(art);
         // Every mask draws the tile drawn FOR it, and none of them is turned — a tile that exists
         // for this exact neighbourhood is never a rotation of a different one.
         for (let mask = 0; mask < AUTOTILE_MASKS; mask++) {
-            expect(table[mask]).toEqual({ index: 100 + mask });
+            expect(table[mask]).toEqual([{ index: 100 + mask }]);
         }
     });
 
@@ -29438,40 +29547,46 @@ describe("rotatedTable — a drawn tile beats a turned one", () => {
         // The old pass gave a different picture for the same art depending on the document array's
         // order — two files holding the same six tiles could draw differently, with nothing to say
         // why. Ten of sixteen entries moved when the array was reversed.
-        const art = new Map<number, number>();
-        for (let mask = 0; mask < AUTOTILE_MASKS; mask++) art.set(mask, 100 + mask);
-        const reversed = new Map([...art].reverse());
+        const art = Array.from({ length: AUTOTILE_MASKS }, (_, mask) => ({ mask, index: 100 + mask }));
+        const reversed = [...art].reverse();
         expect(rotatedTable(reversed)).toEqual(rotatedTable(art));
 
         // …and for a PARTIAL set too, where the gaps really are filled by turning something.
-        const sparse = new Map([[1, 7], [3, 9], [15, 4]]);
-        expect(rotatedTable(new Map([...sparse].reverse()))).toEqual(rotatedTable(sparse));
+        const sparse = [{ mask: 1, index: 7 }, { mask: 3, index: 9 }, { mask: 15, index: 4 }];
+        expect(rotatedTable([...sparse].reverse())).toEqual(rotatedTable(sparse));
 
         // THE CASE THAT ACTUALLY DISTINGUISHES THEM, and neither fixture above reaches it: order can
         // only matter for a gap reachable from TWO drawn tiles, which needs two entries in ONE orbit.
         // Masks 1 and 2 are such a pair, and masks 4 and 8 are the gaps they both reach — stored
         // descending, so the array's order and ascending order genuinely disagree. Without the sort,
         // mask 4 draws tile 90 here and tile 91 the other way round.
-        const twin = new Map([[2, 90], [1, 91]]);
-        const flipped = new Map([...twin].reverse());
+        const twin = [{ mask: 2, index: 90 }, { mask: 1, index: 91 }];
+        const flipped = [...twin].reverse();
         expect(rotatedTable(flipped)).toEqual(rotatedTable(twin));
-        expect(rotatedTable(twin)[4]).toMatchObject({ index: 91 });
-        expect(rotatedTable(twin)[8]).toMatchObject({ index: 91 });
+        // A GAP FILLED BY TURNING gets exactly ONE candidate, never a list of every tile that could
+        // be rotated into place: a rotation is a substitute for art nobody drew, and offering
+        // several would make a mask the artist never addressed look deliberately varied.
+        expect(rotatedTable(twin)[4]).toHaveLength(1);
+        expect(rotatedTable(twin)[4]![0]).toMatchObject({ index: 91 });
+        expect(rotatedTable(twin)[8]![0]).toMatchObject({ index: 91 });
     });
 
     test("a gap is still filled by turning a drawn tile — the six-class set is unchanged", () => {
         // The whole point of the six classes: an artist draws six shapes and gets ten more turned.
         // That must keep working exactly as before, or this fix would have cost the feature it is
         // built on.
-        const six = new Map(autotileClasses().map((mask, i) => [mask, 200 + i]));
+        const six = autotileClasses().map((mask, i) => ({ mask, index: 200 + i }));
         const table = rotatedTable(six);
         expect(table.filter(e => e !== null)).toHaveLength(AUTOTILE_MASKS);
         // Six drawn, ten turned — and every turned entry's flip really does map its own class's mask
         // onto the mask it is filed under, which is the property the whole scheme rests on.
-        expect(table.filter(e => e && e.flip === undefined)).toHaveLength(6);
-        expect(table.filter(e => e && e.flip !== undefined)).toHaveLength(10);
+        // ONE CANDIDATE EACH — six drawn, ten turned. Every entry is a list now, and this art
+        // draws each class once, so every list is one long.
+        expect(table.filter(e => e && e.length !== 1)).toHaveLength(0);
+        expect(table.filter(e => e && e[0].flip === undefined)).toHaveLength(6);
+        expect(table.filter(e => e && e[0].flip !== undefined)).toHaveLength(10);
         for (let mask = 0; mask < AUTOTILE_MASKS; mask++) {
-            const cell = table[mask]!;
+            const cell = table[mask]![0];
             const drawnFor = autotileClasses()[cell.index - 200];
             expect(flipMask(cell.flip ?? 0, drawnFor)).toBe(mask);
             // AND IT IS THE LEAST TRANSFORMATION THAT WORKS. Every one of the sixteen masks has more
@@ -29494,14 +29609,14 @@ describe("rotatedTable — a drawn tile beats a turned one", () => {
         //
         // Mask 1 and mask 2 are in one orbit. Give art for both, and the old pass would have let
         // mask 1's tile claim mask 2 and discarded mask 2's own.
-        const art = new Map([[1, 50], [2, 51], [15, 52]]);
+        const art = [{ mask: 1, index: 50 }, { mask: 2, index: 51 }, { mask: 15, index: 52 }];
         const table = rotatedTable(art);
-        expect(table[1]).toEqual({ index: 50 });
-        expect(table[2]).toEqual({ index: 51 });      // its OWN tile, not a turned 50
-        expect(table[15]).toEqual({ index: 52 });
+        expect(table[1]).toEqual([{ index: 50 }]);
+        expect(table[2]).toEqual([{ index: 51 }]);      // its OWN tile, not a turned 50
+        expect(table[15]).toEqual([{ index: 52 }]);
         // …and mask 4, which has no art, is still reached by turning one that does.
-        expect(table[4]).toMatchObject({ index: 50 });
-        expect(table[4]!.flip).toBeGreaterThan(0);
+        expect(table[4]![0]).toMatchObject({ index: 50 });
+        expect(table[4]![0].flip).toBeGreaterThan(0);
     });
 });
 
@@ -30337,7 +30452,7 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
 
         // …and one material alone is exactly what it was before there were two.
         expect(autotileLayers(terrain, [rock]).tiles)
-            .toEqual(autotile(terrain, 1, rotatedTable(new Map(rock.art.map(a => [a.mask, a.index])))).tiles);
+            .toEqual(autotile(terrain, 1, rotatedTable(rock.art)).tiles);
     });
 
     test("a material list is validated: at least one, no duplicate ids, and a cap", () => {
