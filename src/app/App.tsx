@@ -115,6 +115,11 @@ import { planSheet, sheetAtlas, sheetTooLarge, drawSheet, SheetPlan } from "../c
 import { sliceGrid, sliceCells, sliceTrack, blankCells } from "../core/import/SheetSlice";
 import { groupSequences, sequenceTrack } from "../core/import/Sequence";
 import { sequenceImportActions } from "../core/actions/sequenceImport";
+import { asepriteImportActions, AsepritePlacement } from "../core/actions/asepriteImport";
+import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, composeFrame } from "../core/import/Aseprite";
+
+/** What the drawer hands the shell: everything but where on the canvas it lands. */
+type AsepritePlacementInput = Omit<AsepritePlacement, "x" | "y">;
 import { parseTextureAtlas, atlasError, AtlasEntry } from "../core/import/TextureAtlas";
 import { parseSvgDocument, svgDocumentError } from "../core/import/SvgDocument";
 import { svgNodeSpecs, SvgNodeSpec } from "../core/import/SvgNodes";
@@ -381,6 +386,8 @@ declare global {
             readTiledImage: (folder: string, mapPath: string, relative: string) => Promise<string>;
             readUnityFolder: (folder: string) => Promise<{ path: string; name: string; bytes: number; relative: string }[]>;
             readUnityPackage: (folder: string, filePath: string) => Promise<string>;
+            readAsepriteFolder: (folder: string) => Promise<{ path: string; name: string; bytes: number; relative: string }[]>;
+            readAsepriteBytes: (folder: string, filePath: string) => Promise<string>;
             /** The one SYNCHRONOUS channel — see the preload. Returns base64, or an error to show. */
             inflateSync: (base64: string) => { ok: boolean; data?: string; error?: string };
             /** Its GZIP sibling: a `.unitypackage` carries a header `inflateSync` will not accept. */
@@ -1651,6 +1658,34 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         refresh();
     }, [dispatcher, es, refresh]);
 
+    /**
+     * An `.aseprite` as one node that plays, with the file's OWN timing and its tags as clips.
+     *
+     * The placement is all that lives here, as with `importSequence` — the actions are
+     * `asepriteImportActions`, where a test can reach them. What is different is that this needed
+     * three things built underneath it first: a frame compositor, a write path for `Document.clips`,
+     * and a transaction able to carry two document-level deltas. None of them was about Aseprite.
+     */
+    const importAseprite = useCallback((p: AsepritePlacementInput) => {
+        const el = canvasRef.current;
+        const centre = screenToWorld(es.viewport, { left: 0, top: 0 },
+            (el ? el.clientWidth : 800) / 2, (el ? el.clientHeight : 600) / 2);
+        const doc = dispatcher.getDocument();
+        // THE FILE'S OWN SIZE, unlike the sequence importer's fixed box: an `.aseprite` states its
+        // canvas, so inventing 200x150 would stretch pixel art that came with exact dimensions.
+        const { actions, id, droppedClips } = asepriteImportActions(doc, {
+            ...p, x: centre.x - p.width / 2, y: centre.y - p.height / 2
+        });
+        if (actions.length === 0) return;
+        if (dispatcher.dispatchAction(new TransactionAction(doc, "import-aseprite", actions)).success) {
+            es.selectedNodeIds = [id];
+        }
+        if (droppedClips > 0) {
+            console.warn(`${droppedClips} tag(s) named frames outside the file's own timeline and were dropped.`);
+        }
+        refresh();
+    }, [dispatcher, es, refresh]);
+
     const importSvg = useCallback((specs: SvgNodeSpec[]) => {
         if (specs.length === 0) return;
         const doc = dispatcher.getDocument();
@@ -2616,6 +2651,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                 ? { id: node.id, src: node.src } : null}
                             onImportTrack={importTrack}
                             onImportSequence={importSequence}
+                            onImportAseprite={importAseprite}
                             onImportSvg={importSvg}
                             editContentFont={family => { editSelected({ style: { fontFamily: family } }); refresh(); }}
                             onImportTiles={importTiles}
@@ -4545,10 +4581,12 @@ const LAYER_ICONS: Record<string, string> = {
  */
 function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion, onImportSvg,
     editContentFont, onImportTiles, paintColour, onPickColour, selectedRasterId, onQuantize,
-    onImportSequence }: {
+    onImportSequence, onImportAseprite }: {
     onPlaceImage: (dataUrl: string, name: string) => void;
     /** A numbered run of files as one animated node: its name, frame zero's data URL, its track. */
     onImportSequence: (name: string, first: string, track: Keyframe[]) => void;
+    /** An `.aseprite` as one animated node: the file's own clock and its tags, too. */
+    onImportAseprite: (p: AsepritePlacementInput) => void;
     getDocument: () => ReadonlyDocument;
     /** The selected node when it is an image with a source — what a SHEET import acts ON. */
     selectedImage: { id: string; src: string } | null;
@@ -4584,6 +4622,8 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     const [unityPacks, setUnityPacks] = useState<{ path: string; name: string; bytes: number; relative: string }[]>([]);
     /** What the chosen package holds — images are placeable, everything else is counted. */
     const [unityAssets, setUnityAssets] = useState<UnityAsset[]>([]);
+    const [aseFolder, setAseFolder] = useState<string | null>(null);
+    const [aseFiles, setAseFiles] = useState<{ path: string; name: string; bytes: number; relative: string }[]>([]);
     const [importNote, setImportNote] = useState<string | null>(null);
     const [exported, setExported] = useState<string | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
@@ -5217,6 +5257,101 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                         >
                             <option value="">Place a map…</option>
                             {tiledMaps.map(m => <option key={m.path} value={m.path}>{m.relative}</option>)}
+                        </select>
+                    )}
+
+                    {/* THE FILE THE SHEET WAS EXPORTED FROM. The reader was written months ago,
+                        tested, pinned in apiSurface, and had no door — and opening one meant
+                        building a frame compositor, a write path for `Document.clips`, and a
+                        transaction that can carry two document-level deltas. None was about
+                        Aseprite; all three were things this engine could not do. */}
+                    <button
+                        data-ase-btn="1"
+                        disabled={busy}
+                        onClick={async () => {
+                            const folder = await api.pickFolder();
+                            if (!folder) return;
+                            setBusy(true);
+                            try {
+                                const files = await api.readAsepriteFolder(folder);
+                                setAseFolder(folder);
+                                setAseFiles(files);
+                                setImportNote(files.length === 0
+                                    ? "No .aseprite files in that folder."
+                                    : `${files.length} Aseprite file${files.length === 1 ? "" : "s"} found`);
+                            } finally { setBusy(false); }
+                        }}
+                        style={DRAWER_BUTTON}
+                    >{busy ? "Reading…" : "Find Aseprite files…"}</button>
+                    {aseFiles.length > 0 && aseFolder && (
+                        <select
+                            data-ase-list="1"
+                            defaultValue=""
+                            onChange={async e => {
+                                const filePath = e.target.value;
+                                if (!filePath) return;
+                                setBusy(true);
+                                try {
+                                    const b64 = await api.readAsepriteBytes(aseFolder, filePath);
+                                    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                                    // THE SHARED VALIDATOR, so the panel refuses exactly what the
+                                    // reader would and says the same thing about why.
+                                    const bad = asepriteError(bytes);
+                                    if (bad) { setImportNote(`Cannot read that file: ${bad}.`); return; }
+                                    // CEL PIXELS ARE ZLIB, the same compression a `.tmx` layer uses,
+                                    // so the channel that already exists serves both.
+                                    const file = parseAseprite(bytes, {
+                                        inflate: (d: Uint8Array) => {
+                                            let bin = "";
+                                            for (const b of d) bin += String.fromCharCode(b);
+                                            const r = api.inflateSync(btoa(bin));
+                                            if (!r.ok || !r.data) throw new Error(r.error ?? "inflate failed");
+                                            return Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
+                                        }
+                                    });
+                                    const timeline = asepriteTimeline(file);
+                                    // ENCODED HERE because only the renderer has a canvas, and the
+                                    // compositor is pure on purpose — it returns pixels, not a PNG.
+                                    const canvas = document.createElement("canvas");
+                                    canvas.width = file.width;
+                                    canvas.height = file.height;
+                                    const ctx = canvas.getContext("2d");
+                                    if (!ctx) { setImportNote("No 2D context to compose frames with."); return; }
+                                    const track: Keyframe[] = [];
+                                    const notes = new Set<string>();
+                                    for (let f = 0; f < file.frames.length; f++) {
+                                        const composed = composeFrame(file, f);
+                                        if (!composed) continue;
+                                        for (const n of composed.notes) notes.add(n);
+                                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                                        ctx.putImageData(new ImageData(
+                                            new Uint8ClampedArray(composed.rgba), composed.width, composed.height), 0, 0);
+                                        track.push({ frame: f, values: { src: canvas.toDataURL("image/png") } });
+                                    }
+                                    if (track.length === 0) { setImportNote("That file has no frames to import."); return; }
+                                    onImportAseprite({
+                                        name: (aseFiles.find(x => x.path === filePath)?.name ?? "aseprite")
+                                            .replace(/\.(aseprite|ase)$/i, ""),
+                                        first: track[0].values.src as string,
+                                        track,
+                                        timeline,
+                                        clips: asepriteClips(file),
+                                        width: file.width,
+                                        height: file.height
+                                    });
+                                    setImportNote(`${track.length} frames at ${timeline.fps}fps, `
+                                        + `${file.tags.length} tag${file.tags.length === 1 ? "" : "s"}`
+                                        // BLEND MODES THIS CANNOT HONOUR ARE SURFACED rather than
+                                        // left in a console nobody reads — the compositor names them.
+                                        + (notes.size > 0 ? ` — ${notes.size} layer(s) drawn as normal` : ""));
+                                } catch (err) {
+                                    setImportNote(`Could not read that file: ${String(err).slice(0, 80)}`);
+                                } finally { setBusy(false); }
+                            }}
+                            style={{ ...DRAWER_BUTTON, marginBottom: 6 }}
+                        >
+                            <option value="">Import an animation…</option>
+                            {aseFiles.map(f => <option key={f.path} value={f.path}>{f.relative}</option>)}
                         </select>
                     )}
 

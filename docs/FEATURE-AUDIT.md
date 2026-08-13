@@ -33,7 +33,7 @@ The useful distinction this audit turned up is that a missing feature is not alw
 | **built, unreachable** | the core function exists and is tested; nothing in the UI calls it |
 | **absent** | not written |
 
-**Nine capabilities have been built and unreachable; five are now wired, one was reclassified, and two are BLOCKED rather than merely unwired.** `PixelBuffer.floodFill` and `PixelBuffer.drawLine`
+**Nine capabilities have been built and unreachable; SIX are now wired and two are BLOCKED rather than merely unwired.** `PixelBuffer.floodFill` and `PixelBuffer.drawLine`
 had **no caller anywhere outside the tests**; `paint/Palette` and `paint/Quantize` have **no importer
 outside the tests at all** — an entire palette-and-quantisation layer the app cannot reach; and
 `diagnostics/ActionJournal.recordAction` has no caller either, so nothing is ever journalled. These
@@ -67,7 +67,7 @@ broke a test whose subject was still true. Both are fixed.
 | Indexed colour mode | **absent** | Pixelorama carries index maps and a palette index per pixel |
 | Onion skinning, animation tags, timeline | **have** | schema 39 |
 | GIF export | **absent** | VDE exports SVG and a sprite-sheet atlas |
-| Import Aseprite | **built, unreachable** | `import/Aseprite` — 343 lines, tested, pinned in apiSurface, and **no production importer**. This row said **have** for months, which is how a category exists at all: "the reader was written" and "a person can open one" are different claims and the audit conflated them. 45 `.aseprite`/`.ase` files sit in the asset tree. Wiring it needs a confined bytes channel, the shape `read-unity-package` already has |
+| Import Aseprite | **have** | `import/Aseprite` — reachable since 2026-08-13. One `.aseprite` becomes one animated node with the file's OWN frame rate and its TAGS as clips (a rename, not a translation). Opening the door needed three things that were not about Aseprite: `composeFrame` (the reader could describe a file and draw nothing), `SetClipsAction` (`Document.clips` had no write path at all), and document deltas keyed by kind (a transaction could carry only one document-level change; this carries the clock and the ranges that index into it). Measured on the real tree: 23 files composite to real pixels, 96 tags, and the seven refusals are all `__MACOSX/._*` stubs |
 | Import Krita, Photoshop | **absent** | Pixelorama parses both |
 | Import a NUMBERED FRAME RUN | **have** | `import/Sequence` was the fourth unreachable importer and is now wired: the Assets drawer lists the runs a folder holds and imports one as a single `core.image` with a keyframed `src`. The guard is the interesting part — a tileset exported one file per tile is a numbered run by every rule a name reader has, and one pack here groups to **11,846 frames**, so runs longer than 240 are refused with the reason |
 | Import glTF / OBJ geometry | **built, BLOCKED** | `import/Gltf` (561) + `import/Obj` (335), both tested, both with no caller — and NOT for want of wiring. Every one of the ten `NODE_TYPES` is 2D: nothing holds a mesh, so there is no node to import INTO. That is a schema change plus a renderer, not a panel. Kept rather than deleted because **10,937 files** in this tree are waiting for it — more content than for anything else here. Checked for a 2D-usable subset (glTF *animations* could feed the existing Timeline, *skins* the existing `Skin`/`Rig`): there is none, the readers export mesh geometry only |

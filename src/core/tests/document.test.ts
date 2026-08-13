@@ -97,6 +97,10 @@ import { bouncingBall, jumpingSquare, pendulum, celSequence, wavingLimb, overlap
 import { traceMotion, traceVelocity, traceTiming, traceDigest } from "../diagnostics/MotionTrace";
 import { Clip, clipsError, findClip, clipLength, clipFrameAt, CLIPS_MAX, CLIP_NAME_MAX } from "../document/Clips";
 import { channelsError, CHANNELS_MAX } from "../document/Timeline";
+// EXPLICIT, because `Keyframe` is also a DOM type from lib.dom whose `values` is an index
+// signature — an un-imported annotation silently resolves to that one and the error it gives
+// is about a property nobody wrote.
+import { Keyframe as TrackKeyframe } from "../document/Timeline";
 import { DiscreteMode, blendNode } from "../document/Prototype";
 import { MotionPath, motionPathError, motionPointAt, motionPolyline, ARC_SAMPLES, MOTION_OFFSET_MAX } from "../document/MotionPath";
 import { solveTwoBone, solveFabrik, rotationDelta, FABRIK_PASSES, FABRIK_TOLERANCE } from "../geometry/Ik";
@@ -174,6 +178,7 @@ import { alignBars, ALIGN_ICON_BOX } from "../../app/theme/AlignIcons";
 import { TOOL_CURSORS } from "../../app/theme/Cursors";
 import { SEQUENCE_IMPORT_MAX } from "../../app/App";
 import { sequenceImportActions, SEQUENCE_DEFAULT_FPS } from "../actions/sequenceImport";
+import { asepriteImportActions } from "../actions/asepriteImport";
 import { blendColor, blendStates, easingAt, interactionFor, interactionsError, Interaction, Trigger, TRANSITION_MAX_MS, INTERACTIONS_MAX } from "../document/Prototype";
 import { applyActiveState } from "../document/Components";
 import { SetInteractionsAction } from "../actions/SetInteractionsAction";
@@ -18704,6 +18709,112 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // frame is a half-success with nothing to undo.
         expect(sequenceImportActions(createEmptyDocument(),
             { name: "x", first: "a", track: [], x: 0, y: 0, width: 8, height: 8 }).actions).toHaveLength(0);
+    });
+
+    test("an .aseprite becomes ONE node with the file's OWN clock and its tags as clips", () => {
+        // THE PAYOFF for three things built underneath this, none of them about Aseprite: a frame
+        // compositor (the reader could describe a file and draw nothing), a write path for
+        // `Document.clips` (the field the tags map onto had none), and a transaction able to carry
+        // TWO document-level deltas (this carries the clock and the ranges that index into it).
+        const track: TrackKeyframe[] = Array.from({ length: 6 },
+            (_, f) => ({ frame: f, values: { src: `f${f}` } }));
+        const d = new ActionDispatcher(createEmptyDocument());
+        const before = d.getDocument().nodes.size;
+        const { actions, id, droppedClips } = asepriteImportActions(d.getDocument(), {
+            name: "creature", first: "f0", track,
+            timeline: { frames: 6, fps: 10 },
+            clips: [{ name: "Idle fast", from: 0, to: 3, loop: true }, { name: "Hurt", from: 4, to: 5, loop: true }],
+            x: 0, y: 0, width: 32, height: 48
+        });
+        expect(droppedClips).toBe(0);
+        expect(d.dispatchAction(new TransactionAction(d.getDocument(), "import-aseprite", actions)).success).toBe(true);
+
+        const node = d.getDocument().nodes.get(id)!;
+        expect(node.type).toBe("core.image");
+        expect(node.name).toBe("creature");
+        // THE FILE'S OWN SIZE, not a fixed box: an `.aseprite` states its canvas, and stretching
+        // pixel art that came with exact dimensions is the one thing this format makes inexcusable.
+        expect(node.geometry.width).toBe(32);
+        expect(node.geometry.height).toBe(48);
+        expect(node.track!.map(k => k.frame)).toEqual([0, 1, 2, 3, 4, 5]);
+        // THE FILE'S OWN RATE, which is the argument for reading the format rather than the sheet.
+        expect(d.getDocument().timeline).toEqual({ frames: 6, fps: 10 });
+        // AND THE TAGS, stored — a rename rather than a translation.
+        expect(d.getDocument().clips!.map(c => `${c.name} ${c.from}..${c.to}`))
+            .toEqual(["Idle fast 0..3", "Hurt 4..5"]);
+
+        // ONE UNDO removes all five things. Half an import is a document nobody authored, and this
+        // is the only assertion that can tell one transaction from five.
+        expect(d.undo()).not.toBeNull();
+        expect(d.getDocument().nodes.size).toBe(before);
+        expect(d.getDocument().timeline).toBeUndefined();
+        expect(d.getDocument().clips).toBeUndefined();
+
+        // A TAG THE CLOCK CANNOT HOLD IS DROPPED, not carried — `clipsError` refuses the WHOLE list
+        // for one bad entry, so keeping it would cost the entire import over a detail. Counted, so
+        // the caller can say it happened.
+        const ragged = asepriteImportActions(createEmptyDocument(), {
+            name: "x", first: "f0", track, timeline: { frames: 6, fps: 10 },
+            clips: [{ name: "good", from: 0, to: 5, loop: true }, { name: "past the end", from: 4, to: 99, loop: true }],
+            x: 0, y: 0, width: 8, height: 8
+        });
+        expect(ragged.droppedClips).toBe(1);
+        const d2 = new ActionDispatcher(createEmptyDocument());
+        expect(d2.dispatchAction(new TransactionAction(d2.getDocument(), "a", ragged.actions)).success).toBe(true);
+        expect(d2.getDocument().clips!.map(c => c.name)).toEqual(["good"]);
+
+        // A FILE WITH NO TAGS sets no clips at all rather than an empty list — most files have none,
+        // and `clips: []` would serialise a field nobody asked for.
+        const bare = asepriteImportActions(createEmptyDocument(), {
+            name: "x", first: "f0", track, timeline: { frames: 6, fps: 10 }, clips: [],
+            x: 0, y: 0, width: 8, height: 8
+        });
+        const d3 = new ActionDispatcher(createEmptyDocument());
+        expect(d3.dispatchAction(new TransactionAction(d3.getDocument(), "a", bare.actions)).success).toBe(true);
+        expect(d3.getDocument().clips).toBeUndefined();
+
+        // NO FRAMES, NO ACTIONS — "import an animation" that produced a still is a half-success.
+        expect(asepriteImportActions(createEmptyDocument(), {
+            name: "x", first: "f0", track: [], timeline: { frames: 1, fps: 10 }, clips: [],
+            x: 0, y: 0, width: 8, height: 8
+        }).actions).toHaveLength(0);
+    });
+
+    test("the Aseprite door is OPEN at both ends, and confined like every other path", () => {
+        // The reader was written, tested, pinned in apiSurface and unreachable for months — the
+        // category this project treats as a defect. A green suite proves behaviour, never that
+        // anything runs it.
+        const main = readFileSync(resolve(__dirname, "../../electron/main.js"), "utf8");
+        expect(main).toMatch(/ipcMain\.handle\("read-aseprite-folder"/);
+        expect(main).toMatch(/ipcMain\.handle\("read-aseprite-bytes"/);
+        // CONFINED through the shared, junction-tested guard rather than a sixth hand-rolled copy.
+        expect(main).toMatch(/resolveConfined\(folder, folder, filePath, "an Aseprite file"\)/);
+        // BOTH SPELLINGS: Aseprite writes `.aseprite` by default and `.ase` when asked, and this
+        // tree holds both — accepting one would hide the other from the picker.
+        expect(main).toMatch(/ASEPRITE_EXT = \/\\.\(aseprite\|ase\)\$\/i/);
+
+        // LISTED THROUGH `walkDir`, which applies `JUNK_FILE` — and that is not incidental. This
+        // tree carries seven `__MACOSX/._Name.aseprite` AppleDouble stubs beside the real files;
+        // they fail `asepriteError` with "bad magic", correctly, and a picker that offered them
+        // would hand somebody seven entries that can only produce an error message.
+        expect(main).toMatch(/walkDir\(folder, name => ASEPRITE_EXT\.test\(name\), SCAN_MAX_FILES\)/);
+        expect(main).toMatch(/JUNK_FILE = \/\^\(\\._/);
+
+        const preload = readFileSync(resolve(__dirname, "../../electron/preload.js"), "utf8");
+        expect(preload).toMatch(/readAsepriteFolder:/);
+        expect(preload).toMatch(/readAsepriteBytes:/);
+
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/api\.readAsepriteFolder\(folder\)/);
+        expect(app).toMatch(/api\.readAsepriteBytes\(aseFolder, filePath\)/);
+        expect(app).toMatch(/onImportAseprite=\{importAseprite\}/);
+        // THE COMPOSITOR IS ACTUALLY CALLED. Without it the panel would import six blank frames,
+        // which is exactly the state the reader was in before it existed.
+        expect(app).toMatch(/composeFrame\(file, f\)/);
+        // …and the file's own clock and tags reach the actions, or this is a sheet importer with
+        // extra steps.
+        expect(app).toMatch(/asepriteTimeline\(file\)/);
+        expect(app).toMatch(/clips: asepriteClips\(file\)/);
     });
 
     test("a sequence becomes an UNHELD track whose src steps", () => {

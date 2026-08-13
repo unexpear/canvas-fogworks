@@ -258,6 +258,9 @@ const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
 const FONT_EXT = /\.(ttf|otf)$/i;
 const TILED_EXT = /\.tmx$/i;
 const UNITY_EXT = /\.unitypackage$/i;
+// BOTH SPELLINGS. Aseprite writes `.aseprite` by default and `.ase` when asked; the 45 files
+// in this tree use both, and accepting one would silently hide the other from the picker.
+const ASEPRITE_EXT = /\.(aseprite|ase)$/i;
 // PALETTES are `.json`, which is the widest pattern here and deliberately not narrowed further:
 // there is no palette extension to match on, and guessing by filename would miss every palette not
 // called `Palette.json`. What keeps this honest is that `parsePaletteFile` returns null for a file
@@ -462,6 +465,34 @@ ipcMain.handle("read-unity-folder", async (event, folder) => {
 ipcMain.handle("read-unity-package", async (event, folder, filePath) => {
     const target = resolveConfined(folder, folder, filePath, "a package");
     if (!UNITY_EXT.test(target)) throw new Error("Not a Unity package.");
+    return fs.readFileSync(target).toString("base64");
+});
+
+/** The `.aseprite`/`.ase` files under a folder, for the Aseprite importer. */
+ipcMain.handle("read-aseprite-folder", async (event, folder) => {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    return walkDir(folder, name => ASEPRITE_EXT.test(name), SCAN_MAX_FILES).map(full => ({
+        path: full,
+        name: path.basename(full),
+        bytes: fs.statSync(full).size,
+        relative: path.relative(folder, full).replace(/\\/g, "/")
+    }));
+});
+
+/**
+ * One `.aseprite`, as base64 — CONFINED like every other path that arrives from the renderer.
+ *
+ * BASE64 RATHER THAN A BUFFER because that is what crosses the bridge intact, the same choice
+ * `read-unity-package` made. The renderer turns it back into bytes and parses it there: the parser
+ * is pure and stays that way, which is the rule every importer here follows.
+ *
+ * The file's cel pixels are zlib streams, and the renderer already has `inflate-sync` for exactly
+ * that — a `.tmx` layer and an `.aseprite` cel are the same compression, so no new channel is
+ * needed to read them.
+ */
+ipcMain.handle("read-aseprite-bytes", async (event, folder, filePath) => {
+    const target = resolveConfined(folder, folder, filePath, "an Aseprite file");
+    if (!ASEPRITE_EXT.test(target)) throw new Error("Not an Aseprite file.");
     return fs.readFileSync(target).toString("base64");
 });
 

@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     readTiledMap: (folder, mapPath) => ipcRenderer.invoke("read-tiled-map", folder, mapPath),
     readUnityFolder: (folder) => ipcRenderer.invoke("read-unity-folder", folder),
     readUnityPackage: (folder, filePath) => ipcRenderer.invoke("read-unity-package", folder, filePath),
+    readAsepriteFolder: (folder) => ipcRenderer.invoke("read-aseprite-folder", folder),
+    readAsepriteBytes: (folder, filePath) => ipcRenderer.invoke("read-aseprite-bytes", folder, filePath),
     readTiledTileset: (folder, mapPath, relative) =>
         ipcRenderer.invoke("read-tiled-tileset", folder, mapPath, relative),
     readTiledImage: (folder, mapPath, relative) =>
