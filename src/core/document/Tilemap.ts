@@ -96,7 +96,19 @@ export interface Tilemap {
     /** One cell's size in the node's LOCAL units — which is not the sheet's tile size. */
     tileWidth: number;
     tileHeight: number;
-    sheet: TileSheet;
+    /**
+     * The DOCUMENT's tileset this layer draws from (schema 67).
+     *
+     * REPLACING a `sheet` on the node and an image on `node.src`, which is what made a tileset not
+     * a thing: 41 tile layers in Tiled's own examples draw from 12 distinct tilesets, so every
+     * layer carrying its own copy cost a measured 2.5x. It also left a COLLECTION set — one image
+     * per tile, 1,207 of them in the corpus — with nowhere to be described at all.
+     *
+     * A DANGLING ID IS INERT: the layer draws nothing and the document still opens. See
+     * `findTileset`. EMPTY means none has been chosen yet — the state an unset `src` used to hold,
+     * and the reason this is not required to name anything.
+     */
+    tilesetId: string;
     /**
      * `cols * rows` indices into the sheet, row-major, `TILE_EMPTY` for a blank cell.
      *
@@ -201,7 +213,8 @@ export interface ReadonlyTilemap {
     readonly rows: number;
     readonly tileWidth: number;
     readonly tileHeight: number;
-    readonly sheet: Readonly<TileSheet>;
+    /** The document tileset this layer draws from (schema 67). See `findTileset`. */
+    readonly tilesetId: string;
     readonly tiles: readonly number[];
     readonly flips?: readonly number[];
     readonly terrain?: {
@@ -230,8 +243,15 @@ export function tilemapError(map: unknown): string | null {
             return `tilemap.${field} must be a positive number`;
         }
     }
-    const sheetErr = tileSheetError(m.sheet);
-    if (sheetErr) return sheetErr;
+    // THE SHEET IS NOT HERE ANY MORE (schema 67). The layer names a tileset the document holds and
+    // `findTileset` resolves it — refusing a dangling one here would make deleting a tileset able
+    // to produce a file that will not open.
+    // A STRING, POSSIBLY EMPTY. Empty means NO TILESET CHOSEN YET, which is exactly the state an
+    // unset `src` used to express: a grid the inspector can produce and then fill in. It is not a
+    // hole, because a dangling non-empty id behaves identically — both draw nothing — so there is
+    // no invariant here for a stricter rule to protect.
+    if (typeof m.tilesetId !== "string") return "tilemap.tilesetId must be a string";
+
     if (!Array.isArray(m.tiles)) return "tilemap.tiles must be an array";
     // THE ONE CHECK THAT MATTERS MOST: a grid whose length disagrees with its own dimensions reads
     // every row after the first from the wrong place, which looks like corrupt art rather than a
@@ -369,7 +389,7 @@ export function tileSheetError(sheet: unknown): string | null {
 export function emptyTilemap(): Tilemap {
     return {
         cols: 1, rows: 1, tileWidth: 16, tileHeight: 16,
-        sheet: { columns: 1, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 },
+        tilesetId: "",
         tiles: [TILE_EMPTY]
     };
 }

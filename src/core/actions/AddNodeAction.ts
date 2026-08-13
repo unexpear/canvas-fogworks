@@ -187,7 +187,7 @@ export class AddNodeAction extends Action {
         if (this.nodeType === "core.tilemap") {
             const given = this.content?.tilemap;
             node.tilemap = given
-                ? { ...given, sheet: { ...given.sheet }, tiles: [...given.tiles] }
+                ? { ...given, tiles: [...given.tiles] }
                 : emptyTilemap();
         }
 

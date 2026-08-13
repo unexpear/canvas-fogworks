@@ -137,7 +137,9 @@ import { TiledMapResult, TiledTileset, TiledTileImage, TiledLayer, TiledCell, pa
     tilemapForLayer, TiledTilemapLayer, TiledTilemapFit,
     TiledObject, TiledObjectGroup, TiledProperty, objectBox, objectTransform,
     TILED_MAX_CELLS, TILED_MAX_LAYERS, TILED_MAX_TILE_IMAGES } from "../import/TiledMap";
-import { Tilemap, TerrainMaterial, emptyTilemap, cellAt, FLIP_D } from "../document/Tilemap";
+import { Tilemap, TileSheet, TerrainMaterial, emptyTilemap, cellAt, FLIP_D } from "../document/Tilemap";
+import { Tileset, TilesetTile, tilesetError, tilesetsError, findTileset, tilesetTile,
+    TILESETS_MAX, TILESET_TILES_MAX, TILESET_NAME_MAX } from "../document/Tileset";
 import { GlbContainer, GltfJson, GltfNode, GltfResult, GltfMeshInstance, GltfPrimitive,
     parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GLTF_IGNORABLE_REQUIRED, GLTF_MAX_VERTICES, GLTF_MAX_PRIMITIVES, GLTF_MAX_NODE_DEPTH,
@@ -929,11 +931,16 @@ export function __apiSurfacePin(): void {
     expectType<{ x: number; y: number; width: number; height: number }>(objectBox(tobj));
     expectType<{ rotation: number; origin: { x: number; y: number } }>(objectTransform(tobj));
 
-    const fit: TiledTilemapFit = tilemapForLayer(tmap, tlayer, tmap.tilesets);
+    const fit: TiledTilemapFit = tilemapForLayer(tmap, tlayer, tmap.tilesets, () => "ts");
     expectType<TiledTilemapLayer | null>(fit.layer);
     expectType<string | null>(fit.why);
     const asGrid: TiledTilemapLayer = fit.layer ?? { image: "", x: 0, y: 0, width: 0, height: 0,
+        sheet: { columns: 1, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 },
         tilemap: emptyTilemap(), opacity: 1, hidden: false, dropped: 0 };
+    // THE SHEET IS REPORTED, NOT STAMPED (schema 67): only the caller sees every layer at once and
+    // can tell that six of them name one set, so only the caller can build — and deduplicate — the
+    // document's tileset. This is where the measured 2.5x is collected.
+    expectType<Readonly<TileSheet>>(asGrid.sheet);
     // The sheet as NAMED, not as loaded: resolving it needs a filesystem, which is what keeps this
     // module pure — the same contract `TiledTileset.source` carries.
     expectType<string>(asGrid.image);
@@ -1196,6 +1203,24 @@ export function __apiSurfacePin(): void {
     expectType<{ col: number; row: number }[]>(rectCells(emptyTilemap(), { col: 0, row: 0 }, { col: 1, row: 1 }));
     expectType<{ col: number; row: number }[]>(fillRegion(emptyTilemap(), 0, 0));
     expectType<Tilemap | null>(resizeTilemap(emptyTilemap(), 4, 3));
+
+    // THE TILESET TABLE (schema 67). A tileset is the DOCUMENT's, so any number of layers may name
+    // one — which is the whole change: 41 tile layers in Tiled's own examples draw from 12 sets.
+    const oneSet: Tileset = { id: "t", name: "Terrain", src: "s.png",
+        sheet: { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 },
+        tiles: [], offsetX: 0, offsetY: 0 };
+    expectType<string | null>(tilesetError(oneSet));
+    expectType<string | null>(tilesetsError([oneSet]));
+    // GENERIC IN THE ELEMENT, so one function serves `ProjectDocument` and `ReadonlyDocument` alike
+    // — a cast at each call site is where a readonly guarantee quietly stops being one.
+    expectType<Tileset | null>(findTileset([oneSet], "t"));
+    expectType<TilesetTile | null>(tilesetTile(oneSet, 0));
+    // SPARSE: only tiles that say something appear. 28 of 1,235 in the measured corpus.
+    const oneTile: TilesetTile = { id: 3, probability: 0.25 };
+    expectType<number>(oneTile.id);
+    expectType<number>(TILESETS_MAX);
+    expectType<number>(TILESET_TILES_MAX);
+    expectType<number>(TILESET_NAME_MAX);
     // THE MATERIAL LIST is reshaped by these three and by nothing outside the module. They take a
     // MAP, not a list, which is the contract that matters: a caller who assembles the list is a
     // caller who can drop a field from it, and that is exactly what the panel did to `name` and

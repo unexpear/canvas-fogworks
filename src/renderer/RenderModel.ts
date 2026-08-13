@@ -37,7 +37,8 @@ import { resolveRings } from "../core/geometry/Resolve";
 import { worldCommandsOf } from "../core/actions/booleanActions";
 import { resolveColor, resolveNumber, VariableStore } from "../core/document/Variables";
 import { BlendMode } from "../core/document/Node";
-import { ReadonlyTilemap, visibleCells } from "../core/document/Tilemap";
+import { ReadonlyTilemap, TileSheet, visibleCells } from "../core/document/Tilemap";
+import { findTileset } from "../core/document/Tileset";
 import { localVisibleRect } from "../core/geometry/GeometryEngine";
 import { selectionRoots } from "../core/document/SceneGraph";
 import { resolveScene } from "../core/document/Components";
@@ -119,6 +120,15 @@ export type Shape =
         kind: "tilemap"; x: number; y: number; width: number; height: number;
         href: string | null;
         pixelated: boolean;
+        /**
+         * The SLICING RULE, resolved from the document's tileset (schema 67).
+         *
+         * RESOLVED ONCE, HERE, so the three backends stay ignorant of tilesets entirely — they read
+         * a sheet off the item exactly as they read an href, and cannot disagree about which
+         * picture a layer draws from. Null when the layer's `tilesetId` resolves to nothing, or to
+         * a COLLECTION set, which has no single sheet to cut.
+         */
+        sheet: Readonly<TileSheet> | null;
         map: ReadonlyTilemap;
         cells: { col0: number; row0: number; col1: number; row1: number } | null;
     };
@@ -864,13 +874,17 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
             // because a renderer doing its own matrix work is a second geometry engine. A node
             // that cannot be inverted shows no cells rather than all of them.
             const localWindow = localVisibleRect(computed, id, visible);
+            const tileset = findTileset(doc.tilesets, node.tilemap?.tilesetId);
             shape = {
                 kind: "tilemap", x, y, width, height,
-                href: node.src ?? null,
+                // FROM THE TILESET, not the node. A dangling id draws NOTHING and still opens —
+                // the inert-reference rule this schema follows everywhere.
+                href: tileset?.src ?? null,
                 // A TILE SHEET IS PIXEL ART until told otherwise, the same default a painted
                 // surface takes: a 16px tile smoothed into its neighbours is the one thing nobody
                 // importing a map wants, and it is what happens by default everywhere else.
                 pixelated: node.pixelated !== false,
+                sheet: tileset?.sheet ?? null,
                 map: node.tilemap as ReadonlyTilemap,
                 cells: node.tilemap && localWindow
                     ? visibleCells(node.tilemap as ReadonlyTilemap, localWindow)

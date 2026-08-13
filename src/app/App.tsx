@@ -116,6 +116,7 @@ import { sliceGrid, sliceCells, sliceTrack, blankCells } from "../core/import/Sh
 import { groupSequences, sequenceTrack } from "../core/import/Sequence";
 import { sequenceImportActions } from "../core/actions/sequenceImport";
 import { asepriteImportActions, AsepritePlacement } from "../core/actions/asepriteImport";
+import { Tileset, findTileset } from "../core/document/Tileset";
 import { parseAseprite, asepriteError, asepriteClips, asepriteTimeline, composeFrame } from "../core/import/Aseprite";
 
 /** What the drawer hands the shell: everything but where on the canvas it lands. */
@@ -2983,7 +2984,11 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                     const stored = dispatcher.getDocument().nodes.get(node.id);
                                     const map = stored?.tilemap;
                                     if (!stored || stored.type !== "core.tilemap" || !map) return null;
-                                    const ring = sheetTileRect(map.sheet, tileIndex);
+                                    // THE SHEET IS THE TILESET'S NOW (schema 67). A dangling id or a
+                                    // collection set has none to draw a ring on, and shows nothing.
+                                    const mapSet = findTileset(dispatcher.getDocument().tilesets, map.tilesetId);
+                                    if (!mapSet?.sheet) return null;
+                                    const ring = sheetTileRect(mapSet.sheet, tileIndex);
                                     /**
                                      * TERRAIN (schema 63). Without art a terrain layer draws
                                      * NOTHING — the derivation has no tile to put anywhere — so the
@@ -3250,7 +3255,9 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                                 // IMAGE's own box so the container's
                                                                 // scroll needs no arithmetic here.
                                                                 const r = (e.target as HTMLImageElement).getBoundingClientRect();
-                                                                const picked = tileIndexAt(map.sheet,
+                                                                const pickSet = findTileset(dispatcher.getDocument().tilesets, map.tilesetId);
+                                                                if (!pickSet?.sheet) return;
+                                                                const picked = tileIndexAt(pickSet.sheet,
                                                                     e.clientX - r.left, e.clientY - r.top);
                                                                 // NULL IS THE GUTTER, and it selects
                                                                 // nothing rather than the neighbour:
@@ -5099,13 +5106,47 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
 
                                     const tiles: TilePlacement[] = [];
                                     let unresolved = 0;
+                                    // ONE TILESET PER DISTINCT SET, minted on first sight and reused
+                                    // — this is where the measured 2.5x actually collapses. Tiled's
+                                    // own examples hold 41 tile layers drawing from 12 sets, and
+                                    // every layer used to carry its own copy of the picture.
+                                    const setIds = new Map<TiledTileset, string>();
+                                    const newTilesets: Tileset[] = [];
+                                    const tilesetIdFor = (set: TiledTileset): string => {
+                                        const had = setIds.get(set);
+                                        if (had !== undefined) return had;
+                                        const id = generateUUID();
+                                        setIds.set(set, id);
+                                        newTilesets.push({
+                                            id,
+                                            name: set.name || "Tileset",
+                                            // RESOLVED BY THE CALLER, as the parser's own header
+                                            // says: it reports the path the file named, and reading
+                                            // it needs a filesystem this module does not have.
+                                            src: sheets.get(set.image ?? "") ?? null,
+                                            sheet: {
+                                                columns: set.columns, tileWidth: set.tileWidth,
+                                                tileHeight: set.tileHeight,
+                                                spacing: set.spacing, margin: set.margin
+                                            },
+                                            // A COLLECTION set's per-tile images, which had nowhere
+                                            // to live until now — 1,207 of them in this corpus.
+                                            tiles: set.tiles.map(t => ({
+                                                id: t.id,
+                                                src: sheets.get(t.image) ?? t.image,
+                                                width: t.width, height: t.height
+                                            })),
+                                            offsetX: set.offsetX, offsetY: set.offsetY
+                                        });
+                                        return id;
+                                    };
                                     for (const layer of map.layers) {
                                         // THE GRID IS TRIED FIRST, LAYER BY LAYER. 45 of the
                                         // corpus's 53 tile layers become one `core.tilemap` each,
                                         // which is what turns a 10,618-node import into a 5-node
                                         // one; the rest fall through to the loop below, which is
                                         // the only thing that can draw them.
-                                        const fit = tilemapForLayer(map, layer, sets);
+                                        const fit = tilemapForLayer(map, layer, sets, tilesetIdFor);
                                         const sheet = fit.layer ? sheets.get(fit.layer.image) : undefined;
                                         if (fit.layer && sheet) {
                                             tiles.push({

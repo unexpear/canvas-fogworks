@@ -13,7 +13,7 @@
 <!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
      below. The earlier note stands — the rectangle gesture added no field. -->
 
-> 🔒 Frozen contract · schema v66 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v67 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -1631,13 +1631,13 @@ Serializer.save(doc): SaveResult   // { status: "saved" } | { status: "failed"; 
 
 ---
 
-## PLANNED — schema 67: a tileset as a thing the document holds
+## Schema 67 — a tileset as a thing the document holds
 
-> **NOT IMPLEMENTED. Nothing below exists in the code.** This section is a design, written
-> against measurements, so that whoever builds it does not have to re-derive the evidence. Every
-> number here came from counting the corpus on 2026-08-13; the counting script is in the session
-> scratchpad as `measure-tilesets.py` and is worth re-running before starting, because a corpus
-> that has grown may have changed the answer.
+> **BUILT (2026-08-13).** This section was written as a design first and is kept as the record of
+> the evidence, because the numbers are what shaped it. They came from counting the corpus with
+> `scripts/measure-tilesets.py`, which is in the repo so they can be re-derived rather than
+> believed. Where the design and the code came apart, the code is described below under *What
+> changed while building it*.
 
 ### What a tileset is today, and why that is the defect
 
@@ -1761,3 +1761,41 @@ temptation is to add `tilesetId` and leave `sheet` in place as a fallback, so no
 is the built-and-unreachable pattern this project keeps paying for: two sources of truth for one
 picture, and the new one optional means the old one is what actually runs. The migration must MOVE
 the data, and `sheet` must leave the node in the same change.
+
+
+### What changed while building it
+
+Three things the design did not anticipate, each recorded because the reasoning matters more than
+the outcome:
+
+**An empty `tilesetId` is legal, and means "none chosen yet".** The design said the id names a
+tileset; `emptyTilemap()` then had nothing to name. An empty grid waiting for a picture is exactly
+the state an unset `src` used to hold, so refusing it would have removed an authoring state to
+protect an invariant that does not exist — a DANGLING id behaves identically, both drawing nothing.
+`tilemapError` therefore requires a string and not a non-empty one.
+
+**`tilemapForLayer` takes an identity FUNCTION, not an id.** Deduplication is the caller's, because
+only the caller sees every layer at once and can tell that six of them name one set. Passing the
+function in also means no `Tilemap` ever exists carrying an empty id awaiting a fix-up — a validator
+with a hole for "not filled in yet" is a hole.
+
+**The exporter gained a fix nobody was looking for.** It compared layers by SHEET GEOMETRY to decide
+whether they shared a tileset, so two DIFFERENT images cut on the same grid — the common case, since
+a pack's sheets usually share a tile size — compared equal and exported silently wrong. Comparing
+tileset identity makes the question exact. It also now REFUSES to write a `.tmx` when the first
+layer's tileset has no sheet, rather than emitting a file whose every gid is derived from something
+that is not there.
+
+### What is still open
+
+- **A panel.** The table is reachable through the importer and the migration but nothing lets a
+  person rename a tileset, retarget a layer, or set a tile's probability. That is the reachability
+  rule this project applies to everything else, and it is not yet met here.
+- **Per-tile data is carried but unread.** `probability` and `userData` round-trip; nothing consumes
+  them. The autotiler is the obvious first reader.
+- **Collection tilesets are representable and not yet drawable.** The importer builds them and the
+  model validates them; `RenderModel` resolves a null sheet for one, so the layer draws nothing. The
+  renderer needs a per-tile image path, which is a second derivation and deliberately not smuggled
+  into this change.
+- **The exporter writes ONE tileset.** The document can hold several now, so it could write one
+  `<tileset>` element per distinct set with its own `firstgid`.

@@ -87,9 +87,10 @@ export class SetTilemapAction extends Action {
 function sameMap(a: ReadonlyTilemap, b: ReadonlyTilemap): boolean {
     if (a.cols !== b.cols || a.rows !== b.rows) return false;
     if (a.tileWidth !== b.tileWidth || a.tileHeight !== b.tileHeight) return false;
-    const as = a.sheet, bs = b.sheet;
-    if (as.columns !== bs.columns || as.tileWidth !== bs.tileWidth || as.tileHeight !== bs.tileHeight
-        || as.spacing !== bs.spacing || as.margin !== bs.margin) return false;
+    // THE TILESET IS NAMED, NOT CARRIED (schema 67): pointing a layer at a different set is an
+    // edit, and comparing the sets themselves here would make one shared picture's every property
+    // a reason to redraw every layer that names it.
+    if (a.tilesetId !== b.tilesetId) return false;
     if (a.tiles.length !== b.tiles.length) return false;
     for (let i = 0; i < a.tiles.length; i++) if (a.tiles[i] !== b.tiles[i]) return false;
     // ABSENT AND ALL-ZERO ARE THE SAME MAP, which is what makes the invariant on `Tilemap.flips`

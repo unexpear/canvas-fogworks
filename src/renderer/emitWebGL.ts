@@ -1614,7 +1614,10 @@ export function itemDraws(
     // fragment stage, which is the only way this backend can draw ten thousand cells in one call.
     // The `source` is the WHOLE sheet: the shader picks each tile out of it per fragment, so a
     // source rect here would crop the sheet before the grid ever saw it.
-    if (item.shape.kind === "tilemap" && item.shape.href !== null && item.shape.cells) {
+    // NO RESOLVED SHEET, NO GRID DRAW (schema 67). A dangling `tilesetId` and a COLLECTION set
+    // both arrive as a null sheet from the model; neither has cells this shader can cut.
+    if (item.shape.kind === "tilemap" && item.shape.href !== null && item.shape.cells
+        && item.shape.sheet !== null) {
         const map = item.shape;
         const picture = draw(resolveRings(commandsToRings(local, tolerance), "nonzero"),
             item.world, "#ffffff", paint.opacity,
@@ -2080,8 +2083,9 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
             // whole map — and not a size derived from the grid description either. See the uniform
             // below for what the derived one did.
             const sheetSize = tm && tm.href !== null ? naturalSize(tm.href) : null;
-            if (tm && tm.href !== null && d.image && sheetSize) {
+            if (tm && tm.href !== null && d.image && sheetSize && tm.sheet) {
                 const map = tm.map;
+                const sheet = tm.sheet;
                 gl.activeTexture(gl.TEXTURE2);
                 gl.bindTexture(gl.TEXTURE_2D, state.tileIndexTex);
                 // RE-UPLOADED PER DRAW, like the heightfield and for the same reason: the grid is
@@ -2101,8 +2105,8 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
                 gl.uniform1i(state.tileIndexLoc, 2);
                 gl.uniform4f(state.tileGridLoc, map.cols, map.rows, map.tileWidth, map.tileHeight);
-                gl.uniform4f(state.tileSheetLoc, map.sheet.columns, map.sheet.tileWidth,
-                    map.sheet.tileHeight, map.sheet.spacing);
+                gl.uniform4f(state.tileSheetLoc, sheet.columns, sheet.tileWidth,
+                    sheet.tileHeight, sheet.spacing);
                 // THE SHEET'S REAL SIZE. It was a DERIVED one, and the derived HEIGHT came from the
                 // highest index the map happened to use: a real 968x526 sheet whose map only reaches
                 // row 18 was called 305 tall, so every fragment sampled 1.7x too far down and the
@@ -2110,7 +2114,7 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
                 // the bitmap itself — and SVG had exactly this one, which is why a two-backend
                 // comparison can agree on a wrong answer. Found by importing a real map and putting
                 // it beside the node-per-cell import of the same file.
-                gl.uniform3f(state.tileMarginLoc, map.sheet.margin, sheetSize.width, sheetSize.height);
+                gl.uniform3f(state.tileMarginLoc, sheet.margin, sheetSize.width, sheetSize.height);
                 gl.uniform1f(state.isTilemapLoc, 1);
             } else {
                 gl.uniform1f(state.isTilemapLoc, 0);

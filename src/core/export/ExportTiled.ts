@@ -39,7 +39,8 @@
  */
 
 import { ReadonlyDocument } from "../document/Document";
-import { ReadonlyTilemap, TILE_EMPTY, FLIP_H, FLIP_V, FLIP_D, tileIndexAt } from "../document/Tilemap";
+import { ReadonlyTilemap, TileSheet, TILE_EMPTY, FLIP_H, FLIP_V, FLIP_D, tileIndexAt } from "../document/Tilemap";
+import { findTileset } from "../document/Tileset";
 import { resolveTilemaps } from "../document/Components";
 
 /** What an export could not represent, alongside the file itself. */
@@ -140,7 +141,7 @@ function objectXml(
             path?: readonly { c: string; x?: number; y?: number }[];
             className?: string;
             userData?: Readonly<Record<string, { type: string; propertyType?: string; value: string }>> },
-    id: number, sheet: ReadonlyTilemap["sheet"], firstGid: number
+    id: number, sheet: Readonly<TileSheet>, firstGid: number
 ): { xml: string; why: null; notes: string[] } | { xml: null; why: string; notes: string[] } {
     const g = node.geometry;
     const name = node.name ?? "";
@@ -244,14 +245,35 @@ export function exportTiledMap(doc: ReadonlyDocument, image: string): TiledExpor
             + "a .tmx has one size for every layer, so it was not written");
         return false;
     });
-    // A SHEET THAT DIFFERS IS ALSO A PROBLEM, and a quieter one: the cells would land in the right
-    // places holding the wrong pictures. One tileset is written, so a second sheet cannot be.
-    const sheet = first.sheet;
+    // A DIFFERENT TILESET IS ALSO A PROBLEM, and a quieter one: the cells would land in the right
+    // places holding the wrong pictures. One tileset is written, so a second cannot be.
+    //
+    // COMPARED BY IDENTITY NOW (schema 67), which fixes a false negative this could not see before:
+    // it compared the SHEET GEOMETRY, so two DIFFERENT images cut on the same grid — the common
+    // case, since a pack's sheets usually share a tile size — compared equal and exported silently
+    // wrong. Naming the tileset makes the question exact.
+    //
+    // WORTH DOING NEXT: the document can now hold several tilesets, so this could write one
+    // `<tileset>` element per distinct set with its own `firstgid` and stop being a limitation at
+    // all. That is a bigger change than this one and is not smuggled in here.
+    const firstSet = findTileset(doc.tilesets, first.tilesetId);
+    const sheet = firstSet?.sheet ?? null;
+    if (!sheet) {
+        // REFUSED RATHER THAN HALF-WRITTEN. Every number below is derived from the sheet — the tile
+        // count, the gids, the tileset element — so continuing without one produces a `.tmx` that
+        // looks complete and indexes nothing. A COLLECTION tileset lands here too, and writing one
+        // properly means a `<tile><image>` per tile, which is the follow-up noted above.
+        // NOTHING WRITTEN, WITH THE REASON — the same shape as "there is no tilemap node", because
+        // it is the same outcome: every number below is derived from the sheet (the tile count, the
+        // gids, the tileset element), so continuing without one produces a `.tmx` that looks
+        // complete and indexes nothing.
+        notes.push("the first tile layer's tileset has no sheet to write — a collection tileset, or "
+            + "an id naming nothing");
+        return { xml: "", notes };
+    }
     for (const l of fitting.slice(1)) {
-        const s = l.map.sheet;
-        if (s.columns === sheet.columns && s.tileWidth === sheet.tileWidth
-            && s.tileHeight === sheet.tileHeight && s.spacing === sheet.spacing && s.margin === sheet.margin) continue;
-        notes.push(`layer "${l.name}" draws from a different sheet; one tileset is written, so its `
+        if (l.map.tilesetId === first.tilesetId) continue;
+        notes.push(`layer "${l.name}" draws from a different tileset; one tileset is written, so its `
             + "cells will index the first layer's");
     }
 

@@ -16,6 +16,7 @@ import { transformError, layoutError, dimensionError, pathError, booleanOpError,
 import { interactionsError } from "./Prototype";
 import { timelineError, trackError, channelsError } from "./Timeline";
 import { clipsError } from "./Clips";
+import { tilesetsError } from "./Tileset";
 import { ikError } from "./Rig";
 import { clipsContentError } from "./Node";
 import { tilemapError } from "./Tilemap";
@@ -185,6 +186,12 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
     // does not exist is refused here rather than by whoever tries to play it.
     const clipErr = clipsError(doc.clips, doc.timeline);
     if (clipErr) throw new Error(`Invalid document: ${clipErr}.`);
+    // THE TILESET TABLE is checked as a whole (schema 67) — ids unique, each set either sheet-backed
+    // or a collection. What is NOT checked here is whether a layer's `tilesetId` resolves: a
+    // reference that stops resolving is INERT, and refusing the document would make deleting a
+    // tileset able to produce a file that will not open. The layer draws nothing instead.
+    const tilesetErr = tilesetsError(doc.tilesets);
+    if (tilesetErr) throw new Error(`Invalid document: ${tilesetErr}.`);
     if (doc.frame !== undefined && (!Number.isFinite(doc.frame) || doc.frame < 0)) {
         throw new Error(`Invalid document: frame must be a finite number >= 0.`);
     }

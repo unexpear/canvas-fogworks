@@ -9,6 +9,7 @@
 import { statesError } from "./Components";
 import { ProjectDocument, ReadonlyDocument, ThemeMode, createEmptyDocument, SCHEMA_VERSION, SerializedMetadata } from "./Document";
 import { Clip } from "./Clips";
+import { Tileset } from "./Tileset";
 import { Node, isNodeType, srcError, srcValueError } from "./Node";
 import { variableError, variableKeyError, VARIABLES_MAX } from "./Variables";
 import { validateDocumentIntegrity } from "./Integrity";
@@ -142,6 +143,9 @@ export function serializeDocument(doc: ReadonlyDocument): string {
             // byte-for-byte as it did before the timeline existed.
             ...(doc.timeline !== undefined ? { timeline: doc.timeline } : {}),
             ...(doc.clips !== undefined ? { clips: doc.clips } : {}),
+            // THE TILESET TABLE (schema 67). Omitted when absent, so a document with no
+            // tilemap serialises exactly as it did before tilesets existed.
+            ...(doc.tilesets !== undefined ? { tilesets: doc.tilesets } : {}),
             ...(doc.frame !== undefined ? { frame: doc.frame } : {}),
             ...(doc.lights !== undefined ? { lights: doc.lights } : {}),
             ...(doc.ambient !== undefined ? { ambient: doc.ambient } : {})
@@ -226,6 +230,11 @@ export function deserializeDocument(json: string): ProjectDocument {
     // Clips ride through the same way — malformed included, so `Integrity` stays the single judge.
     if ("clips" in migrated.document) {
         doc.clips = migrated.document.clips as Clip[];
+    }
+    // The tileset table rides through the same way (schema 67), malformed included, so `Integrity`
+    // stays the single judge of what a document may say.
+    if ("tilesets" in migrated.document) {
+        doc.tilesets = (migrated.document as { tilesets?: unknown }).tilesets as Tileset[];
     }
     // Copied through even when malformed, so `Integrity` stays the single judge.
     if ("lights" in migrated.document) {
@@ -365,6 +374,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "63") { raw = migrate_63_to_64(raw); version = "64"; }
     if (version === "64") { raw = migrate_64_to_65(raw); version = "65"; }
     if (version === "65") { raw = migrate_65_to_66(raw); version = "66"; }
+    if (version === "66") { raw = migrate_66_to_67(raw); version = "67"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -989,6 +999,89 @@ function migrate_63_to_64(raw: any): any {
  * because the picture is unchanged and nothing warns. Names are the only thing telling four materials
  * apart in a list, so losing them is not cosmetic even though nothing derives from them.
  */
+/**
+ * 66 -> 67: a TILESET becomes a thing the document holds, and layers name one.
+ *
+ * NOT A PASS-THROUGH — the only migration since 30 that MOVES data rather than adding a field, and
+ * it moves it because leaving the old copy in place was the whole defect. A tilemap node carried the
+ * picture as its own `src` and the slicing rule as `tilemap.sheet`, so nothing could be said about a
+ * tileset, nothing could share one, and a set whose tiles are separate files could not be described
+ * at all. Measured over 63 real files (`scripts/measure-tilesets.py`): Tiled's own examples hold 41
+ * tile layers drawing from 12 distinct sets, which cost 1,003KB where 407KB would do.
+ *
+ * KEYED BY THE IMAGE **AND** THE SLICING GEOMETRY, not by the image alone. Two layers can legitimately
+ * cut one picture on different grids — a 16px set and a 32px set built from the same sheet — and
+ * folding those together would silently re-slice a layer, which draws the right cells from the wrong
+ * places. That is the one way this migration could corrupt a document rather than fail, so it is the
+ * key.
+ *
+ * A NODE WITH NO `src` still gets a tileset, with a null image. It is a legal state the inspector can
+ * produce (an empty grid waiting for a picture) and dropping the layer would be worse than keeping a
+ * set that draws nothing.
+ *
+ * NAMES ARE DEDUPLICATED, because they are what a picker shows and two sets called `Terrain` is a
+ * list nobody can use. The id is a UUID; the name is only ever a label.
+ *
+ * THE REVERSE IS NOT POSSIBLE, which is the usual asymmetry and worth saying out loud: a 66 build
+ * opening a 67 document sees tilemap nodes with no picture at all. That is what the version gate is
+ * for.
+ */
+function migrate_66_to_67(raw: any): any {
+    const nodes = raw?.document?.nodes;
+    if (!nodes || typeof nodes !== "object") return { ...raw, version: "67" };
+
+    const tilesets: any[] = [];
+    const byKey = new Map<string, string>();
+    const usedNames = new Set<string>();
+    const out: any = {};
+    let seq = 0;
+
+    for (const [id, node] of Object.entries<any>(nodes)) {
+        const map = node?.tilemap;
+        if (!map || typeof map !== "object" || map.tilesetId !== undefined) { out[id] = node; continue; }
+        const sheet = map.sheet && typeof map.sheet === "object" ? map.sheet : null;
+        const src = typeof node.src === "string" ? node.src : null;
+        // THE KEY: the picture AND how it is cut. See the header for why the image alone is wrong.
+        const key = JSON.stringify([src, sheet?.columns ?? null, sheet?.tileWidth ?? null,
+            sheet?.tileHeight ?? null, sheet?.spacing ?? null, sheet?.margin ?? null]);
+        let tilesetId = byKey.get(key);
+        if (tilesetId === undefined) {
+            // DETERMINISTIC IDS. A migration that minted UUIDs would give two runs over one file two
+            // different documents, which makes a round-trip test impossible to write.
+            tilesetId = `tileset-${++seq}`;
+            byKey.set(key, tilesetId);
+            let name = typeof node.name === "string" && node.name.length > 0 ? node.name : "Tileset";
+            if (usedNames.has(name)) {
+                let n = 2;
+                while (usedNames.has(`${name} ${n}`)) n++;
+                name = `${name} ${n}`;
+            }
+            usedNames.add(name);
+            tilesets.push({
+                id: tilesetId, name, src, sheet,
+                // NOTHING KNEW ABOUT PER-TILE DATA before this version, so there is none to carry.
+                tiles: [], offsetX: 0, offsetY: 0
+            });
+        }
+        // MOVED, NOT COPIED: `sheet` leaves the map and `src` leaves the node, or the old path is
+        // still what runs and the duplication this exists to remove stays exactly where it was.
+        const { sheet: _dropped, ...restMap } = map;
+        const { src: _alsoDropped, ...restNode } = node;
+        out[id] = { ...restNode, tilemap: { ...restMap, tilesetId } };
+    }
+
+    return {
+        ...raw,
+        version: "67",
+        document: {
+            ...raw.document,
+            nodes: out,
+            // ONLY WHEN THERE ARE ANY, so a document with no tilemap serialises exactly as it did.
+            ...(tilesets.length > 0 ? { tilesets } : {})
+        }
+    };
+}
+
 function migrate_65_to_66(raw: any): any {
     return { ...raw, version: "66" };
 }

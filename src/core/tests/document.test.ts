@@ -175,6 +175,7 @@ import { resolveBooleans } from "../document/Components";
 import { BooleanOp, booleanOpError } from "../document/Node";
 import { TEXT_ALIGNS, FONT_FAMILY_MAX, TextAlign } from "../document/Node";
 import { alignBars, ALIGN_ICON_BOX } from "../../app/theme/AlignIcons";
+import { tilesetError, tilesetsError, findTileset, tilesetTile, Tileset } from "../document/Tileset";
 import { TOOL_CURSORS } from "../../app/theme/Cursors";
 import { SEQUENCE_IMPORT_MAX } from "../../app/App";
 import { sequenceImportActions, SEQUENCE_DEFAULT_FPS } from "../actions/sequenceImport";
@@ -4587,9 +4588,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 65→66 landed, giving a terrain
-        // material a NAME and a swatch colour.)
-        expect(() => migrateIfNeeded(legacy, "67")).toThrow('Migration not implemented for document schema "66"');
+        // time a real migration is added — most recently when 66→67 landed, moving the tileset
+        // off the node and onto the document.)
+        expect(() => migrateIfNeeded(legacy, "68")).toThrow('Migration not implemented for document schema "67"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -15897,7 +15898,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
             layers: '<layer id="1" name="Ground" width="3" height="2" offsetx="5" offsety="-7">'
                 + '<data encoding="csv">9,10,0,13,14,2684354572</data></layer>'
         }));
-        const fit = tilemapForLayer(m, m.layers[0], m.tilesets);
+        const fit = tilemapForLayer(m, m.layers[0], m.tilesets, () => "ts");
         expect(fit.why).toBeNull();
         const got = fit.layer!;
         expect(got.tilemap.cols).toBe(3);
@@ -15905,7 +15906,10 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // INDICES, not gids — and the blank is TILE_EMPTY (-1), not 0, which is a real tile.
         expect(got.tilemap.tiles).toEqual([0, 1, TILE_EMPTY, 4, 5, 3]);
         expect(got.tilemap.flips).toEqual([0, 0, 0, 0, 0, FLIP_H | FLIP_D]);
-        expect(got.tilemap.sheet).toEqual({ columns: 4, tileWidth: 16, tileHeight: 16, spacing: 1, margin: 2 });
+        // THE SHEET IS REPORTED, NOT STAMPED (schema 67): the tileset is the document's, and only
+        // the caller can build it, because only the caller can tell six layers name one set.
+        expect(got.sheet).toEqual({ columns: 4, tileWidth: 16, tileHeight: 16, spacing: 1, margin: 2 });
+        expect(got.tilemap.tilesetId).toBe("ts");
         expect(got.image).toBe("sheet.png");
         expect({ x: got.x, y: got.y, width: got.width, height: got.height })
             .toEqual({ x: 5, y: -7, width: 48, height: 32 });
@@ -15919,14 +15923,14 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const set = m.tilesets[0];
         const gids = [9, 10, 0, 13, 14, 2684354572];
         for (let i = 0; i < gids.length; i++) {
-            const viaGrid = sheetRect(got.tilemap.sheet, got.tilemap.tiles[i]);
+            const viaGrid = sheetRect(got.sheet, got.tilemap.tiles[i]);
             const viaNode = tileSourceRect(set, decodeGid(gids[i]).gid);
             expect(viaGrid).toEqual(viaNode);
         }
         // ...and the fixture really does exercise the margin and the spacing in BOTH axes, rather
         // than agreeing at the origin where every slicer agrees.
-        expect(sheetRect(got.tilemap.sheet, 5)).toEqual({ x: 19, y: 19, width: 16, height: 16 });
-        expect(sheetRect(got.tilemap.sheet, 1)).toEqual({ x: 19, y: 2, width: 16, height: 16 });
+        expect(sheetRect(got.sheet, 5)).toEqual({ x: 19, y: 19, width: 16, height: 16 });
+        expect(sheetRect(got.sheet, 1)).toEqual({ x: 19, y: 2, width: 16, height: 16 });
     });
 
     test("a grid turns a cell exactly as one node per cell did — all eight, all six entries", () => {
@@ -15951,7 +15955,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
     test("a layer a grid cannot express says which one and why", () => {
         const fitOf = (opts: Parameters<typeof tmxMap>[0]) => {
             const m = parseTiledMap(tmxMap(opts));
-            return tilemapForLayer(m, m.layers[0], m.tilesets);
+            return tilemapForLayer(m, m.layers[0], m.tilesets, () => "ts");
         };
         const refused = (opts: Parameters<typeof tmxMap>[0]) => {
             const fit = fitOf(opts);
@@ -16021,7 +16025,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
             + '<tileset firstgid="1" name="z" tilewidth="0" tileheight="0" columns="4" tilecount="16">'
             + '<image source="z.png" width="64" height="64"/></tileset>'
             + '<layer id="1" name="Z" width="2" height="2"><data encoding="csv">1,2,3,4</data></layer></map>');
-        const zeroFit = tilemapForLayer(zero, zero.layers[0], zero.tilesets);
+        const zeroFit = tilemapForLayer(zero, zero.layers[0], zero.tilesets, () => "ts");
         expect(zeroFit.layer).toBeNull();
         expect(zeroFit.why).toMatch(/tilemap\.(tileWidth|sheet\.tileWidth)/);
 
@@ -16047,7 +16051,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
             + '<tileset firstgid="1" name="t" tilewidth="16" tileheight="24" columns="4" tilecount="16">'
             + '<image source="t.png" width="64" height="96"/></tileset>'
             + '<layer id="1" name="L" width="2" height="3"><data encoding="csv">1,2,3,4,5,6</data></layer></map>');
-        const got = tilemapForLayer(m, m.layers[0], m.tilesets).layer!;
+        const got = tilemapForLayer(m, m.layers[0], m.tilesets, () => "ts").layer!;
         expect({ width: got.width, height: got.height }).toEqual({ width: 32, height: 72 });
         expect({ tw: got.tilemap.tileWidth, th: got.tilemap.tileHeight }).toEqual({ tw: 16, th: 24 });
         expect({ cols: got.tilemap.cols, rows: got.tilemap.rows }).toEqual({ cols: 2, rows: 3 });
@@ -16060,7 +16064,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
             + '<tileset firstgid="1" name="t" tilewidth="16" tileheight="24" columns="4" tilecount="16">'
             + '<image source="t.png" width="64" height="96"/></tileset>'
             + '<layer id="1" name="Tall" width="2" height="2"><data encoding="csv">1,2,3,4</data></layer></map>');
-        const fit = tilemapForLayer(tall, tall.layers[0], tall.tilesets);
+        const fit = tilemapForLayer(tall, tall.layers[0], tall.tilesets, () => "ts");
         expect(fit.layer).toBeNull();
         expect(fit.why).toMatch(/16x24 tiles on a 16x16 grid/);
     });
@@ -16073,7 +16077,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
             layers: '<layer id="1" name="Ground" width="2" height="2" opacity="0.5" visible="0">'
                 + '<data encoding="csv">1,2,5,6</data></layer>'
         }));
-        const grid = tilemapForLayer(map, map.layers[0], map.tilesets).layer!;
+        const grid = tilemapForLayer(map, map.layers[0], map.tilesets, () => "ts").layer!;
         const doc = createEmptyDocument();
         const { actions, ids } = tileImportActions(doc, [
             { kind: "tilemap", x: grid.x, y: grid.y, width: grid.width, height: grid.height,
@@ -16119,7 +16123,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
             layers: '<layer id="1" name="Faded" width="2" height="2" opacity="0.4" visible="0">'
                 + '<data encoding="csv">1,2,5,6</data></layer>'
         }));
-        const got = tilemapForLayer(m, m.layers[0], m.tilesets).layer!;
+        const got = tilemapForLayer(m, m.layers[0], m.tilesets, () => "ts").layer!;
         expect(got.opacity).toBeCloseTo(0.4, 9);
         expect(got.hidden).toBe(true);
         // ABSENT, not an array of zeros: 27 of the 45 corpus layers that fit turn nothing, and a
@@ -19880,6 +19884,141 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(fresh.undo()).not.toBeNull();
         expect(fresh.getDocument().clips).toBeUndefined();
         expect(fresh.getDocument().timeline).toBeUndefined();
+    });
+
+    test("a tileset is the DOCUMENT's, and the migration collapses the copies (schema 67)", () => {
+        // THE MEASURED DEFECT, as a test. Tiled's own examples hold 41 tile layers drawing from 12
+        // distinct tilesets, so every layer carrying its own picture cost 1,003KB where 407KB would
+        // do — a 2.5x duplication before base64's further 1.37x. Six layers of one set is the worst
+        // case in that corpus (`rule_006.tmx`), so six is what this migrates.
+        const sheet = { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 };
+        const legacy = {
+            version: "66",
+            document: {
+                metadata: { project_name: "p", created_by: "system", date: "2026-08-13T00:00:00.000Z" },
+                nodes: Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`L${i}`, {
+                    id: `L${i}`, type: "core.tilemap", parent: null, children: [],
+                    geometry: { x: 0, y: 0, width: 64, height: 32 },
+                    style: { fill: "none", opacity: 1 }, layout: {}, name: "ground",
+                    src: "data:image/png;base64,AAAA",
+                    tilemap: { cols: 2, rows: 1, tileWidth: 16, tileHeight: 16, sheet, tiles: [0, 1] }
+                }])),
+                rootNodeUuids: Array.from({ length: 6 }, (_, i) => `L${i}`),
+                variables: {}, activeTheme: "light"
+            }
+        };
+        const doc = deserializeDocument(JSON.stringify(legacy));
+
+        // SIX LAYERS, ONE TILESET. Asserting only "there is a tileset" would pass without any
+        // deduplication at all, which is the entire point of the change.
+        expect(doc.tilesets).toHaveLength(1);
+        expect(doc.tilesets![0].src).toBe("data:image/png;base64,AAAA");
+        expect(doc.tilesets![0].sheet).toEqual(sheet);
+        const ids = new Set([...doc.nodes.values()].map(n => n.tilemap!.tilesetId));
+        expect(ids.size).toBe(1);
+        expect([...ids][0]).toBe(doc.tilesets![0].id);
+
+        // MOVED, NOT COPIED. Leaving the old fields in place is the trap the design named: two
+        // sources of truth for one picture, with the old one still doing the work — so the
+        // duplication this exists to remove would survive the migration that claims to remove it.
+        for (const n of doc.nodes.values()) {
+            expect(n.src).toBeUndefined();
+            expect((n.tilemap as unknown as { sheet?: unknown }).sheet).toBeUndefined();
+        }
+
+        // TWO LAYERS CUTTING ONE IMAGE ON DIFFERENT GRIDS ARE TWO TILESETS. The image alone is not
+        // the key: folding these together would silently re-slice a layer, which draws the right
+        // cells from the wrong places — the one way this migration could corrupt rather than fail.
+        const twoGrids = JSON.parse(JSON.stringify(legacy));
+        twoGrids.document.nodes.L1.tilemap.sheet = { ...sheet, tileWidth: 32, tileHeight: 32 };
+        const split = deserializeDocument(JSON.stringify(twoGrids));
+        expect(split.tilesets).toHaveLength(2);
+        // …and their NAMES are deduplicated, because a picker showing two rows called "ground" is
+        // a list nobody can use.
+        expect(new Set(split.tilesets!.map(t => t.name)).size).toBe(2);
+
+        // A DANGLING ID IS INERT. Deleting a tileset a layer still names must leave an empty grid
+        // somebody can fix, never a file that will not open.
+        const orphaned = deserializeDocument(serializeDocument(doc));
+        orphaned.tilesets = [];
+        expect(() => validateDocumentIntegrity(orphaned)).not.toThrow();
+        expect(findTileset(orphaned.tilesets, [...orphaned.nodes.values()][0].tilemap!.tilesetId)).toBeNull();
+    });
+
+    test("the render model RESOLVES the tileset, so no backend has to know one exists", () => {
+        // THE SEAM. A tilemap layer names a tileset and the picture lives on the document, so
+        // something has to turn a name into a sheet. Doing it HERE, once, is what keeps the three
+        // backends reading a sheet off the item exactly as they read an href — they cannot disagree
+        // about which picture a layer draws from, because they are never asked.
+        const sheet = { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 };
+        const d = createEmptyDocument();
+        d.tilesets = [{ id: "ts", name: "T", src: "sheet.png", sheet, tiles: [], offsetX: 0, offsetY: 0 }];
+        d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 32, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "ground",
+            tilemap: { cols: 2, rows: 1, tileWidth: 16, tileHeight: 16, tilesetId: "ts", tiles: [0, 1] }
+        } as Node);
+        d.rootNodeUuids = ["L"];
+
+        const item = buildRenderModel({ width: 320, height: 320 }, d,
+            { viewport: { x: 0, y: 0, zoom: 1 }, selectedNodeIds: [], hoveredNodeId: null,
+              computed: computeGeometry(d) } as never)
+            .content.find(i => i.shape.kind === "tilemap")!;
+        const shape = item.shape as { kind: "tilemap"; href: string | null; sheet: unknown };
+        // BOTH halves come from the TILESET, not the node: the picture and the rule for cutting it.
+        expect(shape.href).toBe("sheet.png");
+        expect(shape.sheet).toEqual(sheet);
+
+        // A DANGLING NAME RESOLVES TO NOTHING and the layer draws nothing — inert, never fatal.
+        d.nodes.get("L")!.tilemap!.tilesetId = "gone";
+        const orphan = buildRenderModel({ width: 320, height: 320 }, d,
+            { viewport: { x: 0, y: 0, zoom: 1 }, selectedNodeIds: [], hoveredNodeId: null,
+              computed: computeGeometry(d) } as never)
+            .content.find(i => i.shape.kind === "tilemap")!;
+        const orphanShape = orphan.shape as { href: string | null; sheet: unknown };
+        expect(orphanShape.href).toBeNull();
+        expect(orphanShape.sheet).toBeNull();
+    });
+
+    test("a tileset is either a SHEET or a COLLECTION, and per-tile data is sparse", () => {
+        const sheet = { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 };
+        const base = { id: "t", name: "T", tiles: [], offsetX: 0, offsetY: 0 };
+
+        expect(tilesetError({ ...base, src: "s.png", sheet })).toBeNull();
+        // A COLLECTION SET: one image per tile. 1,207 of these in the corpus against 25
+        // probabilities — the dominant per-tile feature by three orders of magnitude, and the one
+        // thing the old model could not describe at all.
+        expect(tilesetError({ ...base, src: null, sheet: null,
+            tiles: [{ id: 0, src: "a.png", width: 16, height: 16 }] })).toBeNull();
+
+        // NEVER BOTH: "where does tile 7 come from" would have two answers.
+        expect(tilesetError({ ...base, src: "s.png", sheet,
+            tiles: [{ id: 0, src: "a.png", width: 8, height: 8 }] })).toMatch(/sheet or per-tile images/);
+        // NEVER NEITHER: that is a name, not a tileset.
+        expect(tilesetError({ ...base, src: null, sheet: null })).toMatch(/either a sheet or at least one/);
+        // AND NEVER HALF: an image with no way to cut it draws nothing anybody meant.
+        expect(tilesetError({ ...base, src: "s.png", sheet: null })).toMatch(/both an image and a sheet/);
+
+        // SPARSE, and the ids are an identity: two records for one tile is a file with two answers.
+        expect(tilesetError({ ...base, src: "s.png", sheet,
+            tiles: [{ id: 2, probability: 0.5 }, { id: 2 }] })).toMatch(/appears twice/);
+        expect(tilesetError({ ...base, src: "s.png", sheet,
+            tiles: [{ id: 0, probability: -1 }] })).toMatch(/probability/);
+        // A COLLECTION TILE NEEDS ITS OWN SIZE — it is not on a grid, so nothing else knows it.
+        expect(tilesetError({ ...base, src: null, sheet: null,
+            tiles: [{ id: 0, src: "a.png" }] })).toMatch(/no positive size/);
+
+        // THE TABLE: ids unique across the document, because a `tilesetId` names ONE.
+        const ok: Tileset = { ...base, src: "s.png", sheet, tiles: [] };
+        expect(tilesetsError([ok])).toBeNull();
+        expect(tilesetsError([ok, { ...ok, name: "Other" }])).toMatch(/used twice/);
+        expect(tilesetsError(undefined)).toBeNull();
+
+        // A tile's record is found by id, and MOST TILES HAVE NONE — which is not an error, it is
+        // what sparse means: 28 of 1,235 tiles in the corpus say anything at all.
+        const withMeta: Tileset = { ...ok, tiles: [{ id: 3, probability: 0.25 }] };
+        expect(tilesetTile(withMeta, 3)!.probability).toBe(0.25);
+        expect(tilesetTile(withMeta, 0)).toBeNull();
     });
 
     test("CLIPS name ranges over the one timeline (schema 46)", () => {
@@ -26151,7 +26290,7 @@ describe("core.tilemap — a grid instead of ten thousand nodes (schema 61)", ()
     const sheet = (over: Partial<TileSheet> = {}): TileSheet =>
         ({ columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0, ...over });
     const grid = (cols: number, rows: number, tiles: number[], over: Partial<Tilemap> = {}): Tilemap =>
-        ({ cols, rows, tileWidth: 16, tileHeight: 16, sheet: sheet(), tiles, ...over });
+        ({ cols, rows, tileWidth: 16, tileHeight: 16, tilesetId: "ts", tiles, ...over });
 
     test("a cell is looked up row-major, and OFF THE GRID is empty rather than wrapped", () => {
         // A flat array indexed `row * cols + col`. Reading it the other way round is the classic
@@ -26217,8 +26356,17 @@ describe("core.tilemap — a grid instead of ten thousand nodes (schema 61)", ()
         expect(tilemapError(grid(1, 1, [0], { tileWidth: 0 }))).toMatch(/tileWidth must be a positive number/);
         expect(tilemapError(grid(1, 1, [0.5]))).toMatch(/whole numbers >= -1/);
         expect(tilemapError(grid(1, 1, [-2]))).toMatch(/whole numbers >= -1/);
-        expect(tilemapError(grid(1, 1, [0], { sheet: sheet({ columns: 0 }) }))).toMatch(/sheet.columns/);
-        expect(tilemapError(grid(1, 1, [0], { sheet: sheet({ spacing: -1 }) }))).toMatch(/sheet.spacing/);
+        // THE SHEET IS THE TILESET'S NOW (schema 67), so its rules are checked there. What a MAP
+        // must say about its tileset is only that it names one AS A STRING.
+        expect(tilemapError(grid(1, 1, [0], { tilesetId: 7 as never }))).toMatch(/tilesetId/);
+        // …and EMPTY is legal: it is "no tileset chosen yet", the state an unset `src` used to
+        // hold. Not a hole — a dangling non-empty id behaves identically, both drawing nothing, so
+        // there is no invariant a stricter rule here would protect.
+        expect(tilemapError(grid(1, 1, [0], { tilesetId: "" }))).toBeNull();
+        expect(tilesetError({ id: "t", name: "T", src: "s.png", sheet: sheet({ columns: 0 }),
+            tiles: [], offsetX: 0, offsetY: 0 })).toMatch(/sheet.columns/);
+        expect(tilesetError({ id: "t", name: "T", src: "s.png", sheet: sheet({ spacing: -1 }),
+            tiles: [], offsetX: 0, offsetY: 0 })).toMatch(/sheet.spacing/);
         // A CAP, because `cols * rows` is a hand-editable multiplication and the array is allocated
         // from it. The largest map in the corpus is 100x100, so the bound has room to spare.
         expect(tilemapError({ ...grid(1, 1, [0]), cols: 2000, rows: 2000 })).toMatch(/at most/);
@@ -26230,6 +26378,10 @@ describe("core.tilemap — a grid instead of ten thousand nodes (schema 61)", ()
             geometry: { x: 0, y: 0, width: 48, height: 32 }, style: { fill: "none", opacity: 1 }, layout: {},
             src: "sheet.png", tilemap: grid(3, 2, [0, 1, 2, -1, 4, 5]) } as unknown as Node);
         d.rootNodeUuids = ["T"];
+        // THE TILESET IS THE DOCUMENT\'S NOW (schema 67): the layer names it and the exporter
+        // resolves it, so a fixture that omitted it would export an empty map and pass nothing.
+        d.tilesets = [{ id: "ts", name: "T", src: "t.png", sheet: sheet(),
+            tiles: [], offsetX: 0, offsetY: 0 }];
         const back = deserializeDocument(serializeDocument(d));
         expect(back.nodes.get("T")!.tilemap!.tiles).toEqual([0, 1, 2, -1, 4, 5]);
         expect(back.nodes.get("T")!.src).toBe("sheet.png");
@@ -26372,6 +26524,10 @@ describe("core.tilemap — a grid instead of ten thousand nodes (schema 61)", ()
             geometry: { x: 0, y: 0, width: 1600, height: 1600 }, style: { fill: "none", opacity: 1 }, layout: {},
             src: "sheet.png", tilemap: grid(100, 100, new Array(10000).fill(0)) } as unknown as Node);
         d.rootNodeUuids = ["T"];
+        // THE TILESET IS THE DOCUMENT\'S NOW (schema 67): the layer names it and the exporter
+        // resolves it, so a fixture that omitted it would export an empty map and pass nothing.
+        d.tilesets = [{ id: "ts", name: "T", src: "t.png", sheet: sheet(),
+            tiles: [], offsetX: 0, offsetY: 0 }];
         const model = buildRenderModel({ width: 320, height: 320 }, d,
             { selectedNodeIds: [], hoveredNodeId: null, computed: computeGeometry(d), viewport: { x: 0, y: 0, zoom: 1 } } as never);
         const items = model.content.filter(i => i.nodeId === "T");
@@ -26390,7 +26546,7 @@ describe("TilemapEdit — painting a grid, and the invariants an edit must not b
     const sheet = (): TileSheet => ({ columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 });
     /** NON-SQUARE by default (3 wide, 2 tall) on a NON-SQUARE cell, so a transposed index cannot pass. */
     const grid = (tiles: number[], over: Partial<Tilemap> = {}): Tilemap =>
-        ({ cols: 3, rows: 2, tileWidth: 16, tileHeight: 24, sheet: sheet(), tiles, ...over });
+        ({ cols: 3, rows: 2, tileWidth: 16, tileHeight: 24, tilesetId: "ts", tiles, ...over });
 
     test("a cell is picked by FLOOR, and the boundary belongs to the cell after it", () => {
         // The single-point twin of `visibleCells`, and the two must round the same way or a tool
@@ -26479,7 +26635,7 @@ describe("TilemapEdit — painting a grid, and the invariants an edit must not b
         // corner of a wall drawn as a diagonal line, which is how most walls in the measured maps
         // turn a corner. The fixture is that exact shape: 0s split by a diagonal of 1s.
         const m: Tilemap = {
-            cols: 4, rows: 3, tileWidth: 16, tileHeight: 16, sheet: sheet(),
+            cols: 4, rows: 3, tileWidth: 16, tileHeight: 16, tilesetId: "ts",
             tiles: [0, 1, 0, 0,
                     1, 0, 1, 0,
                     0, 1, 0, 1]
@@ -26644,7 +26800,7 @@ describe("The tile brush, as a gesture", () => {
         d.nodes.set("T", { id: "T", type: "core.tilemap", parent: null, children: [],
             geometry: { x: 0, y: 0, width: 128, height: 80 }, style: { fill: "none", opacity: 1 }, layout: {},
             src: "sheet.png",
-            tilemap: { cols: 8, rows: 5, tileWidth: 16, tileHeight: 16, sheet: SHEET,
+            tilemap: { cols: 8, rows: 5, tileWidth: 16, tileHeight: 16, tilesetId: "ts",
                 tiles: new Array(40).fill(TILE_EMPTY) } } as Node);
         d.nodes.set("R", { id: "R", type: "core.rectangle", parent: null, children: [],
             geometry: { x: 0, y: 0, width: 20, height: 20 }, style: { fill: "#f00", opacity: 1 }, layout: {} } as Node);
@@ -29444,7 +29600,7 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
     // axis, which is exactly what a surviving mutant found here: the first version of this fixture
     // used 16 by 16 and TR1 walked straight through it.
     const terrainMap = (over: Record<string, unknown> = {}) => ({
-        cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
+        cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, tilesetId: "ts",
         tiles: new Array(6).fill(TILE_EMPTY),
         terrain: { cells: [...CELLS], materials: [{ id: 1, art: ART }] },
         ...over
@@ -29455,6 +29611,10 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
             geometry: { x: 100, y: 40, width: 48, height: 16 },
             style: { fill: "none", opacity: 1 }, layout: {}, tilemap: map } as Node);
         d.rootNodeUuids = ["T"];
+        // THE TILESET IS THE DOCUMENT\'S NOW (schema 67): the layer names it and the exporter
+        // resolves it, so a fixture that omitted it would export an empty map and pass nothing.
+        d.tilesets = [{ id: "ts", name: "T", src: "t.png", sheet,
+            tiles: [], offsetX: 0, offsetY: 0 }];
         return d;
     };
 
@@ -29488,7 +29648,7 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         expect(tilemapError(withTiles)).toContain("must store no tiles");
         expect(tilemapError(terrainMap({ tiles: [0, 0, 0, 0, 0, 0] }))).toContain("must store no tiles");
         // …and an ordinary map without terrain is unaffected, or this would ban tilemaps.
-        expect(tilemapError({ cols: 3, rows: 2, tileWidth: 16, tileHeight: 16, sheet,
+        expect(tilemapError({ cols: 3, rows: 2, tileWidth: 16, tileHeight: 16, tilesetId: "ts",
             tiles: [0, 1, 2, 3, 4, 5] })).toBeNull();
     });
 
@@ -29509,8 +29669,8 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         expect(node.tilemap!.cols).not.toBe(node.tilemap!.rows);
         // THE TERRAIN IS GONE from the result, so nothing downstream can derive a second time.
         expect(node.tilemap!.terrain).toBeUndefined();
-        // The sheet and cell size are the STORED ones — only the grid and the box are derived.
-        expect(node.tilemap!.sheet).toEqual(sheet);
+        // The TILESET NAME and cell size are the STORED ones — only the grid and box are derived.
+        expect(node.tilemap!.tilesetId).toBe("ts");
         expect(node.tilemap!.tileWidth).toBe(16);
         expect(node.tilemap!.tileHeight).toBe(8);
     });
@@ -29540,7 +29700,7 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
             geometry: { x: 0, y: 0, width: 4, height: 4 }, style: { fill: "#fff", opacity: 1 }, layout: {} } as Node);
         expect(resolveTilemaps(plain)).toBe(plain);
         // …and an ordinary tilemap with no terrain is left alone too, box and all.
-        const ordinary = docWith({ cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
+        const ordinary = docWith({ cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, tilesetId: "ts",
             tiles: [0, 1, 2, 3, 4, 5] });
         expect(resolveTilemaps(ordinary)).toBe(ordinary);
     });
@@ -29827,8 +29987,7 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // BECOMING a terrain layer throws the tiles away, which is why it is a deliberate act and
         // never something a brush stroke does.
         const ordinary: Tilemap = { cols: 3, rows: 2, tileWidth: 16, tileHeight: 8,
-            sheet: { image: "t.png", tileWidth: 8, tileHeight: 8, columns: 4, margin: 0, spacing: 0 } as never,
-            tiles: [1, 2, 3, 4, 5, 6] };
+            tilesetId: "ts", tiles: [1, 2, 3, 4, 5, 6] };
         const converted = asTerrain(ordinary, 1, [{ mask: 15, index: 9 }])!;
         expect(converted.tiles.every(t => t === TILE_EMPTY)).toBe(true);
         expect(converted.terrain!.cells).toEqual([0, 0, 0, 0, 0, 0]);
@@ -29848,9 +30007,9 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
         // call, before the brush existed.
         const map = terrainMap() as never as Tilemap;
         expect(withTiles(map, [{ col: 0, row: 0, index: 5, flip: 0 }])).toBeNull();
-        // …while an edit that IS about terrain keeps everything else intact, sheet included.
+        // …while an edit that IS about terrain keeps everything else intact, tileset included.
         const painted = withTerrain(map, [{ col: 2, row: 1, material: 1 }])!;
-        expect(painted.sheet).toEqual(map.sheet);
+        expect(painted.tilesetId).toEqual(map.tilesetId);
         expect(painted.terrain!.materials[0].id).toBe(1);
         expect(painted.terrain!.materials).toEqual(map.terrain!.materials);
         expect(painted.tiles.every(t => t === TILE_EMPTY)).toBe(true);
@@ -30110,7 +30269,7 @@ describe("Terrain — the question a tile grid is the answer to (schema 63)", ()
                         geometry: { x: 0, y: 0, width: 48, height: 16 },
                         style: { fill: "none", opacity: 1 }, layout: {}, name: "g",
                         tilemap: {
-                            cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
+                            cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, tilesetId: "ts",
                             tiles: new Array(6).fill(TILE_EMPTY),
                             terrain: { cells: [...CELLS], material: 4, art: ART }
                         }
@@ -30172,10 +30331,15 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
                 name: m.name, hidden: m.hidden, tilemap: m.map } as Node);
             d.rootNodeUuids.push(`L${i}`);
         });
+        // ONE TILESET, NAMED BY EVERY LAYER (schema 67) — which is the change itself: these
+        // fixtures build up to three layers, and before this each carried its own copy of the
+        // picture. The exporter resolves the name, so a fixture without the table would export an
+        // empty map and assert nothing.
+        d.tilesets = [{ id: "ts", name: "T", src: "t.png", sheet, tiles: [], offsetX: 0, offsetY: 0 }];
         return d;
     };
     const grid = (tiles: number[], flips?: number[]) => ({
-        cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, sheet, tiles, ...(flips ? { flips } : {})
+        cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, tilesetId: "ts", tiles, ...(flips ? { flips } : {})
     });
 
     test("a gid carries the tile AND its flips, and EMPTY is the 0 that leaves", () => {
@@ -30264,14 +30428,14 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
         // the kind of export somebody discovers a week later.
         const doc = docWith([
             { name: "ground", map: grid([1, 1, 1, 1, 1, 1]) },
-            { name: "bigger", map: { cols: 4, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
+            { name: "bigger", map: { cols: 4, rows: 2, tileWidth: 16, tileHeight: 8, tilesetId: "ts",
                 tiles: [1, 1, 1, 1, 1, 1, 1, 1] } },
-            { name: "coarser", map: { cols: 3, rows: 2, tileWidth: 32, tileHeight: 8, sheet,
+            { name: "coarser", map: { cols: 3, rows: 2, tileWidth: 32, tileHeight: 8, tilesetId: "ts",
                 tiles: [1, 1, 1, 1, 1, 1] } },
             // DIFFERING ONLY IN HEIGHT, which is the fixture the height check needs: with cells of
             // 32x8 above, the WIDTH check alone refuses it and the height check goes unexercised.
             // A surviving mutant found exactly that.
-            { name: "taller", map: { cols: 3, rows: 2, tileWidth: 16, tileHeight: 24, sheet,
+            { name: "taller", map: { cols: 3, rows: 2, tileWidth: 16, tileHeight: 24, tilesetId: "ts",
                 tiles: [1, 1, 1, 1, 1, 1] } }
         ]);
         const out = exportTiledMap(doc, "t.png");
@@ -30295,11 +30459,15 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
         d.nodes.set("T", { id: "T", type: "core.tilemap", parent: null, children: [],
             geometry: { x: 0, y: 0, width: 48, height: 16 },
             style: { fill: "none", opacity: 1 }, layout: {}, name: "terrain",
-            tilemap: { cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, sheet,
+            tilemap: { cols: 3, rows: 2, tileWidth: 16, tileHeight: 8, tilesetId: "ts",
                 tiles: new Array(6).fill(TILE_EMPTY),
                 terrain: { cells: [1, 1, 0, 1, 0, 0], materials: [{ id: 1,
                     art: [{ mask: 0, index: 0 }, { mask: 15, index: 5 }] }] } } } as Node);
         d.rootNodeUuids = ["T"];
+        // THE TILESET IS THE DOCUMENT\'S NOW (schema 67): the layer names it and the exporter
+        // resolves it, so a fixture that omitted it would export an empty map and pass nothing.
+        d.tilesets = [{ id: "ts", name: "T", src: "t.png", sheet,
+            tiles: [], offsetX: 0, offsetY: 0 }];
         const back = parseTiledMap(exportTiledMap(d, "t.png").xml);
         // THE DISPLAY GRID, one larger each way — which is what the dual grid draws and therefore
         // what a .tmx must hold.
@@ -30317,7 +30485,7 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
         // folder does not carry, so nothing could resolve their gids without a filesystem.
         const source = readFileSync(resolve(__dirname, "../../../test-fixtures/tiled", "zlib-embedded.tmx"), "utf8");
         const original = parseTiledMap(source, { inflate });
-        const fit = tilemapForLayer(original, original.layers[0], original.tilesets);
+        const fit = tilemapForLayer(original, original.layers[0], original.tilesets, () => "ts");
         expect(fit.layer).not.toBeNull();
         const d = createEmptyDocument();
         d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
@@ -30325,6 +30493,12 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
             style: { fill: "none", opacity: 1 }, layout: {}, name: original.layers[0].name,
             tilemap: fit.layer!.tilemap } as Node);
         d.rootNodeUuids = ["L"];
+        // THE CONTRACT SCHEMA 67 INTRODUCED, demonstrated on a real file: the fit REPORTS the sheet
+        // its layer needs and the CALLER builds the document's tileset from it, because only the
+        // caller sees every layer at once and can tell that several name one set. The layer itself
+        // carries the name and nothing else.
+        d.tilesets = [{ id: "ts", name: "embedded", src: "sheet.png", sheet: fit.layer!.sheet,
+            tiles: [], offsetX: 0, offsetY: 0 }];
 
         const out = exportTiledMap(d, "sheet.png");
         expect(out.notes).toEqual([]);
@@ -30380,6 +30554,9 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
         // exported as tile layers alone — every door, spawn point and collision volume gone, with
         // nothing saying so. The round trip is the oracle here too.
         const d = createEmptyDocument();
+        // THE TILESET IS THE DOCUMENT'S (schema 67) and every layer here names `ts`; the
+        // exporter resolves it, so a fixture without the table exports an empty map.
+        d.tilesets = [{ id: "ts", name: "T", src: "t.png", sheet, tiles: [], offsetX: 0, offsetY: 0 }];
         d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
             geometry: { x: 0, y: 0, width: 48, height: 16 },
             style: { fill: "none", opacity: 1 }, layout: {}, name: "ground",
@@ -30445,6 +30622,9 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
         // is `true` in this language), a string full of XML entities, and an ENUM — none of which
         // any file in this tree contains.
         const d = createEmptyDocument();
+        // THE TILESET IS THE DOCUMENT'S (schema 67) and every layer here names `ts`; the
+        // exporter resolves it, so a fixture without the table exports an empty map.
+        d.tilesets = [{ id: "ts", name: "T", src: "t.png", sheet, tiles: [], offsetX: 0, offsetY: 0 }];
         d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
             geometry: { x: 0, y: 0, width: 48, height: 16 },
             style: { fill: "none", opacity: 1 }, layout: {}, name: "ground",
@@ -30513,6 +30693,9 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
         // and writing one produces a file no reader will open — including this one. So the property
         // is left out and said out loud, which is the bargain the rest of this exporter makes.
         const d = createEmptyDocument();
+        // THE TILESET IS THE DOCUMENT'S (schema 67) and every layer here names `ts`; the
+        // exporter resolves it, so a fixture without the table exports an empty map.
+        d.tilesets = [{ id: "ts", name: "T", src: "t.png", sheet, tiles: [], offsetX: 0, offsetY: 0 }];
         d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
             geometry: { x: 0, y: 0, width: 48, height: 16 },
             style: { fill: "none", opacity: 1 }, layout: {}, name: "g",
@@ -30544,6 +30727,9 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
     test("a REFUSED object says how much data left with it", () => {
         // "3 objects were not written" does not say that a room's worth of gameplay data went too.
         const d = createEmptyDocument();
+        // THE TILESET IS THE DOCUMENT'S (schema 67) and every layer here names `ts`; the
+        // exporter resolves it, so a fixture without the table exports an empty map.
+        d.tilesets = [{ id: "ts", name: "T", src: "t.png", sheet, tiles: [], offsetX: 0, offsetY: 0 }];
         d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
             geometry: { x: 0, y: 0, width: 48, height: 16 },
             style: { fill: "none", opacity: 1 }, layout: {}, name: "g",
@@ -30564,6 +30750,9 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
 
     test("a rotation goes out in DEGREES, and the sign is not flipped", () => {
         const d = createEmptyDocument();
+        // THE TILESET IS THE DOCUMENT'S (schema 67) and every layer here names `ts`; the
+        // exporter resolves it, so a fixture without the table exports an empty map.
+        d.tilesets = [{ id: "ts", name: "T", src: "t.png", sheet, tiles: [], offsetX: 0, offsetY: 0 }];
         d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
             geometry: { x: 0, y: 0, width: 48, height: 16 },
             style: { fill: "none", opacity: 1 }, layout: {}, name: "g",
@@ -30603,6 +30792,9 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
 
     test("an object the format cannot hold is COUNTED, not dropped in silence", () => {
         const d = createEmptyDocument();
+        // THE TILESET IS THE DOCUMENT'S (schema 67) and every layer here names `ts`; the
+        // exporter resolves it, so a fixture without the table exports an empty map.
+        d.tilesets = [{ id: "ts", name: "T", src: "t.png", sheet, tiles: [], offsetX: 0, offsetY: 0 }];
         d.nodes.set("L", { id: "L", type: "core.tilemap", parent: null, children: [],
             geometry: { x: 0, y: 0, width: 48, height: 16 },
             style: { fill: "none", opacity: 1 }, layout: {}, name: "g",

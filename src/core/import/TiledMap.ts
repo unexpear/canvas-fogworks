@@ -1108,6 +1108,15 @@ export interface TiledTilemapLayer {
      * caller does that and puts the result in the node's `src`.
      */
     image: string;
+    /**
+     * How that image is CUT — reported rather than stamped on the node (schema 67).
+     *
+     * The tileset is the document's now, and only the caller can build it, because only the caller
+     * sees every layer at once and can tell that six of them name one set. That is where the
+     * measured 2.5x duplication is actually collected; this function reports what a set would have
+     * to be, and does not decide which one it is.
+     */
+    sheet: TileSheet;
     /** Where the node goes, in map pixels, and how big it is. */
     x: number;
     y: number;
@@ -1164,7 +1173,16 @@ export interface TiledTilemapFit {
 export function tilemapForLayer(
     map: { orientation: string; tileWidth: number; tileHeight: number },
     layer: TiledLayer,
-    tilesets: readonly TiledTileset[]
+    tilesets: readonly TiledTileset[],
+    /**
+     * The document tileset id for the set this layer draws from (schema 67).
+     *
+     * A FUNCTION, NOT A STRING, because identity is the CALLER's to decide and deduplication is the
+     * whole point: only the caller sees every layer at once and can tell that six of them name one
+     * set. Passing it in also means there is never an intermediate `Tilemap` carrying an empty id —
+     * `tilemapError` refuses one, and a validator with a hole for "not filled in yet" is a hole.
+     */
+    tilesetIdFor: (set: TiledTileset) => string
 ): TiledTilemapFit {
     const no = (why: string): TiledTilemapFit => ({ layer: null, why: `layer "${layer.name}" ${why}` });
 
@@ -1236,7 +1254,8 @@ export function tilemapForLayer(
         // they are still two different fields: one is how far apart cells sit on the canvas, the
         // other is how the sheet is cut.
         tileWidth: map.tileWidth, tileHeight: map.tileHeight,
-        sheet, tiles,
+        tilesetId: tilesetIdFor(set),
+        tiles,
         // OMITTED WHEN NOTHING IS TURNED, which is most layers — 27 of the 45 that fit carry no
         // flip at all, and an array of zeros per cell would be pure weight in the saved file.
         ...(turned ? { flips } : {})
@@ -1247,6 +1266,7 @@ export function tilemapForLayer(
     return {
         layer: {
             image: set.image,
+            sheet,
             // BOTH OFFSETS FOLD INTO THE NODE, which is only sound because exactly one tileset
             // reaches this point: a `<tileoffset>` shifts every tile drawn from that set, and here
             // that is every tile in the layer. The node-per-cell path had to add it per tile.

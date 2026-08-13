@@ -269,7 +269,12 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint,
             // arrive as one display item instead of ten thousand nodes.
             const map = shape.map;
             const cells = shape.cells;
+            const sheet = shape.sheet;
             if (!cells) return;                       // scrolled off screen: the model said so
+            // NO SHEET, NO CELLS TO CUT. The model resolved the layer's tileset; a dangling id or a
+            // COLLECTION set (which has no single sheet) both arrive as null, and both draw nothing
+            // rather than refusing the document.
+            if (!sheet) return;
             // NO SHEET, NO TILES. A tilemap whose src is unset is an empty grid waiting for one,
             // which is a legal state the inspector can produce.
             const img = shape.href === null ? null : resolveImage(shape.href);
@@ -279,7 +284,7 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint,
             ctx.imageSmoothingEnabled = !shape.pixelated;
             for (let row = cells.row0; row <= cells.row1; row++) {
                 for (let col = cells.col0; col <= cells.col1; col++) {
-                    const src = tileSourceRect(map.sheet, tileAt(map, col, row));
+                    const src = tileSourceRect(sheet, tileAt(map, col, row));
                     if (!src) continue;               // an empty cell draws nothing at all
                     const dx = shape.x + col * map.tileWidth, dy = shape.y + row * map.tileHeight;
                     const flip = flipAt(map, col, row);

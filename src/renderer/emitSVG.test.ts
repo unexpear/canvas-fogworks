@@ -264,9 +264,12 @@ describe("emitSVG — a tilemap samples its sheet at the sheet's real size", () 
             // 968x526 image holds 31 rows. The map uses indices in row 0 and row 1 ONLY, so the
             // implied height is 33 and the real one is 526: a fixture whose highest tile sat in the
             // last row could not tell the two apart.
+            // THE SHEET RIDES ON THE ITEM (schema 67), resolved from the document's tileset by
+            // the render model — so all three backends read it the way they read `href` and cannot
+            // disagree about which picture a layer draws from.
+            sheet: { columns: 57, tileWidth: 16, tileHeight: 16, spacing: 1, margin: 0 },
             map: { cols: 2, rows: 1, tileWidth: 16, tileHeight: 16,
-                   sheet: { columns: 57, tileWidth: 16, tileHeight: 16, spacing: 1, margin: 0 },
-                   tiles: [0, 58] },
+                   tilesetId: "ts", tiles: [0, 58] },
             cells: { col0: 0, row0: 0, col1: 1, row1: 0 }
         },
         paint: { opacity: null }

@@ -276,10 +276,14 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         // NULL MEANS NOT DECODED YET, and then nothing is drawn — exactly what the Canvas backend
         // does. `ImageCache` bumps its generation on load and asks for the repaint.
         const sheetSize = shape.href === null ? null : naturalSize(shape.href);
-        if (cells && shape.href && sheetSize) {
+        // THE SLICING RULE COMES FROM THE MODEL (schema 67), which resolved the layer's tileset. A
+        // dangling id and a COLLECTION set both arrive as null and both draw nothing, rather than
+        // making an unopenable document out of a deleted tileset.
+        const sheet = shape.sheet;
+        if (cells && shape.href && sheetSize && sheet) {
             for (let row = cells.row0; row <= cells.row1; row++) {
                 for (let col = cells.col0; col <= cells.col1; col++) {
-                    const src = tileSourceRect(map.sheet, tileAt(map, col, row));
+                    const src = tileSourceRect(sheet, tileAt(map, col, row));
                     if (!src) continue;
                     const cell = document.createElementNS(svgNS, "svg");
                     cell.setAttribute("x", String(shape.x + col * map.tileWidth));

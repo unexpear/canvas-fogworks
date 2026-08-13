@@ -162,8 +162,9 @@ export const CURRENT_VERSION: string =
  */
 import type { TimelineSettings } from "./Timeline";
 import type { Light } from "./Light";
+import type { Tileset } from "./Tileset";
 
-export const SCHEMA_VERSION = "66";
+export const SCHEMA_VERSION = "67";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
@@ -227,6 +228,14 @@ export interface ProjectDocument {
      * arranged them in; absent means the whole timeline is the only animation there is.
      */
     clips?: Clip[];
+    /**
+     * The TILESETS this document holds (schema 67), named by `Tilemap.tilesetId`.
+     *
+     * Document-level for the reason `variables` and `clips` are: a tileset is shared. Measured on
+     * Tiled's own examples, 41 tile layers draw from 12 distinct sets — holding the picture on the
+     * node cost a 2.5x duplication and made a collection set impossible to describe.
+     */
+    tilesets?: Tileset[];
     /**
      * What the document is LIT by (schema 42). Absent = unlit, which every document was.
      *

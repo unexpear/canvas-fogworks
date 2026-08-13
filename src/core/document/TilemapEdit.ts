@@ -420,7 +420,7 @@ export function copyTilemap(map: ReadonlyTilemap): Tilemap {
  * had nothing ever been turned — rather than carrying a zero per cell forever after one gesture.
  */
 function rebuild(
-    map: { cols: number; rows: number; tileWidth: number; tileHeight: number; sheet: Readonly<TileSheet>;
+    map: { cols: number; rows: number; tileWidth: number; tileHeight: number; tilesetId: string;
            terrain?: ReadonlyTilemap["terrain"] },
     tiles: number[], flips: number[] | null
 ): Tilemap {
@@ -428,9 +428,9 @@ function rebuild(
     return {
         cols: map.cols, rows: map.rows,
         tileWidth: map.tileWidth, tileHeight: map.tileHeight,
-        // COPIED, not shared. A caller holding the old map must keep seeing the old sheet; sharing
-        // the object would make an inspector edit to one grid's sheet appear in an undone state too.
-        sheet: { ...map.sheet },
+        // THE TILESET IS A NAME NOW (schema 67), so there is nothing to copy: the picture lives on
+        // the document and every layer naming it sees the same one, which is the entire point.
+        tilesetId: map.tilesetId,
         tiles,
         ...(turned ? { flips: flips as number[] } : {}),
         // TERRAIN SURVIVES EVERY EDIT THAT IS NOT ABOUT IT, and copied for the same reason the sheet

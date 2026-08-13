@@ -2,7 +2,7 @@
 
 > The engine is built in **layers**, where each milestone proves **one new
 > architectural capability** before the next begins. This is the canonical roadmap.
-> Status current as of **2026-08-12**, engine **v0.0.5**, schema **66**.
+> Status current as of **2026-08-12**, engine **v0.0.5**, schema **67**.
 >
 > **Seven rows below said ⬜ for capabilities that had shipped.** They said it for three weeks
 > because this file declared no `describes:` directive: `check-doc-drift` named it, looked it
