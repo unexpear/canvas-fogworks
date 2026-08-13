@@ -1026,12 +1026,12 @@ const MUTANTS = [
     // THE EXPANDER. It threw away art the document was already allowed to hold: given a tile for all
     // sixteen masks it kept six, and WHICH six depended on the order of the stored array.
     { id: "RT1", file: "src/core/document/Autotile.ts",
-      from: "    for (const [mask, index] of art) {\n        if (Number.isInteger(mask) && mask >= 0 && mask < AUTOTILE_MASKS) table[mask] = { index };\n    }",
-      to: "",
-      note: "the exact-entry pass is gone, so a tile drawn FOR a mask loses to a turned one from the same orbit — sixteen entries collapse to six again" },
+      from: "        const had = table[mask];",
+      to: "        const had = null;",
+      note: "the exact-entry pass stops accumulating, so a mask keeps only its LAST drawn tile — which is what the Map it replaced did, discarding an artist's variants at the door. RETARGETED: the pass builds a LIST per mask now, since a real set ships 185 tiles for 74 configurations" },
     { id: "RT2", file: "src/core/document/Autotile.ts",
-      from: "    const entries = [...art].sort((a, b) => a[0] - b[0]);",
-      to: "    const entries = [...art];",
+      from: "        .sort((a, b) => a.mask - b.mask);",
+      to: "        ;",
       note: "gap-filling follows the STORED order again, so the same art in a different array order draws a different map" },
 ];
 
