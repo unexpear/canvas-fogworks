@@ -154,6 +154,54 @@ export function resolveImage(href: string): HTMLImageElement | null {
 }
 
 /**
+ * The same size, but WAITED FOR — the one caller that cannot draw a frame later and try again.
+ *
+ * `naturalSize` answers null until a decode finishes, which is exactly right for a renderer: it
+ * draws nothing this frame and the load asks for a repaint. An IMPORT has no next frame. It has to
+ * know how wide a tileset's image is before it can work out how many columns the sheet has, and
+ * that number decides whether 79 cells become tiles or become nothing — so here the decode is
+ * awaited rather than polled.
+ *
+ * IT GOES THROUGH THE SAME CACHE, so the bitmap an import decodes is the one the backends draw:
+ * asking a second decoder would mean two answers to "how big is this", and the whole reason
+ * `naturalSize` exists is that a DERIVED size and a measured one had already disagreed once.
+ *
+ * NULL RATHER THAN A THROW for a broken or undecodable href, because the caller's job is to report
+ * a tileset it could not measure, not to fail the import of every other layer in the map.
+ */
+export async function imageSizeAsync(href: string): Promise<{ width: number; height: number } | null> {
+    if (typeof Image === "undefined") return null;      // no DOM (unit tests): nothing to decode
+    const ready = naturalSize(href);
+    if (ready) return ready;
+    const entry = imageCache.get(href);
+    // `resolveImage` has already started the load and remembers a FAILURE as an entry, so a second
+    // call here would never retry it — an entry that exists and is not loaded is either in flight
+    // or dead, and both are answered by waiting for the element's own events.
+    const img = entry ? entry.img : null;
+    if (!img) return null;
+    // ALREADY FINISHED, AND FINISHED BADLY. `complete` is true once a load has settled either way,
+    // so an href that failed BEFORE this was called has already fired its `error` and would never
+    // fire another — a listener attached now waits for an event that cannot arrive, and the import
+    // hangs rather than reporting a tileset it could not measure. Since the entry is never retried,
+    // this is the only place that can notice.
+    if (img.complete) return naturalSize(href);
+    return new Promise(resolve => {
+        const done = () => {
+            img.removeEventListener("load", done);
+            img.removeEventListener("error", fail);
+            resolve(naturalSize(href));
+        };
+        const fail = () => {
+            img.removeEventListener("load", done);
+            img.removeEventListener("error", fail);
+            resolve(null);
+        };
+        img.addEventListener("load", done);
+        img.addEventListener("error", fail);
+    });
+}
+
+/**
  * A decoded image's own pixel dimensions, or null while it is not ready.
  *
  * Exists because a SOURCE RECT is expressed in source pixels, and SVG can only honour that through

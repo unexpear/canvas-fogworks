@@ -128,11 +128,12 @@ import { svgNodeSpecs, SvgNodeSpec } from "../core/import/SvgNodes";
 import { parseFontFile, fontFileError, FontInfo } from "../core/import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, tilesetFor, tileSourceRect,
     tileImageBox, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer, objectPlacement,
+    withImageSize,
     TiledTileset } from "../core/import/TiledMap";
 import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
-import { naturalSize, surfaceUrl } from "../../src/renderer/ImageCache";
+import { naturalSize, surfaceUrl, imageSizeAsync } from "../../src/renderer/ImageCache";
 import { SourceRect } from "../core/document/Node";
 import { Action } from "../core/actions/Action";
 import { textLinesFor } from "../renderer/TextRaster";
@@ -5249,14 +5250,6 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                                     await api.readTiledTileset(tiledFolder, mapPath, stub.source), stub);
                                             } catch (err) { problems.push(`${stub.source}: ${String(err)}`); }
                                         }
-                                        sets.push(set);
-                                        // Reported once RESOLVED, which is the only point an
-                                        // external set has an image to be measured against. The
-                                        // map already noted the embedded ones for itself.
-                                        if (stub.source) {
-                                            const over = tilesetOverflow(set);
-                                            if (over) problems.push(over);
-                                        }
                                         // A sheet-backed set has ONE image; a collection has one
                                         // per tile. Both are cached by path, so a tile referenced
                                         // a thousand times is still decoded once.
@@ -5266,6 +5259,36 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                             try {
                                                 sheets.set(rel, await api.readTiledImage(tiledFolder, mapPath, rel));
                                             } catch (err) { problems.push(`${rel}: ${String(err)}`); }
+                                        }
+                                        // A SET THAT DECLARES NEITHER ITS COLUMN COUNT NOR ITS
+                                        // IMAGE'S SIZE can only be sliced by MEASURING the picture,
+                                        // and this is the one place that holds both. `deriveGrid`
+                                        // already recovers the count from a DECLARED size — 25 of
+                                        // the tree's 26 such sets are answered that way, in the
+                                        // parser, with no bitmap — so this is the last case rather
+                                        // than the common one, and the decode is paid for only by
+                                        // the file that needs it. Tiled's own `perspective_walls`
+                                        // is that file: 79 painted cells that resolved to nothing.
+                                        const sheetPath = set.image;
+                                        if (sheetPath && set.columns <= 0 && set.imageWidth === null) {
+                                            const url = sheets.get(sheetPath);
+                                            const size = url ? await imageSizeAsync(url) : null;
+                                            if (size) set = withImageSize(set, size.width, size.height);
+                                            // SAID OUT LOUD when it cannot be measured either, or
+                                            // the map arrives empty with nothing to act on — which
+                                            // is how this one went unnoticed.
+                                            else problems.push(`tileset "${set.name}" states neither a column `
+                                                + "count nor its image's size, and the image could not be "
+                                                + "measured, so none of its tiles could be placed");
+                                        }
+                                        sets.push(set);
+                                        // Reported once RESOLVED, which is the only point an
+                                        // external set has an image to be measured against — and
+                                        // that is now after the grid is recovered, since a set with
+                                        // no columns has no grid to overflow.
+                                        if (stub.source) {
+                                            const over = tilesetOverflow(set);
+                                            if (over) problems.push(over);
                                         }
                                     }
 

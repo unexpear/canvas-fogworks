@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1767;
+const EXPECTED_TESTS = 1772;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1089,6 +1089,21 @@ const MUTANTS = [
       from: "    const picture = pictures.get(index);\n    // A CELL NAMING A TILE THE SET DOES NOT HOLD DRAWS NOTHING",
       to: "    const picture = pictures.get(index) ?? pictures.values().next().value;\n    // A CELL NAMING A TILE THE SET DOES NOT HOLD DRAWS NOTHING",
       note: "a cell naming a tile the set does not hold falls back to the set's FIRST tile, so a sparse set (real ones skip ids) draws a plausible wrong picture instead of nothing" },
+
+    // A SET THAT STATES NEITHER ITS COLUMNS NOR ITS IMAGE SIZE. One file in the tree, 79 cells, and
+    // the recovery has to leave the other 25 such sets — the ones that DO state a size — untouched.
+    { id: "CL1", file: "src/core/import/TiledMap.ts",
+      from: "    if (set.imageWidth !== null || !Number.isFinite(width) || !Number.isFinite(height)",
+      to: "    if (!Number.isFinite(width) || !Number.isFinite(height)",
+      note: "a measured bitmap OVERRIDES what the file declared, so the picture's real size silently wins over the map's own claim — two answers to one question, and the file stops being the authority" },
+    { id: "CL2", file: "src/core/import/TiledMap.ts",
+      from: "    return deriveGrid({ ...set, imageWidth: width, imageHeight: height });",
+      to: "    return { ...set, imageWidth: width, imageHeight: height };",
+      note: "the size is recorded and the grid is NOT re-derived, so `columns` stays 0 and every gid still resolves to nothing — the measurement happens and changes nothing" },
+    { id: "CL3", file: "src/renderer/ImageCache.ts",
+      from: "    if (img.complete) return naturalSize(href);",
+      to: "    if (entry.loaded) return naturalSize(href);",
+      note: "an href whose load ALREADY failed is waited on for an event that cannot arrive, so the import hangs with no error anywhere rather than reporting the set it could not measure" },
 
     // TILE ANCHORING. A tile sits at the BOTTOM of its cell, so art taller than the grid stands up
     // from it. Every mutant here still places every tile — what changes is how far off the ground.

@@ -115,7 +115,7 @@ import { parseSvgTransform, Rect, Mat2D } from "../geometry/Matrix";
 import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
-    tileSourceRect, tilePosition, tileImageBox, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer,
+    tileSourceRect, tilePosition, tileImageBox, withImageSize, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer,
     TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES, objectBox, objectTransform, objectPlacement, parseProperties, userDataFor,
     TiledObject, TiledObjectGroup, TiledProperty } from "../import/TiledMap";
 import { parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
@@ -15688,6 +15688,62 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // …and the diamond still moves half a cell per column, which is `tilePosition`'s job and
         // must not have been absorbed into this one.
         expect(tileImageBox(iso, none, none, { width: 64, height: 64 }, 1, 0).x).toBe(32);
+    });
+
+    test("a set that states neither its columns nor its image size is MEASURED, not dropped", () => {
+        // THE MEASUREMENT THAT SCOPED THIS. Swept over every `<tileset>` in the tree — 46 of them —
+        // 32 declare no usable `columns`. Six are COLLECTIONS, which have no grid to cut and are
+        // not a defect. Of the 26 sheet-backed ones, **25 declare `<image width height>` and were
+        // already answered** by `deriveGrid` at parse time, which is why the sewer maps round-trip.
+        // ONE file states neither: Tiled's own `perspective_walls.tsx`, whose 79 painted cells all
+        // resolved to nothing. So this is the last case rather than the common one, and the split
+        // is what decides where the code goes — the parser keeps the 25, the caller gets the 1.
+        const noSize = `<?xml version="1.0" encoding="UTF-8"?>
+<tileset name="perspective_walls" tilewidth="64" tileheight="64">
+ <tileoffset x="-32" y="0"/>
+ <image source="perspective_walls.png"/>
+</tileset>`;
+        const stub = { firstGid: 1, source: "perspective_walls.tsx", name: "", tileWidth: 0,
+            tileHeight: 0, columns: 0, tileCount: 0, spacing: 0, margin: 0, image: null,
+            imageWidth: null, imageHeight: null, tiles: [], offsetX: 0, offsetY: 0 };
+        const parsed = parseTiledTileset(noSize, stub);
+        // AS PARSED it can cut nothing: `deriveGrid` bails with no image size to divide, so every
+        // gid answers null and the map imports as an empty grid.
+        expect(parsed.columns).toBe(0);
+        expect(tileSourceRect(parsed, 1)).toBeNull();
+
+        // MEASURED, the picture is 256x256 — Tiled's formula gives four columns of 64.
+        const measured = withImageSize(parsed, 256, 256);
+        expect(measured.columns).toBe(4);
+        expect(measured.tileCount).toBe(16);
+        expect(tileSourceRect(measured, 1)).toEqual({ x: 0, y: 0, width: 64, height: 64 });
+        // …and gid 6 is column 1, row 1, which is what proves the COUNT was used and not just set.
+        expect(tileSourceRect(measured, 6)).toEqual({ x: 64, y: 64, width: 64, height: 64 });
+        // THE OFFSET SURVIVES. It is the evidence behind the anchoring rule (`tileImageBox`), and a
+        // re-derive that rebuilt the record field by field would drop it — which is the exact
+        // failure this codebase has now paid for five times.
+        expect([measured.offsetX, measured.offsetY]).toEqual([-32, 0]);
+
+        // THE FILE IS THE AUTHORITY. A set that already states its size, or its columns, is
+        // returned UNTOUCHED — otherwise a measured bitmap could contradict what the map says and
+        // there would be two answers to one question. This is also what makes the call safe to
+        // make on every set rather than only on the broken ones.
+        const declares = parseTiledTileset(
+            noSize.replace('source="perspective_walls.png"',
+                'source="perspective_walls.png" width="128" height="128"'), stub);
+        expect(declares.columns).toBe(2);
+        expect(withImageSize(declares, 256, 256)).toBe(declares);
+        // …and a size that is not a size changes nothing rather than producing NaN columns.
+        expect(withImageSize(parsed, 0, 256)).toBe(parsed);
+        expect(withImageSize(parsed, Number.NaN, 256)).toBe(parsed);
+
+        // SPACING AND MARGIN STILL COUNT, or the recovery would be right only for the gutterless
+        // sheets and quietly wrong for the rest: 4 columns of 16 with a 1px gutter and a 2px margin
+        // span 2 + 16*4 + 3 + 2 = 71.
+        const gutter = parseTiledTileset(
+            `<tileset name="g" tilewidth="16" tileheight="16" spacing="1" margin="2">`
+            + `<image source="g.png"/></tileset>`, stub);
+        expect(withImageSize(gutter, 71, 71).columns).toBe(4);
     });
 
     test("a tileset can be a COLLECTION of files rather than one sheet", () => {

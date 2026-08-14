@@ -8,6 +8,7 @@
  */
 
 import { emitCanvas, setImageReadyCallback } from "./emitCanvas";
+import { imageSizeAsync } from "./ImageCache";
 import { buildRenderModel } from "./RenderModel";
 import { RendererState } from "./RendererState";
 import { createEmptyDocument, ProjectDocument } from "../core/document/Document";
@@ -1192,5 +1193,85 @@ describe("a COLLECTION tileset draws a file per cell", () => {
             // inert-reference rule a dangling `tilesetId` follows.
             expect(run(collectionDoc([1, 1])).calls.filter(x => x.op === "drawImage")).toHaveLength(0);
         } finally { restore(); }
+    });
+});
+
+// ─── Measuring an image the import path must wait for ────────────────────────
+/**
+ * `imageSizeAsync` — the one caller that cannot draw a frame later and try again.
+ *
+ * A renderer answers null while an image decodes and repaints when it arrives. An IMPORT has no
+ * next frame: it has to know how wide a tileset's picture is before it can work out how many
+ * columns the sheet has, and that number decides whether 79 painted cells become tiles or become
+ * nothing. So this awaits the decode — and the failure paths are what the tests are for, because a
+ * promise that never settles is an import that hangs with no error anywhere.
+ */
+describe("imageSizeAsync waits for a decode, and never waits forever", () => {
+    /** An `Image` whose load can be settled BY THE TEST, either way, at a chosen moment. */
+    function controllableImages() {
+        const g = globalThis as unknown as { Image?: unknown };
+        const saved = g.Image;
+        const made: { fire: (ok: boolean, w?: number, h?: number) => void }[] = [];
+        g.Image = class {
+            naturalWidth = 0; naturalHeight = 0; complete = false;
+            onload: (() => void) | null = null;
+            private listeners: Record<string, (() => void)[]> = { load: [], error: [] };
+            addEventListener(type: string, fn: () => void) { (this.listeners[type] ??= []).push(fn); }
+            removeEventListener(type: string, fn: () => void) {
+                this.listeners[type] = (this.listeners[type] ?? []).filter(f => f !== fn);
+            }
+            set src(_v: string) {
+                made.push({ fire: (ok, w = 0, h = 0) => {
+                    this.naturalWidth = w; this.naturalHeight = h; this.complete = true;
+                    if (ok) { this.onload?.(); this.listeners.load.forEach(f => f()); }
+                    else this.listeners.error.forEach(f => f());
+                } });
+            }
+        };
+        return { made, restore: () => { g.Image = saved; } };
+    }
+
+    it("resolves with the size once the decode lands", async () => {
+        const { made, restore } = controllableImages();
+        try {
+            const pending = imageSizeAsync("waited-for.png");
+            // Not settled yet — the decode has not happened, which is the whole reason this exists.
+            expect(made).toHaveLength(1);
+            made[0].fire(true, 256, 256);
+            expect(await pending).toEqual({ width: 256, height: 256 });
+        } finally { restore(); }
+    });
+
+    it("resolves NULL for a load that fails, rather than hanging the import", async () => {
+        const { made, restore } = controllableImages();
+        try {
+            const pending = imageSizeAsync("broken.png");
+            made[0].fire(false);
+            expect(await pending).toBeNull();
+        } finally { restore(); }
+    });
+
+    it("resolves for a load that ALREADY failed, which is the one that hangs", async () => {
+        const { made, restore } = controllableImages();
+        try {
+            // The cache never retries a failure: the entry exists and stays unloaded. So the error
+            // fired before anyone asked for the size, and a listener attached afterwards waits for
+            // an event that cannot arrive. `complete` is the only thing that can tell.
+            const first = imageSizeAsync("already-dead.png");
+            made[0].fire(false);
+            expect(await first).toBeNull();
+            // A SECOND ask, after the fact — this is the hang.
+            await expect(Promise.race([
+                imageSizeAsync("already-dead.png"),
+                new Promise(r => setTimeout(() => r("HUNG"), 50))
+            ])).resolves.toBeNull();
+        } finally { restore(); }
+    });
+
+    it("answers null with no DOM at all, which is what a unit run has", async () => {
+        const g = globalThis as unknown as { Image?: unknown };
+        const saved = g.Image;
+        delete g.Image;
+        try { expect(await imageSizeAsync("nowhere.png")).toBeNull(); } finally { g.Image = saved; }
     });
 });

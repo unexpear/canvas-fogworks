@@ -409,6 +409,34 @@ function deriveGrid(set: TiledTileset): TiledTileset {
 }
 
 /**
+ * The same set, told how big its image really is — and re-derived.
+ *
+ * `deriveGrid` runs at parse time and bails on its first line when `imageWidth` is null, because
+ * there is nothing to divide. That is the whole of the remaining gap, and it is one file wide.
+ * Swept over every `<tileset>` in the tree (46 of them): 32 declare no usable `columns`, 6 of those
+ * are COLLECTIONS with no grid to cut, and of the 26 sheet-backed ones **25 declare `<image
+ * width height>` and already work**. The twenty-sixth is Tiled's own `perspective_walls.tsx`, which
+ * declares neither the count nor the size, so its 79 painted cells all resolved to nothing.
+ *
+ * A FUNCTION RATHER THAN AN ARGUMENT TO THE PARSER, for the reason the parser takes `inflate` and
+ * resolves no paths: reading an image needs a filesystem or a decoder, and this module has neither.
+ * The caller is the only thing holding both the set and the bitmap; this is where it puts them
+ * together. Pure, synchronous, and testable without either.
+ *
+ * IT NEVER OVERRIDES WHAT THE FILE SAID. A set that declares its own size or its own `columns` is
+ * returned untouched — the file is the authority, and a measured bitmap that disagreed with it
+ * would be a second answer to a question already answered. That is also what makes this safe to
+ * call on every set rather than only on the broken ones.
+ */
+export function withImageSize(set: TiledTileset, width: number, height: number): TiledTileset {
+    if (set.imageWidth !== null || !Number.isFinite(width) || !Number.isFinite(height)
+        || width <= 0 || height <= 0) {
+        return set;
+    }
+    return deriveGrid({ ...set, imageWidth: width, imageHeight: height });
+}
+
+/**
  * A collection set's per-tile images, and its draw offset.
  *
  * Read from the same text for both paths — an embedded set and an external `.tsx` are the same
