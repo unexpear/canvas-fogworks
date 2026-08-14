@@ -270,6 +270,17 @@ export interface WorldState {
      * would make `contact` fire twice and `separate` never.
      */
     contacts: ReadonlySet<string>;
+    /**
+     * Bodies removed from this RUN — by a command, never by the physics.
+     *
+     * MONOTONIC, and it has to be: `applyWorld` hides these from the derived document, and a body
+     * that came back would need its node's geometry restored from a world that no longer holds it.
+     * Nothing here un-despawns; Stop throws the whole world away, which is what brings them back.
+     *
+     * The STORED document is untouched, so a despawned enemy is still listed in the layer panel and
+     * still there when the run ends. That is the same bargain every other part of a run strikes.
+     */
+    despawned: ReadonlySet<string>;
     /** What the step that produced this world noticed. Empty on most steps, by design. */
     events: readonly WorldEvent[];
 }
@@ -465,7 +476,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
             vx: 0, vy: 0, onGround: false, groundFriction: 1
         });
     }
-    return { bodies, time: 0, contacts: new Set(), jumpWas: false, overlaps: new Set(), events: [] };
+    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), jumpWas: false, overlaps: new Set(), events: [] };
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
@@ -894,7 +905,7 @@ export function stepWorld(
             className: doc.nodes.get(first)?.className ?? "" });
     }
 
-    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, jumpWas: input.jump, overlaps: inside, events };
+    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, jumpWas: input.jump, overlaps: inside, events };
 }
 
 /**
@@ -908,8 +919,26 @@ export function stepWorld(
  * THE SAME DOCUMENT COMES BACK when nothing moved, so an idle run costs nothing downstream.
  */
 export function applyWorld(doc: ReadonlyDocument, world: WorldState): ReadonlyDocument {
-    if (world.bodies.size === 0) return doc;
+    // DESPAWNED NODES ARE HANDLED BEFORE EITHER EARLY RETURN, and that ordering is the whole of it.
+    // Both gates below — "no bodies at all" and "nothing moved" — are about POSITIONS, and a run
+    // that despawned something has a picture to change whether or not anything moved. Hanging the
+    // stamp off the lazily-allocated `nodes` map would drop it on exactly the frames where the
+    // survivors are all sitting still, which for a stomped enemy is most of them.
+    //
+    // `hidden` rather than deletion: `dropHidden` already means "gone from the DISPLAYED scene with
+    // its subtree, still stored, still listed", which is precisely a despawn, and it takes the
+    // node's children with it. Omitting the node instead would leave `rootNodeUuids` naming
+    // something absent and make `validateDocumentIntegrity` throw on a dangling parent.
     let nodes: Map<string, Node> | null = null;
+    if (world.despawned.size > 0) {
+        for (const id of world.despawned) {
+            const node = doc.nodes.get(id);
+            if (!node || node.hidden) continue;
+            if (!nodes) nodes = new Map(doc.nodes as ReadonlyMap<string, Node>);
+            nodes.set(id, { ...(node as Node), hidden: true });
+        }
+    }
+    if (world.bodies.size === 0) return nodes ? { ...(doc as ProjectDocument), nodes } as ReadonlyDocument : doc;
     for (const [id, body] of world.bodies) {
         const node = doc.nodes.get(id);
         if (!node) continue;
@@ -928,6 +957,79 @@ export function applyWorld(doc: ReadonlyDocument, world: WorldState): ReadonlyDo
     }
     if (!nodes) return doc;
     return { ...(doc as ProjectDocument), nodes } as ReadonlyDocument;
+}
+
+/**
+ * THE CHANNEL BY WHICH SOMETHING OUTSIDE THE PHYSICS ACTS ON A RUN — and the whole reason it is a
+ * closed union applied BETWEEN steps rather than a callback handed to `stepWorld`.
+ *
+ * Slice 5 established that the world reports and does not act, and gave the reason: spawning,
+ * scripts and level transitions are each a separate decision about what an APP does, and welding
+ * any of them into the physics makes all three undesignable. That rule survives here intact. A
+ * command cannot be issued from inside a step, cannot see a step in progress, and cannot make the
+ * physics conditional on anything; it is applied to a finished world, producing another finished
+ * world, by a caller that has read the events.
+ *
+ * BEFORE THIS, THERE WAS NO CHANNEL AT ALL. `stepWorld`'s options carry gravity, solids, tiles,
+ * regions, input and controlled, and not one of them can set a velocity or remove a body — so an
+ * app could hear a stomp and had no way to answer it. API-CONTRACTS said so as a stated limit; this
+ * is the limit being lifted deliberately rather than by leaving `es.world` writable, which was "a
+ * hole, not a contract".
+ *
+ * TWO VERBS, because two is what a stomp needs and inventing a third ahead of a caller is the
+ * `Document.clips` mistake. Neither is measured — see the invention notice in this module's header.
+ */
+export type RuntimeCommand =
+    | { kind: "despawn"; bodyId: string }
+    /** Absent components are LEFT ALONE, so a bounce can set vy without touching a walk in progress. */
+    | { kind: "setVelocity"; bodyId: string; vx?: number; vy?: number };
+
+/**
+ * A world with the commands applied, in array order.
+ *
+ * APPLIED PER STEP, NOT PER FRAME, and the caller must honour that: a frame may earn five steps, and
+ * batching the commands to the end of it delays every bounce by up to four steps. Measured on a
+ * stomp-and-bounce: per-step and per-frame land the hero 14.25px apart.
+ *
+ * DESPAWN WINS OVER A LATER setVelocity ON THE SAME BODY, because it must — the body is gone, and
+ * reading `world.bodies` fresh per command rather than from the map being built is what leaves a
+ * body in `bodies` AND `despawned` at once: an invisible thing with full physics.
+ *
+ * Returns the SAME world when there is nothing to do, so an ordinary step costs nothing.
+ */
+export function applyCommands(world: WorldState, commands: readonly RuntimeCommand[]): WorldState {
+    if (commands.length === 0) return world;
+    let bodies: Map<string, Body> | null = null;
+    let despawned: Set<string> | null = null;
+    for (const c of commands) {
+        // ACCUMULATING MAP, never `world.bodies` — see above.
+        const live = bodies ?? world.bodies;
+        const body = live.get(c.bodyId);
+        if (!body) continue;                       // already gone, or never a body
+        if (c.kind === "despawn") {
+            if (!bodies) bodies = new Map(world.bodies);
+            if (!despawned) despawned = new Set(world.despawned);
+            bodies.delete(c.bodyId);
+            despawned.add(c.bodyId);
+            continue;
+        }
+        if (c.vx === undefined && c.vy === undefined) continue;
+        if (!bodies) bodies = new Map(world.bodies);
+        bodies.set(c.bodyId, {
+            ...body,
+            vx: c.vx ?? body.vx,
+            vy: c.vy ?? body.vy,
+            // A body given an upward velocity is NOT on the ground any more, and saying so here is
+            // what stops the next step's jump gate from handing out a second jump off the bounce.
+            onGround: (c.vy !== undefined && c.vy < 0) ? false : body.onGround
+        });
+    }
+    if (!bodies && !despawned) return world;
+    return {
+        ...world,
+        bodies: bodies ?? world.bodies,
+        despawned: despawned ?? world.despawned
+    };
 }
 
 /**

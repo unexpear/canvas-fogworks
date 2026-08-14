@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1876;
+const EXPECTED_TESTS = 1892;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1412,6 +1412,47 @@ const MUTANTS = [
       from: "            const side = ab !== \"inside\" ? ab : oppositeSide(sideOf(b, a));",
       to: "            const side = ab;",
       note: "the pair is derived from whichever id sorts first even when that body is the CONTAINED one, whose own answer is `inside` — so an ordinary small enemy under a big hero reports (inside, inside) and the stomp is unreadable from either side" },
+
+    // ACTING ON EVENTS (M18 slice 10). Four of the rule's five clauses are invisible to any fixture
+    // built from one hero and one enemy — deleting them all gives byte-identical results — so each
+    // has its own mutant and its own fixture, and the region one is the sharpest: the SHIPPED rule
+    // fires on zero corpus objects while that MUTANT fires on all twenty-one of them.
+    { id: "RU1", file: "src/core/runtime/Rules.ts",
+      from: "        if (e.kind !== \"contact\") continue;",
+      to: "",
+      note: "REGIONS become stompable, so the player bounces off — and tries to despawn — every coin, spike, exit, blob and NPC it lands on. An `enter` event carries a `side` too, which is exactly what makes this look right" },
+    { id: "RU2", file: "src/core/runtime/Rules.ts",
+      from: "        if (e.side !== \"below\") continue;",
+      to: "",
+      note: "walking into an enemy kills it exactly like landing on it, so the one distinction the whole contact slice was built to make stops being made" },
+    { id: "RU3", file: "src/core/runtime/Rules.ts",
+      from: "        if (e.className === \"\") continue;",
+      to: "",
+      note: "an unclassed body becomes an actor, so the corpus's ONE dynamic object — sticker-knight's 96x96 block a player PUSHES — is deleted the first time anybody stands on it" },
+    { id: "RU4", file: "src/core/runtime/Rules.ts",
+      from: "        if (e.bodyId !== me) continue;",
+      to: "",
+      note: "the rule fires on the event reported to the ENEMY as well, so an enemy landing on the player despawns the player and bounces a body that is not being driven" },
+    { id: "RU5", file: "src/core/runtime/Rules.ts",
+      from: "        if (!bounced) {\n            bounced = true;",
+      to: "        {",
+      note: "each enemy in a multi-stomp issues its own bounce; a velocity is a STATE, so the last one wins and the launch is right by accident — until a rule that accumulates is written on top of it" },
+    { id: "RU6", file: "src/core/runtime/Rules.ts",
+      from: "        out.push({ kind: \"despawn\", bodyId: e.nodeId });",
+      to: "        out.push({ kind: \"despawn\", bodyId: e.bodyId });",
+      note: "the PLAYER is despawned instead of the thing it landed on — the event names both, and `bodyId` is the one being reported to" },
+    { id: "AC1", file: "src/core/runtime/World.ts",
+      from: "        const live = bodies ?? world.bodies;",
+      to: "        const live = world.bodies;",
+      note: "each command reads the world as it was rather than as it is becoming, so a despawn followed by a setVelocity for the same body leaves it in BOTH `bodies` and `despawned` — an invisible thing with full physics" },
+    { id: "AC2", file: "src/core/runtime/World.ts",
+      from: "            onGround: (c.vy !== undefined && c.vy < 0) ? false : body.onGround",
+      to: "            onGround: body.onGround",
+      note: "a bounced body still believes it is standing on something, so the next step's jump gate hands out a free second jump at the top of every stomp" },
+    { id: "AC3", file: "src/core/runtime/World.ts",
+      from: "    if (world.despawned.size > 0) {\n        for (const id of world.despawned) {\n            const node = doc.nodes.get(id);\n            if (!node || node.hidden) continue;\n            if (!nodes) nodes = new Map(doc.nodes as ReadonlyMap<string, Node>);\n            nodes.set(id, { ...(node as Node), hidden: true });\n        }\n    }",
+      to: "",
+      note: "a despawned body vanishes from the simulation and stays on screen forever — the run reports a kill and the corpse keeps standing there" },
 ];
 
 function runSuite() {

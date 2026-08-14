@@ -1,0 +1,267 @@
+import { createEmptyDocument, ProjectDocument } from "../document/Document";
+import { Node, UserData } from "../document/Node";
+import { resolveScene } from "../document/Components";
+import {
+    FIXED_STEP, JUMP_HEIGHT, DEFAULT_GRAVITY, jumpSpeedFor,
+    worldFrom, stepWorld, applyWorld, applyCommands, movedIds, WorldState
+} from "./World";
+import { marioRules } from "./Rules";
+
+/**
+ * Every number is hand-computed. `jumpSpeedFor(72, 900)` is `sqrt(2*900*72)` = `sqrt(129600)` = 360
+ * EXACTLY, so a bounce is `vy = -360` and the step after it is `-360 + 15 = -345`.
+ */
+
+const prop = (v: string) => ({ type: "string", value: v });
+
+function docWith(nodes: { id: string; x: number; y: number; w?: number; h?: number;
+                          className?: string; userData?: UserData }[]): ProjectDocument {
+    const doc = createEmptyDocument();
+    for (const n of nodes) {
+        doc.nodes.set(n.id, {
+            id: n.id, type: "core.rectangle", parent: null, children: [],
+            geometry: { x: n.x, y: n.y, width: n.w ?? 10, height: n.h ?? 10 },
+            style: { fill: "#888", opacity: 1 }, layout: {},
+            ...(n.className ? { className: n.className } : {}),
+            ...(n.userData ? { userData: n.userData } : {})
+        } as Node);
+        doc.rootNodeUuids.push(n.id);
+    }
+    return doc;
+}
+
+const FLOOR_TOP = 700;
+/** Hero 12x16 above a 20x8 enemy resting on the floor, and the enemy is INSIDE the hero's x span. */
+const level = (enemyClass?: string, heroY = 600) => docWith([
+    { id: "floor", x: 900, y: FLOOR_TOP, w: 400, h: 20, userData: { bodyType: prop("static") } },
+    { id: "enemy", x: 1000, y: 692, w: 20, h: 8, className: enemyClass,
+      userData: { bodyType: prop("dynamic") } },
+    { id: "hero", x: 1004, y: heroY, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
+]);
+
+/** Step until the rules fire, applying them per step exactly as the app does. */
+const runUntilStomp = (doc: ProjectDocument, controlled: string | null = "hero") => {
+    let w = worldFrom(doc);
+    for (let i = 0; i < 120; i++) {
+        w = stepWorld(doc, w, { controlled });
+        const commands = marioRules(w, { controlled });
+        w = applyCommands(w, commands);
+        if (commands.length > 0) return { world: w, step: i + 1, commands };
+    }
+    return { world: w, step: -1, commands: [] as ReturnType<typeof marioRules> };
+};
+
+describe("applyCommands — the channel, with no policy in it", () => {
+    const twoBodies = () => docWith([
+        { id: "a", x: 0, y: 0, userData: { bodyType: prop("dynamic") } },
+        { id: "b", x: 100, y: 0, userData: { bodyType: prop("dynamic") } }
+    ]);
+
+    it("returns the SAME world for an empty command list", () => {
+        const w = worldFrom(twoBodies());
+        expect(applyCommands(w, [])).toBe(w);
+    });
+
+    it("despawn removes the body from the simulation and records it", () => {
+        const w = applyCommands(worldFrom(twoBodies()), [{ kind: "despawn", bodyId: "a" }]);
+        expect(w.bodies.has("a")).toBe(false);
+        expect(w.bodies.has("b")).toBe(true);
+        expect([...w.despawned]).toEqual(["a"]);
+    });
+
+    it("setVelocity writes only the components it names", () => {
+        const base = worldFrom(twoBodies());
+        const moving = applyCommands(base, [{ kind: "setVelocity", bodyId: "a", vx: 50, vy: 20 }]);
+        const only = applyCommands(moving, [{ kind: "setVelocity", bodyId: "a", vy: -360 }]);
+        expect(only.bodies.get("a")!.vx).toBe(50);       // untouched
+        expect(only.bodies.get("a")!.vy).toBe(-360);
+    });
+
+    it("an UPWARD setVelocity clears onGround, or the bounce hands out a free second jump", () => {
+        const doc = docWith([
+            { id: "floor", x: 0, y: 400, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "a", x: 0, y: 390, userData: { bodyType: prop("dynamic") } }
+        ]);
+        let w = stepWorld(doc, worldFrom(doc));
+        expect(w.bodies.get("a")!.onGround).toBe(true);
+        w = applyCommands(w, [{ kind: "setVelocity", bodyId: "a", vy: -360 }]);
+        expect(w.bodies.get("a")!.onGround).toBe(false);
+        // …and a DOWNWARD one does not, because landing is what sets it.
+        const down = applyCommands(w, [{ kind: "setVelocity", bodyId: "a", vy: 5 }]);
+        expect(down.bodies.get("a")!.onGround).toBe(false);
+    });
+
+    it("DESPAWN WINS over a later setVelocity for the same body", () => {
+        // Reading `world.bodies` fresh per command instead of the map being built is what leaves a
+        // body in BOTH sets at once: an invisible thing with full physics.
+        const w = applyCommands(worldFrom(twoBodies()), [
+            { kind: "despawn", bodyId: "a" },
+            { kind: "setVelocity", bodyId: "a", vy: -360 }
+        ]);
+        expect(w.bodies.has("a")).toBe(false);
+        expect([...w.despawned]).toEqual(["a"]);
+    });
+
+    it("ignores a body that is not there rather than inventing one", () => {
+        const w = worldFrom(twoBodies());
+        const after = applyCommands(w, [{ kind: "despawn", bodyId: "ghost" },
+                                        { kind: "setVelocity", bodyId: "ghost", vy: 1 }]);
+        expect(after.bodies.size).toBe(2);
+        expect(after.despawned.size).toBe(0);
+    });
+});
+
+describe("marioRules — the game, which the engine does not know about", () => {
+    it("A STOMP issues exactly two commands: the enemy goes, the hero bounces", () => {
+        const { commands, step } = runUntilStomp(level("enemy"));
+        expect(step).toBe(25);                       // free fall from 600 reaches the enemy here
+        expect(commands).toEqual([
+            { kind: "despawn", bodyId: "enemy" },
+            { kind: "setVelocity", bodyId: "hero", vy: -jumpSpeedFor(JUMP_HEIGHT, DEFAULT_GRAVITY) }
+        ]);
+        expect(jumpSpeedFor(JUMP_HEIGHT, DEFAULT_GRAVITY)).toBe(360);
+    });
+
+    it("does NOTHING to an unclassed body — the corpus's one dynamic object is a block you PUSH", () => {
+        // Without this the rule would delete sticker-knight's 96x96 push-block the first time
+        // anybody stood on it. The class is the marker, and it is an inference, not a measurement.
+        const { step, commands } = runUntilStomp(level(undefined));
+        expect(step).toBe(-1);
+        expect(commands).toEqual([]);
+    });
+
+    it("does NOTHING when the contact is from the side", () => {
+        // Both resting on the floor, hero walking right into the enemy: side is `right`, not `below`.
+        const doc = docWith([
+            { id: "floor", x: 900, y: FLOOR_TOP, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "enemy", x: 1102, y: 692, w: 20, h: 8, className: "enemy",
+              userData: { bodyType: prop("dynamic") } },
+            { id: "hero", x: 1000, y: 684, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
+        ]);
+        let w = worldFrom(doc);
+        let fired = 0;
+        for (let i = 0; i < 40; i++) {
+            w = stepWorld(doc, w, { input: { left: false, right: true, jump: false }, controlled: "hero" });
+            const c = marioRules(w, { controlled: "hero" });
+            fired += c.length;
+            w = applyCommands(w, c);
+        }
+        expect(fired).toBe(0);
+        expect(w.bodies.has("enemy")).toBe(true);
+    });
+
+    it("does NOTHING for a REGION, or the player bounces off every coin it lands on", () => {
+        // A classed node that is NOT a body is a Region, and its `enter` event carries a `side` too
+        // — so a rule that forgot to check `kind` would fire on all 21 of the corpus's classed
+        // actors while the shipped rule fires on none of them.
+        const doc = docWith([
+            { id: "floor", x: 900, y: FLOOR_TOP, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "coin", x: 1000, y: 692, w: 20, h: 8, className: "coin" },   // no bodyType
+            { id: "hero", x: 1004, y: 600, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
+        ]);
+        let w = worldFrom(doc);
+        let sawEnter = false, fired = 0;
+        for (let i = 0; i < 120; i++) {
+            w = stepWorld(doc, w, { controlled: "hero" });
+            if (w.events.some(e => e.kind === "enter")) sawEnter = true;
+            fired += marioRules(w, { controlled: "hero" }).length;
+        }
+        expect(sawEnter).toBe(true);        // the event really happened, or this proves nothing
+        expect(fired).toBe(0);
+    });
+
+    it("does NOTHING when the contact is reported to somebody else, or with nothing driven", () => {
+        const doc = level("enemy");
+        let w = worldFrom(doc);
+        let asEnemy = 0, asNobody = 0;
+        for (let i = 0; i < 40; i++) {
+            w = stepWorld(doc, w, { controlled: "hero" });
+            asEnemy += marioRules(w, { controlled: "enemy" }).length;
+            asNobody += marioRules(w, { controlled: null }).length;
+        }
+        expect(asEnemy).toBe(0);
+        expect(asNobody).toBe(0);
+    });
+
+    it("TWO enemies landed on in one step give two despawns and ONE bounce", () => {
+        // A velocity is a state, not an accumulation — two bounces would double the launch speed.
+        const doc = docWith([
+            { id: "floor", x: 900, y: FLOOR_TOP, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "e1", x: 1000, y: 692, w: 20, h: 8, className: "enemy",
+              userData: { bodyType: prop("dynamic") } },
+            { id: "e2", x: 1020, y: 692, w: 20, h: 8, className: "enemy",
+              userData: { bodyType: prop("dynamic") } },
+            // 30 wide, straddling both: 1005..1035 covers e1's 1000..1020 and e2's 1020..1040.
+            { id: "hero", x: 1005, y: 600, w: 30, h: 16, userData: { bodyType: prop("dynamic") } }
+        ]);
+        const { commands } = runUntilStomp(doc);
+        expect(commands.filter(c => c.kind === "despawn").map(c => c.bodyId).sort())
+            .toEqual(["e1", "e2"]);
+        expect(commands.filter(c => c.kind === "setVelocity")).toHaveLength(1);
+    });
+});
+
+describe("the stomp, end to end", () => {
+    it("the enemy leaves the PICTURE and the hero leaves the ground", () => {
+        const doc = level("enemy");
+        const { world, step } = runUntilStomp(doc);
+        expect(step).toBe(25);
+        // The hero is where the step left it — a command moves nothing — and rising.
+        expect(world.bodies.get("hero")!.y).toBe(681.25);
+        expect(world.bodies.get("hero")!.vy).toBe(-360);
+        expect(world.bodies.get("hero")!.onGround).toBe(false);
+
+        // The DERIVED document hides it; the STORED one is untouched, so Stop brings it back.
+        const played = applyWorld(doc, world);
+        expect((played.nodes.get("enemy") as Node).hidden).toBe(true);
+        expect((doc.nodes.get("enemy") as Node).hidden).toBeUndefined();
+        // …and `dropHidden` then takes it out of the scene entirely, which is what "gone" means.
+        expect(resolveScene(played).nodes.has("enemy")).toBe(false);
+        expect(resolveScene(played).nodes.has("hero")).toBe(true);
+
+        // One more step and the bounce is really carrying it upward: -360 + 15 = -345.
+        const after = stepWorld(doc, world, { controlled: "hero" });
+        expect(after.bodies.get("hero")!.vy).toBe(-345);
+        expect(after.bodies.get("hero")!.y).toBe(681.25 - 345 * FIXED_STEP);
+        expect(after.bodies.get("hero")!.y).toBe(675.5);
+    });
+
+    it("HIDES A DESPAWNED NODE ON A FRAME WHERE NOTHING MOVED", () => {
+        // `applyWorld` has two early returns — "no bodies" and "nothing moved" — and both are about
+        // POSITIONS. Hanging the stamp off them drops it on exactly the frames where the survivors
+        // are sitting still, which after a stomp is most of them.
+        const doc = docWith([
+            { id: "floor", x: 0, y: 400, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "rest", x: 100, y: 380, w: 20, h: 20, userData: { bodyType: prop("dynamic") } },
+            { id: "gone", x: 200, y: 380, w: 20, h: 20, className: "enemy",
+              userData: { bodyType: prop("dynamic") } }
+        ]);
+        let w = stepWorld(doc, worldFrom(doc));
+        w = stepWorld(doc, w);
+        // Both bodies rest exactly where the document put them, so nothing is dirty.
+        expect([...movedIds(doc, w)]).toEqual([]);
+        w = applyCommands(w, [{ kind: "despawn", bodyId: "gone" }]);
+        const played = applyWorld(doc, w);
+        expect((played.nodes.get("gone") as Node).hidden).toBe(true);
+        expect(played).not.toBe(doc);
+    });
+
+    it("a despawn SURVIVES the steps that follow it", () => {
+        // `despawned` is carried by stepWorld; without that the enemy reappears one frame later.
+        const doc = level("enemy");
+        let { world } = runUntilStomp(doc);
+        for (let i = 0; i < 10; i++) world = stepWorld(doc, world, { controlled: "hero" });
+        expect([...world.despawned]).toEqual(["enemy"]);
+        expect((applyWorld(doc, world).nodes.get("enemy") as Node).hidden).toBe(true);
+    });
+
+    it("STOP brings it back, because a run owns nothing", () => {
+        const doc = level("enemy");
+        runUntilStomp(doc);
+        // Stop throws the world away and the editor derives the STORED document again.
+        const fresh: WorldState = worldFrom(doc);
+        expect(fresh.despawned.size).toBe(0);
+        expect(applyWorld(doc, fresh).nodes.has("enemy")).toBe(true);
+        expect(resolveScene(doc).nodes.has("enemy")).toBe(true);
+    });
+});

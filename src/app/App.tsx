@@ -134,7 +134,8 @@ import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
 import { naturalSize, surfaceUrl, imageSizeAsync } from "../../src/renderer/ImageCache";
-import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor } from "../core/runtime/World";
+import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands } from "../core/runtime/World";
+import { marioRules } from "../core/runtime/Rules";
 import { followCamera } from "../core/runtime/Camera";
 import { SourceRect } from "../core/document/Node";
 import { Action } from "../core/actions/Action";
@@ -1362,6 +1363,12 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 // the next step and the physics never reads its own output back in.
                 for (let i = 0; i < spend.steps; i++) {
                     world = stepWorld(base, world, { input: es.input, controlled: es.controlled });
+                    // THE RULES RUN PER STEP, INSIDE THE LOOP. A frame may earn five steps, and
+                    // batching the commands to the end of it would delay every bounce by up to four
+                    // — measured at 14.25px on a stomp. The physics still decides nothing: it
+                    // produced events, this reads them, and `applyCommands` answers a FINISHED
+                    // world. `marioRules` is the game; swapping it changes no line below.
+                    world = applyCommands(world, marioRules(world, { controlled: es.controlled }));
                 }
                 es.world = world;
                 es.worldClock = { accumulator: spend.accumulator, lastAt: now };
