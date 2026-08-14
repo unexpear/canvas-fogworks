@@ -1114,6 +1114,29 @@ const MUTANTS = [
       to: "        if (node.geometry.x === body.x) continue;",
       note: "only the X coordinate decides whether a body moved, so a body falling straight down is never stamped onto the document and never appears to move at all — and `if (false)` could not be used here, because it does not COMPILE" },
 
+    // INPUT (M18 slice 2). Every one of these still walks and still jumps — what changes is how it
+    // FEELS, which is the class of defect a "did it move" assertion is blind to.
+    { id: "IN1", file: "src/core/runtime/World.ts",
+      from: "            vx = (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);",
+      to: "            vx += (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);",
+      note: "the walk ACCUMULATES instead of being set, so holding right builds speed without limit and releasing keeps it — the character skates, and every distance assertion becomes a function of how long the key was held" },
+    { id: "IN2", file: "src/core/runtime/World.ts",
+      from: "            if (input.jump && !world.jumpWas && was.onGround) vy = -jumpSpeedFor(JUMP_HEIGHT, gravity);",
+      to: "            if (input.jump && was.onGround) vy = -jumpSpeedFor(JUMP_HEIGHT, gravity);",
+      note: "the jump stops being an EDGE, so a held key re-launches on every grounded step and the body bunny-hops for as long as the button is down" },
+    { id: "IN3", file: "src/core/runtime/World.ts",
+      from: "            if (input.jump && !world.jumpWas && was.onGround) vy = -jumpSpeedFor(JUMP_HEIGHT, gravity);",
+      to: "            if (input.jump && !world.jumpWas) vy = -jumpSpeedFor(JUMP_HEIGHT, gravity);",
+      note: "the ground check goes, so a body jumps in mid-air — which is what `onGround` was computed for in the first place" },
+    { id: "IN4", file: "src/core/runtime/World.ts",
+      from: "        if (vy > MAX_FALL_SPEED) vy = MAX_FALL_SPEED;",
+      to: "        if (Math.abs(vy) > MAX_FALL_SPEED) vy = MAX_FALL_SPEED;",
+      note: "the cap is applied to the RISE as well and with the wrong sign, so a jump is turned into a fall at terminal velocity the instant it launches" },
+    { id: "IN5", file: "src/core/runtime/World.ts",
+      from: "    return { bodies: next, time: world.time + FIXED_STEP, jumpWas: input.jump };",
+      to: "    return { bodies: next, time: world.time + FIXED_STEP, jumpWas: false };",
+      note: "the world forgets whether jump was held, so the edge never latches and a held key bounces — the same defect as IN2 by a different route, which is why the fixture has to watch LANDINGS rather than one step" },
+
     // A SET THAT STATES NEITHER ITS COLUMNS NOR ITS IMAGE SIZE. One file in the tree, 79 cells, and
     // the recovery has to leave the other 25 such sets — the ones that DO state a size — untouched.
     { id: "CL1", file: "src/core/import/TiledMap.ts",
