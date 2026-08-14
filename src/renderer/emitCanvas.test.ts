@@ -1137,7 +1137,11 @@ describe("a COLLECTION tileset draws a file per cell", () => {
         const sheetDoc = collectionDoc([0, 2]);
         sheetDoc.tilesets = [{ id: "coll", name: "T", src: "sheet.png",
             sheet: { columns: 4, tileWidth: CELL, tileHeight: CELL, spacing: 0, margin: 0 },
-            tiles: [], offsetX: 0, offsetY: 0 }];
+            // WITH A PER-TILE RECORD, which is the half that makes this control discriminating: a
+            // sheet-backed set may carry `tiles` for WEIGHTS alone (25 of them in the corpus), so
+            // an empty array here would satisfy "no pictures" for the wrong reason. A mutant that
+            // decided on `tiles.length` rather than on the SHEET survived exactly that fixture.
+            tiles: [{ id: 2, probability: 0.25 }], offsetX: 0, offsetY: 0 }];
         const sheetList = buildRenderModel(SIZE, sheetDoc, {
             selectedNodeIds: [], hoveredNodeId: null, previewRect: null,
             computed: computeGeometry(sheetDoc), viewport: { x: 0, y: 0, zoom: 1 }
