@@ -68,6 +68,46 @@ export const MAX_STEPS_PER_FRAME = 5;
 /** Pixels per second per second. Positive is DOWN, because y grows downward on this canvas. */
 export const DEFAULT_GRAVITY = 900;
 
+/**
+ * The fastest a body may fall, and it is not a feel decision — it is the tunnelling bound.
+ *
+ * Collision here is discrete, so a body passes through any solid thinner than the distance it
+ * covers in one step. Uncapped, a long fall makes that distance unbounded and the rule becomes
+ * "thick enough for how far it fell". Capped at 1200 px/s the travel is at most 20px a step, so
+ * ANY SOLID 20px OR DEEPER IS SAFE, full stop — and every solid in the measured corpus is 32px and
+ * up. A terminal velocity is also what a falling body does, so the honest bound and the expected
+ * behaviour are the same change.
+ */
+export const MAX_FALL_SPEED = 1200;
+
+/** How fast a controlled body walks, and how high it jumps — see `jumpSpeedFor`. */
+export const MOVE_SPEED = 220;
+export const JUMP_HEIGHT = 72;
+
+/**
+ * The upward speed that reaches exactly `height` under `gravity` — `v = sqrt(2*g*h)`.
+ *
+ * STATED AS A HEIGHT rather than as a speed, because a height is the thing a level is built from:
+ * a jump that clears a three-tile wall is a sentence about the art, and 360 px/s is not. It also
+ * means changing gravity keeps the jump clearing the same wall.
+ */
+export function jumpSpeedFor(height = JUMP_HEIGHT, gravity = DEFAULT_GRAVITY): number {
+    return Math.sqrt(2 * gravity * Math.max(0, height));
+}
+
+/**
+ * What the player is holding down. Three booleans, and deliberately not a key map: this module
+ * knows about intent, and which physical key means "jump" is the app's business.
+ */
+export interface Input {
+    left: boolean;
+    right: boolean;
+    jump: boolean;
+}
+
+/** Nothing held — the input a run starts with and the one a test uses when it means "no input". */
+export const NO_INPUT: Input = { left: false, right: false, jump: false };
+
 /** What a body is doing right now. Pixels and pixels-per-second, in the node's own parent space. */
 export interface Body {
     x: number;
@@ -83,6 +123,15 @@ export interface WorldState {
     bodies: ReadonlyMap<string, Body>;
     /** Seconds since the run began, advanced only by whole steps. */
     time: number;
+    /**
+     * Whether jump was held at the END of the last step — which is what makes a jump an EDGE.
+     *
+     * Without it, holding the key fires a new jump on every step the body is grounded, so a
+     * character bunny-hops for as long as you lean on the button. The state has to live here rather
+     * than in the app because the app produces ONE input per frame while the world may take several
+     * steps from it, and the second step must already know the first consumed the press.
+     */
+    jumpWas: boolean;
 }
 
 /** An axis-aligned box in world units — what a solid is, for this slice. */
@@ -127,7 +176,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
             x: node.geometry.x, y: node.geometry.y, vx: 0, vy: 0, onGround: false
         });
     }
-    return { bodies, time: 0 };
+    return { bodies, time: 0, jumpWas: false };
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
@@ -163,10 +212,12 @@ function overlaps(ax: number, ay: number, aw: number, ah: number, b: Solid): boo
  */
 export function stepWorld(
     doc: ReadonlyDocument, world: WorldState,
-    opts?: { gravity?: number; solids?: readonly Solid[] }
+    opts?: { gravity?: number; solids?: readonly Solid[]; input?: Input; controlled?: string | null }
 ): WorldState {
     const gravity = opts?.gravity ?? DEFAULT_GRAVITY;
     const solids = opts?.solids ?? solidsOf(doc);
+    const input = opts?.input ?? NO_INPUT;
+    const controlled = opts?.controlled ?? null;
     const next = new Map<string, Body>();
 
     for (const [id, was] of world.bodies) {
@@ -180,6 +231,26 @@ export function stepWorld(
         let vx = was.vx;
         let vy = was.vy + gravity * FIXED_STEP;
         let x = was.x, y = was.y;
+
+        // THE CONTROLLED BODY, and only it. Which node that is comes from the caller: nothing in
+        // the measured corpus says "this one is the player" — 216 of 248 objects carry no class at
+        // all — so inventing a property for it would be designing ahead of any content. The app
+        // passes the node that was SELECTED when Play was pressed, which is how a level gets
+        // tested; a real convention can replace that the day real content declares one.
+        if (id === controlled) {
+            // SET, NOT ACCUMULATED. Adding an acceleration each step gives ice; a platformer's
+            // walk is a speed you have while the key is down and lose the moment it is up, and
+            // that is what makes the character feel attached to the button.
+            vx = (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);
+            // A JUMP IS AN EDGE, not a state: it fires on the step the key GOES DOWN while the
+            // body is on the ground. Holding it must not bunny-hop, and `jumpWas` is what
+            // remembers the press across the several steps one frame may take.
+            if (input.jump && !world.jumpWas && was.onGround) vy = -jumpSpeedFor(JUMP_HEIGHT, gravity);
+        }
+
+        // TERMINAL VELOCITY, which is a collision bound before it is a feel decision — see
+        // `MAX_FALL_SPEED`. Capped downward only: a jump's rise is bounded by gravity already.
+        if (vy > MAX_FALL_SPEED) vy = MAX_FALL_SPEED;
 
         // HORIZONTAL, then resolve.
         x += vx * FIXED_STEP;
@@ -201,7 +272,7 @@ export function stepWorld(
         next.set(id, { x, y, vx, vy, onGround });
     }
 
-    return { bodies: next, time: world.time + FIXED_STEP };
+    return { bodies: next, time: world.time + FIXED_STEP, jumpWas: input.jump };
 }
 
 /**

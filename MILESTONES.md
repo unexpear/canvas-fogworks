@@ -48,7 +48,7 @@ M14 AI Integration            ⬜
 M15 Plugins                   ⬜
 M16 Collaboration             ⬜
 M17 Production Hardening      ⬜
-M18 Game Runtime              🚧   slice 1: a fixed-step world that PLAYS inside the editor — bodies, gravity, static collision
+M18 Game Runtime              🚧   slices 1-2: a fixed-step world that PLAYS inside the editor — bodies, gravity, static collision, and a character you drive
 ```
 
 \* **Note on M3/M4:** a working **vertical-slice prototype** of the renderer, the
@@ -888,7 +888,28 @@ play mode now KEEPS the incremental geometry path it used to forfeit (4.5x: 4.6m
 **Verified live**: a crate falls 590/596/602 ms across three runs against a hand-computed 589 ms,
 lands exactly on the floor's top, and Stop puts it back where the document says it is.
 
-**NOT in this slice**, each wanting its own design against real content: rotation, friction (read and
-ignored, said out loud), restitution, per-tile collision, broadphase, triggers, spawning, input. The
-corpus's other property vocabulary — `spawncount`, `spawntype`, `script`, `triggering`, `map` — is
-the map of what comes next.
+**Slice 2 — INPUT, so the loop closes.** Left/right is a SET speed rather than an acceleration (a
+platformer's walk is a speed you have while the key is down, and losing it the moment you let go is
+what makes the character feel attached to the button); a jump is stated as a HEIGHT and its launch
+speed derived, `v = sqrt(2gh)`, so changing gravity keeps the jump clearing the same wall. The press
+is an EDGE — holding it is one jump, not a bounce — which needs `jumpWas` on the world, because the
+app produces one input per frame while the world may take several steps from it.
+
+A terminal velocity arrived here too, and it is a COLLISION bound before it is a feel decision:
+capped at 1200 px/s the travel is 20px a step, so slice 1's "as deep as the fastest body's travel"
+becomes the constant **"any solid 20px or deeper is safe"**.
+
+**WHICH BODY YOU DRIVE comes from the SELECTION** when Play was pressed. Nothing in the corpus says
+which object is the player — 216 of 248 carry no class — so a property for it would be schema
+invented ahead of content. Driving the selection is how a level gets tested, and a real convention
+can replace it the day real content declares one.
+
+**While playing the keyboard is the game's**, and the collision is real: an arrow is `Nudge by 1`,
+which dispatches a `TransactionAction` and EDITS THE DOCUMENT. Verified both ways — five presses
+while stopped moved the crate 268 → 273, and the same key while playing walked the body 132px in
+600ms (220 px/s, exactly) and left the document alone.
+
+**STILL NOT DONE**, each wanting its own design against real content: rotation, friction (read and
+ignored, said out loud), restitution, per-tile collision, broadphase, triggers, spawning, and
+anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
+`spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

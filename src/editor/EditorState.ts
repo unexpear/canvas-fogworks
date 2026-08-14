@@ -95,6 +95,16 @@ export interface EditorState {
      */
     world: import("../core/runtime/World").WorldState | null;
     /**
+     * What the player is holding, and WHICH body it drives (M18 slice 2).
+     *
+     * The controlled id is whatever was SELECTED when Play was pressed. Nothing in the measured
+     * corpus says "this one is the player" — 216 of its 248 objects carry no class at all — so a
+     * property for it would be a schema invented ahead of any content. Driving the selection is how
+     * a level gets tested, and a real convention can replace it the day real content declares one.
+     */
+    input: import("../core/runtime/World").Input;
+    controlled: string | null;
+    /**
      * Left-over time the fixed step has not spent, in seconds, and the timestamp it was measured
      * from. Carried rather than dropped: on a 59.94Hz display the remainders add up to a whole step
      * every few seconds, and discarding them makes the world run measurably slow.
@@ -423,6 +433,8 @@ export function createEditorState(): EditorState {
         playReturnViewport: null,
         world: null,
         worldClock: null,
+        input: { left: false, right: false, jump: false },
+        controlled: null,
         transition: null,
         previewRect: null,
         marqueeRect: null,

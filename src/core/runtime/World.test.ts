@@ -10,7 +10,8 @@
 import { createEmptyDocument, ProjectDocument } from "../document/Document";
 import { Node, UserData } from "../document/Node";
 import {
-    FIXED_STEP, MAX_STEPS_PER_FRAME, DEFAULT_GRAVITY, WorldState,
+    FIXED_STEP, MAX_STEPS_PER_FRAME, DEFAULT_GRAVITY, MAX_FALL_SPEED, MOVE_SPEED, JUMP_HEIGHT,
+    NO_INPUT, Input, WorldState, jumpSpeedFor,
     bodyTypeOf, worldFrom, solidsOf, stepWorld, applyWorld, movedIds, stepsFor, propertyOf
 } from "./World";
 
@@ -292,5 +293,158 @@ describe("the accumulator", () => {
         // no previous timestamp at all. Neither may run the world in reverse.
         expect(stepsFor(0.005, -1)).toEqual({ steps: 0, accumulator: 0.005, dropped: 0 });
         expect(stepsFor(0.005, Number.NaN)).toEqual({ steps: 0, accumulator: 0.005, dropped: 0 });
+    });
+});
+
+describe("input — the controlled body, and only it", () => {
+    /** Two dynamic bodies on a wide floor, so "only the controlled one" is checkable. */
+    const level = () => docWith([
+        { id: "hero", x: 100, y: 90, userData: { bodyType: prop("dynamic") } },
+        { id: "other", x: 300, y: 90, userData: { bodyType: prop("dynamic") } },
+        { id: "floor", x: -500, y: 100, w: 2000, h: 20, userData: { bodyType: prop("static") } }
+    ]);
+    /** Settle onto the floor first, so `onGround` is true before any input arrives. */
+    const grounded = (doc: ProjectDocument) => steps(doc, worldFrom(doc), 5);
+    const drive = (doc: ProjectDocument, w: WorldState, input: Input, n: number) => {
+        let out = w;
+        for (let i = 0; i < n; i++) out = stepWorld(doc, out, { input, controlled: "hero" });
+        return out;
+    };
+
+    it("walks at a SET speed while held, and stops the moment it is not", () => {
+        const doc = level();
+        const w = grounded(doc);
+        expect(w.bodies.get("hero")!.onGround).toBe(true);
+        // 60 steps at 220 px/s is one second and 220 px — a speed you HAVE, not one you build up.
+        const walked = drive(doc, w, { left: false, right: true, jump: false }, 60);
+        expect(walked.bodies.get("hero")!.x).toBeCloseTo(100 + MOVE_SPEED, 6);
+        expect(walked.bodies.get("hero")!.vx).toBe(MOVE_SPEED);
+        // RELEASED it stops dead rather than sliding — the difference between a platformer and ice.
+        expect(drive(doc, walked, NO_INPUT, 1).bodies.get("hero")!.vx).toBe(0);
+        // …and left mirrors right, which is what makes MOVE_SPEED a speed rather than an offset.
+        expect(drive(doc, w, { left: true, right: false, jump: false }, 60).bodies.get("hero")!.x)
+            .toBeCloseTo(100 - MOVE_SPEED, 6);
+        // BOTH AT ONCE cancels, rather than one winning by an accident of evaluation order.
+        expect(drive(doc, w, { left: true, right: true, jump: false }, 10).bodies.get("hero")!.vx).toBe(0);
+    });
+
+    it("ONLY the controlled body is driven — the rest fall as they always did", () => {
+        const doc = level();
+        const w = drive(doc, grounded(doc), { left: false, right: true, jump: true }, 30);
+        expect(w.bodies.get("hero")!.vx).toBe(MOVE_SPEED);
+        // The other dynamic body took no input at all: still where it landed, still grounded.
+        expect(w.bodies.get("other")!.vx).toBe(0);
+        expect(w.bodies.get("other")!.x).toBe(300);
+        expect(w.bodies.get("other")!.onGround).toBe(true);
+    });
+
+    it("jumps to the stated HEIGHT, which is the number a level is built from", () => {
+        const doc = level();
+        const w = grounded(doc);
+        const y0 = w.bodies.get("hero")!.y;
+        // v = sqrt(2*g*h): the speed that reaches exactly JUMP_HEIGHT under this gravity.
+        expect(jumpSpeedFor(72, 900)).toBeCloseTo(360, 6);
+        let jumping = stepWorld(doc, w, {
+            input: { left: false, right: false, jump: true }, controlled: "hero" });
+        // EXACTLY the launch speed: the jump SETS vy rather than adding to it, so that step's
+        // gravity is discarded. That is what makes `jumpSpeedFor` mean what it says — adding would
+        // make the real launch speed depend on the step size, and the peak below would drift.
+        expect(jumping.bodies.get("hero")!.vy).toBeCloseTo(-jumpSpeedFor(), 6);
+        let peak = jumping.bodies.get("hero")!.y;
+        for (let i = 0; i < 60; i++) {
+            jumping = stepWorld(doc, jumping, { input: NO_INPUT, controlled: "hero" });
+            peak = Math.min(peak, jumping.bodies.get("hero")!.y);
+        }
+        // WITHIN A STEP'S WORTH of the stated height: a discrete integrator overshoots slightly,
+        // and asserting the exact continuous number would be asserting the wrong model.
+        expect(y0 - peak).toBeGreaterThan(JUMP_HEIGHT - 6);
+        expect(y0 - peak).toBeLessThan(JUMP_HEIGHT + 6);
+        // …and it comes back down to exactly where it started, on the ground.
+        expect(jumping.bodies.get("hero")!.y).toBe(y0);
+        expect(jumping.bodies.get("hero")!.onGround).toBe(true);
+    });
+
+    it("a HELD jump is ONE jump — the press is an edge, not a state", () => {
+        const doc = level();
+        const w = grounded(doc);
+        const y0 = w.bodies.get("hero")!.y;
+        // Hold it for two seconds. Without the edge the body re-launches on every grounded step
+        // and bunny-hops for as long as the button is down.
+        let held = w;
+        let landings = 0, wasAir = false;
+        for (let i = 0; i < 120; i++) {
+            held = stepWorld(doc, held, {
+                input: { left: false, right: false, jump: true }, controlled: "hero" });
+            const b = held.bodies.get("hero")!;
+            if (wasAir && b.onGround) landings++;
+            wasAir = !b.onGround;
+        }
+        expect(landings).toBe(1);
+        expect(held.bodies.get("hero")!.y).toBe(y0);
+
+        // RELEASE AND PRESS AGAIN jumps a second time, or the edge would be a one-shot.
+        let again = stepWorld(doc, held, { input: NO_INPUT, controlled: "hero" });
+        again = stepWorld(doc, again, {
+            input: { left: false, right: false, jump: true }, controlled: "hero" });
+        expect(again.bodies.get("hero")!.vy).toBeLessThan(-300);
+    });
+
+    it("cannot jump in mid-air, which is what `onGround` was for", () => {
+        const doc = level();
+        let w = grounded(doc);
+        w = stepWorld(doc, w, { input: { left: false, right: false, jump: true }, controlled: "hero" });
+        const rising = w.bodies.get("hero")!.vy;
+        for (let i = 0; i < 10; i++) {
+            w = stepWorld(doc, w, { input: NO_INPUT, controlled: "hero" });
+            w = stepWorld(doc, w, {
+                input: { left: false, right: false, jump: true }, controlled: "hero" });
+        }
+        // Still falling under gravity from the ONE jump — never re-launched mid-air.
+        expect(w.bodies.get("hero")!.vy).toBeGreaterThan(rising);
+        expect(w.bodies.get("hero")!.onGround).toBe(false);
+    });
+
+    it("no controlled id means nothing is driven, which is the default", () => {
+        const doc = level();
+        const w = stepWorld(doc, grounded(doc), { input: { left: false, right: true, jump: true } });
+        expect(w.bodies.get("hero")!.vx).toBe(0);
+    });
+});
+
+describe("terminal velocity, a COLLISION bound before it is a feel decision", () => {
+    it("caps the fall, so one step's travel is a constant rather than a function of the drop", () => {
+        const doc = docWith([{ id: "b", x: 0, y: 0, userData: { bodyType: prop("dynamic") } }]);
+        // Uncapped, ten seconds of falling is 9,000 px/s — 150 px a step, and a solid would need to
+        // be 150 px thick to catch it. Capped, the travel is 20 px however long the fall.
+        expect(steps(doc, worldFrom(doc), 600).bodies.get("b")!.vy).toBe(MAX_FALL_SPEED);
+        expect(MAX_FALL_SPEED * FIXED_STEP).toBe(20);
+    });
+
+    it("makes a 20px solid safe at ANY speed, which the 2px one still is not", () => {
+        // Slice 1's limit was "as deep as the fastest body's travel", which grew with the fall.
+        // It is now a constant, and this is the pair that says so.
+        const deep = docWith([
+            { id: "b", x: 0, y: 0, userData: { bodyType: prop("dynamic") } },
+            { id: "floor", x: -100, y: 4000, w: 400, h: 20, userData: { bodyType: prop("static") } }
+        ]);
+        const landed = steps(deep, worldFrom(deep), 1200);      // twenty seconds of falling
+        expect(landed.bodies.get("b")!.y).toBe(3990);
+        expect(landed.bodies.get("b")!.onGround).toBe(true);
+        // …and the hairline is still passed through, which is the honest half of the same rule.
+        const thin = docWith([
+            { id: "b", x: 0, y: 0, userData: { bodyType: prop("dynamic") } },
+            { id: "hair", x: -100, y: 4000, w: 400, h: 2, userData: { bodyType: prop("static") } }
+        ]);
+        expect(steps(thin, worldFrom(thin), 1200).bodies.get("b")!.y).toBeGreaterThan(4000);
+    });
+
+    it("does not cap the RISE, or a falling rule would clip a jump", () => {
+        const doc = docWith([
+            { id: "b", x: 0, y: 90, userData: { bodyType: prop("dynamic") } },
+            { id: "floor", x: -100, y: 100, w: 400, h: 20, userData: { bodyType: prop("static") } }
+        ]);
+        const w = stepWorld(doc, steps(doc, worldFrom(doc), 5),
+            { input: { left: false, right: false, jump: true }, controlled: "b" });
+        expect(w.bodies.get("b")!.vy).toBeLessThan(-300);
     });
 });

@@ -2718,7 +2718,24 @@ function bodyTypeOf(node: { userData?: UserData }): "static" | "dynamic" | null;
 function worldFrom(doc: ReadonlyDocument): WorldState;         // dynamic bodies, at rest, where the
                                                                // document puts them
 function solidsOf(doc: ReadonlyDocument): Solid[];             // static bodies, read fresh each step
-function stepWorld(doc, world, opts?: { gravity?; solids? }): WorldState;   // pure; one FIXED_STEP
+const MAX_FALL_SPEED: number;          // 1200 px/s. A COLLISION bound before it is a feel
+                                       // decision: capped, one step's travel is at most 20px, so
+                                       // "a solid 20px or deeper is safe" becomes a constant rather
+                                       // than a function of how far the body fell.
+const MOVE_SPEED: number;              // 220 px/s — a speed you HAVE while held, never accumulated
+const JUMP_HEIGHT: number;             // 72 px, stated as a HEIGHT because that is what a level is
+                                       // built from; the launch speed is derived from it
+function jumpSpeedFor(height?, gravity?): number;      // v = sqrt(2*g*h)
+
+interface Input { left: boolean; right: boolean; jump: boolean }
+const NO_INPUT: Input;
+
+// `controlled` names the body the input drives, and it comes from the CALLER: nothing in the corpus
+// says which object is the player, so the app passes whatever was SELECTED when Play was pressed.
+// A jump is an EDGE — `WorldState.jumpWas` is what makes a held key one jump rather than a bounce —
+// and it fires only when `onGround`.
+function stepWorld(doc, world,
+    opts?: { gravity?; solids?; input?: Input; controlled?: string | null }): WorldState;
 
 // THE `applyFrame` MOVE: the document with its bodies where the world says they are. A NEW document
 // and a new map; nodes that did not move pass through BY REFERENCE, which is what lets the caller

@@ -1195,7 +1195,41 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             toolController.onMouseMove(e, rect);
         };
         const handleMouseUp = (e: MouseEvent) => toolController.onMouseUp(e);
+        /**
+         * Which intent a physical key is (M18 slice 2), or null for one the game does not use.
+         *
+         * BOTH THE ARROWS AND WASD, because a level gets tested by whoever is nearest the keyboard
+         * and neither layout is a decision worth making for them. `Space` is a third jump key for
+         * the same reason. None of it is configurable yet — that is a settings surface, and this
+         * slice is the loop.
+         */
+        const intentFor = (key: string): "left" | "right" | "jump" | null => {
+            switch (key) {
+                case "ArrowLeft": case "a": case "A": return "left";
+                case "ArrowRight": case "d": case "D": return "right";
+                case "ArrowUp": case "w": case "W": case " ": return "jump";
+                default: return null;
+            }
+        };
         const handleKeyDown = (e: KeyboardEvent) => {
+            // WHILE PLAYING THE KEYBOARD IS THE GAME'S, and it takes the key before any shortcut
+            // sees it. THE COLLISION IS THE ARROWS, and it is not a tidiness question: an arrow is
+            // "Nudge by 1", which dispatches a real `TransactionAction` and EDITS THE DOCUMENT.
+            // Walking a character right would move the level's art one pixel per press and leave
+            // the undo stack full of it — the exact thing this runtime is built not to do.
+            // Verified live, both halves: five presses while stopped moved the crate 268 -> 273,
+            // and the same key while playing walked the body 132px and left the document alone.
+            // (WASD and Space collide with nothing today; they are here because a level gets
+            // tested by whoever is nearest the keyboard.)
+            // Typing in a panel still wins over both — a name field is a name field.
+            if (es.playing && !isTypingTarget(e.target as HTMLElement)) {
+                const intent = intentFor(e.key);
+                if (intent) {
+                    es.input = { ...es.input, [intent]: true };
+                    e.preventDefault();
+                    return;
+                }
+            }
             // A shortcut must never fire while someone is typing in the inspector — Delete
             // would destroy the selection mid-word and every arrow would move the shape
             // instead of the caret.
@@ -1245,7 +1279,14 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             }
             toolController.onKeyDown(e);
         };
-        const handleKeyUp = (e: KeyboardEvent) => toolController.onKeyUp(e);
+        const handleKeyUp = (e: KeyboardEvent) => {
+            // RELEASED EVEN IF THE PRESS WAS NOT OURS. A key held while Play was pressed, or held
+            // across a click into a panel, must still clear — a stuck "right" walks the body into
+            // a wall forever with nothing on screen to say why.
+            const intent = intentFor(e.key);
+            if (intent) es.input = { ...es.input, [intent]: false };
+            toolController.onKeyUp(e);
+        };
         const handleWheel = (e: WheelEvent) => {
             e.preventDefault();
             const rect = target.getBoundingClientRect();
@@ -1309,7 +1350,9 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 // STEPPED AGAINST THE STORED DOCUMENT, never the derived one: a body's size and
                 // every solid's box are the FILE's facts, so an edit to the level is picked up on
                 // the next step and the physics never reads its own output back in.
-                for (let i = 0; i < spend.steps; i++) world = stepWorld(base, world);
+                for (let i = 0; i < spend.steps; i++) {
+                    world = stepWorld(base, world, { input: es.input, controlled: es.controlled });
+                }
                 es.world = world;
                 es.worldClock = { accumulator: spend.accumulator, lastAt: now };
                 worldMoved = movedIds(base, world);
@@ -2039,6 +2082,16 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                         // and nothing to restore.
                         es.world = es.playing ? worldFrom(dispatcher.getDocument()) : null;
                         es.worldClock = es.playing ? { accumulator: 0, lastAt: Date.now() } : null;
+                        // WHAT WAS SELECTED IS WHAT YOU DRIVE (M18 slice 2), captured HERE —
+                        // before the selection is emptied a few lines down, which is the whole
+                        // reason it sits above that. A run with nothing selected drives nothing,
+                        // which is the honest default rather than a guess at which body is the
+                        // player: 216 of the corpus's 248 objects carry no class to guess from.
+                        es.controlled = es.playing ? (es.selectedNodeIds[0] ?? null) : null;
+                        // AND THE KEYS ARE CLEARED BOTH WAYS: one still held when Play is pressed
+                        // never sent a keydown to the game, and one held when Stop is pressed would
+                        // still be held when the next run starts.
+                        es.input = { left: false, right: false, jump: false };
                         // AND THE REUSE CHAIN IS CUT HERE, which cost a live bug to learn. A
                         // world-only frame keeps its geometry so the next tick can diff against it
                         // — that is the whole optimisation — but the frame after STOP is not a
