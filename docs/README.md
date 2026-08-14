@@ -47,7 +47,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck + lint + test + build).
-- **Tests:** 1807 — `src/core/tests/document.test.ts` (1603) + `src/core/runtime/World.test.ts` (36) + `src/electron/confine.test.ts` (7) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (67) + `src/renderer/emitSVG.test.ts` (11).  <!-- re-read 2026-08-13 after wiring the Aseprite importer: accurate. -->
+- **Tests:** 1808 — `src/core/tests/document.test.ts` (1603) + `src/core/runtime/World.test.ts` (36) + `src/electron/confine.test.ts` (7) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (67) + `src/renderer/emitSVG.test.ts` (11).  <!-- re-read 2026-08-13 after wiring the Aseprite importer: accurate. -->
 - **Verify the tests themselves:** `npm run mutate:dimensions` (215/215) — breaks the paint arithmetic
   on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
   and it refuses a dirty tree. See TESTING.md § Fixture design.

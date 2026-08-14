@@ -51,7 +51,7 @@ M14 AI Integration            ⬜
 M15 Plugins                   ⬜
 M16 Collaboration             ⬜
 M17 Production Hardening      ⬜
-M18 Game Runtime              🚧   slices 1-2: a fixed-step world that PLAYS inside the editor — bodies, gravity, static collision, and a character you drive
+M18 Game Runtime              🚧   slices 1-3: a fixed-step world that PLAYS inside the editor — a character you drive, standing on a level made of TILES
 ```
 
 \* **Note on M3/M4:** a working **vertical-slice prototype** of the renderer, the
@@ -912,7 +912,24 @@ which dispatches a `TransactionAction` and EDITS THE DOCUMENT. Verified both way
 while stopped moved the crate 268 → 273, and the same key while playing walked the body 132px in
 600ms (220 px/s, exactly) and left the document alone.
 
+**Slice 3 — PER-TILE COLLISION, which is what makes a level a level.** Until it, solids came from
+whole nodes, and a `core.tilemap` is ONE node holding ten thousand cells — so a level was either
+entirely solid or entirely not. A tile's own answer comes from `TilesetTile.userData`, the third
+field this project has found that shipped validated, round-tripping and READ BY NOTHING.
+
+THE BROADPHASE IS THE DESIGN. A solid per cell would build an array of thousands every step; asking
+which cells a BOX covers turns that into the four or six a body can touch, through the same
+`visibleCells` the renderer culls with — one statement of "which cells does this rectangle cover",
+not two. Measured on a real 10,618-cell map with every sheet tile solid: **0.0285 ms a step for one
+body**, 0.79 ms for fifty, 6 microseconds for one box query. The cost scales with BODIES, not with
+the level.
+
+Verified live: a crate lands on the tile floor at exactly the row's top, walks across four cell
+seams at constant height, and falls through a one-cell hole at precisely the screen x that hole
+occupies.
+
 **STILL NOT DONE**, each wanting its own design against real content: rotation, friction (read and
-ignored, said out loud), restitution, per-tile collision, broadphase, triggers, spawning, and
-anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
+ignored, said out loud), restitution, one-way platforms, slopes, a tilemap inside a TRANSFORMED
+parent (the collision reads `geometry` directly and would be wrong — it is said in the header rather
+than pretended about), triggers, spawning, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

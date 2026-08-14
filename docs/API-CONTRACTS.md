@@ -2718,6 +2718,15 @@ function bodyTypeOf(node: { userData?: UserData }): "static" | "dynamic" | null;
 function worldFrom(doc: ReadonlyDocument): WorldState;         // dynamic bodies, at rest, where the
                                                                // document puts them
 function solidsOf(doc: ReadonlyDocument): Solid[];             // static bodies, read fresh each step
+
+// PER-TILE COLLISION (slice 3). A level is ONE node holding thousands of cells, so a solid per cell
+// would build an array of thousands every step; asking which cells a BOX covers turns that into the
+// four or six a body can touch, through the same `visibleCells` the renderer culls with. The tile's
+// own answer comes from `TilesetTile.userData` — a field that has existed since schema 67, validates
+// like a node's, round-trips through import and export, and had NO READER until this.
+function tileIsSolid(set: Tileset | null, index: number): boolean;
+function tileSolidsNear(doc, box: { x; y; width; height }): Solid[];
+function documentHasSolidTiles(doc: ReadonlyDocument): boolean;   // one pass over SETS, never cells
 const MAX_FALL_SPEED: number;          // 1200 px/s. A COLLISION bound before it is a feel
                                        // decision: capped, one step's travel is at most 20px, so
                                        // "a solid 20px or deeper is safe" becomes a constant rather
