@@ -12,7 +12,8 @@ import { Node, UserData } from "../document/Node";
 import {
     FIXED_STEP, MAX_STEPS_PER_FRAME, DEFAULT_GRAVITY, MAX_FALL_SPEED, MOVE_SPEED, JUMP_HEIGHT,
     NO_INPUT, Input, WorldState, jumpSpeedFor,
-    bodyTypeOf, worldFrom, solidsOf, stepWorld, applyWorld, movedIds, stepsFor, propertyOf
+    bodyTypeOf, worldFrom, solidsOf, stepWorld, applyWorld, movedIds, stepsFor, propertyOf,
+    tileIsSolid, tileSolidsNear, documentHasSolidTiles
 } from "./World";
 
 const prop = (v: string, type = "string") => ({ type, value: v });
@@ -458,5 +459,163 @@ describe("terminal velocity, a COLLISION bound before it is a feel decision", ()
         expect(jumpSpeedFor(JUMP_HEIGHT, 20000)).toBeGreaterThan(MAX_FALL_SPEED);
         expect(hard.bodies.get("b")!.vy).toBeCloseTo(-jumpSpeedFor(JUMP_HEIGHT, 20000), 6);
         expect(hard.bodies.get("b")!.vy).toBeLessThan(-MAX_FALL_SPEED);
+    });
+});
+
+describe("a level made of TILES, not rectangles", () => {
+    const CELL = 16;
+    /**
+     * A 6x4 grid at (0,100) whose bottom row is solid — except column 3, which is a HOLE.
+     *
+     * The hole is the whole design of this fixture: a tilemap is ONE node, so a body that fell
+     * through it would prove the collision reads CELLS, and a body that stood over it would prove
+     * the opposite. Tile 1 is solid, tile 0 is not, and the tileset says so through
+     * `TilesetTile.userData` — a field that has existed since schema 67 and had no reader.
+     */
+    const level = (rows: number[][], extra: { id: string; x: number; y: number }[] = []) => {
+        const doc = createEmptyDocument();
+        doc.tilesets = [{
+            id: "ts", name: "T", src: "t.png",
+            sheet: { columns: 4, tileWidth: CELL, tileHeight: CELL, spacing: 0, margin: 0 },
+            tiles: [{ id: 1, userData: { bodyType: prop("static") } },
+                    // A tile with a property that is NOT a body type must not become solid.
+                    { id: 2, userData: { door: prop("true") } }],
+            offsetX: 0, offsetY: 0
+        }];
+        doc.nodes.set("map", {
+            id: "map", type: "core.tilemap", parent: null, children: [], name: "level",
+            geometry: { x: 0, y: 100, width: rows[0].length * CELL, height: rows.length * CELL },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            tilemap: { cols: rows[0].length, rows: rows.length, tileWidth: CELL, tileHeight: CELL,
+                tilesetId: "ts", tiles: rows.flat() }
+        } as unknown as Node);
+        doc.rootNodeUuids.push("map");
+        for (const e of extra) {
+            doc.nodes.set(e.id, {
+                id: e.id, type: "core.rectangle", parent: null, children: [],
+                geometry: { x: e.x, y: e.y, width: 10, height: 10 },
+                style: { fill: "#888", opacity: 1 }, layout: {},
+                userData: { bodyType: prop("dynamic") }
+            } as Node);
+            doc.rootNodeUuids.push(e.id);
+        }
+        return doc;
+    };
+    const FLOOR = [[0, 0, 0, 0, 0, 0],
+                   [0, 0, 0, 0, 0, 0],
+                   [0, 0, 0, 0, 0, 0],
+                   [1, 1, 1, 0, 1, 1]];      // column 3 is a hole
+
+    it("asks the TILESET which tiles are solid — a field with no reader until now", () => {
+        const doc = level(FLOOR);
+        const set = doc.tilesets![0];
+        expect(tileIsSolid(set, 1)).toBe(true);
+        expect(tileIsSolid(set, 0)).toBe(false);        // no record at all
+        expect(tileIsSolid(set, 2)).toBe(false);        // a record, but not a body type
+        expect(tileIsSolid(set, -1)).toBe(false);       // TILE_EMPTY is not a tile
+        expect(tileIsSolid(null, 1)).toBe(false);
+        expect(documentHasSolidTiles(doc)).toBe(true);
+        // …and a document whose tiles say nothing must pay nothing.
+        const plain = level(FLOOR);
+        plain.tilesets = [{ ...plain.tilesets![0], tiles: [] }];
+        expect(documentHasSolidTiles(plain)).toBe(false);
+    });
+
+    it("only reports the cells the BOX can reach, not the whole level", () => {
+        const doc = level(FLOOR);
+        // The bottom row starts at y = 100 + 3*16 = 148. A box over columns 0-1 sees two cells.
+        const near = tileSolidsNear(doc, { x: 0, y: 148, width: 20, height: 10 });
+        expect(near).toEqual([
+            { x: 0, y: 148, width: CELL, height: CELL },
+            { x: 16, y: 148, width: CELL, height: CELL }
+        ]);
+        // OVER THE HOLE it sees nothing, which is what makes this a cell question and not a node one.
+        expect(tileSolidsNear(doc, { x: 50, y: 148, width: 10, height: 10 })).toEqual([]);
+        // Away from the grid entirely: nothing, and no throw.
+        expect(tileSolidsNear(doc, { x: 900, y: 900, width: 10, height: 10 })).toEqual([]);
+    });
+
+    it("a body STANDS on a tile floor", () => {
+        const doc = level(FLOOR, [{ id: "b", x: 0, y: 0 }]);
+        const after = steps(doc, worldFrom(doc), 120);
+        // The floor's top is y = 100 + 3*16 = 148, so a 10-high body rests at 138.
+        expect(after.bodies.get("b")!.y).toBe(138);
+        expect(after.bodies.get("b")!.onGround).toBe(true);
+    });
+
+    it("and falls through the HOLE, which is what proves it reads cells", () => {
+        // Column 3 spans x = 48..64. A body at x=50 is over the gap and must keep going.
+        const doc = level(FLOOR, [{ id: "b", x: 50, y: 0 }]);
+        const after = steps(doc, worldFrom(doc), 120);
+        expect(after.bodies.get("b")!.y).toBeGreaterThan(200);
+        expect(after.bodies.get("b")!.onGround).toBe(false);
+    });
+
+    it("walks ALONG a tile floor without snagging on the seams", () => {
+        // Every cell boundary is a seam between two separate solids — the case that made axis
+        // separation necessary in slice 1, now multiplied by a cell every 16px.
+        const doc = level([[0, 0, 0, 0, 0, 0], [1, 1, 1, 1, 1, 1]], [{ id: "b", x: 0, y: 100 }]);
+        // LAND FIRST, and 5 steps is not enough: the drop is 6px and five steps of gravity is
+        // 3.75px. A fixture that asserted `onGround` before the body arrived would be asserting
+        // its own impatience.
+        let w = steps(doc, worldFrom(doc), 20);
+        expect(w.bodies.get("b")!.onGround).toBe(true);
+        const y = w.bodies.get("b")!.y;
+        for (let i = 0; i < 20; i++) {
+            w = stepWorld(doc, w, { input: { left: false, right: true, jump: false }, controlled: "b" });
+        }
+        // 20 steps at 220 px/s is 73.3px — four seams crossed, never caught on one.
+        expect(w.bodies.get("b")!.x).toBeCloseTo(20 * MOVE_SPEED * FIXED_STEP, 6);
+        expect(w.bodies.get("b")!.y).toBe(y);
+        expect(w.bodies.get("b")!.onGround).toBe(true);
+    });
+
+    it("stops against a tile WALL", () => {
+        // A column of solid tiles at column 4 (x = 64..80), floor beneath.
+        const doc = level([[0, 0, 0, 0, 1, 0],
+                           [0, 0, 0, 0, 1, 0],
+                           [0, 0, 0, 0, 1, 0],
+                           [1, 1, 1, 1, 1, 1]], [{ id: "b", x: 0, y: 100 }]);
+        let w = steps(doc, worldFrom(doc), 5);
+        for (let i = 0; i < 60; i++) {
+            w = stepWorld(doc, w, { input: { left: false, right: true, jump: false }, controlled: "b" });
+        }
+        // Its right edge meets the wall's left: 64 - 10.
+        expect(w.bodies.get("b")!.x).toBe(54);
+        expect(w.bodies.get("b")!.vx).toBe(0);
+        expect(w.bodies.get("b")!.onGround).toBe(true);
+    });
+
+    it("places a solid cell with the RIGHT dimension on each axis — a NON-SQUARE grid", () => {
+        // EVERY OTHER FIXTURE HERE IS 16x16, which cannot tell `col * tileWidth` from
+        // `col * tileHeight`. That swap is the whole reason this battery is called
+        // `mutate-dimensions`, and a square fixture is the classic way to be blind to it.
+        // 32 wide by 8 high: a mistake on either axis moves a cell by 24px.
+        const doc = createEmptyDocument();
+        doc.tilesets = [{
+            id: "ts", name: "T", src: "t.png",
+            sheet: { columns: 4, tileWidth: 32, tileHeight: 8, spacing: 0, margin: 0 },
+            tiles: [{ id: 1, userData: { bodyType: prop("static") } }], offsetX: 0, offsetY: 0
+        }];
+        doc.nodes.set("map", {
+            id: "map", type: "core.tilemap", parent: null, children: [], name: "wide",
+            geometry: { x: 0, y: 0, width: 96, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            tilemap: { cols: 3, rows: 2, tileWidth: 32, tileHeight: 8, tilesetId: "ts",
+                tiles: [0, 0, 0, 0, 1, 0] }        // the ONE solid cell is col 1, row 1
+        } as unknown as Node);
+        doc.rootNodeUuids.push("map");
+        // Col 1 row 1 of a 32x8 grid sits at (32, 8) and is 32 by 8. Swap either dimension and it
+        // lands at (8, 8), (32, 32) or with the wrong size — all four are different numbers here.
+        expect(tileSolidsNear(doc, { x: 0, y: 0, width: 96, height: 16 }))
+            .toEqual([{ x: 32, y: 8, width: 32, height: 8 }]);
+    });
+
+    it("a dangling tilesetId collides with NOTHING, rather than becoming an invisible wall", () => {
+        const doc = level(FLOOR, [{ id: "b", x: 0, y: 0 }]);
+        (doc.nodes.get("map") as unknown as { tilemap: { tilesetId: string } }).tilemap.tilesetId = "gone";
+        expect(tileSolidsNear(doc, { x: 0, y: 148, width: 20, height: 10 })).toEqual([]);
+        const after = steps(doc, worldFrom(doc), 120);
+        expect(after.bodies.get("b")!.y).toBeGreaterThan(200);
     });
 });

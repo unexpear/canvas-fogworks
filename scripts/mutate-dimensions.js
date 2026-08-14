@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1800;
+const EXPECTED_TESTS = 1807;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1113,6 +1113,30 @@ const MUTANTS = [
       from: "        if (node.geometry.x === body.x && node.geometry.y === body.y) continue;",
       to: "        if (node.geometry.x === body.x) continue;",
       note: "only the X coordinate decides whether a body moved, so a body falling straight down is never stamped onto the document and never appears to move at all — and `if (false)` could not be used here, because it does not COMPILE" },
+
+    // PER-TILE COLLISION (M18 slice 3). A level here is ONE node holding ten thousand cells, so
+    // every one of these still stands a body on something — what changes is WHICH cells are solid
+    // and WHERE they are, which no "did it land" assertion can see.
+    { id: "TC1", file: "src/core/runtime/World.ts",
+      from: "    return tile !== null && bodyTypeOf(tile) === \"static\";",
+      to: "    return tile !== null;",
+      note: "ANY tile with a per-tile record becomes solid, so a tile carrying `door=true` — which is what the corpus's only per-tile properties actually say — becomes a wall" },
+    { id: "TC2", file: "src/core/runtime/World.ts",
+      from: "                    x: node.geometry.x + col * map.tileWidth,\n                    y: node.geometry.y + row * map.tileHeight,",
+      to: "                    x: col * map.tileWidth,\n                    y: row * map.tileHeight,",
+      note: "the level's own position is dropped from its solid cells, so the collision sits at the origin while the art sits where the node is — a body stops in mid-air, or falls through the floor it is standing on" },
+    { id: "TC3", file: "src/core/runtime/World.ts",
+      from: "                    width: map.tileWidth, height: map.tileHeight",
+      to: "                    width: map.tileHeight, height: map.tileWidth",
+      note: "a solid cell's two dimensions are swapped — invisible on every square grid, which is what every other fixture in this file uses, and 24px out on the 32x8 one written to catch exactly this" },
+    { id: "TC4", file: "src/core/runtime/World.ts",
+      from: "        const acrossTiles = tiles ? tileSolidsNear(doc, { x, y, width: w, height: h }) : [];",
+      to: "        const acrossTiles: Solid[] = [];",
+      note: "only the VERTICAL axis consults the tiles, so a body stands on a tile floor and walks straight through a tile wall" },
+    { id: "TC5", file: "src/core/runtime/World.ts",
+      from: "        const local = { x: box.x - node.geometry.x, y: box.y - node.geometry.y,",
+      to: "        const local = { x: box.x, y: box.y,",
+      note: "the query box is not brought into the grid's own space, so a level placed anywhere but the origin looks up the wrong cells entirely" },
 
     // INPUT (M18 slice 2). Every one of these still walks and still jumps — what changes is how it
     // FEELS, which is the class of defect a "did it move" assertion is blind to.

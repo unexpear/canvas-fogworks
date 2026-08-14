@@ -50,6 +50,8 @@
 
 import { ReadonlyDocument, ProjectDocument } from "../document/Document";
 import { Node, UserData } from "../document/Node";
+import { ReadonlyTilemap, TILE_EMPTY, tileAt, visibleCells } from "../document/Tilemap";
+import { Tileset, findTileset, tilesetTile } from "../document/Tileset";
 
 /** One tick, in seconds. 60Hz: the rate every measurement in this module's tests assumes. */
 export const FIXED_STEP = 1 / 60;
@@ -194,9 +196,81 @@ export function solidsOf(doc: ReadonlyDocument): Solid[] {
     return out;
 }
 
+/**
+ * Is the tile at this INDEX solid — asked of the tileset, once per distinct tile rather than per cell.
+ *
+ * `TilesetTile.userData` has existed since schema 67, validates by the same `userDataError` a node's
+ * does, round-trips through import and export, and is read by NOTHING — not even the exporter. This
+ * is its first reader. The vocabulary is the one a node body already uses (`bodyType=static`) rather
+ * than a second word for one idea, and the corpus offers no convention to follow: it holds exactly
+ * THREE per-tile properties in 1,235 tiles (`door` and `pickup`, in `perspective_walls.tsx`) and not
+ * one per-tile collision shape.
+ */
+export function tileIsSolid(set: Tileset | null, index: number): boolean {
+    if (!set || index === TILE_EMPTY) return false;
+    const tile = tilesetTile(set, index);
+    return tile !== null && bodyTypeOf(tile) === "static";
+}
+
+/**
+ * The solid CELLS of one tilemap that a box could touch — the broadphase, and the reason this is
+ * not just `solidsOf` with more entries.
+ *
+ * A LEVEL IS ONE NODE HOLDING TEN THOUSAND CELLS. Emitting a `Solid` per solid cell would build an
+ * array of thousands every step and test a body against all of them; asking which CELLS THE BOX
+ * OVERLAPS turns that into the four or six a body can actually touch, and it is the same
+ * `visibleCells` arithmetic the renderer culls with — one statement of "which cells does this
+ * rectangle cover", not two.
+ *
+ * THE BOX ARRIVES IN WORLD UNITS and the grid is in the node's own, so it is shifted by the node's
+ * position on the way in and the cells are shifted back on the way out. A tilemap inside a
+ * transformed parent is NOT handled and must not be pretended about: this reads `geometry` directly,
+ * so a rotated or scaled level would collide against boxes that are not where its art is. Levels are
+ * laid out flat today; the day one is not, this is where it breaks and it will break loudly, because
+ * the body will stop in mid-air.
+ */
+export function tileSolidsNear(
+    doc: ReadonlyDocument, box: { x: number; y: number; width: number; height: number }
+): Solid[] {
+    const out: Solid[] = [];
+    for (const node of doc.nodes.values()) {
+        const map = node.tilemap as ReadonlyTilemap | undefined;
+        if (node.type !== "core.tilemap" || !map) continue;
+        const set = findTileset(doc.tilesets, map.tilesetId) as Tileset | null;
+        // NO SET, NO SOLIDS — a dangling id draws nothing and must collide with nothing, or a level
+        // whose tileset was deleted becomes an invisible wall.
+        if (!set || set.tiles.length === 0) continue;
+        const local = { x: box.x - node.geometry.x, y: box.y - node.geometry.y,
+            width: box.width, height: box.height };
+        const range = visibleCells(map, local);
+        if (!range) continue;
+        for (let row = range.row0; row <= range.row1; row++) {
+            for (let col = range.col0; col <= range.col1; col++) {
+                if (!tileIsSolid(set, tileAt(map, col, row))) continue;
+                out.push({
+                    x: node.geometry.x + col * map.tileWidth,
+                    y: node.geometry.y + row * map.tileHeight,
+                    width: map.tileWidth, height: map.tileHeight
+                });
+            }
+        }
+    }
+    return out;
+}
+
 /** Do two boxes overlap? Touching edges do NOT count, or a body resting on a floor is inside it. */
 function overlaps(ax: number, ay: number, aw: number, ah: number, b: Solid): boolean {
     return ax < b.x + b.width && ax + aw > b.x && ay < b.y + b.height && ay + ah > b.y;
+}
+
+/** Does ANY tileset mark a tile solid? One pass over the sets, never over the cells. */
+export function documentHasSolidTiles(doc: ReadonlyDocument): boolean {
+    for (const set of doc.tilesets ?? []) {
+        for (const tile of set.tiles) {
+            if (bodyTypeOf(tile) === "static") return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -212,12 +286,17 @@ function overlaps(ax: number, ay: number, aw: number, ah: number, b: Solid): boo
  */
 export function stepWorld(
     doc: ReadonlyDocument, world: WorldState,
-    opts?: { gravity?: number; solids?: readonly Solid[]; input?: Input; controlled?: string | null }
+    opts?: { gravity?: number; solids?: readonly Solid[]; input?: Input;
+             controlled?: string | null; tileSolids?: boolean }
 ): WorldState {
     const gravity = opts?.gravity ?? DEFAULT_GRAVITY;
     const solids = opts?.solids ?? solidsOf(doc);
     const input = opts?.input ?? NO_INPUT;
     const controlled = opts?.controlled ?? null;
+    // ASKED ONCE PER STEP, NOT PER BODY PER AXIS: whether ANY tileset in the document marks a tile
+    // solid. Most documents do not — a design file has no tilemap at all — and the check is what
+    // keeps them paying nothing for a feature they never asked for.
+    const tiles = opts?.tileSolids ?? documentHasSolidTiles(doc);
     const next = new Map<string, Body>();
 
     for (const [id, was] of world.bodies) {
@@ -252,9 +331,12 @@ export function stepWorld(
         // `MAX_FALL_SPEED`. Capped downward only: a jump's rise is bounded by gravity already.
         if (vy > MAX_FALL_SPEED) vy = MAX_FALL_SPEED;
 
-        // HORIZONTAL, then resolve.
+        // HORIZONTAL, then resolve — against the node solids AND the solid cells the box can
+        // reach. Asked PER AXIS AND PER MOVE, because the box has just moved and the cells it can
+        // touch have moved with it; asking once for the step would test yesterday's neighbourhood.
         x += vx * FIXED_STEP;
-        for (const s of solids) {
+        const acrossTiles = tiles ? tileSolidsNear(doc, { x, y, width: w, height: h }) : [];
+        for (const s of [...solids, ...acrossTiles]) {
             if (!overlaps(x, y, w, h, s)) continue;
             x = vx > 0 ? s.x - w : s.x + s.width;
             vx = 0;
@@ -263,7 +345,8 @@ export function stepWorld(
         // VERTICAL, then resolve — and this is where `onGround` is decided.
         let onGround = false;
         y += vy * FIXED_STEP;
-        for (const s of solids) {
+        const underTiles = tiles ? tileSolidsNear(doc, { x, y, width: w, height: h }) : [];
+        for (const s of [...solids, ...underTiles]) {
             if (!overlaps(x, y, w, h, s)) continue;
             if (vy > 0) { y = s.y - h; onGround = true; } else { y = s.y + s.height; }
             vy = 0;
