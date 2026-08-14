@@ -13,7 +13,8 @@ import {
     FIXED_STEP, MAX_STEPS_PER_FRAME, DEFAULT_GRAVITY, MAX_FALL_SPEED, MOVE_SPEED, JUMP_HEIGHT,
     NO_INPUT, Input, WorldState, jumpSpeedFor,
     bodyTypeOf, worldFrom, solidsOf, stepWorld, applyWorld, movedIds, stepsFor, propertyOf,
-    tileIsSolid, tileSolidsNear, documentHasSolidTiles, frictionOf, regionsOf
+    tileIsSolid, tileSolidsNear, documentHasSolidTiles, frictionOf, regionsOf,
+    worldOffsetOf, runtimeRefusal, runtimeExclusions, applyWorld as applyWorldFn
 } from "./World";
 
 const prop = (v: string, type = "string") => ({ type, value: v });
@@ -836,5 +837,164 @@ describe("regions — the world reports, it does not act", () => {
         const w = stepWorld(doc, worldFrom(doc));
         expect(w.events).toEqual([]);
         expect(w.overlaps.size).toBe(0);
+    });
+});
+
+describe("world space — a node's geometry is its PARENT's, not the world's", () => {
+    /**
+     * A frame at (100,50) with things inside it — which is exactly what the Tiled importer builds
+     * for an object layer, so this is the shape the corpus's own collision geometry arrives in.
+     */
+    const nested = (extra: Partial<Node> = {}) => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("frame", {
+            id: "frame", type: "core.rectangle", parent: null, children: ["floor", "coin"],
+            geometry: { x: 100, y: 50, width: 400, height: 300 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "objects", ...extra
+        } as unknown as Node);
+        doc.nodes.set("floor", {
+            id: "floor", type: "core.rectangle", parent: "frame", children: [],
+            geometry: { x: 10, y: 200, width: 200, height: 20 },
+            style: { fill: "#888", opacity: 1 }, layout: {}, name: "bounds",
+            userData: { bodyType: prop("static") }
+        } as unknown as Node);
+        doc.nodes.set("coin", {
+            id: "coin", type: "core.rectangle", parent: "frame", children: [],
+            geometry: { x: 20, y: 100, width: 24, height: 24 },
+            style: { fill: "#ff0", opacity: 1 }, layout: {}, className: "coin"
+        } as unknown as Node);
+        doc.rootNodeUuids = ["frame"];
+        return doc;
+    };
+
+    it("composes the ancestors' offsets — the defect this replaced was 50px of phantom floor", () => {
+        const doc = nested();
+        expect(worldOffsetOf(doc, "floor")).toEqual({ dx: 100, dy: 50 });
+        expect(worldOffsetOf(doc, "frame")).toEqual({ dx: 0, dy: 0 });
+        // STORED (10,200) — WORLD (110,250). Reading the stored number as the world's is what put
+        // a body's collision fifty pixels above the floor it could see.
+        expect(solidsOf(doc)).toEqual([{ x: 110, y: 250, width: 200, height: 20, friction: 1 }]);
+        expect(regionsOf(doc)).toEqual([
+            { nodeId: "coin", className: "coin", x: 120, y: 150, width: 24, height: 24 }
+        ]);
+    });
+
+    it("a body DROPS ONTO THE FLOOR IT CAN SEE, which is the whole point", () => {
+        const doc = nested();
+        doc.nodes.set("b", {
+            id: "b", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 120, y: 0, width: 10, height: 10 },
+            style: { fill: "#f00", opacity: 1 }, layout: {},
+            userData: { bodyType: prop("dynamic") }
+        } as unknown as Node);
+        doc.rootNodeUuids.push("b");
+        const after = steps(doc, worldFrom(doc), 120);
+        // The floor's real top is 250, so a 10-high body rests at 240 — NOT 190, which is where the
+        // stored-as-world reading put it.
+        expect(after.bodies.get("b")!.y).toBe(240);
+        expect(after.bodies.get("b")!.onGround).toBe(true);
+    });
+
+    it("sums TWO levels, because one is the case that passes by accident", () => {
+        const doc = nested();
+        doc.nodes.set("inner", {
+            id: "inner", type: "core.rectangle", parent: "frame", children: ["deep"],
+            geometry: { x: 7, y: 3, width: 100, height: 100 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "inner"
+        } as unknown as Node);
+        doc.nodes.set("deep", {
+            id: "deep", type: "core.rectangle", parent: "inner", children: [],
+            geometry: { x: 1, y: 2, width: 10, height: 10 },
+            style: { fill: "#0f0", opacity: 1 }, layout: {}, className: "deep"
+        } as unknown as Node);
+        expect(worldOffsetOf(doc, "deep")).toEqual({ dx: 107, dy: 53 });
+        expect(regionsOf(doc).find(r => r.nodeId === "deep"))
+            .toEqual({ nodeId: "deep", className: "deep", x: 108, y: 55, width: 10, height: 10 });
+    });
+
+    it("WRITES BACK into parent space, or a nested body would accelerate away", () => {
+        // The symmetric half. Writing a WORLD position into a nested node's geometry adds the
+        // frame's offset a second time — and it does it every frame, so the body runs off.
+        const doc = nested();
+        doc.nodes.set("b", {
+            id: "b", type: "core.rectangle", parent: "frame", children: [],
+            geometry: { x: 10, y: 0, width: 10, height: 10 },
+            style: { fill: "#f00", opacity: 1 }, layout: {},
+            userData: { bodyType: prop("dynamic") }
+        } as unknown as Node);
+        doc.rootNodeUuids.push("b");
+        const world = worldFrom(doc);
+        // It STARTS at its world position: 10 + 100, 0 + 50.
+        expect(world.bodies.get("b")).toMatchObject({ x: 110, y: 50 });
+        const moved = steps(doc, world, 4);         // 2.5px down
+        const shown = applyWorldFn(doc, moved);
+        // …and the STORED number is back in the frame's space: 0 + 2.5, not 50 + 2.5.
+        expect(shown.nodes.get("b")!.geometry.x).toBe(10);
+        expect(shown.nodes.get("b")!.geometry.y).toBeCloseTo(2.5, 10);
+        // The document itself is untouched, as always.
+        expect(doc.nodes.get("b")!.geometry.y).toBe(0);
+    });
+
+    it("REFUSES what it cannot sum, and says which and why", () => {
+        // A rotation cannot be summed as an offset. Half-composing would put the art in one place
+        // and its collision in another — the very defect this replaced.
+        const turned = nested({ transform: { rotation: 0.3 } } as Partial<Node>);
+        expect(worldOffsetOf(turned, "floor")).toBeNull();
+        expect(runtimeRefusal(turned, "floor")).toMatch(/rotated or scaled/);
+        expect(solidsOf(turned)).toEqual([]);
+        expect(regionsOf(turned)).toEqual([]);
+        expect(runtimeExclusions(turned).map(e => e.nodeId).sort()).toEqual(["coin", "floor"]);
+        expect(runtimeExclusions(turned)[0].why).toContain("objects");
+
+        // A SCALE is the same problem.
+        const scaled = nested({ transform: { scaleX: 2 } } as Partial<Node>);
+        expect(runtimeRefusal(scaled, "floor")).toMatch(/rotated or scaled/);
+
+        // AND AN AUTO-LAYOUT CONTAINER, where a stored x/y is dead data the layout overwrites.
+        const laid = nested({ layout: { container: { direction: "row" } } } as unknown as Partial<Node>);
+        expect(runtimeRefusal(laid, "floor")).toMatch(/auto-layout/);
+        expect(worldOffsetOf(laid, "floor")).toBeNull();
+
+        // A ROOT node is never refused, which is every fixture in this file and most documents.
+        expect(runtimeRefusal(nested(), "frame")).toBeNull();
+        expect(runtimeExclusions(nested())).toEqual([]);
+    });
+
+    it("does not hang on a parent that is missing or circular", () => {
+        // `Integrity` refuses a cycle at rest, but a document is edited between loads and this runs
+        // sixty times a second.
+        const orphan = nested();
+        (orphan.nodes.get("floor") as unknown as { parent: string }).parent = "nowhere";
+        expect(runtimeRefusal(orphan, "floor")).toMatch(/not in the document/);
+        expect(solidsOf(orphan)).toEqual([]);
+
+        const loop = nested();
+        (loop.nodes.get("frame") as unknown as { parent: string }).parent = "floor";
+        expect(runtimeRefusal(loop, "floor")).toMatch(/64 parents, or in a cycle/);
+    });
+
+    it("a TILEMAP inside a frame collides where its art is", () => {
+        const doc = createEmptyDocument();
+        doc.tilesets = [{
+            id: "ts", name: "T", src: "t.png",
+            sheet: { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 },
+            tiles: [{ id: 1, userData: { bodyType: prop("static") } }], offsetX: 0, offsetY: 0
+        }];
+        doc.nodes.set("frame", {
+            id: "frame", type: "core.rectangle", parent: null, children: ["map"],
+            geometry: { x: 200, y: 300, width: 400, height: 300 },
+            style: { fill: "none", opacity: 1 }, layout: {}, name: "level holder"
+        } as unknown as Node);
+        doc.nodes.set("map", {
+            id: "map", type: "core.tilemap", parent: "frame", children: [], name: "level",
+            geometry: { x: 5, y: 7, width: 32, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            tilemap: { cols: 2, rows: 1, tileWidth: 16, tileHeight: 16, tilesetId: "ts",
+                tiles: [1, 0] }
+        } as unknown as Node);
+        doc.rootNodeUuids = ["frame"];
+        // The solid cell is col 0 of a grid whose origin is 200+5, 300+7.
+        expect(tileSolidsNear(doc, { x: 200, y: 300, width: 60, height: 40 }))
+            .toEqual([{ x: 205, y: 307, width: 16, height: 16, friction: 1 }]);
     });
 });

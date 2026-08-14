@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1821;
+const EXPECTED_TESTS = 1828;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1113,6 +1113,32 @@ const MUTANTS = [
       from: "        if (node.geometry.x === body.x && node.geometry.y === body.y) continue;",
       to: "        if (node.geometry.x === body.x) continue;",
       note: "only the X coordinate decides whether a body moved, so a body falling straight down is never stamped onto the document and never appears to move at all — and `if (false)` could not be used here, because it does not COMPILE" },
+
+    // WORLD SPACE (M18 slice 6). A node's `geometry` is its PARENT's space and the runtime read it
+    // as the world's — a floor stored at (10,200) inside a frame at (100,50) was collided against
+    // fifty pixels above its own art. Every mutant here still collides with something; what changes
+    // is WHERE, and every one of them is invisible on a document whose nodes are all roots — which
+    // was every fixture in this file until the day this was found.
+    { id: "WS1", file: "src/core/runtime/World.ts",
+      from: "        dx += parent.geometry.x;\n        dy += parent.geometry.y;",
+      to: "        dx += parent.geometry.x;",
+      note: "only the HORIZONTAL offset is composed, so a nested level's collision sits at the right x and the wrong y — a body walks on air, or sinks into the floor, by exactly the frame's own y" },
+    { id: "WS2", file: "src/core/runtime/World.ts",
+      from: "        const px = body.x - at.dx, py = body.y - at.dy;",
+      to: "        const px = body.x, py = body.y;",
+      note: "the world position is written straight into a nested node's geometry, adding the frame's offset a SECOND time — and it does it every frame, so the body accelerates away from the level" },
+    { id: "WS3", file: "src/core/runtime/World.ts",
+      from: "        if (t && ((t.rotation ?? 0) !== 0 || (t.scaleX ?? 1) !== 1 || (t.scaleY ?? 1) !== 1)) {",
+      to: "        if (t && (t.scaleX ?? 1) !== 1) {",
+      note: "a ROTATED ancestor is no longer refused, so its offsets are summed as though the rotation were not there and the collision lands somewhere the art never goes" },
+    { id: "WS4", file: "src/core/runtime/World.ts",
+      from: "        if (++guard > 64) return \"sits deeper than 64 parents, or in a cycle\";",
+      to: "        if (++guard > 64) return null;",
+      note: "a parent CYCLE answers 'nothing wrong' and the walk below it never terminates — the runtime hangs the app rather than refusing one node, sixty times a second" },
+    { id: "WS5", file: "src/core/runtime/World.ts",
+      from: "        const at = worldOffsetOf(doc, node.id);\n        if (!at) continue;\n        const originX = node.geometry.x + at.dx, originY = node.geometry.y + at.dy;",
+      to: "        const at = { dx: 0, dy: 0 };\n        if (!at) continue;\n        const originX = node.geometry.x + at.dx, originY = node.geometry.y + at.dy;",
+      note: "a TILEMAP's own ancestors are ignored while every other body composes them, so a level inside a frame collides at the origin while its bodies collide correctly — the two halves disagree" },
 
     // REGIONS AND EVENTS (M18 slice 5). A region is a classed node that is NOT a body — the split
     // the corpus already makes, 26 against 51 with no object carrying both. Every mutant here still

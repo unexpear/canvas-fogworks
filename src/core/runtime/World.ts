@@ -68,6 +68,25 @@
  * an app does with an event, and each wants its own design — the events are the seam that lets them
  * be designed at all, and building any of them into the physics would weld the two together.
  *
+ * EVERYTHING HERE IS IN WORLD SPACE, and getting that wrong was a live defect rather than a
+ * hypothetical. A node's `geometry` is stated in its PARENT's space, and this module read it as
+ * though it were the world's — so a floor stored at (10, 200) inside a frame at (100, 50) really
+ * sits at (110, 250) and was collided against at (10, 200). A body dropped over that floor's ART
+ * landed on a phantom fifty pixels above it. It is not an exotic case either: the Tiled importer
+ * puts every object of an object layer INSIDE a frame, which is exactly how the corpus's own
+ * collision geometry arrives.
+ *
+ * SO ANCESTOR TRANSLATIONS ARE COMPOSED, by walking the parent chain and summing. That is exact for
+ * the case that actually occurs — a frame is a position — and it costs a short walk rather than a
+ * second geometry derivation, which this module cannot afford per step and could not order
+ * correctly anyway (the world moves before geometry is computed, not after).
+ *
+ * A NODE UNDER A ROTATION, A SCALE OR A LAYOUT CONTAINER IS REFUSED, not approximated. Offsets
+ * cannot be summed through a rotation, and inside an auto-layout container a stored x/y is dead
+ * data the layout overwrites — so such a node is not a body, a solid or a region at all, and
+ * `runtimeExclusions` says which and why rather than leaving it to be discovered. Half-composing
+ * would put the art in one place and its collision in another, which is the defect this replaced.
+ *
  * WHAT THIS SLICE DELIBERATELY IS NOT: no rotation, no restitution (the property does not exist in
  * the corpus at all —
  * said out loud rather than half-applied), no joints, no triggers, no spawning, no slopes and no
@@ -270,9 +289,11 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
     const bodies = new Map<string, Body>();
     for (const node of doc.nodes.values()) {
         if (bodyTypeOf(node) !== "dynamic") continue;
+        const at = worldOffsetOf(doc, node.id);
+        if (!at) continue;                        // refused, and `runtimeExclusions` says why
         bodies.set(node.id, {
-            x: node.geometry.x, y: node.geometry.y, vx: 0, vy: 0, onGround: false,
-            groundFriction: 1
+            x: node.geometry.x + at.dx, y: node.geometry.y + at.dy,
+            vx: 0, vy: 0, onGround: false, groundFriction: 1
         });
     }
     return { bodies, time: 0, jumpWas: false, overlaps: new Set(), events: [] };
@@ -283,7 +304,10 @@ export function solidsOf(doc: ReadonlyDocument): Solid[] {
     const out: Solid[] = [];
     for (const node of doc.nodes.values()) {
         if (bodyTypeOf(node) !== "static") continue;
-        const g = node.geometry;
+        const at = worldOffsetOf(doc, node.id);
+        if (!at) continue;
+        const g = { x: node.geometry.x + at.dx, y: node.geometry.y + at.dy,
+            width: node.geometry.width, height: node.geometry.height };
         // A ZERO-AREA SOLID IS NOT A FLOOR. The corpus has none, but an author dragging a new box
         // out passes through 0x0 on the way, and a zero-height solid would catch a falling body on
         // an infinitely thin line — which reads as a bug in the physics rather than in the level.
@@ -337,7 +361,10 @@ export function tileSolidsNear(
         // NO SET, NO SOLIDS — a dangling id draws nothing and must collide with nothing, or a level
         // whose tileset was deleted becomes an invisible wall.
         if (!set || set.tiles.length === 0) continue;
-        const local = { x: box.x - node.geometry.x, y: box.y - node.geometry.y,
+        const at = worldOffsetOf(doc, node.id);
+        if (!at) continue;
+        const originX = node.geometry.x + at.dx, originY = node.geometry.y + at.dy;
+        const local = { x: box.x - originX, y: box.y - originY,
             width: box.width, height: box.height };
         const range = visibleCells(map, local);
         if (!range) continue;
@@ -349,14 +376,71 @@ export function tileSolidsNear(
                 // icy patch. The corpus declares none, so the fallback is what it actually gets.
                 const tile = tilesetTile(set, tileAt(map, col, row));
                 out.push({
-                    x: node.geometry.x + col * map.tileWidth,
-                    y: node.geometry.y + row * map.tileHeight,
+                    x: originX + col * map.tileWidth,
+                    y: originY + row * map.tileHeight,
                     width: map.tileWidth, height: map.tileHeight,
                     friction: tile && propertyOf(tile.userData, "friction") !== null
                         ? frictionOf(tile) : frictionOf(node)
                 });
             }
         }
+    }
+    return out;
+}
+
+/** Why a node cannot take part in the runtime, or null when it can. */
+export function runtimeRefusal(doc: ReadonlyDocument, nodeId: string): string | null {
+    let at = doc.nodes.get(nodeId)?.parent ?? null;
+    let guard = 0;
+    while (at !== null) {
+        // A CYCLE CANNOT HANG THE RUNTIME. `Integrity` refuses one at rest, but a document is edited
+        // between loads and this runs sixty times a second — the same reasoning `traverseSceneGraph`
+        // uses for its own cycle guard.
+        if (++guard > 64) return "sits deeper than 64 parents, or in a cycle";
+        const parent = doc.nodes.get(at);
+        if (!parent) return `names a parent (${at}) that is not in the document`;
+        const t = parent.transform;
+        if (t && ((t.rotation ?? 0) !== 0 || (t.scaleX ?? 1) !== 1 || (t.scaleY ?? 1) !== 1)) {
+            return `is inside "${parent.name ?? parent.id}", which is rotated or scaled`;
+        }
+        if (parent.layout && (parent.layout.container || parent.layout.grid)) {
+            return `is inside "${parent.name ?? parent.id}", an auto-layout container whose children have no stored position`;
+        }
+        at = parent.parent ?? null;
+    }
+    return null;
+}
+
+/**
+ * How far a node's parent space is from the world's — the sum of its ancestors' positions.
+ *
+ * NULL WHEN IT CANNOT BE SUMMED, which is what `runtimeRefusal` explains. Everything the runtime
+ * reads goes through this, and everything it writes goes back through it, so the two directions
+ * cannot drift apart.
+ */
+export function worldOffsetOf(doc: ReadonlyDocument, nodeId: string): { dx: number; dy: number } | null {
+    if (runtimeRefusal(doc, nodeId) !== null) return null;
+    let dx = 0, dy = 0;
+    let at = doc.nodes.get(nodeId)?.parent ?? null;
+    while (at !== null) {
+        const parent = doc.nodes.get(at);
+        if (!parent) return null;
+        dx += parent.geometry.x;
+        dy += parent.geometry.y;
+        at = parent.parent ?? null;
+    }
+    return { dx, dy };
+}
+
+/** Every node the runtime had to leave out, and why — counted rather than silently dropped. */
+export function runtimeExclusions(doc: ReadonlyDocument): { nodeId: string; why: string }[] {
+    const out: { nodeId: string; why: string }[] = [];
+    for (const node of doc.nodes.values()) {
+        const isBody = bodyTypeOf(node) !== null;
+        const isRegion = !!node.className && !isBody;
+        if (!isBody && !isRegion && node.type !== "core.tilemap") continue;
+        const why = runtimeRefusal(doc, node.id);
+        if (why) out.push({ nodeId: node.id, why: `"${node.name ?? node.id}" ${why}` });
     }
     return out;
 }
@@ -379,7 +463,10 @@ export function regionsOf(doc: ReadonlyDocument): Region[] {
         if (!className || bodyTypeOf(node) !== null) continue;
         const g = node.geometry;
         if (g.width <= 0 || g.height <= 0) continue;
-        out.push({ nodeId: node.id, className, x: g.x, y: g.y, width: g.width, height: g.height });
+        const at = worldOffsetOf(doc, node.id);
+        if (!at) continue;
+        out.push({ nodeId: node.id, className, x: g.x + at.dx, y: g.y + at.dy,
+            width: g.width, height: g.height });
     }
     return out;
 }
@@ -561,12 +648,18 @@ export function applyWorld(doc: ReadonlyDocument, world: WorldState): ReadonlyDo
     for (const [id, body] of world.bodies) {
         const node = doc.nodes.get(id);
         if (!node) continue;
-        if (node.geometry.x === body.x && node.geometry.y === body.y) continue;
+        // BACK INTO PARENT SPACE, which is the symmetric half of reading it out. Writing a world
+        // position into a nested node's `geometry` would move it by the frame's offset a second
+        // time — every frame, so it would accelerate away.
+        const at = worldOffsetOf(doc, id);
+        if (!at) continue;
+        const px = body.x - at.dx, py = body.y - at.dy;
+        if (node.geometry.x === px && node.geometry.y === py) continue;
         // `as Node` for the same reason `applyFrame` needs it: a `ReadonlyDocument`'s nodes are
         // deep-readonly, and the document being BUILT is an ordinary one. The copy is new either
         // way — nothing here writes through the reference.
         if (!nodes) nodes = new Map(doc.nodes as ReadonlyMap<string, Node>);
-        nodes.set(id, { ...(node as Node), geometry: { ...node.geometry, x: body.x, y: body.y } });
+        nodes.set(id, { ...(node as Node), geometry: { ...node.geometry, x: px, y: py } });
     }
     if (!nodes) return doc;
     return { ...(doc as ProjectDocument), nodes } as ReadonlyDocument;
@@ -578,7 +671,9 @@ export function movedIds(doc: ReadonlyDocument, world: WorldState): Set<string> 
     for (const [id, body] of world.bodies) {
         const node = doc.nodes.get(id);
         if (!node) continue;
-        if (node.geometry.x !== body.x || node.geometry.y !== body.y) out.add(id);
+        const at = worldOffsetOf(doc, id);
+        if (!at) continue;
+        if (node.geometry.x !== body.x - at.dx || node.geometry.y !== body.y - at.dy) out.add(id);
     }
     return out;
 }
