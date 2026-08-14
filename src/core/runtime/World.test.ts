@@ -1346,32 +1346,48 @@ describe("body meets body — REPORTED, never resolved", () => {
         expect(w.contacts.size).toBe(0);
     });
 
-    it("skips a body whose world offset is REFUSED — it is not drawn where it is simulated", () => {
-        // Slice 6's rule: a rotated ancestor cannot be composed as an offset, so `applyWorld` stops
-        // writing that body back to the document. Reporting a contact against it would name a place
-        // with nothing in it — the same defect slice 6 was written to fix, one axis over.
-        const doc = createEmptyDocument();
-        doc.nodes.set("frame", {
-            id: "frame", type: "core.rectangle", parent: null, children: ["hidden"],
-            geometry: { x: 1000, y: 690, width: 400, height: 300 },
-            style: { fill: "none", opacity: 1 }, layout: {}, transform: { rotation: 0.3 }
-        } as unknown as Node);
-        doc.nodes.set("hidden", {
-            id: "hidden", type: "core.rectangle", parent: "frame", children: [],
-            geometry: { x: 0, y: 0, width: 40, height: 10 },
-            style: { fill: "#888", opacity: 1 }, layout: {},
-            userData: { bodyType: prop("dynamic") }
-        } as unknown as Node);
-        doc.nodes.set("free", {
-            id: "free", type: "core.rectangle", parent: null, children: [],
-            geometry: { x: 1005, y: 692, width: 10, height: 10 },
-            style: { fill: "#888", opacity: 1 }, layout: {},
-            userData: { bodyType: prop("dynamic") }
-        } as unknown as Node);
-        doc.rootNodeUuids = ["frame", "free"];
-        expect(runtimeRefusal(doc, "hidden")).not.toBeNull();
-        const w = stepWorld(doc, worldFrom(doc));
-        expect(w.events.filter(e => e.kind === "contact")).toEqual([]);
+    it("skips a body REFUSED MID-RUN — it is no longer drawn where it is simulated", () => {
+        // THE FIRST VERSION OF THIS TEST WAS BLIND AND THE MUTANT SURVIVED. It refused the body
+        // from the start, and `worldFrom` ALREADY skips a refused body — so the body never entered
+        // the world at all and the guard in the contact pass was never reached. The reachable case
+        // is a refusal that appears MID-RUN: the body is in `world.bodies` from Play, and the app
+        // steps against the LIVE stored document, so rotating its frame while the run is going
+        // makes `worldOffsetOf` start answering null for a body that is already moving.
+        const build = (turned: boolean) => {
+            const doc = createEmptyDocument();
+            doc.nodes.set("frame", {
+                id: "frame", type: "core.rectangle", parent: null, children: ["hidden"],
+                geometry: { x: 1000, y: 690, width: 400, height: 300 },
+                style: { fill: "none", opacity: 1 }, layout: {},
+                ...(turned ? { transform: { rotation: 0.3 } } : {})
+            } as unknown as Node);
+            doc.nodes.set("hidden", {
+                id: "hidden", type: "core.rectangle", parent: "frame", children: [],
+                geometry: { x: 0, y: 0, width: 40, height: 10 },
+                style: { fill: "#888", opacity: 1 }, layout: {},
+                userData: { bodyType: prop("dynamic") }
+            } as unknown as Node);
+            doc.nodes.set("free", {
+                id: "free", type: "core.rectangle", parent: null, children: [],
+                geometry: { x: 1005, y: 692, width: 10, height: 10 },
+                style: { fill: "#888", opacity: 1 }, layout: {},
+                userData: { bodyType: prop("dynamic") }
+            } as unknown as Node);
+            doc.rootNodeUuids = ["frame", "free"];
+            return doc;
+        };
+        const upright = build(false);
+        const w = worldFrom(upright);
+        expect(w.bodies.has("hidden")).toBe(true);
+        // THE POSITIVE CONTROL, without which the assertion below passes for the wrong reason:
+        // these two really do touch, and really do report it, while the frame is composable.
+        expect(stepWorld(upright, w).events.filter(e => e.kind === "contact"))
+            .toHaveLength(2);
+        // Now the frame is rotated under the running world — a legal edit, and one App.tsx picks up
+        // on the next step because it steps against the stored document.
+        const turned = build(true);
+        expect(runtimeRefusal(turned, "hidden")).not.toBeNull();
+        expect(stepWorld(turned, w).events.filter(e => e.kind === "contact")).toEqual([]);
     });
 
     it("costs nothing on a document with one body, which is 24 of this file's 25 fixtures", () => {
