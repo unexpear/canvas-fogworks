@@ -13,7 +13,7 @@ import {
     FIXED_STEP, MAX_STEPS_PER_FRAME, DEFAULT_GRAVITY, MAX_FALL_SPEED, MOVE_SPEED, JUMP_HEIGHT,
     NO_INPUT, Input, WorldState, jumpSpeedFor,
     bodyTypeOf, worldFrom, solidsOf, stepWorld, applyWorld, movedIds, stepsFor, propertyOf,
-    tileIsSolid, tileSolidsNear, documentHasSolidTiles, frictionOf
+    tileIsSolid, tileSolidsNear, documentHasSolidTiles, frictionOf, regionsOf
 } from "./World";
 
 const prop = (v: string, type = "string") => ({ type, value: v });
@@ -736,5 +736,105 @@ describe("surface friction — the ground's property, not the body's", () => {
         doc.rootNodeUuids.push("map");
         const solids = tileSolidsNear(doc, { x: 0, y: 0, width: 32, height: 16 });
         expect(solids.map(s => s.friction)).toEqual([0.5, 0]);
+    });
+});
+
+describe("regions — the world reports, it does not act", () => {
+    /** A classed node with no bodyType is a region; the corpus splits exactly that way. */
+    const withRegion = (className: string | undefined, box: { x: number; y: number; w: number; h: number },
+                        extra: Record<string, unknown> = {}) => {
+        const doc = docWith([
+            { id: "b", x: 0, y: 0, userData: { bodyType: prop("dynamic") } },
+            { id: "floor", x: -500, y: 200, w: 2000, h: 20, userData: { bodyType: prop("static") } }
+        ]);
+        doc.nodes.set("r", {
+            id: "r", type: "core.rectangle", parent: null, children: [], name: "region",
+            geometry: { x: box.x, y: box.y, width: box.w, height: box.h },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            ...(className !== undefined ? { className } : {}), ...extra
+        } as unknown as Node);
+        doc.rootNodeUuids.push("r");
+        return doc;
+    };
+
+    it("is a classed node that is NOT a body — the split the corpus already makes", () => {
+        // 26 objects in the tree carry a class and no bodyType; 51 carry a bodyType and no class;
+        // NONE carry both. This reads that split rather than inventing one.
+        const doc = withRegion("coin", { x: 0, y: 0, w: 20, h: 20 });
+        expect(regionsOf(doc)).toEqual([
+            { nodeId: "r", className: "coin", x: 0, y: 0, width: 20, height: 20 }
+        ]);
+        // A CLASSED BODY IS A BODY, not a region — or the level's collision geometry would start
+        // firing enter events at itself.
+        const bodyToo = withRegion("coin", { x: 0, y: 0, w: 20, h: 20 },
+            { userData: { bodyType: prop("static") } });
+        expect(regionsOf(bodyToo)).toEqual([]);
+        // …and an unclassed node is nothing at all, which is 225 of the corpus's 251 objects.
+        expect(regionsOf(withRegion(undefined, { x: 0, y: 0, w: 20, h: 20 }))).toEqual([]);
+    });
+
+    it("skips a ZERO-AREA region, which the corpus really has", () => {
+        // `player-start` is a POINT object with no width or height: somewhere to put something,
+        // not a volume to be inside. Given an overlap it could never be entered or left.
+        expect(regionsOf(withRegion("Location", { x: 10, y: 10, w: 0, h: 0 }))).toEqual([]);
+    });
+
+    it("reports ENTER once, not on every frame the body spends inside", () => {
+        // A coin is collected once. The whole reason the overlap set is carried on the world is
+        // that a game wants the EDGE, and a body sits inside a region for sixty frames a second.
+        const doc = withRegion("coin", { x: -20, y: 40, w: 60, h: 60 });
+        let w = worldFrom(doc);
+        const seen: string[] = [];
+        for (let i = 0; i < 90; i++) {
+            w = stepWorld(doc, w);
+            for (const e of w.events) seen.push(`${e.kind}:${e.className}:${e.bodyId}`);
+        }
+        // It falls in, then out the bottom on its way to the floor — exactly one of each.
+        expect(seen).toEqual(["enter:coin:b", "leave:coin:b"]);
+    });
+
+    it("carries the class straight through and interprets NOTHING", () => {
+        // `exit` with a `map` property is the corpus's level transition; this module's whole job is
+        // to say a body reached it. Loading `sandbox2.json` is the app's decision, not physics.
+        const doc = withRegion("exit", { x: -20, y: 40, w: 60, h: 60 },
+            { userData: { map: prop("scene/game/map/sandbox2.json") } });
+        let w = worldFrom(doc);
+        let first = null as null | { kind: string; className: string; nodeId: string };
+        for (let i = 0; i < 30 && !first; i++) {
+            w = stepWorld(doc, w);
+            if (w.events.length > 0) first = w.events[0];
+        }
+        expect(first).toEqual({ kind: "enter", bodyId: "b", nodeId: "r", className: "exit" });
+    });
+
+    it("reports LEAVE when the region is DELETED under the body", () => {
+        // A coin that is collected and removed must still report the leave, or a game counting
+        // "how many am I inside" drifts up by one every time something vanishes under a player.
+        const doc = withRegion("coin", { x: -20, y: -20, w: 200, h: 400 });
+        let w = stepWorld(doc, worldFrom(doc));
+        expect(w.events.map(e => e.kind)).toEqual(["enter"]);
+        const gone = withRegion(undefined, { x: 0, y: 0, w: 0, h: 0 });
+        gone.nodes.delete("r");
+        w = stepWorld(gone, w);
+        expect(w.events).toEqual([
+            { kind: "leave", bodyId: "b", nodeId: "r", className: "" }
+        ]);
+        expect(w.overlaps.size).toBe(0);
+    });
+
+    it("a region does NOT stop a body — reporting is not colliding", () => {
+        const doc = withRegion("spikes", { x: -50, y: 40, w: 200, h: 20 });
+        const after = steps(doc, worldFrom(doc), 120);
+        // Straight through it and onto the floor at y=200: a region is a volume, not a wall.
+        expect(after.bodies.get("b")!.y).toBe(190);
+        expect(after.bodies.get("b")!.onGround).toBe(true);
+    });
+
+    it("costs nothing when a document has no regions at all", () => {
+        const doc = docWith([{ id: "b", x: 0, y: 0, userData: { bodyType: prop("dynamic") } }]);
+        expect(regionsOf(doc)).toEqual([]);
+        const w = stepWorld(doc, worldFrom(doc));
+        expect(w.events).toEqual([]);
+        expect(w.overlaps.size).toBe(0);
     });
 });

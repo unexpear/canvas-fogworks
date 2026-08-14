@@ -55,6 +55,19 @@
  * data can tell us, and a guess dressed as a feature is worse than the gap. The same goes for
  * `density`, which one object in the whole tree declares.
  *
+ * A REGION IS A CLASSED NODE THAT IS NOT A BODY, and the corpus divides itself that way with no
+ * overlap at all: **26 objects carry a class and no `bodyType`** — coin, spikes, exit, Trigger,
+ * Location, NPC, Sign — while **51 carry a `bodyType` and no class**, and those are the collision
+ * geometry. Not one object in the tree carries both. So the split is the data's own, not a rule
+ * imposed on it, and `Node.className` is the second field this module has found shipping validated,
+ * round-tripping and read by nothing.
+ *
+ * THE WORLD REPORTS, IT DOES NOT ACT. An overlap becomes an `enter`/`leave` event naming the region
+ * and its class, and that is the whole of it: nothing here spawns a maggot, runs
+ * `chest-discovered.lua` or loads `sandbox2.json`. Each of those is a separate decision about what
+ * an app does with an event, and each wants its own design — the events are the seam that lets them
+ * be designed at all, and building any of them into the physics would weld the two together.
+ *
  * WHAT THIS SLICE DELIBERATELY IS NOT: no rotation, no restitution (the property does not exist in
  * the corpus at all —
  * said out loud rather than half-applied), no joints, no triggers, no spawning, no slopes and no
@@ -157,6 +170,21 @@ export interface WorldState {
      * steps from it, and the second step must already know the first consumed the press.
      */
     jumpWas: boolean;
+    /**
+     * Which (body, region) pairs were overlapping at the END of the last step.
+     *
+     * KEPT SO THAT ENTER AND LEAVE CAN BE DIFFED. An overlap on its own is a state; a game wants
+     * the EDGE — a coin is collected once, not on every one of the sixty frames the player spends
+     * inside it. Keyed `bodyId \u0000 nodeId`, because a NUL cannot occur in either.
+     */
+    overlaps: ReadonlySet<string>;
+    /** What the step that produced this world noticed. Empty on most steps, by design. */
+    events: readonly WorldEvent[];
+}
+
+/** The key for one (body, region) pair. A NUL separator cannot collide with any node id. */
+function pairKey(bodyId: string, nodeId: string): string {
+    return bodyId + "\u0000" + nodeId;
 }
 
 /** An axis-aligned box in world units — what a solid is, for this slice. */
@@ -174,6 +202,25 @@ export interface Solid {
      * pushes.
      */
     friction: number;
+}
+
+/** A volume a body can be inside — a coin, a trigger, the mouth of an exit. */
+export interface Region {
+    nodeId: string;
+    /** The node's `className`, carried straight through: this module does not interpret it. */
+    className: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+/** A body crossed a region's edge. Produced by the step that noticed, consumed by the app. */
+export interface WorldEvent {
+    kind: "enter" | "leave";
+    bodyId: string;
+    nodeId: string;
+    className: string;
 }
 
 /** A surface's `friction`, read leniently and clamped — 0 is ice, 1 stops a body dead. */
@@ -228,7 +275,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
             groundFriction: 1
         });
     }
-    return { bodies, time: 0, jumpWas: false };
+    return { bodies, time: 0, jumpWas: false, overlaps: new Set(), events: [] };
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
@@ -314,8 +361,36 @@ export function tileSolidsNear(
     return out;
 }
 
+/**
+ * Every region in the document, in document order so the events are deterministic.
+ *
+ * A NODE WITH A CLASS AND NO BODY TYPE. The corpus is unambiguous about that split — 26 with a class
+ * and no body, 51 with a body and no class, none with both — so this reads the data rather than
+ * imposing a convention on it.
+ *
+ * A ZERO-AREA REGION IS SKIPPED, and the corpus has one that matters: `player-start` is a POINT with
+ * no width or height at all. A point is somewhere to PUT something, not a volume to be inside, and
+ * pretending otherwise would give it an overlap that can never be entered or left.
+ */
+export function regionsOf(doc: ReadonlyDocument): Region[] {
+    const out: Region[] = [];
+    for (const node of doc.nodes.values()) {
+        const className = node.className;
+        if (!className || bodyTypeOf(node) !== null) continue;
+        const g = node.geometry;
+        if (g.width <= 0 || g.height <= 0) continue;
+        out.push({ nodeId: node.id, className, x: g.x, y: g.y, width: g.width, height: g.height });
+    }
+    return out;
+}
+
 /** Do two boxes overlap? Touching edges do NOT count, or a body resting on a floor is inside it. */
 function overlaps(ax: number, ay: number, aw: number, ah: number, b: Solid): boolean {
+    return ax < b.x + b.width && ax + aw > b.x && ay < b.y + b.height && ay + ah > b.y;
+}
+
+/** The same test against a REGION. Two boxes, one rule — separate only because the types differ. */
+function overlaps2(ax: number, ay: number, aw: number, ah: number, b: Region): boolean {
     return ax < b.x + b.width && ax + aw > b.x && ay < b.y + b.height && ay + ah > b.y;
 }
 
@@ -343,7 +418,7 @@ export function documentHasSolidTiles(doc: ReadonlyDocument): boolean {
 export function stepWorld(
     doc: ReadonlyDocument, world: WorldState,
     opts?: { gravity?: number; solids?: readonly Solid[]; input?: Input;
-             controlled?: string | null; tileSolids?: boolean }
+             controlled?: string | null; tileSolids?: boolean; regions?: readonly Region[] }
 ): WorldState {
     const gravity = opts?.gravity ?? DEFAULT_GRAVITY;
     const solids = opts?.solids ?? solidsOf(doc);
@@ -436,7 +511,38 @@ export function stepWorld(
         next.set(id, { x, y, vx, vy, onGround, groundFriction });
     }
 
-    return { bodies: next, time: world.time + FIXED_STEP, jumpWas: input.jump };
+    // OVERLAPS ARE COMPUTED AFTER EVERYTHING HAS MOVED, once, on the settled positions — asking
+    // mid-resolution would report a body inside a wall it is about to be pushed out of.
+    const regions = opts?.regions ?? regionsOf(doc);
+    // NOT `overlaps` — that is the box test used a dozen lines up, and shadowing it inside the same
+    // function turns every collision check into a call on a Set.
+    const inside = new Set<string>();
+    const events: WorldEvent[] = [];
+    for (const [id, body] of next) {
+        const node = doc.nodes.get(id);
+        if (!node) continue;
+        const w = node.geometry.width, h = node.geometry.height;
+        for (const r of regions) {
+            if (!overlaps2(body.x, body.y, w, h, r)) continue;
+            const key = pairKey(id, r.nodeId);
+            inside.add(key);
+            if (!world.overlaps.has(key)) {
+                events.push({ kind: "enter", bodyId: id, nodeId: r.nodeId, className: r.className });
+            }
+        }
+    }
+    // LEAVING IS THE OTHER HALF, and it has to survive the body or the region VANISHING: a coin that
+    // is collected and deleted must still report the leave, or a game counting "how many am I
+    // inside" drifts up by one every time something is removed under a player.
+    for (const key of world.overlaps) {
+        if (inside.has(key)) continue;
+        const [bodyId, nodeId] = key.split("\u0000");
+        const was = regions.find(r => r.nodeId === nodeId);
+        events.push({ kind: "leave", bodyId, nodeId,
+            className: was?.className ?? doc.nodes.get(nodeId)?.className ?? "" });
+    }
+
+    return { bodies: next, time: world.time + FIXED_STEP, jumpWas: input.jump, overlaps: inside, events };
 }
 
 /**

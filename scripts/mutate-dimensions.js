@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1814;
+const EXPECTED_TESTS = 1821;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1113,6 +1113,31 @@ const MUTANTS = [
       from: "        if (node.geometry.x === body.x && node.geometry.y === body.y) continue;",
       to: "        if (node.geometry.x === body.x) continue;",
       note: "only the X coordinate decides whether a body moved, so a body falling straight down is never stamped onto the document and never appears to move at all — and `if (false)` could not be used here, because it does not COMPILE" },
+
+    // REGIONS AND EVENTS (M18 slice 5). A region is a classed node that is NOT a body — the split
+    // the corpus already makes, 26 against 51 with no object carrying both. Every mutant here still
+    // reports something; what changes is WHEN, or how often, which is the difference between a coin
+    // collected once and a coin collected sixty times a second.
+    { id: "RG1", file: "src/core/runtime/World.ts",
+      from: "        if (!className || bodyTypeOf(node) !== null) continue;",
+      to: "        if (!className) continue;",
+      note: "a classed BODY becomes a region too, so the level's own collision geometry starts firing enter events at the bodies resting on it" },
+    { id: "RG2", file: "src/core/runtime/World.ts",
+      from: "            if (!world.overlaps.has(key)) {",
+      to: "            if (true) {",
+      note: "ENTER fires on every step the body is inside rather than on the edge, so a coin is collected sixty times a second and any counter built on it is nonsense" },
+    { id: "RG3", file: "src/core/runtime/World.ts",
+      from: "        if (g.width <= 0 || g.height <= 0) continue;\n        out.push({ nodeId: node.id, className,",
+      to: "        out.push({ nodeId: node.id, className,",
+      note: "a ZERO-AREA region is kept, so the corpus's `player-start` POINT becomes a volume that can never be entered or left — a position pretending to be a trigger" },
+    { id: "RG4", file: "src/core/runtime/World.ts",
+      from: "    for (const key of world.overlaps) {\n        if (inside.has(key)) continue;",
+      to: "    for (const key of inside) {\n        if (inside.has(key)) continue;",
+      note: "LEAVE is diffed against the wrong set and can never fire, so a body that walks out of a trigger is still inside it forever" },
+    { id: "RG5", file: "src/core/runtime/World.ts",
+      from: "    const regions = opts?.regions ?? regionsOf(doc);",
+      to: "    const regions = opts?.regions ?? [];",
+      note: "regions are only ever what a caller passed, so the document's own are never found and no event fires at all — the silent version of the feature" },
 
     // SURFACE FRICTION (M18 slice 4). The ground's property, not the body's — 44 of the corpus's
     // 45 `friction` values sit on STATIC objects. Every mutant here still walks and still stops;
