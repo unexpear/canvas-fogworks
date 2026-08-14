@@ -2,7 +2,7 @@
 
 > The engine is built in **layers**, where each milestone proves **one new
 > architectural capability** before the next begins. This is the canonical roadmap.
-> Status current as of **2026-08-12**, engine **v0.0.5**, schema **67**.
+> Status current as of **2026-08-13**, engine **v0.0.5**, schema **68**.
 >
 > **Seven rows below said ⬜ for capabilities that had shipped.** They said it for three weeks
 > because this file declared no `describes:` directive: `check-doc-drift` named it, looked it
@@ -41,7 +41,7 @@ M7  States                    ✅   `Node.states` + `activeState` (schema 30, th
 M8  Animation Engine          ✅   timeline + keyframes + cubic-Bézier easing + HOLDS (cel) + onion skin — `Timeline` (407), `Bezier` (172), `Clips` (105)
 M9  Interaction Graph         ✅*  `Node.interactions`: trigger → state, with duration/easing, plus NAVIGATE to a node (schema 36), and a Play mode that fires them. A state machine, not a node GRAPH — the name overpromises
 M10 Drawing System            ✅   12 paint modules / 2,107 lines: buffer, patch, brush, stroke, fill, selection + outline, symmetry, palette, quantize, adjust, codec, surface space — with a Paint workspace and its tools
-M11 Assets                    ✅*  16 importers: Tiled (maps, tilesets, objects), SVG, fonts, atlases, `.unitypackage`, sheets, numbered frame runs, and now ASEPRITE — a file arrives as one node that plays, with the file's own timing and its tags as clips, through a confined bytes channel. glTF and OBJ are BLOCKED rather than unwired — every `NODE_TYPE` is 2D, so there is no node to import a mesh into, and 10,937 files here are waiting on that. A TILESET IS NOW A THING THE DOCUMENT HOLDS (schema 67, 2026-08-13): shared by every layer that names it, which ends a measured 2.5x duplication; collection sets are representable and not yet drawable. See FEATURE-AUDIT.md
+M11 Assets                    ✅*  16 importers: Tiled (maps, tilesets, objects), SVG, fonts, atlases, `.unitypackage`, sheets, numbered frame runs, and now ASEPRITE — a file arrives as one node that plays, with the file's own timing and its tags as clips, through a confined bytes channel. glTF and OBJ are BLOCKED rather than unwired — every `NODE_TYPE` is 2D, so there is no node to import a mesh into, and 10,937 files here are waiting on that. A TILESET IS NOW A THING THE DOCUMENT HOLDS (schema 67-68, 2026-08-13): shared by every layer that names it. The duplication took TWO schemas to actually end — 67 moved the picture and the importer went on writing the old copy, so a six-layer import stored the sheet SEVEN times (1,374KB against 202KB) until 68 refused the field. Collection sets draw via the node-per-cell path, not as one node; the corpus holds ZERO orthogonal tile layers that would use one. See FEATURE-AUDIT.md
 M12 Text Engine               ✅*  typesetting, wrapping and on-canvas editing, shared by all three backends and the exporter. ONE style per node — no per-run styling
 M13 Export                    ✅*  SVG, Tiled `.tmx` (tile AND object layers, one `<tileset>` per distinct set with its own `firstgid`), sprite sheet (`sheet.json` + `sheet.png`). No PNG or PDF of the canvas
 M14 AI Integration            ⬜
