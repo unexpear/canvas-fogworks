@@ -1922,3 +1922,44 @@ to paint — read `stored.src`, the node's. So for every document that had been 
 migration the picker was already gone, silently, while the terrain panel went on saying *"pick a
 tile below, then click a shape"*. It reads the tileset's `src` now. A read of a field nothing writes
 is as dead as a write nothing reads, and this repo had one of each pointing at the same field.
+
+
+## Tile anchoring — a tile sits at the BOTTOM of its cell
+
+The per-cell import path placed every picture at the cell's TOP. Correct for the ~98% of layers
+whose art is exactly cell-sized, and wrong for every layer where it is not: **nine maps in the
+measured tree**, from a 64x64 tile on a 60x60 grid to 384x332 art on 32x32 cells. The error is the
+difference between the two heights, so it grew with the overhang and read as badly drawn art rather
+than as arithmetic.
+
+**THE EVIDENCE IS WHAT TILED'S OWN AUTHORS DID NOT HAVE TO WRITE.** Both bundled examples with
+oversized tiles declare SMALL `<tileoffset>`s, which is only possible if the default anchoring
+already stands the art up:
+
+| file | art | cell | its `<tileoffset>` | top-alignment would have needed |
+|---|---|---|---|---|
+| `perspective_walls.tsx` | 64x64 | 31x31 | `x="-32" y="0"` | `y="-33"` |
+| `isometric_grass_and_water` | 64x64 | 64x32 | `x="0" y="16"` | `y="-32"` |
+
+That is the same rule `objectBox` implements for a tile OBJECT and the same one `collectionTileBox`
+draws with, so the reader, the writer and the renderer now agree. `tileImageBox` is the one
+statement of it.
+
+**MEASURED ON REAL FILES, before and after:** Scribble Dungeons' `sampleMap.tmx` moves all **348** of
+its tiles by 4px (64x64 art on 60x60 cells); `isometric-sample.tmx` moves all **51** of its by
+**384px** (256x512 on 256x128). No cell-sized layer moves at all, which is the half that matters —
+if it did, the fix would be a regression dressed as a correction.
+
+**THE X CONVENTION IS LEFT ALONE**, deliberately. Bottom-LEFT means the picture's left edge sits at
+the cell's, which `tilePosition` already gives for an orthogonal map; for isometric, Tiled measures
+from the diamond's bounding box, which differs from this by a constant half-tile for EVERY cell. A
+constant translates the whole layer and preserves how tiles of different widths line up against each
+other, so it is a placement question rather than an anchoring one, and the node's own position is
+where it belongs.
+
+**FOUND WHILE PROVING IT, and not fixed here:** `perspective_walls.tmx` — the file that supplies half
+the evidence above — imports as NOTHING. Its tileset declares neither `columns` nor `tilecount` and
+its `<image>` carries no size, so `tileSourceRect` computes `index % 0` and all 79 painted cells drop.
+They are counted rather than lost silently, but the map arrives empty. Tiled infers the column count
+from the image, which the importer already loads; the parser must stay pure text, so the inference
+belongs at that seam.

@@ -1168,6 +1168,15 @@ interface TiledObjectPlacement {
   path: PathCommand[] | null; name: string;
 }
 function objectPlacement(obj: TiledObject, tilesets: readonly TiledTileset[]): { placement: TiledObjectPlacement | null; why: string | null };
+// WHERE ONE CELL'S PICTURE GOES, box and all — `tilePosition` answers where the CELL is, this
+// answers where the ART goes in it. A tile is anchored at the BOTTOM of its cell, so art taller
+// than the grid stands UP from it (nine maps in the tree have such art). Both of Tiled's own
+// oversized-tile examples declare SMALL `<tileoffset>`s, which is only possible if that is the
+// default. Cell-sized art is unmoved, which is 45 of the corpus's 53 layers.
+function tileImageBox(map: { orientation; tileWidth; tileHeight },
+                      layer: { offsetX; offsetY }, set: { offsetX; offsetY },
+                      image: { width; height }, col: number, row: number):
+    { x: number; y: number; width: number; height: number };
 // The 4th argument is an identity FUNCTION, not an id (schema 67): deduplication is the CALLER's,
 // because only the caller sees every layer at once and can tell that six of them name one set.
 // It also means no `Tilemap` ever exists carrying an empty id awaiting a fix-up.
