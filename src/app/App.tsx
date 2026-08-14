@@ -3322,7 +3322,16 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                     </div>
                                                 </>)}
                                             </div>
-                                            {stored.src && (
+                                            {/* THE PALETTE IS THE TILESET'S (schema 68), and it
+                                                had been the NODE's — a field 66→67 already moved
+                                                and 68 refuses. So this picker vanished for every
+                                                document that had been through the migration, which
+                                                is every document not imported since: the one
+                                                control that says WHICH TILE to paint, gone, with
+                                                the terrain panel still telling people to "pick a
+                                                tile below". A read of a field nothing writes is as
+                                                dead as a write nothing reads. */}
+                                            {mySet?.src && (
                                                 <div
                                                     data-tile-picker="1"
                                                     style={{
@@ -3332,7 +3341,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                 >
                                                     <div style={{ position: "relative", display: "inline-block" }}>
                                                         <img
-                                                            src={stored.src}
+                                                            src={mySet.src}
                                                             alt="tile sheet"
                                                             draggable={false}
                                                             style={{ display: "block", imageRendering: "pixelated", cursor: "crosshair" }}
@@ -5239,7 +5248,12 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                                 kind: "tilemap",
                                                 x: fit.layer.x, y: fit.layer.y,
                                                 width: fit.layer.width, height: fit.layer.height,
-                                                src: sheet, map: fit.layer.tilemap,
+                                                // NO `src` (schema 68) — the picture went onto the
+                                                // TILESET above, and `sheet` is still read here
+                                                // because a layer whose image did not load takes
+                                                // the per-cell path rather than becoming a grid
+                                                // that draws nothing.
+                                                map: fit.layer.tilemap,
                                                 name: layer.name || "Tile layer",
                                                 opacity: fit.layer.opacity, hidden: fit.layer.hidden
                                             });

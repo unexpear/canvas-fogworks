@@ -41,7 +41,7 @@ import { generateUUID } from "../ids/UUID";
 export type TilePlacement =
     | {
         kind: "tilemap";
-        x: number; y: number; width: number; height: number; src: string;
+        x: number; y: number; width: number; height: number;
         map: Tilemap; name: string;
         /** The Tiled layer's own opacity and visibility — a grid can finally carry both. */
         opacity: number; hidden: boolean;
@@ -127,8 +127,11 @@ export function tileImportActions(
             // THE GRID IS A CREATION FIELD, not a patch: `Integrity` refuses a tilemap node without
             // one, so a node made first and filled second would be unsaveable in between — the same
             // rule that makes a raster arrive with its pixels.
+            // NO `src` (schema 68). The picture is the TILESET's, and it has been read from there
+            // since 67 — passing it here as well stored the sheet once per LAYER on top of once per
+            // set, which is the duplication the schema change existed to remove.
             actions.push(new AddNodeAction(doc, "core.tilemap", t.x, t.y, t.width, t.height,
-                "none", id, null, { src: t.src, tilemap: t.map }));
+                "none", id, null, { tilemap: t.map }));
             // `pixelated` is what stops a 16px tile being smoothed into its neighbours when the map
             // is zoomed, and it is the one hint every measured pack needs.
             actions.push(new UpdateNodeContentAction(doc, id, { pixelated: true, name: t.name }));

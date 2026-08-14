@@ -13,7 +13,7 @@
 <!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
      below. The earlier note stands — the rectangle gesture added no field. -->
 
-> 🔒 Frozen contract · schema v67 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v68 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -1810,10 +1810,35 @@ that is not there.
   derives byte-identically. A gap filled by TURNING a tile gets exactly one candidate: a rotation
   substitutes for art nobody drew, and offering several would make a mask the artist never addressed
   look deliberately varied.
-- **Collection tilesets are representable and not yet drawable.** The importer builds them and the
-  model validates them; `RenderModel` resolves a null sheet for one, so the layer draws nothing. The
-  renderer needs a per-tile image path, which is a second derivation and deliberately not smuggled
-  into this change.
+- **Collection tilesets: MEASURED, and the entry above was wrong.** "Representable and not drawable"
+  described the `core.tilemap` GRID path and read as though a collection set drew nothing at all. It
+  draws. A layer whose tileset gives each tile its own file is refused by `tilemapForLayer`
+  (`draws from a tileset that gives each tile its own file`) and takes the NODE-PER-CELL path, where
+  `tileImageFor` gives every cell its own picture at its own size with both the set's `<tileoffset>`
+  and the layer's offset applied. The importer loads all of them (`set.tiles.map(t => t.image)`),
+  cached by path. So the 203 tile-objects and the 51 painted cells in the corpus all arrive and all
+  draw.
+
+  What does not exist is a collection layer as ONE node — and the corpus says nothing needs it.
+  Counted over every `.tmx`/`.tsx` in the tree plus Tiled's own examples: **5 distinct collection
+  sets, 1,207 per-tile images, and ZERO orthogonal tile layers drawing from one.** Two sets are used
+  by object layers only (`sandbox.tmx`, `sandbox2.tmx` — 199 tile-objects, no `<layer>` at all),
+  three sit in blank 60×60 maps, and the single set painted into tile layers is
+  `isometric-sample.tmx` — **isometric**, which `tilemapForLayer` already refuses for an unrelated
+  reason a grid cannot fix ("is isometric, which a grid cannot place").
+
+  And that one file says the grid path would be wrong anyway: its tiles are **256×512 on a 256×128
+  cell** — four times the cell height — with `offsety="-78"` on a layer, and the three Sketch sets
+  carry `<tileoffset x="-12" y="6">`. A cell is one cell; art that hangs three quarters of its height
+  outside it is what the per-cell path exists for.
+
+  A grid path would also cost a **stated backend divergence**: SVG and Canvas already draw one image
+  per cell, but the GPU tilemap is ONE QUAD sampling ONE sheet texture, so a collection would need a
+  runtime atlas — and measured on the real sets, trimmed to their alpha boxes, Sketch Town needs
+  16.0 Mpx against a 4096² page's 16.78 Mpx, i.e. ~95% packing efficiency, which no packer achieves.
+  Two pages or 8192².
+
+  So it is NOT built, and this is the reason rather than an omission.
 - **~~The exporter writes ONE tileset.~~ DONE — one `<tileset>` per distinct set.** Each carries its
   own `firstgid`, in first-seen order, and a set is entered once however many layers name it. The
   bug it closes is one the schema change made reachable and then left standing: with a single
@@ -1832,3 +1857,29 @@ that is not there.
   lands: writing one means a `<tile><image>` per tile, and that is the same gap the renderer has.
   When nothing is writable the export says so and writes no file, because a map declaring a layer
   and no tileset is one Tiled opens as an error dialog.
+
+## Schema 68 — the sheet leaves the tilemap node for good
+
+**66→67 moved the picture and the importer went on writing the old copy.** The migration said it in
+as many words — *"MOVED, NOT COPIED: `sheet` leaves the map and `src` leaves the node, or the old
+path is still what runs and the duplication this exists to remove stays exactly where it was"* — and
+then `tileImportActions` passed `{ src, tilemap }` to `AddNodeAction`, `srcError` still allowed a
+`core.tilemap` to carry a src, and nothing read it. `RenderModel` has resolved the picture from
+`Document.tilesets` since 67 and never once from the node.
+
+**MEASURED, not inferred.** Six layers of one tileset imported through the real action path, then
+serialised: the sheet appeared **seven times** — once per layer plus once on the set — **1,374KB
+where 202KB would do**. That is worse than the 2.5× duplication that justified schema 67, because
+the new home was added without the old one being closed.
+
+**So `srcError` now refuses it** ("only a `core.image` node may carry a src") and `migrate_67_to_68`
+strips what is already out there. The strip is what makes this a migration rather than a breaking
+change: every map imported between 67 and 68 has a `src` on every tilemap node, and tightening the
+validator alone would make each of those files fail to load. Nothing is lost — the picture is on the
+tileset the layer names.
+
+**AND IT TOOK A CONTROL WITH IT.** The inspector's tile picker — the only thing that says WHICH TILE
+to paint — read `stored.src`, the node's. So for every document that had been through the 66→67
+migration the picker was already gone, silently, while the terrain panel went on saying *"pick a
+tile below, then click a shape"*. It reads the tileset's `src` now. A read of a field nothing writes
+is as dead as a write nothing reads, and this repo had one of each pointing at the same field.

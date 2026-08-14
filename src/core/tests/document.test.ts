@@ -4591,9 +4591,9 @@ describe("Guards the suite did not previously protect", () => {
         // (1→2→…→25), and then REFUSED at "25" — never re-stamped straight to the current
         // schema. The error naming "25" (not "1") is the proof the chain actually ran.
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
-        // time a real migration is added — most recently when 66→67 landed, moving the tileset
-        // off the node and onto the document.)
-        expect(() => migrateIfNeeded(legacy, "68")).toThrow('Migration not implemented for document schema "67"');
+        // time a real migration is added — most recently when 67→68 landed, taking the sheet OFF
+        // the node, which 66→67 had moved and the importer had gone on writing anyway.)
+        expect(() => migrateIfNeeded(legacy, "69")).toThrow('Migration not implemented for document schema "68"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -15184,7 +15184,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
               src: null, sourceRect: null, transform: null, path: null, className: "", userData: {} },
             // A TILE LAYER CLOSES THE GROUP: a grid that arrived as a child of an object layer would
             // inherit that layer's opacity, which is a dimmed map with no visible cause.
-            { kind: "tilemap", x: 0, y: 0, width: 32, height: 32, src: "sheet.png",
+            { kind: "tilemap", x: 0, y: 0, width: 32, height: 32,
               map: emptyTilemap(), name: "ground", opacity: 1, hidden: false }
         ];
         const { actions, ids } = tileImportActions(doc, placements);
@@ -15215,7 +15215,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const doc = createEmptyDocument();
         const placements: TilePlacement[] = [
             { kind: "group", x: 0, y: 0, width: 64, height: 64, name: "props", opacity: 0.5, hidden: false },
-            { kind: "tilemap", x: 0, y: 0, width: 32, height: 32, src: "sheet.png",
+            { kind: "tilemap", x: 0, y: 0, width: 32, height: 32,
               map: emptyTilemap(), name: "ground", opacity: 1, hidden: false },
             { kind: "object", shape: "rectangle", x: 1, y: 2, width: 3, height: 4, name: "after",
               src: null, sourceRect: null, transform: null, path: null, className: "", userData: {} }
@@ -16084,7 +16084,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const doc = createEmptyDocument();
         const { actions, ids } = tileImportActions(doc, [
             { kind: "tilemap", x: grid.x, y: grid.y, width: grid.width, height: grid.height,
-              src: "sheet.png", map: grid.tilemap, name: "Ground",
+              map: grid.tilemap, name: "Ground",
               opacity: grid.opacity, hidden: grid.hidden },
             // A LOOSE TILE AFTER IT, which is the ordering that matters: layer order is z-order, so
             // a leftover cell from a later layer must land ABOVE the grid from an earlier one.
@@ -16100,7 +16100,9 @@ describe("Mesh — bending a shape (schema 41)", () => {
         const tilemapNode = after.nodes.get(ids[0])!;
         expect(tilemapNode.type).toBe("core.tilemap");
         expect(tilemapNode.tilemap!.tiles).toEqual([0, 1, 4, 5]);
-        expect(tilemapNode.src).toBe("sheet.png");
+        // NO SHEET ON THE NODE (schema 68). It lives on the tileset the layer names, and the
+        // importer wrote BOTH for two schemas — one copy per layer that nothing read.
+        expect(tilemapNode.src).toBeUndefined();
         expect(tilemapNode.pixelated).toBe(true);
         // The layer flags, which only ONE node per layer could ever carry.
         expect(tilemapNode.style.opacity).toBeCloseTo(0.5, 9);
@@ -19946,6 +19948,80 @@ describe("Mesh — bending a shape (schema 41)", () => {
         orphaned.tilesets = [];
         expect(() => validateDocumentIntegrity(orphaned)).not.toThrow();
         expect(findTileset(orphaned.tilesets, [...orphaned.nodes.values()][0].tilemap!.tilesetId)).toBeNull();
+    });
+
+    test("the IMPORTER stores the sheet ONCE, not once per layer (schema 68)", () => {
+        // THE MIGRATION WAS RIGHT AND THE IMPORT PATH WAS NOT, which is why the test above passed
+        // for two schemas while the defect it describes was still shipping. 66→67 moved the picture
+        // off the node; `tileImportActions` went on passing `{ src, tilemap }` to `AddNodeAction`
+        // and `srcError` still allowed it, so a freshly imported map stored the sheet once per
+        // LAYER *and* once on the set. Measured before the fix: six layers, SEVEN copies, 1,374KB
+        // where 202KB would do — worse than the 2.5x that justified schema 67.
+        //
+        // MEASURED IN THE SAVED FILE, not in the action's return: the count that matters is what a
+        // person's disk holds, and every previous version of this claim was true of the action and
+        // false of the document.
+        const sheet = "data:image/png;base64," + "A".repeat(2_000);
+        const grid = { cols: 4, rows: 4, tileWidth: 16, tileHeight: 16, tilesetId: "ts",
+            tiles: new Array(16).fill(1) };
+        const doc = createEmptyDocument();
+        const dispatcher = new ActionDispatcher(doc);
+        const sets: Tileset[] = [{ id: "ts", name: "T", src: sheet,
+            sheet: { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 },
+            tiles: [], offsetX: 0, offsetY: 0 }];
+        const { actions } = tileImportActions(dispatcher.getDocument(),
+            Array.from({ length: 6 }, (_, i) => ({
+                kind: "tilemap" as const, x: 0, y: 0, width: 64, height: 64,
+                map: { ...grid, tiles: [...grid.tiles] }, name: `layer ${i}`,
+                opacity: 1, hidden: false
+            })));
+        expect(dispatcher.dispatchAction(new TransactionAction(dispatcher.getDocument(), "import",
+            [new SetTilesetsAction(dispatcher.getDocument(), sets), ...actions])).success).toBe(true);
+
+        const after = dispatcher.getDocument();
+        expect([...after.nodes.values()]).toHaveLength(6);
+        const json = serializeDocument(after as ProjectDocument);
+        expect(json.split(sheet).length - 1).toBe(1);
+        // …and the layers still all name the set, or "one copy" would be satisfied by an import
+        // that simply lost the picture.
+        expect(new Set([...after.nodes.values()].map(n => n.tilemap!.tilesetId))).toEqual(new Set(["ts"]));
+        expect(findTileset(after.tilesets, "ts")!.src).toBe(sheet);
+    });
+
+    test("a schema-67 file that carries the old copy is stripped, not refused", () => {
+        // WITHOUT THE STRIP THIS IS A BREAKING CHANGE, not a migration: every map imported between
+        // 67 and 68 has a `src` on every tilemap node, and tightening `srcError` alone would make
+        // each of those files fail to LOAD. Nothing is lost — the picture is on the tileset, which
+        // is where the renderer has read it from since 67.
+        const sheet = { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 };
+        const at67 = {
+            version: "67",
+            document: {
+                metadata: { project_name: "p", created_by: "system", date: "2026-08-13T00:00:00.000Z" },
+                nodes: {
+                    L: { id: "L", type: "core.tilemap", parent: null, children: [],
+                        geometry: { x: 0, y: 0, width: 64, height: 32 },
+                        style: { fill: "none", opacity: 1 }, layout: {}, name: "ground",
+                        src: "data:image/png;base64,AAAA",
+                        tilemap: { cols: 2, rows: 1, tileWidth: 16, tileHeight: 16,
+                            tilesetId: "ts", tiles: [0, 1] } },
+                    // AN IMAGE KEEPS ITS OWN, which is the half a blanket strip would break.
+                    P: { id: "P", type: "core.image", parent: null, children: [],
+                        geometry: { x: 0, y: 0, width: 8, height: 8 },
+                        style: { fill: "none", opacity: 1 }, layout: {}, src: "photo.png" }
+                },
+                rootNodeUuids: ["L", "P"],
+                tilesets: [{ id: "ts", name: "T", src: "data:image/png;base64,AAAA", sheet,
+                    tiles: [], offsetX: 0, offsetY: 0 }],
+                variables: {}, activeTheme: "light"
+            }
+        };
+        const doc = deserializeDocument(JSON.stringify(at67));
+        expect(doc.nodes.get("L")!.src).toBeUndefined();
+        expect(doc.nodes.get("L")!.tilemap!.tiles).toEqual([0, 1]);
+        expect(doc.nodes.get("P")!.src).toBe("photo.png");
+        expect(findTileset(doc.tilesets, "ts")!.src).toBe("data:image/png;base64,AAAA");
+        expect(() => validateDocumentIntegrity(doc)).not.toThrow();
     });
 
     test("the render model RESOLVES the tileset, so no backend has to know one exists", () => {
@@ -26475,7 +26551,7 @@ describe("core.tilemap — a grid instead of ten thousand nodes (schema 61)", ()
         const d = createEmptyDocument();
         d.nodes.set("T", { id: "T", type: "core.tilemap", parent: null, children: [],
             geometry: { x: 0, y: 0, width: 48, height: 32 }, style: { fill: "none", opacity: 1 }, layout: {},
-            src: "sheet.png", tilemap: grid(3, 2, [0, 1, 2, -1, 4, 5]) } as unknown as Node);
+            tilemap: grid(3, 2, [0, 1, 2, -1, 4, 5]) } as unknown as Node);
         d.rootNodeUuids = ["T"];
         // THE TILESET IS THE DOCUMENT\'S NOW (schema 67): the layer names it and the exporter
         // resolves it, so a fixture that omitted it would export an empty map and pass nothing.
@@ -26483,7 +26559,18 @@ describe("core.tilemap — a grid instead of ten thousand nodes (schema 61)", ()
             tiles: [], offsetX: 0, offsetY: 0 }];
         const back = deserializeDocument(serializeDocument(d));
         expect(back.nodes.get("T")!.tilemap!.tiles).toEqual([0, 1, 2, -1, 4, 5]);
-        expect(back.nodes.get("T")!.src).toBe("sheet.png");
+
+        // AND A SHEET ON THE NODE IS NOW REFUSED (schema 68). It had TWO homes for two schemas:
+        // 66→67 moved it to the tileset and the importer went on writing the old one, so a
+        // six-layer import stored the picture seven times — 1,374KB where 202KB would do. A field
+        // with two homes is one the next reader picks wrong.
+        const twoHomes = createEmptyDocument();
+        twoHomes.nodes.set("T", { id: "T", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 48, height: 32 }, style: { fill: "none", opacity: 1 },
+            layout: {}, src: "sheet.png", tilemap: grid(3, 2, [0, 1, 2, -1, 4, 5]) } as unknown as Node);
+        twoHomes.rootNodeUuids = ["T"];
+        expect(() => validateDocumentIntegrity(twoHomes))
+            .toThrow(/only a core.image node may carry a src/);
 
         // A GRID ON A RECTANGLE would be stored, saved and never drawn, because the renderer asks
         // the TYPE what to draw. Refused, like a nine-slice on a rectangle.

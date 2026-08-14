@@ -289,11 +289,15 @@ export function nineSliceError(type: NodeType, slice: unknown): string | null {
 
 export function srcError(type: NodeType, src: unknown): string | null {
     if (src === undefined) return null;
-    // A TILEMAP CARRIES ITS SHEET THE SAME WAY an image carries its picture, deliberately: the
-    // renderer's image cache is keyed by `src`, so a sheet loads, decodes and is reused through the
-    // path that already exists rather than through a second one that would have its own bugs.
-    if (type !== "core.image" && type !== "core.tilemap") {
-        return "only a core.image or core.tilemap node may carry a src";
+    // A TILEMAP NO LONGER CARRIES ITS SHEET (schema 68), and the reason is measured. Until 67 the
+    // picture lived here, beside the slicing rule on the node; 67 moved it to `Document.tilesets` so
+    // several layers could share one — and the IMPORTER went on writing the old copy as well, which
+    // nothing read. A six-layer import stored the sheet SEVEN times: once per layer plus once on the
+    // set, 1,374KB where 202KB would do. That is worse than the 2.5x duplication the schema change
+    // existed to remove, and it is exactly the trap the design named — two homes for one fact, with
+    // the dead one still being written. Refusing it here is what stops it coming back.
+    if (type !== "core.image") {
+        return "only a core.image node may carry a src";
     }
     return srcValueError(src);
 }

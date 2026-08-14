@@ -375,6 +375,7 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "64") { raw = migrate_64_to_65(raw); version = "65"; }
     if (version === "65") { raw = migrate_65_to_66(raw); version = "66"; }
     if (version === "66") { raw = migrate_66_to_67(raw); version = "67"; }
+    if (version === "67") { raw = migrate_67_to_68(raw); version = "68"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -1026,6 +1027,39 @@ function migrate_63_to_64(raw: any): any {
  * opening a 67 document sees tilemap nodes with no picture at all. That is what the version gate is
  * for.
  */
+/**
+ * The sheet leaves a tilemap node for the second and last time.
+ *
+ * 66→67 MOVED it — `const { src: _alsoDropped, ...restNode } = node` — and said why in as many
+ * words: "or the old path is still what runs and the duplication this exists to remove stays exactly
+ * where it was." Then the IMPORTER went on writing it, because `tileImportActions` still passed
+ * `{ src, tilemap }` to `AddNodeAction` and `srcError` still allowed it. Nothing read it. Measured on
+ * a six-layer import: the sheet was stored SEVEN times — once per layer plus once on the tileset —
+ * 1,374KB against the 202KB one copy costs. Worse than the 2.5x that justified schema 67, because
+ * the new home was added without the old one being closed.
+ *
+ * SO THE FIELD IS NOW REFUSED (`srcError`), and this strips what is already out there. Without the
+ * strip, every document imported since 67 would fail to LOAD the moment the validator tightened,
+ * which is the difference between a migration and a breaking change.
+ *
+ * NOTHING IS LOST. The picture is on the tileset the layer names; `RenderModel` has read it from
+ * there since 67 and never once from the node.
+ */
+function migrate_67_to_68(raw: any): any {
+    const nodes = raw?.document?.nodes;
+    if (!nodes || typeof nodes !== "object") return { ...raw, version: "68" };
+    const out: any = {};
+    for (const [id, node] of Object.entries<any>(nodes)) {
+        if (node?.type === "core.tilemap" && node.src !== undefined) {
+            const { src: _dropped, ...rest } = node;
+            out[id] = rest;
+        } else {
+            out[id] = node;
+        }
+    }
+    return { ...raw, version: "68", document: { ...raw.document, nodes: out } };
+}
+
 function migrate_66_to_67(raw: any): any {
     const nodes = raw?.document?.nodes;
     if (!nodes || typeof nodes !== "object") return { ...raw, version: "67" };
