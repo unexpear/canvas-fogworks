@@ -1083,6 +1083,21 @@ the gap at 88px against 24 steps of 220/60 — and a position here is a running 
 additions of 11/3 give 88.00000000000001 rather than 88 and the contact fired a step early. The
 hand-computation was right and the code was right; the fixture was on the boundary. Moved to 90.
 
+**AND ONE OF THIS SLICE'S OWN FIXTURES WAS BLIND, caught by its mutant.** The test for "skip a body
+whose world offset is refused" refused the body FROM THE START — and `worldFrom` already skips a
+refused body, so it never entered the world and the guard in the contact pass was never reached; the
+mutant that deletes that guard survived. The reachable case is a refusal appearing MID-RUN: the body
+is in `world.bodies` from Play, and the app steps against the LIVE stored document, so rotating its
+frame during a run makes `worldOffsetOf` start answering null for a body that is already moving.
+Rebuilt around that, with the positive control the first version lacked — assert the pair really
+does report a contact while the frame is composable, THEN that rotating it suppresses them.
+
+**VERIFIED LIVE against two documents**, because one alone proves only that something reaches the
+status line: dropping onto the blob reports `contact enemy (below)` and walking into it reports
+`contact enemy (right)` then a separate. The blob in that fixture is CLASSED and a body at once,
+which no object in the corpus is — precisely the authored shape this slice exists for and the corpus
+cannot testify to.
+
 **THERE IS NO IMPULSE CHANNEL**, and it is written into API-CONTRACTS as a stated limit rather than
 left for whoever first tries to bounce a stomp: `stepWorld`'s opts carry gravity, solids, tileSolids,
 regions, input and controlled, and not one of them can set a body's velocity. Acting on an event is
