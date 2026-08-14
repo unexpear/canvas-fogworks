@@ -51,7 +51,7 @@ M14 AI Integration            ⬜
 M15 Plugins                   ⬜
 M16 Collaboration             ⬜
 M17 Production Hardening      ⬜
-M18 Game Runtime              🚧   slices 1-4: a fixed-step world that PLAYS inside the editor — a character you drive, a level made of TILES, and ground you can slip on
+M18 Game Runtime              🚧   slices 1-5: a fixed-step world that PLAYS inside the editor — a character you drive, a level of TILES, ground you can slip on, and regions that report
 ```
 
 \* **Note on M3/M4:** a working **vertical-slice prototype** of the renderer, the
@@ -945,8 +945,24 @@ Friction also corrected slice 2: releasing a key used to SET the speed to zero, 
 meaningless for the one body a player drives — no slide on ice, and no air control, because letting
 go mid-jump killed the flight. Releasing now hands the body back to the surface.
 
-**STILL NOT DONE**, each wanting its own design against real content: rotation, restitution, one-way
-platforms, slopes, a tilemap inside a TRANSFORMED parent (the collision reads `geometry` directly and
-would be wrong — said in the header rather than pretended about), triggers, spawning, and anything
-configurable about the keys. The corpus's other property vocabulary — `spawncount`,
+**Slice 5 — REGIONS, and the corpus defined the rule.** 26 objects carry a class and no `bodyType`
+— coin, spikes, exit, Trigger, Location, NPC, Sign — and 51 carry a `bodyType` and no class, which
+is the collision geometry. **Not one carries both.** So a region is a classed node that is not a
+body, read from the data rather than imposed on it, and `Node.className` becomes the second
+carried-but-unread field this runtime has put to work.
+
+**THE WORLD REPORTS, IT DOES NOT ACT.** An overlap becomes an `enter`/`leave` event naming the region
+and its class — and that is all of it. Nothing spawns a maggot, runs `chest-discovered.lua` or loads
+`sandbox2.json`; each is a separate decision about what an APP does with an event, and welding any
+of them into the physics would make all three undesignable.
+
+Enter and leave are EDGES, not states — a coin is collected once, not on all sixty frames a player
+stands inside it — and leaving survives the region being deleted under the body, or a counter drifts
+up by one every time something is collected. Verified live to the status line: "enter coin" as the
+crate falls in, "leave coin" as it walks out.
+
+**STILL NOT DONE**, each wanting its own design against real content: acting on an event (spawning,
+scripts, level transitions), rotation, restitution, one-way platforms, slopes, a tilemap inside a
+TRANSFORMED parent (the collision reads `geometry` directly and would be wrong — said in the header
+rather than pretended about), and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

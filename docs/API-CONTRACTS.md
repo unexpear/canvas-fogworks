@@ -2712,6 +2712,17 @@ interface WorldState { bodies: ReadonlyMap<string, Body>; time: number }
 interface Solid { x; y; width; height; friction: number }
 function frictionOf(node: { userData?: UserData }): number;
 
+// A REGION is a classed node that is NOT a body — the split the corpus already makes (26 classed
+// non-bodies against 51 bodies with no class, and none carrying both). Zero-area is skipped, because
+// `player-start` is a real POINT and a position is not a volume.
+interface Region { nodeId: string; className: string; x; y; width; height }
+interface WorldEvent { kind: "enter" | "leave"; bodyId: string; nodeId: string; className: string }
+function regionsOf(doc: ReadonlyDocument): Region[];
+// THE WORLD REPORTS AND DOES NOT ACT: nothing spawns a maggot, runs `chest-discovered.lua` or loads
+// `sandbox2.json`. `WorldState.overlaps` carries the pairs so ENTER and LEAVE are edges rather than
+// states — a coin is collected once, not on all sixty frames a player stands in it — and
+// `WorldState.events` is what the step that produced it noticed.
+
 // WHAT A BODY IS, measured rather than invented: of 248 objects in the corpus only 24 carry a class,
 // and the level's real collision geometry carries NONE — six untyped rectangles whose only property
 // is `bodyType=static`, the most-declared property in the tree (51 of 138). Values are read

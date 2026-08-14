@@ -486,6 +486,12 @@ function EasingSelect({ value, onPick, width }: { value: Easing | undefined; onP
 
 export function App() {
     const [toolName, setToolName] = useState<string>("select");
+    /**
+     * The last thing the run noticed (M18 slice 5) — kept across frames because a world event is
+     * produced by ONE step and this is a status line, not a log: most steps produce nothing, and a
+     * message that vanished on the next frame would be unreadable at 60Hz.
+     */
+    const [lastEvent, setLastEvent] = useState<import("../core/runtime/World").WorldEvent | null>(null);
     // The N-gon's side count. Held in a ref as well as state because ShapeTool is constructed
     // ONCE and reads the count at commit time through a getter — a captured value would freeze
     // whatever the count was when the toolbar first rendered.
@@ -1356,6 +1362,11 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 es.world = world;
                 es.worldClock = { accumulator: spend.accumulator, lastAt: now };
                 worldMoved = movedIds(base, world);
+                // THE LAST EVENT WINS on a frame that produced several, which a status line can
+                // only show one of anyway. Set outside the render path's own state on purpose: it
+                // is React state, so this schedules a repaint, and the loop is already asking for
+                // one every frame while a world is running.
+                if (world.events.length > 0) setLastEvent(world.events[world.events.length - 1]);
                 // …and the bodies reach the scene the way the PLAYHEAD does: stamped onto a copy.
                 played = applyWorld(timed, world);
             }
@@ -2092,6 +2103,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                         // never sent a keydown to the game, and one held when Stop is pressed would
                         // still be held when the next run starts.
                         es.input = { left: false, right: false, jump: false };
+                        setLastEvent(null);
                         // AND THE REUSE CHAIN IS CUT HERE, which cost a live bug to learn. A
                         // world-only frame keeps its geometry so the next tick can diff against it
                         // — that is the whole optimisation — but the frame after STOP is not a
@@ -4247,6 +4259,17 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
 
             <div style={{ padding: "3px 10px", background: UI.panel, borderTop: `1px solid ${UI.line}`, fontSize: 10, color: "#555", display: "flex", justifyContent: "space-between" }}>
                 <span>{toolName.charAt(0).toUpperCase() + toolName.slice(1)} tool</span>
+                {/* WHAT THE RUN JUST NOTICED (M18 slice 5). The world reports overlaps and does not
+                    act on them — nothing here spawns, runs a script or loads a map — so without a
+                    place for an event to LAND the whole feature would be unreachable, which is the
+                    state this project has now found four separate fields in. A status line is the
+                    smallest honest surface: it proves the chain end to end and commits to nothing
+                    about what a game should do with it. */}
+                {es.playing && lastEvent && (
+                    <span data-world-event="1" style={{ color: UI.accent }}>
+                        {lastEvent.kind} {lastEvent.className || "(no class)"}
+                    </span>
+                )}
                 <span>{Math.round(vp.zoom * 100)}% · {Math.round(vp.x)}, {Math.round(vp.y)}</span>
                 <span>Visual Design Engine v{CURRENT_VERSION}</span>
             </div>
