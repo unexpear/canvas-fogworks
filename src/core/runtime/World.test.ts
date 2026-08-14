@@ -1030,23 +1030,48 @@ describe("one-way platforms — the first thing here that is an INVENTION", () =
         expect(after.bodies.get("b")!.onGround).toBe(true);
     });
 
-    it("PASSES UP THROUGH IT, which is the entire point", () => {
-        // Standing on it, then jumping: the rise must not be stopped by the thing it is standing on.
-        const doc = level(0);
-        let w = steps(doc, worldFrom(doc), 120);
-        expect(w.bodies.get("b")!.y).toBe(90);
+    it("PASSES UP THROUGH IT FROM BELOW, which is the entire point", () => {
+        // FROM BELOW, and that word is the test. The first version of this jumped from ON TOP of
+        // the platform — where the body starts exactly on the surface and moves AWAY from it, so
+        // nothing ever overlaps and the rule is never asked. A mutant deleting the falling check
+        // survived it untouched. The body has to rise INTO the slab for the case to exist.
+        const doc = docWith([
+            { id: "b", x: 20, y: 140, userData: { bodyType: prop("dynamic") } },
+            { id: "plat", x: 0, y: 100, w: 200, h: 10, userData: { bodyType: prop("oneway") } },
+            { id: "floor", x: -500, y: 150, w: 2000, h: 20, userData: { bodyType: prop("static") } }
+        ]);
+        let w = steps(doc, worldFrom(doc), 20);
+        expect(w.bodies.get("b")!.y).toBe(140);            // on the floor, UNDER the platform
+        expect(w.bodies.get("b")!.onGround).toBe(true);
+
         w = stepWorld(doc, w, { input: { left: false, right: false, jump: true }, controlled: "b" });
         let peak = w.bodies.get("b")!.y;
-        for (let i = 0; i < 20; i++) {
+        for (let i = 0; i < 25; i++) {
             w = stepWorld(doc, w, { input: NO_INPUT, controlled: "b" });
             peak = Math.min(peak, w.bodies.get("b")!.y);
         }
-        // It cleared the platform's own top by most of the jump height rather than bouncing off it.
-        expect(peak).toBeLessThan(100 - 50);
-        // …and it comes back down and lands on it again.
+        // IT WENT THROUGH: the peak is above the platform's top rather than stopped under its
+        // underside at 110, which is where a two-way solid would have caught it.
+        expect(peak).toBeLessThan(100);
+        // …and on the way down it LANDS on it, which is the other half of one-way.
         for (let i = 0; i < 60; i++) w = stepWorld(doc, w, { input: NO_INPUT, controlled: "b" });
         expect(w.bodies.get("b")!.y).toBe(90);
         expect(w.bodies.get("b")!.onGround).toBe(true);
+    });
+
+    it("does not stop a body rising into it, even one that never lands", () => {
+        // The narrowest statement of the same rule: shove a body straight up into the underside.
+        const doc = docWith([
+            { id: "b", x: 20, y: 140, userData: { bodyType: prop("dynamic") } },
+            { id: "plat", x: 0, y: 100, w: 200, h: 10, userData: { bodyType: prop("oneway") } }
+        ]);
+        let w: WorldState = { ...worldFrom(doc),
+            bodies: new Map(worldFrom(doc).bodies).set("b",
+                { ...worldFrom(doc).bodies.get("b")!, vy: -600 }) };
+        for (let i = 0; i < 5; i++) w = stepWorld(doc, w);
+        // Straight past 110 and 100 without being caught by either edge.
+        expect(w.bodies.get("b")!.y).toBeLessThan(100);
+        expect(w.bodies.get("b")!.vy).toBeLessThan(0);
     });
 
     it("a body starting INSIDE it falls out rather than being launched to its surface", () => {
