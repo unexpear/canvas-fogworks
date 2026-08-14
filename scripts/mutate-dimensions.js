@@ -1102,8 +1102,8 @@ const MUTANTS = [
       note: "the size is recorded and the grid is NOT re-derived, so `columns` stays 0 and every gid still resolves to nothing — the measurement happens and changes nothing" },
     { id: "CL3", file: "src/renderer/ImageCache.ts",
       from: "    if (img.complete) return naturalSize(href);",
-      to: "    if (entry.loaded) return naturalSize(href);",
-      note: "an href whose load ALREADY failed is waited on for an event that cannot arrive, so the import hangs with no error anywhere rather than reporting the set it could not measure" },
+      to: "    if (img.naturalWidth > 0) return naturalSize(href);",
+      note: "THE GUARD ASKS THE WRONG QUESTION ( does not compile here —  is possibly undefined;  does not compile either). An href whose load ALREADY failed is waited on for an event that cannot arrive, so the import hangs with no error anywhere rather than reporting the set it could not measure" },
 
     // TILE ANCHORING. A tile sits at the BOTTOM of its cell, so art taller than the grid stands up
     // from it. Every mutant here still places every tile — what changes is how far off the ground.
