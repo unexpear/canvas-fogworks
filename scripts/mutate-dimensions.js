@@ -1221,7 +1221,7 @@ const MUTANTS = [
     // every one of these still stands a body on something — what changes is WHICH cells are solid
     // and WHERE they are, which no "did it land" assertion can see.
     { id: "TC1", file: "src/core/runtime/World.ts",
-      from: "    return tile !== null && bodyTypeOf(tile) === \"static\";",
+      from: "    return kind === \"static\" || kind === \"oneway\";",
       to: "    return tile !== null;",
       note: "ANY tile with a per-tile record becomes solid, so a tile carrying `door=true` — which is what the corpus's only per-tile properties actually say — becomes a wall" },
     { id: "TC2", file: "src/core/runtime/World.ts",
