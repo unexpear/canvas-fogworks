@@ -71,7 +71,19 @@
  *     no second texture, upload or sampler: the other backends turn a cell with a matrix, and this
  *     one turns the within-cell coordinate instead, which is the same eight symmetries read backwards.
  *
- * WHAT THIS FILE HAS NO KNOWN GAP FOR, as of schema 62 — a sentence with a shelf life, and
+ * A KNOWN GAP, AND THE ONLY ONE: a COLLECTION TILESET IS NOT DRAWN HERE (schema 67). Such a set
+ * gives every tile its own image file at its own size, and everything the paragraph above describes
+ * — one quad, one sheet texture, source rects derived by `mod`/`floor` over a column count — is
+ * arithmetic on ONE picture. There is no sheet to sample. SVG and Canvas draw those layers a cell
+ * at a time, which they were already doing for every cell anyway, so on this one shape they are
+ * ahead. Closing it means building a texture ATLAS at runtime, and the measurement says that is a
+ * project rather than a patch: trimmed to their alpha boxes the corpus's largest collection set
+ * needs 16.0 Mpx against a 4096-square page's 16.78 — about 95% packing efficiency, which no
+ * rectangle packer achieves — so it wants 8192 or two pages, plus a per-tile trim offset stored
+ * somewhere. Deliberately not started; said here so a backend comparison knows the two pictures are
+ * allowed to differ on exactly this, and only this.
+ *
+ * WHAT THIS FILE HAS NO OTHER KNOWN GAP FOR, as of schema 62 — a sentence with a shelf life, and
  * `npm run header-claims` lists it on purpose so whoever finds the next one comes back here.
  *
  * The app still offers this backend as a preview, because a backend that quietly drops content is

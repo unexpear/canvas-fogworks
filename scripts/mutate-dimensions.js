@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1759;
+const EXPECTED_TESTS = 1765;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1070,6 +1070,26 @@ const MUTANTS = [
       from: "            notes.push(`layer \"${l.name}\" draws from a tileset with no sheet to write `\n                + \"(a collection tileset, or an id naming nothing), so it was not written\");\n            return false;",
       to: "            return false;",
       note: "a layer whose tileset has no sheet is dropped IN SILENCE, so a collection-set layer leaves the export with nothing said and the .tmx simply lacks it" },
+    // A COLLECTION TILESET DRAWN (schema 67, built at 68). Every one of these still draws a picture
+    // in every cell — what changes is WHICH picture, or WHERE. The family exists because the
+    // anchoring is the kind of arithmetic that reads as bad art rather than as a bug.
+    { id: "CT1", file: "src/core/document/Tilemap.ts",
+      from: "        y: originY + row * map.tileHeight + map.tileHeight - picture.height,",
+      to: "        y: originY + row * map.tileHeight,",
+      note: "a collection tile is TOP-aligned in its cell, so art three cells tall sinks through the floor instead of standing over the row behind it — invisible on any fixture whose tiles are exactly cell-sized" },
+    { id: "CT2", file: "src/renderer/RenderModel.ts",
+      from: "                pictures: tileset && tileset.sheet === null && tileset.tiles.length > 0",
+      to: "                pictures: tileset && tileset.tiles.length > 0",
+      note: "a SHEET-backed set with per-tile records (weights, which 25 corpus tiles carry) also resolves a pictures map, so the collection branch runs for a layer that has a sheet" },
+    { id: "CT3", file: "src/renderer/emitCanvas.ts",
+      from: "                            const m = flipMatrix(box.flip, box.width, box.height);",
+      to: "                            const m = flipMatrix(box.flip, map.tileWidth, map.tileHeight);",
+      note: "a turned collection cell is mirrored about the CELL's centre rather than the tile's, so a tall tile swings out of place — and a FLIP_H-only fixture cannot see it, because that term is the width either way" },
+    { id: "CT4", file: "src/core/document/Tilemap.ts",
+      from: "    const picture = pictures.get(index);\n    // A CELL NAMING A TILE THE SET DOES NOT HOLD DRAWS NOTHING",
+      to: "    const picture = pictures.get(index) ?? pictures.values().next().value;\n    // A CELL NAMING A TILE THE SET DOES NOT HOLD DRAWS NOTHING",
+      note: "a cell naming a tile the set does not hold falls back to the set's FIRST tile, so a sparse set (real ones skip ids) draws a plausible wrong picture instead of nothing" },
+
     // SCHEMA 68 — the sheet leaves the tilemap node. Note what could NOT be mutated: putting `src`
     // back into `tileImportActions` does not compile, because the field left `TilePlacement`
     // altogether. Deleting a field beats guarding one, and tsc is the guard.

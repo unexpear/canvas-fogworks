@@ -1071,3 +1071,122 @@ describe("Blend modes (schema 60)", () => {
         expect(ops.filter(o => o === "save").length).toBe(ops.filter(o => o === "restore").length);
     });
 });
+
+// ─── A COLLECTION tileset (schema 67) ────────────────────────────────────────
+/**
+ * The other half of `sheet`: a set whose tiles are separate FILES, drawn one per cell.
+ *
+ * Driven from a real document through the real model, because the thing worth pinning is the whole
+ * chain — `Document.tilesets` → `RenderModel.pictures` → `drawImage`. The tiles are THREE CELLS
+ * TALL, which is what the corpus actually holds (256x352 art on 232x110 cells) and what makes
+ * bottom-left anchoring distinguishable from top-left at all.
+ */
+describe("a COLLECTION tileset draws a file per cell", () => {
+    const CELL = 16, TALL = 48;
+
+    /** An `Image` that reports itself decoded the moment a src is set — the cache needs one. */
+    function fakeImages() {
+        const g = globalThis as unknown as { Image?: unknown };
+        const saved = g.Image;
+        g.Image = class {
+            naturalWidth = CELL; naturalHeight = TALL;
+            onload: (() => void) | null = null;
+            set src(_v: string) { this.onload?.(); }
+        };
+        return () => { g.Image = saved; };
+    }
+
+    const collectionDoc = (tiles: number[], flips?: number[]): ProjectDocument => {
+        const doc = createEmptyDocument();
+        doc.tilesets = [{
+            id: "coll", name: "Props", src: null, sheet: null, offsetX: 0, offsetY: 0,
+            // SPARSE AND NON-CONTIGUOUS on purpose: real sets skip ids (one corpus set has no 47,
+            // another starts at 12), so a model that indexed an array by id would answer wrong.
+            tiles: [{ id: 0, src: "a.png", width: CELL, height: TALL },
+                    { id: 2, src: "b.png", width: CELL, height: CELL }]
+        }];
+        doc.nodes.set("L", {
+            id: "L", type: "core.tilemap", parent: null, children: [], name: "props",
+            geometry: { x: 100, y: 200, width: 32, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            tilemap: { cols: 2, rows: 1, tileWidth: CELL, tileHeight: CELL, tilesetId: "coll",
+                       tiles, ...(flips ? { flips } : {}) }
+        } as unknown as Node);
+        doc.rootNodeUuids = ["L"];
+        return doc;
+    };
+
+    it("resolves per-tile pictures in the MODEL, and leaves sheet and href null", () => {
+        const doc = collectionDoc([0, 2]);
+        const list = buildRenderModel(SIZE, doc, {
+            selectedNodeIds: [], hoveredNodeId: null, previewRect: null,
+            computed: computeGeometry(doc), viewport: { x: 0, y: 0, zoom: 1 }
+        });
+        const shape = list.content[0].shape as unknown as {
+            sheet: unknown; href: unknown;
+            pictures: ReadonlyMap<number, { href: string; width: number; height: number }> | null;
+        };
+        expect(shape.sheet).toBeNull();
+        expect(shape.href).toBeNull();
+        // KEYED BY TILE ID, sparse — id 1 is absent because the set says nothing about it.
+        expect([...shape.pictures!.keys()]).toEqual([0, 2]);
+        expect(shape.pictures!.get(0)).toEqual({ href: "a.png", width: CELL, height: TALL });
+
+        // A SHEET-BACKED SET RESOLVES NO PICTURES AT ALL, so the common case costs no Map: without
+        // this half, "pictures is built" would be satisfied by building one for every layer.
+        const sheetDoc = collectionDoc([0, 2]);
+        sheetDoc.tilesets = [{ id: "coll", name: "T", src: "sheet.png",
+            sheet: { columns: 4, tileWidth: CELL, tileHeight: CELL, spacing: 0, margin: 0 },
+            tiles: [], offsetX: 0, offsetY: 0 }];
+        const sheetList = buildRenderModel(SIZE, sheetDoc, {
+            selectedNodeIds: [], hoveredNodeId: null, previewRect: null,
+            computed: computeGeometry(sheetDoc), viewport: { x: 0, y: 0, zoom: 1 }
+        });
+        expect((sheetList.content[0].shape as unknown as { pictures: unknown }).pictures).toBeNull();
+    });
+
+    it("draws each cell's own file, hanging ABOVE the cell it occupies", () => {
+        const restore = fakeImages();
+        try {
+            const calls = run(collectionDoc([0, 2])).calls
+                .filter(c => c.op === "drawImage").map(c => c.args.slice(1));
+            expect(calls).toHaveLength(2);
+            // FIVE ARGUMENTS, not nine: there is no source rect, because the whole file is the tile.
+            expect(calls[0]).toHaveLength(4);
+            // The tall tile: cell 0 of a 16-high grid, art 48 high, so the top is 32 above the
+            // cell's own top. The shape is LOCAL (placement rides in the item's matrix), so the
+            // cell's top is 0 and the answer is 0 + 16 - 48 = -32. Top-aligning gives 0, which is
+            // the same picture sunk three quarters of its height into the floor.
+            expect(calls[0]).toEqual([0, -32, CELL, TALL]);
+            // …and a cell-sized tile lands exactly on its cell, which is what makes the number
+            // above an anchoring rule rather than a constant that happens to fit.
+            expect(calls[1]).toEqual([CELL, 0, CELL, CELL]);
+        } finally { restore(); }
+    });
+
+    it("a turned cell is turned in the TILE's box, and an unknown index draws nothing", () => {
+        const restore = fakeImages();
+        try {
+            // FLIP_V, NOT FLIP_H, and that is the whole reason this fixture works. `flipMatrix`
+            // mirrors about the centre of the box it is handed, and for FLIP_H the translation term
+            // is `w/2 - (-w/2)` = w — the SAME number for a 16x48 tile box and a 16x16 cell box.
+            // An H-only fixture cannot tell the two apart, so a mutant handed the cell's box would
+            // survive it. V puts the height in the answer: 48 against 16.
+            const c = run(collectionDoc([0, -1], [2, 0]));        // FLIP_V on the tall tile
+            // `+0` normalises NEGATIVE ZERO, which mirroring produces for the two zero terms.
+            // It is an artefact of the assertion, not of the matrix — the same note the tile
+            // transform tests carry — and `toContainEqual` distinguishes -0 from 0.
+            const t = c.calls.filter(x => x.op === "transform")
+                .map(x => (x.args as number[]).map(n => n + 0));
+            // `flipMatrix(FLIP_V, 16, 48)` — mirrored about the TILE's centre, so f is its own
+            // height, 48. Handed the CELL's 16x16 box the same call gives 16, and the tile would be
+            // drawn a cell and a half out of place.
+            expect(t).toContainEqual([1, 0, 0, -1, 0, TALL]);
+            expect(c.calls.filter(x => x.op === "drawImage")).toHaveLength(1);
+
+            // AN INDEX THE SET HAS NO RECORD FOR draws nothing rather than throwing — the same
+            // inert-reference rule a dangling `tilesetId` follows.
+            expect(run(collectionDoc([1, 1])).calls.filter(x => x.op === "drawImage")).toHaveLength(0);
+        } finally { restore(); }
+    });
+});

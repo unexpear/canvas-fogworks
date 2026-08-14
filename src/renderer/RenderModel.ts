@@ -129,6 +129,24 @@ export type Shape =
          * a COLLECTION set, which has no single sheet to cut.
          */
         sheet: Readonly<TileSheet> | null;
+        /**
+         * A COLLECTION set's per-tile pictures, by tile INDEX — the other half of `sheet`.
+         *
+         * A collection tileset gives every tile its own file, so there is no grid to cut and no one
+         * `href` to name: 1,207 such images in the measured corpus. Resolved here for the same
+         * reason `sheet` is — the backends read pictures off the item and never learn what a
+         * tileset is. Null for a sheet-backed set, and the two are never both non-null, because
+         * `tilesetError` refuses a set that is both.
+         *
+         * THE SIZE COMES FROM THE DOCUMENT, not from a decode. `tilesetError` requires a positive
+         * `width`/`height` on every tile that carries a `src`, so the model can state the box
+         * without waiting for a bitmap — which it must, since this file may not wait for anything.
+         *
+         * SPARSE, and deliberately a Map rather than an array: tile ids are not contiguous in real
+         * sets (the sticker-knight set skips id 47; the isometric sample starts at 12), so an array
+         * indexed by id would be mostly holes and would answer `undefined` for a legal tile.
+         */
+        pictures: ReadonlyMap<number, { href: string; width: number; height: number }> | null;
         map: ReadonlyTilemap;
         cells: { col0: number; row0: number; col1: number; row1: number } | null;
     };
@@ -885,6 +903,15 @@ function buildContent(doc: ReadonlyDocument, computed: ComputedState, z: number,
                 // importing a map wants, and it is what happens by default everywhere else.
                 pixelated: node.pixelated !== false,
                 sheet: tileset?.sheet ?? null,
+                // BUILT ONLY FOR A COLLECTION, so a sheet-backed layer costs no Map at all — which
+                // is every layer in the measured corpus's tile layers but one. A tile with no `src`
+                // is skipped rather than entered as a hole: a sheet-backed set may carry records
+                // for weights alone, and those name no picture.
+                pictures: tileset && tileset.sheet === null && tileset.tiles.length > 0
+                    ? new Map(tileset.tiles.flatMap(t => t.src !== undefined
+                        && t.width !== undefined && t.height !== undefined
+                        ? [[t.id, { href: t.src, width: t.width, height: t.height }] as const] : []))
+                    : null,
                 map: node.tilemap as ReadonlyTilemap,
                 cells: node.tilemap && localWindow
                     ? visibleCells(node.tilemap as ReadonlyTilemap, localWindow)

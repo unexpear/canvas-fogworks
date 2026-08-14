@@ -333,3 +333,84 @@ describe("no backend derives a tilemap sheet's pixel size", () => {
         expect(read("./emitWebGL.ts")).toMatch(/naturalSize\(tm\.href\)/);
     });
 });
+
+/**
+ * A COLLECTION tileset — the other half of `sheet`, and the anchoring is the whole test.
+ *
+ * A collection set gives every tile its own file at its own size (1,207 such images in the measured
+ * corpus), so there is no sheet to cut. The fixture's tiles are THREE CELLS TALL on purpose: the
+ * corpus's collection tiles are 256x352 and 256x512 on cells of 232x110 and 256x128, and a fixture
+ * whose tiles happened to be exactly cell-sized could not tell bottom-left anchoring from top-left
+ * — which is the one thing here that can be wrong in a way that looks like bad art rather than bad
+ * arithmetic.
+ */
+describe("emitSVG — a collection tileset draws one image per cell, anchored bottom-left", () => {
+    const CELL = 16;
+    const TALL = 48;                                   // three cells: the overhang is the point
+    const pictures = new Map([
+        [0, { href: "a.png", width: CELL, height: TALL }],
+        [2, { href: "b.png", width: CELL, height: CELL }]
+    ]);
+    const item = (tiles: number[], flips?: number[]): DrawItem => ({
+        world: null,
+        nodeId: "t1",
+        shape: {
+            kind: "tilemap", x: 100, y: 200, width: 32, height: 16, href: null, pixelated: true,
+            sheet: null, pictures,
+            map: { cols: 2, rows: 1, tileWidth: CELL, tileHeight: CELL, tilesetId: "coll", tiles,
+                   ...(flips ? { flips } : {}) },
+            cells: { col0: 0, row0: 0, col1: 1, row1: 0 }
+        },
+        paint: { opacity: null }
+    } as unknown as DrawItem);
+
+    test("each cell gets its OWN picture at its own size, hanging ABOVE the cell", () => {
+        const dom = fakeDom();
+        try {
+            emitSVG(dom.container, listOf([item([0, 2])]));
+            const images = walk(dom.container).filter(e => e.tagName === "image");
+            expect(images).toHaveLength(2);
+            expect(images.map(i => i.getAttribute("href"))).toEqual(["a.png", "b.png"]);
+            // THE TALL TILE: column 0 of a cell 16 high, drawn 48 high, so its top is 32 ABOVE the
+            // cell's own top — 200 + 0 + 16 - 48 = 168. Top-aligning would put it at 200 and hang
+            // the art through the floor instead of over the row behind it.
+            expect([images[0].getAttribute("x"), images[0].getAttribute("y")]).toEqual(["100", "168"]);
+            expect([images[0].getAttribute("width"), images[0].getAttribute("height")])
+                .toEqual(["16", "48"]);
+            // …and a tile that IS cell-sized lands exactly on its cell, which is what makes the
+            // number above an anchoring rule rather than a constant.
+            expect([images[1].getAttribute("x"), images[1].getAttribute("y")]).toEqual(["116", "200"]);
+            expect(images[1].getAttribute("image-rendering")).toBe("pixelated");
+            // NO NESTED <svg>: there is no crop to express, so the sheet path's viewBox trick is
+            // absent — its presence would mean the wrong branch ran.
+            expect(walk(dom.container).filter(e => e.tagName === "svg" && e.getAttribute("viewBox")))
+                .toHaveLength(0);
+        } finally { dom.restore(); }
+    });
+
+    test("an empty cell and a cell naming no tile both draw nothing", () => {
+        const dom = fakeDom();
+        try {
+            // -1 is TILE_EMPTY; 1 is a real index this sparse set simply has no record for, which
+            // is not hypothetical — one corpus set has no tile id 47 and another starts at 12.
+            emitSVG(dom.container, listOf([item([-1, 1])]));
+            expect(walk(dom.container).filter(e => e.tagName === "image")).toHaveLength(0);
+        } finally { dom.restore(); }
+    });
+
+    test("a turned cell is turned in the TILE's box, not the cell's", () => {
+        const dom = fakeDom();
+        try {
+            // FLIP_V, because FLIP_H's translation term is `w` for both the tile's box and the
+            // cell's — an H-only fixture cannot see which box the matrix was built in. See the
+            // Canvas test's note; the two backends must be checked against the same trap.
+            emitSVG(dom.container, listOf([item([0, -1], [2, 0])]));   // FLIP_V on the tall tile
+            const img = walk(dom.container).filter(e => e.tagName === "image")[0];
+            // `flipMatrix(FLIP_V, 16, 48)` mirrors about the tile's own centre, so the translation
+            // term is its own height — 48, where a cell-sized box would say 16. The placement is a
+            // translate because an <image> takes x/y OR a transform, never both.
+            expect(img.getAttribute("transform")).toBe("translate(100, 168) matrix(1 0 0 -1 0 48)");
+            expect(img.getAttribute("x")).toBe("0");
+        } finally { dom.restore(); }
+    });
+});

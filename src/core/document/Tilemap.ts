@@ -428,6 +428,47 @@ export function flipMatrix(flip: number, w: number, h: number): [number, number,
 }
 
 /**
+ * Where a COLLECTION set's tile is drawn for one cell — the per-tile answer to `tileSourceRect`.
+ *
+ * A collection tileset gives each tile its own file at its own size, so there is no rect to cut out
+ * of a sheet: the whole picture is the tile, and the only question is where its box goes.
+ *
+ * IT IS ANCHORED BOTTOM-LEFT OF THE CELL, and that is the entire arithmetic worth stating. Tiled
+ * anchors a tile-layer tile to the bottom-left of its cell, so a tile taller than the grid hangs
+ * ABOVE the square it occupies — which is the reason `<tileoffset>` exists and the reason this
+ * codebase already describes it as "a building rooted in one square standing over the three behind
+ * it". Top-aligning instead makes the same building sink through the floor, and it is invisible on
+ * any fixture whose tiles happen to be exactly one cell tall. The measured sets are nowhere near:
+ * every collection tile in the corpus is 256x352 or 256x512 on cells of 232x110 and 256x128.
+ *
+ * `<tileoffset>` IS NOT APPLIED HERE. The importer folds both the set's offset and the layer's into
+ * the NODE's own position for a grid layer, so applying it again would move every tile twice.
+ *
+ * ONE STATEMENT OF IT, shared, for the reason `flipMatrix` is shared: two backends deriving the
+ * same anchoring separately is two chances to disagree, and a disagreement here reads as art drawn
+ * at the wrong height rather than as arithmetic.
+ */
+export function collectionTileBox(
+    pictures: ReadonlyMap<number, { href: string; width: number; height: number }>,
+    map: ReadonlyTilemap, col: number, row: number, originX: number, originY: number
+): { href: string; x: number; y: number; width: number; height: number; flip: number } | null {
+    const index = tileAt(map, col, row);
+    if (index === TILE_EMPTY) return null;
+    const picture = pictures.get(index);
+    // A CELL NAMING A TILE THE SET DOES NOT HOLD DRAWS NOTHING, like every other dangling
+    // reference in this schema — real sets skip ids (one corpus set has no id 47).
+    if (!picture) return null;
+    return {
+        href: picture.href,
+        x: originX + col * map.tileWidth,
+        y: originY + row * map.tileHeight + map.tileHeight - picture.height,
+        width: picture.width,
+        height: picture.height,
+        flip: flipAt(map, col, row)
+    };
+}
+
+/**
  * Where one tile sits IN THE SHEET, in image pixels — or null when the index is empty or absurd.
  *
  * The margin is applied once and the spacing once per preceding tile, which is Tiled's own layout.

@@ -15,7 +15,7 @@
  */
 
 import { toMatrixString, isTranslationOnly } from "../core/geometry/Matrix";
-import { tileAt, tileSourceRect, flipAt, flipMatrix } from "../core/document/Tilemap";
+import { tileAt, tileSourceRect, flipAt, flipMatrix, collectionTileBox } from "../core/document/Tilemap";
 import { DisplayList, DrawItem, Paint, FilterDef, PaintGradient, commandsToPathData, effectFilterId } from "./RenderModel";
 import { naturalSize, surfaceUrl } from "./ImageCache";
 import { nineSliceRects } from "../core/geometry/NineSlice";
@@ -280,6 +280,35 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         // dangling id and a COLLECTION set both arrive as null and both draw nothing, rather than
         // making an unopenable document out of a deleted tileset.
         const sheet = shape.sheet;
+        // A COLLECTION SET: one `<image>` per cell at its OWN size, with no nested `<svg>` because
+        // there is no crop to express — the whole file is the tile. Every other backend concern
+        // (turning, pixelation, the visible range) stays exactly as it is for a sheet.
+        if (cells && !sheet && shape.pictures) {
+            for (let row = cells.row0; row <= cells.row1; row++) {
+                for (let col = cells.col0; col <= cells.col1; col++) {
+                    const box = collectionTileBox(shape.pictures, map, col, row, shape.x, shape.y);
+                    if (!box) continue;
+                    const img = document.createElementNS(svgNS, "image");
+                    img.setAttribute("href", box.href);
+                    img.setAttribute("width", String(box.width));
+                    img.setAttribute("height", String(box.height));
+                    if (box.flip !== 0) {
+                        // The same shared matrix, in the tile's OWN box — a collection tile is not
+                        // cell-sized, so turning it about the cell would swing it out of place.
+                        const m = flipMatrix(box.flip, box.width, box.height);
+                        img.setAttribute("x", "0");
+                        img.setAttribute("y", "0");
+                        img.setAttribute("transform", `translate(${box.x}, ${box.y}) `
+                            + `matrix(${m[0]} ${m[1]} ${m[2]} ${m[3]} ${m[4]} ${m[5]})`);
+                    } else {
+                        img.setAttribute("x", String(box.x));
+                        img.setAttribute("y", String(box.y));
+                    }
+                    if (shape.pixelated) img.setAttribute("image-rendering", "pixelated");
+                    g.appendChild(img);
+                }
+            }
+        }
         if (cells && shape.href && sheetSize && sheet) {
             for (let row = cells.row0; row <= cells.row1; row++) {
                 for (let col = cells.col0; col <= cells.col1; col++) {

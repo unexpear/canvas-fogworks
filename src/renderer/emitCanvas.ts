@@ -42,7 +42,7 @@ import { isTranslationOnly } from "../core/geometry/Matrix";
 import { ClipRegion, DisplayList, DrawItem, Paint, PaintGradient, Shape, layerTransition, textParagraphs } from "./RenderModel";
 import { GradientStop } from "../core/document/Gradient";
 import { nineSliceRects } from "../core/geometry/NineSlice";
-import { tileAt, tileSourceRect, flipAt, flipMatrix } from "../core/document/Tilemap";
+import { tileAt, tileSourceRect, flipAt, flipMatrix, collectionTileBox } from "../core/document/Tilemap";
 import { parseColor } from "./emitWebGL";
 import { resolveSurface, resolveImage, setImageReadyCallback } from "./ImageCache";
 import { drawTextInto } from "./TextRaster";
@@ -271,9 +271,37 @@ function drawShape(ctx: CanvasRenderingContext2D, shape: Shape, paint: Paint,
             const cells = shape.cells;
             const sheet = shape.sheet;
             if (!cells) return;                       // scrolled off screen: the model said so
-            // NO SHEET, NO CELLS TO CUT. The model resolved the layer's tileset; a dangling id or a
-            // COLLECTION set (which has no single sheet) both arrive as null, and both draw nothing
-            // rather than refusing the document.
+            // A COLLECTION SET HAS NO SHEET AND ITS OWN PICTURES. Each cell is a whole file at its
+            // own size, so there is nothing to cut — the nine-argument `drawImage` above becomes
+            // the five-argument one, and the only arithmetic is where the box sits.
+            if (!sheet && shape.pictures) {
+                if (paint.opacity !== null) ctx.globalAlpha = paint.opacity;
+                ctx.imageSmoothingEnabled = !shape.pixelated;
+                for (let row = cells.row0; row <= cells.row1; row++) {
+                    for (let col = cells.col0; col <= cells.col1; col++) {
+                        const box = collectionTileBox(shape.pictures, map, col, row, shape.x, shape.y);
+                        if (!box) continue;
+                        const tile = resolveImage(box.href);
+                        if (!tile) continue;          // not decoded yet, as for any image
+                        // TURNED IN THE TILE'S OWN BOX, not the cell's: a collection tile is not
+                        // cell-sized, and `flipMatrix` works about the centre of the box it is
+                        // given — handed the cell's, it would swing the tile out of place.
+                        if (box.flip !== 0) {
+                            const m = flipMatrix(box.flip, box.width, box.height);
+                            ctx.save();
+                            ctx.translate(box.x, box.y);
+                            ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+                            ctx.drawImage(tile, 0, 0, box.width, box.height);
+                            ctx.restore();
+                            continue;
+                        }
+                        ctx.drawImage(tile, box.x, box.y, box.width, box.height);
+                    }
+                }
+                return;
+            }
+            // NO SHEET, NO CELLS TO CUT. The model resolved the layer's tileset; a dangling id
+            // arrives as null and draws nothing rather than refusing the document.
             if (!sheet) return;
             // NO SHEET, NO TILES. A tilemap whose src is unset is an empty grid waiting for one,
             // which is a legal state the inspector can produce.
