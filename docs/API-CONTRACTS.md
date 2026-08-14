@@ -1168,6 +1168,11 @@ interface TiledObjectPlacement {
   path: PathCommand[] | null; name: string;
 }
 function objectPlacement(obj: TiledObject, tilesets: readonly TiledTileset[]): { placement: TiledObjectPlacement | null; why: string | null };
+// THE SAME SET, TOLD HOW BIG ITS IMAGE REALLY IS — and re-derived. `columns` and `tilecount` are
+// recovered from a DECLARED `<image width height>` at parse time (25 of the tree's 26 such sets);
+// this is for the one that declares neither, where only a decoded bitmap can say. NEVER overrides
+// what the file stated, so it is safe to call on every set: the file is the authority.
+function withImageSize(set: TiledTileset, width: number, height: number): TiledTileset;
 // WHERE ONE CELL'S PICTURE GOES, box and all — `tilePosition` answers where the CELL is, this
 // answers where the ART goes in it. A tile is anchored at the BOTTOM of its cell, so art taller
 // than the grid stands UP from it (nine maps in the tree have such art). Both of Tiled's own

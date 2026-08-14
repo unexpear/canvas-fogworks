@@ -1103,7 +1103,7 @@ const MUTANTS = [
     { id: "CL3", file: "src/renderer/ImageCache.ts",
       from: "    if (img.complete) return naturalSize(href);",
       to: "    if (img.naturalWidth > 0) return naturalSize(href);",
-      note: "THE GUARD ASKS THE WRONG QUESTION ( does not compile here —  is possibly undefined;  does not compile either). An href whose load ALREADY failed is waited on for an event that cannot arrive, so the import hangs with no error anywhere rather than reporting the set it could not measure" },
+      note: "THE GUARD ASKS THE WRONG QUESTION, and this one took two tries: the obvious mutants do not COMPILE. `if (false)` never does, and `entry.loaded` is a TS18048 because `entry` is possibly undefined there while `img` is what got narrowed. Asking the IMAGE whether it has a size looks equivalent and is not: an href whose load ALREADY failed reports width 0, falls through, and is waited on for an event that cannot arrive — so the import hangs with no error anywhere rather than reporting the set it could not measure" },
 
     // TILE ANCHORING. A tile sits at the BOTTOM of its cell, so art taller than the grid stands up
     // from it. Every mutant here still places every tile — what changes is how far off the ground.

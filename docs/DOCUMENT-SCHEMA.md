@@ -1957,9 +1957,38 @@ constant translates the whole layer and preserves how tiles of different widths 
 other, so it is a placement question rather than an anchoring one, and the node's own position is
 where it belongs.
 
-**FOUND WHILE PROVING IT, and not fixed here:** `perspective_walls.tmx` — the file that supplies half
-the evidence above — imports as NOTHING. Its tileset declares neither `columns` nor `tilecount` and
-its `<image>` carries no size, so `tileSourceRect` computes `index % 0` and all 79 painted cells drop.
-They are counted rather than lost silently, but the map arrives empty. Tiled infers the column count
-from the image, which the importer already loads; the parser must stay pure text, so the inference
-belongs at that seam.
+**FOUND WHILE PROVING IT, and now fixed:** `perspective_walls.tmx` — the file that supplies half the
+evidence above — imported as NOTHING. Its tileset declares neither `columns` nor `tilecount` and its
+`<image>` carries no size, so `tileSourceRect` computed `index % 0` and all 79 painted cells dropped.
+
+**THE SWEEP CHANGED THE SHAPE OF THAT FIX.** Counted over every `<tileset>` in the tree — 46 of them:
+
+| | count |
+|---|---:|
+| declaring no usable `columns` | 32 |
+| …of those, COLLECTIONS (no grid to cut — not a defect) | 6 |
+| …of those, sheet-backed | 26 |
+| …of the 26, declaring `<image width height>` — **already recovered** by `deriveGrid` at parse time | 25 |
+| …of the 26, declaring neither, so only a decoded bitmap can say | **1** |
+
+So this was never twenty-six broken files. `deriveGrid` has recovered the count from a DECLARED size
+all along — it is why the sewer maps round-trip — and it bails on its first line when `imageWidth` is
+null because there is nothing to divide. One file in the corpus reaches that line.
+
+**THE PARSER STAYS PURE.** `withImageSize(set, w, h)` is exported and re-derives; the caller is the
+only thing holding both the set and the bitmap, which is the same division that makes `inflate` an
+argument and external `.tsx` files the caller's job. It NEVER overrides what the file said — a set
+that declares its own size or count is returned untouched, because a measured bitmap contradicting
+the map would be a second answer to a settled question, and that property is what makes it safe to
+call on every set rather than only the broken ones. Measured before and after: `perspective_walls.tmx`
+goes **0 → 79** cells (columns 0 → 4), and `sewers.tmx` (2,530 cells), `rule_006.tmx` (26),
+`hexagonal-mini.tmx` (400) and `zlib-embedded.tmx` (10,618) are all unchanged, column counts identical.
+
+**AND THE DECODE HAD TO BE AWAITED, WHICH IS A NEW HAZARD.** `naturalSize` answers null while an image
+decodes, which is right for a renderer — it draws nothing this frame and the load asks for a repaint.
+An import has no next frame. `imageSizeAsync` waits, through the SAME cache the backends draw from, so
+the import and the renderer cannot disagree about how big a picture is. The trap is that the cache
+never retries a failure: an href that already failed has fired its `error` and will not fire another,
+so a listener attached afterwards waits forever and the import hangs with nothing reported. `complete`
+is the only thing that can tell, and a test asserts the hang by racing a timeout — it reports `"HUNG"`
+without the guard.
