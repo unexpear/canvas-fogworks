@@ -1,6 +1,8 @@
 # Feature audit — VDE against Pixelorama and Tiled
 
 <!-- describes: src/editor/tools, src/core/paint, src/core/import, src/core/export -->
+<!-- re-read 2026-08-13 after the tile-anchoring fix: the .tmx import row now records the
+     anchoring and the columns gap. -->
 <!-- re-read 2026-08-13 after schema 67: four rows were wrong, and the oldest by four schemas —
      autotiling was still listed as having no stored field. Tileset-as-content moved absent →
      partial, probability absent → have, tile user data absent → partial. -->
@@ -86,7 +88,7 @@ broke a test whose subject was still true. Both are fixed.
 |---|---|---|
 | Tilemap as a grid of indices | **have** | `core.tilemap`, schema 61 |
 | Per-cell orientation (3 flip bits) | **have** | schema 62, all three backends |
-| Import a `.tmx` as one node per layer | **have** | 45 of the corpus's 53 layers fit; the rest fall back per layer with a reason |
+| Import a `.tmx` as one node per layer | **have** | 45 of the corpus's 53 layers fit; the rest fall back per layer with a reason — and that per-cell path now anchors a tile at the BOTTOM of its cell, so art taller than the grid stands up from it (nine maps in the tree have such art; one moves every tile 384px). A tileset declaring no `columns` still imports as nothing, counted |
 | Paint / bucket / erase tiles, pick from the sheet | **have** | `TileTool`, Map workspace |
 | Resize the grid | **have** | keeps cells by coordinate |
 | Dual-grid autotiling arithmetic | **have** | `document/Autotile`, STORED as `Tilemap.terrain` since schema 63 — the row said "no field yet" for four schemas after it shipped. A mask holds a LIST of candidates (schema 67), chosen deterministically by weight and cell position |
