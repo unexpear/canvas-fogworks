@@ -4304,6 +4304,10 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 {es.playing && lastEvent && (
                     <span data-world-event="1" style={{ color: UI.accent }}>
                         {lastEvent.kind} {lastEvent.className || "(no class)"}
+                        {/* THE SIDE IS THE ONLY NEW INFORMATION slice 9 produces, so leaving it off
+                            here would make it a field nothing in the app can observe — the exact
+                            shape of failure this project keeps finding. `below` is a stomp. */}
+                        {lastEvent.side ? ` (${lastEvent.side})` : ""}
                     </span>
                 )}
                 <span>{Math.round(vp.zoom * 100)}% · {Math.round(vp.x)}, {Math.round(vp.y)}</span>
