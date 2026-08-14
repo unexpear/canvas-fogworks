@@ -1081,11 +1081,12 @@ export function tileImageFor(set: TiledTileset, gid: number): TiledTileImage | n
  * half down. Treating an isometric map as a grid produces a rectangle of tiles that overlap
  * nothing, which looks like a broken tileset rather than a misread orientation.
  *
- * NOTHING HERE HAS EVER PLACED A REAL ISOMETRIC CELL, which is worth knowing before trusting the
- * formula: all three of those maps carry one 60x60 tile layer and every cell in it is empty. The
- * diamond is covered by unit tests and by the spec, not by the corpus. (It was recorded as four
- * maps until the count was re-run against the `<map>` element itself — the fourth file carries
- * `orientation="isometric"` on a tileset's `<grid>`, which is an editor overlay hint.)
+ * THAT USED TO SAY NOTHING HERE HAD EVER PLACED A REAL ISOMETRIC CELL, and it stopped being true
+ * when `isometric-sample.tmx` was vendored: 60x32 at 256x128, three layers, **51 painted cells**,
+ * found inside `Tiled Sample.zip` — the asset sweep had never looked in archives. The three
+ * 60x60-and-empty maps are still there and still empty; they are simply no longer all of it. (It
+ * was recorded as four maps until the count was re-run against the `<map>` element itself — one
+ * file carries `orientation="isometric"` on a tileset's `<grid>`, which is an editor overlay hint.)
  */
 export function tilePosition(
     map: { orientation: string; tileWidth: number; tileHeight: number }, col: number, row: number
@@ -1097,6 +1098,55 @@ export function tilePosition(
         };
     }
     return { x: col * map.tileWidth, y: row * map.tileHeight };
+}
+
+/**
+ * Where one cell's PICTURE goes, box and all — `tilePosition` plus the thing it does not know.
+ *
+ * A TILE IS ANCHORED AT THE BOTTOM of its cell, so art taller than the grid stands UP from it. This
+ * is not a preference and it is not derivable from `tilePosition`, which answers where the CELL is.
+ * Two of Tiled's own examples settle it, and they settle it by what their authors did NOT have to
+ * write:
+ *
+ *   - `perspective_walls.tsx` — 64x64 tiles on 31x31 cells — declares `<tileoffset x="-32" y="0">`.
+ *     Under top-alignment those walls would sink 33px through the floor, and the author would have
+ *     had to write `y="-33"` to stand them back up. They wrote zero.
+ *   - `isometric_grass_and_water.tsx` — 64x64 tiles on 64x32 cells — declares `y="16"`, a nudge.
+ *     Under top-alignment it would need to be a whole tile height.
+ *
+ * Both offsets are SMALL, which is only possible if the default already puts the art where the
+ * artist meant. That is the same rule `objectBox` implements for a tile OBJECT (bottom-left in the
+ * format, top-left here) and the same one `collectionTileBox` draws with, so all three agree.
+ *
+ * WHAT THIS FIXES: the per-cell import path placed every tile at the cell's TOP, which is correct
+ * for the 98% of layers whose art is exactly cell-sized and wrong for every layer where it is not —
+ * nine maps in the measured tree, from a 64x64 tile on a 60x60 grid to 384x332 art on 32x32 cells.
+ * The error is the difference between the two heights, so it grew with the overhang and looked like
+ * badly drawn art rather than arithmetic.
+ *
+ * THE X CONVENTION IS LEFT ALONE, deliberately. Bottom-LEFT means the picture's left edge sits at
+ * the cell's, which `tilePosition` already gives for an orthogonal map; for isometric, Tiled measures
+ * from the diamond's bounding box, which differs from this by a constant half-tile for EVERY cell.
+ * A constant translates the whole layer and preserves how tiles of different widths line up against
+ * each other, so it is a placement question rather than an anchoring one — and the node's own
+ * position is where it belongs. Recorded rather than folded in silently.
+ */
+export function tileImageBox(
+    map: { orientation: string; tileWidth: number; tileHeight: number },
+    layer: { offsetX: number; offsetY: number },
+    set: { offsetX: number; offsetY: number },
+    image: { width: number; height: number },
+    col: number, row: number
+): { x: number; y: number; width: number; height: number } {
+    const at = tilePosition(map, col, row);
+    return {
+        x: at.x + set.offsetX + layer.offsetX,
+        // THE CELL'S BOTTOM, minus the picture's own height. For art exactly one cell tall this is
+        // `at.y` — so every layer in the corpus that already looked right still does, byte for byte.
+        y: at.y + map.tileHeight - image.height + set.offsetY + layer.offsetY,
+        width: image.width,
+        height: image.height
+    };
 }
 
 /** One Tiled layer as the single `core.tilemap` node it can become. */

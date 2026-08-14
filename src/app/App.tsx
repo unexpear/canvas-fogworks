@@ -127,7 +127,7 @@ import { parseSvgDocument, svgDocumentError } from "../core/import/SvgDocument";
 import { svgNodeSpecs, SvgNodeSpec } from "../core/import/SvgNodes";
 import { parseFontFile, fontFileError, FontInfo } from "../core/import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, tilesetFor, tileSourceRect,
-    tilePosition, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer, objectPlacement,
+    tileImageBox, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer, objectPlacement,
     TiledTileset } from "../core/import/TiledMap";
 import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
@@ -5351,27 +5351,26 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                             const path = own ? own.image : set.image;
                                             const src = path ? sheets.get(path) : undefined;
                                             if (!src || (!own && !rect)) { unresolved++; continue; }
-                                            const at = tilePosition(map, i % layer.width, Math.floor(i / layer.width));
+                                            // THE BOX, ANCHORING AND ALL, from `tileImageBox` — which
+                                            // is where the rule lives now rather than here. Both
+                                            // offsets are still applied (the SET's lets a tall tile
+                                            // hang above its own cell; the LAYER's shifts the whole
+                                            // layer, and one corpus map moves one 30 pixels up), and
+                                            // what this line used to get wrong is the anchoring: a
+                                            // tile sits at the BOTTOM of its cell, so art taller than
+                                            // the grid stands up from it instead of hanging down
+                                            // through the floor. Nine maps in the tree have such
+                                            // art. The grid path folds the offsets into the node's
+                                            // own position and refuses oversized art outright, so
+                                            // this is the only place either question arises.
+                                            const box = tileImageBox(map, layer, set,
+                                                own ?? { width: set.tileWidth, height: set.tileHeight },
+                                                i % layer.width, Math.floor(i / layer.width));
                                             const t = tileTransform(cell);
                                             tiles.push({
                                                 kind: "image",
-                                                // TWO OFFSETS, both of which the reader had been
-                                                // reading and this had been dropping. The SET's
-                                                // lets a tall tile hang above its own cell — a
-                                                // building rooted in one square standing over the
-                                                // three behind it. The LAYER's shifts the whole
-                                                // layer, and one corpus map moves one 30 pixels up;
-                                                // ignoring it drew that art 30 pixels low, which
-                                                // reads as a badly aligned pack rather than as an
-                                                // attribute nobody applied. The grid path folds
-                                                // both into the node's own position.
-                                                x: at.x + set.offsetX + layer.offsetX,
-                                                y: at.y + set.offsetY + layer.offsetY,
-                                                // The TILE's size, not the map's: a collection tile
-                                                // states its own, and a sheet tile may be taller
-                                                // than the grid it sits on.
-                                                width: own ? own.width : set.tileWidth,
-                                                height: own ? own.height : set.tileHeight,
+                                                x: box.x, y: box.y,
+                                                width: box.width, height: box.height,
                                                 src, sourceRect: rect,
                                                 name: `${layer.name} ${cell.gid}`,
                                                 // Only the 820-in-124,692 that need one, so an

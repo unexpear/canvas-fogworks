@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1766;
+const EXPECTED_TESTS = 1767;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1089,6 +1089,21 @@ const MUTANTS = [
       from: "    const picture = pictures.get(index);\n    // A CELL NAMING A TILE THE SET DOES NOT HOLD DRAWS NOTHING",
       to: "    const picture = pictures.get(index) ?? pictures.values().next().value;\n    // A CELL NAMING A TILE THE SET DOES NOT HOLD DRAWS NOTHING",
       note: "a cell naming a tile the set does not hold falls back to the set's FIRST tile, so a sparse set (real ones skip ids) draws a plausible wrong picture instead of nothing" },
+
+    // TILE ANCHORING. A tile sits at the BOTTOM of its cell, so art taller than the grid stands up
+    // from it. Every mutant here still places every tile — what changes is how far off the ground.
+    { id: "AN1", file: "src/core/import/TiledMap.ts",
+      from: "        y: at.y + map.tileHeight - image.height + set.offsetY + layer.offsetY,",
+      to: "        y: at.y + set.offsetY + layer.offsetY,",
+      note: "the ORIGINAL bug: a tile is placed at the TOP of its cell, so a 256x512 tile on a 256x128 cell hangs 384px through the floor — and it is invisible on any layer whose art is exactly cell-sized, which is 45 of the corpus's 53" },
+    { id: "AN2", file: "src/core/import/TiledMap.ts",
+      from: "        y: at.y + map.tileHeight - image.height",
+      to: "        y: at.y + map.tileWidth - image.height",
+      note: "the anchoring measures the cell's WIDTH, which is identical on every square grid and wrong on every isometric one — 64x32 cells are the usual isometric case" },
+    { id: "AN3", file: "src/core/import/TiledMap.ts",
+      from: "image.height + set.offsetY + layer.offsetY,",
+      to: "image.height + layer.offsetY,",
+      note: "the SET's `<tileoffset>` is dropped from y, which is the field that lets a building stand over the squares behind it — four real sets in the tree carry one" },
 
     // SCHEMA 68 — the sheet leaves the tilemap node. Note what could NOT be mutated: putting `src`
     // back into `tileImportActions` does not compile, because the field left `TilePlacement`

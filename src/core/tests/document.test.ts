@@ -115,7 +115,7 @@ import { parseSvgTransform, Rect, Mat2D } from "../geometry/Matrix";
 import { svgNodeSpecs, SVG_TRANSPARENT } from "../import/SvgNodes";
 import { parseFontFile, fontFileError, FONT_MAX_TABLES } from "../import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
-    tileSourceRect, tilePosition, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer,
+    tileSourceRect, tilePosition, tileImageBox, tileTransform, tileImageFor, tilesetOverflow, tilemapForLayer,
     TILED_MAX_CELLS, TILED_MAX_TILE_IMAGES, objectBox, objectTransform, objectPlacement, parseProperties, userDataFor,
     TiledObject, TiledObjectGroup, TiledProperty } from "../import/TiledMap";
 import { parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
@@ -15642,6 +15642,52 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // from a correct one: 64x32 halves to 32 across and 16 down.
         expect(tilePosition({ orientation: "isometric", tileWidth: 64, tileHeight: 32 }, 1, 0))
             .toEqual({ x: 32, y: 16 });
+    });
+
+    test("a tile is anchored at the BOTTOM of its cell, so tall art stands up", () => {
+        // THE DEFECT: the per-cell import path placed every picture at the cell's TOP. Correct for
+        // the ~98% of layers whose art is exactly cell-sized, and wrong for every layer where it is
+        // not — NINE maps in the measured tree, from a 64x64 tile on a 60x60 grid to 384x332 art on
+        // 32x32 cells. The error is the difference between the two heights, so it grew with the
+        // overhang and read as badly drawn art rather than as arithmetic.
+        //
+        // THE EVIDENCE IS WHAT TILED'S OWN AUTHORS DID NOT HAVE TO WRITE. Both bundled examples
+        // with oversized tiles declare SMALL `<tileoffset>`s, which is only possible if the default
+        // anchoring already stands the art up:
+        //   perspective_walls.tsx      64x64 tiles on 31x31 cells, `<tileoffset x="-32" y="0">`
+        //   isometric_grass_and_water  64x64 tiles on 64x32 cells, `<tileoffset x="0" y="16">`
+        // Top-alignment would have needed y="-33" and y="-32" respectively.
+        const none = { offsetX: 0, offsetY: 0 };
+        const walls = { orientation: "orthogonal", tileWidth: 31, tileHeight: 31 };
+        // Cell (0,0): its bottom is y=31, so a 64-tall picture occupies -33..31 — 33 pixels ABOVE
+        // the cell, which is a wall standing on the floor rather than sunk through it.
+        expect(tileImageBox(walls, none, none, { width: 64, height: 64 }, 0, 0))
+            .toEqual({ x: 0, y: -33, width: 64, height: 64 });
+        // …and the row below sits exactly one cell lower, or the rule would be a constant.
+        expect(tileImageBox(walls, none, none, { width: 64, height: 64 }, 0, 1).y).toBe(-2);
+
+        // CELL-SIZED ART IS UNMOVED, which is the half that matters most: 45 of the corpus's 53
+        // layers are exactly cell-sized, and if this changed them the fix would be a regression
+        // dressed as a correction.
+        const grid = { orientation: "orthogonal", tileWidth: 16, tileHeight: 16 };
+        expect(tileImageBox(grid, none, none, { width: 16, height: 16 }, 2, 3))
+            .toEqual({ x: 32, y: 48, width: 16, height: 16 });
+
+        // BOTH OFFSETS STILL APPLY, and they are added to the anchored position rather than
+        // replacing it — the set's is what lets a building hang over the squares behind it.
+        expect(tileImageBox(walls, { offsetX: 5, offsetY: 7 }, { offsetX: -32, offsetY: 0 },
+            { width: 64, height: 64 }, 0, 0)).toEqual({ x: -27, y: -26, width: 64, height: 64 });
+
+        // ISOMETRIC ANCHORS THE SAME WAY, on the diamond's own height: `isometric_grass_and_water`
+        // is 64x64 art on a 64x32 cell, so cell (0,0) runs -32..32 and the tileset's y="16" nudge
+        // lands it at -16. A whole-tile-height offset would have been needed the other way.
+        const iso = { orientation: "isometric", tileWidth: 64, tileHeight: 32 };
+        expect(tileImageBox(iso, none, none, { width: 64, height: 64 }, 0, 0).y).toBe(-32);
+        expect(tileImageBox(iso, none, { offsetX: 0, offsetY: 16 }, { width: 64, height: 64 }, 0, 0).y)
+            .toBe(-16);
+        // …and the diamond still moves half a cell per column, which is `tilePosition`'s job and
+        // must not have been absorbed into this one.
+        expect(tileImageBox(iso, none, none, { width: 64, height: 64 }, 1, 0).x).toBe(32);
     });
 
     test("a tileset can be a COLLECTION of files rather than one sheet", () => {
