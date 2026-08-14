@@ -1070,6 +1070,17 @@ const MUTANTS = [
       from: "            notes.push(`layer \"${l.name}\" draws from a tileset with no sheet to write `\n                + \"(a collection tileset, or an id naming nothing), so it was not written\");\n            return false;",
       to: "            return false;",
       note: "a layer whose tileset has no sheet is dropped IN SILENCE, so a collection-set layer leaves the export with nothing said and the .tmx simply lacks it" },
+    // SCHEMA 68 — the sheet leaves the tilemap node. Note what could NOT be mutated: putting `src`
+    // back into `tileImportActions` does not compile, because the field left `TilePlacement`
+    // altogether. Deleting a field beats guarding one, and tsc is the guard.
+    { id: "TS1", file: "src/core/document/Node.ts",
+      from: "    if (type !== \"core.image\") {\n        return \"only a core.image node may carry a src\";",
+      to: "    if (type !== \"core.image\" && type !== \"core.tilemap\") {\n        return \"only a core.image node may carry a src\";",
+      note: "a tilemap may carry a sheet again, so the picture has two homes and the importer's old copy is legal — the state that stored it seven times for six layers" },
+    { id: "TS2", file: "src/core/document/Serializer.ts",
+      from: "        if (node?.type === \"core.tilemap\" && node.src !== undefined) {",
+      to: "        if (node?.type === \"core.image\" && node.src !== undefined) {",
+      note: "the 67->68 strip takes an IMAGE's src instead of a tilemap's, so every photo loses its picture and every tilemap keeps the copy that made the migration necessary" },
     { id: "EX22", file: "src/core/export/ExportTiled.ts",
       from: "    if (writable.length === 0) {",
       to: "    if (writable.length < 0) {",
