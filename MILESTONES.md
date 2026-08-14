@@ -51,7 +51,7 @@ M14 AI Integration            ⬜
 M15 Plugins                   ⬜
 M16 Collaboration             ⬜
 M17 Production Hardening      ⬜
-M18 Game Runtime              🚧   slices 1-3: a fixed-step world that PLAYS inside the editor — a character you drive, standing on a level made of TILES
+M18 Game Runtime              🚧   slices 1-4: a fixed-step world that PLAYS inside the editor — a character you drive, a level made of TILES, and ground you can slip on
 ```
 
 \* **Note on M3/M4:** a working **vertical-slice prototype** of the renderer, the
@@ -928,8 +928,25 @@ Verified live: a crate lands on the tile floor at exactly the row's top, walks a
 seams at constant height, and falls through a one-cell hole at precisely the screen x that hole
 occupies.
 
-**STILL NOT DONE**, each wanting its own design against real content: rotation, friction (read and
-ignored, said out loud), restitution, one-way platforms, slopes, a tilemap inside a TRANSFORMED
-parent (the collision reads `geometry` directly and would be wrong — it is said in the header rather
-than pretended about), triggers, spawning, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
+**Slice 4 — SURFACE FRICTION, and the measurement chose it.** `friction` is the corpus's second
+most-declared property (45) and **44 of the 45 sit on STATIC objects**: it describes what you are
+standing on, not what you are. Applied as Coulomb — `a = mu * g` — so the slice brought no new
+constant, and the distances belong to the model rather than to taste: at mu=1 a body walking at 220
+px/s slides 26.9px before stopping, at 0.45 (the corpus's one other value, on the block a player
+pushes) 59.8px, and at 0 it never stops.
+
+**`floating` WAS MEASURED AND NOT IMPLEMENTED.** It is the third most-declared property (24) and
+every one of its 24 objects is STATIC — a body that never moves cannot be exempted from a gravity
+that never touches it. Whatever sticker-knight means by it, this data cannot say, and a guess
+dressed as a feature is worse than the gap. `density`, declared by one object in the whole tree,
+likewise.
+
+Friction also corrected slice 2: releasing a key used to SET the speed to zero, which made friction
+meaningless for the one body a player drives — no slide on ice, and no air control, because letting
+go mid-jump killed the flight. Releasing now hands the body back to the surface.
+
+**STILL NOT DONE**, each wanting its own design against real content: rotation, restitution, one-way
+platforms, slopes, a tilemap inside a TRANSFORMED parent (the collision reads `geometry` directly and
+would be wrong — said in the header rather than pretended about), triggers, spawning, and anything
+configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

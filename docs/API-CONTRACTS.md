@@ -2705,7 +2705,12 @@ const DEFAULT_GRAVITY: number;         // 900 px/s². Positive is DOWN; y grows 
 
 interface Body { x; y; vx; vy; onGround: boolean }
 interface WorldState { bodies: ReadonlyMap<string, Body>; time: number }
-interface Solid { x; y; width; height }
+// A surface's Coulomb coefficient: 0 is ice, 1 decelerates a body at exactly one gravity. It is the
+// GROUND's property — 44 of the corpus's 45 `friction` values sit on static objects — and it
+// defaults to 1 because that is what 44 of them say. `floating` (24, all static) and `density` (1)
+// are measured and deliberately NOT implemented.
+interface Solid { x; y; width; height; friction: number }
+function frictionOf(node: { userData?: UserData }): number;
 
 // WHAT A BODY IS, measured rather than invented: of 248 objects in the corpus only 24 carry a class,
 // and the level's real collision geometry carries NONE — six untyped rectangles whose only property
