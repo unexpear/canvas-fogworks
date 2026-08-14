@@ -1090,6 +1090,30 @@ const MUTANTS = [
       to: "    const picture = pictures.get(index) ?? pictures.values().next().value;\n    // A CELL NAMING A TILE THE SET DOES NOT HOLD DRAWS NOTHING",
       note: "a cell naming a tile the set does not hold falls back to the set's FIRST tile, so a sparse set (real ones skip ids) draws a plausible wrong picture instead of nothing" },
 
+    // THE RUNTIME (M18). Every one of these still runs a world and still draws a falling body —
+    // what changes is where it ends up, or how fast it got there, which is the class of defect a
+    // "does it move" assertion cannot see.
+    { id: "RN1", file: "src/core/runtime/World.ts",
+      from: "        let vy = was.vy + gravity * FIXED_STEP;",
+      to: "        let vy = was.vy + gravity;",
+      note: "gravity is applied per STEP rather than per second, so the world falls sixty times too fast and a jump height depends on the step size — the exact mistake a fixed timestep exists to prevent" },
+    { id: "RN2", file: "src/core/runtime/World.ts",
+      from: "            if (vy > 0) { y = s.y - h; onGround = true; } else { y = s.y + s.height; }",
+      to: "            if (vy > 0) { y = s.y; onGround = true; } else { y = s.y + s.height; }",
+      note: "a landing body's TOP is put on the floor's top, so every body sinks into the ground by its own height — invisible to any fixture asserting only that it stopped" },
+    { id: "RN3", file: "src/core/runtime/World.ts",
+      from: "        // VERTICAL, then resolve — and this is where `onGround` is decided.\n        let onGround = false;\n        y += vy * FIXED_STEP;",
+      to: "        // VERTICAL, then resolve — and this is where `onGround` is decided.\n        let onGround = false;\n        y += vy * FIXED_STEP;\n        x += 0;",
+      note: "THE CONTROL — an equivalent statement that should SURVIVE. A run where every mutant dies cannot tell a real kill from a harness failing every time" },
+    { id: "RN4", file: "src/core/runtime/World.ts",
+      from: "        acc = 0;                                  // the dropped time is gone; do not owe it back",
+      to: "        acc = acc - steps * FIXED_STEP;           // the dropped time is gone; do not owe it back",
+      note: "a capped frame KEEPS the debt it just refused to spend, so the next frame spends the cap again, and the frame after that — the spiral the cap exists to stop, in instalments" },
+    { id: "RN5", file: "src/core/runtime/World.ts",
+      from: "        if (node.geometry.x === body.x && node.geometry.y === body.y) continue;",
+      to: "        if (node.geometry.x === body.x) continue;",
+      note: "only the X coordinate decides whether a body moved, so a body falling straight down is never stamped onto the document and never appears to move at all — and `if (false)` could not be used here, because it does not COMPILE" },
+
     // A SET THAT STATES NEITHER ITS COLUMNS NOR ITS IMAGE SIZE. One file in the tree, 79 cells, and
     // the recovery has to leave the other 25 such sets — the ones that DO state a size — untouched.
     { id: "CL1", file: "src/core/import/TiledMap.ts",
