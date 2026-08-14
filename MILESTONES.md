@@ -804,25 +804,33 @@ correct, just not incremental).
 
 ## Phase 7 — States
 
-### Milestone 7 — States ⬜
-State machines per node: `Default` · `Hover` · `Pressed` · `Focused` · `Disabled`.
-State transitions only — **no animation yet**. (`Node.states` is already reserved.)
+### Milestone 7 — States ✅
+`Node.states` + `activeState` (schema 30), with `SetStateAction` and the toolbar switcher. Capture
+stores a node's current look under a name; switching re-derives. It was the FIRST sanitizing
+migration, which is the part worth remembering: a state holding a field the schema no longer allows
+had to be cleaned on load rather than refused, or the file would not open.
 
 ---
 
 ## Phase 8 — Animation Engine
 
-### Milestone 8 — Animation ⬜
-The biggest engine after layout: timelines · keyframes · springs · Bézier curves ·
-physics · interpolation · playback · scrubbing. **Animation becomes another producer
-of `ComputedState`.**
+### Milestone 8 — Animation ✅
+Timeline + keyframes + cubic-Bézier easing + HOLDS (cel) + onion skin — `Timeline` (407), `Bezier`
+(172), `Clips` (105). **Animation did become another producer of `ComputedState`**, exactly as this
+line planned: `applyFrame` takes the document and a time and hands back the document AT that time,
+which the same derivation chain then resolves. NOT DONE from the original list: springs, and
+physics — which is where a game RUNTIME starts rather than where animation ends.
 
 ---
 
 ## Phase 9 — Interaction Graph
 
-### Milestone 9 — Interaction Graph ⬜
-A visual behavior graph, e.g. `Button Click → Open Menu → Wait 300ms → Fade Overlay → Navigate`.
+### Milestone 9 — Interaction Graph ✅*
+`Node.interactions` (schema 35): trigger → state, with duration and easing, plus NAVIGATE to a node
+(schema 36), and a Play mode that fires them. **The name overpromises and the star is why**: this is
+a state machine, not a node GRAPH — there is no canvas of wired boxes, and `Button Click → Open Menu
+→ Wait 300ms → Fade Overlay → Navigate` is a chain this cannot express. What it can express is one
+trigger choosing one state on one target.
 
 ---
 
