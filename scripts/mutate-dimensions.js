@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1835;
+const EXPECTED_TESTS = 1855;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1309,6 +1309,44 @@ const MUTANTS = [
       from: "    if (writable.length === 0) {",
       to: "    if (writable.length < 0) {",
       note: "a document whose every layer draws from an unwritable set exports a map with no tileset at all — a file Tiled opens as an error dialog — instead of saying so and writing nothing" },
+
+    // THE CAMERA (M18 slice 8). Two of these are aimed at the specific shape of defect that got
+    // `lerpViewport` wrong for four days: arithmetic that is exactly right at the world origin and
+    // at zoom 1, which is where every convenient fixture sits. The rest aim at the deadzone, whose
+    // whole job is to do NOTHING most of the time — a rule that is invisible unless a test asserts
+    // the nothing exactly, since "close enough" passes for a camera that creeps every frame.
+    { id: "CAM1", file: "src/core/runtime/Camera.ts",
+      from: "export const DEADZONE_FRACTION = 0.34;",
+      to: "export const DEADZONE_FRACTION = 0;",
+      note: "the deadzone collapses to a point, so the camera pins the target to the exact screen centre and every footstep moves the entire world — the scenery appears to walk rather than the character" },
+    { id: "CAM2", file: "src/core/runtime/Camera.ts",
+      from: "    const marginX = size.width * (1 - f) / 2;",
+      to: "    const marginX = size.width * f / 2;",
+      note: "the fraction is read as the MARGIN rather than the window, so 0.34 gives a deadzone covering two thirds of the screen instead of the middle third — the camera lags a third of a screen behind" },
+    { id: "CAM3", file: "src/core/runtime/Camera.ts",
+      from: "            z * (target.x + target.width) - (size.width - marginX),",
+      to: "            z * target.x - (size.width - marginX),",
+      note: "the right-hand edge is tested against the target's LEFT edge, so a wide body pushes the camera late by its own width and its front half is off screen at the moment it matters" },
+    { id: "CAM4", file: "src/core/runtime/Camera.ts",
+      from: "            z * (target.y + target.height) - (size.height - marginY),",
+      to: "            z * (target.y + target.height) - (size.width - marginY),",
+      note: "the vertical axis measures against the view's WIDTH — the copy-paste every two-axis routine invites, and invisible on any fixture with a square canvas" },
+    { id: "CAM5", file: "src/core/runtime/Camera.ts",
+      from: "    if (lo > hi) return (lo + hi) / 2;",
+      to: "",
+      note: "an inverted interval falls through to an ordinary clamp, so anything BIGGER than the space allowed for it slams to one edge: a level narrower than the view sits in a corner, and a target wider than its deadzone judders between the two edges it violates at once" },
+    { id: "CAM6", file: "src/core/runtime/Camera.ts",
+      from: "    const closed = 1 - Math.pow(1 - k, steps);",
+      to: "    const closed = k;",
+      note: "the smoothing becomes per FRAME instead of per fixed step, so the camera is slower on a 144Hz monitor than a 60Hz one — the same class of defect as a frame-rate-dependent jump, and far harder to see because nobody can say what the right answer looked like" },
+    { id: "CAM7", file: "src/core/runtime/Camera.ts",
+      from: "        x = clampOrCentre(x, z * bounds.x, z * (bounds.x + bounds.width) - size.width);",
+      to: "        x = view.x + (clampOrCentre(want.x, z * bounds.x, z * (bounds.x + bounds.width) - size.width) - view.x) * closed;",
+      note: "THE OTHER DESIGN: the bounds clamp the DESTINATION rather than the result, which is right only while the camera is already inside the level — and it is not, on the first frame of a run begun with the canvas scrolled away, so the run opens on ten frames of the void outside the level" },
+    { id: "CAM8", file: "src/core/runtime/Camera.ts",
+      from: "    if (!(steps > 0) || !(view.zoom > 0)) return view;",
+      to: "    if (!(view.zoom > 0)) return view;",
+      note: "a frame that earned no fixed step still moves the camera, so a paused or backgrounded run keeps scrolling toward the level edge on frames the physics did not run at all" },
 ];
 
 function runSuite() {

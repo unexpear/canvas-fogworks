@@ -135,6 +135,7 @@ import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
 import { naturalSize, surfaceUrl, imageSizeAsync } from "../../src/renderer/ImageCache";
 import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor } from "../core/runtime/World";
+import { followCamera } from "../core/runtime/Camera";
 import { SourceRect } from "../core/document/Node";
 import { Action } from "../core/actions/Action";
 import { textLinesFor } from "../renderer/TextRaster";
@@ -700,6 +701,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     // them). The invariant `incremental === full` is property-tested — this is the
     // producer of the dirty set the engine consumes.
     const prevComputedRef = useRef<ComputedState | null>(null);
+    /** The playing level's extent, captured on the run's first derived frame and cleared on Stop. */
+    const runBoundsRef = useRef<ReturnType<typeof contentBounds>>(null);
     const dirtyNodesRef = useRef<Set<string>>(new Set());
     const prevPendingRef = useRef<Set<string>>(new Set());
     /**
@@ -1362,6 +1365,29 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 es.world = world;
                 es.worldClock = { accumulator: spend.accumulator, lastAt: now };
                 worldMoved = movedIds(base, world);
+                // THE CAMERA FOLLOWS WHAT YOU DRIVE, and it is stepped with the SAME step count
+                // the physics just spent, not once per frame — a camera closing a fixed fraction
+                // per frame is a different camera on a 144Hz monitor, which is the same defect as
+                // a frame-rate-dependent jump and far harder to notice. `followCamera` is pure and
+                // cannot reach the bodies, so no level plays differently for being looked at.
+                //
+                // IT YIELDS TO AN EXPLICIT NAVIGATION: a `viewportTransition` is something the run
+                // ASKED for, and two writers on one viewport is a fight the user always loses.
+                const drivenNode = es.controlled ? base.nodes.get(es.controlled) : undefined;
+                const drivenBody = es.controlled ? world.bodies.get(es.controlled) : undefined;
+                const canvasEl = canvasRef.current;
+                if (drivenNode && drivenBody && canvasEl && !es.viewportTransition) {
+                    Object.assign(es.viewport, followCamera(
+                        es.viewport,
+                        { width: canvasEl.clientWidth, height: canvasEl.clientHeight },
+                        {
+                            // The body's own x/y are already WORLD space (slice 6); its SIZE is the
+                            // file's, read from the stored node like every other body fact.
+                            x: drivenBody.x, y: drivenBody.y,
+                            width: drivenNode.geometry.width, height: drivenNode.geometry.height
+                        },
+                        runBoundsRef.current, spend.steps));
+                }
                 // THE LAST EVENT WINS on a frame that produced several, which a status line can
                 // only show one of anyway. Set outside the render path's own state on purpose: it
                 // is React state, so this schedules a repaint, and the loop is already asking for
@@ -1435,6 +1461,13 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             // which is what makes the reuse above worth having, since a chain broken every frame
             // would have nothing to reuse FROM.
             prevComputedRef.current = es.playing && !worldOnly ? null : computed;
+            // THE LEVEL'S EXTENT, MEASURED ONCE PER RUN — the edge the camera will not scroll past.
+            // Once, because a level does not move while it is being played and `contentBounds` is
+            // O(nodes); the frame it is captured on is the first the camera has a limit, which is a
+            // frame at the position the editor was already showing.
+            if (es.playing && es.world && runBoundsRef.current === null) {
+                runBoundsRef.current = contentBounds(computed);
+            }
             prevPendingRef.current = pendingKeys;
             dirtyNodesRef.current = new Set();
 
@@ -2113,6 +2146,9 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                         // the entire time. A green suite of 1,793 said nothing; pressing Stop said
                         // it immediately.
                         prevComputedRef.current = null;
+                        // …and so is the camera's limit, both ways: a run measures the level it is
+                        // actually given, and a level edited between runs is not held to the old one.
+                        runBoundsRef.current = null;
                         // Starting REMEMBERS where the canvas was looking; stopping puts it back.
                         // A prototype run navigates, and being dumped three screens away from
                         // where you pressed Play is the editor losing your place.
