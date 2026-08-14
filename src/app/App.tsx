@@ -2993,11 +2993,18 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                     const stored = dispatcher.getDocument().nodes.get(node.id);
                                     const map = stored?.tilemap;
                                     if (!stored || stored.type !== "core.tilemap" || !map) return null;
-                                    // THE SHEET IS THE TILESET'S NOW (schema 67). A dangling id or a
-                                    // collection set has none to draw a ring on, and shows nothing.
+                                    // THE SHEET IS THE TILESET'S NOW (schema 67), and until this line
+                                    // was fixed the WHOLE PANEL returned null without one — so a
+                                    // layer pointed at a COLLECTION set, or at a tileset somebody
+                                    // deleted, lost every control it had INCLUDING the dropdown that
+                                    // would point it somewhere else. A dead end you can walk into
+                                    // with one click of a picker and cannot walk back out of.
+                                    //
+                                    // Only the SHEET-SHAPED parts are conditional now: the selection
+                                    // ring is a rectangle in a sheet, and a collection has no sheet
+                                    // to put one in — it gets its own palette below instead.
                                     const mapSet = findTileset(dispatcher.getDocument().tilesets, map.tilesetId);
-                                    if (!mapSet?.sheet) return null;
-                                    const ring = sheetTileRect(mapSet.sheet, tileIndex);
+                                    const ring = mapSet?.sheet ? sheetTileRect(mapSet.sheet, tileIndex) : null;
                                     /**
                                      * TERRAIN (schema 63). Without art a terrain layer draws
                                      * NOTHING — the derivation has no tile to put anywhere — so the
@@ -3372,6 +3379,69 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                                             }} />
                                                         )}
                                                     </div>
+                                                </div>
+                                            )}
+                                            {/* A COLLECTION SET'S PALETTE — the other half, and the
+                                                reason it needs one: a collection has no sheet to
+                                                click, so the picker above was gated on an image
+                                                that does not exist and there was NO WAY to choose a
+                                                tile. Such a layer could be painted with tile 0 and
+                                                nothing else, on a set of 244.
+
+                                                ONE BUTTON PER TILE, IN ID ORDER, and the id is what
+                                                a cell stores — so the label under each thumbnail is
+                                                the number the rest of this panel talks about, not a
+                                                position in a list. Real sets skip ids (one corpus
+                                                set has no 47, another starts at 12), which is
+                                                exactly why the number is shown.
+
+                                                THUMBNAILS ARE CONTAINED, not stretched: the
+                                                measured art is 256x352 and 256x512, so a fixed box
+                                                with `object-fit: contain` keeps a tall tile tall
+                                                rather than squashing it into a square, and a
+                                                picker that misrepresents the shape of the art is a
+                                                picker people stop trusting. */}
+                                            {mySet && !mySet.sheet && mySet.tiles.some(t => t.src) && (
+                                                <div
+                                                    data-tile-picker="1"
+                                                    data-picker-kind="collection"
+                                                    style={{
+                                                        marginTop: 4, maxHeight: 180, overflow: "auto",
+                                                        border: `1px solid ${UI.line}`, background: "#111",
+                                                        display: "flex", flexWrap: "wrap", gap: 3, padding: 3
+                                                    }}
+                                                >
+                                                    {mySet.tiles.filter(t => t.src)
+                                                        .slice().sort((a, b) => a.id - b.id).map(t => (
+                                                        <button
+                                                            key={t.id}
+                                                            data-tile-id={t.id}
+                                                            title={`tile ${t.id} — ${t.width}x${t.height}`}
+                                                            onClick={() => { setTileIndex(t.id); setTileErasing(false); }}
+                                                            style={{
+                                                                display: "flex", flexDirection: "column",
+                                                                alignItems: "center", gap: 1, padding: 2,
+                                                                background: "transparent", cursor: "pointer",
+                                                                // THE SELECTION IS THE BORDER, which is
+                                                                // what the sheet picker's ring is for —
+                                                                // the same statement in the shape this
+                                                                // palette has.
+                                                                border: `1px solid ${t.id === tileIndex && !tileErasing
+                                                                    ? UI.accent : UI.line}`,
+                                                                borderRadius: 3
+                                                            }}
+                                                        >
+                                                            <img
+                                                                src={t.src}
+                                                                alt={`tile ${t.id}`}
+                                                                draggable={false}
+                                                                style={{ display: "block", width: 40, height: 40,
+                                                                    objectFit: "contain",
+                                                                    imageRendering: "pixelated" }}
+                                                            />
+                                                            <span style={{ fontSize: 9, color: "#888" }}>{t.id}</span>
+                                                        </button>
+                                                    ))}
                                                 </div>
                                             )}
                                             <label style={INSPECTOR_LABEL}>Grid</label>

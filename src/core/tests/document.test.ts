@@ -2674,6 +2674,30 @@ describe("Components: instance overrides", () => {
         expect(tc).toMatch(/geometryActionFor\(doc, this\.resizeNodeId/);
     });
 
+    test("the tile panel is not gated on a SHEET — a collection layer keeps its controls", () => {
+        // THE DEAD END this guards, and it was reachable in one click: the panel began with
+        // `if (!mapSet?.sheet) return null`, so pointing a layer at a COLLECTION set — which the
+        // panel's own dropdown offers — removed every control the layer had, INCLUDING the dropdown
+        // that would point it back. A deleted tileset did the same thing. You could walk in and not
+        // out, and nothing failed: `success` was never involved, the panel simply was not there.
+        //
+        // A TEXT GUARD, deliberately, and it is the same trade `no backend derives a tilemap
+        // sheet's pixel size` makes: this markup has no unit harness at all, so the alternative to
+        // reading the source is no check whatsoever. What it pins is exactly what was wrong.
+        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(src).not.toMatch(/if \(!mapSet\?\.sheet\) return null;/);
+        // The RING is what genuinely needs a sheet — it is a rectangle inside one — so it is the
+        // thing that stayed conditional. Without this half, deleting the gate entirely would pass.
+        expect(src).toMatch(/const ring = mapSet\?\.sheet \? sheetTileRect\(mapSet\.sheet, tileIndex\) : null;/);
+        // AND A COLLECTION HAS A PALETTE OF ITS OWN. Until it did, such a layer could be painted
+        // with tile 0 and nothing else — on a set of 244 — because the only picker was an <img> of
+        // a sheet the set has not got. Keyed by the tile's ID, which is what a cell stores and what
+        // makes a sparse set (one corpus set skips 47, another starts at 12) selectable at all.
+        expect(src).toMatch(/data-picker-kind="collection"/);
+        expect(src).toMatch(/data-tile-id=\{t\.id\}/);
+        expect(src).toMatch(/setTileIndex\(t\.id\)/);
+    });
+
     test("the TYPE-aware size rule applies to overrides too — the seam can't validate less", () => {
         // `overridesError` alone can't run `dimensionError` (it never sees the master's type), so
         // a 0-width copy of a RECTANGLE would slip through a check the stored node fails.

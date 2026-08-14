@@ -1856,10 +1856,24 @@ that is not there.
   known-gap list since schema 62. One quad sampling one sheet texture cannot express a picture per
   tile; closing it needs a runtime atlas, and the packing measurement above says that is a project.
 
+  **AND A COLLECTION SET NOW HAS A PICKER, which is what made the drawing usable.** Two defects sat
+  in one line of the panel. The tile picker was an `<img>` of the set's sheet, gated on a sheet a
+  collection has not got — so such a layer could be painted with tile 0 and nothing else, on a set of
+  244. Worse, the whole panel began `if (!mapSet?.sheet) return null`, so pointing a layer at a
+  collection set — which the panel's OWN dropdown offers — removed every control it had, including
+  the dropdown that would point it back. A dead end reachable in one click, out of which there was no
+  click. Only the RING is sheet-shaped now; the collection palette is one button per tile in ID
+  order, labelled with that id (real sets skip ids), thumbnails CONTAINED rather than stretched
+  because the measured art is 256x352 and 256x512 and a picker that misrepresents the shape of the
+  art is one people stop trusting.
+
   Verified in the running app on a real document pushed through the `file-opened` channel: SVG emits
   six `<image>` elements for six painted cells at y = -32 and -16 (the overhang), and Canvas's own
   pixels show the tall tile's white cap two cells ABOVE its row with the row below's overhang
-  correctly covering the tile behind it. A screenshot diff of the two backends over the map region
+  correctly covering the tile behind it. The picker was driven the same way, end to end: clicking
+  tile 1 moved the selection border and the weight label, and a click on the canvas over an EMPTY
+  cell painted it — a seventh `<image>` at exactly that cell, carrying the data URL of the picker's
+  own thumbnail for tile 1, which is the ground truth for which picture is which. A screenshot diff of the two backends over the map region
   (11,264 ink pixels) differs on 0.9% of pixels, worst channel 101 — all of it the top edge row,
   where SVG blends the image against the backdrop and Canvas does not. **That is pre-existing, not
   new: the same diff on a SHEET-backed document differs on 2.9%, worst channel 202.** Recorded
