@@ -1,6 +1,9 @@
 # API Contracts
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
+<!-- re-read 2026-08-14 after the runtime's first slice: accurate, and it gained a surface —
+     `core/runtime/World`, below. Nothing existing changed shape; the runtime stamps a document the
+     way `applyFrame` does and every signature here reads it unchanged. -->
 <!-- re-read 2026-08-13 after the collection draw path: `collectionTileBox` added; the tilemap
      DisplayItem now carries `pictures` beside `sheet`, and the two are never both non-null. -->
 <!-- re-read 2026-08-13 after schema 67 and the multi-tileset exporter: THREE signatures here had
@@ -2685,3 +2688,53 @@ Three esbuild builds → `dist/`:
 | `electron/preload.js` | `dist/electron/preload.js` | cjs / node, `external: electron` |
 
 Plus `index.html` copied to `dist/app/` with the bundle injected. `--watch` supported.
+
+
+## Runtime (`core/runtime/`)
+
+The game runtime's mutable half (M18 slice 1). Pure and testable without a DOM or a clock; the clock
+lives with the caller, because only the caller has one.
+
+```ts
+const FIXED_STEP: number;              // 1/60s. A fixed step, never the frame's own delta:
+                                       // integrating a variable delta makes a jump height depend on
+                                       // the frame rate, and makes a replay impossible.
+const MAX_STEPS_PER_FRAME: number;     // 5 — the spiral guard. A backgrounded tab would otherwise
+                                       // ask for 600 steps at once on the frame that resumes.
+const DEFAULT_GRAVITY: number;         // 900 px/s². Positive is DOWN; y grows downward here.
+
+interface Body { x; y; vx; vy; onGround: boolean }
+interface WorldState { bodies: ReadonlyMap<string, Body>; time: number }
+interface Solid { x; y; width; height }
+
+// WHAT A BODY IS, measured rather than invented: of 248 objects in the corpus only 24 carry a class,
+// and the level's real collision geometry carries NONE — six untyped rectangles whose only property
+// is `bodyType=static`, the most-declared property in the tree (51 of 138). Values are read
+// LENIENTLY because the same name is declared with two types in one file (`friction` is float 17
+// times and untyped 28).
+function propertyOf(data: UserData | undefined, name: string): string | null;
+function bodyTypeOf(node: { userData?: UserData }): "static" | "dynamic" | null;
+
+function worldFrom(doc: ReadonlyDocument): WorldState;         // dynamic bodies, at rest, where the
+                                                               // document puts them
+function solidsOf(doc: ReadonlyDocument): Solid[];             // static bodies, read fresh each step
+function stepWorld(doc, world, opts?: { gravity?; solids? }): WorldState;   // pure; one FIXED_STEP
+
+// THE `applyFrame` MOVE: the document with its bodies where the world says they are. A NEW document
+// and a new map; nodes that did not move pass through BY REFERENCE, which is what lets the caller
+// hand `computeGeometry` a dirty set and reuse everything else (measured 4.5x). Returns the SAME
+// document when nothing moved, so an idle run costs nothing downstream.
+function applyWorld(doc: ReadonlyDocument, world: WorldState): ReadonlyDocument;
+function movedIds(doc: ReadonlyDocument, world: WorldState): Set<string>;
+
+// How many whole steps a wall-clock gap earned, and what is carried. The remainder is KEPT — on a
+// 59.94Hz display the leftovers add up to a whole step every few seconds — and a capped frame drops
+// its debt rather than owing it back, which is the spiral in instalments.
+function stepsFor(accumulator: number, elapsedSeconds: number):
+    { steps: number; accumulator: number; dropped: number };
+```
+
+**COLLISION IS DISCRETE AND IT TUNNELS**, measured: a solid thinner than one step's travel is passed
+straight through — a 2px floor lets a body reach y=11,287. The rule that follows is that a solid must
+be at least as deep as the fastest body's travel per step (15px after a second of falling, 20px after
+two). Every solid in the measured corpus is 32px and up. A test pins both halves.

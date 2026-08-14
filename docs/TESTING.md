@@ -521,15 +521,16 @@ The checklist, applied when the fixture is written:
 This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
 cannot see — over the paint modules, the Tiled reader, the mesh, nine-slice, the tile grid, the tile
-brush and the autotiler, exiting non-zero on a survivor: the battery holds **235 mutants**. The last
+brush and the autotiler, exiting non-zero on a survivor: the battery holds **240 mutants**. The last
 FULL run was 2026-08-12 at **215 mutants, 215 killed** and 1,734 tests (**56m20s, 16s per mutant**,
 nothing NOT APPLIED and nothing AMBIGUOUS); the eight added since — `EX15`–`EX22`, the exporter's
 multi-tileset family — were run FILTERED at 1,757 tests, seven killed and one the deliberate
 control; `TS1`–`TS2` (schema 68) filtered at 1,759, both killed; `CT1`–`CT4` (the collection draw
 path) filtered at 1,765, all four killed — two of them only after the fixtures above were made able
-to see them; `AN1`–`AN3` (tile anchoring) filtered at 1,767, all three killed; and `CL1`–`CL3` (recovering a
-tileset's column count) filtered at 1,772, all three killed. Said that way round on purpose: "223 killed" would be a true-sounding sentence about a run
-nobody has done. The exporter's ten are
+to see them; `AN1`–`AN3` (tile anchoring) filtered at 1,767, all three killed; `CL1`–`CL3` (recovering
+a tileset's column count) filtered at 1,772, all three killed; and `RN1`–`RN5` (the runtime) filtered
+at 1,791 — four killed and one the deliberate control. Said that way round on purpose: "240 killed"
+would be a true-sounding sentence about a run nobody has done. The exporter's ten are
 checked by the ROUND TRIP: a real map imported, exported and imported again, compared cell by
 cell — so a mutation has to survive a reader that was written against files Tiled itself wrote.
 Six cover `SurfaceSpace`, where the convenient fixture is not
