@@ -101,6 +101,47 @@
  * the body WAS at the start of the step, not where it is now — a body 15px above a platform is
  * below it one step later, and asking about the present would let it through.
  *
+ * BODY-VS-BODY CONTACT IS THE SECOND INVENTION, AND A LARGER ONE THAN `oneway` — said here first
+ * because everything below it is easier to read as a measurement than it deserves. The numbers,
+ * counted across the same 97 Tiled files every other rule here was read from:
+ *
+ *   - ONE object in the whole corpus declares `bodyType=dynamic`, and it lives in
+ *     `templates/block.tx`, which `TiledMap.ts:644` refuses to import. So ZERO dynamic bodies reach
+ *     this runtime from the corpus. Not one of the 248 placed objects is dynamic.
+ *   - The nearest pair of declared dynamic bodies sits 654px apart on different platform tiers.
+ *     They never touch, in any map.
+ *   - The vocabulary for what a contact would MEAN does not exist: damage, health, hp, bounce,
+ *     restitution, stomp, kill, hurt, pushable, mass, weight, hit, attack, collide, impulse, force,
+ *     kinematic, knockback, squash — 24 stems, every one of them zero across all 97 files.
+ *
+ * By this module's own published scale that is BELOW `density`, which was refused at one
+ * declaration, and below `floating`, refused at twenty-four. So this is not `oneway`'s justification
+ * wearing a bigger coat. `oneway` was a new VALUE on a field that already had a reader, leaving
+ * every prior document bit-identical; this is a mechanism for a situation the corpus never declares.
+ * It is here because the STATED TEST GAME needs it — an authored enemy must fall off a ledge, so it
+ * must be a dynamic body, and a Region cannot move — which is a legitimate reason to build a thing
+ * and a different one from every slice before it.
+ *
+ * AND THE OBVIOUS MOTIVATION IS FALSE AGAINST THE DATA, which is worth stating because it is the
+ * thing everyone will assume. "Stomping an enemy is two dynamic bodies meeting" is not true of this
+ * corpus: every blob (x2), enemy (x1), NPC (x2) and spike (x4) carries a class and NO `bodyType`,
+ * and so does the hero. Under slice 5's rule all nine are already REGIONS, and a stomp is already an
+ * `enter blob` event. That is why `side` is added to enter/leave in the same breath — THAT half is
+ * measured, and it serves content that exists today, while the pair pass serves content that does not.
+ *
+ * IT REPORTS AND IT DOES NOT RESOLVE, and the refusal is the design rather than a shortcut. Making
+ * bodies solid to each other was written out in full and rejected on three concrete failures, each
+ * reachable with ordinary level geometry: (1) neither resolution loop breaks and both re-read the
+ * mutated velocity, so a body landing on a floor while overlapping a crate takes the crate's `else`
+ * branch and is driven INTO the floor, then ejected the solid's full width on the next step's
+ * horizontal pass; (2) the same shove puts a body's top at a one-way platform's top, where slice
+ * 7's `was.y + h <= s.y` correctly refuses it forever and the body leaves the level; (3) the
+ * tunnelling guarantee above — "any solid 20px or deeper is safe" — is a fact about SOLIDS, which
+ * the corpus makes 32px and up. A body has no depth floor, and two 10px bodies give a margin of
+ * exactly zero, which is exactly hittable because every position here is a dyadic rational.
+ * Resolution needs a design that answers all three; reporting needs none of them, because it moves
+ * nothing.
+ *
  * WHAT THIS SLICE DELIBERATELY IS NOT: no rotation, no restitution (the property does not exist in
  * the corpus at all —
  * said out loud rather than half-applied), no joints, no triggers, no spawning, no slopes and no
@@ -171,7 +212,15 @@ export interface Input {
 /** Nothing held — the input a run starts with and the one a test uses when it means "no input". */
 export const NO_INPUT: Input = { left: false, right: false, jump: false };
 
-/** What a body is doing right now. Pixels and pixels-per-second, in the node's own parent space. */
+/**
+ * What a body is doing right now. Pixels and pixels-per-second, in WORLD space.
+ *
+ * It said "the node's own parent space" for four days after slice 6 stopped making that true —
+ * `worldFrom` composes ancestor translations and `applyWorld` writes back through them, so a body's
+ * x/y have been world coordinates since. The comment mattered: the contact pass reads these
+ * directly against other bodies' boxes, and a reader who believed the old sentence would have
+ * composed the offset a second time.
+ */
 export interface Body {
     x: number;
     y: number;
@@ -211,6 +260,16 @@ export interface WorldState {
      * inside it. Keyed `bodyId \u0000 nodeId`, because a NUL cannot occur in either.
      */
     overlaps: ReadonlySet<string>;
+    /**
+     * Which (body, body) pairs were touching at the END of the last step — the same diff as
+     * `overlaps`, one axis over.
+     *
+     * KEYED WITH THE TWO IDS IN SORTED ORDER, so a pair has exactly one key however the two bodies
+     * are reached. `overlaps` can key by (body, region) because those are two different kinds of
+     * thing; a pair of bodies has no such asymmetry to borrow, and keying it by encounter order
+     * would make `contact` fire twice and `separate` never.
+     */
+    contacts: ReadonlySet<string>;
     /** What the step that produced this world noticed. Empty on most steps, by design. */
     events: readonly WorldEvent[];
 }
@@ -255,12 +314,79 @@ export interface Region {
     height: number;
 }
 
-/** A body crossed a region's edge. Produced by the step that noticed, consumed by the app. */
+/**
+ * WHERE THE OTHER THING SITS, relative to the one being reported to — not "which of my edges was
+ * touched", which is the same fact said backwards and reads wrong in every test that uses it.
+ *
+ * So a STOMP is `below`: the reporting body is above, the thing it met is under its feet. That is
+ * the whole reason this exists — "did I land on it or walk into it" is the single question a
+ * contact has to answer, and it is the only genuinely new information in this slice.
+ *
+ * `inside` is a REFUSAL rather than an approximation, in the posture `runtimeExclusions` already
+ * takes: one box entirely within another has no side, and guessing one would be a direction an app
+ * acts on that the geometry never supported.
+ */
+export type ContactSide = "above" | "below" | "left" | "right" | "inside";
+
+/** An axis-aligned box, for the one function here that does not care what it belongs to. */
+export interface ContactBox {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+/**
+ * Where `b` sits relative to `a`, for two boxes already known to overlap.
+ *
+ * PURE, AND DOCUMENT-FREE ON PURPOSE: two boxes in, one word out. No `was`, no clock, no ordering,
+ * no document — which is what lets it answer for a body pair and for a region with the same code,
+ * and lets a test pin it with literal numbers.
+ *
+ * A SPANNED AXIS CANNOT BE THE CONTACT AXIS, and this is the part a shallowest-overlap test gets
+ * wrong. If `a` is entirely covered by `b` horizontally there is no left or right to report, however
+ * thin the horizontal overlap happens to be; the contact is necessarily vertical. Checking that
+ * first is what makes a narrow body meeting a wide floor answer `below` rather than `left`.
+ *
+ * THE TIE GOES VERTICAL, deliberately: equal overlaps mean a corner, and a platformer's commonest
+ * contact by far is a landing. A stated wrong answer beats one chosen by whichever axis the
+ * arithmetic happened to reach first.
+ */
+export function sideOf(a: ContactBox, b: ContactBox): ContactSide {
+    const ox = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+    const oy = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+    // Asked about boxes that do not overlap at all, which no caller here does. There is no side.
+    if (!(ox > 0) || !(oy > 0)) return "inside";
+    const spannedX = a.x >= b.x && a.x + a.width <= b.x + b.width;
+    const spannedY = a.y >= b.y && a.y + a.height <= b.y + b.height;
+    if (spannedX && spannedY) return "inside";
+    const vertical = () => (a.y + a.height / 2 < b.y + b.height / 2 ? "below" : "above");
+    const horizontal = () => (a.x + a.width / 2 < b.x + b.width / 2 ? "right" : "left");
+    if (spannedX) return vertical();
+    if (spannedY) return horizontal();
+    return oy <= ox ? vertical() : horizontal();
+}
+
+/**
+ * Something a body touched — a region's edge crossed, or another body met.
+ *
+ * `enter`/`leave` name a REGION; `contact`/`separate` name another BODY. Both are EDGES for the
+ * reason slice 5 gave: a coin is collected once, not on all sixty frames a player stands in it.
+ *
+ * A CONTACT IS REPORTED TO BOTH BODIES, one event each, because there is no non-arbitrary way to
+ * pick which of two bodies is the subject — and the two carry OPPOSITE sides, which is exactly what
+ * distinguishes a stomp from being stomped.
+ *
+ * `side` is absent on `leave` and `separate`: they say the boxes are no longer touching, and a
+ * direction for a contact that has ended would be a fact about the past dressed as one about now.
+ */
 export interface WorldEvent {
-    kind: "enter" | "leave";
+    kind: "enter" | "leave" | "contact" | "separate";
     bodyId: string;
+    /** The region entered, or the OTHER body met. */
     nodeId: string;
     className: string;
+    side?: ContactSide;
 }
 
 /** A surface's `friction`, read leniently and clamped — 0 is ice, 1 stops a body dead. */
@@ -323,7 +449,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
             vx: 0, vy: 0, onGround: false, groundFriction: 1
         });
     }
-    return { bodies, time: 0, jumpWas: false, overlaps: new Set(), events: [] };
+    return { bodies, time: 0, contacts: new Set(), jumpWas: false, overlaps: new Set(), events: [] };
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
@@ -663,7 +789,12 @@ export function stepWorld(
             const key = pairKey(id, r.nodeId);
             inside.add(key);
             if (!world.overlaps.has(key)) {
-                events.push({ kind: "enter", bodyId: id, nodeId: r.nodeId, className: r.className });
+                // THE SIDE IS THE MEASURED HALF OF THIS SLICE. Every one of the corpus's nine
+                // hittable actors — blob x2, enemy x1, NPC x2, spikes x4 — is a REGION, so
+                // "landed on it" versus "walked into it" is a question about content that exists
+                // today, unlike the body pair below.
+                events.push({ kind: "enter", bodyId: id, nodeId: r.nodeId, className: r.className,
+                    side: sideOf({ x: body.x, y: body.y, width: w, height: h }, r) });
             }
         }
     }
@@ -678,7 +809,65 @@ export function stepWorld(
             className: was?.className ?? doc.nodes.get(nodeId)?.className ?? "" });
     }
 
-    return { bodies: next, time: world.time + FIXED_STEP, jumpWas: input.jump, overlaps: inside, events };
+    // ── BODY MEETS BODY ────────────────────────────────────────────────────────────────────────
+    // Read the invention notice in this module's header before extending any of this. It REPORTS
+    // and it does not resolve: no position and no velocity is touched here, which is what makes it
+    // immune to the three failures that killed the resolving design.
+    //
+    // BUILT FROM A SORTED ID LIST, not from the `next` Map, and that is not tidiness. `world.bodies`
+    // inherits the document's node-Map order, which `applyMutations` permutes when a DELETE IS
+    // UNDONE — so two files with byte-identical content, saved after different edit sequences, would
+    // emit their events in different orders. Sorting costs one pass over a handful of bodies and
+    // makes the event stream a function of the document alone.
+    const contactBoxes: (ContactBox & { id: string; className: string })[] = [];
+    for (const id of [...next.keys()].sort()) {
+        const node = doc.nodes.get(id);
+        if (!node) continue;
+        const g = node.geometry;
+        // THE SAME TWO REFUSALS `solidsOf` AND `regionsOf` ALREADY MAKE, and for the same reasons: a
+        // zero-area box is a position rather than a volume (an author dragging a new node out passes
+        // through 0x0), and a body whose world offset cannot be composed is not drawn where it is
+        // simulated, so a contact reported against it names a place with nothing in it.
+        if (g.width <= 0 || g.height <= 0) continue;
+        if (!worldOffsetOf(doc, id)) continue;
+        const b = next.get(id)!;
+        contactBoxes.push({ id, className: node.className ?? "",
+            x: b.x, y: b.y, width: g.width, height: g.height });
+    }
+    const touching = new Set<string>();
+    for (let i = 0; i < contactBoxes.length; i++) {
+        const a = contactBoxes[i];
+        for (let j = i + 1; j < contactBoxes.length; j++) {
+            const b = contactBoxes[j];
+            // `i < j` is the whole self-collision guard: a body is never its own partner, and each
+            // pair is visited exactly once.
+            if (!(a.x < b.x + b.width && a.x + a.width > b.x
+                && a.y < b.y + b.height && a.y + a.height > b.y)) continue;
+            const key = pairKey(a.id, b.id);            // already sorted: the ids are
+            touching.add(key);
+            if (world.contacts.has(key)) continue;
+            // ONE EVENT EACH, WITH OPPOSITE SIDES. There is no non-arbitrary way to say which of two
+            // bodies is the subject, and the pair of sides is precisely what tells a stomp from
+            // being stomped: the one who landed reads `below`, the one landed on reads `above`.
+            events.push({ kind: "contact", bodyId: a.id, nodeId: b.id,
+                className: b.className, side: sideOf(a, b) });
+            events.push({ kind: "contact", bodyId: b.id, nodeId: a.id,
+                className: a.className, side: sideOf(b, a) });
+        }
+    }
+    // SEPARATING SURVIVES EITHER BODY VANISHING, exactly as leaving survives a deleted region: a
+    // game holding "what am I touching" must be told when the answer changes, including when it
+    // changes because something was removed under it.
+    for (const key of world.contacts) {
+        if (touching.has(key)) continue;
+        const [first, second] = key.split("\u0000");
+        events.push({ kind: "separate", bodyId: first, nodeId: second,
+            className: doc.nodes.get(second)?.className ?? "" });
+        events.push({ kind: "separate", bodyId: second, nodeId: first,
+            className: doc.nodes.get(first)?.className ?? "" });
+    }
+
+    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, jumpWas: input.jump, overlaps: inside, events };
 }
 
 /**

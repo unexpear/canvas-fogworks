@@ -2703,8 +2703,15 @@ const MAX_STEPS_PER_FRAME: number;     // 5 — the spiral guard. A backgrounded
                                        // ask for 600 steps at once on the frame that resumes.
 const DEFAULT_GRAVITY: number;         // 900 px/s². Positive is DOWN; y grows downward here.
 
-interface Body { x; y; vx; vy; onGround: boolean }
-interface WorldState { bodies: ReadonlyMap<string, Body>; time: number }
+// Body coordinates are WORLD space (slice 6 composes ancestor translations; applyWorld writes back
+// through them). `groundFriction` is carried one step behind on purpose - see slice 4.
+interface Body { x; y; vx; vy; onGround: boolean; groundFriction: number }
+// `overlaps` and `contacts` are what make enter/leave and contact/separate EDGES rather than states;
+// `jumpWas` is what makes a held jump key one jump. All three are carried, none are serialized.
+interface WorldState {
+    bodies: ReadonlyMap<string, Body>; time: number; jumpWas: boolean;
+    overlaps: ReadonlySet<string>; contacts: ReadonlySet<string>; events: readonly WorldEvent[];
+}
 // A surface's Coulomb coefficient: 0 is ice, 1 decelerates a body at exactly one gravity. It is the
 // GROUND's property — 44 of the corpus's 45 `friction` values sit on static objects — and it
 // defaults to 1 because that is what 44 of them say. `floating` (24, all static) and `density` (1)
@@ -2720,7 +2727,8 @@ function frictionOf(node: { userData?: UserData }): number;
 // non-bodies against 51 bodies with no class, and none carrying both). Zero-area is skipped, because
 // `player-start` is a real POINT and a position is not a volume.
 interface Region { nodeId: string; className: string; x; y; width; height }
-interface WorldEvent { kind: "enter" | "leave"; bodyId: string; nodeId: string; className: string }
+interface WorldEvent { kind: "enter" | "leave" | "contact" | "separate";
+    bodyId: string; nodeId: string; className: string; side?: ContactSide }
 function regionsOf(doc: ReadonlyDocument): Region[];
 
 // EVERYTHING ABOVE IS WORLD SPACE, and a node's `geometry` is its PARENT's — the runtime read one as
@@ -2773,7 +2781,33 @@ const NO_INPUT: Input;
 // A jump is an EDGE — `WorldState.jumpWas` is what makes a held key one jump rather than a bounce —
 // and it fires only when `onGround`.
 function stepWorld(doc, world,
-    opts?: { gravity?; solids?; input?: Input; controlled?: string | null }): WorldState;
+    opts?: { gravity?; solids?; tileSolids?; regions?; input?: Input; controlled?: string | null }): WorldState;
+
+// BODY MEETS BODY (slice 9), and the header of core/runtime/World says at length why this is an
+// INVENTION rather than a reading: ONE object in the corpus declares bodyType=dynamic, it lives in a
+// template file TiledMap.ts:644 refuses to import, the nearest declared pair sits 654px apart, and
+// 24 contact-vocabulary stems (damage, health, bounce, mass, stomp...) are zero across all 97 files.
+// It is here because the stated test game needs it, which is a different reason from every slice
+// before it except `oneway`.
+//
+// IT REPORTS AND DOES NOT RESOLVE. Making bodies solid to each other was designed and rejected on
+// three concrete failures: a body landing while overlapping a crate is driven INTO the floor by the
+// else-branch and ejected the solid's full width next step; the same shove permanently disables a
+// one-way platform under slice 7's `was.y + h <= s.y`; and the tunnelling guarantee ("any solid 20px
+// or deeper is safe") is a fact about SOLIDS, which the corpus makes 32px+, while two 10px bodies
+// give a margin of exactly zero.
+//
+// `side` says WHERE THE OTHER THING SITS, not which edge was touched - so a stomp is `below`, and
+// the pair of events carries opposite sides, which is what tells a stomp from being stomped.
+// `inside` is a refusal, in the same posture as runtimeExclusions.
+type ContactSide = "above" | "below" | "left" | "right" | "inside";
+function sideOf(a: ContactBox, b: ContactBox): ContactSide;   // pure; no document, no clock, no order
+
+// THERE IS NO IMPULSE CHANNEL, and this bounds what an app can ever do with a contact. stepWorld's
+// opts carry gravity, solids, tileSolids, regions, input and controlled - not one of them can set a
+// body's velocity. An app owning `es.world` and rewriting the Map between frames is a hole, not a
+// contract. Acting on an event (killing a stomped enemy, bouncing off it) is the NEXT slice's
+// design, and it needs a channel that does not exist yet.
 
 // THE `applyFrame` MOVE: the document with its bodies where the world says they are. A NEW document
 // and a new map; nodes that did not move pass through BY REFERENCE, which is what lets the caller

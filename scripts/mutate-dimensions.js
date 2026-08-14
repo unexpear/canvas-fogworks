@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1855;
+const EXPECTED_TESTS = 1869;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1347,6 +1347,52 @@ const MUTANTS = [
       from: "    if (!(steps > 0) || !(view.zoom > 0)) return view;",
       to: "    if (!(view.zoom > 0)) return view;",
       note: "a frame that earned no fixed step still moves the camera, so a paused or backgrounded run keeps scrolling toward the level edge on frames the physics did not run at all" },
+
+    // BODY-VS-BODY CONTACT (M18 slice 9). The module header says at length why this is an INVENTION
+    // — one bodyType=dynamic declaration in the whole corpus, in a file the importer refuses — so
+    // these mutants are the only thing standing between the slice and a rule nobody can check
+    // against content. Half of them aim at `sideOf`, because "did I land on it or walk into it" is
+    // the entire new information and every wrong answer to it is a plausible-looking word.
+    { id: "CN1", file: "src/core/runtime/World.ts",
+      from: "    if (spannedX) return vertical();",
+      to: "",
+      note: "a SPANNED axis becomes eligible again, so a 4-wide body standing on a 100-wide floor reports that it walked into the floor's LEFT side — the shallower overlap is horizontal, which is exactly why the span has to be tested before the depths are compared" },
+    { id: "CN2", file: "src/core/runtime/World.ts",
+      from: "    return oy <= ox ? vertical() : horizontal();",
+      to: "    return oy < ox ? vertical() : horizontal();",
+      note: "an exact corner tie falls to the horizontal instead of the vertical, so a body landing precisely on a block's corner reports walking into it — a platformer's commonest contact decided by which way a floating-point comparison happens to fall" },
+    { id: "CN3", file: "src/core/runtime/World.ts",
+      from: "    const vertical = () => (a.y + a.height / 2 < b.y + b.height / 2 ? \"below\" : \"above\");",
+      to: "    const vertical = () => (a.y + a.height / 2 < b.y + b.height / 2 ? \"above\" : \"below\");",
+      note: "the vertical side is inverted, so a stomp reads as being stomped and every game built on it kills the player instead of the enemy" },
+    { id: "CN4", file: "src/core/runtime/World.ts",
+      from: "            events.push({ kind: \"contact\", bodyId: b.id, nodeId: a.id,\n                className: a.className, side: sideOf(b, a) });",
+      to: "",
+      note: "only one of the two bodies is told, and which one is whichever id sorts first — so an enemy never learns it was hit, and the asymmetry is invisible until the pair happens to be named the other way round" },
+    { id: "CN5", file: "src/core/runtime/World.ts",
+      from: "            if (world.contacts.has(key)) continue;",
+      to: "            if (world.overlaps.has(key)) continue;",
+      note: "the edge is diffed against the REGION set, which a body pair's key never enters — so contact fires on all sixty frames a pair spends touching, and the coin-collected-once rule that justifies the whole edge design is gone" },
+    { id: "CN6", file: "src/core/runtime/World.ts",
+      from: "    for (const id of [...next.keys()].sort()) {",
+      to: "    for (const id of next.keys()) {",
+      note: "the pair order becomes the document's node-Map order, which undoing a DELETE permutes — so two files with identical content emit their events in different orders depending on the edits that made them" },
+    { id: "CN7", file: "src/core/runtime/World.ts",
+      from: "        if (g.width <= 0 || g.height <= 0) continue;\n        if (!worldOffsetOf(doc, id)) continue;",
+      to: "        if (!worldOffsetOf(doc, id)) continue;",
+      note: "a zero-area body becomes a contact partner, so the 0x0 state every drag-out passes through reports touching everything it is inside — the refusal solidsOf and regionsOf both already make, dropped" },
+    { id: "CN8", file: "src/core/runtime/World.ts",
+      from: "        if (!worldOffsetOf(doc, id)) continue;\n        const b = next.get(id)!;",
+      to: "        const b = next.get(id)!;",
+      note: "a body whose world offset is REFUSED still reports contacts, at a position nothing is drawn at — slice 6's defect one axis over, and silent because the body simply is not where the report says" },
+    { id: "CN9", file: "src/core/runtime/World.ts",
+      from: "        for (let j = i + 1; j < contactBoxes.length; j++) {",
+      to: "        for (let j = 0; j < contactBoxes.length; j++) {",
+      note: "every body contacts ITSELF and every pair is visited twice — `i < j` is the entire self-collision guard, and a lone body on an empty level starts reporting that it touched something" },
+    { id: "CN10", file: "src/core/runtime/World.ts",
+      from: "    for (const key of world.contacts) {",
+      to: "    for (const key of touching) {",
+      note: "separate is diffed against the set that was just filled, so it can never fire: a game holding \"what am I touching\" grows a list that only ever gets longer, including entries for bodies that have been deleted" },
 ];
 
 function runSuite() {

@@ -10,7 +10,7 @@
 > passing, which is now itself a reported condition.
 
 <!-- describes: src/core, src/editor, src/renderer -->
-<!-- re-read 2026-08-14 after M18 slice 8 (the camera): the runtime section below is current, including the
+<!-- re-read 2026-08-14 after M18 slice 9 (body-vs-body contact): the runtime section below is current, including the
      two things that went wrong and were kept — the reuse chain held across Stop, and my first
      claim about which key the game has to take from the editor. -->
 <!-- re-read 2026-08-13 after schema 67: M11 said Aseprite was BUILT AND UNREACHABLE and that a
@@ -51,7 +51,7 @@ M14 AI Integration            ⬜
 M15 Plugins                   ⬜
 M16 Collaboration             ⬜
 M17 Production Hardening      ⬜
-M18 Game Runtime              🚧   slices 1-8: a fixed-step world that PLAYS inside the editor — a character you drive, a level of TILES, ground you can slip on, regions that report, and a camera that follows
+M18 Game Runtime              🚧   slices 1-9: a fixed-step world that PLAYS inside the editor — a character you drive, a level of TILES, ground you can slip on, regions that report, a camera that follows, and bodies that notice each other
 ```
 
 \* **Note on M3/M4:** a working **vertical-slice prototype** of the renderer, the
@@ -861,7 +861,7 @@ resolution needs. These are dividends of the Milestone 0 invariants.
 
 ## Phase 18 — Game Runtime
 
-### Milestone 18 — Game Runtime 🚧 (slices 1-8 landed)
+### Milestone 18 — Game Runtime 🚧 (slices 1-9 landed)
 A 2D game that RUNS inside VDE rather than being exported to something else that runs it.
 
 **The architecture was already there, in a shape nobody had used for this.** `applyFrame(doc, frame)`
@@ -1029,6 +1029,64 @@ one transform): the crate walks world 60 -> 280 with the viewport at exactly **0
 deadzone edge at world 390, and from then on its SCREEN x is pinned at 399 while its world x runs to
 940 and the viewport climbs to 541. The settled 399 is the predicted one — a target moving 3.667px a
 step against an 18%-a-step camera settles 16.7px past the 382.02 edge. Stop puts the view back.
+
+**Slice 9 — BODY MEETS BODY, and the measurement said NOT TO BUILD IT.** That is recorded first
+because it is the most useful thing this slice produced. Counted across the same 97 Tiled files
+every other rule here was read from: **ONE** object declares `bodyType=dynamic`, and it lives in
+`templates/block.tx`, which `TiledMap.ts:644` refuses to import — so **zero** dynamic bodies reach
+the runtime from the corpus, and not one of the 248 placed objects is dynamic. The nearest declared
+pair sits **654px apart** on different tiers and never touches in any map. Twenty-four
+contact-vocabulary stems — damage, health, hp, bounce, restitution, stomp, kill, hurt, pushable,
+mass, weight, hit, attack, collide, impulse, force, kinematic, knockback, squash and five more —
+return **zero** across all 97 files.
+
+By this milestone's own published scale that is BELOW `density` (refused at one declaration) and
+below `floating` (refused at twenty-four). **So it ships LABELLED an invention, and a larger one
+than `oneway`** — whose justification does not transfer: that was a new VALUE on a field that
+already had a reader, leaving every prior document bit-identical. This is a mechanism for a
+situation the corpus never declares. It is here because the **stated test game** needs it: an
+authored enemy must fall off a ledge, so it must be a dynamic body, and a Region cannot move.
+
+**AND THE OBVIOUS MOTIVATION WAS FALSE AGAINST THE DATA.** "Stomping an enemy is two dynamic bodies
+meeting" is not true of this corpus: every blob (x2), enemy (x1), NPC (x2) and spike (x4) carries a
+class and NO `bodyType`, and so does the hero — his whole template is
+`<object name="hero" type="hero" gid="22" width="128" height="160"/>`. Under slice 5's rule all nine
+are already REGIONS and a stomp is already an `enter blob` event. **That is why `side` was added to
+enter/leave in the same commit:** that half is measured and serves content that exists today, while
+the pair pass serves content that does not.
+
+**IT REPORTS AND IT DOES NOT RESOLVE, and the refusal is the design.** Making bodies solid to each
+other was written out in full and rejected on three concrete failures, each reachable with ordinary
+level geometry: (1) neither resolution loop breaks and both re-read the mutated velocity, so a body
+landing on a floor while overlapping a crate takes the crate's `else` branch, is driven INTO the
+floor, and is ejected the solid's full width by the next step's horizontal pass; (2) the same shove
+puts a body's top at a one-way platform's top, where slice 7's `was.y + h <= s.y` correctly refuses
+it *forever* and the body leaves the level; (3) the tunnelling guarantee — "any solid 20px or deeper
+is safe" — is a fact about SOLIDS, which the corpus makes 32px and up, while two 10px bodies give a
+margin of **exactly zero**, exactly hittable because every position here is a dyadic rational.
+
+**`side` SAYS WHERE THE OTHER THING SITS**, not which edge was touched — the same fact said
+backwards, and it reads wrong in every test that uses it. So a stomp is `below`, and the pair of
+events carries OPPOSITE sides, which is precisely what tells a stomp from being stomped. A spanned
+axis cannot be the contact axis: a 4-wide body on a 100-wide floor has a *shallower* horizontal
+overlap, so a naive shallowest-axis test reports it walked into the floor it is standing on. Ties
+go vertical, stated, because a platformer's commonest contact is a landing.
+
+**THE EVENT ORDER IS A FUNCTION OF THE DOCUMENT.** Pairs are built from a SORTED id list, not from
+the body Map, whose order the document's node-Map inherits and which undoing a DELETE permutes — two
+files with byte-identical content would otherwise emit their events in different orders. Nothing in
+the runtime had ever tested iteration order; a fixture with **two** bodies cannot see it, so the
+test uses three, one overlapping the other two in a single step.
+
+**A FIXTURE LANDED EXACTLY ON A FLOATING-POINT TIE**, which is worth keeping. The walk-into test put
+the gap at 88px against 24 steps of 220/60 — and a position here is a running SUM, so twenty-four
+additions of 11/3 give 88.00000000000001 rather than 88 and the contact fired a step early. The
+hand-computation was right and the code was right; the fixture was on the boundary. Moved to 90.
+
+**THERE IS NO IMPULSE CHANNEL**, and it is written into API-CONTRACTS as a stated limit rather than
+left for whoever first tries to bounce a stomp: `stepWorld`'s opts carry gravity, solids, tileSolids,
+regions, input and controlled, and not one of them can set a body's velocity. Acting on an event is
+the next slice's design and it needs a channel that does not exist.
 
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,

@@ -14,7 +14,8 @@ import {
     NO_INPUT, Input, WorldState, jumpSpeedFor,
     bodyTypeOf, worldFrom, solidsOf, stepWorld, applyWorld, movedIds, stepsFor, propertyOf,
     tileIsSolid, tileSolidsNear, documentHasSolidTiles, frictionOf, regionsOf,
-    worldOffsetOf, runtimeRefusal, runtimeExclusions, applyWorld as applyWorldFn
+    worldOffsetOf, runtimeRefusal, runtimeExclusions, applyWorld as applyWorldFn,
+    sideOf, ContactSide
 } from "./World";
 
 const prop = (v: string, type = "string") => ({ type, value: v });
@@ -805,7 +806,12 @@ describe("regions — the world reports, it does not act", () => {
             w = stepWorld(doc, w);
             if (w.events.length > 0) first = w.events[0];
         }
-        expect(first).toEqual({ kind: "enter", bodyId: "b", nodeId: "r", className: "exit" });
+        // The SIDE says how it arrived, and it is the region that is `below`: the body is 10 wide
+        // inside the region's 60-wide span, so the contact axis cannot be horizontal, and it fell
+        // in through the top. That is the difference between dropping into an exit and walking
+        // into a spike, on the nine classed actors the corpus actually declares.
+        expect(first).toEqual({ kind: "enter", bodyId: "b", nodeId: "r", className: "exit",
+            side: "below" });
     });
 
     it("reports LEAVE when the region is DELETED under the body", () => {
@@ -1130,5 +1136,250 @@ describe("one-way platforms — the first thing here that is an INVENTION", () =
         const after = steps(doc, worldFrom(doc), 120);
         expect(after.bodies.get("b")!.y).toBe(90);
         expect(after.bodies.get("b")!.onGround).toBe(true);
+    });
+});
+
+describe("sideOf — where the other thing sits", () => {
+    /**
+     * Literal boxes and literal answers. This is the only genuinely new INFORMATION in the contact
+     * slice, so it is pinned on its own before anything asks it about a body.
+     */
+    const box = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
+
+    it("names the vertical side from the reporter's point of view, both ways round", () => {
+        // A stomp: the thing met is UNDER the reporter.
+        expect(sideOf(box(0, 0, 10, 10), box(0, 8, 10, 10))).toBe("below");
+        // …and the same pair asked from the other side is the opposite word, which is what tells
+        // a stomp from being stomped.
+        expect(sideOf(box(0, 8, 10, 10), box(0, 0, 10, 10))).toBe("above");
+    });
+
+    it("names the horizontal side", () => {
+        expect(sideOf(box(0, 0, 10, 10), box(8, 0, 10, 10))).toBe("right");
+        expect(sideOf(box(8, 0, 10, 10), box(0, 0, 10, 10))).toBe("left");
+    });
+
+    it("A SPANNED AXIS CANNOT BE THE CONTACT AXIS — the case a shallowest-overlap test gets wrong", () => {
+        // A 4-wide body standing on a 100-wide floor. The horizontal overlap (4) is SHALLOWER than
+        // the vertical one (10), so picking the shallower axis answers "left" — a body reporting it
+        // walked into the floor it is standing on. Being entirely inside the floor's x span settles
+        // it: there is no left or right to report.
+        const thin = box(0, 0, 4, 100), wide = box(-50, 90, 100, 20);
+        expect(sideOf(thin, wide)).toBe("below");
+        // The naive rule really would have said otherwise, which is what makes this test worth having.
+        const ox = Math.min(4, 50) - Math.max(0, -50);
+        const oy = Math.min(100, 110) - Math.max(0, 90);
+        expect(ox).toBe(4);
+        expect(oy).toBe(10);
+        expect(ox < oy).toBe(true);
+    });
+
+    it("breaks an exact tie VERTICALLY, because a platformer's commonest contact is a landing", () => {
+        // A perfect corner: 5px of overlap on each axis, neither box spanned.
+        expect(sideOf(box(0, 0, 10, 10), box(5, 5, 10, 10))).toBe("below");
+        expect(sideOf(box(5, 5, 10, 10), box(0, 0, 10, 10))).toBe("above");
+    });
+
+    it("REFUSES rather than guesses when one box is wholly inside the other", () => {
+        expect(sideOf(box(5, 5, 2, 2), box(0, 0, 20, 20))).toBe("inside");
+        // …and refuses for boxes that do not touch at all, which no caller here asks about.
+        expect(sideOf(box(0, 0, 10, 10), box(100, 100, 10, 10))).toBe("inside");
+        // Touching edges are not an overlap, the same rule the collision test uses.
+        expect(sideOf(box(0, 0, 10, 10), box(0, 10, 10, 10))).toBe("inside");
+    });
+});
+
+describe("body meets body — REPORTED, never resolved", () => {
+    /**
+     * THE FIXTURES ARE NOT AT THE ORIGIN AND THE BODIES ARE NOT THE SAME SIZE, both deliberately.
+     * Every other dynamic body in this file is 10x10 at small coordinates, which cannot tell a
+     * width from a height nor see anything proportional to position. Here the hero is 12x16, the
+     * blob 20x8, and the level sits at x=1000, y=700.
+     */
+    const FLOOR_TOP = 700;
+    const level = (extra: { id: string; x: number; y: number; w?: number; h?: number;
+                            userData?: UserData }[]) =>
+        docWith([
+            { id: "floor", x: 900, y: FLOOR_TOP, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            ...extra
+        ]);
+    const classed = (doc: ProjectDocument, id: string, className: string) => {
+        const n = doc.nodes.get(id)!;
+        doc.nodes.set(id, { ...n, className } as Node);
+        return doc;
+    };
+    const contacts = (w: WorldState) => w.events.filter(e => e.kind === "contact" || e.kind === "separate");
+
+    it("A STOMP: the one that landed reads `below`, the one landed on reads `above`", () => {
+        // Blob 20x8 resting on the floor: its bottom is 700, so it sits at 692.
+        // Hero 12x16 dropped from 600, horizontally INSIDE the blob's 20-wide span (1004..1016
+        // within 1000..1020) so the contact axis cannot be horizontal.
+        const doc = classed(level([
+            { id: "blob", x: 1000, y: 692, w: 20, h: 8, userData: { bodyType: prop("dynamic") } },
+            { id: "hero", x: 1004, y: 600, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
+        ]), "blob", "enemy");
+        let w = worldFrom(doc);
+        // Free fall from 600 is y(n) = 600 + 0.125*n*(n+1). At step 24 the hero's box is
+        // 675..691, clear of the blob's 692..700; at step 25 it is 681.25..697.25, which overlaps.
+        for (let i = 0; i < 24; i++) w = stepWorld(doc, w);
+        expect(w.bodies.get("hero")!.y).toBe(675);
+        expect(contacts(w)).toEqual([]);
+        w = stepWorld(doc, w);
+        expect(w.bodies.get("hero")!.y).toBe(681.25);
+        expect(contacts(w)).toEqual([
+            { kind: "contact", bodyId: "blob", nodeId: "hero", className: "", side: "above" },
+            { kind: "contact", bodyId: "hero", nodeId: "blob", className: "enemy", side: "below" }
+        ]);
+    });
+
+    it("REPORTING IS NOT COLLIDING — the hero falls straight through and lands on the FLOOR", () => {
+        // The entire design in one assertion. If a contact ever moved a body this fails, and it is
+        // the reason none of the resolving design's failures can occur here.
+        const doc = level([
+            { id: "blob", x: 1000, y: 692, w: 20, h: 8, userData: { bodyType: prop("dynamic") } },
+            { id: "hero", x: 1004, y: 600, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
+        ]);
+        const after = steps(doc, worldFrom(doc), 120);
+        // Hero is 16 high and the floor's top is 700, so it rests at 684 — THROUGH the blob, whose
+        // box it still overlaps, and which has not been pushed anywhere either.
+        expect(after.bodies.get("hero")!.y).toBe(684);
+        expect(after.bodies.get("hero")!.onGround).toBe(true);
+        expect(after.bodies.get("blob")!.y).toBe(692);
+        expect(after.bodies.get("blob")!.x).toBe(1000);
+        // …and they are still touching, so nothing separated when it settled.
+        expect(after.contacts.size).toBe(1);
+    });
+
+    it("WALKING INTO IT reads `right`, not `below` — the distinction this slice exists for", () => {
+        // Both rest on the floor: hero 12x16 at 684, blob 20x8 at 692, so they share the floor's
+        // top plane and the vertical overlap is 8 the whole way. The hero walks right at 220 px/s.
+        const doc = level([
+            { id: "blob", x: 1102, y: 692, w: 20, h: 8, userData: { bodyType: prop("dynamic") } },
+            { id: "hero", x: 1000, y: 684, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
+        ]);
+        let w = worldFrom(doc);
+        const RIGHT = { left: false, right: true, jump: false };
+        // 220/60 is 11/3 px a step, and the hero's right edge starts at 1012. THE GAP IS 90, NOT 88,
+        // and the two extra pixels are the point: at 88 the crossing lands exactly on the boundary,
+        // where twenty-four accumulated additions of 11/3 give 88.00000000000001 rather than 88 and
+        // the contact fires a step early. A position here is a running SUM, so a closed-form
+        // hand-computation and the code can disagree in the last bit — put the fixture where the
+        // answer does not depend on which of them is right. 90 / (11/3) = 24.5, so step 25.
+        for (let i = 0; i < 24; i++) w = stepWorld(doc, w, { input: RIGHT, controlled: "hero" });
+        expect(contacts(w)).toEqual([]);
+        w = stepWorld(doc, w, { input: RIGHT, controlled: "hero" });
+        expect(w.bodies.get("hero")!.x).toBeCloseTo(1000 + 25 * MOVE_SPEED * FIXED_STEP, 9);
+        expect(contacts(w).map(e => [e.bodyId, e.side])).toEqual([
+            ["blob", "left"], ["hero", "right"]
+        ]);
+    });
+
+    it("is an EDGE: contact fires once, and separate fires when it walks out the far side", () => {
+        const doc = level([
+            { id: "blob", x: 1102, y: 692, w: 20, h: 8, userData: { bodyType: prop("dynamic") } },
+            { id: "hero", x: 1000, y: 684, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
+        ]);
+        let w = worldFrom(doc);
+        const RIGHT = { left: false, right: true, jump: false };
+        const seen: string[] = [];
+        for (let i = 0; i < 40; i++) {
+            w = stepWorld(doc, w, { input: RIGHT, controlled: "hero" });
+            for (const e of contacts(w)) seen.push(`${e.kind}:${e.bodyId}`);
+        }
+        // Exactly one of each per body across forty steps, not one per frame spent overlapping.
+        expect(seen).toEqual([
+            "contact:blob", "contact:hero", "separate:blob", "separate:hero"
+        ]);
+    });
+
+    it("SEPARATES when the other body is DELETED under it, as leaving survives a deleted region", () => {
+        const doc = level([
+            { id: "blob", x: 1000, y: 692, w: 20, h: 8, userData: { bodyType: prop("dynamic") } },
+            { id: "hero", x: 1004, y: 684, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
+        ]);
+        let w = stepWorld(doc, worldFrom(doc));
+        expect(contacts(w).map(e => e.kind)).toEqual(["contact", "contact"]);
+        const gone = level([
+            { id: "hero", x: 1004, y: 684, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
+        ]);
+        w = stepWorld(gone, w);
+        expect(contacts(w)).toEqual([
+            { kind: "separate", bodyId: "blob", nodeId: "hero", className: "" },
+            { kind: "separate", bodyId: "hero", nodeId: "blob", className: "" }
+        ]);
+        expect(w.contacts.size).toBe(0);
+    });
+
+    it("THE EVENT ORDER IS A FUNCTION OF THE DOCUMENT, not of node insertion order", () => {
+        // Nothing in this file tested body iteration order before, and the order really does move:
+        // undoing a DELETE re-appends the node, permuting the map without changing the content.
+        // `m` overlaps BOTH `a` and `z` in one step, so there is a real ordering choice to get wrong
+        // — with one pair there is nothing to order and the test would be blind.
+        const bodies = [
+            { id: "m", x: 1000, y: 690, w: 40, h: 10, userData: { bodyType: prop("dynamic") } },
+            { id: "a", x: 1005, y: 692, w: 10, h: 10, userData: { bodyType: prop("dynamic") } },
+            { id: "z", x: 1025, y: 692, w: 10, h: 10, userData: { bodyType: prop("dynamic") } }
+        ];
+        const run = (order: typeof bodies) => {
+            const doc = docWith(order);
+            return stepWorld(doc, worldFrom(doc));
+        };
+        const forward = run([bodies[0], bodies[1], bodies[2]]);
+        const backward = run([bodies[2], bodies[1], bodies[0]]);
+        expect(forward.events).toEqual(backward.events);
+        expect([...forward.contacts]).toEqual([...backward.contacts]);
+        // …and it really did see two pairs, or the fixture proves nothing. `a` and `z` are 10px
+        // apart so they do NOT touch each other; both touch `m`.
+        expect(forward.events.map(e => `${e.bodyId}>${e.nodeId}`)).toEqual([
+            "a>m", "m>a", "m>z", "z>m"
+        ]);
+    });
+
+    it("skips a ZERO-AREA body, the same refusal solidsOf and regionsOf already make", () => {
+        // An author dragging a new node out passes through 0x0, and a point is not a volume.
+        const doc = docWith([
+            { id: "ghost", x: 1005, y: 695, w: 0, h: 0, userData: { bodyType: prop("dynamic") } },
+            { id: "real", x: 1000, y: 690, w: 40, h: 10, userData: { bodyType: prop("dynamic") } }
+        ]);
+        const w = stepWorld(doc, worldFrom(doc));
+        expect(w.events).toEqual([]);
+        expect(w.contacts.size).toBe(0);
+    });
+
+    it("skips a body whose world offset is REFUSED — it is not drawn where it is simulated", () => {
+        // Slice 6's rule: a rotated ancestor cannot be composed as an offset, so `applyWorld` stops
+        // writing that body back to the document. Reporting a contact against it would name a place
+        // with nothing in it — the same defect slice 6 was written to fix, one axis over.
+        const doc = createEmptyDocument();
+        doc.nodes.set("frame", {
+            id: "frame", type: "core.rectangle", parent: null, children: ["hidden"],
+            geometry: { x: 1000, y: 690, width: 400, height: 300 },
+            style: { fill: "none", opacity: 1 }, layout: {}, transform: { rotation: 0.3 }
+        } as unknown as Node);
+        doc.nodes.set("hidden", {
+            id: "hidden", type: "core.rectangle", parent: "frame", children: [],
+            geometry: { x: 0, y: 0, width: 40, height: 10 },
+            style: { fill: "#888", opacity: 1 }, layout: {},
+            userData: { bodyType: prop("dynamic") }
+        } as unknown as Node);
+        doc.nodes.set("free", {
+            id: "free", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 1005, y: 692, width: 10, height: 10 },
+            style: { fill: "#888", opacity: 1 }, layout: {},
+            userData: { bodyType: prop("dynamic") }
+        } as unknown as Node);
+        doc.rootNodeUuids = ["frame", "free"];
+        expect(runtimeRefusal(doc, "hidden")).not.toBeNull();
+        const w = stepWorld(doc, worldFrom(doc));
+        expect(w.events.filter(e => e.kind === "contact")).toEqual([]);
+    });
+
+    it("costs nothing on a document with one body, which is 24 of this file's 25 fixtures", () => {
+        const doc = level([
+            { id: "hero", x: 1004, y: 684, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
+        ]);
+        const w = stepWorld(doc, worldFrom(doc));
+        expect(w.contacts.size).toBe(0);
+        expect(w.events).toEqual([]);
     });
 });
