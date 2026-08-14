@@ -1210,8 +1210,8 @@ const MUTANTS = [
       to: "        if (Math.abs(vy) > MAX_FALL_SPEED) vy = MAX_FALL_SPEED;",
       note: "the cap is applied to the RISE as well and with the wrong sign, so a jump is turned into a fall at terminal velocity the instant it launches" },
     { id: "KB5", file: "src/core/runtime/World.ts",
-      from: "    return { bodies: next, time: world.time + FIXED_STEP, jumpWas: input.jump };",
-      to: "    return { bodies: next, time: world.time + FIXED_STEP, jumpWas: false };",
+      from: "jumpWas: input.jump, overlaps: inside, events };",
+      to: "jumpWas: false, overlaps: inside, events };",
       note: "the world forgets whether jump was held, so the edge never latches and a held key bounces — the same defect as IN2 by a different route, which is why the fixture has to watch LANDINGS rather than one step" },
 
     // A SET THAT STATES NEITHER ITS COLUMNS NOR ITS IMAGE SIZE. One file in the tree, 79 cells, and
