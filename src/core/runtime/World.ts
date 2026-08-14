@@ -87,6 +87,20 @@
  * `runtimeExclusions` says which and why rather than leaving it to be discovered. Half-composing
  * would put the art in one place and its collision in another, which is the defect this replaced.
  *
+ * ONE-WAY PLATFORMS ARE AN INVENTION, and this is the first thing in this module that is. Every
+ * rule above was read from the corpus — `bodyType`, `friction`, a class without a body — and the
+ * corpus's vocabulary is now spent: it declares nothing about platforms you jump up through. So
+ * `bodyType=oneway` is a CHOICE, said plainly rather than dressed as a measurement, and it is a new
+ * VALUE on a field that already exists rather than a new field, because a value costs nothing to a
+ * reader that has never met it: `bodyTypeOf` already answers null for a word it does not know, and
+ * a level written before this one existed behaves exactly as it did.
+ *
+ * THE RULE IS "SOLID ONLY FROM ABOVE, ONLY WHILE FALLING", and both halves matter. A body moving up
+ * passes through, which is the point; a body already overlapping passes through too, so something
+ * standing inside a platform falls out rather than being launched to its surface. The test is where
+ * the body WAS at the start of the step, not where it is now — a body 15px above a platform is
+ * below it one step later, and asking about the present would let it through.
+ *
  * WHAT THIS SLICE DELIBERATELY IS NOT: no rotation, no restitution (the property does not exist in
  * the corpus at all —
  * said out loud rather than half-applied), no joints, no triggers, no spawning, no slopes and no
@@ -221,6 +235,13 @@ export interface Solid {
      * pushes.
      */
     friction: number;
+    /**
+     * Solid only from ABOVE, and only to a body that is falling — a platform you jump up through.
+     *
+     * An INVENTION rather than a measurement: the corpus says nothing about these, and this module
+     * says so in its header instead of implying otherwise.
+     */
+    oneWay: boolean;
 }
 
 /** A volume a body can be inside — a coin, a trigger, the mouth of an exit. */
@@ -270,12 +291,18 @@ export function propertyOf(data: UserData | undefined, name: string): string | n
     return entry === undefined ? null : entry.value;
 }
 
-/** `"static"`, `"dynamic"`, or null for the 216-of-248 objects that are not bodies at all. */
-export function bodyTypeOf(node: { userData?: UserData }): "static" | "dynamic" | null {
+/**
+ * `"static"`, `"dynamic"`, `"oneway"`, or null for the 216-of-248 objects that are not bodies.
+ *
+ * A WORD IT DOES NOT KNOW IS NOT A BODY, which is what makes adding one safe: a document written
+ * against an older build behaves identically, and a typo becomes decoration rather than a wall
+ * somewhere unexpected.
+ */
+export function bodyTypeOf(node: { userData?: UserData }): "static" | "dynamic" | "oneway" | null {
     const raw = propertyOf(node.userData, "bodyType");
     if (raw === null) return null;
     const lower = raw.trim().toLowerCase();
-    return lower === "static" || lower === "dynamic" ? lower : null;
+    return lower === "static" || lower === "dynamic" || lower === "oneway" ? lower : null;
 }
 
 /**
@@ -303,7 +330,8 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
 export function solidsOf(doc: ReadonlyDocument): Solid[] {
     const out: Solid[] = [];
     for (const node of doc.nodes.values()) {
-        if (bodyTypeOf(node) !== "static") continue;
+        const kind = bodyTypeOf(node);
+        if (kind !== "static" && kind !== "oneway") continue;
         const at = worldOffsetOf(doc, node.id);
         if (!at) continue;
         const g = { x: node.geometry.x + at.dx, y: node.geometry.y + at.dy,
@@ -312,7 +340,8 @@ export function solidsOf(doc: ReadonlyDocument): Solid[] {
         // out passes through 0x0 on the way, and a zero-height solid would catch a falling body on
         // an infinitely thin line — which reads as a bug in the physics rather than in the level.
         if (g.width <= 0 || g.height <= 0) continue;
-        out.push({ x: g.x, y: g.y, width: g.width, height: g.height, friction: frictionOf(node) });
+        out.push({ x: g.x, y: g.y, width: g.width, height: g.height,
+            friction: frictionOf(node), oneWay: kind === "oneway" });
     }
     return out;
 }
@@ -330,7 +359,8 @@ export function solidsOf(doc: ReadonlyDocument): Solid[] {
 export function tileIsSolid(set: Tileset | null, index: number): boolean {
     if (!set || index === TILE_EMPTY) return false;
     const tile = tilesetTile(set, index);
-    return tile !== null && bodyTypeOf(tile) === "static";
+    const kind = tile === null ? null : bodyTypeOf(tile);
+    return kind === "static" || kind === "oneway";
 }
 
 /**
@@ -376,12 +406,14 @@ export function tileSolidsNear(
                 // one surface per cell, and a per-cell answer is the only one that can describe an
                 // icy patch. The corpus declares none, so the fallback is what it actually gets.
                 const tile = tilesetTile(set, tileAt(map, col, row));
+                const kind = tile === null ? null : bodyTypeOf(tile);
                 out.push({
                     x: originX + col * map.tileWidth,
                     y: originY + row * map.tileHeight,
                     width: map.tileWidth, height: map.tileHeight,
                     friction: tile && propertyOf(tile.userData, "friction") !== null
-                        ? frictionOf(tile) : frictionOf(node)
+                        ? frictionOf(tile) : frictionOf(node),
+                    oneWay: kind === "oneway"
                 });
             }
         }
@@ -579,6 +611,9 @@ export function stepWorld(
         x += vx * FIXED_STEP;
         const acrossTiles = tiles ? tileSolidsNear(doc, { x, y, width: w, height: h }) : [];
         for (const s of [...solids, ...acrossTiles]) {
+            // A ONE-WAY PLATFORM HAS NO SIDES. Walking into the edge of one must not stop a body:
+            // the whole shape is "a floor that is only a floor from above".
+            if (s.oneWay) continue;
             if (!overlaps(x, y, w, h, s)) continue;
             x = vx > 0 ? s.x - w : s.x + s.width;
             vx = 0;
@@ -591,6 +626,11 @@ export function stepWorld(
         const underTiles = tiles ? tileSolidsNear(doc, { x, y, width: w, height: h }) : [];
         for (const s of [...solids, ...underTiles]) {
             if (!overlaps(x, y, w, h, s)) continue;
+            // ONLY FROM ABOVE, AND ONLY WHILE FALLING. `was.y` is where the body started the step,
+            // not where it is now: at 15px a step a body that was clear of a platform is inside it
+            // by the time this runs, so asking about the present would let every landing through.
+            // A body that BEGAN overlapping falls out rather than being launched to the surface.
+            if (s.oneWay && !(vy > 0 && was.y + h <= s.y)) continue;
             if (vy > 0) { y = s.y - h; onGround = true; groundFriction = s.friction; }
             else { y = s.y + s.height; }
             vy = 0;

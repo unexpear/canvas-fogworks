@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1828;
+const EXPECTED_TESTS = 1834;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1113,6 +1113,30 @@ const MUTANTS = [
       from: "        if (node.geometry.x === px && node.geometry.y === py) continue;",
       to: "        if (node.geometry.x === px) continue;",
       note: "only the X coordinate decides whether a body moved, so a body falling straight down is never stamped onto the document and never appears to move at all — and `if (false)` could not be used here, because it does not COMPILE" },
+
+    // ONE-WAY PLATFORMS (M18 slice 7) — the first invention in this module rather than a reading of
+    // the corpus. Every mutant here still lands a body on the platform; what changes is whether it
+    // can ever get off it, or through it, which no "did it land" assertion can see.
+    { id: "OW1", file: "src/core/runtime/World.ts",
+      from: "            if (s.oneWay && !(vy > 0 && was.y + h <= s.y)) continue;",
+      to: "            if (s.oneWay && !(vy > 0 && y + h <= s.y)) continue;",
+      note: "the ABOVE test asks where the body is NOW rather than where it started the step — but the vertical move has already happened, so a landing body is inside the slab by then and every landing falls through" },
+    { id: "OW2", file: "src/core/runtime/World.ts",
+      from: "            if (s.oneWay && !(vy > 0 && was.y + h <= s.y)) continue;",
+      to: "            if (s.oneWay && !(was.y + h <= s.y)) continue;",
+      note: "the FALLING test goes, so a body rising through a platform is stopped by it from underneath — the one thing a one-way platform exists not to do" },
+    { id: "OW3", file: "src/core/runtime/World.ts",
+      from: "            if (s.oneWay) continue;\n            if (!overlaps(x, y, w, h, s)) continue;",
+      to: "            if (!overlaps(x, y, w, h, s)) continue;",
+      note: "a one-way platform gains SIDES, so walking into the edge of one stops a body dead in mid-air with nothing visible to have hit" },
+    { id: "OW4", file: "src/core/runtime/World.ts",
+      from: "    return lower === \"static\" || lower === \"dynamic\" || lower === \"oneway\" ? lower : null;",
+      to: "    return lower === \"static\" || lower === \"dynamic\" ? lower : (lower as \"oneway\");",
+      note: "ANY unknown word becomes a body type, so a typo in a level file turns decoration into collision — and the safety that lets a new value be added at all is gone" },
+    { id: "OW5", file: "src/core/runtime/World.ts",
+      from: "                    oneWay: kind === \"oneway\"",
+      to: "                    oneWay: false",
+      note: "a one-way TILE is solid from every side, so a level built out of them cannot be jumped up through even though the same node type can" },
 
     // WORLD SPACE (M18 slice 6). A node's `geometry` is its PARENT's space and the runtime read it
     // as the world's — a floor stored at (10,200) inside a frame at (100,50) was collided against

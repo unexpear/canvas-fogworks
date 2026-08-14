@@ -78,7 +78,7 @@ describe("what counts as a body", () => {
         expect(world.time).toBe(0);
         // A STATIC BODY IS NOT IN THE WORLD, because its position is the document's to state and
         // two copies of one fact can disagree the moment somebody edits the level.
-        expect(solidsOf(doc)).toEqual([{ x: 0, y: 100, width: 200, height: 10, friction: 1 }]);
+        expect(solidsOf(doc)).toEqual([{ x: 0, y: 100, width: 200, height: 10, friction: 1, oneWay: false }]);
     });
 
     it("ignores a zero-area solid, which an author passes through while dragging one out", () => {
@@ -538,8 +538,8 @@ describe("a level made of TILES, not rectangles", () => {
         // The bottom row starts at y = 100 + 3*16 = 148. A box over columns 0-1 sees two cells.
         const near = tileSolidsNear(doc, { x: 0, y: 148, width: 20, height: 10 });
         expect(near).toEqual([
-            { x: 0, y: 148, width: CELL, height: CELL, friction: 1 },
-            { x: 16, y: 148, width: CELL, height: CELL, friction: 1 }
+            { x: 0, y: 148, width: CELL, height: CELL, friction: 1, oneWay: false },
+            { x: 16, y: 148, width: CELL, height: CELL, friction: 1, oneWay: false }
         ]);
         // OVER THE HOLE it sees nothing, which is what makes this a cell question and not a node one.
         expect(tileSolidsNear(doc, { x: 50, y: 148, width: 10, height: 10 })).toEqual([]);
@@ -620,7 +620,7 @@ describe("a level made of TILES, not rectangles", () => {
         // Col 1 row 1 of a 32x8 grid sits at (32, 8) and is 32 by 8. Swap either dimension and it
         // lands at (8, 8), (32, 32) or with the wrong size — all four are different numbers here.
         expect(tileSolidsNear(doc, { x: 0, y: 0, width: 96, height: 16 }))
-            .toEqual([{ x: 32, y: 8, width: 32, height: 8, friction: 1 }]);
+            .toEqual([{ x: 32, y: 8, width: 32, height: 8, friction: 1, oneWay: false }]);
     });
 
     it("a dangling tilesetId collides with NOTHING, rather than becoming an invisible wall", () => {
@@ -873,7 +873,7 @@ describe("world space — a node's geometry is its PARENT's, not the world's", (
         expect(worldOffsetOf(doc, "frame")).toEqual({ dx: 0, dy: 0 });
         // STORED (10,200) — WORLD (110,250). Reading the stored number as the world's is what put
         // a body's collision fifty pixels above the floor it could see.
-        expect(solidsOf(doc)).toEqual([{ x: 110, y: 250, width: 200, height: 20, friction: 1 }]);
+        expect(solidsOf(doc)).toEqual([{ x: 110, y: 250, width: 200, height: 20, friction: 1, oneWay: false }]);
         expect(regionsOf(doc)).toEqual([
             { nodeId: "coin", className: "coin", x: 120, y: 150, width: 24, height: 24 }
         ]);
@@ -995,6 +995,115 @@ describe("world space — a node's geometry is its PARENT's, not the world's", (
         doc.rootNodeUuids = ["frame"];
         // The solid cell is col 0 of a grid whose origin is 200+5, 300+7.
         expect(tileSolidsNear(doc, { x: 200, y: 300, width: 60, height: 40 }))
-            .toEqual([{ x: 205, y: 307, width: 16, height: 16, friction: 1 }]);
+            .toEqual([{ x: 205, y: 307, width: 16, height: 16, friction: 1, oneWay: false }]);
+    });
+});
+
+describe("one-way platforms — the first thing here that is an INVENTION", () => {
+    /**
+     * The corpus declares nothing about platforms you jump up through, so `bodyType=oneway` is a
+     * choice rather than a measurement — said here as plainly as the module header says it.
+     *
+     * A platform at y=100, and a body that can be put above or below it.
+     */
+    const level = (bodyY: number) => docWith([
+        { id: "b", x: 20, y: bodyY, userData: { bodyType: prop("dynamic") } },
+        { id: "plat", x: 0, y: 100, w: 200, h: 10, userData: { bodyType: prop("oneway") } },
+        { id: "ground", x: -500, y: 400, w: 2000, h: 20, userData: { bodyType: prop("static") } }
+    ]);
+
+    it("is a body type an older build simply does not know", () => {
+        // A NEW VALUE ON AN EXISTING FIELD costs nothing to a reader that never met it: an unknown
+        // word is not a body, so a level written before this behaves exactly as it did.
+        expect(bodyTypeOf({ userData: { bodyType: prop("oneway") } })).toBe("oneway");
+        expect(bodyTypeOf({ userData: { bodyType: prop("ONEWAY") } })).toBe("oneway");
+        expect(bodyTypeOf({ userData: { bodyType: prop("one-way") } })).toBeNull();
+        const doc = level(0);
+        expect(solidsOf(doc).map(s => [s.y, s.oneWay])).toEqual([[100, true], [400, false]]);
+    });
+
+    it("LANDS on it from above", () => {
+        const doc = level(0);
+        const after = steps(doc, worldFrom(doc), 120);
+        // Its top is 100, so a 10-high body rests at 90 — not on the ground far below.
+        expect(after.bodies.get("b")!.y).toBe(90);
+        expect(after.bodies.get("b")!.onGround).toBe(true);
+    });
+
+    it("PASSES UP THROUGH IT, which is the entire point", () => {
+        // Standing on it, then jumping: the rise must not be stopped by the thing it is standing on.
+        const doc = level(0);
+        let w = steps(doc, worldFrom(doc), 120);
+        expect(w.bodies.get("b")!.y).toBe(90);
+        w = stepWorld(doc, w, { input: { left: false, right: false, jump: true }, controlled: "b" });
+        let peak = w.bodies.get("b")!.y;
+        for (let i = 0; i < 20; i++) {
+            w = stepWorld(doc, w, { input: NO_INPUT, controlled: "b" });
+            peak = Math.min(peak, w.bodies.get("b")!.y);
+        }
+        // It cleared the platform's own top by most of the jump height rather than bouncing off it.
+        expect(peak).toBeLessThan(100 - 50);
+        // …and it comes back down and lands on it again.
+        for (let i = 0; i < 60; i++) w = stepWorld(doc, w, { input: NO_INPUT, controlled: "b" });
+        expect(w.bodies.get("b")!.y).toBe(90);
+        expect(w.bodies.get("b")!.onGround).toBe(true);
+    });
+
+    it("a body starting INSIDE it falls out rather than being launched to its surface", () => {
+        // The test is where the body WAS at the start of the step, not where it is: a body that
+        // began overlapping was never above, so nothing catches it.
+        const doc = level(102);                    // its box is 102..112, inside the 100..110 slab
+        const after = steps(doc, worldFrom(doc), 200);
+        // Straight down to the real ground at 400.
+        expect(after.bodies.get("b")!.y).toBe(390);
+        expect(after.bodies.get("b")!.onGround).toBe(true);
+    });
+
+    it("has NO SIDES — walking into its edge does not stop a body", () => {
+        // A one-way platform is a floor that is only a floor from above; a body at the same height
+        // must pass straight through where a static solid would block it.
+        const doc = docWith([
+            { id: "b", x: -40, y: 100, userData: { bodyType: prop("dynamic") } },
+            { id: "plat", x: 0, y: 100, w: 100, h: 10, userData: { bodyType: prop("oneway") } },
+            { id: "ground", x: -500, y: 400, w: 2000, h: 20, userData: { bodyType: prop("static") } }
+        ]);
+        let w = worldFrom(doc);
+        for (let i = 0; i < 30; i++) {
+            w = stepWorld(doc, w, { input: { left: false, right: true, jump: false }, controlled: "b" });
+        }
+        // 30 steps at 220 px/s is 110px: from -40 to 70, straight through where the slab is.
+        expect(w.bodies.get("b")!.x).toBeCloseTo(-40 + 30 * MOVE_SPEED * FIXED_STEP, 6);
+        expect(w.bodies.get("b")!.vx).toBe(MOVE_SPEED);
+    });
+
+    it("works as a TILE too, so a level can be built out of them", () => {
+        const doc = createEmptyDocument();
+        doc.tilesets = [{
+            id: "ts", name: "T", src: "t.png",
+            sheet: { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 },
+            tiles: [{ id: 1, userData: { bodyType: prop("oneway") } },
+                    { id: 2, userData: { bodyType: prop("static") } }],
+            offsetX: 0, offsetY: 0
+        }];
+        doc.nodes.set("map", {
+            id: "map", type: "core.tilemap", parent: null, children: [], name: "level",
+            geometry: { x: 0, y: 100, width: 64, height: 32 },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            tilemap: { cols: 4, rows: 2, tileWidth: 16, tileHeight: 16, tilesetId: "ts",
+                tiles: [1, 1, 1, 1, 2, 2, 2, 2] }
+        } as unknown as Node);
+        doc.nodes.set("b", {
+            id: "b", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 20, y: 0, width: 10, height: 10 },
+            style: { fill: "#f00", opacity: 1 }, layout: {},
+            userData: { bodyType: prop("dynamic") }
+        } as unknown as Node);
+        doc.rootNodeUuids = ["map", "b"];
+        // Both rows are solid to a falling body, and the one-way row is the one it meets first.
+        expect(tileSolidsNear(doc, { x: 16, y: 100, width: 16, height: 32 }).map(s => [s.y, s.oneWay]))
+            .toEqual([[100, true], [116, false]]);
+        const after = steps(doc, worldFrom(doc), 120);
+        expect(after.bodies.get("b")!.y).toBe(90);
+        expect(after.bodies.get("b")!.onGround).toBe(true);
     });
 });
