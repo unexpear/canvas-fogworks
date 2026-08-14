@@ -112,7 +112,7 @@
  *     They never touch, in any map.
  *   - The vocabulary for what a contact would MEAN does not exist: damage, health, hp, bounce,
  *     restitution, stomp, kill, hurt, pushable, mass, weight, hit, attack, collide, impulse, force,
- *     kinematic, knockback, squash — 24 stems, every one of them zero across all 97 files.
+ *     kinematic, knockback, squash — 24 stems, every one of them zero across all 65 files.
  *
  * By this module's own published scale that is BELOW `density`, which was refused at one
  * declaration, and below `floating`, refused at twenty-four. So this is not `oneway`'s justification
@@ -365,6 +365,22 @@ export function sideOf(a: ContactBox, b: ContactBox): ContactSide {
     if (spannedX) return vertical();
     if (spannedY) return horizontal();
     return oy <= ox ? vertical() : horizontal();
+}
+
+/**
+ * The same contact seen from the other body — `above` for `below`, `right` for `left`.
+ *
+ * DERIVED, NOT RE-COMPUTED, because `sideOf` is not antisymmetric and cannot be: it answers a
+ * question about two boxes, and "b is entirely inside a" is true while "a is entirely inside b" is
+ * false. Asking it twice therefore yields (below, inside) for the ordinary case of a small enemy
+ * under a big hero — which is not wrong about the geometry and is useless as a pair.
+ */
+export function oppositeSide(side: ContactSide): ContactSide {
+    return side === "above" ? "below"
+        : side === "below" ? "above"
+        : side === "left" ? "right"
+        : side === "right" ? "left"
+        : "inside";
 }
 
 /**
@@ -846,13 +862,24 @@ export function stepWorld(
             const key = pairKey(a.id, b.id);            // already sorted: the ids are
             touching.add(key);
             if (world.contacts.has(key)) continue;
-            // ONE EVENT EACH, WITH OPPOSITE SIDES. There is no non-arbitrary way to say which of two
-            // bodies is the subject, and the pair of sides is precisely what tells a stomp from
-            // being stomped: the one who landed reads `below`, the one landed on reads `above`.
+            // ONE EVENT EACH, WITH OPPOSITE SIDES — and the reciprocal is DERIVED rather than
+            // computed a second time, which was a defect the first version shipped. Asking
+            // `sideOf(b, a)` independently answers `inside` whenever b's box is contained in a's,
+            // so an ordinary small enemy under a big hero produced the pair (below, INSIDE) while
+            // this comment claimed (below, above) — and every rule keyed on the STOMPED body's side
+            // was unreachable for exactly the commonest case. Measured: hero 32x32 at y=368 over a
+            // 32x8 enemy at y=392 gives `sideOf(E,H) === "inside"`.
+            // THE INFORMATIVE DIRECTION WINS. Deriving from whichever id sorts first is not enough:
+            // that may be the CONTAINED body, whose own answer is `inside`, and the pair then reads
+            // (inside, inside) — the same uselessness by a shorter route. Only one of the two can be
+            // `inside` unless the boxes are identical, so ask both and keep the one that says
+            // something; the other is its opposite by construction.
+            const ab = sideOf(a, b);
+            const side = ab !== "inside" ? ab : oppositeSide(sideOf(b, a));
             events.push({ kind: "contact", bodyId: a.id, nodeId: b.id,
-                className: b.className, side: sideOf(a, b) });
+                className: b.className, side });
             events.push({ kind: "contact", bodyId: b.id, nodeId: a.id,
-                className: a.className, side: sideOf(b, a) });
+                className: a.className, side: oppositeSide(side) });
         }
     }
     // SEPARATING SURVIVES EITHER BODY VANISHING, exactly as leaving survives a deleted region: a
@@ -903,15 +930,39 @@ export function applyWorld(doc: ReadonlyDocument, world: WorldState): ReadonlyDo
     return { ...(doc as ProjectDocument), nodes } as ReadonlyDocument;
 }
 
-/** Which ids `applyWorld` would move — the dirty set the incremental geometry path wants. */
-export function movedIds(doc: ReadonlyDocument, world: WorldState): Set<string> {
+/**
+ * The dirty set the incremental geometry path wants: every id whose DRAWN position differs from the
+ * one the previous frame drew.
+ *
+ * `previous` IS NOT OPTIONAL IN SPIRIT, and omitting it was a defect that shipped. This asked "does
+ * the world disagree with the STORED document", but a dirty set has to answer "did this frame's
+ * geometry change since the LAST one" — and those differ in exactly one case, which a platformer
+ * hits every time anybody jumps. A body that leaves its authored position and comes back is
+ * identical to the stored document on the frame it lands, so it was named on every frame of the
+ * flight and NOT on the frame it arrived; `computeGeometry` therefore reused the previous frame's
+ * entry and drew it mid-air, permanently, because it never moves again. Measured on a 72px jump
+ * onto a floor at y=400: **6px of divergence from a full recompute, from step 49 onward, forever.**
+ *
+ * The union is the whole fix. An id belongs in the set if it differs from the stored document NOW
+ * (it moved) or differed LAST frame (it moved back). If neither holds it has been sitting still at
+ * its authored position and there is nothing to redraw.
+ *
+ * Same family as the Play/Stop reuse bug this file already records — a stale geometry chain showing
+ * a body where it used to be, invisible to every test because the DOCUMENT was right the whole time.
+ */
+export function movedIds(doc: ReadonlyDocument, world: WorldState,
+                         previous?: WorldState): Set<string> {
     const out = new Set<string>();
-    for (const [id, body] of world.bodies) {
+    const differs = (id: string, body: Body) => {
         const node = doc.nodes.get(id);
-        if (!node) continue;
+        if (!node) return false;
         const at = worldOffsetOf(doc, id);
-        if (!at) continue;
-        if (node.geometry.x !== body.x - at.dx || node.geometry.y !== body.y - at.dy) out.add(id);
+        if (!at) return false;
+        return node.geometry.x !== body.x - at.dx || node.geometry.y !== body.y - at.dy;
+    };
+    for (const [id, body] of world.bodies) if (differs(id, body)) out.add(id);
+    if (previous) {
+        for (const [id, body] of previous.bodies) if (differs(id, body)) out.add(id);
     }
     return out;
 }

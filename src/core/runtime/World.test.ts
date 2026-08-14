@@ -15,7 +15,7 @@ import {
     bodyTypeOf, worldFrom, solidsOf, stepWorld, applyWorld, movedIds, stepsFor, propertyOf,
     tileIsSolid, tileSolidsNear, documentHasSolidTiles, frictionOf, regionsOf,
     worldOffsetOf, runtimeRefusal, runtimeExclusions, applyWorld as applyWorldFn,
-    sideOf, ContactSide
+    sideOf, ContactSide, oppositeSide
 } from "./World";
 
 const prop = (v: string, type = "string") => ({ type, value: v });
@@ -1397,5 +1397,83 @@ describe("body meets body — REPORTED, never resolved", () => {
         const w = stepWorld(doc, worldFrom(doc));
         expect(w.contacts.size).toBe(0);
         expect(w.events).toEqual([]);
+    });
+});
+
+describe("the reciprocal side is DERIVED, because sideOf is not antisymmetric", () => {
+    it("sideOf really does answer `inside` for the contained box — the reason this exists", () => {
+        // A 32x8 enemy standing where a 32x32 hero lands is ENTIRELY inside the hero's box, so
+        // asking sideOf the other way round is not wrong about the geometry — it is just useless as
+        // a pair, and it made every rule keyed on the STOMPED body unreachable.
+        const H = { x: 100, y: 368, width: 32, height: 32 };
+        const E = { x: 100, y: 392, width: 32, height: 8 };
+        expect(sideOf(H, E)).toBe("below");
+        expect(sideOf(E, H)).toBe("inside");
+        expect(oppositeSide(sideOf(H, E))).toBe("above");
+    });
+
+    it("inverts each axis and leaves a refusal alone", () => {
+        expect(oppositeSide("above")).toBe("below");
+        expect(oppositeSide("below")).toBe("above");
+        expect(oppositeSide("left")).toBe("right");
+        expect(oppositeSide("right")).toBe("left");
+        expect(oppositeSide("inside")).toBe("inside");
+    });
+
+    it("A CONTAINED BODY'S CONTACT EVENT READS `above`, not `inside`", () => {
+        // The fixture the earlier stomp test could not be: the enemy is narrower than the hero AND
+        // inside it vertically, which is the ordinary shape of a small enemy under a big player.
+        // With the reciprocal computed rather than derived this pair read (below, inside).
+        const doc = docWith([
+            { id: "floor", x: 0, y: 400, w: 400, h: 32, userData: { bodyType: prop("static") } },
+            { id: "enemy", x: 100, y: 392, w: 32, h: 8, userData: { bodyType: prop("dynamic") } },
+            { id: "hero", x: 100, y: 368, w: 32, h: 32, userData: { bodyType: prop("dynamic") } }
+        ]);
+        const w = stepWorld(doc, worldFrom(doc));
+        const pair = w.events.filter(e => e.kind === "contact").map(e => [e.bodyId, e.side]);
+        expect(pair).toEqual([["enemy", "above"], ["hero", "below"]]);
+    });
+});
+
+describe("the dirty set names what changed since the LAST frame", () => {
+    /**
+     * `movedIds` compared the world against the STORED document, which is a different question, and
+     * they disagree in exactly the case a platformer produces constantly: a body that jumps and
+     * lands back where it was authored agrees with the document again, so it went unnamed on the
+     * very frame it arrived and the incremental geometry drew it mid-air for the rest of the run.
+     */
+    const level = () => docWith([
+        { id: "floor", x: 0, y: 400, w: 400, h: 32, userData: { bodyType: prop("static") } },
+        { id: "H", x: 100, y: 368, w: 32, h: 32, userData: { bodyType: prop("dynamic") } }
+    ]);
+
+    it("NAMES A BODY ON THE FRAME IT RETURNS to its authored position", () => {
+        const doc = level();
+        let w = worldFrom(doc);
+        let landed: { named: boolean; namedWithout: boolean } | null = null;
+        for (let i = 0; i < 60 && !landed; i++) {
+            const before = w;
+            w = stepWorld(doc, w, { input: { left: false, right: false, jump: i === 1 }, controlled: "H" });
+            const y = w.bodies.get("H")!.y, wasY = before.bodies.get("H")!.y;
+            // The frame of interest: back at the authored 368 having been somewhere else.
+            if (y === 368 && wasY !== 368) {
+                landed = { named: movedIds(doc, w, before).has("H"), namedWithout: movedIds(doc, w).has("H") };
+            }
+        }
+        expect(landed).not.toBeNull();
+        expect(landed!.named).toBe(true);
+        // …and WITHOUT the previous world it is missed, which is the defect stated as a fact.
+        expect(landed!.namedWithout).toBe(false);
+    });
+
+    it("still names nothing when a body has sat still at its authored position all along", () => {
+        // Or the fix would mark everything dirty forever and the incremental path would be pointless.
+        const doc = level();
+        let w = worldFrom(doc);
+        for (let i = 0; i < 5; i++) {
+            const before = w;
+            w = stepWorld(doc, w);
+            if (i > 1) expect([...movedIds(doc, w, before)]).toEqual([]);
+        }
     });
 });

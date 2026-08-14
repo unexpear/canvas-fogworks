@@ -1355,6 +1355,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             if (es.playing && es.world && es.worldClock) {
                 const now = Date.now();
                 const spend = stepsFor(es.worldClock.accumulator, (now - es.worldClock.lastAt) / 1000);
+                const before = es.world;              // what the last frame DREW, for the dirty set
                 let world = es.world;
                 // STEPPED AGAINST THE STORED DOCUMENT, never the derived one: a body's size and
                 // every solid's box are the FILE's facts, so an edit to the level is picked up on
@@ -1364,7 +1365,12 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 }
                 es.world = world;
                 es.worldClock = { accumulator: spend.accumulator, lastAt: now };
-                worldMoved = movedIds(base, world);
+                // THE PREVIOUS WORLD IS PART OF THE QUESTION. A dirty set must name what changed
+                // since the LAST frame, not what disagrees with the stored document — a body that
+                // jumps and lands back on its authored position agrees with the document again, so
+                // without this it goes unnamed on exactly the frame it arrives and the incremental
+                // geometry keeps drawing it mid-air. Measured at 6px, permanent.
+                worldMoved = movedIds(base, world, before);
                 // THE CAMERA FOLLOWS WHAT YOU DRIVE, and it is stepped with the SAME step count
                 // the physics just spent, not once per frame — a camera closing a fixed fraction
                 // per frame is a different camera on a 144Hz monitor, which is the same defect as

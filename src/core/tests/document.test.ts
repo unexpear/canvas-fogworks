@@ -10,6 +10,7 @@ import { createEmptyDocument, ProjectDocument, ReadonlyDocument, CURRENT_VERSION
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, isTokenRef, tokenRefFor, tokenKeyOf, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
+import { dropHidden } from "../document/Components";
 import { expandInstances, componentError, overridesError, overrideAgainstMasterError, isVirtualId, splitVirtualId, INSTANCE_MAX_DEPTH, INSTANCE_MAX_NODES, INSTANCE_MAX_OVERRIDES , variantMembers, variantProperties, resolveVariantMaster, masterSubtreeIds, resolveOverridePath, resolveScene, statesError} from "../document/Components";
 import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction";
 import { SetVariantAction, SetInstanceVariantAction } from "../actions/VariantActions";
@@ -31439,5 +31440,57 @@ describe("Exporting a .tmx — the round trip is the oracle", () => {
         expect(escaped).toContain("A &amp; &lt;B&gt;");
         expect(escaped).toContain('source="a&amp;b.png"');
         expect(parseTiledMap(escaped).layers[0].name).toBe("A & <B>");
+    });
+});
+
+describe("dropHidden keeps the DOCUMENT, not just the nodes", () => {
+    /**
+     * It had no behavioural test at all — only a type assertion in apiSurface — and it returned an
+     * enumerated seven-field literal, so hiding anything silently dropped every optional field the
+     * document has. `resolveScene` calls it FIRST, so the renderer then looked for its tilesets on a
+     * document that no longer had any: a hidden layer blanked every tile layer's art and switched
+     * the lights off. Reachable from the corpus without touching a checkbox — the Tiled importer
+     * writes `hidden: !layer.visible` and `sandbox.tmx` ships a `visible="0"` layer.
+     */
+    const withOptionals = (hideOne: boolean): ReadonlyDocument => {
+        const doc = createEmptyDocument();
+        doc.tilesets = [{ id: "ts", name: "T", src: "sheet.png", tiles: [], offsetX: 0, offsetY: 0,
+            sheet: { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 } }] as never;
+        doc.timeline = { frames: 10 } as never;
+        doc.frame = 3;
+        doc.clips = [] as never;
+        doc.lights = [{ id: "L" }] as never;
+        doc.ambient = 0.5;
+        doc.nodes.set("keep", { id: "keep", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 },
+            style: { fill: "#888", opacity: 1 }, layout: {} } as Node);
+        doc.rootNodeUuids = ["keep"];
+        if (hideOne) {
+            doc.nodes.set("gone", { id: "gone", type: "core.rectangle", parent: null, children: [],
+                geometry: { x: 40, y: 0, width: 10, height: 10 },
+                style: { fill: "#888", opacity: 1 }, layout: {}, hidden: true } as unknown as Node);
+            doc.rootNodeUuids = ["keep", "gone"];
+        }
+        return doc;
+    };
+
+    it("SURVIVES A HIDDEN NODE with every optional field intact", () => {
+        // THE FIXTURE MUST CARRY THEM ALL. A document with only nodes cannot see this at all, which
+        // is exactly why it went unnoticed: every existing fixture was that document.
+        const hidden = resolveScene(withOptionals(true));
+        expect(hidden.tilesets?.length).toBe(1);
+        expect(hidden.timeline).toBeDefined();
+        expect(hidden.frame).toBe(3);
+        expect(hidden.clips).toBeDefined();
+        expect(hidden.lights?.length).toBe(1);
+        expect(hidden.ambient).toBe(0.5);
+        // …and the hidden node really is gone, or the test proves only that nothing happened.
+        expect(hidden.nodes.has("gone")).toBe(false);
+        expect(hidden.nodes.has("keep")).toBe(true);
+    });
+
+    it("is unchanged when NOTHING is hidden — the by-reference fast path still holds", () => {
+        const doc = withOptionals(false);
+        expect(dropHidden(doc)).toBe(doc);
     });
 });

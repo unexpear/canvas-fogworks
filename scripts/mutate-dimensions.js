@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1869;
+const EXPECTED_TESTS = 1876;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1393,6 +1393,25 @@ const MUTANTS = [
       from: "    for (const key of world.contacts) {",
       to: "    for (const key of touching) {",
       note: "separate is diffed against the set that was just filled, so it can never fire: a game holding \"what am I touching\" grows a list that only ever gets longer, including entries for bodies that have been deleted" },
+
+    // THREE DEFECTS THAT HAD SHIPPED, each found by attacking slice 9 rather than by writing it.
+    // All three were invisible to the whole suite, and each mutant below is the defect restored.
+    { id: "DH1", file: "src/core/document/Components.ts",
+      from: "    return {\n        ...(doc as ProjectDocument),\n        nodes,\n        rootNodeUuids: doc.rootNodeUuids.filter(id => !gone.has(id))\n    } as ProjectDocument;",
+      to: "    return {\n        version: doc.version,\n        metadata: doc.metadata as ProjectDocument[\"metadata\"],\n        nodes,\n        rootNodeUuids: doc.rootNodeUuids.filter(id => !gone.has(id)),\n        variables: doc.variables as ProjectDocument[\"variables\"],\n        activeTheme: doc.activeTheme,\n        activeState: doc.activeState\n    } as ProjectDocument;",
+      note: "THE DEFECT AS IT SHIPPED — an enumerated literal that drops all six optional document fields, so one hidden node costs the scene its tilesets, timeline, frame, clips, lights and ambient. Reachable from the corpus with no user action: the Tiled importer writes `hidden: !layer.visible` and sandbox.tmx ships a visible=\"0\" layer, so importing it blanked every tile layer's art" },
+    { id: "MV1", file: "src/core/runtime/World.ts",
+      from: "    if (previous) {\n        for (const [id, body] of previous.bodies) if (differs(id, body)) out.add(id);\n    }",
+      to: "",
+      note: "the dirty set goes back to asking whether the world disagrees with the STORED document, so a body that jumps and lands back on its authored position is unnamed on the very frame it arrives — and the incremental geometry keeps drawing it mid-air, permanently. Measured at 6px on a 72px jump" },
+    { id: "CS1", file: "src/core/runtime/World.ts",
+      from: "    return side === \"above\" ? \"below\"",
+      to: "    return side === \"above\" ? \"above\"",
+      note: "the reciprocal of `above` is itself, so a stomped body reports the same side as the stomper and nothing can tell which of the two landed on the other" },
+    { id: "CS2", file: "src/core/runtime/World.ts",
+      from: "            const side = ab !== \"inside\" ? ab : oppositeSide(sideOf(b, a));",
+      to: "            const side = ab;",
+      note: "the pair is derived from whichever id sorts first even when that body is the CONTAINED one, whose own answer is `inside` — so an ordinary small enemy under a big hero reports (inside, inside) and the stomp is unreadable from either side" },
 ];
 
 function runSuite() {

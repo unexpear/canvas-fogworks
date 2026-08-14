@@ -1038,7 +1038,7 @@ the runtime from the corpus, and not one of the 248 placed objects is dynamic. T
 pair sits **654px apart** on different tiers and never touches in any map. Twenty-four
 contact-vocabulary stems — damage, health, hp, bounce, restitution, stomp, kill, hurt, pushable,
 mass, weight, hit, attack, collide, impulse, force, kinematic, knockback, squash and five more —
-return **zero** across all 97 files.
+return **zero** across all 65 files.
 
 By this milestone's own published scale that is BELOW `density` (refused at one declaration) and
 below `floating` (refused at twenty-four). **So it ships LABELLED an invention, and a larger one
@@ -1102,6 +1102,38 @@ cannot testify to.
 left for whoever first tries to bounce a stomp: `stepWorld`'s opts carry gravity, solids, tileSolids,
 regions, input and controlled, and not one of them can set a body's velocity. Acting on an event is
 the next slice's design and it needs a channel that does not exist.
+
+**THREE DEFECTS THAT HAD ALREADY SHIPPED, found by attacking slice 9 rather than by writing it —
+and every one was invisible to the whole suite.**
+
+1. **`dropHidden` returned an enumerated seven-field literal**, so hiding ANYTHING silently dropped
+   all six of the document's optional fields — `tilesets`, `timeline`, `frame`, `clips`, `lights`,
+   `ambient`. `resolveScene` calls it FIRST, so the renderer then looked for its tilesets on a
+   document that no longer had any. **Reachable from the corpus with no user action:** the Tiled
+   importer writes `hidden: !layer.visible` and `sandbox.tmx` ships a `visible="0"` layer, so
+   importing it blanked every tile layer's art and switched the lights off. It had NO behavioural
+   test at all — only a type assertion in `apiSurface` — which is why it rotted. Fixed with a spread,
+   because an enumerated literal is correct exactly until the next field is added.
+
+2. **`movedIds` answered the wrong question.** It reported "does the world disagree with the STORED
+   document"; a dirty set must report "did this frame's geometry change since the LAST one". They
+   differ in precisely the case a platformer produces constantly — a body that jumps and lands back
+   on its authored position agrees with the document again, so it went unnamed on the very frame it
+   arrived and `computeGeometry` reused the previous frame's entry. **Measured at 6px of permanent
+   divergence** from a full recompute, on a 72px jump onto a floor at y=400. Same family as the
+   Play/Stop reuse bug already recorded above. Fixed by taking the previous world and unioning.
+
+3. **A contact pair does NOT always carry opposite sides**, though slice 9's own header said it did.
+   `sideOf` is not antisymmetric and cannot be: "b is inside a" is true while "a is inside b" is
+   false, so a 32x8 enemy under a 32x32 hero gave (below, **inside**) and every rule keyed on the
+   STOMPED body was unreachable for the commonest case. The first fix was wrong too — deriving from
+   whichever id sorts first picks the CONTAINED body half the time and yields (inside, inside). The
+   informative direction has to win.
+
+**AND THE "97 Tiled files" IN SLICE 9's OWN HEADER WAS WRONG — it is 65**, corrected in all three
+places it was published. The likely cause is the `.tsx` extension collision: a Tiled tileset and a
+React component share it. Every other headline recounted exactly (248 objects, 138 declarations,
+bodyType 51, friction 45, floating 24, density 1, 1,235 tiles).
 
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,

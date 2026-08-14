@@ -1093,13 +1093,18 @@ export function dropHidden(doc: ReadonlyDocument): ReadonlyDocument {
         nodes.set(id, kept.length === n.children.length ? (n as Node) : { ...(n as Node), children: kept });
     });
 
+    // SPREAD, NEVER AN ENUMERATED LITERAL — and this was a live defect, not a tidiness preference.
+    // Naming seven fields silently dropped ALL SIX of the document's optional ones (`tilesets`,
+    // `timeline`, `frame`, `clips`, `lights`, `ambient`) the instant anything was hidden, and
+    // `resolveScene` calls this FIRST, so the renderer looked for its tilesets on a document that no
+    // longer had any. It was reachable from the corpus without anyone touching a checkbox: the Tiled
+    // importer sets `hidden: !layer.visible` (TiledMap.ts:1362) and `sandbox.tmx` ships a
+    // `visible="0"` layer, so importing it blanked every tile layer's art and switched the lights
+    // off. A literal like that is correct exactly until the next field is added to the document,
+    // which is the shape of bug that cannot be tested for once — only prevented.
     return {
-        version: doc.version,
-        metadata: doc.metadata as ProjectDocument["metadata"],
+        ...(doc as ProjectDocument),
         nodes,
-        rootNodeUuids: doc.rootNodeUuids.filter(id => !gone.has(id)),
-        variables: doc.variables as ProjectDocument["variables"],
-        activeTheme: doc.activeTheme,
-        activeState: doc.activeState
+        rootNodeUuids: doc.rootNodeUuids.filter(id => !gone.has(id))
     } as ProjectDocument;
 }

@@ -2786,7 +2786,7 @@ function stepWorld(doc, world,
 // BODY MEETS BODY (slice 9), and the header of core/runtime/World says at length why this is an
 // INVENTION rather than a reading: ONE object in the corpus declares bodyType=dynamic, it lives in a
 // template file TiledMap.ts:644 refuses to import, the nearest declared pair sits 654px apart, and
-// 24 contact-vocabulary stems (damage, health, bounce, mass, stomp...) are zero across all 97 files.
+// 24 contact-vocabulary stems (damage, health, bounce, mass, stomp...) are zero across all 65 files.
 // It is here because the stated test game needs it, which is a different reason from every slice
 // before it except `oneway`.
 //
