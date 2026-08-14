@@ -10,6 +10,9 @@
 > passing, which is now itself a reported condition.
 
 <!-- describes: src/core, src/editor, src/renderer -->
+<!-- re-read 2026-08-14 after M18 slices 1-2: the runtime section below is current, including the
+     two things that went wrong and were kept — the reuse chain held across Stop, and my first
+     claim about which key the game has to take from the editor. -->
 <!-- re-read 2026-08-13 after schema 67: M11 said Aseprite was BUILT AND UNREACHABLE and that a
      tileset was not a thing the document holds. Both had stopped being true, one of them the same
      day. M13 records the multi-tileset export. -->
