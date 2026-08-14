@@ -1,6 +1,14 @@
 # Architecture
 
 <!-- describes: src/core/actions/ActionDispatcher.ts, src/core/actions/applyMutations.ts, src/core/actions/HistoryManager.ts, src/core/geometry, src/renderer -->
+<!-- re-read 2026-08-13 after schema 67-68, the collection draw path and the column recovery:
+     accurate at this altitude, with two additions below. The render model now RESOLVES a layer's
+     picture from the document's tileset table — a sheet, or a per-tile map for a collection — which
+     is what keeps three backends ignorant of tilesets; and `ImageCache` gained one function that
+     AWAITS a decode rather than answering null, because an import has no next frame to try again
+     in. It goes through the same cache the backends draw from, so no arrow in the chain moved.
+     (Three earlier stamps meant for this file never landed: the insert matched a `\n`-terminated
+     line in a file read with CRLF preserved, and failed silently. Written with an exact edit.) -->
 <!-- re-read 2026-08-10 after schema 64: accurate at this altitude. `applyMutations` gained two
      fields whose whole behaviour is that NOTHING derives from them, so no arrow in the chain
      moved — which is the clearest case the derivation picture still holds. -->
