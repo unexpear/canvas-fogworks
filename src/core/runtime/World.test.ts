@@ -446,5 +446,17 @@ describe("terminal velocity, a COLLISION bound before it is a feel decision", ()
         const w = stepWorld(doc, steps(doc, worldFrom(doc), 5),
             { input: { left: false, right: false, jump: true }, controlled: "b" });
         expect(w.bodies.get("b")!.vy).toBeLessThan(-300);
+
+        // AND THE CAP MUST BE DIRECTIONAL, which the assertion above CANNOT see: the ordinary jump
+        // launches at 360 px/s and the cap is 1200, so a cap written `Math.abs(vy) > MAX` never
+        // fires and survives. A mutant said so. Seeing it needs a rise FASTER than the cap, which
+        // a strong gravity produces — sqrt(2 * 20000 * 72) is about 1697 px/s. Applied to the rise,
+        // the cap would turn that launch into a fall at +1200 on the very step it happened.
+        const strong = { gravity: 20000, input: { left: false, right: false, jump: true },
+            controlled: "b" };
+        const hard = stepWorld(doc, steps(doc, worldFrom(doc), 5), strong);
+        expect(jumpSpeedFor(JUMP_HEIGHT, 20000)).toBeGreaterThan(MAX_FALL_SPEED);
+        expect(hard.bodies.get("b")!.vy).toBeCloseTo(-jumpSpeedFor(JUMP_HEIGHT, 20000), 6);
+        expect(hard.bodies.get("b")!.vy).toBeLessThan(-MAX_FALL_SPEED);
     });
 });
