@@ -1118,13 +1118,13 @@ const MUTANTS = [
     // the corpus. Every mutant here still lands a body on the platform; what changes is whether it
     // can ever get off it, or through it, which no "did it land" assertion can see.
     { id: "OW1", file: "src/core/runtime/World.ts",
-      from: "            if (s.oneWay && !(vy > 0 && was.y + h <= s.y)) continue;",
-      to: "            if (s.oneWay && !(vy > 0 && y + h <= s.y)) continue;",
+      from: "            if (s.oneWay && !(was.y + h <= s.y)) continue;",
+      to: "            if (s.oneWay && !(y + h <= s.y)) continue;",
       note: "the ABOVE test asks where the body is NOW rather than where it started the step — but the vertical move has already happened, so a landing body is inside the slab by then and every landing falls through" },
     { id: "OW2", file: "src/core/runtime/World.ts",
-      from: "            if (s.oneWay && !(vy > 0 && was.y + h <= s.y)) continue;",
-      to: "            if (s.oneWay && !(was.y + h <= s.y)) continue;",
-      note: "the FALLING test goes, so a body rising through a platform is stopped by it from underneath — the one thing a one-way platform exists not to do" },
+      from: "            if (s.oneWay && !(was.y + h <= s.y)) continue;\n            if (vy > 0) { y = s.y - h;",
+      to: "            if (s.oneWay && !(was.y + h < s.y)) continue;\n            if (vy > 0) { y = s.y - h;",
+      note: "THE BOUNDARY: a body resting on the surface has `was.y + h` exactly equal to the platform's top, so `<` drops it through the thing it just landed on, one frame later. RETARGETED — this mutant first deleted a `vy > 0` term and survived, because that term was EQUIVALENT: \"was above\" already implies the body moved down, since the only motion between the two tests is `y += vy * dt`. The term is gone from the code rather than tested around" },
     { id: "OW3", file: "src/core/runtime/World.ts",
       from: "            if (s.oneWay) continue;\n            if (!overlaps(x, y, w, h, s)) continue;",
       to: "            if (!overlaps(x, y, w, h, s)) continue;",

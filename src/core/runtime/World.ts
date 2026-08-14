@@ -626,11 +626,19 @@ export function stepWorld(
         const underTiles = tiles ? tileSolidsNear(doc, { x, y, width: w, height: h }) : [];
         for (const s of [...solids, ...underTiles]) {
             if (!overlaps(x, y, w, h, s)) continue;
-            // ONLY FROM ABOVE, AND ONLY WHILE FALLING. `was.y` is where the body started the step,
-            // not where it is now: at 15px a step a body that was clear of a platform is inside it
-            // by the time this runs, so asking about the present would let every landing through.
-            // A body that BEGAN overlapping falls out rather than being launched to the surface.
-            if (s.oneWay && !(vy > 0 && was.y + h <= s.y)) continue;
+            // ONLY FROM ABOVE. `was.y` is where the body STARTED the step, not where it is now: at
+            // 15px a step a body that was clear of a platform is inside it by the time this runs,
+            // so asking about the present would let every landing through. A body that BEGAN
+            // overlapping falls out rather than being launched to the surface.
+            //
+            // THERE IS NO `vy > 0` HERE, and there was until a mutant proved it could not matter.
+            // "Was above" means the body did not overlap vertically at the start of the step; it
+            // overlaps now; the only motion between the two is `y += vy * dt` — so it moved DOWN,
+            // and vy was positive by construction. A second statement of one fact reads like care
+            // and is really a place for the two halves to disagree later. `<=` rather than `<` is
+            // the part that IS load-bearing: a body resting on the surface has `was.y + h` exactly
+            // equal to `s.y`, and `<` drops it through the platform it just landed on.
+            if (s.oneWay && !(was.y + h <= s.y)) continue;
             if (vy > 0) { y = s.y - h; onGround = true; groundFriction = s.friction; }
             else { y = s.y + s.height; }
             vy = 0;
