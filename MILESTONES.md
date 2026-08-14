@@ -10,7 +10,7 @@
 > passing, which is now itself a reported condition.
 
 <!-- describes: src/core, src/editor, src/renderer -->
-<!-- re-read 2026-08-14 after M18 slices 1-2: the runtime section below is current, including the
+<!-- re-read 2026-08-14 after M18 slice 8 (the camera): the runtime section below is current, including the
      two things that went wrong and were kept — the reuse chain held across Stop, and my first
      claim about which key the game has to take from the editor. -->
 <!-- re-read 2026-08-13 after schema 67: M11 said Aseprite was BUILT AND UNREACHABLE and that a
@@ -51,7 +51,7 @@ M14 AI Integration            ⬜
 M15 Plugins                   ⬜
 M16 Collaboration             ⬜
 M17 Production Hardening      ⬜
-M18 Game Runtime              🚧   slices 1-7: a fixed-step world that PLAYS inside the editor — a character you drive, a level of TILES, ground you can slip on, and regions that report
+M18 Game Runtime              🚧   slices 1-8: a fixed-step world that PLAYS inside the editor — a character you drive, a level of TILES, ground you can slip on, regions that report, and a camera that follows
 ```
 
 \* **Note on M3/M4:** a working **vertical-slice prototype** of the renderer, the
@@ -861,7 +861,7 @@ resolution needs. These are dividends of the Milestone 0 invariants.
 
 ## Phase 18 — Game Runtime
 
-### Milestone 18 — Game Runtime 🚧 (slice 1 landed)
+### Milestone 18 — Game Runtime 🚧 (slices 1-8 landed)
 A 2D game that RUNS inside VDE rather than being exported to something else that runs it.
 
 **The architecture was already there, in a shape nobody had used for this.** `applyFrame(doc, frame)`
@@ -989,6 +989,46 @@ Two fixtures were wrong before they were right, and both are recorded: the "jump
 test jumped from ON TOP of the platform, where a body starts on the surface and moves away so the
 rule is never asked; and the surviving mutant turned out to be EQUIVALENT rather than a gap — `vy>0`
 is implied by "was above", so the term was deleted rather than tested around.
+
+**Slice 8 — THE CAMERA, without which none of the above is playable.** The corpus's levels are
+1600x1600 and the probe level 3000 wide; on a 606px canvas a character walks off screen in under
+three seconds, so every slice before this was verifiable only in a viewport that happened to contain
+the whole level.
+
+`core/runtime/Camera` is a separate module from `World` and takes a viewport rather than a world:
+**nothing in the physics may read the camera**, or a level would play differently depending on where
+you were looking, which is precisely what a fixed step exists to prevent.
+
+**A DEADZONE, NOT A LEASH.** Pinning the target to the screen centre means every footstep moves the
+entire world, which reads as the scenery walking rather than the character — the character being the
+one thing on screen that never moves. So the camera does nothing at all while the target is inside a
+centred window, and only pushes when the target reaches its edge.
+
+**SMOOTHING IS PER FIXED STEP**, for the same reason the physics is: closing a fixed fraction per
+FRAME is a different camera on a 144Hz monitor than a 60Hz one, the same class of defect as a
+frame-rate-dependent jump and much harder to notice, since nobody can say what the right answer
+looked like. Folding it `1 - (1-k)^n` makes five steps of 0.18 equal one step of 0.62926, always.
+Bounds are applied AFTER the smoothing, so the view cannot leave the level part-way through a glide
+— clamping the destination instead is right only while the camera is already inside, which it is not
+on the first frame of a run begun with the canvas scrolled away.
+
+**Two recorded defects turned out to be already fixed, and the memory saying otherwise was the
+defect.** `lerpViewport`'s origin drift and a missing `worldToScreen` were re-measured before being
+acted on: drift is now 0.000px at x = 0, 1000 AND 5000 (it was 0/84/418), and the round trip is
+exact to 1.4e-14. A note naming a bug has to be re-measured, not quoted.
+
+**One of this slice's own fixtures was blind and is recorded as such.** The `steps > 0` guard test
+passed a null bounds, where every case returns the start position through the ordinary path too — so
+deleting the guard outright changed nothing. Moved outside a 1600-wide level, it pins to 800 instead.
+
+Verified live, and the first probe was blind too: tracking markers by a shared fill read as "the
+camera barely moved", because viewport culling drops an off-screen node from the SVG and the probe
+silently switched to the NEXT marker each time one scrolled away. With a colour per marker the
+viewport is recoverable from the picture itself (every marker agrees to 1.1e-13 px, so it really is
+one transform): the crate walks world 60 -> 280 with the viewport at exactly **0**, reaches the
+deadzone edge at world 390, and from then on its SCREEN x is pinned at 399 while its world x runs to
+940 and the viewport climbs to 541. The settled 399 is the predicted one — a target moving 3.667px a
+step against an 18%-a-step camera settles 16.7px past the 382.02 edge. Stop puts the view back.
 
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,

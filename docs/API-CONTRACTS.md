@@ -2789,6 +2789,44 @@ function stepsFor(accumulator: number, elapsedSeconds: number):
     { steps: number; accumulator: number; dropped: number };
 ```
 
+### `core/runtime/Camera` (M18 slice 8)
+
+A SEPARATE MODULE FROM `World`, and the separation is the contract: it takes a viewport and gives
+back a viewport, and cannot reach the bodies at all. Nothing in the physics may read the camera, or a
+level would play differently depending on where you were looking — which is the one thing a fixed
+step exists to prevent.
+
+```ts
+// Structurally the editor's viewport, re-declared rather than imported: `core` may not depend on the
+// editor. The transform is `screen = zoom·world − vp`, the one `screenToWorld` inverts.
+interface CameraView { x: number; y: number; zoom: number }
+
+const DEADZONE_FRACTION: number;   // 0.34 — the middle third of the view, inside which the camera
+                                   // does NOTHING. Pinning the target to the exact centre moves the
+                                   // whole world on every footstep, which reads as the scenery
+                                   // walking rather than the character. A CHOICE, like `oneway`: no
+                                   // document in the corpus declares a camera.
+const CAMERA_SMOOTHING: number;    // 0.18 of the remaining gap per FIXED STEP. 1 is a rigid camera.
+
+// The nearest viewport that puts `target` back inside the deadzone — the current one, unchanged,
+// whenever it is already inside. A target BIGGER than its own deadzone is CENTRED rather than
+// slammed to whichever edge was tested last.
+function cameraDesired(view, size, target, deadzone?): { x: number; y: number };
+
+// SMOOTHING IS PER STEP, NOT PER FRAME: `1 − (1−k)^n`, so a 144Hz monitor and a 60Hz one get the
+// same camera per unit of TIME. Closing a fixed fraction per frame is the same class of defect as a
+// frame-rate-dependent jump, and far harder to see.
+//
+// BOUNDS ARE APPLIED AFTER THE SMOOTHING, so the view cannot leave the level part-way through a
+// glide; clamping the DESTINATION instead is right only while the camera is already inside, which it
+// is not on the first frame of a run begun with the canvas scrolled away. A level smaller than the
+// view is CENTRED. Returns the input view unchanged when it cannot answer — no steps elapsed, a
+// non-positive zoom, a non-finite target — because a camera that gives up should leave the picture
+// where it is rather than jump it somewhere.
+function followCamera(view, size, target, bounds: CameraRect | null,
+    steps: number, smoothing?, deadzone?): CameraView;
+```
+
 **COLLISION IS DISCRETE AND IT TUNNELS**, measured: a solid thinner than one step's travel is passed
 straight through — a 2px floor lets a body reach y=11,287. The rule that follows is that a solid must
 be at least as deep as the fastest body's travel per step (15px after a second of falling, 20px after
