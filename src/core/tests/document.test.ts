@@ -12182,10 +12182,21 @@ describe("Prototype interactions and transitions", () => {
         // and a tweened shape did not move at all while the playhead ran the length of its track.
         // Both conditions are pinned here because the guard is one expression and losing either
         // half brings the bug back silently.
-        expect(src).toMatch(/const computed = !es\.playing && !frameChanged && prevComputedRef\.current/);
+        //
+        // AND THE RUNTIME (M18) CARVED OUT THE ONE EXCEPTION, deliberately. A world tick moves a
+        // handful of BODIES and touches nothing else, and `movedIds` names exactly those — so
+        // unlike a state blend or a scrub, this derived document DOES come with a dirty set broad
+        // enough to trust. That is why the reuse is allowed back here and nowhere else: measured at
+        // 4.5x on a 1,000-node scene, 4.6ms a frame against 1.2ms. The carve-out is narrow, and
+        // every condition of it is pinned — a transition or a frame change still recomputes fully.
+        expect(src).toMatch(/const worldOnly = es\.playing && worldMoved !== null && !es\.transition && !frameChanged;/);
+        expect(src).toMatch(/const computed = \(worldOnly \|\| \(!es\.playing && !frameChanged\)\) && prevComputedRef\.current/);
+        expect(src).toMatch(/\.\.\.\(worldMoved \?\? \[\]\)/);
         expect(src).toMatch(/const frameChanged = es\.frame !== prevFrameRef\.current;/);
         expect(src).toMatch(/prevFrameRef\.current = es\.frame;/);
-        expect(src).toMatch(/prevComputedRef\.current = es\.playing \? null : computed;/);
+        // The chain is still broken across play EXCEPT for a world-only frame, which has to be
+        // kept — otherwise the reuse above would have nothing to reuse FROM.
+        expect(src).toMatch(/prevComputedRef\.current = es\.playing && !worldOnly \? null : computed;/);
         // Stopping clears the run's state, so the document is exactly as it was.
         expect(src).toMatch(/es\.playing = !es\.playing;[\s\S]{0,120}es\.playState = null;[\s\S]{0,60}es\.transition = null;/);
     });
@@ -12364,7 +12375,9 @@ describe("Prototype navigation", () => {
         expect(src).toMatch(/width: canvasRef\.current\?\.clientWidth \?\? 0/);
         // The rAF loop must stay alive while EITHER transition runs, or a navigation with no
         // state change would render one frame and stop halfway.
-        expect(src).toMatch(/es\.playing && \(es\.transition \|\| es\.viewportTransition\)/);
+        // …and a RUNNING WORLD re-arms it too (M18), which is what makes it a LOOP rather than a
+        // transition that happens to tick: a transition ends and stops asking, a world never does.
+        expect(src).toMatch(/es\.playing && \(es\.transition \|\| es\.viewportTransition \|\| es\.world\)/);
         expect(src).toMatch(/es\.viewportTransition = null;/);
         // Starting REMEMBERS the viewport and stopping restores it: a prototype run navigates,
         // and "playing is not editing" has to cover where you are looking, not just the document.

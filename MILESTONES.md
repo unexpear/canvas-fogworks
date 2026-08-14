@@ -48,6 +48,7 @@ M14 AI Integration            ⬜
 M15 Plugins                   ⬜
 M16 Collaboration             ⬜
 M17 Production Hardening      ⬜
+M18 Game Runtime              🚧   slice 1: a fixed-step world that PLAYS inside the editor — bodies, gravity, static collision
 ```
 
 \* **Note on M3/M4:** a working **vertical-slice prototype** of the renderer, the
@@ -851,3 +852,43 @@ trigger choosing one state on one target.
 are safe because they can *only* emit Actions, and M16 (Collaboration) is feasible
 because a linear, serializable revision history is exactly what branch/merge/conflict
 resolution needs. These are dividends of the Milestone 0 invariants.
+
+
+---
+
+## Phase 18 — Game Runtime
+
+### Milestone 18 — Game Runtime 🚧 (slice 1 landed)
+A 2D game that RUNS inside VDE rather than being exported to something else that runs it.
+
+**The architecture was already there, in a shape nobody had used for this.** `applyFrame(doc, frame)`
+takes the document and a moment and returns a NEW document showing that moment; everything below it
+— layout, picking, culling, three backends — reads it without knowing time exists. `applyWorld` is
+the same move for a different question. The run's mutable half lives on `EditorState`, beside
+selection, under the rule that file already states: *"Runtime editor context. Never serialized."* A
+game that wrote every body's position sixty times a second would put sixty entries a second on the
+undo stack.
+
+**Slice 1 is the TICK, not an entity model** — deliberately, and against a measurement. Of the 248
+objects in the corpus only 24 carry a class, and the level's real collision geometry carries none at
+all: six untyped rectangles on a `visible="0"` layer whose only property is `bodyType=static`, which
+is also the single most-declared property in the tree (51 of 138). So the runtime reads
+`userData.bodyType` — a field that already round-trips through import and export and had **no reader
+anywhere** until now — rather than a `core.entity` invented ahead of any content.
+
+What landed: `core/runtime/World` — a fixed 1/60s step with a carried accumulator and a spiral cap,
+gravity, axis-separated AABB collision against static bodies, and `onGround`. Play builds the world,
+Stop throws it away, and the document is never touched.
+
+**Measured, because the design turned on it.** `resolveScene` is ~0.002ms and `computeGeometry`
+~2.2µs/node, so a real map — five nodes holding 10,618 cells — costs **0.04ms a frame**, 0.3% of a
+60Hz budget, while 5,000 separate nodes costs 22ms and blows it. A tick moves a handful of bodies, so
+play mode now KEEPS the incremental geometry path it used to forfeit (4.5x: 4.6ms → 1.2ms).
+
+**Verified live**: a crate falls 590/596/602 ms across three runs against a hand-computed 589 ms,
+lands exactly on the floor's top, and Stop puts it back where the document says it is.
+
+**NOT in this slice**, each wanting its own design against real content: rotation, friction (read and
+ignored, said out loud), restitution, per-tile collision, broadphase, triggers, spawning, input. The
+corpus's other property vocabulary — `spawncount`, `spawntype`, `script`, `triggering`, `map` — is
+the map of what comes next.

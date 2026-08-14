@@ -87,6 +87,20 @@ export interface EditorState {
      */
     playReturnViewport: EditorState["viewport"] | null;
     /**
+     * THE RUNTIME'S MUTABLE HALF (M18): where every body is right now, or null when nothing is
+     * running. Here rather than in the document for the reason selection is: a run is not a
+     * document change, and a game that wrote every body's position sixty times a second would put
+     * sixty entries a second on the undo stack. `applyWorld` stamps it onto a COPY at derivation
+     * time, exactly as `es.frame` is stamped on for animation.
+     */
+    world: import("../core/runtime/World").WorldState | null;
+    /**
+     * Left-over time the fixed step has not spent, in seconds, and the timestamp it was measured
+     * from. Carried rather than dropped: on a 59.94Hz display the remainders add up to a whole step
+     * every few seconds, and discarding them makes the world run measurably slow.
+     */
+    worldClock: { accumulator: number; lastAt: number } | null;
+    /**
      * The transition currently running, or null. `startedAt` is a timestamp the app's clock
      * compares against; the blend factor is derived from it per frame rather than stored, so a
      * dropped frame lands in the right place instead of accumulating drift.
@@ -407,6 +421,8 @@ export function createEditorState(): EditorState {
         pixelSelection: null,
         viewportTransition: null,
         playReturnViewport: null,
+        world: null,
+        worldClock: null,
         transition: null,
         previewRect: null,
         marqueeRect: null,
