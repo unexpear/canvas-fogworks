@@ -7,6 +7,8 @@
 > [MILESTONES.md](MILESTONES.md) and [docs/README.md](docs/README.md).
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-08-14 after the dropHidden/movedIds/reciprocal-side fixes: still accurate BECAUSE
+     IT IS FROZEN; none of the three touched anything this record decided. -->
 <!-- re-read 2026-08-13 after schema 68 and the collection draw path: still accurate BECAUSE IT IS FROZEN. This file is the record of
      the 2026-07-23 pass and its numbers are that pass's; it is flagged by drift only because
      `src/core/document` keeps moving under it. Current status lives in MILESTONES.md and

@@ -1,6 +1,10 @@
 # Document Schema
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-08-14 after the dropHidden fix: accurate, and NO field moved. `hidden` (line 94)
+     is described exactly right and always was — the defect was that `dropHidden` returned an
+     enumerated literal and lost the document's OPTIONAL fields alongside the node, which this file
+     never claimed otherwise about. Schema still 68. -->
 <!-- re-read 2026-08-11 after the rotatedTable fix: accurate, and NO field moved. Art for all
      sixteen masks was already legal here — terrainError accepts any mask 0..15 — and only the
      derivation refused to use it. What the schema says a document may hold is now what the
