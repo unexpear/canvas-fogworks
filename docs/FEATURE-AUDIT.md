@@ -155,16 +155,18 @@ broke a test whose subject was still true. Both are fixed.
    `objectGroups`; `objectPlacement` says what each object becomes or why it cannot; the import
    places an object layer as a FRAME carrying its opacity and visibility with the objects nested
    inside. A tile object becomes a `core.image` with its source rect, a rectangle a box, an ellipse
-   a `core.ellipse`, a polygon or polyline a `core.path`. WHAT IS NOT CARRIED, and is counted rather
-   than dropped silently: an object's CLASS and CUSTOM PROPERTIES (the engine has no field for
-   them — that is what a `core.entity` schema change would be for, and it should be designed against
-   imported maps rather than ahead of them), template references (`.tx` files are not opened), text
-   objects, points, and an object layer's parallax factor.
+   a `core.ellipse`, a polygon or polyline a `core.path`. **CLASS AND CUSTOM PROPERTIES ARE CARRIED
+   NOW** — schema 64 gave them a home (`Node.className`, `Node.userData`), the import writes them and
+   the `.tmx` export writes them back, so a round trip keeps a door's `door=true`. They are carried
+   and NOT READ: nothing in the engine derives from them, which is the honest state and exactly what
+   a `core.entity` would change. WHAT IS STILL NOT CARRIED, and is counted rather than dropped
+   silently: template references (`.tx` files are not opened), text objects, points, and an object
+   layer's parallax factor.
 5. ~~**A tileset as editable content**~~ — DONE 2026-08-13 as schema 67. `Document.tilesets`, a
    panel, `SetTilesetsAction`, per-tile weights the autotiler READS, and an exporter that writes one
    `<tileset>` per distinct set. What it does not yet do is what Pixelorama's Manual/Auto/Stack
-   modes need: adding or growing a TILE, painting pixels into one, and drawing a COLLECTION set
-   (the renderer needs a per-tile image path).
+   modes need: adding or growing a TILE, and painting pixels into one. **Drawing a COLLECTION set is
+   done** (2026-08-13) on SVG and Canvas, with its own picker; the GPU still cannot, and says so.
 6. ~~**TMX export**~~ — DONE 2026-08-10 (`core/export/ExportTiled`). Tile layers go out as a
    `.tmx`, an autotiled layer exports the picture its terrain DERIVES, and a layer the format
    cannot hold (one map size, one tile size) is reported rather than dropped. The oracle is the
