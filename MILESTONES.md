@@ -51,7 +51,7 @@ M14 AI Integration            ⬜
 M15 Plugins                   ⬜
 M16 Collaboration             ⬜
 M17 Production Hardening      ⬜
-M18 Game Runtime              🚧   slices 1-5: a fixed-step world that PLAYS inside the editor — a character you drive, a level of TILES, ground you can slip on, and regions that report
+M18 Game Runtime              🚧   slices 1-6: a fixed-step world that PLAYS inside the editor — a character you drive, a level of TILES, ground you can slip on, and regions that report
 ```
 
 \* **Note on M3/M4:** a working **vertical-slice prototype** of the renderer, the
@@ -961,8 +961,25 @@ stands inside it — and leaving survives the region being deleted under the bod
 up by one every time something is collected. Verified live to the status line: "enter coin" as the
 crate falls in, "leave coin" as it walks out.
 
+**Slice 6 — WORLD SPACE, which was a defect and not a feature.** A node's `geometry` is stated in
+its PARENT's space; the runtime read it as the world's. A floor stored at (10,200) inside a frame at
+(100,50) really sits at (110,250) and was collided against at (10,200) — a body dropped over that
+floor's ART landed on a phantom fifty pixels above it. The header had called this a hypothetical for
+a transformed parent; it was neither hypothetical nor about transforms, and **the Tiled importer puts
+every object of an object layer inside a frame**, which is exactly how the corpus's own collision
+geometry arrives.
+
+Ancestor TRANSLATIONS are composed, which is exact and covers the case that occurs. A rotated or
+scaled ancestor, an auto-layout container (where a stored x/y is dead data), a missing parent and a
+cycle are all REFUSED rather than approximated — `runtimeExclusions` names each and why, because
+half-composing would put the art in one place and its collision in another, which is the defect this
+replaced.
+
+Every fixture in the runtime's test file had been a FLAT document — all roots, where stored space and
+world space are the same thing. That is the purest way to be blind to this, and it is why the new
+ones nest two levels deep.
+
 **STILL NOT DONE**, each wanting its own design against real content: acting on an event (spawning,
-scripts, level transitions), rotation, restitution, one-way platforms, slopes, a tilemap inside a
-TRANSFORMED parent (the collision reads `geometry` directly and would be wrong — said in the header
-rather than pretended about), and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
+scripts, level transitions), rotation, restitution, one-way platforms, slopes, and anything
+configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

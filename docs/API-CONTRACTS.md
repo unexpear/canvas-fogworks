@@ -2718,6 +2718,15 @@ function frictionOf(node: { userData?: UserData }): number;
 interface Region { nodeId: string; className: string; x; y; width; height }
 interface WorldEvent { kind: "enter" | "leave"; bodyId: string; nodeId: string; className: string }
 function regionsOf(doc: ReadonlyDocument): Region[];
+
+// EVERYTHING ABOVE IS WORLD SPACE, and a node's `geometry` is its PARENT's — the runtime read one as
+// the other and collided a nested floor fifty pixels above its own art. Ancestor TRANSLATIONS are
+// summed (exact, and a frame is a position); a rotated or scaled ancestor, an auto-layout container,
+// a missing parent or a cycle is REFUSED rather than approximated, because half-composing puts the
+// art in one place and its collision in another.
+function worldOffsetOf(doc, nodeId): { dx: number; dy: number } | null;
+function runtimeRefusal(doc, nodeId): string | null;
+function runtimeExclusions(doc): { nodeId: string; why: string }[];   // counted, never silent
 // THE WORLD REPORTS AND DOES NOT ACT: nothing spawns a maggot, runs `chest-discovered.lua` or loads
 // `sandbox2.json`. `WorldState.overlaps` carries the pairs so ENTER and LEAVE are edges rather than
 // states — a coin is collected once, not on all sixty frames a player stands in it — and

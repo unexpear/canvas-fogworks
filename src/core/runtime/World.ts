@@ -343,12 +343,13 @@ export function tileIsSolid(set: Tileset | null, index: number): boolean {
  * `visibleCells` arithmetic the renderer culls with — one statement of "which cells does this
  * rectangle cover", not two.
  *
- * THE BOX ARRIVES IN WORLD UNITS and the grid is in the node's own, so it is shifted by the node's
- * position on the way in and the cells are shifted back on the way out. A tilemap inside a
- * transformed parent is NOT handled and must not be pretended about: this reads `geometry` directly,
- * so a rotated or scaled level would collide against boxes that are not where its art is. Levels are
- * laid out flat today; the day one is not, this is where it breaks and it will break loudly, because
- * the body will stop in mid-air.
+ * THE BOX ARRIVES IN WORLD UNITS and the grid is in the node's own, so it is shifted onto the grid's
+ * WORLD origin on the way in and the cells are shifted back on the way out. That origin composes the
+ * node's ancestors (`worldOffsetOf`) rather than reading `geometry` alone — this paragraph used to
+ * say a nested level "is NOT handled and must not be pretended about", which was true and also an
+ * understatement: it was not a transformed-parent edge case but an ordinary frame, and the Tiled
+ * importer puts every object layer inside one. A level under a ROTATED or SCALED ancestor is still
+ * refused, and now says so through `runtimeExclusions` instead of colliding somewhere else.
  */
 export function tileSolidsNear(
     doc: ReadonlyDocument, box: { x: number; y: number; width: number; height: number }
