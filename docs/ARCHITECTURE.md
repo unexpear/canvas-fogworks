@@ -1103,8 +1103,13 @@ as it hands any image an href, so all three stay ignorant of tilesets entirely a
 about which picture a layer draws from. That resolution is the whole reason a document may hold
 several sets without the backends changing at all. A dangling `tilesetId` yields null and draws
 NOTHING while the file still opens — the inert-reference rule this schema follows everywhere — and a
-COLLECTION set yields null too, because it has no single sheet to cut: the renderer still needs a
-per-tile image path, which is a second derivation and deliberately not smuggled into that change.
+COLLECTION set yields null and hands over `pictures` instead — a map of tile index to its own file
+and that file's own size, resolved in the same place for the same reason. SVG and Canvas draw those
+a cell at a time, anchored BOTTOM-LEFT so art taller than the grid stands over the row behind it;
+`collectionTileBox` is the single statement of that arithmetic, shared, as `flipMatrix` is. THE GPU
+DOES NOT: its tilemap is one quad sampling one sheet texture, so a picture per tile has nowhere to
+come from, and `emitWebGL`'s header carries that as its only known gap rather than dropping the
+content silently.
 
 **A CELL CAN BE TURNED (schema 62)**, three bits per cell — horizontal, vertical, and a diagonal
 that is a transpose. Measured before building: 820 of the corpus's 22,808 non-empty cells are

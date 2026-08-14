@@ -1,6 +1,8 @@
 # API Contracts
 
 <!-- describes: src/core/actions, src/core/document, src/core/geometry, src/editor, src/renderer, src/electron/preload.js, scripts/build.js -->
+<!-- re-read 2026-08-13 after the collection draw path: `collectionTileBox` added; the tilemap
+     DisplayItem now carries `pictures` beside `sheet`, and the two are never both non-null. -->
 <!-- re-read 2026-08-13 after schema 67 and the multi-tileset exporter: THREE signatures here had
      drifted. `tilemapForLayer` gained its identity FUNCTION; `AutotileTable` holds a LIST per mask
      and `rotatedTable` takes an array, not a Map; and autotiling was still described as having "no
@@ -2401,6 +2403,13 @@ function tilesetsError(sets: unknown): string | null;            // the table: c
 // still names leaves an empty grid somebody can re-point, not a file that will not open.
 function findTileset<T extends { id: string }>(sets: readonly T[] | undefined, id: string | undefined): T | null;
 function tilesetTile<T extends { id: number }>(set: { tiles: readonly T[] } | null, id: number): T | null;
+// WHERE a collection tile is drawn for one cell — the per-tile answer to `tileSourceRect`, and the
+// ONE statement of the anchoring, shared by the SVG and Canvas backends. BOTTOM-LEFT of the cell,
+// so art taller than the grid hangs ABOVE the square it occupies (which is what `<tileoffset>` is
+// for); top-aligning is the same picture sunk through the floor. `<tileoffset>` is NOT applied
+// here — the importer folds it into the node's own position for a grid layer.
+function collectionTileBox(pictures, map, col, row, originX, originY):
+    { href: string; x: number; y: number; width: number; height: number; flip: number } | null;
 function copyTileset(t: Tileset): Tileset;                       // the ONE place a set is copied
 // A WEIGHT OF 1 STORES NO RECORD, because 1 is what an unmentioned tile already means — and a tile
 // left with nothing else to say drops out of `tiles` entirely.

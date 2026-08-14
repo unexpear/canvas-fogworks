@@ -1838,7 +1838,32 @@ that is not there.
   16.0 Mpx against a 4096² page's 16.78 Mpx, i.e. ~95% packing efficiency, which no packer achieves.
   Two pages or 8192².
 
-  So it is NOT built, and this is the reason rather than an omission.
+  **BUILT ANYWAY, on SVG and Canvas, because the user asked for it with that measurement in hand.**
+  `RenderModel` resolves a collection set's per-tile pictures into `pictures: Map<index, {href,
+  width, height}>` — the other half of `sheet`, and never both. Sizes come from the DOCUMENT
+  (`tilesetError` requires a positive width/height on any tile carrying a `src`), so the model states
+  the box without waiting for a decode, which it must: it may not wait for anything. A Map, not an
+  array, because real ids are sparse — one corpus set has no id 47 and another starts at 12.
+
+  **THE ANCHORING IS THE FEATURE.** `collectionTileBox` is the one statement of it, shared by both
+  backends for the reason `flipMatrix` is shared. A tile is anchored BOTTOM-LEFT of its cell, so art
+  taller than the grid hangs ABOVE the square it occupies — which is what `<tileoffset>` exists for
+  and what this repo already describes as "a building rooted in one square standing over the three
+  behind it". Top-aligning is the same picture sunk through the floor, and it is invisible on any
+  fixture whose tiles are exactly one cell tall, so the fixtures' tiles are THREE cells tall.
+
+  **THE GPU DOES NOT DRAW THEM, and `emitWebGL`'s header now says so** — the first entry in its
+  known-gap list since schema 62. One quad sampling one sheet texture cannot express a picture per
+  tile; closing it needs a runtime atlas, and the packing measurement above says that is a project.
+
+  Verified in the running app on a real document pushed through the `file-opened` channel: SVG emits
+  six `<image>` elements for six painted cells at y = -32 and -16 (the overhang), and Canvas's own
+  pixels show the tall tile's white cap two cells ABOVE its row with the row below's overhang
+  correctly covering the tile behind it. A screenshot diff of the two backends over the map region
+  (11,264 ink pixels) differs on 0.9% of pixels, worst channel 101 — all of it the top edge row,
+  where SVG blends the image against the backdrop and Canvas does not. **That is pre-existing, not
+  new: the same diff on a SHEET-backed document differs on 2.9%, worst channel 202.** Recorded
+  rather than claimed as parity, and worth its own look.
 - **~~The exporter writes ONE tileset.~~ DONE — one `<tileset>` per distinct set.** Each carries its
   own `firstgid`, in first-seen order, and a set is entered once however many layers name it. The
   bug it closes is one the schema change made reachable and then left standing: with a single
