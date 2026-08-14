@@ -13,7 +13,7 @@ import {
     FIXED_STEP, MAX_STEPS_PER_FRAME, DEFAULT_GRAVITY, MAX_FALL_SPEED, MOVE_SPEED, JUMP_HEIGHT,
     NO_INPUT, Input, WorldState, jumpSpeedFor,
     bodyTypeOf, worldFrom, solidsOf, stepWorld, applyWorld, movedIds, stepsFor, propertyOf,
-    tileIsSolid, tileSolidsNear, documentHasSolidTiles
+    tileIsSolid, tileSolidsNear, documentHasSolidTiles, frictionOf
 } from "./World";
 
 const prop = (v: string, type = "string") => ({ type, value: v });
@@ -72,11 +72,12 @@ describe("what counts as a body", () => {
         const world = worldFrom(doc);
         expect([...world.bodies.keys()]).toEqual(["crate"]);
         // AT REST, WHERE THE DOCUMENT PUTS IT — the world does not invent a position.
-        expect(world.bodies.get("crate")).toEqual({ x: 10, y: 20, vx: 0, vy: 0, onGround: false });
+        expect(world.bodies.get("crate"))
+            .toEqual({ x: 10, y: 20, vx: 0, vy: 0, onGround: false, groundFriction: 1 });
         expect(world.time).toBe(0);
         // A STATIC BODY IS NOT IN THE WORLD, because its position is the document's to state and
         // two copies of one fact can disagree the moment somebody edits the level.
-        expect(solidsOf(doc)).toEqual([{ x: 0, y: 100, width: 200, height: 10 }]);
+        expect(solidsOf(doc)).toEqual([{ x: 0, y: 100, width: 200, height: 10, friction: 1 }]);
     });
 
     it("ignores a zero-area solid, which an author passes through while dragging one out", () => {
@@ -193,15 +194,21 @@ describe("landing on something solid", () => {
             { id: "t1", x: 0, y: 100, w: 100, h: 20, userData: { bodyType: prop("static") } },
             { id: "t2", x: 100, y: 100, w: 100, h: 20, userData: { bodyType: prop("static") } }
         ]);
-        let w = worldFrom(doc);
-        w = { ...w, bodies: new Map(w.bodies).set("b", { ...w.bodies.get("b")!, vx: 60 }) };
-        w = steps(doc, w, 60);                                // one second at 60 px/s
+        // DRIVEN, not shoved: a one-off `vx` is now decelerated by the ground's friction, and the
+        // subject of this test is the SEAM rather than the speed. Holding right is also what a
+        // player does, so the fixture and the real thing agree.
+        let w = steps(doc, worldFrom(doc), 5);
+        // TWENTY STEPS, not sixty: at 220 px/s a second would carry it off the end of a 200-wide
+        // floor and the test would be measuring a fall.
+        for (let i = 0; i < 20; i++) {
+            w = stepWorld(doc, w, { input: { left: false, right: true, jump: false }, controlled: "b" });
+        }
         const b = w.bodies.get("b")!;
         expect(b.onGround).toBe(true);
         expect(b.y).toBe(90);
-        // IT KEPT MOVING: 90 + 60 = 150, straight across the seam at x=100.
-        expect(b.x).toBeCloseTo(150, 6);
-        expect(b.vx).toBe(60);
+        // 73px, straight across the seam at x=100 without catching on it.
+        expect(b.x).toBeCloseTo(90 + 20 * MOVE_SPEED * FIXED_STEP, 6);
+        expect(b.vx).toBe(MOVE_SPEED);
     });
 
     it("stops against a WALL and keeps its footing", () => {
@@ -320,8 +327,12 @@ describe("input — the controlled body, and only it", () => {
         const walked = drive(doc, w, { left: false, right: true, jump: false }, 60);
         expect(walked.bodies.get("hero")!.x).toBeCloseTo(100 + MOVE_SPEED, 6);
         expect(walked.bodies.get("hero")!.vx).toBe(MOVE_SPEED);
-        // RELEASED it stops dead rather than sliding — the difference between a platformer and ice.
-        expect(drive(doc, walked, NO_INPUT, 1).bodies.get("hero")!.vx).toBe(0);
+        // RELEASED, THE GROUND TAKES OVER. It does not snap to zero — that was the behaviour before
+        // friction existed, and it made an icy surface meaningless for the body a player drives.
+        // One step on grip (mu=1, so 900 px/s^2) sheds exactly 15 px/s.
+        expect(drive(doc, walked, NO_INPUT, 1).bodies.get("hero")!.vx).toBeCloseTo(MOVE_SPEED - 15, 6);
+        // …and it does stop, in the distance Coulomb says rather than instantly.
+        expect(drive(doc, walked, NO_INPUT, 60).bodies.get("hero")!.vx).toBe(0);
         // …and left mirrors right, which is what makes MOVE_SPEED a speed rather than an offset.
         expect(drive(doc, w, { left: true, right: false, jump: false }, 60).bodies.get("hero")!.x)
             .toBeCloseTo(100 - MOVE_SPEED, 6);
@@ -526,8 +537,8 @@ describe("a level made of TILES, not rectangles", () => {
         // The bottom row starts at y = 100 + 3*16 = 148. A box over columns 0-1 sees two cells.
         const near = tileSolidsNear(doc, { x: 0, y: 148, width: 20, height: 10 });
         expect(near).toEqual([
-            { x: 0, y: 148, width: CELL, height: CELL },
-            { x: 16, y: 148, width: CELL, height: CELL }
+            { x: 0, y: 148, width: CELL, height: CELL, friction: 1 },
+            { x: 16, y: 148, width: CELL, height: CELL, friction: 1 }
         ]);
         // OVER THE HOLE it sees nothing, which is what makes this a cell question and not a node one.
         expect(tileSolidsNear(doc, { x: 50, y: 148, width: 10, height: 10 })).toEqual([]);
@@ -608,7 +619,7 @@ describe("a level made of TILES, not rectangles", () => {
         // Col 1 row 1 of a 32x8 grid sits at (32, 8) and is 32 by 8. Swap either dimension and it
         // lands at (8, 8), (32, 32) or with the wrong size — all four are different numbers here.
         expect(tileSolidsNear(doc, { x: 0, y: 0, width: 96, height: 16 }))
-            .toEqual([{ x: 32, y: 8, width: 32, height: 8 }]);
+            .toEqual([{ x: 32, y: 8, width: 32, height: 8, friction: 1 }]);
     });
 
     it("a dangling tilesetId collides with NOTHING, rather than becoming an invisible wall", () => {
@@ -617,5 +628,113 @@ describe("a level made of TILES, not rectangles", () => {
         expect(tileSolidsNear(doc, { x: 0, y: 148, width: 20, height: 10 })).toEqual([]);
         const after = steps(doc, worldFrom(doc), 120);
         expect(after.bodies.get("b")!.y).toBeGreaterThan(200);
+    });
+});
+
+describe("surface friction — the ground's property, not the body's", () => {
+    /** A floor with a stated friction, and a body already standing on it. */
+    const on = (friction: string | null) => {
+        const doc = docWith([
+            { id: "b", x: 0, y: 90, userData: { bodyType: prop("dynamic") } },
+            { id: "floor", x: -500, y: 100, w: 2000, h: 20,
+              userData: friction === null
+                ? { bodyType: prop("static") }
+                : { bodyType: prop("static"), friction: prop(friction) } }
+        ]);
+        return { doc, world: steps(doc, worldFrom(doc), 5) };
+    };
+    /** Give it a shove and let it run until it stops or 3 seconds pass. */
+    const shove = (doc: ProjectDocument, world: WorldState, vx: number) => {
+        let w: WorldState = { ...world,
+            bodies: new Map(world.bodies).set("b", { ...world.bodies.get("b")!, vx }) };
+        for (let i = 0; i < 180; i++) w = stepWorld(doc, w);
+        return w.bodies.get("b")!;
+    };
+
+    it("reads the coefficient the way the corpus writes it", () => {
+        // The corpus writes `1`, `1.00`, `0.45` — and one property with an EMPTY value.
+        expect(frictionOf({ userData: { friction: prop("1") } })).toBe(1);
+        expect(frictionOf({ userData: { friction: prop("1.00", "float") } })).toBe(1);
+        expect(frictionOf({ userData: { friction: prop("0.45", "float") } })).toBe(0.45);
+        // A SURFACE THAT SAYS NOTHING IS GRIPPY, not ice — the measured default, since 44 of the
+        // 45 declared values are 1. Getting this backwards would make every level in the tree
+        // frictionless, which is the loudest possible wrong default and the easiest to ship.
+        expect(frictionOf({})).toBe(1);
+        expect(frictionOf({ userData: { friction: prop("") } })).toBe(1);
+        expect(frictionOf({ userData: { friction: prop("nonsense") } })).toBe(1);
+        // …and it is a coefficient, so it is clamped rather than trusted.
+        expect(frictionOf({ userData: { friction: prop("-3") } })).toBe(0);
+        expect(frictionOf({ userData: { friction: prop("50") } })).toBe(1);
+    });
+
+    it("stops a shoved body in the distance COULOMB says, not a distance I chose", () => {
+        // a = mu*g = 900 px/s^2; a body at 220 px/s covers v^2/(2a) = 26.9px before stopping.
+        // The number comes from the model, which is the whole reason there is no new constant.
+        const { doc, world } = on("1");
+        const b = shove(doc, world, MOVE_SPEED);
+        expect(b.vx).toBe(0);
+        expect(b.x).toBeGreaterThan(24);
+        expect(b.x).toBeLessThan(30);
+    });
+
+    it("slides further on a slippier surface, which is what makes 0.45 mean anything", () => {
+        // The corpus's one non-1 value, on the block a player pushes: 220^2/(2*0.45*900) = 59.8px.
+        const slip = on("0.45");
+        const slippy = shove(slip.doc, slip.world, MOVE_SPEED);
+        expect(slippy.x).toBeGreaterThan(55);
+        expect(slippy.x).toBeLessThan(65);
+        // …and ICE never stops it at all.
+        const icy = on("0");
+        const ice = shove(icy.doc, icy.world, MOVE_SPEED);
+        expect(ice.vx).toBe(MOVE_SPEED);
+        expect(ice.x).toBeCloseTo(MOVE_SPEED * 180 * FIXED_STEP, 6);
+    });
+
+    it("does NOT apply in the air, which is what air control means", () => {
+        const { doc, world } = on("1");
+        // Jump, then check the horizontal speed survives the flight.
+        let w = stepWorld(doc, world, { input: { left: false, right: true, jump: true }, controlled: "b" });
+        const vx = w.bodies.get("b")!.vx;
+        expect(vx).toBe(MOVE_SPEED);
+        for (let i = 0; i < 10; i++) w = stepWorld(doc, w, { input: NO_INPUT, controlled: "b" });
+        expect(w.bodies.get("b")!.onGround).toBe(false);
+        // A grippy floor would have killed this in a quarter second on the ground; in the air the
+        // body keeps every pixel of it.
+        expect(w.bodies.get("b")!.vx).toBe(MOVE_SPEED);
+    });
+
+    it("a held key overrides the ground, or walking on grip would be walking uphill", () => {
+        const { doc, world } = on("1");
+        let w = world;
+        for (let i = 0; i < 60; i++) {
+            w = stepWorld(doc, w, { input: { left: false, right: true, jump: false }, controlled: "b" });
+        }
+        expect(w.bodies.get("b")!.vx).toBe(MOVE_SPEED);
+        expect(w.bodies.get("b")!.x).toBeCloseTo(MOVE_SPEED, 6);
+    });
+
+    it("a TILE carries its own friction, and falls back to the layer's", () => {
+        const doc = createEmptyDocument();
+        doc.tilesets = [{
+            id: "ts", name: "T", src: "t.png",
+            sheet: { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 },
+            tiles: [
+                { id: 1, userData: { bodyType: prop("static") } },                       // says nothing
+                { id: 2, userData: { bodyType: prop("static"), friction: prop("0") } }   // ice
+            ], offsetX: 0, offsetY: 0
+        }];
+        doc.nodes.set("map", {
+            id: "map", type: "core.tilemap", parent: null, children: [], name: "level",
+            geometry: { x: 0, y: 0, width: 32, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            // THE LAYER says 0.5, so the tile that states nothing inherits it and the tile that
+            // states 0 does not — one fixture, both directions.
+            userData: { friction: prop("0.5") },
+            tilemap: { cols: 2, rows: 1, tileWidth: 16, tileHeight: 16, tilesetId: "ts",
+                tiles: [1, 2] }
+        } as unknown as Node);
+        doc.rootNodeUuids.push("map");
+        const solids = tileSolidsNear(doc, { x: 0, y: 0, width: 32, height: 16 });
+        expect(solids.map(s => s.friction)).toEqual([0.5, 0]);
     });
 });

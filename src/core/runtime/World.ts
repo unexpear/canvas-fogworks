@@ -41,9 +41,24 @@
  * and up — so the corpus is safe and a hand-drawn hairline floor is not. Sweeping is what a later
  * slice buys; a test pins the failure so it is a known shape rather than a surprise.
  *
- * WHAT THIS SLICE DELIBERATELY IS NOT: no rotation, no friction (the property is read and ignored —
- * said out loud rather than half-applied), no restitution, no per-tile collision, no broadphase, no
- * joints, no triggers, no spawning. Axis-aligned boxes, gravity, and stopping on solid ground. The
+ * SURFACE FRICTION IS THE GROUND'S, NOT THE BODY'S, and the corpus is what settles that. `friction`
+ * is the second most-declared property in the tree (45 of 138) and **44 of the 45 sit on STATIC
+ * bodies** — it describes what you are standing on. Its values are 1 and "1.00" forty-four times and
+ * 0.45 once, on the block a player pushes. It is applied as COULOMB friction, `a = mu * g`, which is
+ * why this brought no new constant with it: the gravity already here supplies the g. A default of 1
+ * for a surface that says nothing means a body walking at 220 px/s slides 27px over a quarter second
+ * before stopping; 0 is ice and never stops.
+ *
+ * `floating` IS MEASURED AND NOT IMPLEMENTED, deliberately. It is the third most-declared property
+ * (24) and every single one of its 24 objects is STATIC — a body that never moves cannot be exempted
+ * from a gravity that never touches it. Whatever sticker-knight means by it is not something this
+ * data can tell us, and a guess dressed as a feature is worse than the gap. The same goes for
+ * `density`, which one object in the whole tree declares.
+ *
+ * WHAT THIS SLICE DELIBERATELY IS NOT: no rotation, no restitution (the property does not exist in
+ * the corpus at all —
+ * said out loud rather than half-applied), no joints, no triggers, no spawning, no slopes and no
+ * one-way platforms. Axis-aligned boxes, gravity, and stopping on solid ground. The
  * corpus's other property names (`spawncount`, `spawntype`, `script`, `triggering`, `map`) are what
  * the next slices are for, and each wants its own design against real content.
  */
@@ -118,6 +133,14 @@ export interface Body {
     vy: number;
     /** Whether it ended the last step resting on something solid — what a jump would ask. */
     onGround: boolean;
+    /**
+     * The friction of whatever it landed on, carried to the NEXT step.
+     *
+     * A body decelerates according to what it was standing on, which is one step behind what it is
+     * standing on now — imperceptible at 60Hz, and the alternative is resolving the vertical axis
+     * before the horizontal one, which is the ordering that makes a body snag on every seam.
+     */
+    groundFriction: number;
 }
 
 /** The run's whole mutable state. Keyed by STORED node id, never serialized. */
@@ -142,6 +165,32 @@ export interface Solid {
     y: number;
     width: number;
     height: number;
+    /**
+     * The Coulomb coefficient of whatever a body stands on: 0 is ice, 1 decelerates it at exactly
+     * one gravity.
+     *
+     * DEFAULTS TO 1, which is the measured value rather than a neutral one — 44 of the corpus's 45
+     * `friction` values are 1 or "1.00", and the one that is not is 0.45, on the block a player
+     * pushes.
+     */
+    friction: number;
+}
+
+/** A surface's `friction`, read leniently and clamped — 0 is ice, 1 stops a body dead. */
+export function frictionOf(node: { userData?: UserData }): number {
+    const raw = propertyOf(node.userData, "friction");
+    if (raw === null) return 1;
+    const text = raw.trim();
+    // AN EMPTY VALUE IS ABSENT, NOT ZERO. `Number("")` is 0 and finite, so the check below waves it
+    // through as ice — and the corpus really does hold a property with an empty value. The comment
+    // beside this warned about exactly that and the first version of the code did it anyway.
+    if (text === "") return 1;
+    const n = Number(text);
+    // "1.00" IS 1 AND "" IS NOTHING. The corpus writes both `1` and `1.00` for the same idea and
+    // one property with an empty value; a reader that took `Number("")` as 0 would turn a surface
+    // that meant "grippy" into ice.
+    if (!Number.isFinite(n)) return 1;
+    return Math.min(1, Math.max(0, n));
 }
 
 /**
@@ -175,7 +224,8 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
     for (const node of doc.nodes.values()) {
         if (bodyTypeOf(node) !== "dynamic") continue;
         bodies.set(node.id, {
-            x: node.geometry.x, y: node.geometry.y, vx: 0, vy: 0, onGround: false
+            x: node.geometry.x, y: node.geometry.y, vx: 0, vy: 0, onGround: false,
+            groundFriction: 1
         });
     }
     return { bodies, time: 0, jumpWas: false };
@@ -191,7 +241,7 @@ export function solidsOf(doc: ReadonlyDocument): Solid[] {
         // out passes through 0x0 on the way, and a zero-height solid would catch a falling body on
         // an infinitely thin line — which reads as a bug in the physics rather than in the level.
         if (g.width <= 0 || g.height <= 0) continue;
-        out.push({ x: g.x, y: g.y, width: g.width, height: g.height });
+        out.push({ x: g.x, y: g.y, width: g.width, height: g.height, friction: frictionOf(node) });
     }
     return out;
 }
@@ -247,10 +297,16 @@ export function tileSolidsNear(
         for (let row = range.row0; row <= range.row1; row++) {
             for (let col = range.col0; col <= range.col1; col++) {
                 if (!tileIsSolid(set, tileAt(map, col, row))) continue;
+                // THE TILE'S OWN FRICTION, falling back to the LAYER's — a level made of tiles has
+                // one surface per cell, and a per-cell answer is the only one that can describe an
+                // icy patch. The corpus declares none, so the fallback is what it actually gets.
+                const tile = tilesetTile(set, tileAt(map, col, row));
                 out.push({
                     x: node.geometry.x + col * map.tileWidth,
                     y: node.geometry.y + row * map.tileHeight,
-                    width: map.tileWidth, height: map.tileHeight
+                    width: map.tileWidth, height: map.tileHeight,
+                    friction: tile && propertyOf(tile.userData, "friction") !== null
+                        ? frictionOf(tile) : frictionOf(node)
                 });
             }
         }
@@ -316,11 +372,34 @@ export function stepWorld(
         // all — so inventing a property for it would be designing ahead of any content. The app
         // passes the node that was SELECTED when Play was pressed, which is how a level gets
         // tested; a real convention can replace that the day real content declares one.
+        // FRICTION FIRST, so a held key overrides it rather than fighting it. A body only loses
+        // speed to a surface it is actually ON: in the air it keeps what it has, which is what air
+        // control means and why a jump carries you forward.
+        //
+        // COULOMB, WHICH IS WHY THERE IS NO NEW CONSTANT HERE. Friction opposes motion with a force
+        // proportional to the normal one — on flat ground that is `mu * m * g`, so the deceleration
+        // is `mu * g` and the gravity this module already has supplies the g. The first version of
+        // this multiplied the speed by `1 - mu` each step, which reads well and is wrong twice:
+        // mu = 1 stopped a body inside one 16ms step, and since 44 of the corpus's 45 surfaces say
+        // exactly 1, every surface in the tree would have been instant-stop and the one 0.45 would
+        // have meant nothing. At mu = 1 a body walking at 220 px/s now slides 27px over a quarter
+        // second, and at 0 it never stops.
+        if (was.onGround && was.groundFriction > 0 && vx !== 0) {
+            const drop = was.groundFriction * gravity * FIXED_STEP;
+            // NEVER PAST ZERO: a deceleration that overshoots would push the body backwards, which
+            // is friction turning into a spring.
+            vx = vx > 0 ? Math.max(0, vx - drop) : Math.min(0, vx + drop);
+        }
+
         if (id === controlled) {
-            // SET, NOT ACCUMULATED. Adding an acceleration each step gives ice; a platformer's
-            // walk is a speed you have while the key is down and lose the moment it is up, and
-            // that is what makes the character feel attached to the button.
-            vx = (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);
+            // SET WHILE HELD, AND ONLY WHILE HELD. Adding an acceleration each step gives ice; a
+            // platformer's walk is a speed you have while the key is down. But letting go must not
+            // SET it to zero — that was the first version, and it made friction meaningless for the
+            // one body a player actually controls: no slide on ice, and no air control, because
+            // releasing mid-jump killed the flight. Releasing now hands the body back to the
+            // surface, which is what friction is for.
+            const held = (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);
+            if (held !== 0) vx = held;
             // A JUMP IS AN EDGE, not a state: it fires on the step the key GOES DOWN while the
             // body is on the ground. Holding it must not bunny-hop, and `jumpWas` is what
             // remembers the press across the several steps one frame may take.
@@ -344,15 +423,17 @@ export function stepWorld(
 
         // VERTICAL, then resolve — and this is where `onGround` is decided.
         let onGround = false;
+        let groundFriction = was.groundFriction;
         y += vy * FIXED_STEP;
         const underTiles = tiles ? tileSolidsNear(doc, { x, y, width: w, height: h }) : [];
         for (const s of [...solids, ...underTiles]) {
             if (!overlaps(x, y, w, h, s)) continue;
-            if (vy > 0) { y = s.y - h; onGround = true; } else { y = s.y + s.height; }
+            if (vy > 0) { y = s.y - h; onGround = true; groundFriction = s.friction; }
+            else { y = s.y + s.height; }
             vy = 0;
         }
 
-        next.set(id, { x, y, vx, vy, onGround });
+        next.set(id, { x, y, vx, vy, onGround, groundFriction });
     }
 
     return { bodies: next, time: world.time + FIXED_STEP, jumpWas: input.jump };

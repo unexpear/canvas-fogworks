@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1808;
+const EXPECTED_TESTS = 1814;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1113,6 +1113,34 @@ const MUTANTS = [
       from: "        if (node.geometry.x === body.x && node.geometry.y === body.y) continue;",
       to: "        if (node.geometry.x === body.x) continue;",
       note: "only the X coordinate decides whether a body moved, so a body falling straight down is never stamped onto the document and never appears to move at all — and `if (false)` could not be used here, because it does not COMPILE" },
+
+    // SURFACE FRICTION (M18 slice 4). The ground's property, not the body's — 44 of the corpus's
+    // 45 `friction` values sit on STATIC objects. Every mutant here still walks and still stops;
+    // what changes is where, and by how much.
+    { id: "FR1", file: "src/core/runtime/World.ts",
+      from: "    if (text === \"\") return 1;",
+      to: "    if (text === \"nothing-is-this\") return 1;",
+      note: "AN EMPTY VALUE BECOMES ICE. `Number(\"\")` is 0 and finite, so it sails past the isFinite check — and the corpus really does hold a property with an empty value. This one bit for real: the comment beside the code warned about it and the first version did it anyway" },
+    { id: "FR2", file: "src/core/runtime/World.ts",
+      from: "    if (raw === null) return 1;",
+      to: "    if (raw === null) return 0;",
+      note: "a surface that says nothing becomes ICE, so every level in the tree that never heard of friction turns frictionless — the loudest possible wrong default, and the easiest to ship" },
+    { id: "FR3", file: "src/core/runtime/World.ts",
+      from: "            const drop = was.groundFriction * gravity * FIXED_STEP;",
+      to: "            const drop = was.groundFriction * gravity;",
+      note: "friction decelerates per STEP rather than per second, so it is sixty times too strong and every surface stops a body inside one frame — which also makes 0.45 and 1 indistinguishable" },
+    { id: "FR4", file: "src/core/runtime/World.ts",
+      from: "        if (was.onGround && was.groundFriction > 0 && vx !== 0) {",
+      to: "        if (was.groundFriction > 0 && vx !== 0) {",
+      note: "friction applies IN THE AIR, so a jump loses its forward speed mid-flight and there is no air control — the body drops out of the arc it launched into" },
+    { id: "FR5", file: "src/core/runtime/World.ts",
+      from: "            vx = vx > 0 ? Math.max(0, vx - drop) : Math.min(0, vx + drop);",
+      to: "            vx = vx > 0 ? vx - drop : vx + drop;",
+      note: "the deceleration overshoots past zero, so a body that should have stopped reverses and creeps backwards — friction turned into a spring" },
+    { id: "FR6", file: "src/core/runtime/World.ts",
+      from: "            const held = (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);\n            if (held !== 0) vx = held;",
+      to: "            vx = (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);",
+      note: "releasing the key SETS the speed to zero rather than handing the body to the surface, so friction means nothing for the one body a player controls: no slide on ice, and no air control, because letting go mid-jump kills the flight" },
 
     // PER-TILE COLLISION (M18 slice 3). A level here is ONE node holding ten thousand cells, so
     // every one of these still stands a body on something — what changes is WHICH cells are solid
