@@ -2709,7 +2709,11 @@ interface WorldState { bodies: ReadonlyMap<string, Body>; time: number }
 // GROUND's property — 44 of the corpus's 45 `friction` values sit on static objects — and it
 // defaults to 1 because that is what 44 of them say. `floating` (24, all static) and `density` (1)
 // are measured and deliberately NOT implemented.
-interface Solid { x; y; width; height; friction: number }
+// `oneWay` is solid only from ABOVE and only to a body that was above it when the step began — a
+// platform you jump up through. It is the runtime's first INVENTION rather than a reading of the
+// corpus, which declares nothing about them; it is a new VALUE on `bodyType` rather than a new
+// field, because an unknown word is already not a body.
+interface Solid { x; y; width; height; friction: number; oneWay: boolean }
 function frictionOf(node: { userData?: UserData }): number;
 
 // A REGION is a classed node that is NOT a body — the split the corpus already makes (26 classed
@@ -2738,7 +2742,7 @@ function runtimeExclusions(doc): { nodeId: string; why: string }[];   // counted
 // LENIENTLY because the same name is declared with two types in one file (`friction` is float 17
 // times and untyped 28).
 function propertyOf(data: UserData | undefined, name: string): string | null;
-function bodyTypeOf(node: { userData?: UserData }): "static" | "dynamic" | null;
+function bodyTypeOf(node: { userData?: UserData }): "static" | "dynamic" | "oneway" | null;
 
 function worldFrom(doc: ReadonlyDocument): WorldState;         // dynamic bodies, at rest, where the
                                                                // document puts them

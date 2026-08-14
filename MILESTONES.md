@@ -51,7 +51,7 @@ M14 AI Integration            ⬜
 M15 Plugins                   ⬜
 M16 Collaboration             ⬜
 M17 Production Hardening      ⬜
-M18 Game Runtime              🚧   slices 1-6: a fixed-step world that PLAYS inside the editor — a character you drive, a level of TILES, ground you can slip on, and regions that report
+M18 Game Runtime              🚧   slices 1-7: a fixed-step world that PLAYS inside the editor — a character you drive, a level of TILES, ground you can slip on, and regions that report
 ```
 
 \* **Note on M3/M4:** a working **vertical-slice prototype** of the renderer, the
@@ -979,7 +979,17 @@ Every fixture in the runtime's test file had been a FLAT document — all roots,
 world space are the same thing. That is the purest way to be blind to this, and it is why the new
 ones nest two levels deep.
 
-**STILL NOT DONE**, each wanting its own design against real content: acting on an event (spawning,
-scripts, level transitions), rotation, restitution, one-way platforms, slopes, and anything
-configurable about the keys. The corpus's other property vocabulary — `spawncount`,
+**Slice 7 — ONE-WAY PLATFORMS, and the first INVENTION here rather than a reading.** The corpus's
+vocabulary was spent, so this is a choice, said plainly: `bodyType=oneway` is solid only from above
+and only to a body that was above it when the step began. A new VALUE on an existing field rather
+than a new field, because an unknown word is already not a body — a level written before this
+behaves identically, and a typo becomes decoration rather than a wall.
+
+Two fixtures were wrong before they were right, and both are recorded: the "jumps up through it"
+test jumped from ON TOP of the platform, where a body starts on the surface and moves away so the
+rule is never asked; and the surviving mutant turned out to be EQUIVALENT rather than a gap — `vy>0`
+is implied by "was above", so the term was deleted rather than tested around.
+
+**STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
+level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.
