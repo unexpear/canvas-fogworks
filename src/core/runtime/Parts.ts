@@ -62,10 +62,14 @@ export interface Part {
      * and should keep standing still rather than fall back to some default.
      */
     patrol: number | null;
+    /** Touching it any way but stomping it ends the run. Mario's Goomba from the side. */
+    deadly: boolean;
+    /** Reaching it wins. The flagpole. */
+    goal: boolean;
 }
 
 /** A part that declares nothing — what every node in the corpus and every older document is. */
-export const INERT: Part = { stompable: false, patrol: null };
+export const INERT: Part = { stompable: false, patrol: null, deadly: false, goal: false };
 
 /**
  * What this node declares, read LENIENTLY for the reason the whole runtime reads leniently: the same
@@ -82,7 +86,9 @@ export function partOf(node: { userData?: UserData }): Part {
         // "false" and "0" and "" all mean NO. Anything else present means yes, because a part that
         // bothered to declare the key wants the behaviour.
         stompable: stomp !== null && truthy(stomp),
-        patrol: speedOf(patrol)
+        patrol: speedOf(patrol),
+        deadly: yes(node, "deadly"),
+        goal: yes(node, "goal")
     };
 }
 
@@ -90,9 +96,15 @@ export function partOf(node: { userData?: UserData }): Part {
 export function hasParts(nodes: Iterable<{ userData?: UserData }>): boolean {
     for (const n of nodes) {
         const p = partOf(n);
-        if (p.stompable || p.patrol !== null) return true;
+        if (p.stompable || p.patrol !== null || p.deadly || p.goal) return true;
     }
     return false;
+}
+
+/** A declared flag: absent is no, and every word that means no is no. */
+function yes(node: { userData?: UserData }, key: string): boolean {
+    const raw = propertyOf(node.userData, PART_PREFIX + key);
+    return raw !== null && truthy(raw);
 }
 
 function truthy(raw: string): boolean {

@@ -37,6 +37,14 @@ import { partOf } from "./Parts";
 /** What the rules need that the world does not carry: which body the player drives. */
 export interface RuleContext {
     controlled: string | null;
+    /**
+     * The level's extent, for the one ending that no part can declare: falling out of the world.
+     *
+     * A LEVEL HAS NO EDGE OF ITS OWN — nothing in the document says "the level stops here" — so the
+     * caller supplies the content's bounds, which is the same rectangle the camera already refuses
+     * to scroll past. Absent means no floor of last resort, which is what the runtime did before.
+     */
+    bounds?: { x: number; y: number; width: number; height: number } | null;
     /** Matches `stepWorld`'s, so a level with a different gravity keeps the bounce proportionate. */
     gravity?: number;
 }
@@ -56,6 +64,9 @@ export function marioRules(
     doc: ReadonlyDocument, world: WorldState, ctx: RuleContext
 ): RuntimeCommand[] {
     const out: RuntimeCommand[] = [];
+    // A FINISHED RUN DECIDES NOTHING FURTHER. Not an optimisation: without it a dead player keeps
+    // patrolling enemies, keeps stomping, and keeps re-reporting its own death every step.
+    if (world.outcome !== "running") return out;
 
     // ── PARTS THAT WALK ──────────────────────────────────────────────────────────────────────────
     // Every step, not only on an event: a walk is a STATE the part is in, unlike a stomp, which is
@@ -80,6 +91,23 @@ export function marioRules(
     // ── STOMPS ───────────────────────────────────────────────────────────────────────────────────
     const me = ctx.controlled;
     if (!me) return out;                        // a run driving nothing has nothing else to decide
+
+    // ── FALLING OUT OF THE WORLD ─────────────────────────────────────────────────────────────────
+    // THE ONE ENDING NO PART CAN DECLARE, because it is the absence of parts. A body below the
+    // level's bottom is gone: it will never come back, terminal velocity is 1200 px/s, and the run
+    // that produced this rule had reached y=4658 with nothing to do but press Stop.
+    //
+    // ONE BODY HEIGHT OF SLACK, so standing on the very lowest floor is not death. `bounds` is the
+    // CONTENT's extent, so its bottom edge is the underside of the lowest thing in the level.
+    const body = world.bodies.get(me);
+    const node = doc.nodes.get(me);
+    if (body && node && ctx.bounds) {
+        if (body.y > ctx.bounds.y + ctx.bounds.height + node.geometry.height) {
+            out.push({ kind: "endRun", outcome: "lost" });
+            return out;                          // nothing that happened this step outlives the fall
+        }
+    }
+
     let bounced = false;
     for (const e of world.events) {
         // `contact` NAMES ANOTHER BODY; `enter` names a REGION and must not be read here, or the
@@ -94,6 +122,29 @@ export function marioRules(
             bounced = true;
             out.push({ kind: "setVelocity", bodyId: me,
                 vy: -jumpSpeedFor(JUMP_HEIGHT, ctx.gravity ?? DEFAULT_GRAVITY) });
+        }
+    }
+
+    // ── TOUCHING SOMETHING THAT ENDS THE RUN ─────────────────────────────────────────────────────
+    // READ AFTER THE STOMP, and that ordering is the rule rather than an accident: a part may be
+    // BOTH deadly and stompable — which is exactly what a Goomba is — and landing on it must win.
+    // A stomp despawns it, so by the time this loop runs the killing contact is the one that came
+    // from any side but above.
+    const stomped = new Set(
+        out.flatMap(c => (c.kind === "despawn" ? [c.bodyId] : [])));
+    for (const e of world.events) {
+        if (e.bodyId !== me) continue;
+        // A GOAL MAY BE EITHER, because a flagpole is a volume you reach and a coin is a thing you
+        // touch, and nothing in the corpus decides which shape a level author will reach for.
+        if (e.kind === "enter" || e.kind === "contact") {
+            const other = doc.nodes.get(e.nodeId);
+            if (!other) continue;
+            const part = partOf(other);
+            if (part.goal) { out.push({ kind: "endRun", outcome: "won" }); return out; }
+            if (part.deadly && e.side !== "below" && !stomped.has(e.nodeId)) {
+                out.push({ kind: "endRun", outcome: "lost" });
+                return out;
+            }
         }
     }
     return out;

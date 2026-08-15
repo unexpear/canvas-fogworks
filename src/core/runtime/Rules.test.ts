@@ -201,7 +201,7 @@ describe("marioRules — the game, which the engine does not know about", () => 
             { id: "hero", x: 1005, y: 600, w: 30, h: 16, userData: { bodyType: prop("dynamic") } }
         ]);
         const { commands } = runUntilStomp(doc);
-        expect(commands.filter(c => c.kind === "despawn").map(c => c.bodyId).sort())
+        expect(commands.flatMap(c => (c.kind === "despawn" ? [c.bodyId] : [])).sort())
             .toEqual(["e1", "e2"]);
         expect(commands.filter(c => c.kind === "setVelocity")).toHaveLength(1);
     });

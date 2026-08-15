@@ -1196,6 +1196,32 @@ Verified live in the built Kenney level: enemy1 walks 180 -> 288 and falls off a
 LEFT from its negative declared speed, the player stomps enemy2 (`contact enemy (below)`, 237 -> 236
 images) and bumps two others from the side with no effect.
 
+**Slice 13 — THE RUN LIFECYCLE, so a level can be lost, won and ended.** Until this a run could
+only be STOPPED by the editor, which is a different thing: the person watching decided, not the game.
+Building a real level measured the cost — with no bounds, one stomp bounced the player past the edge
+and it reached **y=4658** still at terminal velocity, the run happily continuing with nothing to do
+but reach for Stop.
+
+**AND THE RESEARCH SAID THE SAME THING FROM THE OTHER SIDE.** Every published account of World 1-1
+turns on CONSEQUENCE: the first Goomba teaches by killing you once, and the first pit is deliberately
+given a filled-in bottom so the jump can be rehearsed before the identical next pit charges for it.
+A safe-then-lethal pair means nothing while both halves are survivable — so the single most important
+principle in the Mario level-design literature was unbuildable here until now.
+
+`WorldState.outcome` is `running | lost | won`, set ONLY by an `endRun` command — the third verb, and
+the physics still decides nothing. It is MONOTONIC and first-one-wins: nothing un-ends a run, and a
+step that both kills the player and reaches the goal reports the kill. A finished run decides nothing
+further, which is not an optimisation — without it a dead player keeps patrolling enemies and keeps
+re-reporting its own death every step.
+
+`vde.deadly` and `vde.goal` join the parts vocabulary. **THE ORDERING BETWEEN DEADLY AND STOMPABLE IS
+THE RULE, not an accident:** a part may be both — which is exactly what a Goomba is — so the stomp is
+read FIRST and a part it despawned cannot then kill. Falling out of the world is the one ending no
+part can declare, because it is the ABSENCE of parts; the caller supplies the level's extent, which
+is the same rectangle the camera already refuses to scroll past, with one body height of slack so
+standing on the lowest floor is not death. With no bounds supplied the runtime behaves exactly as it
+did before, and a test pins the 4,000px runaway to prove it.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

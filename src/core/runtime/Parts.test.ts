@@ -29,7 +29,7 @@ describe("the vocabulary a part declares about itself", () => {
         expect(partOf(node(undefined))).toEqual(INERT);
         expect(partOf(node({ bodyType: prop("dynamic"), friction: prop("0.45") }))).toEqual(INERT);
         // …including a node carrying a CLASS, which is what slice 10 read as "actor" and no longer does.
-        expect(partOf(node({ bodyType: prop("dynamic") }))).toEqual({ stompable: false, patrol: null });
+        expect(partOf(node({ bodyType: prop("dynamic") }))).toEqual({ stompable: false, patrol: null, deadly: false, goal: false });
     });
 
     it("reads stompable leniently, and reads the words that mean NO as no", () => {
@@ -132,5 +132,116 @@ describe("a part that WALKS", () => {
         expect(60).toBeLessThan(MOVE_SPEED);
         // …and the speed it ACTUALLY travels, after the friction above, is lower still.
         expect(45).toBeLessThan(MOVE_SPEED);
+    });
+});
+
+describe("the run lifecycle — a run that can be lost, won and ended", () => {
+    const LEVEL = { x: 0, y: 0, width: 400, height: 120 };
+    const world = (doc: ProjectDocument, n: number, controlled: string | null = "hero") => {
+        let w = worldFrom(doc);
+        for (let i = 0; i < n; i++) {
+            if (w.outcome !== "running") break;
+            w = stepWorld(doc, w, { controlled });
+            w = applyCommands(w, marioRules(doc, w, { controlled, bounds: LEVEL }));
+        }
+        return w;
+    };
+
+    it("STARTS running, which is what every earlier slice assumed and none could say", () => {
+        expect(worldFrom(docWith([])).outcome).toBe("running");
+    });
+
+    it("FALLING OUT OF THE WORLD loses the run", () => {
+        // No floor at all: the hero falls past the level's bottom (120) plus its own height.
+        const doc = docWith([{ id: "hero", x: 50, y: 0, userData: { bodyType: prop("dynamic") } }]);
+        expect(world(doc, 600).outcome).toBe("lost");
+    });
+
+    it("…but standing on the lowest floor does NOT, which is the slack the rule allows for", () => {
+        const doc = docWith([
+            { id: "floor", x: 0, y: 100, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "hero", x: 50, y: 80, userData: { bodyType: prop("dynamic") } }
+        ]);
+        const w = world(doc, 600);
+        expect(w.outcome).toBe("running");
+        expect(w.bodies.get("hero")!.y).toBe(90);
+    });
+
+    it("with NO bounds it cannot fall out, which is exactly what the runtime did before", () => {
+        const doc = docWith([{ id: "hero", x: 50, y: 0, userData: { bodyType: prop("dynamic") } }]);
+        let w = worldFrom(doc);
+        for (let i = 0; i < 600; i++) {
+            w = stepWorld(doc, w, { controlled: "hero" });
+            w = applyCommands(w, marioRules(doc, w, { controlled: "hero", bounds: null }));
+        }
+        expect(w.outcome).toBe("running");
+        expect(w.bodies.get("hero")!.y).toBeGreaterThan(4000);   // the measured runaway, preserved
+    });
+
+    it("TOUCHING A DEADLY PART from the side loses the run", () => {
+        const doc = docWith([
+            { id: "floor", x: 0, y: 100, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "spike", x: 120, y: 90, userData: { bodyType: prop("dynamic"),
+                [PART_PREFIX + "deadly"]: prop("true") } },
+            { id: "hero", x: 50, y: 90, userData: { bodyType: prop("dynamic") } }
+        ]);
+        let w = worldFrom(doc);
+        for (let i = 0; i < 200 && w.outcome === "running"; i++) {
+            w = stepWorld(doc, w, { input: { left: false, right: true, jump: false }, controlled: "hero" });
+            w = applyCommands(w, marioRules(doc, w, { controlled: "hero", bounds: LEVEL }));
+        }
+        expect(w.outcome).toBe("lost");
+    });
+
+    it("STOMPING a part that is deadly AND stompable wins the exchange — a Goomba, exactly", () => {
+        // The ordering rule: the stomp is read first, and a part it despawned cannot then kill.
+        const doc = docWith([
+            { id: "floor", x: 0, y: 100, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "goomba", x: 50, y: 92, w: 10, h: 8, userData: { bodyType: prop("dynamic"),
+                [PART_PREFIX + "deadly"]: prop("true"), [PART_PREFIX + "stompable"]: prop("true") } },
+            { id: "hero", x: 51, y: 20, w: 8, h: 10, userData: { bodyType: prop("dynamic") } }
+        ]);
+        const w = world(doc, 200);
+        expect(w.outcome).toBe("running");            // it lived
+        expect([...w.despawned]).toEqual(["goomba"]); // …and the goomba did not
+    });
+
+    it("REACHING A GOAL wins, whether it is a body or a region", () => {
+        const asRegion = docWith([
+            { id: "floor", x: 0, y: 100, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "flag", x: 120, y: 60, w: 10, h: 40, userData: { [PART_PREFIX + "goal"]: prop("true") } },
+            { id: "hero", x: 50, y: 90, userData: { bodyType: prop("dynamic") } }
+        ]);
+        // A goal with no bodyType is a REGION, so it is entered rather than contacted.
+        asRegion.nodes.set("flag", { ...(asRegion.nodes.get("flag")!), className: "exit" } as Node);
+        let w = worldFrom(asRegion);
+        for (let i = 0; i < 200 && w.outcome === "running"; i++) {
+            w = stepWorld(asRegion, w, { input: { left: false, right: true, jump: false }, controlled: "hero" });
+            w = applyCommands(w, marioRules(asRegion, w, { controlled: "hero", bounds: LEVEL }));
+        }
+        expect(w.outcome).toBe("won");
+    });
+
+    it("A FINISHED RUN DECIDES NOTHING FURTHER", () => {
+        const doc = docWith([
+            { id: "floor", x: 0, y: 100, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "walker", x: 50, y: 90, userData: { bodyType: prop("dynamic"),
+                [PART_PREFIX + "patrol"]: prop("60") } },
+            { id: "hero", x: 200, y: 90, userData: { bodyType: prop("dynamic") } }
+        ]);
+        let w = applyCommands(worldFrom(doc), [{ kind: "endRun", outcome: "lost" }]);
+        w = stepWorld(doc, w, { controlled: "hero" });
+        // Not even the patrol, which otherwise runs on every step regardless of events.
+        expect(marioRules(doc, w, { controlled: "hero", bounds: LEVEL })).toEqual([]);
+    });
+
+    it("an ending is MONOTONIC — nothing un-ends a run, and the first one wins", () => {
+        const w0 = worldFrom(docWith([]));
+        const lost = applyCommands(w0, [{ kind: "endRun", outcome: "lost" }]);
+        expect(lost.outcome).toBe("lost");
+        expect(applyCommands(lost, [{ kind: "endRun", outcome: "won" }]).outcome).toBe("lost");
+        // …and within one batch, the first wins too.
+        expect(applyCommands(w0, [{ kind: "endRun", outcome: "won" },
+                                  { kind: "endRun", outcome: "lost" }]).outcome).toBe("won");
     });
 });

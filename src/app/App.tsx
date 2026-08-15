@@ -1365,14 +1365,19 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 // STEPPED AGAINST THE STORED DOCUMENT, never the derived one: a body's size and
                 // every solid's box are the FILE's facts, so an edit to the level is picked up on
                 // the next step and the physics never reads its own output back in.
-                for (let i = 0; i < spend.steps; i++) {
+                // A FINISHED RUN DOES NOT STEP. The world is kept rather than cleared, so the
+                // last frame stays on screen and the bodies stay where they ended; Stop is what
+                // throws it away, exactly as it always was.
+                const stepsToRun = world.outcome === "running" ? spend.steps : 0;
+                for (let i = 0; i < stepsToRun; i++) {
                     world = stepWorld(base, world, { input: es.input, controlled: es.controlled });
                     // THE RULES RUN PER STEP, INSIDE THE LOOP. A frame may earn five steps, and
                     // batching the commands to the end of it would delay every bounce by up to four
                     // — measured at 14.25px on a stomp. The physics still decides nothing: it
                     // produced events, this reads them, and `applyCommands` answers a FINISHED
                     // world. `marioRules` is the game; swapping it changes no line below.
-                    world = applyCommands(world, marioRules(base, world, { controlled: es.controlled }));
+                    world = applyCommands(world, marioRules(base, world,
+                        { controlled: es.controlled, bounds: runBoundsRef.current }));
                 }
                 es.world = world;
                 es.worldClock = { accumulator: spend.accumulator, lastAt: now };
@@ -4318,6 +4323,13 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     state this project has now found four separate fields in. A status line is the
                     smallest honest surface: it proves the chain end to end and commits to nothing
                     about what a game should do with it. */}
+                {es.playing && es.world && es.world.outcome !== "running" && (
+                    <span data-run-outcome={es.world.outcome}
+                        style={{ color: es.world.outcome === "won" ? "#5f9e78" : "#d4655a",
+                                 fontWeight: 600 }}>
+                        {es.world.outcome === "won" ? "COMPLETE" : "FAILED"}
+                    </span>
+                )}
                 {es.playing && lastEvent && (
                     <span data-world-event="1" style={{ color: UI.accent }}>
                         {lastEvent.kind} {lastEvent.className || "(no class)"}

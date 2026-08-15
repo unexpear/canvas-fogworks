@@ -294,6 +294,11 @@ export interface WorldState {
      * still there when the run ends. That is the same bargain every other part of a run strikes.
      */
     despawned: ReadonlySet<string>;
+    /**
+     * Whether this run is still going. Set only by an `endRun` command — the physics never decides
+     * that a game is over, for the same reason it never decides what a stomp means.
+     */
+    outcome: RunOutcome;
     /** What the step that produced this world noticed. Empty on most steps, by design. */
     events: readonly WorldEvent[];
 }
@@ -350,6 +355,25 @@ export interface Region {
  * takes: one box entirely within another has no side, and guessing one would be a direction an app
  * acts on that the geometry never supported.
  */
+/**
+ * WHETHER THE RUN IS STILL GOING, and how it stopped if it is not.
+ *
+ * Until this existed a run could not be lost, won or ended — it could only be STOPPED by the editor,
+ * which is a different thing entirely: the person watching decided, not the game. Building a real
+ * level proved how much that costs. With no bounds, one stomp bounced the player past the level edge
+ * and it reached y=4658 still at terminal velocity, with the run happily continuing and nothing to
+ * do but reach for Stop.
+ *
+ * IT IS ALSO WHAT MAKES A LEVEL TEACHABLE. Every published account of World 1-1 turns on
+ * consequence — the first Goomba teaches by killing you once, and the first pit is deliberately
+ * given a filled-in bottom so the jump can be rehearsed before the identical next pit charges for
+ * it. A safe-then-lethal pair means nothing while both halves are survivable.
+ *
+ * MONOTONIC WITHIN A RUN. Nothing here returns to `running`; a finished run is finished, and
+ * starting again is Play building a new world, which is the same bargain despawn already strikes.
+ */
+export type RunOutcome = "running" | "lost" | "won";
+
 export type ContactSide = "above" | "below" | "left" | "right" | "inside";
 
 /** An axis-aligned box, for the one function here that does not care what it belongs to. */
@@ -489,7 +513,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
             vx: 0, vy: 0, onGround: false, groundFriction: 1, blockedX: false
         });
     }
-    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), jumpWas: false, overlaps: new Set(), events: [] };
+    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), outcome: "running", jumpWas: false, overlaps: new Set(), events: [] };
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
@@ -922,7 +946,7 @@ export function stepWorld(
             className: doc.nodes.get(first)?.className ?? "" });
     }
 
-    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, jumpWas: input.jump, overlaps: inside, events };
+    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, outcome: world.outcome, jumpWas: input.jump, overlaps: inside, events };
 }
 
 /**
@@ -999,7 +1023,16 @@ export function applyWorld(doc: ReadonlyDocument, world: WorldState): ReadonlyDo
 export type RuntimeCommand =
     | { kind: "despawn"; bodyId: string }
     /** Absent components are LEFT ALONE, so a bounce can set vy without touching a walk in progress. */
-    | { kind: "setVelocity"; bodyId: string; vx?: number; vy?: number };
+    | { kind: "setVelocity"; bodyId: string; vx?: number; vy?: number }
+    /**
+     * The run is over. THE THIRD VERB, and the one the built level demanded loudest — before it a
+     * run had no way to end, so a level could not be lost, won, or taught.
+     *
+     * FIRST ONE WINS. A step that both kills the player and reaches the goal reports the kill,
+     * because a later command must not overwrite an ending that already happened; and a run that
+     * has ended issues nothing further at all.
+     */
+    | { kind: "endRun"; outcome: Exclude<RunOutcome, "running"> };
 
 /**
  * A world with the commands applied, in array order.
@@ -1018,7 +1051,13 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
     if (commands.length === 0) return world;
     let bodies: Map<string, Body> | null = null;
     let despawned: Set<string> | null = null;
+    let outcome: RunOutcome | null = null;
     for (const c of commands) {
+        if (c.kind === "endRun") {
+            // FIRST ONE WINS, and the world's own is checked too: nothing may un-end a run.
+            if (outcome === null && world.outcome === "running") outcome = c.outcome;
+            continue;
+        }
         // ACCUMULATING MAP, never `world.bodies` — see above.
         const live = bodies ?? world.bodies;
         const body = live.get(c.bodyId);
@@ -1041,11 +1080,12 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
             onGround: (c.vy !== undefined && c.vy < 0) ? false : body.onGround
         });
     }
-    if (!bodies && !despawned) return world;
+    if (!bodies && !despawned && !outcome) return world;
     return {
         ...world,
         bodies: bodies ?? world.bodies,
-        despawned: despawned ?? world.despawned
+        despawned: despawned ?? world.despawned,
+        outcome: outcome ?? world.outcome
     };
 }
 
