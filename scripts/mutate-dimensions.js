@@ -1425,10 +1425,10 @@ const MUTANTS = [
       from: "        if (e.side !== \"below\") continue;",
       to: "",
       note: "walking into an enemy kills it exactly like landing on it, so the one distinction the whole contact slice was built to make stops being made" },
-    { id: "RU3", file: "src/core/runtime/Rules.ts",
-      from: "        if (e.className === \"\") continue;",
-      to: "",
-      note: "an unclassed body becomes an actor, so the corpus's ONE dynamic object — sticker-knight's 96x96 block a player PUSHES — is deleted the first time anybody stands on it" },
+    // RU3 IS GONE, not re-authored. It pinned the className === "" test — the slice-10
+    // inference that read a class as "authored as an actor" — and slice 12 DELETED that line in
+    // favour of a declaration the part makes itself. A mutant whose code no longer exists is not
+    // drift to be repaired; the guard it provided is now PT7, aimed at the rule that replaced it.
     { id: "RU4", file: "src/core/runtime/Rules.ts",
       from: "        if (e.bodyId !== me) continue;",
       to: "",
