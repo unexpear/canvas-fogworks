@@ -138,7 +138,7 @@ import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
 import { naturalSize, surfaceUrl, imageSizeAsync } from "../../src/renderer/ImageCache";
-import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands } from "../core/runtime/World";
+import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds } from "../core/runtime/World";
 import { marioRules } from "../core/runtime/Rules";
 import { followCamera } from "../core/runtime/Camera";
 import { SourceRect } from "../core/document/Node";
@@ -1400,7 +1400,10 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 // jumps and lands back on its authored position agrees with the document again, so
                 // without this it goes unnamed on exactly the frame it arrives and the incremental
                 // geometry keeps drawing it mid-air. Measured at 6px, permanent.
-                worldMoved = movedIds(base, world, before);
+                // A CHARACTER THAT TURNS AROUND HAS NOT MOVED A PIXEL, so `movedIds` alone leaves
+                // it out of the dirty set and the incremental geometry keeps the old matrix for
+                // ever — the third time a stale dirty set would have shown a stale picture here.
+                worldMoved = new Set([...movedIds(base, world, before), ...facedIds(base, world)]);
                 // THE CAMERA FOLLOWS WHAT YOU DRIVE, and it is stepped with the SAME step count
                 // the physics just spent, not once per frame — a camera closing a fixed fraction
                 // per frame is a different camera on a 144Hz monitor, which is the same defect as
@@ -1436,7 +1439,9 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     setRunOutcome(world.outcome);
                 }
                 // …and the bodies reach the scene the way the PLAYHEAD does: stamped onto a copy.
-                played = applyWorld(timed, world);
+                // …and then MIRRORED to face the way it is going. A sibling of applyWorld rather
+                // than part of it: this changes no box, so nothing derived from bounds can shift.
+                played = applyFacing(applyWorld(timed, world), world);
             }
             const stored = applyParallax(played as ProjectDocument, es.viewport) as ReadonlyDocument;
             const doc: ReadonlyDocument = !es.playing

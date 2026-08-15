@@ -249,6 +249,21 @@ export interface Body {
      * not more.
      */
     blockedX: boolean;
+    /**
+     * WHICH WAY THIS BODY IS FACING: 1 for right, -1 for left. Never 0.
+     *
+     * A FACT ABOUT MOTION, not about presentation — which is why it lives here beside `onGround` and
+     * `blockedX` rather than in a rule. It is `sign(vx)` with one addition that is the whole point:
+     * a body whose vx is zero KEEPS the way it was facing. Deriving it outside the step could not do
+     * that, because a stopped character has no velocity left to read and would snap back to facing
+     * right the instant it stood still.
+     *
+     * PER STEP BY CONSTRUCTION. A frame may spend anywhere from zero to five steps, so anything
+     * computed once per FRAME and inherited across frames gives a different picture on a different
+     * monitor — the defect already measured at 14.25px when rules were sampled per frame. Living on
+     * the body means it is updated exactly as often as the physics is, and never more.
+     */
+    facing: 1 | -1;
 }
 
 /** The run's whole mutable state. Keyed by STORED node id, never serialized. */
@@ -510,7 +525,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
         if (!at) continue;                        // refused, and `runtimeExclusions` says why
         bodies.set(node.id, {
             x: node.geometry.x + at.dx, y: node.geometry.y + at.dy,
-            vx: 0, vy: 0, onGround: false, groundFriction: 1, blockedX: false
+            vx: 0, vy: 0, onGround: false, groundFriction: 1, blockedX: false, facing: 1
         });
     }
     return { bodies, time: 0, contacts: new Set(), despawned: new Set(), outcome: "running", jumpWas: false, overlaps: new Set(), events: [] };
@@ -838,7 +853,10 @@ export function stepWorld(
             vy = 0;
         }
 
-        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX });
+        // FACING KEEPS ITS LAST NON-ZERO DIRECTION. Read from the SETTLED vx, so a body stopped by
+        // a wall goes on facing the wall it walked into rather than flipping the instant it stops.
+        const facing: 1 | -1 = vx > 0 ? 1 : vx < 0 ? -1 : was.facing;
+        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX, facing });
     }
 
     // OVERLAPS ARE COMPUTED AFTER EVERYTHING HAS MOVED, once, on the settled positions — asking
@@ -1087,6 +1105,61 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
         despawned: despawned ?? world.despawned,
         outcome: outcome ?? world.outcome
     };
+}
+
+/**
+ * The document with each body MIRRORED to face the way it is going — the `applyFrame` move again,
+ * for a different question.
+ *
+ * A SIBLING OF `applyWorld` RATHER THAN PART OF IT, because they answer different questions to
+ * different readers: `applyWorld` says where the bodies are and is consumed by the camera, the dirty
+ * set and every downstream derivation, while this says which way they point and is consumed by
+ * nothing but the renderer. Keeping them apart is what lets a caller take one without the other.
+ *
+ * THE MAGNITUDE IS THE AUTHOR'S, THE SIGN IS THE RUN'S. A node scaled 2x stays 2x; only which side
+ * of zero it sits on belongs to the runtime, so an artist's scale survives being played.
+ *
+ * IT CANNOT MOVE ANYTHING. A negative `scaleX` about the default origin leaves the axis-aligned box
+ * identical, so nothing derived from bounds — the camera, `contentBounds`, the level extent the run
+ * lifecycle uses as its death plane — can shift because a character turned around. That was checked
+ * rather than assumed: a pose that changed a node's BOX would feed back into policy through
+ * `contentBounds` and move the death plane, which is why the frame half of this is not here yet.
+ */
+export function applyFacing(doc: ReadonlyDocument, world: WorldState): ReadonlyDocument {
+    let nodes: Map<string, Node> | null = null;
+    for (const [id, body] of world.bodies) {
+        const node = doc.nodes.get(id);
+        if (!node) continue;
+        const authored = node.transform?.scaleX ?? 1;
+        // `|authored|` because the sign is ours and the size is not; a node authored mirrored has a
+        // magnitude of 1 either way, so it simply faces the run's direction like everything else.
+        const want = body.facing * Math.abs(authored);
+        if (authored === want) continue;
+        if (!nodes) nodes = new Map(doc.nodes as ReadonlyMap<string, Node>);
+        nodes.set(id, { ...(node as Node),
+            transform: { ...(node.transform ?? {}), scaleX: want } } as Node);
+    }
+    if (!nodes) return doc;
+    return { ...(doc as ProjectDocument), nodes } as ReadonlyDocument;
+}
+
+/**
+ * Which ids `applyFacing` would flip — the dirty set's other half.
+ *
+ * WITHOUT THIS THE MIRROR IS DRAWN ONCE AND NEVER AGAIN. `movedIds` names bodies whose POSITION
+ * differs, and a character that turns around while standing still has not moved a pixel, so the
+ * incremental geometry path would keep the old matrix for ever. Exactly the shape of the two stale
+ * geometry bugs this runtime has already paid for.
+ */
+export function facedIds(doc: ReadonlyDocument, world: WorldState): Set<string> {
+    const out = new Set<string>();
+    for (const [id, body] of world.bodies) {
+        const node = doc.nodes.get(id);
+        if (!node) continue;
+        const authored = node.transform?.scaleX ?? 1;
+        if (authored !== body.facing * Math.abs(authored)) out.add(id);
+    }
+    return out;
 }
 
 /**

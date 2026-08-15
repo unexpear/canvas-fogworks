@@ -1,6 +1,6 @@
 import { createEmptyDocument, ProjectDocument } from "../document/Document";
 import { Node, UserData } from "../document/Node";
-import { worldFrom, stepWorld, applyCommands, MOVE_SPEED, FIXED_STEP } from "./World";
+import { worldFrom, stepWorld, applyCommands, applyFacing, facedIds, MOVE_SPEED, FIXED_STEP } from "./World";
 import { partOf, hasParts, INERT, PART_PREFIX } from "./Parts";
 import { marioRules } from "./Rules";
 
@@ -293,5 +293,73 @@ describe("the two lifecycle fixtures that were BLIND, and what they could not se
         expect(0.125 * 32 * 33).toBe(132);
         // Subtracting the slack instead of adding it would fire at 110, which is step 30.
         expect(0.125 * 30 * 31).toBe(116.25);
+    });
+});
+
+describe("facing — a character looks the way it is going", () => {
+    const pen = (speed: string) => docWith([
+        { id: "floor", x: 0, y: 100, w: 200, h: 20, userData: { bodyType: prop("static") } },
+        { id: "wallR", x: 200, y: 0, w: 20, h: 120, userData: { bodyType: prop("static") } },
+        { id: "goomba", x: 90, y: 90, w: 10, h: 10,
+          userData: { bodyType: prop("dynamic"), [PART_PREFIX + "patrol"]: prop(speed) } }
+    ]);
+    const step = (doc: ProjectDocument, n: number) => {
+        let w = worldFrom(doc);
+        for (let i = 0; i < n; i++) {
+            w = stepWorld(doc, w);
+            w = applyCommands(w, marioRules(doc, w, { controlled: null }));
+        }
+        return w;
+    };
+
+    it("starts facing RIGHT and turns with the walk", () => {
+        expect(worldFrom(pen("60")).bodies.get("goomba")!.facing).toBe(1);
+        expect(step(pen("-60"), 3).bodies.get("goomba")!.facing).toBe(-1);
+        expect(step(pen("60"), 3).bodies.get("goomba")!.facing).toBe(1);
+    });
+
+    it("KEEPS its direction when it stops, which is the whole reason it lives on the body", () => {
+        // A stopped character has no velocity left to read. Deriving facing outside the step would
+        // snap it back to facing right the instant it stood still.
+        const doc = pen("-60");
+        let w = step(doc, 3);
+        expect(w.bodies.get("goomba")!.facing).toBe(-1);
+        w = applyCommands(w, [{ kind: "setVelocity", bodyId: "goomba", vx: 0 }]);
+        // Stepping on with no patrol command: the body is at rest and still faces left.
+        const still = docWith([
+            { id: "floor", x: 0, y: 100, w: 200, h: 20, userData: { bodyType: prop("static") } },
+            { id: "goomba", x: 90, y: 90, w: 10, h: 10, userData: { bodyType: prop("dynamic") } }
+        ]);
+        for (let i = 0; i < 5; i++) w = stepWorld(still, w);
+        expect(w.bodies.get("goomba")!.vx).toBe(0);
+        expect(w.bodies.get("goomba")!.facing).toBe(-1);
+    });
+
+    it("MIRRORS the node, keeping the author's magnitude", () => {
+        const doc = pen("-60");
+        doc.nodes.set("goomba", { ...(doc.nodes.get("goomba")!),
+            transform: { scaleX: 2, scaleY: 2 } } as Node);
+        const w = step(doc, 3);
+        const out = applyFacing(doc, w);
+        expect(out.nodes.get("goomba")!.transform!.scaleX).toBe(-2);   // sign ours, size theirs
+        expect(out.nodes.get("goomba")!.transform!.scaleY).toBe(2);    // untouched
+        // …and the STORED document is not changed, as with every other derivation.
+        expect(doc.nodes.get("goomba")!.transform!.scaleX).toBe(2);
+    });
+
+    it("is NAMED IN THE DIRTY SET, or the mirror is drawn once and never again", () => {
+        // A character that turns around while standing still has not moved a pixel, so `movedIds`
+        // leaves it out and the incremental geometry keeps the old matrix for ever.
+        const doc = pen("-60");
+        const w = step(doc, 3);
+        expect([...facedIds(doc, w)]).toEqual(["goomba"]);
+        // Once stamped, it is no longer dirty — or every frame would redraw it for ever.
+        expect([...facedIds(applyFacing(doc, w), w)]).toEqual([]);
+    });
+
+    it("returns the SAME document when nothing needs mirroring", () => {
+        const doc = pen("60");
+        const w = step(doc, 3);
+        expect(applyFacing(doc, w)).toBe(doc);
     });
 });
