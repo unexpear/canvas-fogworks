@@ -1430,9 +1430,9 @@ const MUTANTS = [
     // favour of a declaration the part makes itself. A mutant whose code no longer exists is not
     // drift to be repaired; the guard it provided is now PT7, aimed at the rule that replaced it.
     { id: "RU4", file: "src/core/runtime/Rules.ts",
-      from: "        if (e.bodyId !== me) continue;",
-      to: "",
-      note: "the rule fires on the event reported to the ENEMY as well, so an enemy landing on the player despawns the player and bounces a body that is not being driven" },
+      from: "        if (e.kind !== \"contact\") continue;\n        if (e.bodyId !== me) continue;",
+      to: "        if (e.kind !== \"contact\") continue;",
+      note: "the rule fires on the event reported to the ENEMY as well, so an enemy landing on the player despawns the player and bounces a body that is not being driven. CONTEXT ADDED when slice 13's lifecycle loop gave `if (e.bodyId !== me) continue;` a second home — the harness reported AMBIGUOUS rather than silently mutating whichever came first, which is the whole reason that verdict exists" },
     { id: "RU5", file: "src/core/runtime/Rules.ts",
       from: "        if (!bounced) {\n            bounced = true;",
       to: "        {",
