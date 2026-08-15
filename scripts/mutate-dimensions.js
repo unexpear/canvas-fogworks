@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1892;
+const EXPECTED_TESTS = 1902;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1453,6 +1453,26 @@ const MUTANTS = [
       from: "    if (world.despawned.size > 0) {\n        for (const id of world.despawned) {\n            const node = doc.nodes.get(id);\n            if (!node || node.hidden) continue;\n            if (!nodes) nodes = new Map(doc.nodes as ReadonlyMap<string, Node>);\n            nodes.set(id, { ...(node as Node), hidden: true });\n        }\n    }",
       to: "",
       note: "a despawned body vanishes from the simulation and stays on screen forever — the run reports a kill and the corpse keeps standing there" },
+
+    // THE EXTRACTED PLACEMENT LOGIC (M18 slice 11). Not one of these could have been written
+    // before the conversion left App.tsx's folder-picker handler: `window.electronAPI` is frozen,
+    // so the code they mutate was unreachable from any test, script or CDP session.
+    { id: "TP1", file: "src/core/import/tiledPlacements.ts",
+      from: "        if (fit.layer && sheet) {",
+      to: "        if (fit.layer) {",
+      note: "a layer whose sheet failed to load still becomes a GRID, which then draws nothing at all — instead of falling back to the per-cell path, which is the only thing that can draw it" },
+    { id: "TP2", file: "src/core/import/tiledPlacements.ts",
+      from: "        const had = setIds.get(set);\n        if (had !== undefined) return had;",
+      to: "        const had = undefined;\n        if (had !== undefined) return had;",
+      note: "one tileset per LAYER instead of per distinct set — the measured 2.5x picture duplication schema 67 existed to remove, back again (41 layers drawing from 12 sets in the corpus)" },
+    { id: "TP3", file: "src/core/import/tiledPlacements.ts",
+      from: "        if (placeable.length === 0) continue;",
+      to: "",
+      note: "an object layer with nothing placeable still gets a FRAME, so a map full of templates imports as a stack of empty rectangles — which reads as a broken import rather than as content this cannot open" },
+    { id: "TP5", file: "src/core/import/tiledPlacements.ts",
+      from: "            width: map.width * map.tileWidth,\n            height: map.height * map.tileHeight,",
+      to: "            width: group.offsetX, height: group.offsetY,",
+      note: "the object layer's frame is sized from its own offset rather than spanning the map, so every entity inside it is displaced and the frame moves whenever an object does" },
 ];
 
 function runSuite() {

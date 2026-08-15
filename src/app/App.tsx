@@ -25,6 +25,10 @@ import { SetSlotAction, SetSlotContentAction } from "../core/actions/SlotActions
 import { SetNodeStateAction, SetActiveStateAction } from "../core/actions/StateActions";
 import { SetNodeFlagsAction } from "../core/actions/SetNodeFlagsAction";
 import { tileImportActions, TilePlacement } from "../core/actions/tileImport";
+//  is aliased: the drawer already has a state variable of that name.
+// ALIASED: this drawer already has a state variable called `importNote`, and the shadowing is not
+// hypothetical — it typechecked as "String has no call signatures" the moment the import landed.
+import { buildPlacements, importNote as tiledImportNote } from "../core/import/tiledPlacements";
 import { resolveLayerDrop, DropPosition } from "../editor/layerDrop";
 import { selectionForRowClick, ClickModifiers } from "../editor/layerSelection";
 import { filterLayers } from "../editor/layerFilter";
@@ -5476,195 +5480,26 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                         }
                                     }
 
-                                    const tiles: TilePlacement[] = [];
-                                    let unresolved = 0;
-                                    // ONE TILESET PER DISTINCT SET, minted on first sight and reused
-                                    // — this is where the measured 2.5x actually collapses. Tiled's
-                                    // own examples hold 41 tile layers drawing from 12 sets, and
-                                    // every layer used to carry its own copy of the picture.
-                                    const setIds = new Map<TiledTileset, string>();
-                                    const newTilesets: Tileset[] = [];
-                                    const tilesetIdFor = (set: TiledTileset): string => {
-                                        const had = setIds.get(set);
-                                        if (had !== undefined) return had;
-                                        const id = generateUUID();
-                                        setIds.set(set, id);
-                                        newTilesets.push({
-                                            id,
-                                            name: set.name || "Tileset",
-                                            // RESOLVED BY THE CALLER, as the parser's own header
-                                            // says: it reports the path the file named, and reading
-                                            // it needs a filesystem this module does not have.
-                                            src: sheets.get(set.image ?? "") ?? null,
-                                            sheet: {
-                                                columns: set.columns, tileWidth: set.tileWidth,
-                                                tileHeight: set.tileHeight,
-                                                spacing: set.spacing, margin: set.margin
-                                            },
-                                            // A COLLECTION set's per-tile images, which had nowhere
-                                            // to live until now — 1,207 of them in this corpus.
-                                            tiles: set.tiles.map(t => ({
-                                                id: t.id,
-                                                src: sheets.get(t.image) ?? t.image,
-                                                width: t.width, height: t.height
-                                            })),
-                                            offsetX: set.offsetX, offsetY: set.offsetY
-                                        });
-                                        return id;
-                                    };
-                                    for (const layer of map.layers) {
-                                        // THE GRID IS TRIED FIRST, LAYER BY LAYER. 45 of the
-                                        // corpus's 53 tile layers become one `core.tilemap` each,
-                                        // which is what turns a 10,618-node import into a 5-node
-                                        // one; the rest fall through to the loop below, which is
-                                        // the only thing that can draw them.
-                                        const fit = tilemapForLayer(map, layer, sets, tilesetIdFor);
-                                        const sheet = fit.layer ? sheets.get(fit.layer.image) : undefined;
-                                        if (fit.layer && sheet) {
-                                            tiles.push({
-                                                kind: "tilemap",
-                                                x: fit.layer.x, y: fit.layer.y,
-                                                width: fit.layer.width, height: fit.layer.height,
-                                                // NO `src` (schema 68) — the picture went onto the
-                                                // TILESET above, and `sheet` is still read here
-                                                // because a layer whose image did not load takes
-                                                // the per-cell path rather than becoming a grid
-                                                // that draws nothing.
-                                                map: fit.layer.tilemap,
-                                                name: layer.name || "Tile layer",
-                                                opacity: fit.layer.opacity, hidden: fit.layer.hidden
-                                            });
-                                            // A HOLE COUNTS WHERE EVERY OTHER UNPLACEABLE CELL
-                                            // COUNTS, so the same map reports the same number
-                                            // whichever path drew it.
-                                            unresolved += fit.layer.dropped;
-                                            continue;
-                                        }
-                                        // WHY, not merely "not a grid": a layer that fell back is a
-                                        // layer costing a thousand nodes, and the reason is the
-                                        // difference between a file to fix and a feature we lack.
-                                        problems.push(fit.why
-                                            ?? `layer "${layer.name}" fits a grid but its sheet did not load`);
-                                        for (let i = 0; i < layer.cells.length; i++) {
-                                            const cell = layer.cells[i];
-                                            if (cell.gid === 0) continue;   // EMPTY is most of a map
-                                            const set = tilesetFor(sets, cell.gid);
-                                            if (!set) { unresolved++; continue; }
-                                            // A COLLECTION tile is asked about FIRST: it is a whole
-                                            // file at its own size, so there is no rect to cut and
-                                            // the set's declared tile size does not apply to it.
-                                            const own = tileImageFor(set, cell.gid);
-                                            const rect = own ? null : tileSourceRect(set, cell.gid);
-                                            const path = own ? own.image : set.image;
-                                            const src = path ? sheets.get(path) : undefined;
-                                            if (!src || (!own && !rect)) { unresolved++; continue; }
-                                            // THE BOX, ANCHORING AND ALL, from `tileImageBox` — which
-                                            // is where the rule lives now rather than here. Both
-                                            // offsets are still applied (the SET's lets a tall tile
-                                            // hang above its own cell; the LAYER's shifts the whole
-                                            // layer, and one corpus map moves one 30 pixels up), and
-                                            // what this line used to get wrong is the anchoring: a
-                                            // tile sits at the BOTTOM of its cell, so art taller than
-                                            // the grid stands up from it instead of hanging down
-                                            // through the floor. Nine maps in the tree have such
-                                            // art. The grid path folds the offsets into the node's
-                                            // own position and refuses oversized art outright, so
-                                            // this is the only place either question arises.
-                                            const box = tileImageBox(map, layer, set,
-                                                own ?? { width: set.tileWidth, height: set.tileHeight },
-                                                i % layer.width, Math.floor(i / layer.width));
-                                            const t = tileTransform(cell);
-                                            tiles.push({
-                                                kind: "image",
-                                                x: box.x, y: box.y,
-                                                width: box.width, height: box.height,
-                                                src, sourceRect: rect,
-                                                name: `${layer.name} ${cell.gid}`,
-                                                // Only the 820-in-124,692 that need one, so an
-                                                // unflipped tile carries no transform at all.
-                                                transform: t.rotation === 0 && t.scaleX === 1 ? null : t
-                                            });
-                                        }
-                                    }
+                                    // THE CONVERSION LIVES IN `core/import/tiledPlacements` NOW, and moving
+                                    // it there was the point rather than the tidiness. `window.electronAPI`
+                                    // is frozen, so this handler cannot be driven from a test or a script —
+                                    // which meant the most intricate part of the importer (grid-or-per-cell
+                                    // per layer, tileset deduplication, anchoring, object layers) was the
+                                    // one part nothing could exercise. Everything ABOVE this line is
+                                    // filesystem work that genuinely needs a filesystem; everything below
+                                    // it was pure all along and is now reachable.
+                                    const built = buildPlacements(map, sets, sheets,
+                                        { newId: generateUUID, problems });
+                                    const tiles = built.placements;
+                                    const newTilesets = built.tilesets;
 
-                                    // OBJECT LAYERS (2026-08-10), in file order after the tile
-                                    // layers, so an entity sits above the ground it stands on. Each
-                                    // group becomes a FRAME carrying the layer's opacity and
-                                    // visibility, and `tileImportActions` nests what follows it.
-                                    for (const group of map.objectGroups) {
-                                        // ONE PASS, kept: `objectPlacement` resolves a tileset per
-                                        // object, and asking twice — once to place and once to
-                                        // report — is the same work done again for 114 objects.
-                                        const fits = group.objects.map(o => objectPlacement(o, sets));
-                                        for (const fit of fits) {
-                                            // WHY EACH ONE WAS REFUSED, not merely how many: a
-                                            // template reference and a text object are different
-                                            // gaps, and the reason is what says whether this is a
-                                            // file to fix or a feature we do not have.
-                                            if (fit.why) problems.push(fit.why);
-                                        }
-                                        const placeable = fits.filter(f => f.placement !== null);
-                                        // AN EMPTY LAYER GETS NO FRAME. A map full of templates
-                                        // would otherwise import as a stack of empty rectangles,
-                                        // which reads as a broken import rather than as content
-                                        // this cannot open.
-                                        if (placeable.length === 0) continue;
-                                        tiles.push({
-                                            kind: "group",
-                                            // THE FRAME SPANS THE MAP, not its contents: an object
-                                            // layer has no box of its own, and a frame sized to the
-                                            // objects would move whenever one did.
-                                            x: group.offsetX, y: group.offsetY,
-                                            width: map.width * map.tileWidth,
-                                            height: map.height * map.tileHeight,
-                                            name: group.name || "Object layer",
-                                            opacity: group.opacity, hidden: !group.visible
-                                        });
-                                        for (const fit of placeable) {
-                                            const pl = fit.placement!;
-                                            const src = pl.image ? sheets.get(pl.image) : undefined;
-                                            // A tile object whose sheet did not load is counted
-                                            // where every other unplaceable thing is counted.
-                                            if (pl.shape === "image" && !src) { unresolved++; continue; }
-                                            tiles.push({
-                                                kind: "object",
-                                                shape: pl.shape,
-                                                x: pl.x + group.offsetX, y: pl.y + group.offsetY,
-                                                width: pl.width, height: pl.height,
-                                                name: pl.name,
-                                                src: src ?? null,
-                                                sourceRect: pl.sourceRect,
-                                                // Emitted only when it turns or mirrors, so an
-                                                // ordinary entity carries no transform at all.
-                                                transform: pl.rotation !== 0 || pl.scaleX !== 1 || pl.scaleY !== 1
-                                                    ? { rotation: pl.rotation, scaleX: pl.scaleX,
-                                                        scaleY: pl.scaleY, origin: pl.origin }
-                                                    : null,
-                                                path: pl.path,
-                                                // Carried, never read — see `TilePlacement`.
-                                                className: pl.className,
-                                                userData: pl.userData
-                                            });
-                                        }
-                                    }
-
-                                    // NODES, NOT CELLS, which is what the cap was always about: a
-                                    // grid holding ten thousand tiles is one node, so the map that
-                                    // used to sit just under this limit now costs five.
                                     if (tiles.length > TILE_PLACE_MAX) {
                                         setImportNote(`${tiles.length} nodes is more than the `
                                             + `${TILE_PLACE_MAX} this will place at once.`);
                                         return;
                                     }
                                     onImportTiles(tiles, newTilesets);
-                                    const grids = tiles.filter(t => t.kind === "tilemap").length;
-                                    const loose = tiles.length - grids;
-                                    setImportNote(`${grids} grid${grids === 1 ? "" : "s"} from `
-                                        + `${map.layers.length} layer${map.layers.length === 1 ? "" : "s"}`
-                                        + (loose > 0 ? ` · ${loose} loose tile${loose === 1 ? "" : "s"}` : "")
-                                        + ` · ${map.orientation}`
-                                        + (unresolved > 0 ? ` · ${unresolved} unresolved` : "")
-                                        + (problems.length > 0 ? ` · ${problems[0]}` : ""));
+                                    setImportNote(tiledImportNote(map, built));
                                 } catch (err) {
                                     setImportNote(`Cannot read that map: ${String(err)}`);
                                 } finally { setBusy(false); }

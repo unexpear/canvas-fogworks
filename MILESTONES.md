@@ -1135,6 +1135,32 @@ places it was published. The likely cause is the `.tsx` extension collision: a T
 React component share it. Every other headline recounted exactly (248 objects, 138 declarations,
 bodyType 51, friction 45, floating 24, density 1, 1,235 tiles).
 
+**Slice 11 — THE PLACEMENT LOGIC LEAVES THE FOLDER DIALOG, and it was found by trying to build the
+test game for real rather than by reading the code.** Two hundred and forty-one lines deciding WHAT
+a Tiled map places — grid-or-per-cell per layer, tileset deduplication, tile anchoring, object
+layers, and the note the drawer prints — lived inside a `<select onChange>` in `App.tsx`. And
+`window.electronAPI` is FROZEN and non-configurable, so that handler cannot be driven from a test,
+a script or CDP: **the most intricate part of the importer was the only part nothing could
+exercise.** The ACTIONS were extracted to `core/actions/tileImport` months ago for exactly this
+reason; the code that decides what to place never followed them out.
+
+`core/import/tiledPlacements` now holds it, and the seam is AFTER the filesystem: resolving an
+external `.tsx`, reading a PNG and measuring an image all need a filesystem, so they stay in the
+handler, and everything below them was pure all along. Even the id source is a parameter — a test
+that cannot predict the ids cannot assert on the output.
+
+**AND IT IMMEDIATELY IMPORTED AN ASSET PACK NOTHING HAD EVER IMPORTED.** Kenney's Pixel Platformer
+(`freeassets/2D assets/Pixel Platformer/Tiled/tilemap-example-a.tmx`), 26x15 at 18x18 with TWO
+tilesets, run through the extracted module: **3 grids + 10 loose tiles, 0 unresolved**, and the
+character layer correctly refuses the grid with its reason stated — *"layer 'Characters' draws 24x24
+tiles on a 18x18 grid, which a cell cannot hold"* — falling back to the per-cell path, which is the
+only thing that can draw it. The set's `<tileoffset x="-3">` is carried. That map is the visual
+basis for the test game.
+
+**One tileset is minted, not two, and that is correct:** only the GRID path needs a document
+tileset, and the 24x24 characters become `core.image` nodes with their own source rects. Worth
+knowing before anyone tries to PAINT with that set — it is not in the document.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.
