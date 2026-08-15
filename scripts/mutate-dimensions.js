@@ -1524,8 +1524,8 @@ const MUTANTS = [
       to: "        if (body.y > ctx.bounds.y + ctx.bounds.height - node.geometry.height) {",
       note: "the slack is subtracted instead of added, so a body standing on the LOWEST floor in the level is already below the line and the run is lost the instant it lands" },
     { id: "RL3", file: "src/core/runtime/Rules.ts",
-      from: "            if (part.deadly && e.side !== \"below\" && !stomped.has(e.nodeId)) {",
-      to: "            if (part.deadly && !stomped.has(e.nodeId)) {",
+      from: "            if (part.deadly && e.side !== \"below\") {",
+      to: "            if (part.deadly) {",
       note: "landing on a part that is both deadly and stompable kills you as well as it — a Goomba becomes unkillable, which is the exact exchange the ordering of these two loops exists to decide" },
     // RL4 IS GONE: it was EQUIVALENT. It removed a `stomped` set that could only hold a part
     // whose event side was already `below`, so the line above it did the same work. The code
