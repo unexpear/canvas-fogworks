@@ -7,6 +7,9 @@
 > [MILESTONES.md](MILESTONES.md) and [docs/README.md](docs/README.md).
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-08-15 after schema 69 (a node's own playhead): still accurate BECAUSE IT IS FROZEN.
+     The step moves no data — a node without a frame reads the document's, which is what every node
+     already did — so nothing this record decided is affected. -->
 <!-- re-read 2026-08-14 after the dropHidden/movedIds/reciprocal-side fixes: still accurate BECAUSE
      IT IS FROZEN; none of the three touched anything this record decided. -->
 <!-- re-read 2026-08-13 after schema 68 and the collection draw path: still accurate BECAUSE IT IS FROZEN. This file is the record of
