@@ -263,21 +263,33 @@ export function keyframesAt(track: readonly Keyframe[], frame: number): { from: 
  * a document that is not animated must cost exactly what it did before this module existed.
  */
 export function applyFrame(doc: ReadonlyDocument, frame: number | undefined): ReadonlyDocument {
-    if (!Number.isFinite(frame)) return doc;
-    const f = Math.round(frame as number);
-
+    // A NODE WITH ITS OWN PLAYHEAD IS ANIMATED EVEN WHEN THE DOCUMENT HAS NO FRAME, and this line is
+    // where a per-node frame would otherwise be silently discarded. `doc.frame` is `undefined` for
+    // every document that had no timeline when it was loaded — which is every imported map — so a
+    // check for a finite document frame FIRST would make the whole field a no-op on exactly the
+    // documents that need it. The document's frame is a DEFAULT, not a gate.
+    let owned = false;
     let any = false;
     doc.nodes.forEach(n => {
+        if (n.frame !== undefined) owned = true;
         if (n.track && n.track.length > 0) any = true;
         if (n.channels && Object.keys(n.channels).length > 0) any = true;
     });
     if (!any) return doc;
+    if (!Number.isFinite(frame) && !owned) return doc;
+    // The document's frame, for every node that does not state one. NaN never reaches the
+    // arithmetic: a node without its own frame is skipped below when this is not finite.
+    const f = Number.isFinite(frame) ? Math.round(frame as number) : Number.NaN;
 
     const nodes = new Map<string, Node>();
     doc.nodes.forEach((n, id) => {
+        // ITS OWN PLAYHEAD WINS. Tested against `undefined` rather than for truthiness, because
+        // frame 0 is a real frame and the falsy reading would hand it back to the document's.
+        const own = n.frame !== undefined && Number.isFinite(n.frame) ? Math.round(n.frame) : f;
+        if (!Number.isFinite(own)) { nodes.set(id, n as Node); return; }
         const track = n.track;
-        const at = track && track.length > 0 ? keyframesAt(track, f) : null;
-        if (!at) { nodes.set(id, applyChannels(n as Node, n as Node, id, f)); return; }
+        const at = track && track.length > 0 ? keyframesAt(track, own) : null;
+        if (!at) { nodes.set(id, applyChannels(n as Node, n as Node, id, own)); return; }
         // `materializeNode` is the ONE place a node and a statement of differences are combined,
         // so a keyframe lands exactly as a state and an override do — same field rules, same
         // layout exclusivity. `isRoot: false`: the node keeps its own position and constraints.
@@ -313,18 +325,20 @@ export function applyFrame(doc: ReadonlyDocument, frame: number | undefined): Re
         // CHANNELS LAST (schema 47): the more specific statement wins. A property named by both the
         // track and a channel takes the channel's, which is the order that makes a channel worth
         // adding — and it is why a document with none behaves exactly as it did before they existed.
-        nodes.set(id, applyChannels(posed, n as Node, id, f));
+        nodes.set(id, applyChannels(posed, n as Node, id, own));
     });
 
+    // SPREAD, NEVER AN ENUMERATED LITERAL — the SIXTH instance of this bug in this codebase, and the
+    // second found today. Naming nine fields silently dropped `tilesets`, `clips`, `lights` and
+    // `ambient` from every animated document, and it bites exactly the case this slice exists for: a
+    // level with a tilemap AND an animated character loses the tileset the moment the character has
+    // a track, so the terrain stops drawing. `dropHidden` had the identical defect for the identical
+    // reason. A literal like this is correct until the next document field is added, and then it is
+    // silently wrong for ever.
     return {
-        version: doc.version,
-        metadata: doc.metadata as ProjectDocument["metadata"],
+        ...(doc as ProjectDocument),
         nodes,
         rootNodeUuids: [...doc.rootNodeUuids],
-        variables: doc.variables as ProjectDocument["variables"],
-        activeTheme: doc.activeTheme,
-        activeState: doc.activeState,
-        timeline: doc.timeline,
         // NO frame. The derived document has already been placed in time, and `resolveScene` runs
         // `applyFrame` again on whatever it is given — naming the frame here would re-apply the
         // track to a document that is already at it. That is the same trap `blendStates` fell into

@@ -4618,7 +4618,10 @@ describe("Guards the suite did not previously protect", () => {
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
         // time a real migration is added — most recently when 67→68 landed, taking the sheet OFF
         // the node, which 66→67 had moved and the importer had gone on writing anyway.)
-        expect(() => migrateIfNeeded(legacy, "69")).toThrow('Migration not implemented for document schema "68"');
+        // (Most recently 68->69, giving a node its OWN playhead so two props on one track need not
+        // flap in lockstep. That step moves no data — a node without a frame reads the document's,
+        // which is what every node already did — so it is named and empty rather than absent.)
+        expect(() => migrateIfNeeded(legacy, "70")).toThrow('Migration not implemented for document schema "69"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -31492,5 +31495,87 @@ describe("dropHidden keeps the DOCUMENT, not just the nodes", () => {
     it("is unchanged when NOTHING is hidden — the by-reference fast path still holds", () => {
         const doc = withOptionals(false);
         expect(dropHidden(doc)).toBe(doc);
+    });
+});
+
+describe("a node's OWN playhead (schema 69)", () => {
+    /** Two identical props with the same two-frame track: one at frame 0, one at frame 10. */
+    const twoProps = (aFrame?: number, bFrame?: number, docFrame?: number): ReadonlyDocument => {
+        const doc = createEmptyDocument();
+        doc.timeline = { frames: 20 } as never;
+        if (docFrame !== undefined) doc.frame = docFrame;
+        for (const [id, own] of [["a", aFrame], ["b", bFrame]] as [string, number | undefined][]) {
+            doc.nodes.set(id, {
+                id, type: "core.rectangle", parent: null, children: [],
+                geometry: { x: 0, y: 0, width: 10, height: 10 },
+                style: { fill: "#888", opacity: 1 }, layout: {},
+                ...(own !== undefined ? { frame: own } : {}),
+                track: [
+                    { frame: 0, values: { geometry: { x: 0, y: 0, width: 10, height: 10 } } },
+                    { frame: 10, values: { geometry: { x: 100, y: 0, width: 10, height: 10 } } }
+                ]
+            } as unknown as Node);
+            doc.rootNodeUuids.push(id);
+        }
+        return doc;
+    };
+    const xOf = (d: ReadonlyDocument, id: string) => d.nodes.get(id)!.geometry.x;
+
+    it("ENDS ONE CLOCK FOR THE WHOLE DOCUMENT — two props on the same track, in different places", () => {
+        // The art-tool hole this closes: before it, identical props flapped in perfect lockstep and
+        // no author could hold one on its idle pose while scrubbing the other.
+        const out = applyFrame(twoProps(0, 10, 5), 5);
+        expect(xOf(out, "a")).toBe(0);
+        expect(xOf(out, "b")).toBe(100);
+    });
+
+    it("a node WITHOUT its own frame still reads the document's", () => {
+        const out = applyFrame(twoProps(undefined, 10, 5), 5);
+        expect(xOf(out, "a")).toBe(50);      // half way, from the document's frame 5
+        expect(xOf(out, "b")).toBe(100);
+    });
+
+    it("WORKS WHEN THE DOCUMENT HAS NO FRAME AT ALL, which is every imported map", () => {
+        // `applyFrame` used to return at `!Number.isFinite(frame)` before it ever looked at a node,
+        // so a per-node playhead read inside the loop would have been a silent no-op on exactly the
+        // documents that need it — a blocking defect caught in review rather than in code.
+        const out = applyFrame(twoProps(10, undefined, undefined), undefined);
+        expect(xOf(out, "a")).toBe(100);     // its own frame is honoured
+        expect(xOf(out, "b")).toBe(0);       // no frame anywhere: it keeps its authored pose
+    });
+
+    it("FRAME 0 IS A REAL FRAME, not an absent one", () => {
+        // Tested against `undefined`, never for truthiness: the falsy reading hands 0 back to the
+        // document's frame, which is a different picture and an easy line to write.
+        const out = applyFrame(twoProps(0, undefined, 10), 10);
+        expect(xOf(out, "a")).toBe(0);       // pinned to its own frame 0
+        expect(xOf(out, "b")).toBe(100);     // …while the document is at 10
+    });
+
+    it("costs nothing when no node is animated", () => {
+        const plain = createEmptyDocument();
+        plain.nodes.set("n", { id: "n", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 10, height: 10 },
+            style: { fill: "#888", opacity: 1 }, layout: {}, frame: 3 } as unknown as Node);
+        expect(applyFrame(plain, 5)).toBe(plain);
+    });
+
+    it("KEEPS THE DOCUMENT'S OPTIONAL FIELDS — the sixth instance of the enumerated-literal bug", () => {
+        // applyFrame returned a nine-field literal and dropped tilesets, clips, lights and ambient
+        // from every animated document. It bites exactly this slice's own case: a level with a
+        // tilemap AND an animated character loses its tileset the moment the character has a track.
+        const doc = twoProps(0, 10, 5) as ProjectDocument;
+        doc.tilesets = [{ id: "ts", name: "T", src: "s.png", tiles: [], offsetX: 0, offsetY: 0,
+            sheet: { columns: 4, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 } }] as never;
+        doc.lights = [{ id: "L" }] as never;
+        doc.ambient = 0.5;
+        doc.clips = [] as never;
+        const out = applyFrame(doc, 5);
+        expect(out.tilesets?.length).toBe(1);
+        expect(out.lights?.length).toBe(1);
+        expect(out.ambient).toBe(0.5);
+        expect(out.clips).toBeDefined();
+        // …and the deliberate omission is still deliberate: the derived document names no frame.
+        expect(out.frame).toBeUndefined();
     });
 });

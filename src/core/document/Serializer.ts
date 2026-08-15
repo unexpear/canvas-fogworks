@@ -376,6 +376,11 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "65") { raw = migrate_65_to_66(raw); version = "66"; }
     if (version === "66") { raw = migrate_66_to_67(raw); version = "67"; }
     if (version === "67") { raw = migrate_67_to_68(raw); version = "68"; }
+    // 68 -> 69 ADDS `Node.frame` AND CHANGES NOTHING THAT EXISTS. A node without one reads the
+    // document's playhead, which is what every node did before — so an old file is already a
+    // valid new one and there is no data to move. The step is still named, because a version
+    // the chain does not mention is a version nobody can tell was considered.
+    if (version === "68") { raw = { ...raw, version: "69" }; version = "69"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {

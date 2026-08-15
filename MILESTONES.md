@@ -1222,6 +1222,41 @@ is the same rectangle the camera already refuses to scroll past, with one body h
 standing on the lowest floor is not death. With no bounds supplied the runtime behaves exactly as it
 did before, and a test pins the 4,000px runaway to prove it.
 
+**Slice 14 — A NODE'S OWN PLAYHEAD (schema 69), the first ART-side slice of the 8-bit rung.** The
+ladder is FIDELITY ERAS — 8-bit, 16-bit pixel art, 2.5D, 3D — and the point is holes that stop people
+MAKING ART as much as ones that stop them building games. Thirteen slices of runtime had left the
+presentation floor untouched.
+
+**THE MEASUREMENT OVERTURNED THE ASSUMPTION, which is why it was worth making.** I expected the hole
+to be that a sprite-sheet frame could not be keyframed. It can: `sourceRect` is one of the eight
+`OVERRIDE_FIELDS` and is NOT among the sixteen `EASABLE_PATHS`, so under `applyFrame` it STEPS — which
+is exactly frame-by-frame playback — and `sliceTrack` already builds such tracks with a live caller.
+
+**THE REAL HOLE WAS ONE CLOCK FOR THE WHOLE DOCUMENT.** `applyFrame` took a single frame for every
+node, so two identical props flapped in perfect lockstep with nothing an author could do, and a hero
+mid-jump and a goomba mid-walk were **not expressible at the same instant by any route**. `Node.frame`
+ends that. Absent means "read the document's", so every existing file behaves exactly as it did, and
+the 68→69 migration is named and empty rather than absent.
+
+**A BLOCKING DEFECT WAS CAUGHT IN REVIEW RATHER THAN IN CODE.** `applyFrame` returned at
+`!Number.isFinite(frame)` BEFORE it looked at a single node — and `doc.frame` is `undefined` for every
+document that had no timeline when it was loaded, which is every imported map. A per-node playhead
+read inside that loop would have been a **silent no-op on exactly the documents that need it**. The
+document's frame is now a DEFAULT, not a gate.
+
+**AND THE SIXTH INSTANCE OF THE ENUMERATED-LITERAL BUG, the second found today.** `applyFrame`
+returned a nine-field literal and dropped `tilesets`, `clips`, `lights` and `ambient` from every
+animated document — so a level with a tilemap AND an animated character lost its tileset the moment
+the character had a track, and the terrain stopped drawing. `dropHidden` had the identical defect for
+the identical reason. Spread, never enumerate.
+
+**STILL OPEN on the animation gap, with the refutations recorded rather than guessed at:** the
+runtime cannot yet select a frame from a velocity, and `clipFrameAt` remains a complete, tested clip
+player with ZERO production callers. Four blocking problems stand between here and that — a pose
+feeding back into policy through `contentBounds` and the death plane, `clipFrameAt`'s `elapsed`
+counting from the CLIP's start rather than the run's, `importTrack` replacing a whole track so a node
+holds one clip spanning the entire sheet, and a pose sampled per FRAME rather than per STEP.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

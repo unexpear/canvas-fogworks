@@ -164,7 +164,7 @@ import type { TimelineSettings } from "./Timeline";
 import type { Light } from "./Light";
 import type { Tileset } from "./Tileset";
 
-export const SCHEMA_VERSION = "68";
+export const SCHEMA_VERSION = "69";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

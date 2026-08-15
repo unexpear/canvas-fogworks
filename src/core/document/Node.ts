@@ -373,6 +373,23 @@ export interface Node {
      */
     channels?: Record<string, Keyframe[]>;
     /**
+     * THIS NODE'S OWN PLAYHEAD (schema 69). Absent = it reads the document's, as everything did.
+     *
+     * WHAT IT ENDS is "one clock for the whole document". `applyFrame` took a single frame for
+     * every node, so two identical props flapped in perfect lockstep and no author could stop them,
+     * and a background character could not be held on its idle pose while the hero was scrubbed.
+     * It is also the reason a runtime could never animate two characters: a hero mid-jump and a
+     * goomba mid-walk were not expressible at the same instant BY ANY ROUTE.
+     *
+     * A NUMBER, NOT A CLIP NAME. What plays is still the node's own track, and a clip is a NAMED
+     * SPAN of the timeline (`Document.clips`) that something else resolves to a number — keeping
+     * this a frame means the field cannot disagree with a clip list it does not read.
+     *
+     * ABSENT AND ZERO ARE DIFFERENT, and the arithmetic makes that easy to get wrong: frame 0 is a
+     * real frame, so this is tested against `undefined` and never for truthiness.
+     */
+    frame?: number;
+    /**
      * Where this node is asked to BE, with its parent and grandparent derived to put it there
      * (schema 49). Absent = the node is placed the ordinary way.
      *
