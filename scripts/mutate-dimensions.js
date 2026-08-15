@@ -1538,6 +1538,27 @@ const MUTANTS = [
       from: "    goal: yes(node, \"goal\")",
       to: "    goal: yes(node, \"deadly\")",
       note: "a deadly part is read as a GOAL, so touching a spike wins the level and no goal can ever be reached — the two endings swapped, and both look plausible from either side" },
+
+    // A NODE'S OWN PLAYHEAD (M18 slice 14, schema 69). PF1 is the defect the design review caught
+    // before it was written: the document's frame as a GATE rather than a default made the whole
+    // field a silent no-op on every imported map. PF4 is the enumerated-literal bug for the sixth
+    // time — see dropHidden, which had it identically.
+    { id: "PF1", file: "src/core/document/Timeline.ts",
+      from: "    if (!Number.isFinite(frame) && !owned) return doc;",
+      to: "    if (!Number.isFinite(frame)) return doc;",
+      note: "THE BLOCKING DEFECT AS REVIEW FOUND IT — the document frame becomes a GATE again rather than a default, so a node with its own playhead is silently ignored on every document that had no timeline when it loaded, which is every imported map. The feature becomes a no-op on exactly the documents it exists for" },
+    { id: "PF2", file: "src/core/document/Timeline.ts",
+      from: "        const own = n.frame !== undefined && Number.isFinite(n.frame) ? Math.round(n.frame) : f;",
+      to: "        const own = n.frame ? Math.round(n.frame) : f;",
+      note: "the playhead is read for TRUTHINESS, so frame 0 — a real frame, and the one every idle pose sits on — is handed back to the document's clock and the node animates when it was pinned" },
+    { id: "PF3", file: "src/core/document/Timeline.ts",
+      from: "        const at = track && track.length > 0 ? keyframesAt(track, own) : null;",
+      to: "        const at = track && track.length > 0 ? keyframesAt(track, f) : null;",
+      note: "the node's own playhead is accepted and then not used, so every node poses at the document's frame exactly as before and two props on one track flap in lockstep again" },
+    { id: "PF4", file: "src/core/document/Timeline.ts",
+      from: "        ...(doc as ProjectDocument),",
+      to: "        version: doc.version, metadata: doc.metadata as ProjectDocument[\"metadata\"], variables: doc.variables as ProjectDocument[\"variables\"], activeTheme: doc.activeTheme, activeState: doc.activeState, timeline: doc.timeline,",
+      note: "THE ENUMERATED LITERAL RESTORED — the sixth instance of this bug in this codebase. An animated document loses tilesets, clips, lights and ambient, so a level with a tilemap AND an animated character stops drawing its terrain the moment the character gains a track" },
 ];
 
 function runSuite() {
