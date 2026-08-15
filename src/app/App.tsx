@@ -498,6 +498,18 @@ export function App() {
      * message that vanished on the next frame would be unreadable at 60Hz.
      */
     const [lastEvent, setLastEvent] = useState<import("../core/runtime/World").WorldEvent | null>(null);
+    /**
+     * HOW THE RUN ENDED, mirrored into REACT STATE rather than read off `es.world` during render.
+     *
+     * The first version read `es.world.outcome` in the JSX, and it flickered: `es.world` is mutable
+     * editor state that React does not track, so the banner rendered only when something ELSE
+     * happened to trigger a re-render — the event line beside it, which is React state, persisted
+     * while the banner did not. Measured live: the banner appeared at the right moment with the
+     * right value and was gone within three seconds. Setting it here is what makes it a fact the
+     * view is subscribed to.
+     */
+    const [runOutcome, setRunOutcome] =
+        useState<import("../core/runtime/World").RunOutcome | null>(null);
     // The N-gon's side count. Held in a ref as well as state because ShapeTool is constructed
     // ONCE and reads the count at commit time through a getter — a captured value would freeze
     // whatever the count was when the toolbar first rendered.
@@ -708,6 +720,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const prevComputedRef = useRef<ComputedState | null>(null);
     /** The playing level's extent, captured on the run's first derived frame and cleared on Stop. */
     const runBoundsRef = useRef<ReturnType<typeof contentBounds>>(null);
+    /** Mirrors `runOutcome`, so the frame loop can tell a NEW ending from one already shown. */
+    const runOutcomeRef = useRef<import("../core/runtime/World").RunOutcome | null>(null);
     const dirtyNodesRef = useRef<Set<string>>(new Set());
     const prevPendingRef = useRef<Set<string>>(new Set());
     /**
@@ -1415,6 +1429,12 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 // is React state, so this schedules a repaint, and the loop is already asking for
                 // one every frame while a world is running.
                 if (world.events.length > 0) setLastEvent(world.events[world.events.length - 1]);
+                // A RUN THAT HAS ENDED SAYS SO ONCE, and the guard is what stops a setState on
+                // every frame of a finished run — which would re-render for ever.
+                if (world.outcome !== "running" && runOutcomeRef.current !== world.outcome) {
+                    runOutcomeRef.current = world.outcome;
+                    setRunOutcome(world.outcome);
+                }
                 // …and the bodies reach the scene the way the PLAYHEAD does: stamped onto a copy.
                 played = applyWorld(timed, world);
             }
@@ -2159,6 +2179,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                         // still be held when the next run starts.
                         es.input = { left: false, right: false, jump: false };
                         setLastEvent(null);
+                        setRunOutcome(null);
+                        runOutcomeRef.current = null;
                         // AND THE REUSE CHAIN IS CUT HERE, which cost a live bug to learn. A
                         // world-only frame keeps its geometry so the next tick can diff against it
                         // — that is the whole optimisation — but the frame after STOP is not a
@@ -4323,11 +4345,11 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     state this project has now found four separate fields in. A status line is the
                     smallest honest surface: it proves the chain end to end and commits to nothing
                     about what a game should do with it. */}
-                {es.playing && es.world && es.world.outcome !== "running" && (
-                    <span data-run-outcome={es.world.outcome}
-                        style={{ color: es.world.outcome === "won" ? "#5f9e78" : "#d4655a",
+                {es.playing && runOutcome && (
+                    <span data-run-outcome={runOutcome}
+                        style={{ color: runOutcome === "won" ? "#5f9e78" : "#d4655a",
                                  fontWeight: 600 }}>
-                        {es.world.outcome === "won" ? "COMPLETE" : "FAILED"}
+                        {runOutcome === "won" ? "COMPLETE" : "FAILED"}
                     </span>
                 )}
                 {es.playing && lastEvent && (
