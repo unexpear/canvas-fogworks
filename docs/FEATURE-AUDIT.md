@@ -1,6 +1,12 @@
 # Feature audit — VDE against Pixelorama and Tiled
 
 <!-- describes: src/editor/tools, src/core/paint, src/core/import, src/core/export -->
+<!-- re-read 2026-08-14 after extracting the Tiled placement logic into core/import/tiledPlacements.
+     THE UNREACHABLE LIST WAS MISSING ITS LARGEST ENTRY: 241 lines deciding what a .tmx places lived
+     inside a <select onChange> in App.tsx, and window.electronAPI is frozen, so nothing could call
+     them. This audit tracked "built, unreachable" CAPABILITIES and never asked whether a reachable
+     capability's IMPLEMENTATION was reachable — the same question, one level down. Now extracted,
+     tested (10) and mutated (4). The row below is otherwise accurate. -->
 <!-- re-read 2026-08-13 after the column recovery: the .tmx import row records it. -->
 <!-- re-read 2026-08-13 after the tile-anchoring fix: the .tmx import row now records the
      anchoring and the columns gap. -->
