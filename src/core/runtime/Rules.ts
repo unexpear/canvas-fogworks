@@ -126,12 +126,14 @@ export function marioRules(
     }
 
     // ── TOUCHING SOMETHING THAT ENDS THE RUN ─────────────────────────────────────────────────────
-    // READ AFTER THE STOMP, and that ordering is the rule rather than an accident: a part may be
-    // BOTH deadly and stompable — which is exactly what a Goomba is — and landing on it must win.
-    // A stomp despawns it, so by the time this loop runs the killing contact is the one that came
-    // from any side but above.
-    const stomped = new Set(
-        out.flatMap(c => (c.kind === "despawn" ? [c.bodyId] : [])));
+    // A PART MAY BE BOTH DEADLY AND STOMPABLE — which is exactly what a Goomba is — and landing on
+    // it must win. `e.side !== "below"` is the whole of that: an event whose side is `below` is the
+    // one the stomp loop above already acted on.
+    //
+    // A SET OF WHAT WAS STOMPED WAS TRIED HERE AND DELETED as an EQUIVALENT mutant rather than
+    // tested around. It could only ever hold a part the stomp loop despawned, which requires that
+    // same event's side to be `below` — so it was implied by the line above it and guarded nothing,
+    // while masking the mutant that removes the side check. Same shape as slice 7's `vy > 0`.
     for (const e of world.events) {
         if (e.bodyId !== me) continue;
         // A GOAL MAY BE EITHER, because a flagpole is a volume you reach and a coin is a thing you
@@ -141,7 +143,7 @@ export function marioRules(
             if (!other) continue;
             const part = partOf(other);
             if (part.goal) { out.push({ kind: "endRun", outcome: "won" }); return out; }
-            if (part.deadly && e.side !== "below" && !stomped.has(e.nodeId)) {
+            if (part.deadly && e.side !== "below") {
                 out.push({ kind: "endRun", outcome: "lost" });
                 return out;
             }

@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1920;
+const EXPECTED_TESTS = 1922;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1527,10 +1527,9 @@ const MUTANTS = [
       from: "            if (part.deadly && e.side !== \"below\" && !stomped.has(e.nodeId)) {",
       to: "            if (part.deadly && !stomped.has(e.nodeId)) {",
       note: "landing on a part that is both deadly and stompable kills you as well as it — a Goomba becomes unkillable, which is the exact exchange the ordering of these two loops exists to decide" },
-    { id: "RL4", file: "src/core/runtime/Rules.ts",
-      from: "            if (part.deadly && e.side !== \"below\" && !stomped.has(e.nodeId)) {",
-      to: "            if (part.deadly && e.side !== \"below\") {",
-      note: "the stomped set is ignored, so the despawn and the death are both reported for one contact and which arrives first decides the run" },
+    // RL4 IS GONE: it was EQUIVALENT. It removed a `stomped` set that could only hold a part
+    // whose event side was already `below`, so the line above it did the same work. The code
+    // was deleted rather than the mutant retargeted.
     { id: "RL5", file: "src/core/runtime/World.ts",
       from: "            if (outcome === null && world.outcome === \"running\") outcome = c.outcome;",
       to: "            outcome = c.outcome;",

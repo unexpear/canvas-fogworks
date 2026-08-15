@@ -245,3 +245,53 @@ describe("the run lifecycle — a run that can be lost, won and ended", () => {
                                   { kind: "endRun", outcome: "lost" }]).outcome).toBe("won");
     });
 });
+
+describe("the two lifecycle fixtures that were BLIND, and what they could not see", () => {
+    const LEVEL = { x: 0, y: 0, width: 400, height: 120 };
+
+    it("LANDING ON A DEADLY PART THAT IS NOT STOMPABLE does not kill you", () => {
+        // THE FIXTURE THE GOOMBA TEST COULD NOT BE. That one declared deadly AND stompable, so the
+        // stomp despawned the part and either half of the guard suppressed the death on its own —
+        // the mutant deleting the side check survived, masked by the other clause. Here the part is
+        // deadly ONLY: nothing despawns it, so the side test is the only thing standing between the
+        // player and a death it did not earn.
+        const doc = docWith([
+            { id: "floor", x: 0, y: 100, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "spikeTop", x: 50, y: 92, w: 10, h: 8, userData: { bodyType: prop("dynamic"),
+                [PART_PREFIX + "deadly"]: prop("true") } },
+            { id: "hero", x: 51, y: 20, w: 8, h: 10, userData: { bodyType: prop("dynamic") } }
+        ]);
+        let w = worldFrom(doc);
+        let landed = false;
+        for (let i = 0; i < 200 && w.outcome === "running"; i++) {
+            w = stepWorld(doc, w, { controlled: "hero" });
+            if (w.events.some(e => e.kind === "contact" && e.bodyId === "hero" && e.side === "below")) {
+                landed = true;
+            }
+            w = applyCommands(w, marioRules(doc, w, { controlled: "hero", bounds: LEVEL }));
+        }
+        expect(landed).toBe(true);            // the contact really happened, or this proves nothing
+        expect(w.outcome).toBe("running");    // …and it did not end the run
+        expect(w.despawned.size).toBe(0);     // …and nothing was stomped, since it is not stompable
+    });
+
+    it("THE FALL IS DETECTED AT THE SLACK LINE, not one body-height early", () => {
+        // Asserting only "it is lost" cannot see the sign of the slack: both the rule and its
+        // inversion lose the run, a couple of steps apart. The STEP is what distinguishes them.
+        // Free fall from 0 is y(n) = 0.125*n*(n+1). The level's bottom is 120 and the body is 10
+        // high, so the line is 130: n(n+1) > 1040 first holds at n=32, where y=132.
+        const doc = docWith([{ id: "hero", x: 50, y: 0, userData: { bodyType: prop("dynamic") } }]);
+        let w = worldFrom(doc);
+        let steps = 0;
+        for (let i = 0; i < 200 && w.outcome === "running"; i++) {
+            w = stepWorld(doc, w, { controlled: "hero" });
+            w = applyCommands(w, marioRules(doc, w, { controlled: "hero", bounds: LEVEL }));
+            steps++;
+        }
+        expect(w.outcome).toBe("lost");
+        expect(steps).toBe(32);
+        expect(0.125 * 32 * 33).toBe(132);
+        // Subtracting the slack instead of adding it would fire at 110, which is step 30.
+        expect(0.125 * 30 * 31).toBe(116.25);
+    });
+});
