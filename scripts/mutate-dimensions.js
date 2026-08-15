@@ -1510,6 +1510,35 @@ const MUTANTS = [
       from: "        out.push({ kind: \"setVelocity\", bodyId: id, vx: turned * Math.abs(speed) });",
       to: "        out.push({ kind: \"setVelocity\", bodyId: id, vx: turned * speed });",
       note: "the declared sign is applied TWICE — once as the starting direction and once as the speed — so a part declaring a negative speed walks right instead of left, and turning around returns it to its original heading" },
+
+    // THE RUN LIFECYCLE (M18 slice 13). Three of these attack the ORDERING between deadly and
+    // stompable, because that ordering is the rule rather than an accident: a part may be both,
+    // which is exactly what a Goomba is, and a fixture whose enemy declares only one of them
+    // cannot tell any of these mutants from the real thing.
+    { id: "RL1", file: "src/core/runtime/Rules.ts",
+      from: "    if (world.outcome !== \"running\") return out;",
+      to: "",
+      note: "a finished run keeps deciding — a dead player goes on patrolling every enemy and goes on reporting its own death on every step for as long as the frame loop runs" },
+    { id: "RL2", file: "src/core/runtime/Rules.ts",
+      from: "        if (body.y > ctx.bounds.y + ctx.bounds.height + node.geometry.height) {",
+      to: "        if (body.y > ctx.bounds.y + ctx.bounds.height - node.geometry.height) {",
+      note: "the slack is subtracted instead of added, so a body standing on the LOWEST floor in the level is already below the line and the run is lost the instant it lands" },
+    { id: "RL3", file: "src/core/runtime/Rules.ts",
+      from: "            if (part.deadly && e.side !== \"below\" && !stomped.has(e.nodeId)) {",
+      to: "            if (part.deadly && !stomped.has(e.nodeId)) {",
+      note: "landing on a part that is both deadly and stompable kills you as well as it — a Goomba becomes unkillable, which is the exact exchange the ordering of these two loops exists to decide" },
+    { id: "RL4", file: "src/core/runtime/Rules.ts",
+      from: "            if (part.deadly && e.side !== \"below\" && !stomped.has(e.nodeId)) {",
+      to: "            if (part.deadly && e.side !== \"below\") {",
+      note: "the stomped set is ignored, so the despawn and the death are both reported for one contact and which arrives first decides the run" },
+    { id: "RL5", file: "src/core/runtime/World.ts",
+      from: "            if (outcome === null && world.outcome === \"running\") outcome = c.outcome;",
+      to: "            outcome = c.outcome;",
+      note: "an ending can be overwritten, so a later command un-ends a finished run and a step that both kills the player and reaches the goal reports whichever was pushed last" },
+    { id: "RL6", file: "src/core/runtime/Parts.ts",
+      from: "    goal: yes(node, \"goal\")",
+      to: "    goal: yes(node, \"deadly\")",
+      note: "a deadly part is read as a GOAL, so touching a spike wins the level and no goal can ever be reached — the two endings swapped, and both look plausible from either side" },
 ];
 
 function runSuite() {
