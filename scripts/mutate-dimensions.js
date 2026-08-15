@@ -1473,6 +1473,43 @@ const MUTANTS = [
       from: "            width: map.width * map.tileWidth,\n            height: map.height * map.tileHeight,",
       to: "            width: group.offsetX, height: group.offsetY,",
       note: "the object layer's frame is sized from its own offset rather than spanning the map, so every entity inside it is displaced and the frame moves whenever an object does" },
+
+    // THE PARTS VOCABULARY (M18 slice 12). Four of these aim at `partOf`, because a vocabulary is
+    // only as good as its refusals: the difference between "this part said nothing" and "this part
+    // said no" is the whole safety argument for adding it, and both readings look identical in any
+    // fixture that only ever declares things it wants.
+    { id: "PT1", file: "src/core/runtime/Parts.ts",
+      from: "    return v !== \"\" && v !== \"false\" && v !== \"0\" && v !== \"no\";",
+      to: "    return v !== \"\" && v !== \"0\" && v !== \"no\";",
+      note: "a part declaring `vde.stompable=false` becomes stompable, so the one word an author reaches for to turn a behaviour OFF turns it on" },
+    { id: "PT2", file: "src/core/runtime/Parts.ts",
+      from: "    if (t === \"\") return null;",
+      to: "",
+      note: "THE `Number(\\\"\\\")` TRAP, restored — it is 0 and FINITE, so an empty declaration stops meaning \\\"this part said nothing\\\" and starts meaning \\\"stand still\\\". The same trap once made an empty friction value into ice; this module's header warns about it and this mutant proves the warning is enforced rather than decorative" },
+    { id: "PT3", file: "src/core/runtime/Parts.ts",
+      from: "        stompable: stomp !== null && truthy(stomp),",
+      to: "        stompable: stomp !== null,",
+      note: "the PRESENCE of the key is read as the answer, so every value including `false` and `0` makes a part stompable and there is no way to author one that is not" },
+    { id: "PT4", file: "src/core/runtime/Parts.ts",
+      from: "    if (!Number.isFinite(n)) return null;",
+      to: "",
+      note: "a patrol of `banana` becomes NaN rather than null, so the part is treated as declaring a speed and every position it computes is NaN — a body that vanishes from the level rather than a declaration that was ignored" },
+    { id: "PT5", file: "src/core/runtime/Rules.ts",
+      from: "        const dir = body.vx === 0 ? Math.sign(speed) : Math.sign(body.vx);",
+      to: "        const dir = Math.sign(speed);",
+      note: "the direction is taken from the DECLARATION every step rather than from the part's current velocity, so the turn is immediately overwritten and the part walks into a wall forever" },
+    { id: "PT6", file: "src/core/runtime/Rules.ts",
+      from: "        const turned = body.blockedX ? -dir : dir;",
+      to: "        const turned = dir;",
+      note: "a part never turns around at all, which is the whole of what `blockedX` was added to the physics for — it walks into the first wall and stays there for the rest of the run" },
+    { id: "PT7", file: "src/core/runtime/Rules.ts",
+      from: "        if (!other || !partOf(other).stompable) continue;",
+      to: "        if (!other || partOf(other).patrol === null) continue;",
+      note: "the stomp reads the WRONG DECLARATION — a part is stompable if it walks — so a stationary enemy cannot be killed and a moving piece of scenery can" },
+    { id: "PT8", file: "src/core/runtime/Rules.ts",
+      from: "        out.push({ kind: \"setVelocity\", bodyId: id, vx: turned * Math.abs(speed) });",
+      to: "        out.push({ kind: \"setVelocity\", bodyId: id, vx: turned * speed });",
+      note: "the declared sign is applied TWICE — once as the starting direction and once as the speed — so a part declaring a negative speed walks right instead of left, and turning around returns it to its original heading" },
 ];
 
 function runSuite() {

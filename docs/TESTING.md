@@ -526,7 +526,7 @@ The checklist, applied when the fixture is written:
 This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
 cannot see — over the paint modules, the Tiled reader, the mesh, nine-slice, the tile grid, the tile
-brush and the autotiler, exiting non-zero on a survivor: the battery holds **306 mutants**. The last
+brush and the autotiler, exiting non-zero on a survivor: the battery holds **314 mutants**. The last
 FULL run was 2026-08-12 at **215 mutants, 215 killed** and 1,734 tests (**56m20s, 16s per mutant**,
 nothing NOT APPLIED and nothing AMBIGUOUS); the eight added since — `EX15`–`EX22`, the exporter's
 multi-tileset family — were run FILTERED at 1,757 tests, seven killed and one the deliberate
