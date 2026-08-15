@@ -32,10 +32,14 @@ function docWith(nodes: { id: string; x: number; y: number; w?: number; h?: numb
 
 const FLOOR_TOP = 700;
 /** Hero 12x16 above a 20x8 enemy resting on the floor, and the enemy is INSIDE the hero's x span. */
-const level = (enemyClass?: string, heroY = 600) => docWith([
+const level = (stompable?: boolean, heroY = 600) => docWith([
     { id: "floor", x: 900, y: FLOOR_TOP, w: 400, h: 20, userData: { bodyType: prop("static") } },
-    { id: "enemy", x: 1000, y: 692, w: 20, h: 8, className: enemyClass,
-      userData: { bodyType: prop("dynamic") } },
+    // CLASSED EITHER WAY, so the test proves the class is no longer what decides — only the
+    // declaration is. Slice 10 read className !== "" as "authored as an actor"; slice 12 does not.
+    { id: "enemy", x: 1000, y: 692, w: 20, h: 8, className: "enemy",
+      userData: stompable
+          ? { bodyType: prop("dynamic"), "vde.stompable": prop("true") }
+          : { bodyType: prop("dynamic") } },
     { id: "hero", x: 1004, y: heroY, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
 ]);
 
@@ -44,7 +48,7 @@ const runUntilStomp = (doc: ProjectDocument, controlled: string | null = "hero")
     let w = worldFrom(doc);
     for (let i = 0; i < 120; i++) {
         w = stepWorld(doc, w, { controlled });
-        const commands = marioRules(w, { controlled });
+        const commands = marioRules(doc, w, { controlled });
         w = applyCommands(w, commands);
         if (commands.length > 0) return { world: w, step: i + 1, commands };
     }
@@ -113,7 +117,7 @@ describe("applyCommands — the channel, with no policy in it", () => {
 
 describe("marioRules — the game, which the engine does not know about", () => {
     it("A STOMP issues exactly two commands: the enemy goes, the hero bounces", () => {
-        const { commands, step } = runUntilStomp(level("enemy"));
+        const { commands, step } = runUntilStomp(level(true));
         expect(step).toBe(25);                       // free fall from 600 reaches the enemy here
         expect(commands).toEqual([
             { kind: "despawn", bodyId: "enemy" },
@@ -122,10 +126,12 @@ describe("marioRules — the game, which the engine does not know about", () => 
         expect(jumpSpeedFor(JUMP_HEIGHT, DEFAULT_GRAVITY)).toBe(360);
     });
 
-    it("does NOTHING to an unclassed body — the corpus's one dynamic object is a block you PUSH", () => {
-        // Without this the rule would delete sticker-knight's 96x96 push-block the first time
-        // anybody stood on it. The class is the marker, and it is an inference, not a measurement.
-        const { step, commands } = runUntilStomp(level(undefined));
+    it("does NOTHING to a body that DECLARES NOTHING, however it is classed", () => {
+        // The enemy here is still className "enemy" — it simply never declared `vde.stompable`,
+        // and that is now the whole of the difference. Slice 10 would have deleted it. This is what
+        // protects sticker-knight's 96x96 push-block, and it protects it by the block's own silence
+        // rather than by an inference about what a class means.
+        const { step, commands } = runUntilStomp(level(false));
         expect(step).toBe(-1);
         expect(commands).toEqual([]);
     });
@@ -135,14 +141,14 @@ describe("marioRules — the game, which the engine does not know about", () => 
         const doc = docWith([
             { id: "floor", x: 900, y: FLOOR_TOP, w: 400, h: 20, userData: { bodyType: prop("static") } },
             { id: "enemy", x: 1102, y: 692, w: 20, h: 8, className: "enemy",
-              userData: { bodyType: prop("dynamic") } },
+              userData: { bodyType: prop("dynamic"), "vde.stompable": prop("true") } },
             { id: "hero", x: 1000, y: 684, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
         ]);
         let w = worldFrom(doc);
         let fired = 0;
         for (let i = 0; i < 40; i++) {
             w = stepWorld(doc, w, { input: { left: false, right: true, jump: false }, controlled: "hero" });
-            const c = marioRules(w, { controlled: "hero" });
+            const c = marioRules(doc, w, { controlled: "hero" });
             fired += c.length;
             w = applyCommands(w, c);
         }
@@ -164,20 +170,20 @@ describe("marioRules — the game, which the engine does not know about", () => 
         for (let i = 0; i < 120; i++) {
             w = stepWorld(doc, w, { controlled: "hero" });
             if (w.events.some(e => e.kind === "enter")) sawEnter = true;
-            fired += marioRules(w, { controlled: "hero" }).length;
+            fired += marioRules(doc, w, { controlled: "hero" }).length;
         }
         expect(sawEnter).toBe(true);        // the event really happened, or this proves nothing
         expect(fired).toBe(0);
     });
 
     it("does NOTHING when the contact is reported to somebody else, or with nothing driven", () => {
-        const doc = level("enemy");
+        const doc = level(true);
         let w = worldFrom(doc);
         let asEnemy = 0, asNobody = 0;
         for (let i = 0; i < 40; i++) {
             w = stepWorld(doc, w, { controlled: "hero" });
-            asEnemy += marioRules(w, { controlled: "enemy" }).length;
-            asNobody += marioRules(w, { controlled: null }).length;
+            asEnemy += marioRules(doc, w, { controlled: "enemy" }).length;
+            asNobody += marioRules(doc, w, { controlled: null }).length;
         }
         expect(asEnemy).toBe(0);
         expect(asNobody).toBe(0);
@@ -188,9 +194,9 @@ describe("marioRules — the game, which the engine does not know about", () => 
         const doc = docWith([
             { id: "floor", x: 900, y: FLOOR_TOP, w: 400, h: 20, userData: { bodyType: prop("static") } },
             { id: "e1", x: 1000, y: 692, w: 20, h: 8, className: "enemy",
-              userData: { bodyType: prop("dynamic") } },
+              userData: { bodyType: prop("dynamic"), "vde.stompable": prop("true") } },
             { id: "e2", x: 1020, y: 692, w: 20, h: 8, className: "enemy",
-              userData: { bodyType: prop("dynamic") } },
+              userData: { bodyType: prop("dynamic"), "vde.stompable": prop("true") } },
             // 30 wide, straddling both: 1005..1035 covers e1's 1000..1020 and e2's 1020..1040.
             { id: "hero", x: 1005, y: 600, w: 30, h: 16, userData: { bodyType: prop("dynamic") } }
         ]);
@@ -203,7 +209,7 @@ describe("marioRules — the game, which the engine does not know about", () => 
 
 describe("the stomp, end to end", () => {
     it("the enemy leaves the PICTURE and the hero leaves the ground", () => {
-        const doc = level("enemy");
+        const doc = level(true);
         const { world, step } = runUntilStomp(doc);
         expect(step).toBe(25);
         // The hero is where the step left it — a command moves nothing — and rising.
@@ -234,7 +240,7 @@ describe("the stomp, end to end", () => {
             { id: "floor", x: 0, y: 400, w: 400, h: 20, userData: { bodyType: prop("static") } },
             { id: "rest", x: 100, y: 380, w: 20, h: 20, userData: { bodyType: prop("dynamic") } },
             { id: "gone", x: 200, y: 380, w: 20, h: 20, className: "enemy",
-              userData: { bodyType: prop("dynamic") } }
+              userData: { bodyType: prop("dynamic"), "vde.stompable": prop("true") } }
         ]);
         let w = stepWorld(doc, worldFrom(doc));
         w = stepWorld(doc, w);
@@ -248,7 +254,7 @@ describe("the stomp, end to end", () => {
 
     it("a despawn SURVIVES the steps that follow it", () => {
         // `despawned` is carried by stepWorld; without that the enemy reappears one frame later.
-        const doc = level("enemy");
+        const doc = level(true);
         let { world } = runUntilStomp(doc);
         for (let i = 0; i < 10; i++) world = stepWorld(doc, world, { controlled: "hero" });
         expect([...world.despawned]).toEqual(["enemy"]);
@@ -256,7 +262,7 @@ describe("the stomp, end to end", () => {
     });
 
     it("STOP brings it back, because a run owns nothing", () => {
-        const doc = level("enemy");
+        const doc = level(true);
         runUntilStomp(doc);
         // Stop throws the world away and the editor derives the STORED document again.
         const fresh: WorldState = worldFrom(doc);

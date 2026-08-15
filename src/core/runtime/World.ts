@@ -236,6 +236,19 @@ export interface Body {
      * before the horizontal one, which is the ordering that makes a body snag on every seam.
      */
     groundFriction: number;
+    /**
+     * Whether a SOLID stopped this body horizontally on the last step — `onGround`'s sideways twin.
+     *
+     * The physics has always known this and thrown it away: the horizontal pass sets `vx = 0` and
+     * says nothing. A part that walks needs exactly this one fact to turn around, and deriving it
+     * outside would mean re-running the sweep or guessing from "it did not move as far as it should",
+     * which is a different question with a different answer on a slope or in a corner.
+     *
+     * A WALL, NOT A LEDGE. Nothing here reports the edge of a platform, and that is deliberate:
+     * Mario's own goombas walk off ledges, so a patrol that turns at a drop would be less faithful,
+     * not more.
+     */
+    blockedX: boolean;
 }
 
 /** The run's whole mutable state. Keyed by STORED node id, never serialized. */
@@ -473,7 +486,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
         if (!at) continue;                        // refused, and `runtimeExclusions` says why
         bodies.set(node.id, {
             x: node.geometry.x + at.dx, y: node.geometry.y + at.dy,
-            vx: 0, vy: 0, onGround: false, groundFriction: 1
+            vx: 0, vy: 0, onGround: false, groundFriction: 1, blockedX: false
         });
     }
     return { bodies, time: 0, contacts: new Set(), despawned: new Set(), jumpWas: false, overlaps: new Set(), events: [] };
@@ -711,6 +724,9 @@ export function stepWorld(
         if (!node) { next.set(id, { ...was }); continue; }
         const w = node.geometry.width, h = node.geometry.height;
 
+        // Declared with vx because the HORIZONTAL pass below is what sets it, and that pass runs
+        // before onGround is even declared.
+        let blockedX = false;
         let vx = was.vx;
         let vy = was.vy + gravity * FIXED_STEP;
         let x = was.x, y = was.y;
@@ -770,6 +786,7 @@ export function stepWorld(
             if (!overlaps(x, y, w, h, s)) continue;
             x = vx > 0 ? s.x - w : s.x + s.width;
             vx = 0;
+            blockedX = true;
         }
 
         // VERTICAL, then resolve — and this is where `onGround` is decided.
@@ -797,7 +814,7 @@ export function stepWorld(
             vy = 0;
         }
 
-        next.set(id, { x, y, vx, vy, onGround, groundFriction });
+        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX });
     }
 
     // OVERLAPS ARE COMPUTED AFTER EVERYTHING HAS MOVED, once, on the settled positions — asking

@@ -1372,7 +1372,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     // — measured at 14.25px on a stomp. The physics still decides nothing: it
                     // produced events, this reads them, and `applyCommands` answers a FINISHED
                     // world. `marioRules` is the game; swapping it changes no line below.
-                    world = applyCommands(world, marioRules(world, { controlled: es.controlled }));
+                    world = applyCommands(world, marioRules(base, world, { controlled: es.controlled }));
                 }
                 es.world = world;
                 es.worldClock = { accumulator: spend.accumulator, lastAt: now };

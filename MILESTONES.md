@@ -1161,6 +1161,41 @@ basis for the test game.
 tileset, and the 24x24 characters become `core.image` nodes with their own source rects. Worth
 knowing before anyone tries to PAINT with that set — it is not in the document.
 
+**Slice 12 — THE PARTS VOCABULARY, and the level chose its entries.** A part declares its own
+behaviour in `userData` under a `vde.` prefix, read by `core/runtime/Parts.partOf`. This is Super
+Mario Maker's shape rather than a level format's: a goomba there is not a name the engine looks up,
+it is a part that brings its behaviour with it, and the editor's palette IS the vocabulary.
+
+**WHY THIS IS NOT THE SCHEMA-AHEAD-OF-CONTENT THAT REFUSED `core.entity`.** That charge is about
+inventing a shape and WAITING. The corpus cannot justify this because the corpus is somebody else's
+imported level geometry — 12 `coin` objects carrying zero properties between them, a `script` naming
+a `.lua` that does not exist, no game source shipped. The content that uses this vocabulary is
+content WE author, and it ships in the same commit as the vocabulary and its reader. A node that
+declares nothing is INERT, so every corpus document and every older file plays exactly as it did —
+`oneway`'s argument, and unlike slice 9's it genuinely transfers.
+
+**TWO ENTRIES, BOTH NAMED BY BUILDING THE LEVEL rather than guessed.** `vde.stompable` replaces the
+inference I disliked when I wrote it — slice 10 read `className !== ""` as "authored as an actor",
+the corpus's measured disjointness pressed into service as a marker it never was. Sticker-knight's
+push-block is now safe by its own SILENCE rather than by a heuristic about classes, and the class is
+back to being a name. `vde.patrol` makes a part walk: measured need, because every enemy in the
+built level was a statue — `worldFrom` starts every body at rest and nothing could give one a
+velocity.
+
+**`Body.blockedX` IS THE PHYSICS GIVING BACK A FACT IT ALREADY HAD.** The horizontal pass sets
+`vx = 0` and said nothing; a part that walks needs exactly that to turn around, and deriving it
+outside would mean re-running the sweep. A WALL, NOT A LEDGE — Mario's own goombas walk off ledges,
+and the level's enemy1 duly did (y 144 -> 198), which is faithful rather than a bug.
+
+**A DECLARED SPEED IS NOT THE SPEED IT TRAVELS, measured and documented rather than papered over.**
+A part declaring 60 walks at 45: friction is the GROUND's property and applies to every body, and a
+velocity re-set once per step loses exactly one step of it (mu*g*dt = 15) before the move. The player
+escapes this only because input re-sets `vx` INSIDE the step. On ice the two numbers would agree.
+
+Verified live in the built Kenney level: enemy1 walks 180 -> 288 and falls off a ledge, enemy2 walks
+LEFT from its negative declared speed, the player stomps enemy2 (`contact enemy (below)`, 237 -> 236
+images) and bumps two others from the side with no effect.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.
