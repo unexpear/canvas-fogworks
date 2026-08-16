@@ -42,6 +42,24 @@ export function depthOf(node: { depth?: number }): number {
 }
 
 /**
+ * The depth this node parallaxes by VERTICALLY (schema 71). Absent = the same as `depth`.
+ *
+ * TWO AXES, BECAUSE THE FORMAT HAS TWO. Tiled declares `parallaxx` and `parallaxy` as INDEPENDENT
+ * per-layer factors, and this engine had one scalar driving both — which is right for a design
+ * canvas, where a layered card lifts in every direction, and wrong for a side-scroller, where the
+ * scenery scrolls sideways and the ground stays where it is. Seen in the test level the moment
+ * scenery went in: with the camera 176px up, hills at depth 2 rode 117px off the horizon and the
+ * two scenery layers stopped lining up with the ground or with each other.
+ *
+ * ABSENT MEANS "THE SAME AS `depth`", so every document written before this behaves exactly as it
+ * did and no migration moves any data. A side-scroller writes `depthY: 0` — vertical rate 1, no
+ * vertical lag at all — which is the ONE value that pins a layer to the world in that axis.
+ */
+export function depthYOf(node: { depth?: number; depthY?: number }): number {
+    return node.depthY ?? depthOf(node);
+}
+
+/**
  * How much of the viewport's pan a layer at this depth should follow, in [0, 1].
  *
  * `1 / (1 + d)` for positive depth: at 0 the layer tracks the canvas exactly, at 1 it moves half
@@ -64,10 +82,20 @@ export function parallaxRate(depth: number): number {
  * ZOOM is deliberately not scaled by depth: parallax is about distance travelled, and a layer that
  * also changed size as you zoomed would read as the shape resizing itself.
  */
-export function parallaxOffset(depth: number, viewport: { x: number; y: number; zoom: number }): { x: number; y: number } {
-    const lag = 1 - parallaxRate(depth);
-    if (lag === 0 || viewport.zoom === 0) return { x: 0, y: 0 };
-    return { x: (viewport.x * lag) / viewport.zoom, y: (viewport.y * lag) / viewport.zoom };
+export function parallaxOffset(depth: number, viewport: { x: number; y: number; zoom: number },
+                               depthY: number = depth): { x: number; y: number } {
+    // PER AXIS (schema 71) — see `depthYOf`. `depthY` defaults to `depth`, so a caller that does not
+    // know about the second axis gets exactly the behaviour it had.
+    const lagX = 1 - parallaxRate(depth);
+    const lagY = 1 - parallaxRate(depthY);
+    if (viewport.zoom === 0 || (lagX === 0 && lagY === 0)) return { x: 0, y: 0 };
+    // A PINNED AXIS RETURNS EXACTLY ZERO, not negative zero. `-176 * 0` is `-0`, which adds to a
+    // position harmlessly and then fails `Object.is` against 0 for anyone who compares offsets —
+    // an unpleasant thing to hand out from a function whose whole job is "how far did this move".
+    return {
+        x: lagX === 0 ? 0 : (viewport.x * lagX) / viewport.zoom,
+        y: lagY === 0 ? 0 : (viewport.y * lagY) / viewport.zoom
+    };
 }
 
 /**
@@ -111,12 +139,24 @@ export function byDepth(a: { depth: number }, b: { depth: number }): number {
  * exactly zero. An unlayered document therefore reports NOTHING and pays nothing, which is what
  * keeps this callable on every frame of every pan.
  */
-export function parallaxIds<T extends { nodes: ReadonlyMap<string, { depth?: number }> }>(
+export function parallaxIds<T extends { nodes: ReadonlyMap<string, { depth?: number; depthY?: number }> }>(
     doc: T
 ): Set<string> {
     const out = new Set<string>();
-    doc.nodes.forEach((n, id) => { if (depthOf(n) !== 0) out.add(id); });
+    doc.nodes.forEach((n, id) => { if (isParallaxed(n)) out.add(id); });
     return out;
+}
+
+/**
+ * Is this node layered on EITHER axis?
+ *
+ * BOTH, because one is enough: a node at `depth: 0, depthY: 2` does not move sideways and does move
+ * vertically, and asking only about `depth` would call it unlayered — leaving it out of the dirty
+ * set that keeps parallax from going stale, and leaving it SOLID to a runtime that must not collide
+ * with anything the camera can move.
+ */
+export function isParallaxed(node: { depth?: number; depthY?: number }): boolean {
+    return depthOf(node) !== 0 || depthYOf(node) !== 0;
 }
 
 /**
@@ -134,12 +174,12 @@ export function applyParallax<T extends {
     nodes: ReadonlyMap<string, { depth?: number; geometry: { x: number; y: number } }>;
 }>(doc: T, viewport: { x: number; y: number; zoom: number }): T {
     let any = false;
-    doc.nodes.forEach(n => { if (depthOf(n) !== 0) any = true; });
+    doc.nodes.forEach(n => { if (isParallaxed(n)) any = true; });
     if (!any) return doc;
 
     const nodes = new Map<string, unknown>();
     doc.nodes.forEach((n, id) => {
-        const offset = parallaxOffset(depthOf(n), viewport);
+        const offset = parallaxOffset(depthOf(n), viewport, depthYOf(n));
         nodes.set(id, offset.x === 0 && offset.y === 0
             ? n
             // Only the POSITION moves. Size is deliberately untouched: a layer that also shrank

@@ -154,7 +154,7 @@ import { ReadonlyDocument, ProjectDocument } from "../document/Document";
 import { Node, UserData } from "../document/Node";
 import { ReadonlyTilemap, TILE_EMPTY, tileAt, visibleCells } from "../document/Tilemap";
 import { Tileset, findTileset, tilesetTile } from "../document/Tileset";
-import { depthOf } from "../document/Depth";
+import { isParallaxed } from "../document/Depth";
 
 /** One tick, in seconds. 60Hz: the rate every measurement in this module's tests assumes. */
 export const FIXED_STEP = 1 / 60;
@@ -702,8 +702,8 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
  * is the same statement that makes it parallax. A level that wants solid ground keeps it at 0,
  * which is where every node already is.
  */
-function isLayered(node: { depth?: number }): boolean {
-    return depthOf(node) !== 0;
+function isLayered(node: { depth?: number; depthY?: number }): boolean {
+    return isParallaxed(node);
 }
 
 export function solidsOf(doc: ReadonlyDocument): Solid[] {

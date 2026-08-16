@@ -1520,6 +1520,42 @@ per-layer axis rather than a defect, and nothing in the corpus asks for one yet.
 
 3 tests, 2 mutants, 2/2 killed.
 
+**Slice 21 — PARALLAX HAS TWO AXES (schema 71), because the format always did.** The user looked at
+the scenery screenshot and said the terrain was not lined up, and they were right: one scalar drove
+both axes, so with the camera 176px up the depth-2 hills rode **117px off the horizon** (`-176 × 2/3`)
+and the depth-1 bushes 88px, which is why the two scenery layers stopped agreeing with the ground
+and with each other. I had filed that as cosmetic one message earlier. It was not.
+
+**MEASURED, NOT INVENTED: Tiled declares `parallaxx` and `parallaxy` as INDEPENDENT per-layer
+factors** — the importer has been counting them as "not read" all along, so the vocabulary was
+already sitting there. `Node.depthY` is the second factor in this engine's own depth vocabulary:
+absent means "the same as `depth`", so every document written before this behaves exactly as it did
+and the 70→71 migration moves no data.
+
+**ONE SCALAR IS RIGHT FOR A DESIGN CANVAS AND WRONG FOR A SIDE-SCROLLER**, which is the whole
+tension and why this is a field rather than a change of behaviour. A layered card should lift in
+every direction when the canvas pans; a hillside should scroll sideways and stay on the horizon. A
+side-scroller writes `depthY: 0` — vertical rate 1, no vertical lag — and that is the one value that
+pins a layer to the world in an axis.
+
+**IT DOES NOT TOUCH DRAW ORDER OR THE Z-BUFFER**, which stay `depth`'s alone: this is how far a
+layer LAGS the camera, not how far away it is. Two layers that sort identically may still scroll
+differently, which is exactly what a sky and a hillside do.
+
+**EITHER AXIS MAKES A NODE LAYERED**, and `isParallaxed` is the one answer both callers use. A node
+at `depth: 0, depthY: 2` does not move sideways and does move vertically — asking only about `depth`
+would leave it out of the dirty set that keeps parallax fresh AND leave it SOLID to a runtime that
+must not collide with anything the camera can move. PA10 is that mutant.
+
+**A PINNED AXIS RETURNS EXACTLY ZERO, not negative zero.** `-176 × 0` is `-0`, which adds to a
+position harmlessly and then fails `Object.is` against 0 for anyone comparing offsets — found by a
+test asserting `toBe(0)`, and fixed in the function rather than in the assertion.
+
+Verified in the running app: the hills and bushes now sit ON the ground line and still lag
+horizontally, and the playthrough is byte-identical to every run before the scenery existed.
+
+4 tests, 2 mutants, 6/6 killed across the parallax and scenery families.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

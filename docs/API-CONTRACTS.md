@@ -15,7 +15,7 @@
      sentence about a grid inheriting an object layer's opacity lived in the code comment, the
      mutant note and ACTION-SYSTEM.md — not here; `TilePlacement` is not part of this surface. -->
 
-> 🔒 Frozen contract · schema v70 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v71 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)

@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1953;
+const EXPECTED_TESTS = 1957;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1670,11 +1670,11 @@ const MUTANTS = [
     // PARALLAX AND THE DIRTY SET — the fourth stale-dirty-set defect in this codebase, found by
     // asking whether parallax survives the incremental geometry path. It did not: 300px.
     { id: "PX1", file: "src/core/document/Depth.ts",
-      from: "    doc.nodes.forEach((n, id) => { if (depthOf(n) !== 0) out.add(id); });",
+      from: "    doc.nodes.forEach((n, id) => { if (isParallaxed(n)) out.add(id); });",
       to: "    doc.nodes.forEach((n, id) => { out.add(id); });",
       note: "EVERY node is reported as parallaxed rather than only the layered ones, so a pan dirties the whole document and the incremental geometry path this engine is built on stops being incremental — the picture stays correct, which is why only a test that asks WHICH ids can see it" },
     { id: "PX2", file: "src/core/document/Depth.ts",
-      from: "    doc.nodes.forEach((n, id) => { if (depthOf(n) !== 0) out.add(id); });",
+      from: "    doc.nodes.forEach((n, id) => { if (isParallaxed(n)) out.add(id); });",
       to: "    doc.nodes.forEach(() => { });",
       note: "nothing is reported, so a layered node keeps the geometry it had when the camera was somewhere else — the exact defect this function was written for, measured at 300px on one layer after a 600px pan" },
 
@@ -1683,13 +1683,24 @@ const MUTANTS = [
     // something is wrong. Found by putting scenery back in the test level: every one of that
     // tileset's 29 tiles is solid, so a background drawn from the same sheet was a wall in the sky.
     { id: "SC1", file: "src/core/runtime/World.ts",
-      from: "function isLayered(node: { depth?: number }): boolean {\n    return depthOf(node) !== 0;",
-      to: "function isLayered(node: { depth?: number }): boolean {\n    return false;",
+      from: "    return isParallaxed(node);",
+      to: "    return false;",
       note: "a layered node is solid again, so scenery drawn from the level's own sheet becomes a wall in the sky — at a position that is not even where it draws, since the drawn one moves with the camera" },
     { id: "SC2", file: "src/core/runtime/World.ts",
-      from: "function isLayered(node: { depth?: number }): boolean {\n    return depthOf(node) !== 0;",
-      to: "function isLayered(node: { depth?: number }): boolean {\n    return depthOf(node) > 0;",
+      from: "    return isParallaxed(node);",
+      to: "    return (node.depth ?? 0) > 0;",
       note: "only BACKGROUND layers are excused and a FOREGROUND one (negative depth) still collides — which is the half a fixture written around clouds would never reach, since scenery in front of the player is the rarer case and the one nobody thinks to place" },
+
+    // PER-AXIS PARALLAX (schema 71). One scalar drove both axes, so a vertical pan lifted the
+    // scenery off the horizon — 117px at depth 2 with the camera 176px up.
+    { id: "PA9", file: "src/core/document/Depth.ts",
+      from: "    return node.depthY ?? depthOf(node);",
+      to: "    return depthOf(node);",
+      note: "the second axis is IGNORED, so `depthY: 0` stops pinning anything and a side-scroller's scenery rides off the horizon again on every vertical pan — invisible to any fixture that only ever pans sideways" },
+    { id: "PA10", file: "src/core/document/Depth.ts",
+      from: "    return depthOf(node) !== 0 || depthYOf(node) !== 0;",
+      to: "    return depthOf(node) !== 0;",
+      note: "a node layered ONLY vertically reads as unlayered, so it is left out of the dirty set that keeps parallax fresh AND left solid to a runtime that must not collide with anything the camera can move" },
 ];
 
 function runSuite() {

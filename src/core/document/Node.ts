@@ -408,6 +408,19 @@ export interface Node {
      */
     depth?: number;
     /**
+     * The depth this node parallaxes by VERTICALLY (schema 71). Absent = the same as `depth`.
+     *
+     * TWO AXES, BECAUSE THE FORMAT HAS TWO: Tiled declares `parallaxx` and `parallaxy` as
+     * INDEPENDENT per-layer factors. One scalar driving both is right for a design canvas — a
+     * layered card lifts in every direction — and wrong for a side-scroller, where the scenery
+     * scrolls sideways and the ground stays put. A side-scroller writes `depthY: 0`.
+     *
+     * IT DOES NOT AFFECT DRAW ORDER OR THE Z-BUFFER, which remain `depth`'s alone: this is about
+     * how far a layer LAGS the camera, not about how far away it is. Two layers that sort
+     * identically may still scroll differently, which is exactly what a sky and a hillside do.
+     */
+    depthY?: number;
+    /**
      * A GRID of control points that BENDS this node's outline (schema 41).
      *
      * Resolved at the display seam into an ordinary `core.path`, so nothing downstream knows a

@@ -81,7 +81,7 @@ import { SetTrackAction } from "../actions/SetTrackAction";
 import { SetTimelineAction } from "../actions/SetTimelineAction";
 import { SetClipsAction } from "../actions/SetClipsAction";
 import { isDocumentDeltaKey, documentDeltaKey } from "../actions/types";
-import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyParallax, parallaxIds, DEPTH_MIN, DEPTH_MAX } from "../document/Depth";
+import { depthError, depthOf, depthYOf, depthToClipZ, parallaxOffset, parallaxRate, applyParallax, parallaxIds, isParallaxed, DEPTH_MIN, DEPTH_MAX } from "../document/Depth";
 import { Mesh, meshError, restMesh, warpPoint, isIdentityMesh, MESH_MAX_DIVISIONS } from "../document/Mesh";
 import { meshHandles, meshHandleAtPoint, meshIndexOf, meshPointFromWorld } from "../geometry/SelectionHandles";
 import { normalAt, surfaceNormal, warpHeight, isFlatMesh, heightRange } from "../document/Mesh";
@@ -4619,11 +4619,10 @@ describe("Guards the suite did not previously protect", () => {
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
         // time a real migration is added — most recently when 67→68 landed, taking the sheet OFF
         // the node, which 66→67 had moved and the importer had gone on writing anyway.)
-        // (Most recently 69->70, giving the document a BACKGROUND. That step moves no data either —
-        // absent already meant "no sky", which is what every document before it had — but a
-        // schema-69 build would load a file declaring one and draw it on nothing, which is exactly
-        // the silent misstatement the bump exists to prevent.)
-        expect(() => migrateIfNeeded(legacy, "71")).toThrow('Migration not implemented for document schema "70"');
+        // (Most recently 70->71, a SECOND parallax axis on a node. Absent means "the same as
+        // `depth`", which is what one scalar driving both axes already did — but a schema-70 build
+        // would load a side-scroller's scenery and lift it off the horizon on every vertical pan.)
+        expect(() => migrateIfNeeded(legacy, "72")).toThrow('Migration not implemented for document schema "71"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -31617,7 +31616,7 @@ describe("the document's BACKGROUND (schema 70) — what a level sits on", () =>
         doc.background = "#27b99a";
         const wire = JSON.parse(serializeDocument(doc));
         expect(wire.document.background).toBe("#27b99a");
-        expect(wire.version).toBe("70");
+        expect(wire.version).toBe(SCHEMA_VERSION);
         expect(deserializeDocument(serializeDocument(doc)).background).toBe("#27b99a");
         // …and clearing it returns the document to indistinguishable-from-before.
         doc.background = undefined;
@@ -31629,7 +31628,7 @@ describe("the document's BACKGROUND (schema 70) — what a level sits on", () =>
         const old = JSON.parse(serializeDocument(doc));
         old.version = "69";
         const migrated = migrateIfNeeded(old);
-        expect(migrated.version).toBe("70");
+        expect(migrated.version).toBe(SCHEMA_VERSION);
         expect(migrated.document).not.toHaveProperty("background");
         expect(deserializeDocument(JSON.stringify(old)).background).toBeUndefined();
     });
@@ -31772,5 +31771,71 @@ describe("parallax and the INCREMENTAL geometry path — the fourth stale dirty 
         expect(app).toMatch(/\.\.\.\(layered \?\? \[\]\)/);
         // …and that it is keyed on the VIEWPORT having moved, not recomputed unconditionally.
         expect(app).toMatch(/prevViewportRef\.current = \{ x: vpNow\.x, y: vpNow\.y, zoom: vpNow\.zoom \}/);
+    });
+});
+
+describe("PER-AXIS parallax (schema 71) — scenery scrolls sideways, the ground stays put", () => {
+    /**
+     * SEEN IN THE TEST LEVEL the moment scenery went in. One scalar drove both axes, so with the
+     * camera 176px up the far hills at depth 2 rode 117px off the horizon and the two scenery
+     * layers stopped lining up with the ground or with each other. Tiled models this correctly and
+     * always has: `parallaxx` and `parallaxy` are INDEPENDENT per-layer factors.
+     */
+    test("ABSENT means the same as `depth`, so every document written before this is unchanged", () => {
+        expect(depthYOf({ depth: 2 })).toBe(2);
+        expect(depthYOf({})).toBe(0);
+        // …and the offset with no second axis is byte-for-byte the one-scalar answer.
+        const vp = { x: 300, y: -176, zoom: 1 };
+        expect(parallaxOffset(2, vp)).toEqual(parallaxOffset(2, vp, 2));
+    });
+
+    test("`depthY: 0` PINS THE VERTICAL AXIS, which is the whole point", () => {
+        const vp = { x: 300, y: -176, zoom: 1 };
+        // depth 2: rate 1/3, lag 2/3. Horizontally that is 200px of lag; VERTICALLY it was -117.33,
+        // which is the number that lifted the hills off the horizon.
+        const both = parallaxOffset(2, vp);
+        expect(both.x).toBeCloseTo(200, 10);
+        expect(both.y).toBeCloseTo(-117.3333333333, 8);
+        // Pinned: the horizontal lag is untouched and the vertical one is exactly zero.
+        const pinned = parallaxOffset(2, vp, 0);
+        expect(pinned.x).toBeCloseTo(200, 10);
+        expect(pinned.y).toBe(0);
+        // The axes are INDEPENDENT in both directions, not merely suppressible: a node can lag
+        // vertically and not horizontally, which is what a scrolling shooter wants.
+        const vertical = parallaxOffset(0, vp, 2);
+        expect(vertical.x).toBe(0);
+        expect(vertical.y).toBeCloseTo(-117.3333333333, 8);
+    });
+
+    test("EITHER axis makes a node layered — for the dirty set AND for the physics", () => {
+        // One is enough. A node at depth 0 with depthY 2 does not move sideways and DOES move
+        // vertically, so asking only about `depth` would call it unlayered: left out of the dirty
+        // set that keeps parallax fresh, and left SOLID to a runtime that must not collide with
+        // anything the camera can move.
+        expect(isParallaxed({})).toBe(false);
+        expect(isParallaxed({ depth: 1 })).toBe(true);
+        expect(isParallaxed({ depth: 0, depthY: 2 })).toBe(true);
+        // …and `depthY: 0` on an unlayered node is still unlayered, rather than becoming layered by
+        // the act of saying so.
+        expect(isParallaxed({ depth: 0, depthY: 0 })).toBe(false);
+        // A side-scroller's scenery: layered sideways, pinned vertically, and STILL not solid.
+        expect(isParallaxed({ depth: 2, depthY: 0 })).toBe(true);
+    });
+
+    test("applyParallax moves each axis by its own depth, and the document round-trips", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("hills", {
+            id: "hills", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 100, y: 100, width: 10, height: 10 },
+            style: { fill: "#888888", opacity: 1 }, layout: {}, depth: 2, depthY: 0
+        } as Node);
+        doc.rootNodeUuids.push("hills");
+        const moved = applyParallax(doc, { x: 300, y: -176, zoom: 1 });
+        const g = moved.nodes.get("hills")!.geometry;
+        expect(g.x).toBeCloseTo(300, 10);      // 100 + 200 of horizontal lag
+        expect(g.y).toBe(100);                 // PINNED — the whole reason the field exists
+        // …and it survives a save/load, because a scenery layer that forgets its axis on reload is
+        // a level that looks different the second time it is opened.
+        expect(deserializeDocument(serializeDocument(doc)).nodes.get("hills")!.depthY).toBe(0);
     });
 });

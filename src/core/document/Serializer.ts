@@ -394,6 +394,11 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     // required all the same, since a schema-69 build would load a file that declares a sky and
     // draw it on nothing, silently misstating the document.
     if (version === "69") { raw = { ...raw, version: "70" }; version = "70"; }
+    // 70 -> 71: a node gained `depthY`, a SECOND parallax axis. Named and empty: absent means "the
+    // same as `depth`", which is exactly what one scalar driving both axes already did. The bump is
+    // required all the same — a schema-70 build would load a side-scroller's scenery and lift it
+    // off the horizon on every vertical pan, which is the defect this field exists to end.
+    if (version === "70") { raw = { ...raw, version: "71" }; version = "71"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
