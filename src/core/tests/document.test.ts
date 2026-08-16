@@ -81,7 +81,7 @@ import { SetTrackAction } from "../actions/SetTrackAction";
 import { SetTimelineAction } from "../actions/SetTimelineAction";
 import { SetClipsAction } from "../actions/SetClipsAction";
 import { isDocumentDeltaKey, documentDeltaKey } from "../actions/types";
-import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyParallax, DEPTH_MIN, DEPTH_MAX } from "../document/Depth";
+import { depthError, depthOf, depthToClipZ, parallaxOffset, parallaxRate, applyParallax, parallaxIds, DEPTH_MIN, DEPTH_MAX } from "../document/Depth";
 import { Mesh, meshError, restMesh, warpPoint, isIdentityMesh, MESH_MAX_DIVISIONS } from "../document/Mesh";
 import { meshHandles, meshHandleAtPoint, meshIndexOf, meshPointFromWorld } from "../geometry/SelectionHandles";
 import { normalAt, surfaceNormal, warpHeight, isFlatMesh, heightRange } from "../document/Mesh";
@@ -31700,5 +31700,77 @@ describe("the document's BACKGROUND (schema 70) — what a level sits on", () =>
         expect(map("backgroundcolor=\"#ff27b99a\"").background).toBe("#27b99aff");
         // Anything else is passed through as written rather than guessed at.
         expect(map("backgroundcolor=\"skyblue\"").background).toBe("skyblue");
+    });
+});
+
+describe("parallax and the INCREMENTAL geometry path — the fourth stale dirty set", () => {
+    /** Two roots at the same x: one layered, one not. The unlayered one is the control. */
+    const layeredDoc = () => {
+        const doc = createEmptyDocument();
+        for (const n of [{ id: "sky", depth: 1 }, { id: "ground", depth: 0 }]) {
+            doc.nodes.set(n.id, {
+                id: n.id, type: "core.rectangle", parent: null, children: [],
+                geometry: { x: 100, y: 0, width: 50, height: 50 },
+                style: { fill: "#888888", opacity: 1 }, layout: {}, depth: n.depth
+            } as Node);
+            doc.rootNodeUuids.push(n.id);
+        }
+        return doc;
+    };
+
+    test("names exactly the nodes a pan MOVES, and nothing at all when none are layered", () => {
+        const doc = layeredDoc();
+        // Depth 0 is not shifted — `parallaxRate(0)` is 1 and the offset is exactly zero — so
+        // including it would dirty every node of every document on every frame of every pan.
+        expect([...parallaxIds(doc)]).toEqual(["sky"]);
+        const flat = createEmptyDocument();
+        flat.nodes.set("a", { id: "a", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 1, height: 1 },
+            style: { fill: "#888888", opacity: 1 }, layout: {} } as Node);
+        expect(parallaxIds(flat).size).toBe(0);
+    });
+
+    test("A REUSED ENTRY GOES STALE WITHOUT IT — 300px, measured, on one layer", () => {
+        // THE DEFECT THIS EXISTS FOR. `applyParallax` shifts a layered node's stored geometry from
+        // the VIEWPORT, and the engine decides reuse by SET MEMBERSHIP — it never compares
+        // geometry. A pan dispatches no action and moves no body, so before `parallaxIds` nothing
+        // named the shift and the reused entry stayed where the camera used to be.
+        const doc = layeredDoc();
+        const at = (vx: number) =>
+            applyParallax(doc, { x: vx, y: 0, zoom: 1 }) as ProjectDocument;
+        const xOf = (s: ReturnType<typeof computeGeometry>, id: string) => s.nodes.get(id)!.bounds.x;
+
+        const frame1 = computeGeometry(at(0));
+        expect(xOf(frame1, "sky")).toBe(100);
+        // The camera scrolls 600px. Depth 1 lags HALF of it, so the stored document really changed.
+        const panned = at(600);
+        expect(panned.nodes.get("sky")!.geometry.x).toBe(400);
+
+        const full = computeGeometry(panned);
+        expect(xOf(full, "sky")).toBe(400);
+        // The dirty set a pan actually produces, WITHOUT the fix: empty. The entry is stale by the
+        // whole parallax offset — and this is the assertion that fails if the fix is removed.
+        const blind = computeGeometry(panned, undefined, frame1, new Set<string>());
+        expect(xOf(blind, "sky")).toBe(100);
+        expect(xOf(full, "sky") - xOf(blind, "sky")).toBe(300);
+
+        // …and WITH it the incremental path agrees with the full one, which is the invariant this
+        // engine is built on rather than a number I chose.
+        const fixed = computeGeometry(panned, undefined, frame1, parallaxIds(panned));
+        expect(xOf(fixed, "sky")).toBe(xOf(full, "sky"));
+        // THE CONTROL: depth 0 is not shifted, so every path agrees about it whatever happens
+        // above. Without this the test could pass because nothing moves at all.
+        expect(xOf(fixed, "ground")).toBe(xOf(full, "ground"));
+        expect(xOf(blind, "ground")).toBe(xOf(full, "ground"));
+    });
+
+    test("and the APP asks — a fix in a module nothing calls is not a fix", () => {
+        // The reachability question this project treats as standing. `parallaxIds` living in
+        // `Depth` proves nothing about the frame loop; these two lines are what make it run.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/parallaxIds\(doc\)/);
+        expect(app).toMatch(/\.\.\.\(layered \?\? \[\]\)/);
+        // …and that it is keyed on the VIEWPORT having moved, not recomputed unconditionally.
+        expect(app).toMatch(/prevViewportRef\.current = \{ x: vpNow\.x, y: vpNow\.y, zoom: vpNow\.zoom \}/);
     });
 });

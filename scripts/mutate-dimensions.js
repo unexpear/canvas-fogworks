@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1947;
+const EXPECTED_TESTS = 1950;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1667,6 +1667,16 @@ const MUTANTS = [
       from: '        : /^#[0-9a-f]{8}$/i.test(declared) ? `#${declared.slice(3)}${declared.slice(1, 3)}`',
       to: '        : /^#[0-9a-f]{8}$/i.test(declared) ? declared',
       note: "Tiled's alpha-FIRST #aarrggbb is passed through as CSS's alpha-LAST #rrggbbaa, so an opaque colour arrives nearly transparent — both are eight hex characters and nothing about the string says which end the alpha is on" },
+    // PARALLAX AND THE DIRTY SET — the fourth stale-dirty-set defect in this codebase, found by
+    // asking whether parallax survives the incremental geometry path. It did not: 300px.
+    { id: "PX1", file: "src/core/document/Depth.ts",
+      from: "    doc.nodes.forEach((n, id) => { if (depthOf(n) !== 0) out.add(id); });",
+      to: "    doc.nodes.forEach((n, id) => { out.add(id); });",
+      note: "EVERY node is reported as parallaxed rather than only the layered ones, so a pan dirties the whole document and the incremental geometry path this engine is built on stops being incremental — the picture stays correct, which is why only a test that asks WHICH ids can see it" },
+    { id: "PX2", file: "src/core/document/Depth.ts",
+      from: "    doc.nodes.forEach((n, id) => { if (depthOf(n) !== 0) out.add(id); });",
+      to: "    doc.nodes.forEach(() => { });",
+      note: "nothing is reported, so a layered node keeps the geometry it had when the camera was somewhere else — the exact defect this function was written for, measured at 300px on one layer after a 600px pan" },
 ];
 
 function runSuite() {

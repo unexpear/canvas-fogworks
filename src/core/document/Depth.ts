@@ -95,6 +95,31 @@ export function byDepth(a: { depth: number }, b: { depth: number }): number {
 }
 
 /**
+ * Which nodes `applyParallax` would MOVE — the dirty set's half of the same question.
+ *
+ * IT EXISTS BECAUSE PARALLAX DID NOT SURVIVE THE INCREMENTAL GEOMETRY PATH, measured at 300px on a
+ * single depth-1 layer after a 600px pan. `applyParallax` changes a layered node's stored geometry
+ * from the VIEWPORT, and the geometry engine reuses a previous entry for any node the dirty set
+ * does not name — it compares set membership, never geometry. A pan dispatches no action and moves
+ * no body, so nothing named the shift and the reused entry stayed where the camera used to be.
+ *
+ * THE FOURTH INSTANCE OF THIS SHAPE in this codebase — after a run's bodies, a scrubbed playhead,
+ * and a character that turned around without moving. Each was a thing that changed geometry by a
+ * route the dirty set could not see, and each drew a stale picture until something named it.
+ *
+ * DEPTH 0 IS NOT INCLUDED, because it is not shifted: `parallaxRate(0)` is 1 and the offset is
+ * exactly zero. An unlayered document therefore reports NOTHING and pays nothing, which is what
+ * keeps this callable on every frame of every pan.
+ */
+export function parallaxIds<T extends { nodes: ReadonlyMap<string, { depth?: number }> }>(
+    doc: T
+): Set<string> {
+    const out = new Set<string>();
+    doc.nodes.forEach((n, id) => { if (depthOf(n) !== 0) out.add(id); });
+    return out;
+}
+
+/**
  * The document with every layered node shifted to where its depth says it belongs.
  *
  * A DERIVATION, applied by the app beside the frame and the active state, and for the same

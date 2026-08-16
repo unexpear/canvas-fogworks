@@ -58,7 +58,7 @@ import { booleanAction, makeBooleanNodeAction } from "../core/actions/booleanAct
 import { outlineStrokeAction } from "../core/actions/outlineStrokeActions";
 import { onionFrames, Keyframe } from "../core/document/Timeline";
 import { DEMOS } from "../core/document/Demos";
-import { applyParallax, DEPTH_MIN, DEPTH_MAX } from "../core/document/Depth";
+import { applyParallax, parallaxIds, DEPTH_MIN, DEPTH_MAX } from "../core/document/Depth";
 import { SetDepthAction } from "../core/actions/SetDepthAction";
 import { SetMeshAction } from "../core/actions/SetMeshAction";
 import { WeightTool, WeightBrush } from "../editor/tools/WeightTool";
@@ -732,6 +732,14 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
      * path cannot see it — see the note where this is read.
      */
     const prevFrameRef = useRef<number | undefined>(undefined);
+    /**
+     * The viewport the last computed geometry was built at — the parallax half of `prevFrameRef`.
+     *
+     * A LAYERED NODE MOVES WHEN THE CAMERA DOES, and by a route the dirty set cannot see: nothing
+     * dispatches an action and no body moves, so the incremental path reused an entry from where
+     * the camera used to be. Measured at 300px on one depth-1 layer after a 600px pan.
+     */
+    const prevViewportRef = useRef<{ x: number; y: number; zoom: number } | null>(null);
     const editorStateRef = useRef<EditorState | null>(null);
     if (!editorStateRef.current) {
         editorStateRef.current = createEditorState();
@@ -1496,12 +1504,24 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             // It applies ONLY while the world is what changed: a state transition rewrites nodes
             // this set knows nothing about, so that case still recomputes in full.
             const worldOnly = es.playing && worldMoved !== null && !es.transition && !frameChanged;
+            // PARALLAX IS THE OTHER THING THE DIRTY SET CANNOT SEE. `applyParallax` shifted every
+            // layered node's stored geometry from the viewport a few lines above, and the engine
+            // decides reuse by SET MEMBERSHIP — it never compares geometry — so a pan, which
+            // dispatches no action and moves no body, left those nodes where the camera used to be.
+            // Measured at 300px on one depth-1 layer after a 600px pan; the follow camera makes it
+            // continuous. `parallaxIds` is empty for an unlayered document, which is almost all of
+            // them, so this costs nothing to ask on every frame.
+            const vpNow = es.viewport, vpWas = prevViewportRef.current;
+            const viewportMoved = vpWas === null
+                || vpWas.x !== vpNow.x || vpWas.y !== vpNow.y || vpWas.zoom !== vpNow.zoom;
+            const layered = viewportMoved ? parallaxIds(doc) : null;
             const computed = (worldOnly || (!es.playing && !frameChanged)) && prevComputedRef.current
                 ? computeGeometry(doc, es.pendingGeometry, prevComputedRef.current,
                     new Set([...dirtyNodesRef.current, ...pendingKeys, ...prevPendingRef.current,
-                        ...(worldMoved ?? [])]))
+                        ...(worldMoved ?? []), ...(layered ?? [])]))
                 : computeGeometry(doc, es.pendingGeometry);
             prevFrameRef.current = es.frame;
+            prevViewportRef.current = { x: vpNow.x, y: vpNow.y, zoom: vpNow.zoom };
 
             // …and the reuse chain is BROKEN across play, so the first frame back in the editor
             // does not diff against a state's geometry. A WORLD-ONLY frame is the exception: it

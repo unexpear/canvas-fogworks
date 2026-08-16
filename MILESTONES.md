@@ -1455,6 +1455,36 @@ That has never been verified with a game camera and is the cheap check to make b
 
 7 tests, 4 mutants, 4/4 killed.
 
+**Slice 19 — PARALLAX DID NOT SURVIVE THE INCREMENTAL GEOMETRY PATH, and it never had.** Slice 18
+ended by saying layered scenery *should* already parallax during a run, because `applyParallax` is
+applied against the viewport and the viewport during a run IS the follow camera — and that the claim
+had never been checked. It was wrong. **300px of divergence on a single depth-1 layer after a 600px
+pan**, with the depth-0 control agreeing, so the fixture was not passing for the wrong reason.
+
+**THE ENGINE COMPARES SET MEMBERSHIP, NEVER GEOMETRY.** `selfDirty` is `effectiveDirty.has(id)`, so
+a node whose stored geometry changed by a route the dirty set cannot see reuses its previous entry
+unconditionally. `applyParallax` shifts a layered node from the VIEWPORT, and a pan dispatches no
+action and moves no body — so nothing named the shift and the reused entry stayed where the camera
+used to be. `parallaxIds` is the missing half, and the app asks it only when the viewport moved.
+
+**THE FOURTH INSTANCE OF THIS EXACT SHAPE**, after a run's bodies (`movedIds`, 6px permanent), a
+scrubbed playhead (the shape did not move at all while the track ran), and a character that turned
+around without moving a pixel (`facedIds`). Each was geometry changed by a route the dirty set could
+not see. That is now four, and the pattern is worth stating as a rule: **anything that derives
+geometry from something other than an action must ship the ids it touched in the same commit.**
+
+**IT WAS BROKEN IN THE EDITOR TOO, not only during a run** — `!es.playing && !frameChanged` takes
+the same reuse branch, and panning a layered document is the single most common thing a person does
+to one. Parallax has existed since schema 40; on the evidence it has worked only on frames where
+something else happened to be dirty.
+
+**DEPTH 0 IS EXCLUDED and that is load-bearing rather than tidy:** `parallaxRate(0)` is 1 and the
+offset is exactly zero, so including it would dirty every node of every document on every frame of
+every pan — which is the incremental path deleted. PX1 is the mutant that does exactly that, and it
+KEEPS THE PICTURE CORRECT, so only a test that asks which ids come back can see it.
+
+3 tests, 2 mutants, 2/2 killed.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.
