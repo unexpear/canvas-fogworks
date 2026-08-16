@@ -1745,9 +1745,9 @@ const MUTANTS = [
     // SPAWNING (M18) — the fifth verb, the only one that ADDS, and the only derive that must run
     // BEFORE the step rather than after it.
     { id: "SP1", file: "src/core/runtime/World.ts",
-      from: "            spawns.push({ id: c.templateId + \"#\" + spawns.length,",
-      to: "            spawns.push({ id: c.templateId + \"#\" + Math.round(Math.random() * 1e9),",
-      note: "ids stop being deterministic, so a replayed run produces different ones and a pure, reproducible runtime stops being either — every position and event stays identical, which is why only an assertion on the ID can see it" },
+      from: "            const id = c.templateId + \"#\" + spawns.length;",
+      to: "            const id = c.templateId + \"#\" + Math.round(Math.random() * 1e9);",
+      note: "ids stop being deterministic, so a replayed run produces different ones and a pure, reproducible runtime stops being either — every position and event stays identical, which is why only an assertion on the ID can see it. RE-AUTHORED for slice 27, which hoisted the id into a `const` so a spawned BODY could be minted under the same one; the old `from` named the inline `spawns.push({ id: ...` and went NOT APPLIED for two slices" },
     { id: "SP2", file: "src/core/runtime/World.ts",
       from: "            parent: null,",
       to: "            parent: template.parent,",
