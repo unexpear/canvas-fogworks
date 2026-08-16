@@ -1257,6 +1257,39 @@ feeding back into policy through `contentBounds` and the death plane, `clipFrame
 counting from the CLIP's start rather than the run's, `importTrack` replacing a whole track so a node
 holds one clip spanning the entire sheet, and a pose sampled per FRAME rather than per STEP.
 
+**Slice 15 — A CHARACTER FACES THE WAY IT IS GOING**, the first half of the animation gap and the
+half chosen because it avoids all four blockers the design review found.
+
+`Body.facing` lives beside `onGround` and `blockedX` because which way something moves is a fact
+about MOTION rather than about presentation — and because a body field is per-step BY CONSTRUCTION,
+which is the defect that would otherwise make the picture depend on the monitor. It keeps its last
+non-zero direction: a stopped character has no velocity left to read, so deriving this outside the
+step would snap it back to facing right the instant it stood still.
+
+`applyFacing` is a SIBLING of `applyWorld`, not part of it — they answer different questions to
+different readers. The magnitude is the author's and only the sign is the run's, so a node scaled 2x
+stays 2x. **IT CANNOT MOVE ANYTHING**, checked rather than assumed: a negative `scaleX` about the
+default origin leaves the AABB identical, so nothing derived from bounds — the camera,
+`contentBounds`, the death plane — can shift because a character turned around. A pose that changed
+a node's BOX would feed back into policy and move the death plane, which is exactly why the FRAME
+half is still not here.
+
+`facedIds` is the dirty set's other half: a character that turns around while standing still has not
+moved a pixel, so `movedIds` leaves it out and the incremental geometry would keep the old matrix for
+ever — the third time a stale dirty set would have shown a stale picture in this runtime.
+
+Verified live in the built Kenney level: the enemy declaring `patrol=-45` renders
+`matrix(-1 0 0 1 226 180)` while the one declaring `+45` renders a plain `translate`, and Stop
+restores both. 3/3 mutants killed.
+
+**AND THE ERA RESEARCH FOUND A CHOICE OF MINE THAT DOES NOT MATCH THE ART.** SMB1 accelerates,
+carries momentum and skids; slice 2 implemented the walk as a SET speed on the reasoning that "a
+platformer's walk is a speed you have while the key is down". That is a defensible arcade feel and it
+is not what the 8-bit era does. Nor is the jump: SMB1's signature rule is a VARIABLE jump height, and
+this runtime has one fixed 72px jump with no analogue component at all. Both are holes this project
+introduced rather than found, and the jump is the smaller and sharper of the two — it is also the
+first test of whether the input path can carry an analogue value.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.
