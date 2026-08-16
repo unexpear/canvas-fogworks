@@ -1799,10 +1799,8 @@ const MUTANTS = [
     // FRAMING A DOCUMENT ON OPEN (M18 slice 30). `viewportToFit` was correct, tested, and reachable
     // only from a menu — the editor opened every document at the viewport's literal default.
     { id: "VO1", file: "src/editor/EditorState.ts",
-      from: "    const fit = viewportToFit(bounds, size, padding, 1);
-    if (fit.zoom >= 1) return fit;",
-      to: "    const fit = viewportToFit(bounds, size, padding, 1);
-    if (true) return fit;",
+      from: "    if (fit.zoom >= 1) return fit;",
+      to: "    if (true) return fit;",
       note: "opening falls back to plain fit, so a 3618x270 side-scrolling level opens at zoom 0.15 occupying 7.9% of the canvas with every tile under three pixels — measured in the running app, and the whole reason the two questions are different functions" },
     { id: "VO2", file: "src/editor/EditorState.ts",
       from: "        y: fitsY ? bounds.y + bounds.height / 2 - size.height / 2 : bounds.y - padding",
