@@ -1676,6 +1676,52 @@ it was written for after the last time; nothing else notices, because it compile
 
 6 tests, 3 mutants, 3/3 killed.
 
+**Slice 25 — SPAWNING: the fifth verb, the only one that ADDS, and the only derive that runs BEFORE
+the step.** Four verbs acted on things that already existed, so a coin could not come out of a block.
+
+**IT INVERTS THE PATTERN THE OTHER FOUR FOLLOW, and that was the finding worth measuring for.**
+`applyWorld`, `applyFacing`, `applyPose` and `applyCells` all run AFTER `stepWorld` and feed only the
+PICTURE. The app steps against the STORED document, so a spawned node fed in that way would be drawn
+and invisible to the physics — not a solid, not a region, not collidable. `applySpawns` therefore
+appears TWICE in the frame: once before the step so the world can touch what was made, once in the
+render chain so it can be seen. SP3 removes the first and every fixture about position still passes.
+
+**AND IT IS AFFORDABLE BECAUSE NOTHING CACHES.** `stepWorld` re-derives its solids and regions from
+the document every step, so a node that appears between two steps takes part in the next one with no
+invalidation to arrange. `applySpawns` returns the SAME REFERENCE until something is spawned, which
+is every run until a rule says otherwise.
+
+**IT COPIES A TEMPLATE rather than describing a node.** Describing one means naming a type, a
+geometry, a style, a source rect and whatever the schema grows next — a second definition of "what a
+node is", drifting from the first from the day it is written. A template is a node the AUTHOR made,
+in the editor, with every field they wanted. That is Tiled's own shape (`templates/*.tx`) and Mario
+Maker's, and it is copied BY SPREAD: the sixth instance of the enumerated-literal bug in this
+codebase lost a document's tilesets, and a spawner that enumerated would drop whatever comes next.
+
+**IDS ARE THE INDEX, and that is what keeps the runtime replayable.** The nth spawn of a run is at
+index n however the run got there, so `templateId#n` is reproducible and a test asserts it with a
+literal. `generateUUID` here would have made a pure, reproducible runtime neither — and SP1 shows it
+is invisible to everything except an assertion on the id itself, because every position and every
+event stays identical.
+
+**A SPAWNED THING IS A ROOT**, because keeping the template's parent makes `worldOffsetOf` compose a
+frame's offset the thing was never positioned against — slice 6's defect arriving by a new route.
+SP2 SURVIVED FIRST TIME on a blind fixture whose template was already a root, where keeping the
+parent is a no-op; it needed a template nested in a frame at (500,300) to show, and then the coin
+asked for at world (100,50) lands at (600,350).
+
+**WHAT IS DELIBERATELY ABSENT: a spawned BODY.** `worldFrom` runs once, at Play, so a spawned node
+never becomes a body — a spawned REGION costs nothing because regions are derived per step, and a
+coin that SITS above the block is a region. A coin that POPS is a body, and wants `applyCommands` to
+mint body state as well as a node. Stated rather than half-built.
+
+**Verified end to end on the real level**, through the whole chain and not a fixture: hitting the
+block over the player's start at step 19 turns cell (3,7) from 11 to 31 in the derived document,
+leaves the STORED cell at 11, and spawns `coin-template#0` at (54,108) — one cell above the block,
+classed `coin`, present in the derived document and absent from the stored one.
+
+5 tests, 3 mutants, 3/3 killed.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

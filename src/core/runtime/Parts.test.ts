@@ -491,6 +491,6 @@ describe("A WALK CYCLE, driven by DISTANCE — the runtime half of the animation
 
     it("and the APP poses — a derivation nothing calls is not a feature", () => {
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
-        expect(app).toMatch(/applyPose\(applyFacing\(applyWorld\(timed, world\), world\), world\)/);
+        expect(app).toMatch(/applyPose\(applyFacing\(applyWorld\(applySpawns\(timed, world\), world\), world\), world\)/);
     });
 });

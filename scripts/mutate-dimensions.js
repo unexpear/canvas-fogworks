@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1974;
+const EXPECTED_TESTS = 1979;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1741,6 +1741,21 @@ const MUTANTS = [
       from: "            if (!cells) cells = new Map(world.cells);",
       to: "            cells = new Map();",
       note: "each setCell starts a FRESH map, so a run keeps only the last cell it changed and every block bumped before this one silently reverts — invisible to any fixture that bumps exactly one" },
+
+    // SPAWNING (M18) — the fifth verb, the only one that ADDS, and the only derive that must run
+    // BEFORE the step rather than after it.
+    { id: "SP1", file: "src/core/runtime/World.ts",
+      from: "            spawns.push({ id: c.templateId + \"#\" + spawns.length,",
+      to: "            spawns.push({ id: c.templateId + \"#\" + Math.round(Math.random() * 1e9),",
+      note: "ids stop being deterministic, so a replayed run produces different ones and a pure, reproducible runtime stops being either — every position and event stays identical, which is why only an assertion on the ID can see it" },
+    { id: "SP2", file: "src/core/runtime/World.ts",
+      from: "            parent: null,",
+      to: "            parent: template.parent,",
+      note: "a spawned copy KEEPS THE TEMPLATE'S PARENT, so `worldOffsetOf` composes a frame's offset the thing was never positioned against — slice 6's defect, arriving by a new route" },
+    { id: "SP3", file: "src/app/App.tsx",
+      from: "                    const live = applySpawns(base, world);",
+      to: "                    const live = base;",
+      note: "the STEP goes back to reading the stored document, so everything this run spawned is drawn and untouchable — not a solid, not a region, not collidable. The picture is perfect and the game is not there" },
 ];
 
 function runSuite() {

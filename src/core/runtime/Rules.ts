@@ -30,7 +30,7 @@
  */
 import { ReadonlyDocument } from "../document/Document";
 import {
-    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed, propertyOf
+    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed, propertyOf, worldOffsetOf
 } from "./World";
 import { partOf, PART_PREFIX } from "./Parts";
 import { findTileset, tilesetTile } from "../document/Tileset";
@@ -136,6 +136,18 @@ export function marioRules(
         // twice, checked rather than remembered.
         if (becomes.trim() === "" || !Number.isFinite(index)) continue;
         out.push({ kind: "setCell", nodeId: e.nodeId, col: e.cell.col, row: e.cell.row, tile: index });
+        // …AND WHAT IT PUTS OUT. `vde.spawns` names a TEMPLATE node the author made in the editor,
+        // so this rule invents no geometry and no node shape — it places a copy, one cell above the
+        // block that was hit, which is where a coin goes.
+        const spawns = tile ? propertyOf(tile.userData, PART_PREFIX + "spawns") : null;
+        if (spawns !== null && spawns.trim() !== "") {
+            const origin = worldOffsetOf(doc, e.nodeId);
+            if (origin) {
+                out.push({ kind: "spawn", templateId: spawns.trim(),
+                    x: origin.dx + node!.geometry.x + e.cell.col * map.tileWidth,
+                    y: origin.dy + node!.geometry.y + (e.cell.row - 1) * map.tileHeight });
+            }
+        }
     }
 
     let bounced = false;

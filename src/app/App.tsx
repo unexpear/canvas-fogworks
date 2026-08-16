@@ -139,7 +139,7 @@ import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
 import { naturalSize, surfaceUrl, imageSizeAsync } from "../../src/renderer/ImageCache";
-import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds, applyCells } from "../core/runtime/World";
+import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds, applyCells, applySpawns } from "../core/runtime/World";
 import { marioRules } from "../core/runtime/Rules";
 import { applyPose } from "../core/runtime/Parts";
 import { followCamera } from "../core/runtime/Camera";
@@ -1394,13 +1394,20 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 // throws it away, exactly as it always was.
                 const stepsToRun = world.outcome === "running" ? spend.steps : 0;
                 for (let i = 0; i < stepsToRun; i++) {
-                    world = stepWorld(base, world, { input: es.input, controlled: es.controlled });
+                    // STEPPED AGAINST THE DOCUMENT THAT INCLUDES WHAT THIS RUN SPAWNED, which is
+                    // the one derive that has to happen BEFORE the step rather than after it — see
+                    // `applySpawns`. Inside the loop, because a rule may spawn something on step
+                    // three and step four must be able to collide with it; it returns the same
+                    // reference until something is spawned, so a run that spawns nothing pays
+                    // nothing for asking.
+                    const live = applySpawns(base, world);
+                    world = stepWorld(live, world, { input: es.input, controlled: es.controlled });
                     // THE RULES RUN PER STEP, INSIDE THE LOOP. A frame may earn five steps, and
                     // batching the commands to the end of it would delay every bounce by up to four
                     // — measured at 14.25px on a stomp. The physics still decides nothing: it
                     // produced events, this reads them, and `applyCommands` answers a FINISHED
                     // world. `marioRules` is the game; swapping it changes no line below.
-                    world = applyCommands(world, marioRules(base, world,
+                    world = applyCommands(world, marioRules(live, world,
                         { controlled: es.controlled, bounds: runBoundsRef.current }));
                 }
                 es.world = world;
@@ -1458,8 +1465,14 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 // …and the CELLS this run has changed, stamped like the bodies are (M18). A bumped
                 // block is the level looking different for the length of a run, so it belongs on the
                 // derived copy beside the moved bodies rather than in the file.
+                // `applySpawns` FIRST, and it is the only one of these five that also ran BEFORE
+                // the step. It has to appear twice: once so the physics can collide with what was
+                // spawned, and once so it is drawn. Feeding only the picture would put a coin on
+                // screen that nothing can touch; feeding only the step would collide with one
+                // nobody can see.
                 played = applyCells(
-                    applyPose(applyFacing(applyWorld(timed, world), world), world), world);
+                    applyPose(applyFacing(applyWorld(applySpawns(timed, world), world), world), world),
+                    world);
             }
             const stored = applyParallax(played as ProjectDocument, es.viewport) as ReadonlyDocument;
             const doc: ReadonlyDocument = !es.playing

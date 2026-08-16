@@ -6,7 +6,7 @@ import {
     worldFrom, stepWorld, applyWorld, applyCommands, movedIds, WorldState
 } from "./World";
 import { marioRules } from "./Rules";
-import { applyCells, cellKey } from "./World";
+import { applyCells, cellKey, applySpawns, regionsOf } from "./World";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
@@ -409,5 +409,99 @@ describe("setCell — a bumped block BECOMES something, without editing the leve
     it("and the APP stamps them — a derivation nothing calls is not a feature", () => {
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         expect(app).toMatch(/applyCells\(/);
+    });
+});
+
+describe("spawn — the fifth verb, and the only one that ADDS", () => {
+    const withTemplate = () => {
+        const doc = docWith([
+            { id: "coin", x: 0, y: 0, w: 8, h: 8, className: "coin" },
+            { id: "a", x: 0, y: 0, userData: { bodyType: prop("dynamic") } }
+        ]);
+        return doc;
+    };
+
+    it("mints ids from the INDEX, so a replayed run produces the same ones", () => {
+        // `generateUUID` here would make a pure, replayable runtime unreplayable — the one thing
+        // this module has refused to give up. The nth spawn is at index n however the run got there.
+        const w = applyCommands(worldFrom(withTemplate()), [
+            { kind: "spawn", templateId: "coin", x: 10, y: 20 },
+            { kind: "spawn", templateId: "coin", x: 30, y: 40 }
+        ]);
+        expect(w.spawns.map(s => s.id)).toEqual(["coin#0", "coin#1"]);
+        // …and a later batch continues the count rather than restarting it.
+        const more = applyCommands(w, [{ kind: "spawn", templateId: "coin", x: 50, y: 60 }]);
+        expect(more.spawns.map(s => s.id)).toEqual(["coin#0", "coin#1", "coin#2"]);
+    });
+
+    it("MATERIALISES a copy of the template, positioned, and leaves the stored doc alone", () => {
+        const doc = withTemplate();
+        const w = applyCommands(worldFrom(doc), [{ kind: "spawn", templateId: "coin", x: 100, y: 50 }]);
+        const live = applySpawns(doc, w);
+        const made = live.nodes.get("coin#0")!;
+        expect(made.geometry).toEqual({ x: 100, y: 50, width: 8, height: 8 });
+        // THE TEMPLATE'S OWN FIELDS SURVIVE, because it is copied by spread rather than rebuilt —
+        // the sixth instance of the enumerated-literal bug in this codebase lost a document's
+        // tilesets, and a spawner that enumerated would drop whatever the schema grows next.
+        expect(made.className).toBe("coin");
+        expect(made.type).toBe(doc.nodes.get("coin")!.type);
+        // A SPAWNED THING IS A ROOT and is drawn: keeping the template's parent would compose a
+        // frame's offset it was never positioned against.
+        expect(made.parent).toBeNull();
+        expect(live.rootNodeUuids).toContain("coin#0");
+        // AND IT MATTERS ONLY WHEN THE TEMPLATE IS NESTED, which the fixture above is not — a
+        // mutant survived on exactly that. A template inside a frame at (500,300): the spawn asks
+        // for world (100,50), and keeping the parent would make `worldOffsetOf` add the frame's
+        // offset on top, putting the coin at (600,350) — slice 6's defect by a new route.
+        const nested = withTemplate();
+        (nested.nodes.get("coin") as Node).parent = "frame";
+        nested.nodes.set("frame", {
+            id: "frame", type: "core.rectangle", parent: null, children: ["coin"],
+            geometry: { x: 500, y: 300, width: 400, height: 400 },
+            style: { fill: "#888888", opacity: 1 }, layout: {}
+        } as Node);
+        nested.rootNodeUuids = ["frame", "a"];
+        const nw = applyCommands(worldFrom(nested), [{ kind: "spawn", templateId: "coin", x: 100, y: 50 }]);
+        const nlive = applySpawns(nested, nw);
+        expect((nlive.nodes.get("coin#0") as Node).parent).toBeNull();
+        // The REGION it becomes is where the spawn asked for it, not where the frame would put it.
+        const region = regionsOf(nlive).find(r => r.nodeId === "coin#0")!;
+        expect({ x: region.x, y: region.y }).toEqual({ x: 100, y: 50 });
+        // …and the STORED document never had a coin in it.
+        expect(doc.nodes.has("coin#0")).toBe(false);
+        expect(applySpawns(doc, worldFrom(doc))).toBe(doc);
+    });
+
+    it("REACHES THE PHYSICS, which is the whole reason it runs before the step", () => {
+        // A spawned REGION is reported the step after it exists. Fed only to the picture it would
+        // be drawn and untouchable — the defect this ordering exists to prevent.
+        const doc = withTemplate();
+        let w = worldFrom(doc);
+        expect(regionsOf(applySpawns(doc, w)).map(r => r.nodeId)).toEqual(["coin"]);
+        w = applyCommands(w, [{ kind: "spawn", templateId: "coin", x: 0, y: 0 }]);
+        const live = applySpawns(doc, w);
+        expect(regionsOf(live).map(r => r.nodeId).sort()).toEqual(["coin", "coin#0"]);
+        // The body sits on the spawned coin, so stepping against the LIVE document enters it…
+        const entered = stepWorld(live, w).events.filter(e => e.kind === "enter" && e.nodeId === "coin#0");
+        expect(entered).toHaveLength(1);
+        // …and stepping against the STORED one does not, which is the two halves of the same point.
+        expect(stepWorld(doc, w).events.filter(e => e.nodeId === "coin#0")).toEqual([]);
+    });
+
+    it("a MISSING template spawns nothing, inertly", () => {
+        // The dangling-reference rule this schema follows everywhere: a level whose template was
+        // deleted keeps playing rather than throwing.
+        const doc = withTemplate();
+        const w = applyCommands(worldFrom(doc), [{ kind: "spawn", templateId: "ghost", x: 1, y: 2 }]);
+        expect(w.spawns).toHaveLength(1);          // the channel recorded it…
+        expect(applySpawns(doc, w)).toBe(doc);     // …and the derive resolved it to nothing
+    });
+
+    it("and the APP steps against the spawned document, not the stored one", () => {
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/const live = applySpawns\(base, world\)/);
+        expect(app).toMatch(/stepWorld\(live, world/);
+        // BOTH halves: it must feed the picture too, or a coin is collided with and never seen.
+        expect(app).toMatch(/applyWorld\(applySpawns\(timed, world\)/);
     });
 });

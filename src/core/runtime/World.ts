@@ -483,6 +483,18 @@ export interface WorldState {
      */
     cells: ReadonlyMap<string, number>;
     /**
+     * What this run has BROUGHT INTO EXISTENCE, in the order it happened.
+     *
+     * AN ARRAY, AND THAT IS WHAT MAKES THE IDS DETERMINISTIC: the nth spawn of a run is at index n
+     * however the run got there, so `templateId#n` is reproducible and a test can assert on it with
+     * a literal. `generateUUID` here would make a pure, replayable runtime unreplayable — the one
+     * thing this module has refused to give up.
+     *
+     * IT DIES WITH THE RUN, like `cells` and `despawned`: Stop throws it away and the stored
+     * document never had a coin in it.
+     */
+    spawns: readonly { id: string; templateId: string; x: number; y: number }[];
+    /**
      * Whether this run is still going. Set only by an `endRun` command — the physics never decides
      * that a game is over, for the same reason it never decides what a stomp means.
      */
@@ -727,7 +739,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
             travelled: 0
         });
     }
-    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), cells: new Map(), outcome: "running", jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
+    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), cells: new Map(), spawns: [], outcome: "running", jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
@@ -1273,7 +1285,7 @@ export function stepWorld(
             className: doc.nodes.get(first)?.className ?? "" });
     }
 
-    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, cells: world.cells, outcome: world.outcome, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
+    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, cells: world.cells, spawns: world.spawns, outcome: world.outcome, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
 }
 
 /**
@@ -1372,7 +1384,20 @@ export type RuntimeCommand =
      * the WORLD and is stamped onto a derived copy, so Stop restores the level and nothing lands on
      * the undo stack — a run is not an edit.
      */
-    | { kind: "setCell"; nodeId: string; col: number; row: number; tile: number };
+    | { kind: "setCell"; nodeId: string; col: number; row: number; tile: number }
+    /**
+     * A THING COMES INTO EXISTENCE — the fifth verb, and the only one that adds rather than changes.
+     *
+     * IT COPIES A TEMPLATE rather than describing a node, because describing one means naming a
+     * type, a geometry, a style, a source rect and whatever else the schema grows next — a second
+     * definition of "what a node is", drifting from the first from the day it is written. A template
+     * is a node the AUTHOR made, in the editor, with every field they wanted; spawning places a copy
+     * of it. That is also Tiled's own shape (`templates/*.tx`) and Mario Maker's.
+     *
+     * A TEMPLATE THAT IS NOT THERE SPAWNS NOTHING, inertly — the dangling-reference rule this schema
+     * follows everywhere. A level whose template was deleted keeps playing.
+     */
+    | { kind: "spawn"; templateId: string; x: number; y: number };
 
 /**
  * A world with the commands applied, in array order.
@@ -1392,11 +1417,20 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
     let bodies: Map<string, Body> | null = null;
     let despawned: Set<string> | null = null;
     let cells: Map<string, number> | null = null;
+    let spawns: { id: string; templateId: string; x: number; y: number }[] | null = null;
     let outcome: RunOutcome | null = null;
     for (const c of commands) {
         if (c.kind === "endRun") {
             // FIRST ONE WINS, and the world's own is checked too: nothing may un-end a run.
             if (outcome === null && world.outcome === "running") outcome = c.outcome;
+            continue;
+        }
+        if (c.kind === "spawn") {
+            // NAMES NO BODY EITHER, so it goes above the lookup with setCell. The id is the INDEX,
+            // which is what makes a replayed run produce the same ids.
+            if (!spawns) spawns = [...world.spawns];
+            spawns.push({ id: c.templateId + "#" + spawns.length,
+                          templateId: c.templateId, x: c.x, y: c.y });
             continue;
         }
         if (c.kind === "setCell") {
@@ -1428,10 +1462,11 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
             onGround: (c.vy !== undefined && c.vy < 0) ? false : body.onGround
         });
     }
-    if (!bodies && !despawned && !outcome && !cells) return world;
+    if (!bodies && !despawned && !outcome && !cells && !spawns) return world;
     return {
         ...world,
         cells: cells ?? world.cells,
+        spawns: spawns ?? world.spawns,
         bodies: bodies ?? world.bodies,
         despawned: despawned ?? world.despawned,
         outcome: outcome ?? world.outcome
@@ -1471,6 +1506,52 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
  * the override naming nothing, and naming nothing does nothing. The dangling-reference rule this
  * schema follows everywhere, and the alternative is a run that throws because a level was edited.
  */
+/**
+ * The document with everything this run has SPAWNED materialised into it.
+ *
+ * THE ONE DERIVE THAT MUST RUN BEFORE THE STEP, and it inverts the pattern the other four follow.
+ * `applyWorld`, `applyFacing`, `applyPose` and `applyCells` all run AFTER `stepWorld` and feed only
+ * the picture. A spawned node fed that way would be DRAWN and invisible to the physics: not a
+ * solid, not a region, not collidable — because the step reads the document it is given, and that
+ * document would not contain it. So the caller steps against `applySpawns(base, world)`.
+ *
+ * AND NOTHING CACHES, which is what makes that affordable: `stepWorld` re-derives its solids and
+ * regions from the document every step, so a node that appears between two steps takes part in the
+ * next one with no invalidation to arrange.
+ *
+ * A COPY OF A TEMPLATE, placed. The template keeps its own type, style, source rect and everything
+ * else the schema grows later; only the id and the position are the run's. It is COPIED BY SPREAD
+ * rather than rebuilt field by field — the sixth instance of that bug in this codebase was a
+ * document that lost its tilesets, and a spawner that enumerated would drop whatever was added next.
+ *
+ * A MISSING TEMPLATE SPAWNS NOTHING, inertly, and so does one that is itself spawned: a template
+ * naming a template would let one bump fill the level.
+ */
+export function applySpawns(doc: ReadonlyDocument, world: WorldState): ReadonlyDocument {
+    if (world.spawns.length === 0) return doc;
+    let nodes: Map<string, Node> | null = null;
+    const roots: string[] = [];
+    for (const s of world.spawns) {
+        const template = doc.nodes.get(s.templateId) as Node | undefined;
+        if (!template || (nodes ?? doc.nodes).has(s.id)) continue;
+        if (!nodes) nodes = new Map(doc.nodes as ReadonlyMap<string, Node>);
+        nodes.set(s.id, {
+            ...template,
+            id: s.id,
+            // A SPAWNED THING IS A ROOT. Keeping the template's parent would put it inside a frame
+            // whose offset it was never positioned against, and `worldOffsetOf` would then compose
+            // that offset a second time — the exact defect slice 6 was written to fix.
+            parent: null,
+            children: [],
+            geometry: { ...template.geometry, x: s.x, y: s.y }
+        } as Node);
+        roots.push(s.id);
+    }
+    if (!nodes) return doc;
+    return { ...(doc as ProjectDocument), nodes,
+             rootNodeUuids: [...doc.rootNodeUuids, ...roots] } as ReadonlyDocument;
+}
+
 export function applyCells(doc: ReadonlyDocument, world: WorldState): ReadonlyDocument {
     if (world.cells.size === 0) return doc;
     let nodes: Map<string, Node> | null = null;
