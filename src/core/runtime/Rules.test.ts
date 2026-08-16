@@ -6,7 +6,7 @@ import {
     worldFrom, stepWorld, applyWorld, applyCommands, movedIds, WorldState
 } from "./World";
 import { marioRules } from "./Rules";
-import { applyCells, cellKey, applySpawns, regionsOf } from "./World";
+import { applyCells, cellKey, applySpawns, regionsOf, facedIds } from "./World";
 import { partOf } from "./Parts";
 import { readFileSync } from "fs";
 import { resolve } from "path";
@@ -520,6 +520,46 @@ describe("spawn — the fifth verb, and the only one that ADDS", () => {
         expect((applySpawns(tucked, tw).nodes.get("coin#0") as Node).hidden).toBeUndefined();
         // …and the template itself stays hidden, which is the whole reason it was marked.
         expect((applySpawns(tucked, tw).nodes.get("coin") as Node).hidden).toBe(true);
+    });
+
+    it("IS NAMED IN THE DIRTY SET, or it draws where it was thrown for ever", () => {
+        // MEASURED IN THE RUNNING APP, not reasoned about: a coin thrown out of a block arced
+        // through its whole flight in the world — 24px up and back down over half a second — and did
+        // not move one pixel on screen. `applyWorld` had written the right position on every one of
+        // those frames; `movedIds` was asked against the STORED document, a spawned node is in no
+        // stored document, and so it answered "no such node" for the one node the frame had just
+        // invented. The incremental geometry then kept the matrix it first drew.
+        //
+        // THE FIFTH STALE-DIRTY-SET DEFECT HERE, which is why the fix is inside the question rather
+        // than at the call site: this passes the STORED document, exactly as `App` does, and still
+        // expects the coin to be named.
+        const doc = withTemplate();
+        const spawned = applyCommands(worldFrom(doc), [
+            { kind: "spawn", templateId: "coin", x: 100, y: 50, body: { vx: 0, vy: -200 } }]);
+        // On the frame it appears it IS at its spawn point, so there is nothing stale to redraw.
+        expect(movedIds(doc, spawned).has("coin#0")).toBe(false);
+        const moved = stepWorld(applySpawns(doc, spawned), spawned);
+        expect(moved.bodies.get("coin#0")!.y).toBeLessThan(50);          // it really did move…
+        expect(movedIds(doc, moved, spawned).has("coin#0")).toBe(true);  // …and the set says so
+        expect(doc.nodes.has("coin#0")).toBe(false);                     // nothing written back
+    });
+
+    it("…and a spawned body that TURNS is named by the other half", () => {
+        // `facedIds` was blind the same way, and a thrown thing facing the way it was thrown has
+        // not moved a pixel on the frame it appears — so `movedIds` alone could never name it.
+        const doc = withTemplate();
+        const w = applyCommands(worldFrom(doc), [
+            { kind: "spawn", templateId: "coin", x: 100, y: 50, body: { vx: -30, vy: 0 } }]);
+        expect(w.bodies.get("coin#0")!.facing).toBe(-1);
+        expect(facedIds(doc, w).has("coin#0")).toBe(true);
+        // …AND IT IS STILL COMPARING, rather than naming every spawn it finds. A template already
+        // authored mirrored spawns a copy that is already facing the right way, and a set that
+        // named it anyway would be a dirty set nobody could trust to be small.
+        const mirrored = withTemplate();
+        (mirrored.nodes.get("coin") as Node).transform = { scaleX: -1 };
+        const mw = applyCommands(worldFrom(mirrored), [
+            { kind: "spawn", templateId: "coin", x: 100, y: 50, body: { vx: -30, vy: 0 } }]);
+        expect(facedIds(mirrored, mw).has("coin#0")).toBe(false);
     });
 
     it("REACHES THE PHYSICS, which is the whole reason it runs before the step", () => {

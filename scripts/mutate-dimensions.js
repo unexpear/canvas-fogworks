@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1984;
+const EXPECTED_TESTS = 1986;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1788,6 +1788,18 @@ const MUTANTS = [
       from: "            hidden: undefined,",
       to: "            hidden: template.hidden,",
       note: "a spawned copy inherits the template's `hidden`, so the one way to keep a template out of the picture also makes every spawn invisible — `dropHidden` removes it from the scene entirely, and the physics goes on colliding with a thing nobody can see" },
+
+    // THE DIRTY SET AND SPAWNS (M18) — the FIFTH stale-dirty-set defect in this runtime, and the
+    // first where the node the set was asked about did not exist in any stored document. Found by
+    // watching the app rather than by reading: the coin arced in the world and sat still on screen.
+    { id: "SP5", file: "src/core/runtime/World.ts",
+      from: "    const live = applySpawns(doc, world);\n    const out = new Set<string>();\n    const differs =",
+      to: "    const live = doc;\n    const out = new Set<string>();\n    const differs =",
+      note: "`movedIds` goes back to asking the STORED document, where a spawned node does not exist — so every spawn is left out of the dirty set and the incremental geometry keeps the matrix it first drew. The document is right on every frame, which is why no assertion about applyWorld can see it" },
+    { id: "SP6", file: "src/core/runtime/World.ts",
+      from: "    const live = applySpawns(doc, world);\n    const out = new Set<string>();\n    for (const [id, body] of world.bodies) {",
+      to: "    const live = doc;\n    const out = new Set<string>();\n    for (const [id, body] of world.bodies) {",
+      note: "the same blindness in `facedIds`: a thrown thing faces the way it was thrown and has not moved a pixel on the frame it appears, so nothing else could ever name it and it stays mirrored the wrong way for the whole run" },
 ];
 
 function runSuite() {

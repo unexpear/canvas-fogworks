@@ -1802,6 +1802,36 @@ something other than what it found.
 
 2 tests, 2 mutants, 2/2 killed.
 
+**Slice 29 — A SPAWNED THING THAT DRAWS WHERE IT IS.** Found by WATCHING THE APP, and findable no
+other way. The coin the block throws out arced 24px up and back down over half a second in the
+world, and did not move one pixel on screen for any of it.
+
+**THE DERIVED DOCUMENT WAS RIGHT ON EVERY FRAME**, which is what made this invisible. Measured
+before it was touched, because the two candidates — `applyWorld` never writing the position, or the
+position being written and never redrawn — have completely different fixes and guessing between them
+is what the last four instances each cost. `applyWorld` wrote the body's exact y on all 33 frames of
+the flight; `movedIds`, asked the way `App` asks it, named the coin on **none** of them.
+
+**BECAUSE A SPAWNED NODE IS IN NO STORED DOCUMENT.** `movedIds` and `facedIds` both open with
+`doc.nodes.get(id)`, and both take the stored document — the only one a caller has. So for the one
+node the frame had just invented they answered "no such node, nothing to say", the incremental
+geometry kept the matrix it first drew, and the coin sat still. THE FIFTH STALE-DIRTY-SET DEFECT
+here, and the first where the node the set was asked about did not exist yet.
+
+**SO THE FIX IS INSIDE THE QUESTION, not at the call site.** `App` is unchanged: both functions now
+materialise the spawns themselves. A question no caller can ask wrongly is the only kind that stops
+coming back, and this is the fifth time. It costs nothing when nothing has spawned — `applySpawns`
+returns the document itself — and the docstring names the one trap it creates: pass the STORED
+document, because handing it one that already has the spawns would overwrite the positions
+`applyWorld` had just stamped.
+
+**THE BUMPED BLOCK WAS NEVER AT RISK**, and checking rather than assuming is why that is a sentence
+here. Tiles are read from the derived document every frame; only POSITIONS come from the cached
+`ComputedState`. Confirmed in the running app: the block is brown and spent while playing and orange
+again on Stop.
+
+2 tests, 2 mutants, 2/2 killed.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

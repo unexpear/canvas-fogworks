@@ -1638,11 +1638,15 @@ export function applyFacing(doc: ReadonlyDocument, world: WorldState): ReadonlyD
  * differs, and a character that turns around while standing still has not moved a pixel, so the
  * incremental geometry path would keep the old matrix for ever. Exactly the shape of the two stale
  * geometry bugs this runtime has already paid for.
+ *
+ * SPAWNS FIRST, for the reason `movedIds` gives at length: a thrown enemy that turns around has a
+ * node in no stored document, so asking one would leave it facing the way it was thrown for ever.
  */
 export function facedIds(doc: ReadonlyDocument, world: WorldState): Set<string> {
+    const live = applySpawns(doc, world);
     const out = new Set<string>();
     for (const [id, body] of world.bodies) {
-        const node = doc.nodes.get(id);
+        const node = live.nodes.get(id);
         if (!node) continue;
         const authored = node.transform?.scaleX ?? 1;
         if (authored !== body.facing * Math.abs(authored)) out.add(id);
@@ -1669,14 +1673,30 @@ export function facedIds(doc: ReadonlyDocument, world: WorldState): Set<string> 
  *
  * Same family as the Play/Stop reuse bug this file already records — a stale geometry chain showing
  * a body where it used to be, invisible to every test because the DOCUMENT was right the whole time.
+ *
+ * ASKED AGAINST THE DOCUMENT THE FRAME DRAWS, which is why `applySpawns` runs here. A spawned body's
+ * node exists in NO stored document — it is minted by `applySpawns` for the picture and thrown away
+ * with the run — so a caller holding the stored one gets "no such node, nothing to say" for every
+ * spawn, and the incremental geometry keeps the matrix it first drew. Measured in the running app:
+ * a coin thrown out of a block arced through its whole flight in the world and sat motionless on
+ * screen for all of it. The FIFTH stale-dirty-set defect here, and the first where the node the set
+ * was asked about did not exist yet — so the fix is inside rather than at the call site, because a
+ * question no caller can ask wrongly is the only kind that stops coming back.
+ *
+ * PASS THE STORED DOCUMENT. This materialises the spawns itself, and handing it one that already
+ * has them would overwrite the positions `applyWorld` just stamped with the spawn points they were
+ * thrown from — every spawn would then read as "moved" on every frame for ever.
+ *
+ * It costs nothing when nothing has spawned: `applySpawns` returns the document itself.
  */
 export function movedIds(doc: ReadonlyDocument, world: WorldState,
                          previous?: WorldState): Set<string> {
+    const live = applySpawns(doc, world);
     const out = new Set<string>();
     const differs = (id: string, body: Body) => {
-        const node = doc.nodes.get(id);
+        const node = live.nodes.get(id);
         if (!node) return false;
-        const at = worldOffsetOf(doc, id);
+        const at = worldOffsetOf(live, id);
         if (!at) return false;
         return node.geometry.x !== body.x - at.dx || node.geometry.y !== body.y - at.dy;
     };
