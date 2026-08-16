@@ -2768,7 +2768,25 @@ const MAX_FALL_SPEED: number;          // 1200 px/s. A COLLISION bound before it
                                        // decision: capped, one step's travel is at most 20px, so
                                        // "a solid 20px or deeper is safe" becomes a constant rather
                                        // than a function of how far the body fell.
-const MOVE_SPEED: number;              // 220 px/s — a speed you HAVE while held, never accumulated
+const MOVE_SPEED: number;              // 220 px/s — the TOP speed a held key builds up to (slice 17;
+                                       // it was a speed you simply had, until then)
+const SKID_TURN: number;               // 2. How much harder a TURN pushes than a start, and the only
+                                       // new magnitude in slice 17 — in the original it is not a
+                                       // constant at all but an `asl`/`rol` bit shift that fires
+                                       // while facing and moving disagree, so the ratio is exactly
+                                       // 2 rather than approximately 2.
+function walkAccel(gravity?): number;  // ONE GRAVITY, and no new number: in the original's WALK tier
+                                       // the acceleration byte and the release-friction byte are the
+                                       // SAME byte, and this runtime's default friction is already
+                                       // `mu * g` at `mu = 1`. Takes the STEP's gravity, so a level
+                                       // that changes gravity keeps the identity.
+function skidAccel(gravity?): number;  // that, doubled
+function walkRunup(speed?, gravity?): number;    // DERIVED, not declared — `v^2 / 2a` = 26.89px, the
+function skidDistance(speed?, gravity?): number;  // run-up to top speed, and 13.44px, the room a
+                                       // full-speed turn costs. These are what a level is drawn
+                                       // against (1.49 and 0.75 tiles, against the original's walk
+                                       // tier at 1.90 and 0.75 blocks), but they are CONSEQUENCES of
+                                       // one gravity and its double rather than knobs beside them.
 const JUMP_HEIGHT: number;             // 72 px, stated as a HEIGHT because that is what a level is
                                        // built from; the launch speed is derived from it. It is the
                                        // height of a FULLY HELD jump (slice 16), not of every jump.

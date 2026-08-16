@@ -189,6 +189,74 @@ export const MOVE_SPEED = 220;
 export const JUMP_HEIGHT = 72;
 
 /**
+ * How much harder a TURN pushes than a start — the whole of the skid (M18 slice 17), and the only
+ * new magnitude the slice introduces.
+ *
+ * IN THE ORIGINAL IT IS NOT A NUMBER AT ALL, IT IS A BIT SHIFT. There is no skid constant in the
+ * ROM: holding the opposite direction takes the SAME table entry as releasing, and the whole effect
+ * is `asl FrictionAdderLow / rol FrictionAdderHigh` — a doubling that fires on the frames the facing
+ * direction and the moving direction disagree. So the ratio is exactly 2, not approximately 2, and
+ * writing anything else here would be inventing a number where the era has an operation.
+ */
+export const SKID_TURN = 2;
+
+/**
+ * The acceleration a held key applies, and the one a turn applies — ONE GRAVITY, and two of it.
+ *
+ * NO NEW MAGNITUDE, WHICH IS SLICE 4'S STANDARD AND THE ERA'S OWN STRUCTURE. In the original's WALK
+ * tier — the tier this runtime is in, because it has no run button and one speed — the acceleration
+ * byte and the release-friction byte are THE SAME BYTE, `$98`. Acceleration equals friction there;
+ * it is one addition per frame whose sign the D-pad chooses. This runtime already has a friction of
+ * `mu * g`, defaulting to `mu = 1` because 44 of the corpus's 45 surfaces declare exactly 1 — so
+ * "the push is one gravity" reproduces the original's identity using the number slice 4 already had.
+ *
+ * THE FIRST VERSION OF THIS ANCHORED ON THE RUN TIER and was wrong for a reason worth keeping: our
+ * `MOVE_SPEED` of 220 px/s is 1.47x the original's RUNNING top speed, so it looked like the run. But
+ * a tier is chosen by the BUTTON, not by the speed, and with no run button a held key is a walk.
+ * Read off the run tier the run-up came out at 3.5 tiles against the walk tier's 1.5, and the skid
+ * at 2 tiles against 0.75 — both more than twice the era's own figures.
+ *
+ * IT TAKES THE STEP'S GRAVITY, not the default, so a level that changes gravity keeps the identity
+ * rather than silently keeping the 900. That matches `jumpSpeedFor`, which is stated against gravity
+ * for the same reason.
+ */
+export function walkAccel(gravity = DEFAULT_GRAVITY): number {
+    return Math.max(0, gravity);
+}
+
+/** …and the turn, which is that doubled. */
+export function skidAccel(gravity = DEFAULT_GRAVITY): number {
+    return walkAccel(gravity) * SKID_TURN;
+}
+
+/**
+ * WHAT THOSE PRODUCE, FOR A LEVEL: the run-up a standing start needs to reach `speed`, and the room
+ * a full-speed turn costs. `v^2 = 2*a*d`.
+ *
+ * DERIVED RATHER THAN DECLARED, and that is the correction. These read the way `JUMP_HEIGHT` reads —
+ * a distance is what a gap, a ledge and a corridor are drawn against, and "is there room to get up
+ * to speed before this jump" is a measurement on the map. But they are CONSEQUENCES of one gravity
+ * and its double, not knobs standing beside them; declaring the distance and deriving the rate put
+ * two numbers where the era has none, and let the skid ratio drift off 2 without anything noticing.
+ *
+ * MEASURED AGAINST THE ORIGINAL'S WALK TIER: it reaches top speed over 1.90 blocks and turns round
+ * in 0.75. Ours is 26.89px = 1.49 tiles and 13.44px = 0.75 tiles — the turn exact, the run-up
+ * punchier, which is what a body moving 2.4x faster on a tile only 1.125x bigger has to be. The two
+ * cannot both be preserved, and the turn is the one a player feels. A cross-check that fell out
+ * rather than being aimed at: the run-up is 26.89px and a TAPPED jump clears 25.92.
+ */
+export function walkRunup(speed = MOVE_SPEED, gravity = DEFAULT_GRAVITY): number {
+    const a = walkAccel(gravity);
+    return a > 0 ? (speed * speed) / (2 * a) : Number.POSITIVE_INFINITY;
+}
+
+/** The room a full-speed turn costs — `SKID_TURN` times shorter than the run-up, by construction. */
+export function skidDistance(speed = MOVE_SPEED, gravity = DEFAULT_GRAVITY): number {
+    const a = skidAccel(gravity);
+    return a > 0 ? (speed * speed) / (2 * a) : Number.POSITIVE_INFINITY;
+}
+
+/**
  * The fraction of gravity that pulls on a RISING body whose jump key is still HELD, and with it the
  * whole of variable jump height (M18 slice 16).
  *
@@ -875,9 +943,17 @@ export function stepWorld(
         // all — so inventing a property for it would be designing ahead of any content. The app
         // passes the node that was SELECTED when Play was pressed, which is how a level gets
         // tested; a real convention can replace that the day real content declares one.
-        // FRICTION FIRST, so a held key overrides it rather than fighting it. A body only loses
-        // speed to a surface it is actually ON: in the air it keeps what it has, which is what air
-        // control means and why a jump carries you forward.
+        // FRICTION ONLY WHEN NOTHING IS PUSHING (slice 17). A body only loses speed to a surface it
+        // is actually ON: in the air it keeps what it has, which is what air control means and why a
+        // jump carries you forward.
+        //
+        // WHY A HELD KEY SUPPRESSES IT RATHER THAN COMPOSING WITH IT, and this is forced rather than
+        // chosen. Compose them and the effective acceleration is `a - mu*g`; the default mu is 1 and
+        // g is 900, so ANY walk acceleration below 900 px/s^2 leaves the player unable to move at
+        // all on ordinary ground, and 44 of the corpus's 45 declared surfaces say exactly 1. The
+        // original agrees for its own reasons — its friction routine runs only on the frames no
+        // direction is held. Until slice 17 this line ran always and the walk simply ASSIGNED over
+        // it, which is the same suppression written less honestly.
         //
         // COULOMB, WHICH IS WHY THERE IS NO NEW CONSTANT HERE. Friction opposes motion with a force
         // proportional to the normal one — on flat ground that is `mu * m * g`, so the deceleration
@@ -887,7 +963,11 @@ export function stepWorld(
         // exactly 1, every surface in the tree would have been instant-stop and the one 0.45 would
         // have meant nothing. At mu = 1 a body walking at 220 px/s now slides 27px over a quarter
         // second, and at 0 it never stops.
-        if (was.onGround && was.groundFriction > 0 && vx !== 0) {
+        // EXACTLY ONE DIRECTION HELD is what counts as pushing: both at once cancels, and a body
+        // being asked to go two ways is a body being asked to go nowhere, which is what friction is
+        // for. Only the controlled body has a key to hold.
+        const push = id === controlled ? (input.left ? -1 : 0) + (input.right ? 1 : 0) : 0;
+        if (was.onGround && was.groundFriction > 0 && vx !== 0 && push === 0) {
             const drop = was.groundFriction * gravity * FIXED_STEP;
             // NEVER PAST ZERO: a deceleration that overshoots would push the body backwards, which
             // is friction turning into a spring.
@@ -895,14 +975,30 @@ export function stepWorld(
         }
 
         if (id === controlled) {
-            // SET WHILE HELD, AND ONLY WHILE HELD. Adding an acceleration each step gives ice; a
-            // platformer's walk is a speed you have while the key is down. But letting go must not
-            // SET it to zero — that was the first version, and it made friction meaningless for the
-            // one body a player actually controls: no slide on ice, and no air control, because
-            // releasing mid-jump killed the flight. Releasing now hands the body back to the
-            // surface, which is what friction is for.
-            const held = (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);
-            if (held !== 0) vx = held;
+            // A WALK IS BUILT UP, NOT SWITCHED ON (slice 17), and this is the second era mismatch
+            // the slice-15 research found. Slice 2 SET the speed on the reasoning that "a
+            // platformer's walk is a speed you have while the key is down" — defensible arcade feel,
+            // and not what the 8-bit era does. The original accelerates, carries the momentum, and
+            // gives turning around its OWN much larger deceleration. Releasing must still not set
+            // the speed to zero: that hands the body back to the surface, which is what friction is
+            // for, and it is why a jump carries you forward.
+            //
+            // SKID IS A SEPARATE RATE, NOT A SIGN. Turning around at the walking rate takes as long
+            // to stop as it took to start, which reads as ice rather than as a turn; the original
+            // spends a much larger number on it, and so does every platformer that feels sharp. It
+            // is the SAME acceleration applied against the motion, so no direction logic is needed
+            // — only the rate changes.
+            if (push !== 0) {
+                const skid = vx !== 0 && Math.sign(vx) !== push;
+                const rate = skid ? skidAccel(gravity) : walkAccel(gravity);
+                const want = vx + push * rate * FIXED_STEP;
+                // CLAMPED TO THE TOP SPEED, BUT NEVER BRAKING. A body already travelling faster than
+                // MOVE_SPEED — thrown, or carried out of a bounce — must not be slammed down to it
+                // by its own input; the clamp catches the step that CROSSES the cap and nothing
+                // else. Above it, the surface is what brings a body back, on the frames it can.
+                vx = Math.abs(want) > MOVE_SPEED && Math.abs(vx) <= MOVE_SPEED
+                    ? push * MOVE_SPEED : want;
+            }
             // A JUMP IS AN EDGE, not a state: it fires on the step the key GOES DOWN while the
             // body is on the ground. Holding it must not bunny-hop, and `jumpWas` is what
             // remembers the press across the several steps one frame may take.

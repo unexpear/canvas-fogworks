@@ -1350,6 +1350,66 @@ arms of those comparisons hold the key across the apex. The fixture now asserts 
 sequence THROUGH the apex instead: -5.4, 0, then 15 — a full gravity for a sixtieth of a second,
 with the key still down. Blind fixture, not a missing assertion, for the umpteenth time.
 
+**Slice 17 — ACCELERATION AND SKID, the LAST era mismatch this project introduced.** Slice 2 made
+the walk a SET speed on the reasoning that "a platformer's walk is a speed you have while the key is
+down" — defensible arcade feel, and not what the 8-bit era does. A walk is now built up over a
+run-up, and turning round has its own, harder rate.
+
+**IT ADDS ONE NEW MAGNITUDE, AND THE ERA SAYS IT IS A BIT SHIFT.** The original has no skid constant
+at all: holding the opposite direction takes the SAME table entry as releasing, and the whole effect
+is `asl FrictionAdderLow / rol FrictionAdderHigh`, firing on the frames facing and moving disagree.
+So `SKID_TURN` is exactly 2 — not approximately 2 — and everything else here is a number this runtime
+already had.
+
+**THE PUSH IS ONE GRAVITY, WHICH IS SLICE 4'S STANDARD MET AGAIN.** In the original's WALK tier the
+acceleration byte and the release-friction byte are the same byte, `$98`: acceleration EQUALS
+friction there, one addition per frame whose sign the D-pad chooses. This runtime already carries a
+friction of `mu * g` defaulting to `mu = 1`, because 44 of the corpus's 45 surfaces declare exactly
+1 — so "the push is one gravity" reproduces the era's identity out of the constant slice 4 already
+measured, and `walkAccel` introduces no number of its own.
+
+**I ANCHORED ON THE WRONG TIER FIRST, and the research caught it.** `MOVE_SPEED` is 220 px/s, which
+is 1.47x the original's RUNNING top speed, so the run tier looked like the match. A tier is chosen by
+the BUTTON, not by the speed, and with no run button a held key is a walk. Read off the run tier the
+run-up came out at 3.5 tiles against the walk tier's 1.5, and the skid at 2 tiles against 0.75 —
+both more than double the era's own figures, and the skid ratio drifted to 1.75 where the original's
+is a shift.
+
+**THE DISTANCES ARE DERIVED RATHER THAN DECLARED**, which was the other correction. `walkRunup` and
+`skidDistance` read the way `JUMP_HEIGHT` reads — a distance is what a gap and a ledge are drawn
+against — but declaring them and deriving the rate puts two numbers where the era has none, and lets
+the ratio drift with nothing noticing. Measured: 26.89px (1.49 tiles) and 13.44px (0.75) against the
+original's 1.90 and 0.75 blocks. **The turn matches exactly and the run-up is punchier**, which is
+what a body moving 2.4x faster on a tile only 1.125x bigger has to be; the two cannot both be
+preserved, and the turn is the one a player feels. A cross-check that fell out rather than being
+aimed at: the run-up is 26.89px and a TAPPED jump clears 25.92.
+
+**FRICTION IS NOW SUPPRESSED WHILE A KEY IS HELD, and that is forced rather than chosen.** Compose
+them and the effective acceleration is `a - mu*g`; the push IS one gravity and the default mu is
+exactly 1, so the two cancel to zero and the player cannot move at all on the surface almost every
+level declares. The original agrees from the code — its `ImposeFriction` applies exactly one adder
+per frame and lets the D-pad choose its sign, so acceleration and friction are never both applied.
+Until now this line ran always and the walk simply ASSIGNED over it, which is the same suppression
+written less honestly.
+
+**TWO DIVERGENCES RECORDED RATHER THAN FAKED.** (1) The original does NOT double the rate in the air,
+because its doubling fires on facing-vs-moving and it only writes facing from the D-pad while
+GROUNDED — so a midair turn is weaker, and reproducing it needs a facing that comes from the KEY and
+freezes in flight. `Body.facing` comes from the VELOCITY and therefore can never disagree with it.
+(2) Its release friction is 133.6 px/s^2 against our 900, so our coast is far shorter — a level
+wanting the original's slide declares `friction="0.15"` on the surface, which the measured knob
+already supports.
+
+**AND THE FIRST MUTANT THIS PROJECT HAS RETIRED FOR THE OPPOSITE REASON TO THE USUAL.** KB1 mutated
+the walk from SET to ACCUMULATED, and accumulated is now what the walk deliberately does — a mutant
+whose defect has become the feature cannot be repaired, only replaced. What made its version wrong
+was the absence of a CAP, which survives as AS1. `OW2` and `RL4` were deleted for being EQUIVALENT;
+this one was deleted for being RIGHT. FR6 then had to be retargeted as an INSERTION, because its
+defect stopped being expressible as an edit — `if (push !== 0)` multiplies the rate BY the push, so
+opening the guard changes nothing, and my first retarget was itself an equivalent mutant.
+
+Eight mutants, 8/8 killed, and 16/16 across the three families the slice touched.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

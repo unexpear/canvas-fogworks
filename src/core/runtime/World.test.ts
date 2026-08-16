@@ -12,6 +12,7 @@ import { Node, UserData } from "../document/Node";
 import {
     FIXED_STEP, MAX_STEPS_PER_FRAME, DEFAULT_GRAVITY, MAX_FALL_SPEED, MOVE_SPEED, JUMP_HEIGHT,
     NO_INPUT, Input, WorldState, jumpSpeedFor, jumpLaunchSpeed, HELD_JUMP_GRAVITY,
+    SKID_TURN, walkAccel, skidAccel, walkRunup, skidDistance,
     bodyTypeOf, worldFrom, solidsOf, stepWorld, applyWorld, movedIds, stepsFor, propertyOf,
     tileIsSolid, tileSolidsNear, documentHasSolidTiles, frictionOf, regionsOf,
     worldOffsetOf, runtimeRefusal, runtimeExclusions, applyWorld as applyWorldFn,
@@ -332,30 +333,116 @@ describe("input — the controlled body, and only it", () => {
         return out;
     };
 
-    it("walks at a SET speed while held, and stops the moment it is not", () => {
+    it("BUILDS UP to its top speed over a stated RUN-UP, and stops the moment it is not held", () => {
         const doc = level();
         const w = grounded(doc);
         expect(w.bodies.get("hero")!.onGround).toBe(true);
-        // 60 steps at 220 px/s is one second and 220 px — a speed you HAVE, not one you build up.
-        const walked = drive(doc, w, { left: false, right: true, jump: false }, 60);
-        expect(walked.bodies.get("hero")!.x).toBeCloseTo(100 + MOVE_SPEED, 6);
+        // THE RUN-UP IS THE CONSTANT AND THE RATE IS DERIVED: `a = v^2 / 2d`. Held long enough the
+        // body arrives at exactly MOVE_SPEED and stays there — the cap is a cap, not a target it
+        // oscillates around.
+        expect(walkAccel()).toBe(DEFAULT_GRAVITY);                 // ONE gravity, no new number
+        expect(walkRunup()).toBeCloseTo(MOVE_SPEED * MOVE_SPEED / (2 * walkAccel()), 10);
+        const walked = drive(doc, w, { left: false, right: true, jump: false }, 240);
         expect(walked.bodies.get("hero")!.vx).toBe(MOVE_SPEED);
+        // AND IT COVERS THE RUN-UP GETTING THERE, which is the number a level is drawn against: the
+        // distance to top speed is `walkRunup()`, within the step the discrete integrator overshoots by.
+        const reached = (() => {
+            let out = grounded(doc);
+            const x0 = out.bodies.get("hero")!.x;
+            for (let i = 0; i < 600; i++) {
+                out = stepWorld(doc, out, { input: { left: false, right: true, jump: false }, controlled: "hero" });
+                if (out.bodies.get("hero")!.vx === MOVE_SPEED) return out.bodies.get("hero")!.x - x0;
+            }
+            return -1;
+        })();
+        // BOUNDED BY THE INTEGRATOR, not by a tolerance I liked the look of. `walkRunup()` is the
+        // continuous answer and a discrete sum overshoots it: the step that reaches the cap is
+        // travelled at the NEW speed, and the final one is clamped rather than exact. Two steps at
+        // top speed is the honest ceiling.
+        expect(reached).toBeGreaterThan(walkRunup());
+        expect(reached).toBeLessThan(walkRunup() + 2 * MOVE_SPEED * FIXED_STEP);
+        // …and a SINGLE step is emphatically not the top speed, which is the whole difference from
+        // the set speed this replaced.
+        expect(drive(doc, w, { left: false, right: true, jump: false }, 1).bodies.get("hero")!.vx)
+            .toBeCloseTo(walkAccel() * FIXED_STEP, 10);
         // RELEASED, THE GROUND TAKES OVER. It does not snap to zero — that was the behaviour before
         // friction existed, and it made an icy surface meaningless for the body a player drives.
         // One step on grip (mu=1, so 900 px/s^2) sheds exactly 15 px/s.
         expect(drive(doc, walked, NO_INPUT, 1).bodies.get("hero")!.vx).toBeCloseTo(MOVE_SPEED - 15, 6);
         // …and it does stop, in the distance Coulomb says rather than instantly.
         expect(drive(doc, walked, NO_INPUT, 60).bodies.get("hero")!.vx).toBe(0);
-        // …and left mirrors right, which is what makes MOVE_SPEED a speed rather than an offset.
-        expect(drive(doc, w, { left: true, right: false, jump: false }, 60).bodies.get("hero")!.x)
-            .toBeCloseTo(100 - MOVE_SPEED, 6);
+        // …and left MIRRORS right, which is what makes these speeds rather than offsets — asserted
+        // as a mirror rather than as a number, so it stays true whatever the run-up is set to.
+        const goneRight = drive(doc, w, { left: false, right: true, jump: false }, 40).bodies.get("hero")!;
+        const goneLeft = drive(doc, w, { left: true, right: false, jump: false }, 40).bodies.get("hero")!;
+        expect(goneLeft.x - 100).toBeCloseTo(-(goneRight.x - 100), 10);
+        expect(goneLeft.vx).toBeCloseTo(-goneRight.vx, 10);
         // BOTH AT ONCE cancels, rather than one winning by an accident of evaluation order.
         expect(drive(doc, w, { left: true, right: true, jump: false }, 10).bodies.get("hero")!.vx).toBe(0);
     });
 
+    it("SKIDS: turning round costs its own distance, and a much shorter one than starting", () => {
+        const doc = level();
+        // At top speed going right, ask for left. The body must carry FORWARD while it turns — that
+        // carry is the skid, and its length is the constant.
+        const running = atWalk(grounded(doc), "hero");
+        const x0 = running.bodies.get("hero")!.x;
+        let w = running, furthest = x0, turnedAt = -1;
+        for (let i = 0; i < 240; i++) {
+            w = stepWorld(doc, w, { input: { left: true, right: false, jump: false }, controlled: "hero" });
+            const b = w.bodies.get("hero")!;
+            furthest = Math.max(furthest, b.x);
+            if (turnedAt < 0 && b.vx < 0) turnedAt = i;
+        }
+        expect(turnedAt).toBeGreaterThan(0);
+        // BOUNDED THE OTHER WAY ROUND FROM THE RUN-UP, and the asymmetry is the integrator rather
+        // than a fudge: a discrete sum travels each step at the NEW velocity, so accelerating
+        // OVERSHOOTS the continuous distance and decelerating UNDERSHOOTS it. One step at top speed
+        // is the gap either way — measured 11.67 against a continuous 13.44.
+        expect(furthest - x0).toBeGreaterThan(skidDistance() - MOVE_SPEED * FIXED_STEP);
+        expect(furthest - x0).toBeLessThan(skidDistance());
+        // AND IT IS EXACTLY HALF THE RUN-UP, because the turn is exactly twice the push — a bit
+        // shift in the original, so the ratio is 2 rather than about 2.
+        expect(skidAccel()).toBe(walkAccel() * SKID_TURN);
+        expect(skidDistance()).toBeCloseTo(walkRunup() / SKID_TURN, 10);
+        // AND IT IS THE SHORTER RATE OF THE TWO, which is the whole reason skid is a separate
+        // number: turning at the walking rate would carry the player a full run-up past the ledge.
+        expect(skidAccel()).toBeGreaterThan(walkAccel());
+        expect(furthest - x0).toBeLessThan(walkRunup());
+        // …and it does come out the other side at full speed, so a skid is a TURN and not a brake.
+        expect(w.bodies.get("hero")!.vx).toBe(-MOVE_SPEED);
+
+        // A STANDING START IS NOT A SKID — the rate is chosen from the sign of the motion, and a
+        // body at rest has none. Without `vx !== 0` the first step off the mark would use the skid
+        // rate and the walk would begin three times too fast.
+        const off = drive(doc, grounded(doc), { left: false, right: true, jump: false }, 1);
+        expect(off.bodies.get("hero")!.vx).toBeCloseTo(walkAccel() * FIXED_STEP, 10);
+    });
+
+    it("skids in the AIR at the SAME rate, which is a stated DIVERGENCE from the original", () => {
+        const doc = level();
+        // Jump at full speed, then ask for the other way mid-flight. The body turns, and it turns at
+        // the same rate it would on the ground.
+        //
+        // THE ORIGINAL DOES NOT, and the reason is worth writing down because it is not a tuning
+        // choice. Its doubling fires on the frames FACING and MOVING disagree, and it only ever
+        // writes facing from the D-pad while GROUNDED — so a midair turn is undoubled and weaker,
+        // and once the speed crosses zero the cap has already dropped out of run physics, which is
+        // why you cannot recover run speed in the air after reversing. Reproducing that needs a
+        // facing that comes from the KEY and freezes in flight; `Body.facing` comes from the
+        // VELOCITY and therefore can never disagree with it. Recorded rather than faked.
+        let w = stepWorld(doc, atWalk(grounded(doc), "hero"),
+            { input: { left: false, right: true, jump: true }, controlled: "hero" });
+        expect(w.bodies.get("hero")!.onGround).toBe(false);
+        const vx0 = w.bodies.get("hero")!.vx;
+        w = stepWorld(doc, w, { input: { left: true, right: false, jump: true }, controlled: "hero" });
+        expect(w.bodies.get("hero")!.onGround).toBe(false);
+        expect(w.bodies.get("hero")!.vx).toBeCloseTo(vx0 - skidAccel() * FIXED_STEP, 10);
+    });
+
     it("ONLY the controlled body is driven — the rest fall as they always did", () => {
         const doc = level();
-        const w = drive(doc, grounded(doc), { left: false, right: true, jump: true }, 30);
+        const w = drive(doc, grounded(doc), { left: false, right: true, jump: true }, 240);
         expect(w.bodies.get("hero")!.vx).toBe(MOVE_SPEED);
         // The other dynamic body took no input at all: still where it landed, still grounded.
         expect(w.bodies.get("other")!.vx).toBe(0);
@@ -891,14 +978,35 @@ describe("surface friction — the ground's property, not the body's", () => {
         expect(w.bodies.get("b")!.vx).toBe(MOVE_SPEED);
     });
 
-    it("a held key overrides the ground, or walking on grip would be walking uphill", () => {
-        const { doc, world } = on("1");
-        let w = world;
-        for (let i = 0; i < 60; i++) {
-            w = stepWorld(doc, w, { input: { left: false, right: true, jump: false }, controlled: "b" });
-        }
-        expect(w.bodies.get("b")!.vx).toBe(MOVE_SPEED);
-        expect(w.bodies.get("b")!.x).toBeCloseTo(MOVE_SPEED, 6);
+    it("a held key SUPPRESSES the ground, or walking on grip would be walking uphill", () => {
+        // THE ARITHMETIC IS THE ARGUMENT. Compose friction with the walk and the effective
+        // acceleration is `a - mu*g`; on the default surface that is `a - 900`, and any run-up
+        // longer than 26.9px puts `a` below 900 — so the player would not move AT ALL on the
+        // surface 44 of the corpus's 45 declare. Suppressed instead, grip and ICE accelerate
+        // IDENTICALLY while the key is down, and the surface is felt only when it is released.
+        const grip = on("1"), ice = on("0");
+        const push = (o: { doc: ProjectDocument; world: WorldState }, n: number) => {
+            let w = o.world;
+            for (let i = 0; i < n; i++) {
+                w = stepWorld(o.doc, w, { input: { left: false, right: true, jump: false }, controlled: "b" });
+            }
+            return w.bodies.get("b")!;
+        };
+        expect(push(grip, 20).vx).toBeCloseTo(push(ice, 20).vx, 10);
+        expect(push(grip, 20).x).toBeCloseTo(push(ice, 20).x, 10);
+        // …and both do reach the top speed, rather than agreeing at zero.
+        expect(push(grip, 240).vx).toBe(MOVE_SPEED);
+        // ON RELEASE THEY PART, which is what makes the coefficient mean anything again.
+        let g = push(grip, 240) && (() => { let w = grip.world;
+            for (let i = 0; i < 240; i++) w = stepWorld(grip.doc, w, { input: { left: false, right: true, jump: false }, controlled: "b" });
+            for (let i = 0; i < 30; i++) w = stepWorld(grip.doc, w, { input: NO_INPUT, controlled: "b" });
+            return w.bodies.get("b")!; })();
+        const i2 = (() => { let w = ice.world;
+            for (let i = 0; i < 240; i++) w = stepWorld(ice.doc, w, { input: { left: false, right: true, jump: false }, controlled: "b" });
+            for (let i = 0; i < 30; i++) w = stepWorld(ice.doc, w, { input: NO_INPUT, controlled: "b" });
+            return w.bodies.get("b")!; })();
+        expect(g.vx).toBe(0);                 // grip: 220 px/s is gone inside half a second
+        expect(i2.vx).toBe(MOVE_SPEED);       // ice: every pixel of it kept
     });
 
     it("a TILE carries its own friction, and falls back to the layer's", () => {
@@ -1470,7 +1578,7 @@ describe("body meets body — REPORTED, never resolved", () => {
             { id: "blob", x: 1102, y: 692, w: 20, h: 8, userData: { bodyType: prop("dynamic") } },
             { id: "hero", x: 1000, y: 684, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
         ]);
-        let w = worldFrom(doc);
+        let w = atWalk(worldFrom(doc), "hero");
         const RIGHT = { left: false, right: true, jump: false };
         const seen: string[] = [];
         for (let i = 0; i < 40; i++) {

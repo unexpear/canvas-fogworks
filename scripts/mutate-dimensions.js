@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1938;
+const EXPECTED_TESTS = 1940;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1205,17 +1205,17 @@ const MUTANTS = [
       to: "            const drop = was.groundFriction * gravity;",
       note: "friction decelerates per STEP rather than per second, so it is sixty times too strong and every surface stops a body inside one frame — which also makes 0.45 and 1 indistinguishable" },
     { id: "FR4", file: "src/core/runtime/World.ts",
-      from: "        if (was.onGround && was.groundFriction > 0 && vx !== 0) {",
-      to: "        if (was.groundFriction > 0 && vx !== 0) {",
+      from: "        if (was.onGround && was.groundFriction > 0 && vx !== 0 && push === 0) {",
+      to: "        if (was.groundFriction > 0 && vx !== 0 && push === 0) {",
       note: "friction applies IN THE AIR, so a jump loses its forward speed mid-flight and there is no air control — the body drops out of the arc it launched into" },
     { id: "FR5", file: "src/core/runtime/World.ts",
       from: "            vx = vx > 0 ? Math.max(0, vx - drop) : Math.min(0, vx + drop);",
       to: "            vx = vx > 0 ? vx - drop : vx + drop;",
       note: "the deceleration overshoots past zero, so a body that should have stopped reverses and creeps backwards — friction turned into a spring" },
     { id: "FR6", file: "src/core/runtime/World.ts",
-      from: "            const held = (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);\n            if (held !== 0) vx = held;",
-      to: "            vx = (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);",
-      note: "releasing the key SETS the speed to zero rather than handing the body to the surface, so friction means nothing for the one body a player controls: no slide on ice, and no air control, because letting go mid-jump kills the flight" },
+      from: "            if (push !== 0) {\n                const skid",
+      to: "            if (push === 0) vx = 0;\n            if (push !== 0) {\n                const skid",
+      note: "releasing the key SETS the speed to zero rather than handing the body to the surface, so friction means nothing for the one body a player controls: no slide on ice, and no air control, because letting go mid-jump kills the flight. RETARGETED IN SLICE 17 AS AN INSERTION, because the defect stopped being expressible as an edit: `if (push !== 0)` multiplies the rate BY the push, so opening the guard changes nothing at all and the first retarget was an equivalent mutant" },
 
     // PER-TILE COLLISION (M18 slice 3). A level here is ONE node holding ten thousand cells, so
     // every one of these still stands a body on something — what changes is WHICH cells are solid
@@ -1243,10 +1243,11 @@ const MUTANTS = [
 
     // INPUT (M18 slice 2). Every one of these still walks and still jumps — what changes is how it
     // FEELS, which is the class of defect a "did it move" assertion is blind to.
-    { id: "KB1", file: "src/core/runtime/World.ts",
-      from: "            const held = (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);\n            if (held !== 0) vx = held;",
-      to: "            const held = (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);\n            vx += held;",
-      note: "the walk ACCUMULATES instead of being set, so holding right builds speed without limit and releasing keeps it — the character skates, and every distance assertion becomes a function of how long the key was held" },
+    // KB1 IS RETIRED (slice 17), the second mutant this project has deleted rather than repaired —
+    // after OW2's `vy > 0` and RL4's `stomped` set, though for the opposite reason. Those were
+    // EQUIVALENT; this one was a real defect whose description has become the feature. It mutated
+    // the walk from SET to ACCUMULATED, and accumulated is now exactly what the walk does. What made
+    // its version wrong was the absence of a CAP, and that survives as AS1.
     { id: "KB2", file: "src/core/runtime/World.ts",
       from: "            if (input.jump && !world.jumpWas && was.onGround) {",
       to: "            if (input.jump && was.onGround) {",
@@ -1612,6 +1613,41 @@ const MUTANTS = [
       from: "jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };",
       to: "jumpWas: input.jump, jumpCut: cutNow, overlaps: inside, events };",
       note: "a fresh launch never REOPENS the latch, so the first jump of a run is variable and every one after it is stuck at the minimum — which a fixture that jumps once cannot possibly notice" },
+
+    // ACCELERATION AND SKID (M18 slice 17), the LAST era mismatch this project introduced. The walk
+    // was a SET speed; it now builds up over a stated run-up, and a turn has its own shorter one.
+    { id: "AS1", file: "src/core/runtime/World.ts",
+      from: "                vx = Math.abs(want) > MOVE_SPEED && Math.abs(vx) <= MOVE_SPEED\n                    ? push * MOVE_SPEED : want;",
+      to: "                vx = want;",
+      note: "THE CAP GOES: holding right builds speed without limit, so a walk becomes a skate and every distance in the level turns into a function of how long the key was held. This is what was actually wrong with what the retired KB1 described, now that accumulating is the intended behaviour" },
+    { id: "AS2", file: "src/core/runtime/World.ts",
+      from: "                const skid = vx !== 0 && Math.sign(vx) !== push;",
+      to: "                const skid = false;",
+      note: "turning round happens at the WALKING rate, so a full-speed reversal carries the player a whole run-up past the ledge instead of two tiles — the arithmetic still works and the character simply feels like ice, which is the class of defect a position assertion alone is blind to" },
+    { id: "AS3", file: "src/core/runtime/World.ts",
+      from: "                const skid = vx !== 0 && Math.sign(vx) !== push;",
+      to: "                const skid = Math.sign(vx) !== push;",
+      note: "a body AT REST counts as skidding, because Math.sign(0) is 0 and never equals the push — so every walk begins at the turning rate, 1.75x too fast, and ONLY the very first step off the mark is wrong" },
+    { id: "AS4", file: "src/core/runtime/World.ts",
+      from: "        if (was.onGround && was.groundFriction > 0 && vx !== 0 && push === 0) {",
+      to: "        if (was.onGround && was.groundFriction > 0 && vx !== 0) {",
+      note: "friction COMPOSES with the walk instead of being suppressed by it, so the effective acceleration is `a - mu*g` — and since the push IS one gravity and the default mu is exactly 1, the two cancel to ZERO and the player cannot move at all on the surface 44 of the corpus's 45 declare" },
+    { id: "AS5", file: "src/core/runtime/World.ts",
+      from: "                vx = Math.abs(want) > MOVE_SPEED && Math.abs(vx) <= MOVE_SPEED",
+      to: "                vx = Math.abs(want) > MOVE_SPEED && Math.abs(vx) < MOVE_SPEED",
+      note: "the clamp stops applying at EXACTLY the top speed — which is the one value it always lands on, because the clamp itself assigns it — so the cap holds for a single step and then leaks upward for ever" },
+    { id: "AS6", file: "src/core/runtime/World.ts",
+      from: "                const rate = skid ? skidAccel(gravity) : walkAccel(gravity);",
+      to: "                const rate = skid ? walkAccel(gravity) : skidAccel(gravity);",
+      note: "the two rates are swapped, so starting is sharp and turning is sludge — exactly backwards, with both numbers still in use so nothing reads as missing" },
+    { id: "AS7", file: "src/core/runtime/World.ts",
+      from: "export const SKID_TURN = 2;",
+      to: "export const SKID_TURN = 1;",
+      note: "the turn stops being HARDER than the push, so a skid is just a walk the other way and a full-speed reversal costs a whole run-up. In the original this ratio is a bit shift rather than a constant, which is exactly why it cannot be allowed to drift" },
+    { id: "AS8", file: "src/core/runtime/World.ts",
+      from: "    return Math.max(0, gravity);\n}",
+      to: "    return Math.max(0, gravity) / 2;\n}",
+      note: "the push stops being ONE gravity, so it no longer equals the default surface's friction — the era identity this slice is built on — and the run-up silently doubles to three tiles" },
 ];
 
 function runSuite() {
