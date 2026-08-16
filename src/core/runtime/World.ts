@@ -212,12 +212,15 @@ export const JUMP_HEIGHT = 72;
  *
  * WHY 9/25, AND IT IS MEASURED RATHER THAN CHOSEN. The original's `JumpMForceData` and
  * `FallMForceData` tables hold its two vertical accelerations — `$20`/`$70`, `$1e`/`$60`, `$28`/`$90`
- * across three speed tiers — but their ratio is NOT the height ratio, because its launch frame is
- * exempt from the switch and its integrator is fractional. Simulating those tables frame by frame
- * gives minimum-to-maximum jump heights of 0.350, 0.371 and 0.344. 9/25 = 0.36 sits in the middle of
- * that, and it is also the value that comes out whole here: the launch speed is EXACTLY 216 px/s
- * under the default gravity and the apex lands on step 40 exactly, so this module's tests stay
- * hand-computable. The published block figures agree from the other side — a tap is documented as
+ * across three speed tiers — but their ratio is NOT the height ratio, and reading it as one is the
+ * trap. Two things pull the realised ratio ABOVE it: the launch frame is exempt from the switch, so
+ * even the shortest possible jump gets one frame of weak gravity (+14% on the minimum), and the
+ * original moves by its velocity BEFORE it accelerates, which lifts the maximum. Simulating those
+ * tables frame by frame gives min-to-max jump heights of 0.350, 0.371 and 0.344 against gravity
+ * ratios of 0.286, 0.313 and 0.278. 9/25 = 0.36 sits in the middle of the HEIGHTS, which is the
+ * quantity a level is built from, and it is also the value that comes out whole here: the launch
+ * speed is EXACTLY 216 px/s under the default gravity and the apex lands on step 40 exactly, so this
+ * module's tests stay hand-computable. The published block figures agree from the other side — a tap is documented as
  * "a little over one block" and a full jump as "almost exactly 4 blocks", and 0.36 of `JUMP_HEIGHT`
  * is 25.92px, which on this project's 18px grid is 1.44 tiles against 4.
  *

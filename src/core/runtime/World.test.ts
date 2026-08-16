@@ -430,6 +430,7 @@ describe("input — the controlled body, and only it", () => {
 
     it("holding the key does NOT slow the FALL, or a jump would be a glide", () => {
         const doc = level();
+        const DOWN = { left: false, right: false, jump: true };
         // The same jump, held all the way up; the only difference is whether the key stays down
         // AFTER the apex. `was.vy < 0` is the line that makes these identical, and without it a
         // player could hover by never letting go.
@@ -453,6 +454,29 @@ describe("input — the controlled body, and only it", () => {
         };
         expect(landStep(200)).toBeGreaterThan(0);
         expect(landStep(200)).toBe(landStep(55));
+
+        // AND THE STEP THE RISE ENDS IS THE STEP THE KEY STOPS MATTERING — asserted on its own,
+        // because everything above is blind to it. A SURVIVING MUTANT SAID SO: dropping `was.vy < 0`
+        // and leaning on the latch alone reads almost the same, since the latch also closes at the
+        // apex — but it closes ONE STEP LATER, because it is computed from the velocity entering the
+        // PREVIOUS step. That leaves a single step where a descending body would still get the weak
+        // gravity, and one step is invisible to any apex or landing-step comparison where both arms
+        // hold the key across the apex.
+        //
+        // 216 / 5.4 is 40 steps to the top, so step 40 is where vy reaches zero and step 41 is the
+        // first of the fall: 15 px/s, which is a FULL 900 for a sixtieth of a second, with the key
+        // still down the whole time. Under the mutant it is 5.4.
+        let held = grounded(doc);
+        const vys: number[] = [];
+        for (let i = 0; i <= 41; i++) {
+            held = stepWorld(doc, held, { input: DOWN, controlled: "hero" });
+            vys.push(held.bodies.get("hero")!.vy);
+        }
+        expect(vys[0]).toBe(-jumpLaunchSpeed());                  // -216
+        expect(vys[39]).toBeCloseTo(-DEFAULT_GRAVITY * HELD_JUMP_GRAVITY * FIXED_STEP, 10);   // -5.4
+        expect(vys[40]).toBeCloseTo(0, 10);                       // the apex, exactly on a step
+        expect(vys[41]).toBeCloseTo(DEFAULT_GRAVITY * FIXED_STEP, 10);                        // 15
+        expect(vys[41]).not.toBeCloseTo(DEFAULT_GRAVITY * HELD_JUMP_GRAVITY * FIXED_STEP, 10);
     });
 
     it("LATCHES: letting go commits the arc, so fluttering the key is not a higher jump", () => {

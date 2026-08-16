@@ -1314,10 +1314,13 @@ goes — and the launch speed is the SHORTEST jump's, which is also what a stomp
 
 **9/25 IS MEASURED, AND THE OBVIOUS ARITHMETIC IS WRONG.** The original's `JumpMForceData` and
 `FallMForceData` hold `$20`/`$70`, `$1e`/`$60` and `$28`/`$90` across three speed tiers — ratios of
-3.5, 3.2 and 3.6, so "a third" looks like the answer. It is not: its launch frame is exempt from the
-switch and its integrator is fractional, and simulating the tables frame by frame gives min/max
-heights of 0.350, 0.371 and 0.344. 0.36 sits in the middle of THAT, and is also the value that comes
-out whole here — launch exactly 216 px/s, apex exactly on step 40. The published block figures agree
+3.5, 3.2 and 3.6, so "about a third" looks like the answer. It is not, and it is wrong in the
+direction that flatters it: the launch frame is exempt from the switch, so even the shortest jump
+gets one frame of weak gravity (+14% on the minimum), and the original moves by its velocity BEFORE
+it accelerates, which lifts the maximum. Simulating the tables frame by frame gives min/max heights
+of 0.350, 0.371 and 0.344 against gravity ratios of 0.286, 0.313 and 0.278. 0.36 sits in the middle
+of the HEIGHTS — the quantity a level is built from — and is also the value that comes out whole
+here: launch exactly 216 px/s, apex exactly on step 40. The published block figures agree
 from the other side: "a little over one block" and "almost exactly 4 blocks" against our 1.44 and 4.
 
 **AND THE RESEARCH OVERTURNED A CLAIM I HAD ALREADY WRITTEN INTO A COMMENT.** I had said a stomp
@@ -1337,6 +1340,15 @@ That belongs to the OTHER era mismatch, acceleration and skid, which is now the 
 
 Eight mutants, and every one of them survives a fixture that only ever HOLDS the key — which is what
 every jump fixture in this repo did before this slice. The range only exists if something releases.
+
+**AND ONE OF THE EIGHT SURVIVED FIRST TIME, which is the battery doing its job.** Dropping the
+`was.vy < 0` guard and leaning on the latch alone reads almost equivalent, because the latch also
+closes at the apex — but it closes ONE STEP LATER, since it is computed from the velocity entering
+the PREVIOUS step. That leaves a single step in which a descending body would still get the weak
+gravity, and one step is invisible to every apex-height and landing-step comparison, because both
+arms of those comparisons hold the key across the apex. The fixture now asserts the velocity
+sequence THROUGH the apex instead: -5.4, 0, then 15 — a full gravity for a sixtieth of a second,
+with the key still down. Blind fixture, not a missing assertion, for the umpteenth time.
 
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
