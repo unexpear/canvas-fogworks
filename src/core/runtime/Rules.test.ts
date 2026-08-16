@@ -7,6 +7,7 @@ import {
 } from "./World";
 import { marioRules } from "./Rules";
 import { applyCells, cellKey, applySpawns, regionsOf } from "./World";
+import { partOf } from "./Parts";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
@@ -115,12 +116,25 @@ describe("applyCommands — the channel, with no policy in it", () => {
         expect([...w.despawned]).toEqual(["a"]);
     });
 
-    it("ignores a body that is not there rather than inventing one", () => {
+    it("ignores a MOVE for a body that is not there rather than inventing one", () => {
         const w = worldFrom(twoBodies());
-        const after = applyCommands(w, [{ kind: "despawn", bodyId: "ghost" },
-                                        { kind: "setVelocity", bodyId: "ghost", vy: 1 }]);
+        const after = applyCommands(w, [{ kind: "setVelocity", bodyId: "ghost", vy: 1 }]);
         expect(after.bodies.size).toBe(2);
-        expect(after.despawned.size).toBe(0);
+        expect(after).toBe(w);                     // nothing to change, so nothing was copied
+    });
+
+    it("DESPAWN IS ABOUT A NODE, NOT A BODY — which is what lets a spawned coin be collected", () => {
+        // It used to require the id to be a live body, so a spawned REGION could be made and never
+        // taken away: bodies are established once, by `worldFrom`, at Play. Despawn is a node
+        // leaving the run, and only some nodes are bodies.
+        const w = worldFrom(twoBodies());
+        const gone = applyCommands(w, [{ kind: "despawn", bodyId: "not-a-body" }]);
+        expect([...gone.despawned]).toEqual(["not-a-body"]);
+        expect(gone.bodies.size).toBe(2);          // it removed no body, because it named none
+        // …and despawning a real body still removes it, which is the half that already worked.
+        const both = applyCommands(gone, [{ kind: "despawn", bodyId: "a" }]);
+        expect(both.bodies.has("a")).toBe(false);
+        expect([...both.despawned].sort()).toEqual(["a", "not-a-body"]);
     });
 });
 
@@ -495,6 +509,32 @@ describe("spawn — the fifth verb, and the only one that ADDS", () => {
         const w = applyCommands(worldFrom(doc), [{ kind: "spawn", templateId: "ghost", x: 1, y: 2 }]);
         expect(w.spawns).toHaveLength(1);          // the channel recorded it…
         expect(applySpawns(doc, w)).toBe(doc);     // …and the derive resolved it to nothing
+    });
+
+    it("A SPAWNED COIN CAN BE COLLECTED, which is the loop closing", () => {
+        // MADE AND THEN TAKEN AWAY, through the whole chain: spawn puts a classed region where the
+        // body already is, the enter edge fires, the rule reads the part's own `vde.collect`, and
+        // the despawn stops `applySpawns` materialising it at all.
+        const doc = docWith([
+            { id: "coin", x: 0, y: 0, w: 8, h: 8, className: "coin",
+              userData: { "vde.collect": prop("true") } },
+            { id: "a", x: 0, y: 0, userData: { bodyType: prop("dynamic") } }
+        ]);
+        let w = applyCommands(worldFrom(doc), [{ kind: "spawn", templateId: "coin", x: 0, y: 0 }]);
+        expect(applySpawns(doc, w).nodes.has("coin#0")).toBe(true);
+
+        const live = applySpawns(doc, w);
+        w = stepWorld(live, w, { controlled: "a" });
+        expect(w.events.filter(e => e.kind === "enter" && e.nodeId === "coin#0")).toHaveLength(1);
+        w = applyCommands(w, marioRules(live, w, { controlled: "a" }));
+        expect([...w.despawned]).toContain("coin#0");
+        // GONE FROM THE SCENE ENTIRELY, not merely hidden: stamping `hidden` the way `applyWorld`
+        // does would leave an invisible region still reporting enters.
+        expect(applySpawns(doc, w).nodes.has("coin#0")).toBe(false);
+        // …and it is not reported as a region any more, which is what "collected" has to mean.
+        expect(regionsOf(applySpawns(doc, w)).map(r => r.nodeId)).toEqual(["coin"]);
+        // A TEMPLATE THAT DECLARES NOTHING IS NOT COLLECTIBLE, so a spawned platform stays put.
+        expect(partOf(doc.nodes.get("coin")!).collectible).toBe(true);
     });
 
     it("and the APP steps against the spawned document, not the stored one", () => {

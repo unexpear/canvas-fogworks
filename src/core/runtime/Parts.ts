@@ -67,10 +67,18 @@ export interface Part {
     deadly: boolean;
     /** Reaching it wins. The flagpole. */
     goal: boolean;
+    /**
+     * Touching it takes it away. The coin.
+     *
+     * SEPARATE FROM `goal` because reaching a flagpole ends the run and picking up a coin does not,
+     * and separate from `stompable` because that needs landing on it from above. A part may be all
+     * three; nothing here reads one from another.
+     */
+    collectible: boolean;
 }
 
 /** A part that declares nothing — what every node in the corpus and every older document is. */
-export const INERT: Part = { stompable: false, patrol: null, deadly: false, goal: false };
+export const INERT: Part = { stompable: false, patrol: null, deadly: false, goal: false, collectible: false };
 
 /**
  * What this node declares, read LENIENTLY for the reason the whole runtime reads leniently: the same
@@ -89,7 +97,8 @@ export function partOf(node: { userData?: UserData }): Part {
         stompable: stomp !== null && truthy(stomp),
         patrol: speedOf(patrol),
         deadly: yes(node, "deadly"),
-        goal: yes(node, "goal")
+        goal: yes(node, "goal"),
+        collectible: yes(node, "collect")
     };
 }
 

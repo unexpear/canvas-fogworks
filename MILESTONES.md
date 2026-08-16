@@ -1722,6 +1722,33 @@ classed `coin`, present in the derived document and absent from the stored one.
 
 5 tests, 3 mutants, 3/3 killed.
 
+**Slice 26 — COLLECTING, and the loop closes: a coin can be made and then taken away.** Slice 25
+could spawn one and nothing could remove it.
+
+**DESPAWN WAS ABOUT A BODY AND HAD TO BECOME ABOUT A NODE.** `applyCommands` looked up
+`live.get(c.bodyId)` and dropped anything that was not a live body — and a spawned REGION is not one,
+because bodies are established ONCE, by `worldFrom`, at Play. So the command channel accepted the
+despawn, found no body, and silently did nothing. Despawn now sits above that lookup, records the id,
+and removes a body only if there was one. Its meaning is "a node leaves the run", and only some nodes
+are bodies.
+
+**AND `applySpawns` MUST NOT MATERIALISE A DESPAWNED SPAWN.** Stamping `hidden` the way `applyWorld`
+does would leave an invisible region in the scene, still reporting enters for ever; never making it
+is the honest removal. CO1 is that mutant, and it is invisible to any assertion about the COMMAND —
+the despawn is recorded correctly and then ignored one derive later.
+
+**A PART SAYS IT CAN BE PICKED UP.** `vde.collect`, on the same footing as `stompable`, `deadly` and
+`goal` — not a class table saying `coin` means collectible, which is the refusal `Parts` was built
+on, and the corpus's twelve coin objects carry zero properties between them so their word could not
+have meant anything anyway. CO2 drops the declaration check and every region entered vanishes: a
+checkpoint, a trigger volume and the level's own exit, all gone the first time you walk through one.
+
+**IT RIDES ON `enter`, WHICH IS ALREADY AN EDGE** — a region reports entering once rather than on all
+sixty frames the body spends inside it — so collecting cannot fire twice for one pickup without a
+set to remember it.
+
+2 tests, 2 mutants, 2/2 killed.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

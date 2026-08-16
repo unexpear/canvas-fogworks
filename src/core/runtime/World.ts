@@ -1440,17 +1440,24 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
             cells.set(cellKey(c.nodeId, c.col, c.row), c.tile);
             continue;
         }
+        if (c.kind === "despawn") {
+            // ABOVE THE BODY LOOKUP SINCE SPAWNING (M18). A spawned REGION is not a body — bodies
+            // are established once, by `worldFrom`, at Play — so the guard below dropped every
+            // attempt to take one away, and a coin could be made and never collected. Despawn is
+            // about a NODE leaving the run, and only some nodes are bodies.
+            if (!despawned) despawned = new Set(world.despawned);
+            despawned.add(c.bodyId);
+            const had = (bodies ?? world.bodies).get(c.bodyId);
+            if (had) {
+                if (!bodies) bodies = new Map(world.bodies);
+                bodies.delete(c.bodyId);
+            }
+            continue;
+        }
         // ACCUMULATING MAP, never `world.bodies` — see above.
         const live = bodies ?? world.bodies;
         const body = live.get(c.bodyId);
         if (!body) continue;                       // already gone, or never a body
-        if (c.kind === "despawn") {
-            if (!bodies) bodies = new Map(world.bodies);
-            if (!despawned) despawned = new Set(world.despawned);
-            bodies.delete(c.bodyId);
-            despawned.add(c.bodyId);
-            continue;
-        }
         if (c.vx === undefined && c.vy === undefined) continue;
         if (!bodies) bodies = new Map(world.bodies);
         bodies.set(c.bodyId, {
@@ -1533,6 +1540,10 @@ export function applySpawns(doc: ReadonlyDocument, world: WorldState): ReadonlyD
     const roots: string[] = [];
     for (const s of world.spawns) {
         const template = doc.nodes.get(s.templateId) as Node | undefined;
+        // A DESPAWNED SPAWN IS NOT MATERIALISED, which is how a collected coin goes away. Stamping
+        // `hidden` the way `applyWorld` does would leave it in the scene as an invisible region,
+        // still reporting enters; never making it is the honest removal.
+        if (world.despawned.has(s.id)) continue;
         if (!template || (nodes ?? doc.nodes).has(s.id)) continue;
         if (!nodes) nodes = new Map(doc.nodes as ReadonlyMap<string, Node>);
         nodes.set(s.id, {

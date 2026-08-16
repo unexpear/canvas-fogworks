@@ -150,6 +150,19 @@ export function marioRules(
         }
     }
 
+    // ── COLLECTING ───────────────────────────────────────────────────────────────────────────────
+    // A PART SAYS IT CAN BE PICKED UP, rather than a class table saying `coin` means collectible —
+    // the same refusal `Parts` was built on, and the corpus's twelve coin objects carry zero
+    // properties between them, so their word could not have meant anything anyway.
+    //
+    // ON `enter`, WHICH IS ALREADY AN EDGE: a region reports entering once, not on all sixty frames
+    // the body spends inside it, so this cannot fire twice for one pickup.
+    for (const e of world.events) {
+        if (e.kind !== "enter" || e.bodyId !== me) continue;
+        const got = doc.nodes.get(e.nodeId);
+        if (got && partOf(got).collectible) out.push({ kind: "despawn", bodyId: e.nodeId });
+    }
+
     let bounced = false;
     for (const e of world.events) {
         // `contact` NAMES ANOTHER BODY; `enter` names a REGION and must not be read here, or the

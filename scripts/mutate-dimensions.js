@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1979;
+const EXPECTED_TESTS = 1981;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1756,6 +1756,17 @@ const MUTANTS = [
       from: "                    const live = applySpawns(base, world);",
       to: "                    const live = base;",
       note: "the STEP goes back to reading the stored document, so everything this run spawned is drawn and untouchable — not a solid, not a region, not collidable. The picture is perfect and the game is not there" },
+
+    // COLLECTING (M18). Despawn used to require a live BODY, so a spawned region could be made and
+    // never taken away — bodies are established once, by worldFrom, at Play.
+    { id: "CO1", file: "src/core/runtime/World.ts",
+      from: "        if (world.despawned.has(s.id)) continue;",
+      to: "        if (false) continue;",
+      note: "a collected coin is materialised again on the very next frame, so it comes back for ever and reports another enter each time — the despawn is recorded and then ignored, which no assertion about the COMMAND can see" },
+    { id: "CO2", file: "src/core/runtime/Rules.ts",
+      from: "        if (got && partOf(got).collectible) out.push({ kind: \"despawn\", bodyId: e.nodeId });",
+      to: "        if (got) out.push({ kind: \"despawn\", bodyId: e.nodeId });",
+      note: "EVERY region entered is taken away, declared collectible or not — so a checkpoint, a trigger volume and the level's own exit all vanish the first time the player walks through one" },
 ];
 
 function runSuite() {
