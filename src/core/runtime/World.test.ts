@@ -42,6 +42,16 @@ function steps(doc: ProjectDocument, world: WorldState, n: number): WorldState {
     return w;
 }
 
+/**
+ * The same world with `id` ALREADY MOVING at walking speed.
+ *
+ * For fixtures that are about COLLISION — seams, walls, one-way slabs, contact sides — and merely
+ * need a body crossing the level to test it. How a body gets up to speed is the INPUT model's
+ * business, and a collision fixture that starts from a standstill silently measures both.
+ */
+const atWalk = (w: WorldState, id: string, vx = MOVE_SPEED): WorldState =>
+    ({ ...w, bodies: new Map(w.bodies).set(id, { ...w.bodies.get(id)!, vx }) });
+
 describe("what counts as a body", () => {
     it("reads bodyType from userData — the field the art already uses", () => {
         // MEASURED: `bodyType` is the most-declared property in the corpus (51 of 138), and the
@@ -202,6 +212,7 @@ describe("landing on something solid", () => {
         let w = steps(doc, worldFrom(doc), 5);
         // TWENTY STEPS, not sixty: at 220 px/s a second would carry it off the end of a 200-wide
         // floor and the test would be measuring a fall.
+        w = atWalk(w, "b");
         for (let i = 0; i < 20; i++) {
             w = stepWorld(doc, w, { input: { left: false, right: true, jump: false }, controlled: "b" });
         }
@@ -745,6 +756,7 @@ describe("a level made of TILES, not rectangles", () => {
         let w = steps(doc, worldFrom(doc), 20);
         expect(w.bodies.get("b")!.onGround).toBe(true);
         const y = w.bodies.get("b")!.y;
+        w = atWalk(w, "b");
         for (let i = 0; i < 20; i++) {
             w = stepWorld(doc, w, { input: { left: false, right: true, jump: false }, controlled: "b" });
         }
@@ -865,8 +877,11 @@ describe("surface friction — the ground's property, not the body's", () => {
 
     it("does NOT apply in the air, which is what air control means", () => {
         const { doc, world } = on("1");
-        // Jump, then check the horizontal speed survives the flight.
-        let w = stepWorld(doc, world, { input: { left: false, right: true, jump: true }, controlled: "b" });
+        // Jump ALREADY AT WALKING SPEED, then check the horizontal speed survives the flight. What
+        // is being tested is that the AIR does not take it away, so the body is handed the speed
+        // rather than made to build it up — that is the input model's business, not friction's.
+        let w = stepWorld(doc, atWalk(world, "b"),
+            { input: { left: false, right: true, jump: true }, controlled: "b" });
         const vx = w.bodies.get("b")!.vx;
         expect(vx).toBe(MOVE_SPEED);
         for (let i = 0; i < 10; i++) w = stepWorld(doc, w, { input: NO_INPUT, controlled: "b" });
@@ -1274,7 +1289,7 @@ describe("one-way platforms — the first thing here that is an INVENTION", () =
             { id: "plat", x: 0, y: 100, w: 100, h: 10, userData: { bodyType: prop("oneway") } },
             { id: "ground", x: -500, y: 400, w: 2000, h: 20, userData: { bodyType: prop("static") } }
         ]);
-        let w = worldFrom(doc);
+        let w = atWalk(worldFrom(doc), "b");
         for (let i = 0; i < 30; i++) {
             w = stepWorld(doc, w, { input: { left: false, right: true, jump: false }, controlled: "b" });
         }
@@ -1433,7 +1448,7 @@ describe("body meets body — REPORTED, never resolved", () => {
             { id: "blob", x: 1102, y: 692, w: 20, h: 8, userData: { bodyType: prop("dynamic") } },
             { id: "hero", x: 1000, y: 684, w: 12, h: 16, userData: { bodyType: prop("dynamic") } }
         ]);
-        let w = worldFrom(doc);
+        let w = atWalk(worldFrom(doc), "hero");
         const RIGHT = { left: false, right: true, jump: false };
         // 220/60 is 11/3 px a step, and the hero's right edge starts at 1012. THE GAP IS 90, NOT 88,
         // and the two extra pixels are the point: at 88 the crossing lands exactly on the boundary,
