@@ -1559,6 +1559,22 @@ const MUTANTS = [
       from: "        ...(doc as ProjectDocument),",
       to: "        version: doc.version, metadata: doc.metadata as ProjectDocument[\"metadata\"], variables: doc.variables as ProjectDocument[\"variables\"], activeTheme: doc.activeTheme, activeState: doc.activeState, timeline: doc.timeline,",
       note: "THE ENUMERATED LITERAL RESTORED — the sixth instance of this bug in this codebase. An animated document loses tilesets, clips, lights and ambient, so a level with a tilemap AND an animated character stops drawing its terrain the moment the character gains a track" },
+
+    // FACING (M18 slice 15). The first half of the animation gap, and the half that avoids all four
+    // blockers the design review found — chiefly that a negative scaleX about the default origin
+    // leaves the AABB identical, so it cannot move the death plane the way a frame change would.
+    { id: "FC1", file: "src/core/runtime/World.ts",
+      from: "        const facing: 1 | -1 = vx > 0 ? 1 : vx < 0 ? -1 : was.facing;",
+      to: "        const facing: 1 | -1 = vx > 0 ? 1 : vx < 0 ? -1 : 1;",
+      note: "a body at rest snaps back to facing RIGHT, so a character that stops walking left turns to face away from where it was going — and the whole reason facing lives on the body rather than being derived outside it is that a stopped body has no velocity left to read" },
+    { id: "FC2", file: "src/core/runtime/World.ts",
+      from: "        const want = body.facing * Math.abs(authored);",
+      to: "        const want = body.facing;",
+      note: "the author's SCALE is thrown away and replaced by a bare sign, so a node drawn at 2x snaps to 1x the moment a run starts — the magnitude is the artist's and only the sign belongs to the run" },
+    { id: "FC3", file: "src/core/runtime/World.ts",
+      from: "        if (authored !== body.facing * Math.abs(authored)) out.add(id);",
+      to: "        out.add(id);",
+      note: "every body is reported as needing a mirror on every frame, so the dirty set never empties and the incremental geometry path this runtime is built on stops being incremental" },
 ];
 
 function runSuite() {
