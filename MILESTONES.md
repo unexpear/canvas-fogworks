@@ -1832,6 +1832,41 @@ again on Stop.
 
 2 tests, 2 mutants, 2/2 killed.
 
+**Slice 30 — THE EDITOR FRAMES THE DOCUMENT IT OPENS.** Reported from use: "the floor should not be
+that high up in the first place, and why would it lower when I hit play". Three of my hypotheses
+about it were wrong, and each was killed by a measurement rather than by more thinking.
+
+**WRONG 1: the hidden template stretches the level.** `runBounds` is `contentBounds`, which is the
+camera clamp AND the death plane, so a template parked at y=-100 looked like it would move the edge
+of the world. It does not — bounds are identical with it and without it. **WRONG 2: empty rows below
+the ground.** The tilemap's lowest non-empty row is its last; there are none. **WRONG 3: Stop is
+drifting.** Stop restores the pre-Play viewport to the PIXEL — 0px on all four layers, measured
+across a run that drove the camera 264px.
+
+**WHAT IT ACTUALLY WAS: nothing ever framed the document.** `EditorState`'s viewport starts at
+`{ x: 0, y: 0, zoom: 1 }`, and no code moved it on load — so a document opened showing whatever sat
+at the world ORIGIN. For a level whose ground is at the bottom of its map that is sky, with the
+ground high and a void beneath; for a document authored away from the origin it is nothing at all.
+PLAY looked right only because the follow camera clamps to the level's own extent, which is the
+framing the editor never did. `viewportToFit` had existed, tested, reachable from one menu item —
+the same reachability shape as Escape and the GPU backend.
+
+**AND FIT WAS THE WRONG QUESTION, which only the running app said.** Framing on load with
+`viewportToFit` put the 3618x270 level at zoom 0.15, occupying **7.9% of the canvas**, every tile
+under three pixels. So `viewportToOpen` is its own function with its own rule: fit, but never show a
+document SMALLER than actual size — the axis that fits is centred, the axis that overflows opens at
+the document's own start. A wide level opens on its beginning, a tall one on its top, and a drawing
+smaller than the canvas is framed exactly as the menu frames it. Measured after: 7.9% -> 37.6%, at
+100%, opening on the level's left edge.
+
+**STILL OPEN, and stated rather than fixed:** the background is painted in SCREEN space
+(`svg.style.background`) by every backend, deliberately — a level three screens wide needs no
+three-screen rectangle behind it, and in PLAY that is simply correct. The cost is that the EDITOR
+gives no indication of where the document ends, so a framed level still floats in an unbounded sky.
+That is a decision about what an editor shows, not a defect in the runtime.
+
+4 tests, 2 mutants.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

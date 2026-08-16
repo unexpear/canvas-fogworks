@@ -193,7 +193,7 @@ import { compileScript, snapshotFor, actionRequestError, SCRIPT_MAX_REQUESTS } f
 import { WORKER_BOOTSTRAP } from "../../editor/ScriptRunner";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
-import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld, EditorState } from "../../editor/EditorState";
+import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld, viewportToOpen, EditorState } from "../../editor/EditorState";
 import { selectionHandles, selectionFrame, handleAtPoint, groupRotateHandle, groupHandleAtPoint, groupCornerHandles, HANDLE_SIZE_PX, ROTATE_OFFSET_PX , pathVertexHandles, vertexIndexOf, vertexHandleAtPoint} from "../geometry/SelectionHandles";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../geometry/GroupTransform";
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
@@ -24557,6 +24557,53 @@ describe("Zoom to fit", () => {
         const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
         expect(centre.x * vp.zoom - vp.x).toBeCloseTo(size.width / 2, 9);
         expect(centre.y * vp.zoom - vp.y).toBeCloseTo(size.height / 2, 9);
+    });
+
+    test("OPENING a document never shows it smaller than actual size", () => {
+        const size = { width: 554, height: 622 };
+        // THE LEVEL THAT PROVED FIT WAS THE WRONG QUESTION — 3618x270, measured in the app: fitting
+        // it picks zoom 0.15 and leaves the whole level occupying 7.9% of the canvas, every tile
+        // under three pixels across.
+        const level = { x: -18, y: 0, width: 3618, height: 270 };
+        expect(viewportToFit(level, size, FIT_PADDING_PX, 1).zoom).toBeLessThan(0.2);
+        const open = viewportToOpen(level, size, FIT_PADDING_PX);
+        expect(open.zoom).toBe(1);
+        // The axis that FITS is centred — this is the defect the user reported, a ground plane
+        // hard against the top of the frame with empty sky under it, because nothing framed it.
+        expect(level.y + level.height / 2 - open.y).toBeCloseTo(size.height / 2, 9);
+        // …and the axis that does NOT fit opens on the document's own start, not its middle.
+        expect(open.x).toBe(level.x - FIT_PADDING_PX);
+
+        // A TALL DOCUMENT IS THE SAME RULE THE OTHER WAY UP: opened on its top, centred across.
+        const tower = { x: 0, y: 0, width: 270, height: 3618 };
+        const up = viewportToOpen(tower, size, FIT_PADDING_PX);
+        expect(up.y).toBe(-FIT_PADDING_PX);
+        expect(tower.width / 2 - up.x).toBeCloseTo(size.width / 2, 9);
+
+        // AND A DOCUMENT THAT FITS IS FRAMED EXACTLY AS THE MENU FRAMES IT — no second answer to
+        // one question. This one is smaller than the viewport, so fitting MAGNIFIES it, and the
+        // floor must not clip that: it is a floor on shrinking, not a cap on zoom.
+        const small = { x: 100, y: 100, width: 200, height: 100 };
+        expect(viewportToOpen(small, size, FIT_PADDING_PX))
+            .toEqual(viewportToFit(small, size, FIT_PADDING_PX, 1));
+        expect(viewportToOpen(small, size, FIT_PADDING_PX).zoom).toBeGreaterThan(1);
+    });
+
+    test("the app FRAMES the document it opened with, rather than starting at the origin", () => {
+        // A STRUCTURAL ASSERTION, because the gap was reachability rather than arithmetic —
+        // `viewportToFit` was correct, tested, and reached only from a menu item. The editor's
+        // viewport starts at its literal default and nothing moved it, so opening a document showed
+        // whatever happened to be at the world origin: on the level this was found on, the ground a
+        // third of the way up with sky below, and the only view that ever looked right was PLAY,
+        // whose follow camera clamps to the level's extent. A document authored away from the
+        // origin opens on nothing at all.
+        expect(createEditorState().viewport).toEqual({ x: 0, y: 0, zoom: 1 });
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        // The same three pieces `view.zoomFit` uses, so the two framings cannot drift apart.
+        expect(app).toMatch(/framedOnLoad\.current = true;[\s\S]{0,400}?viewportToOpen\(box,/);
+        expect(app).toMatch(/if \(framedOnLoad\.current \|\| !initialDocument\) return;/);
+        // …and it waits for a laid-out canvas rather than dividing by a zero-width box.
+        expect(app).toMatch(/el\.clientWidth === 0 \|\| el\.clientHeight === 0/);
     });
 
     test("every menu command has a handler — no item that does nothing when clicked", () => {

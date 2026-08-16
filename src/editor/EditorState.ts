@@ -182,6 +182,41 @@ export const FIT_PADDING_PX = 24;
  * Clamped like every other viewport change, so navigating to a huge or microscopic frame lands
  * somewhere reachable instead of somewhere the user cannot get back from.
  */
+/**
+ * The viewport a document is OPENED at — framed, but never shown smaller than actual size.
+ *
+ * NOT THE SAME QUESTION AS `viewportToFit`, and measuring is what said so. "Fit the whole document"
+ * is right for a frame you asked to zoom to; applied to a 3618x270 side-scrolling level in a 554px
+ * viewport it picks zoom 0.15 and the level occupies **7.9% of the canvas** — every tile under three
+ * pixels. Measured in the running app, which is the only reason this function exists rather than a
+ * second call to the first one.
+ *
+ * SO THE ZOOM HAS A FLOOR OF 1. A document that fits is framed exactly as the menu would frame it.
+ * One that does not is shown at 100% — actual size, the thing the author drew — with each axis
+ * treated on its own: the axis that fits is CENTRED, and the axis that overflows is anchored at the
+ * document's own start, so a wide level opens on its beginning and a tall one on its top.
+ *
+ * The alternative was "fill the viewport and crop", which is right for this level and wrong for
+ * every document smaller than the canvas — it would crop a 400x300 drawing that had room to spare.
+ */
+export function viewportToOpen(
+    bounds: { x: number; y: number; width: number; height: number },
+    size: { width: number; height: number },
+    padding: number
+): EditorState["viewport"] {
+    const fit = viewportToFit(bounds, size, padding, 1);
+    if (fit.zoom >= 1) return fit;
+    const fitsX = bounds.width + padding * 2 <= size.width;
+    const fitsY = bounds.height + padding * 2 <= size.height;
+    const vp = {
+        zoom: 1,
+        x: fitsX ? bounds.x + bounds.width / 2 - size.width / 2 : bounds.x - padding,
+        y: fitsY ? bounds.y + bounds.height / 2 - size.height / 2 : bounds.y - padding
+    };
+    clampViewport(vp);
+    return vp;
+}
+
 export function viewportToFit(
     bounds: { x: number; y: number; width: number; height: number },
     size: { width: number; height: number },

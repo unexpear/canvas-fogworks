@@ -39,7 +39,7 @@ import { CreateInstanceAction } from "../core/actions/CreateInstanceAction";
 import { DetachInstanceAction } from "../core/actions/DetachInstanceAction";
 import { UpdateNodeTransformAction } from "../core/actions/UpdateNodeTransformAction";
 import { UpdateNodeLayoutAction } from "../core/actions/UpdateNodeLayoutAction";
-import { createEditorState, frameOnLoad, pickedMeshPoint, pixelMaskFor, EditorState, zoomAt, viewportToFit, FIT_PADDING_PX, screenToWorld, overlayTransform } from "../editor/EditorState";
+import { createEditorState, frameOnLoad, pickedMeshPoint, pixelMaskFor, EditorState, zoomAt, viewportToFit, viewportToOpen, FIT_PADDING_PX, screenToWorld, overlayTransform } from "../editor/EditorState";
 import { ToolController } from "../editor/tools/ToolController";
 import { SelectTool } from "../editor/tools/SelectTool";
 import { MoveTool } from "../editor/tools/MoveTool";
@@ -1638,6 +1638,36 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
 
         return () => { observer?.disconnect(); mql?.removeEventListener("change", onDprChange); };
     }, [refresh]);
+
+    // FRAME THE DOCUMENT THE APP OPENED WITH — otherwise the editor starts at the viewport's
+    // literal default, `{ x: 0, y: 0, zoom: 1 }`, and shows whatever happens to be at the world
+    // origin. For the level this was found on that meant the ground sitting a third of the way up
+    // with empty sky below it, and the only thing that ever looked right was PLAY — because the
+    // follow camera clamps to the level's own extent, which is the framing nothing did on load.
+    // For a document authored somewhere other than the origin it means opening a file and being
+    // shown nothing at all.
+    //
+    // THE SAME ARITHMETIC `view.zoomFit` USES, deliberately: "what you see when you open it" and
+    // "what you see when you ask to fit it" being two answers would be two behaviours to keep
+    // right. That command already existed, tested, and was reachable only from a menu.
+    //
+    // ONCE, AND ONLY FOR THE DOCUMENT THE APP BOOTED WITH. A later `loadDocument` is a user
+    // action — File > Open frames itself through the same command — and re-framing on every
+    // document change would fight the user's own panning the moment they moved a node.
+    const framedOnLoad = useRef(false);
+    useEffect(() => {
+        if (framedOnLoad.current || !initialDocument) return;
+        const el = canvasRef.current;
+        // The canvas has no size until it is laid out; an effect that runs before that would
+        // divide by a zero-width box, so this waits for a frame that has one rather than guessing.
+        if (!el || el.clientWidth === 0 || el.clientHeight === 0) return;
+        framedOnLoad.current = true;
+        const box = contentBounds(computeGeometry(resolveScene(dispatcher.getDocument())));
+        if (!box) return;                        // an empty document has nothing to frame
+        es.viewport = viewportToOpen(box, { width: el.clientWidth, height: el.clientHeight },
+            FIT_PADDING_PX);
+        refresh();
+    });
 
     // Repaint whenever the DOCUMENT changes, from any source, and record which nodes
     // changed so the next compute can reuse the untouched ones. Ephemeral editor state

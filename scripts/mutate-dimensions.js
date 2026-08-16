@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1986;
+const EXPECTED_TESTS = 1988;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1796,6 +1796,19 @@ const MUTANTS = [
       from: "    const live = applySpawns(doc, world);\n    const out = new Set<string>();\n    const differs =",
       to: "    const live = doc;\n    const out = new Set<string>();\n    const differs =",
       note: "`movedIds` goes back to asking the STORED document, where a spawned node does not exist — so every spawn is left out of the dirty set and the incremental geometry keeps the matrix it first drew. The document is right on every frame, which is why no assertion about applyWorld can see it" },
+    // FRAMING A DOCUMENT ON OPEN (M18 slice 30). `viewportToFit` was correct, tested, and reachable
+    // only from a menu — the editor opened every document at the viewport's literal default.
+    { id: "VO1", file: "src/editor/EditorState.ts",
+      from: "    const fit = viewportToFit(bounds, size, padding, 1);
+    if (fit.zoom >= 1) return fit;",
+      to: "    const fit = viewportToFit(bounds, size, padding, 1);
+    if (true) return fit;",
+      note: "opening falls back to plain fit, so a 3618x270 side-scrolling level opens at zoom 0.15 occupying 7.9% of the canvas with every tile under three pixels — measured in the running app, and the whole reason the two questions are different functions" },
+    { id: "VO2", file: "src/editor/EditorState.ts",
+      from: "        y: fitsY ? bounds.y + bounds.height / 2 - size.height / 2 : bounds.y - padding",
+      to: "        y: bounds.y - padding",
+      note: "the axis that FITS stops being centred and is anchored at the top like the one that does not — which is precisely the reported defect: a level's ground plane hard against the top of the frame with empty sky underneath it" },
+
     { id: "SP6", file: "src/core/runtime/World.ts",
       from: "    const live = applySpawns(doc, world);\n    const out = new Set<string>();\n    for (const [id, body] of world.bodies) {",
       to: "    const live = doc;\n    const out = new Set<string>();\n    for (const [id, body] of world.bodies) {",
