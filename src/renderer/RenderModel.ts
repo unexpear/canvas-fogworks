@@ -493,6 +493,16 @@ export interface DisplayList {
      */
     lights?: readonly Light[];
     ambient?: number;
+    /**
+     * What the frame sits ON (schema 70) — the sky, the paper, the stage. Absent = transparent.
+     *
+     * ON THE LIST RATHER THAN AS A DRAW ITEM, for the same reason `lights` is: a background is a
+     * property of the SCENE, and a draw item would be cullable, pickable, orderable and inside
+     * `contentBounds` — none of which a backdrop should ever be. Each backend paints it before
+     * anything else and in SCREEN space: it is not a shape in the world, so it neither pans nor
+     * zooms, and a level three screens wide does not need a rectangle three screens wide behind it.
+     */
+    background?: string;
     /** Deduped filter defs referenced by content items — emitSVG builds `<defs>` from these. */
     defs: FilterDef[];
     /**
@@ -1475,6 +1485,7 @@ export function buildRenderModel(
         content,
         ...(doc.lights !== undefined ? { lights: doc.lights } : {}),
         ...(doc.ambient !== undefined ? { ambient: doc.ambient } : {}),
+        ...(doc.background !== undefined ? { background: doc.background } : {}),
         overlay: buildOverlay(state, z, doc, effective),
         defs: collectDefs(content),
         gradients: collectGradients(content),

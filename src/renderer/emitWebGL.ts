@@ -93,6 +93,7 @@
 import { ClipRegion, DisplayList, DrawItem, PaintGradient, Shape, layerTransition } from "./RenderModel";
 
 import { gaussianKernel, blurPlan, GAUSSIAN_MAX_RADIUS } from "./Gaussian";
+import { parseHex } from "../core/document/Prototype";
 import { Mat2D, translation, multiply, invert, IDENTITY } from "../core/geometry/Matrix";
 import { Ring, commandsToRings } from "../core/geometry/PathBoolean";
 import { subdivideTriangles, triangulate } from "../core/geometry/Tessellate";
@@ -1681,7 +1682,20 @@ export function emitWebGL(canvas: HTMLCanvasElement, list: DisplayList, vp: { x:
     const height = Math.max(1, Math.round(canvas.clientHeight * dpr));
     if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
     gl.viewport(0, 0, width, height);
-    gl.clearColor(0.102, 0.102, 0.180, 1);          // the same #1a1a2e both other backends use
+    // THE DOCUMENT'S OWN BACKGROUND (schema 70), falling back to the same #1a1a2e both other
+    // backends use.
+    //
+    // HEX ONLY, AND THE DIVERGENCE IS STATED RATHER THAN HIDDEN. SVG and Canvas hand the string to
+    // the browser, which accepts names, `rgb()` and everything else CSS does; `gl.clearColor` takes
+    // four floats, so this backend has to parse. A colour it cannot parse falls back to the editor
+    // backdrop, which means a document declaring `background: "skyblue"` draws a different colour
+    // here than on the other two — the one place in this renderer where the backends disagree by
+    // construction. It is hex in all three maps in the tree that declare one (#000000, #3a3a3a,
+    // #27b99a), so the gap is real but unexercised; the fix, when it is needed, is to resolve the
+    // colour ONCE in the render model rather than to teach this file CSS.
+    const bg = list.background ? parseHex(list.background) : null;
+    if (bg) gl.clearColor(bg[0] / 255, bg[1] / 255, bg[2] / 255, 1);
+    else gl.clearColor(0.102, 0.102, 0.180, 1);
     // THE Z-BUFFER (schema 40). The model has already sorted far-to-near, so this is braces
     // rather than belt — but it is the half that does not depend on anybody sorting correctly:
     // a fragment nearer the viewer wins whatever order its draw call arrived in. LEQUAL rather

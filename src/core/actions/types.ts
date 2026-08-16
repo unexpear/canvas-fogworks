@@ -170,7 +170,11 @@ export type NodeDelta =
     /** The TILESET TABLE (schema 67). Whole-value under its own document key, like the clips and
      *  the clock. `undefined` removes it. A tileset is shared by every layer that names it, so it
      *  belongs to the file rather than to a node. */
-    | { kind: "tilesets"; tilesets: Tileset[] | undefined };
+    | { kind: "tilesets"; tilesets: Tileset[] | undefined }
+    /** WHAT THE DOCUMENT SITS ON (schema 70). Whole-value under its own document key, like the
+     *  tileset table and the clock. `undefined` removes it, which is how a document says it has no
+     *  sky — the state every document was in before this field existed. */
+    | { kind: "background"; background: string | undefined };
 
 /** The result of an action execution. Communicates changes without coupling services. */
 export interface MutationResult {

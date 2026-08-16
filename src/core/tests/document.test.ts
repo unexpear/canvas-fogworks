@@ -6,7 +6,7 @@
 import { readFileSync, readdirSync } from "fs";
 import { resolve } from "path";
 import { inflateSync } from "zlib";
-import { createEmptyDocument, ProjectDocument, ReadonlyDocument, CURRENT_VERSION, SCHEMA_VERSION } from "../document/Document";
+import { createEmptyDocument, ProjectDocument, ReadonlyDocument, CURRENT_VERSION, SCHEMA_VERSION, backgroundError } from "../document/Document";
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, isTokenRef, tokenRefFor, tokenKeyOf, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
@@ -180,6 +180,7 @@ import { tilesetError, tilesetsError, findTileset, tilesetTile, copyTileset, wit
     Tileset } from "../document/Tileset";
 import { withTilesetId } from "../document/TilemapEdit";
 import { SetTilesetsAction } from "../actions/SetTilesetsAction";
+import { SetBackgroundAction } from "../actions/SetBackgroundAction";
 import { TOOL_CURSORS } from "../../app/theme/Cursors";
 import { SEQUENCE_IMPORT_MAX } from "../../app/App";
 import { sequenceImportActions, SEQUENCE_DEFAULT_FPS } from "../actions/sequenceImport";
@@ -4618,10 +4619,11 @@ describe("Guards the suite did not previously protect", () => {
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
         // time a real migration is added — most recently when 67→68 landed, taking the sheet OFF
         // the node, which 66→67 had moved and the importer had gone on writing anyway.)
-        // (Most recently 68->69, giving a node its OWN playhead so two props on one track need not
-        // flap in lockstep. That step moves no data — a node without a frame reads the document's,
-        // which is what every node already did — so it is named and empty rather than absent.)
-        expect(() => migrateIfNeeded(legacy, "70")).toThrow('Migration not implemented for document schema "69"');
+        // (Most recently 69->70, giving the document a BACKGROUND. That step moves no data either —
+        // absent already meant "no sky", which is what every document before it had — but a
+        // schema-69 build would load a file declaring one and draw it on nothing, which is exactly
+        // the silent misstatement the bump exists to prevent.)
+        expect(() => migrateIfNeeded(legacy, "71")).toThrow('Migration not implemented for document schema "70"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -20244,8 +20246,10 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(app).toMatch(/data-tileset-pick="1"/);
         expect(app).toMatch(/withTilesetId\(map, e\.target\.value\)/);
         expect(app).toMatch(/withTileWeight\(t, tileIndex, weight\)/);
-        // …and the IMPORTER's tilesets actually reach the document, which is the bug above.
-        expect(app).toMatch(/onImportTiles\(tiles, newTilesets\)/);
+        // …and the IMPORTER's tilesets actually reach the document, which is the bug above. The
+        // call gained the map's BACKGROUND at schema 70, travelling the same seam for the same
+        // reason: a thing the importer reads and cannot deliver is a thing it did not read.
+        expect(app).toMatch(/onImportTiles\(tiles, newTilesets, map\.background\)/);
         expect(app).toMatch(/new SetTilesetsAction\(doc, \[\.\.\.\(doc\.tilesets \?\? \[\]\)/);
     });
 
@@ -31577,5 +31581,124 @@ describe("a node's OWN playhead (schema 69)", () => {
         expect(out.clips).toBeDefined();
         // …and the deliberate omission is still deliberate: the derived document names no frame.
         expect(out.frame).toBeUndefined();
+    });
+});
+
+describe("the document's BACKGROUND (schema 70) — what a level sits on", () => {
+    /**
+     * THE HOLE THIS CLOSES, so the fixtures below read against it: nothing in the document carried
+     * a background of any kind. What a level appeared to sit on was the EDITOR'S chrome, which is
+     * not part of the document — so a run had no sky, an export emitted no ground colour, and the
+     * Tiled importer read `<map backgroundcolor>` in none of the three maps here that declare one.
+     */
+    test("SHAPE, not colour — the loader's own rule, shared with the write path", () => {
+        // Absent is how a document says it has no sky, and every document before schema 70 was in
+        // exactly that state.
+        expect(backgroundError(undefined)).toBeNull();
+        expect(backgroundError("#27b99a")).toBeNull();
+        // LOOSE ON PURPOSE. These strings are whatever CSS accepts — `Style.fill` already carries
+        // names, `rgb()` and variable references — so a hex-only validator would refuse documents
+        // the renderer draws perfectly.
+        expect(backgroundError("skyblue")).toBeNull();
+        expect(backgroundError("rgb(1, 2, 3)")).toBeNull();
+        // …but an EMPTY string is a field somebody cleared and did not remove, which is a different
+        // intention from "no background" and must not be mistaken for it.
+        expect(backgroundError("")).not.toBeNull();
+        expect(backgroundError("   ")).not.toBeNull();
+        expect(backgroundError(0)).not.toBeNull();
+        expect(backgroundError(null)).not.toBeNull();
+    });
+
+    test("round-trips, and a document with NO sky serialises exactly as it always did", () => {
+        const doc = createEmptyDocument();
+        // THE ABSENT CASE FIRST, because it is the one every existing file is in: the key must not
+        // appear at all, or every document in the tree would differ from itself across this change.
+        expect(JSON.parse(serializeDocument(doc)).document).not.toHaveProperty("background");
+        doc.background = "#27b99a";
+        const wire = JSON.parse(serializeDocument(doc));
+        expect(wire.document.background).toBe("#27b99a");
+        expect(wire.version).toBe("70");
+        expect(deserializeDocument(serializeDocument(doc)).background).toBe("#27b99a");
+        // …and clearing it returns the document to indistinguishable-from-before.
+        doc.background = undefined;
+        expect(JSON.parse(serializeDocument(doc)).document).not.toHaveProperty("background");
+    });
+
+    test("a schema-69 file opens, and is stamped 70 with no sky invented for it", () => {
+        const doc = createEmptyDocument();
+        const old = JSON.parse(serializeDocument(doc));
+        old.version = "69";
+        const migrated = migrateIfNeeded(old);
+        expect(migrated.version).toBe("70");
+        expect(migrated.document).not.toHaveProperty("background");
+        expect(deserializeDocument(JSON.stringify(old)).background).toBeUndefined();
+    });
+
+    test("THE WRITE PATH EXISTS, which is the third time this has needed saying", () => {
+        // `Document.clips` and `Document.tilesets` both shipped validated, serialised, migrated and
+        // READ, with nothing able to set them. This action is written in the same commit as the
+        // field for that reason.
+        const doc = createEmptyDocument();
+        const set = new SetBackgroundAction(doc, "#123456");
+        expect(set.validate()).toBe(true);
+        const delta = set.execute().propertyDeltas;
+        expect([...delta.values()][0]).toEqual({ kind: "background", background: "#123456" });
+        // A document-level action must NOT name a node, or it seeds the geometry dirty-tracker
+        // with a ghost id.
+        expect(set.execute().updatedNodeIds.size).toBe(0);
+        // `undefined` REMOVES it; an empty string is refused by the loader's own rule.
+        expect(new SetBackgroundAction(doc, undefined).validate()).toBe(true);
+        expect(new SetBackgroundAction(doc, "").validate()).toBe(false);
+        expect(() => new SetBackgroundAction(doc, "").execute()).toThrow();
+    });
+
+    test("reaches the RENDER MODEL, which is what carries it to all three backends", () => {
+        const doc = createEmptyDocument();
+        const state = { viewport: { x: 0, y: 0, zoom: 1 }, selectedNodeIds: [], hoveredNodeId: null,
+            computed: computeGeometry(doc) } as unknown as Parameters<typeof buildRenderModel>[2];
+        // Absent stays absent rather than becoming a default, so a backend can tell "no background"
+        // from "a background that happens to match mine".
+        expect(buildRenderModel({ width: 100, height: 100 }, doc, state).background).toBeUndefined();
+        doc.background = "#27b99a";
+        expect(buildRenderModel({ width: 100, height: 100 }, doc, state).background).toBe("#27b99a");
+    });
+
+    test("EXPORTS as a rect, because a style on the root is presentation a converter may drop", () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("a", { id: "a", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 40, height: 20 },
+            style: { fill: "#888888", opacity: 1 }, layout: {} } as Node);
+        doc.rootNodeUuids.push("a");
+        expect(exportSVG(doc)).not.toContain("#27b99a");
+        doc.background = "#27b99a";
+        const svg = exportSVG(doc);
+        expect(svg).toContain("fill=\"#27b99a\"");
+        // FIRST, so it is behind everything — a backdrop drawn last is a covering.
+        expect(svg.indexOf("#27b99a")).toBeLessThan(svg.indexOf("#888888"));
+        // …and it covers the viewBox exactly, so the file frames the region it claims to.
+        const rect = /<rect x="([-\d.]+)" y="([-\d.]+)" width="([\d.]+)" height="([\d.]+)"/.exec(svg);
+        expect(rect).not.toBeNull();
+        const box = /viewBox="([-\d.]+) ([-\d.]+) ([\d.]+) ([\d.]+)"/.exec(svg);
+        expect([rect![1], rect![2], rect![3], rect![4]]).toEqual([box![1], box![2], box![3], box![4]]);
+    });
+
+    test("READS `<map backgroundcolor>`, including Tiled's alpha-FIRST form", () => {
+        // MEASURED: three of the twenty-four maps in this tree declare one, and until schema 70
+        // there was nowhere to put it, so it was read by nothing.
+        const map = (attrs: string) =>
+            parseTiledMap("<?xml version=\"1.0\"?><map version=\"1.10\" orientation=\"orthogonal\" "
+                + "renderorder=\"right-down\" width=\"2\" height=\"1\" tilewidth=\"16\" tileheight=\"16\" "
+                + attrs + "><layer id=\"1\" name=\"L\" width=\"2\" height=\"1\">"
+                + "<data encoding=\"csv\">0,0</data></layer></map>");
+        expect(map("backgroundcolor=\"#27b99a\"").background).toBe("#27b99a");
+        // A map that declares nothing must leave the field ABSENT rather than inventing a default —
+        // 21 of the 24 maps here are in that case.
+        expect(map("").background).toBeUndefined();
+        // `#aarrggbb` IS ALPHA FIRST, which CSS reads as alpha LAST. Both are eight hex characters,
+        // so getting it backwards turns an opaque colour into a nearly transparent one and nothing
+        // says so: `#ff27b99a` is opaque #27b99a, not #27b99a at alpha 0xff read from the wrong end.
+        expect(map("backgroundcolor=\"#ff27b99a\"").background).toBe("#27b99aff");
+        // Anything else is passed through as written rather than guessed at.
+        expect(map("backgroundcolor=\"skyblue\"").background).toBe("skyblue");
     });
 });

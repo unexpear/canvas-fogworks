@@ -271,6 +271,16 @@ export interface TiledMapResult {
     layers: TiledLayer[];
     /** Object layers, in file order. Empty for the 20 maps in this tree, which have none. */
     objectGroups: TiledObjectGroup[];
+    /**
+     * `<map backgroundcolor>` — what the map says it sits on, or absent (schema 70).
+     *
+     * MEASURED: three of the twenty-four maps in this tree declare one — `#000000`, `#3a3a3a`,
+     * `#27b99a` — and until schema 70 there was nowhere in a document to put it, so it was read by
+     * nothing and reported by nothing. Tiled writes `#rrggbb` or `#aarrggbb`; the alpha-first form
+     * is normalised here rather than at the far end, because a colour that means one thing in a
+     * `.tmx` and another in a document is exactly the sort of thing that goes unnoticed.
+     */
+    background?: string;
     /** What could not be represented exactly, reported rather than left to be discovered. */
     notes: string[];
 }
@@ -962,12 +972,22 @@ export function parseTiledMap(xml: string, opts?: { inflate?: (d: Uint8Array) =>
         if (over) notes.push(over);
     }
 
+    // `#rrggbb` straight through; `#aarrggbb` — Tiled's alpha-FIRST form — reordered to the
+    // alpha-last `#rrggbbaa` that CSS and every backend here read. Getting that backwards makes an
+    // opaque black sky arrive as a transparent one, and both strings are eight characters of hex.
+    // Anything else is left exactly as written rather than guessed at.
+    const declared = mapAttrs.backgroundcolor;
+    const background = declared === undefined ? undefined
+        : /^#[0-9a-f]{8}$/i.test(declared) ? `#${declared.slice(3)}${declared.slice(1, 3)}`
+        : declared;
+
     return {
         width: num(mapAttrs.width, 0),
         height: num(mapAttrs.height, 0),
         tileWidth: num(mapAttrs.tilewidth, 0),
         tileHeight: num(mapAttrs.tileheight, 0),
         orientation,
+        ...(background !== undefined ? { background } : {}),
         tilesets, layers, objectGroups, notes
     };
 }

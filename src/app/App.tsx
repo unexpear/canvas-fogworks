@@ -84,6 +84,7 @@ import { Tilemap, tileSourceRect as sheetTileRect, tileIndexAt,
     FLIP_H, FLIP_V, FLIP_D , TERRAIN_MATERIALS_MAX} from "../core/document/Tilemap";
 import { EyedropperTool } from "../editor/tools/EyedropperTool";
 import { SetLightingAction } from "../core/actions/SetLightingAction";
+import { SetBackgroundAction } from "../core/actions/SetBackgroundAction";
 import { restMesh, MESH_MAX_DIVISIONS, copyMeshPoint, Mesh, ReadonlyMesh } from "../core/document/Mesh";
 import { BLEND_MODES, BlendMode } from "../core/document/Node";
 import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, PAINT_STRENGTH } from "../core/document/MeshEdit";
@@ -1889,7 +1890,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
      * VIRTUAL ids, which an import never has; moving the construction to a module that can be tested
      * satisfies it honestly instead of by exemption.
      */
-    const importTiles = useCallback((placements: TilePlacement[], tilesets: Tileset[] = []) => {
+    const importTiles = useCallback((placements: TilePlacement[], tilesets: Tileset[] = [],
+                                     background?: string) => {
         if (placements.length === 0) return;
         const doc = dispatcher.getDocument();
         const { actions, ids } = tileImportActions(doc, placements);
@@ -1901,7 +1903,15 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         const withSets = tilesets.length > 0
             ? [new SetTilesetsAction(doc, [...(doc.tilesets ?? []) as Tileset[], ...tilesets]), ...actions]
             : actions;
-        dispatcher.dispatchAction(new TransactionAction(doc, "import-tiles", withSets));
+        // AND THE MAP'S OWN BACKGROUND (schema 70), in the SAME transaction for the same reason the
+        // tilesets are: one import is one undo step, and a document that briefly had the layers but
+        // not the sky is a state no author ever made. It does NOT overwrite a background the
+        // document already has — placing a second map must not repaint the first one's sky, and the
+        // map that declares nothing (21 of the 24 here) leaves the field exactly as it found it.
+        const withSky = background !== undefined && doc.background === undefined
+            ? [new SetBackgroundAction(doc, background), ...withSets]
+            : withSets;
+        dispatcher.dispatchAction(new TransactionAction(doc, "import-tiles", withSky));
         es.selectedNodeIds = ids.slice(0, 1);
         refresh();
     }, [dispatcher, es, refresh]);
@@ -2309,6 +2319,38 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                              color: dispatcher.getDocument().lights ? UI.accent : "#ccc",
                              border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
                 >☀ Light</button>
+                {/* THE DOCUMENT'S BACKGROUND (schema 70), and a real colour input rather than a
+                    toggle: the field is a colour, so the control that sets it should be one. A
+                    document with no sky shows the swatch at the editor's own backdrop and the
+                    CLEAR button is what puts it back to absent — absent and "the same colour the
+                    editor happens to use" are different documents, and only one of them exports. */}
+                <input
+                    type="color"
+                    data-doc-background="1"
+                    title="What the document sits on. Exported, drawn by all three backends, and read from a Tiled map's backgroundcolor."
+                    value={dispatcher.getDocument().background ?? "#1a1a2e"}
+                    onChange={e => {
+                        dispatcher.dispatchAction(
+                            new SetBackgroundAction(dispatcher.getDocument(), e.target.value));
+                        refresh();
+                    }}
+                    style={{ width: 26, height: 20, marginLeft: 4, padding: 0, background: "transparent",
+                             border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer",
+                             verticalAlign: "middle" }}
+                />
+                {dispatcher.getDocument().background !== undefined && (
+                    <button
+                        data-doc-background-clear="1"
+                        title="Remove the background, so the document has none at all again."
+                        onClick={() => {
+                            dispatcher.dispatchAction(
+                                new SetBackgroundAction(dispatcher.getDocument(), undefined));
+                            refresh();
+                        }}
+                        style={{ fontSize: 11, padding: "3px 6px", marginLeft: 2, background: "transparent",
+                                 color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
+                    >✕</button>
+                )}
                 {startedFromCorruptSave && (
                     <span
                         title={`The previous autosave could not be read and was kept at "${CORRUPT_BACKUP_KEY}". Saving now will replace it.`}
@@ -4995,7 +5037,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     onImportSvg: (specs: SvgNodeSpec[]) => void;
     /** Apply a registered family to the selected node — the point of loading one. */
     editContentFont: (family: string) => void;
-    onImportTiles: (placements: TilePlacement[], tilesets?: Tileset[]) => void;
+    onImportTiles: (placements: TilePlacement[], tilesets?: Tileset[], background?: string) => void;
     /** The swatch a palette click writes to, and what it currently holds. */
     paintColour: string;
     onPickColour: (hex: string) => void;
@@ -5537,7 +5579,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                             + `${TILE_PLACE_MAX} this will place at once.`);
                                         return;
                                     }
-                                    onImportTiles(tiles, newTilesets);
+                                    onImportTiles(tiles, newTilesets, map.background);
                                     setImportNote(tiledImportNote(map, built));
                                 } catch (err) {
                                     setImportNote(`Cannot read that map: ${String(err)}`);

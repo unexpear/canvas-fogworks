@@ -458,6 +458,11 @@ export function emitSVG(container: HTMLElement, model: DisplayList): void {
         svg.style.background = "#1a1a2e";
         container.appendChild(svg);
     }
+    // THE DOCUMENT'S OWN BACKGROUND (schema 70), and set EVERY FRAME rather than at creation like
+    // the default above — the element is reused across frames, so a background assigned once could
+    // never change and clearing it would leave the last sky on screen for ever. Absent falls back
+    // to the editor's own backdrop, which is what every document without one has always shown.
+    svg.style.background = model.background ?? "#1a1a2e";
 
     // Effect filter defs — rebuilt each frame (shares content's lifecycle; leak-free).
     const defs = getOrCreateDefs(svg);

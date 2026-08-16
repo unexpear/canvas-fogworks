@@ -112,6 +112,8 @@ export interface SerializedDocument {
         /** The scene's lighting (schema 42). Absent = unlit. */
         lights?: readonly import("./Light").Light[];
         ambient?: number;
+        /** What the document sits on (schema 70). Absent = transparent, as every document was. */
+        background?: string;
     };
 }
 
@@ -148,7 +150,10 @@ export function serializeDocument(doc: ReadonlyDocument): string {
             ...(doc.tilesets !== undefined ? { tilesets: doc.tilesets } : {}),
             ...(doc.frame !== undefined ? { frame: doc.frame } : {}),
             ...(doc.lights !== undefined ? { lights: doc.lights } : {}),
-            ...(doc.ambient !== undefined ? { ambient: doc.ambient } : {})
+            ...(doc.ambient !== undefined ? { ambient: doc.ambient } : {}),
+            // Omitted when absent, so a document with no sky serialises byte-for-byte as it did
+            // before schema 70 — the same rule every optional field here follows.
+            ...(doc.background !== undefined ? { background: doc.background } : {})
         }
     };
 
@@ -242,6 +247,9 @@ export function deserializeDocument(json: string): ProjectDocument {
     }
     if ("ambient" in migrated.document) {
         doc.ambient = migrated.document.ambient as number;
+    }
+    if ("background" in migrated.document) {
+        doc.background = migrated.document.background as string;
     }
 
     // Reconstruct the Map, validating each node's shape and key/id agreement.
@@ -381,6 +389,11 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     // valid new one and there is no data to move. The step is still named, because a version
     // the chain does not mention is a version nobody can tell was considered.
     if (version === "68") { raw = { ...raw, version: "69" }; version = "69"; }
+    // 69 -> 70: a document gained a BACKGROUND. Named and empty, because absent already meant
+    // "transparent" and that is exactly what every document before this one was — the bump is
+    // required all the same, since a schema-69 build would load a file that declares a sky and
+    // draw it on nothing, silently misstating the document.
+    if (version === "69") { raw = { ...raw, version: "70" }; version = "70"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {

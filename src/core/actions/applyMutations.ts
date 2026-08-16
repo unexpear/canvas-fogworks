@@ -194,6 +194,12 @@ export function applyMutationsToDocument(
                 doc.tilesets = delta.tilesets;
                 return;
             }
+            case "background": {
+                // What the document sits on (schema 70). `undefined` removes it, so clearing the
+                // sky serialises byte-for-byte as a document that never had one.
+                doc.background = delta.background;
+                return;
+            }
             case "activeState": {
                 // Document-level state (M7): which named state everything resolves against.
                 doc.activeState = delta.activeState;

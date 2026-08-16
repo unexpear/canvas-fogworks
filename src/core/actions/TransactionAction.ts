@@ -130,6 +130,7 @@ export class TransactionAction extends Action {
         // indexes into composes in the order it was written.
         let clipsDelta: Extract<NodeDelta, { kind: "clips" }> | null = null;
         let tilesetsDelta: Extract<NodeDelta, { kind: "tilesets" }> | null = null;
+        let backgroundDelta: Extract<NodeDelta, { kind: "background" }> | null = null;
 
         for (const action of this.componentActions) {
             action.rebind(working);
@@ -166,6 +167,8 @@ export class TransactionAction extends Action {
                     clipsDelta = delta;
                 } else if (delta.kind === "tilesets") {
                     tilesetsDelta = delta;
+                } else if (delta.kind === "background") {
+                    backgroundDelta = delta;
                 } else {
                     const prev = propertyEdits.get(nodeId) ?? { kind: "patch" as const };
                     propertyEdits.set(nodeId, mergePatch(prev, delta));
@@ -206,7 +209,7 @@ export class TransactionAction extends Action {
         // `applyMutations` was already indifferent — "the key is ignored, the KIND carries the
         // meaning" — so the change is confined to who may share the map.
         const documentDeltas = [variablesDelta, activeStateDelta, timelineDelta, lightingDelta,
-            clipsDelta, tilesetsDelta].filter(d => d !== null);
+            clipsDelta, tilesetsDelta, backgroundDelta].filter(d => d !== null);
         for (const delta of documentDeltas) {
             finalDeltas.set(documentDeltaKey((delta as NodeDelta & { kind: string }).kind), delta as NodeDelta);
         }

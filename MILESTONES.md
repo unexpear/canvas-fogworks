@@ -1410,6 +1410,51 @@ opening the guard changes nothing, and my first retarget was itself an equivalen
 
 Eight mutants, 8/8 killed, and 16/16 across the three families the slice touched.
 
+**Slice 18 — THE DOCUMENT HAS A BACKGROUND (schema 70), and the hole was found by looking at a
+screenshot.** Nothing in the document carried a background of any kind. What a level appeared to sit
+on was the EDITOR'S chrome, which is not part of the document — so a run had no sky, an export
+emitted no ground colour, and a Tiled map's own `backgroundcolor` was read by nothing.
+
+**MEASURED BEFORE BUILT, and the measurement narrowed it.** Three of the twenty-four maps in this
+tree declare `<map backgroundcolor>` — `#000000`, `#3a3a3a`, `#27b99a` — and the importer dropped all
+three. **ZERO** use an `<imagelayer>`, so the backdrop-picture feature the importer counts and does
+not read is correctly unbuilt. One declares a parallax factor. The era agrees with the small answer:
+the original's background is not an image layer, it is a solid sky colour plus scenery drawn as
+ORDINARY TILES, so a colour and a second tile layer is the whole of it.
+
+**A DOCUMENT-LEVEL FIELD, not a very large rectangle.** A rectangle behind everything would be
+selectable, draggable, deletable, and INSIDE `contentBounds` — which the follow camera clamps to and
+the death plane is derived from, so the sky would move the edge of the world.
+
+**THE WRITE PATH SHIPPED IN THE SAME COMMIT AS THE FIELD.** `Document.clips` arrived at schema 46
+validated, serialised, migrated and read by the sprite-sheet exporter with nothing able to set it;
+`Document.tilesets` shipped the same way. Twice made `SetTilesetsAction`'s header ask for a rule, so
+`SetBackgroundAction`, the delta, the inspector control and the import seam are all in this commit.
+
+**PAINTED IN SCREEN SPACE BY ALL THREE BACKENDS**, so a level three screens wide needs no rectangle
+three screens wide behind it — and EXPORTED AS A REAL `<rect>` rather than a style on the root,
+because a standalone file is opened by converters and printers that drop presentation, which would
+make the sky the one thing that did not survive the export.
+
+**ONE DIVERGENCE, STATED RATHER THAN HIDDEN.** SVG and Canvas hand the string to the browser, which
+takes names and `rgb()`; `gl.clearColor` takes four floats, so the GPU parses hex and falls back to
+the editor backdrop on anything else. That is the one place these backends disagree by construction.
+It is hex in all three maps that declare one, so the gap is real and unexercised — the fix, when it
+is needed, is to resolve the colour ONCE in the render model rather than teach a backend CSS.
+
+**AND TILED PUTS THE ALPHA FIRST.** `#aarrggbb`, where CSS reads `#rrggbbaa`. Both are eight hex
+characters and nothing in the string says which end it is, so an opaque sky arrives nearly
+transparent — normalised at the reader, where the format is known, rather than at the far end.
+
+**WHAT THIS DID NOT DO, and is the next thing the screenshot asks for:** the test level still has no
+scenery. The Kenney map ships four layers — `Tiles`, `Tiles (layer A)`, `Tiles (layer B)`,
+`Characters` — and the wide level rebuilt the terrain on ONE of them and discarded the other two.
+`depth` and `applyParallax` have existed since schema 40 and are applied against the viewport, which
+during a run IS the follow camera, so layered scenery should already parallax in a playing game.
+That has never been verified with a game camera and is the cheap check to make before building on it.
+
+7 tests, 4 mutants, 4/4 killed.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

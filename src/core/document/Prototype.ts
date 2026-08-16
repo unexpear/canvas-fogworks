@@ -135,7 +135,15 @@ export function easingAt(easing: Easing | undefined, t: number): number {
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 /** `#rgb` / `#rrggbb` as three channels, or null for anything else (a token, a CSS name). */
-function parseHex(c: string): [number, number, number] | null {
+/**
+ * `#rgb` or `#rrggbb` as 0..255 channels, or null for anything else.
+ *
+ * EXPORTED SINCE SCHEMA 70 because the GPU needs it: `gl.clearColor` takes floats, so a document
+ * background has to become channels somewhere, and a second copy of this would be the first thing
+ * to drift. `Tilemap` already describes its own accepted pair as "the same pair this accepts" —
+ * that sentence should have been an import.
+ */
+export function parseHex(c: string): [number, number, number] | null {
     const s = c.trim();
     if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(s)) return null;
     const h = s.slice(1);

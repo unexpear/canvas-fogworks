@@ -403,7 +403,12 @@ export function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dp
     // `undefined` and `null` mean different things here, so the check is for the TARGET rather
     // than for a falsy colour: no target at all is the editor drawing itself and wants the
     // backdrop; a target that asked for `null` wants transparency and must not get a default.
-    const background = into ? into.background : BACKGROUND;
+    //
+    // THE DOCUMENT'S OWN BACKGROUND OUTRANKS THE EDITOR'S (schema 70) but NOT an explicit target.
+    // A target names what it wants drawn behind its region — a sprite-sheet cell asks for `null`
+    // and must stay transparent — while the editor is merely showing a document, and a document
+    // that declares a sky should be shown against it rather than against this module's taste.
+    const background = into ? into.background : (model.background ?? BACKGROUND);
 
     // Clear + background in device space (SVG sets svg.style.background). A caller drawing into
     // part of a larger canvas clips first, so clearing the whole thing only clears its own region.

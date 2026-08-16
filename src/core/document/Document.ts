@@ -164,7 +164,7 @@ import type { TimelineSettings } from "./Timeline";
 import type { Light } from "./Light";
 import type { Tileset } from "./Tileset";
 
-export const SCHEMA_VERSION = "69";
+export const SCHEMA_VERSION = "70";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
@@ -246,6 +246,23 @@ export interface ProjectDocument {
     /** The floor below which nothing gets darker, 0..1. Absent = 1, i.e. no lighting at all. */
     ambient?: number;
 
+    /**
+     * What the document sits ON (schema 70) — the sky, the paper, the stage.
+     *
+     * ABSENT MEANS TRANSPARENT, and that is what every document was until now: nothing in the tree
+     * carried a background of any kind, so what a level appeared to sit on was the EDITOR'S chrome,
+     * which is not part of the document at all. A run had no sky, an export emitted no ground
+     * colour, and the Tiled importer read `<map backgroundcolor>` in none of the three maps here
+     * that declare one. It is one string because that is what the corpus declares — `#000000`,
+     * `#3a3a3a`, `#27b99a` — and a gradient sky is a bigger question that a fill can answer later.
+     *
+     * DOCUMENT-LEVEL RATHER THAN A NODE, for the same reason `lights` is: a background is a
+     * property of the SCENE. A giant rectangle behind everything would be selectable, draggable,
+     * deletable and would need excluding from every bounds calculation the camera and the death
+     * plane depend on — see how much `contentBounds` already decides.
+     */
+    background?: string;
+
     /** The named STATE every node resolves against (Milestone 7, schema 30) — the same
      *  document-level-selection shape as `activeTheme`. Absent/empty = the base state. */
     activeState?: string;
@@ -262,6 +279,22 @@ export interface ProjectDocument {
  * can write.
  */
 export type ReadonlyDocument = DeepReadonly<ProjectDocument>;
+
+/**
+ * Why `background` is not a valid colour, or null.
+ *
+ * A LOOSE CHECK ON PURPOSE. Colour strings in this document are already whatever CSS accepts —
+ * `Style.fill` carries hex, `rgb()`, named colours and variable references — and a validator that
+ * only understood hex would refuse documents the renderer draws perfectly. What is refused is the
+ * shape: a non-string, or an empty one, which is a field somebody meant to clear and did not.
+ * ABSENT is the way to say "no background"; empty string is a typo.
+ */
+export function backgroundError(background: unknown): string | null {
+    if (background === undefined) return null;
+    if (typeof background !== "string") return "background must be a string or absent";
+    if (background.trim() === "") return "background must not be empty — omit it to have none";
+    return null;
+}
 
 // Utility function to create a new, empty document instance.
 export function createEmptyDocument(): ProjectDocument {

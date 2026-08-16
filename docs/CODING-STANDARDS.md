@@ -11,7 +11,7 @@
      one validator shared by the load and edit paths, and a header that says WHY the value is
      text rather than what it is. -->
 
-> 🔒 Frozen contract · schema v69 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Conventions + the hard rules that protect the invariants.
+> 🔒 Frozen contract · schema v70 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Conventions + the hard rules that protect the invariants.
 
 ## Hard rules (never violate)
 

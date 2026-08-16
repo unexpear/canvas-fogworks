@@ -10,7 +10,7 @@
  * corrupting state later.
  */
 
-import { ReadonlyDocument } from "./Document";
+import { ReadonlyDocument, backgroundError } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
 import { transformError, layoutError, dimensionError, pathError, booleanOpError, srcError, sourceRectError, nineSliceError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError, classNameError, userDataError } from "./Node";
 import { interactionsError } from "./Prototype";
@@ -180,6 +180,12 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
     if (lightErr) throw new Error(`Invalid document: ${lightErr}.`);
     const ambErr = ambientError(doc.ambient);
     if (ambErr) throw new Error(`Invalid document: ${ambErr}.`);
+    // THE BACKGROUND (schema 70). Checked for SHAPE, not for colour: the strings this document
+    // already carries are whatever CSS accepts, so a hex-only validator would refuse files the
+    // renderer draws perfectly. An EMPTY string is refused, because absent is how a document says
+    // it has no sky and empty is how a field gets cleared by accident.
+    const bgErr = backgroundError(doc.background);
+    if (bgErr) throw new Error(`Invalid document: ${bgErr}.`);
     const tlErr = timelineError(doc.timeline);
     if (tlErr) throw new Error(`Invalid document: ${tlErr}.`);
     // CLIPS are checked against the timeline they name frames in, so a range over a clock that

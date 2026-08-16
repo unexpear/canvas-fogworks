@@ -289,7 +289,16 @@ export function exportSVG(doc: ReadonlyDocument, linesOf: TextLines = HARD_BREAK
         if (markup) parts.push(markup);
     }
     for (let i = open.length; i > 0; i--) parts.push("</g>");
-    const body = parts.filter(Boolean).join("\n  ");
+    // THE DOCUMENT'S BACKGROUND (schema 70), as a real `<rect>` rather than a style on the root.
+    // A standalone file is opened by things that are not browsers — an editor, a converter, a
+    // printer — and a CSS background on `<svg>` is presentation that several of them drop, which
+    // would make the exported sky the one thing that did not survive the export. The rect covers
+    // the viewBox exactly, so it frames the same region the file claims to be.
+    const sky = doc.background
+        ? `<rect x="${num(bounds.x)}" y="${num(bounds.y)}" width="${num(bounds.width)}"` +
+          ` height="${num(bounds.height)}" fill="${esc(doc.background)}"/>`
+        : "";
+    const body = [sky, ...parts].filter(Boolean).join("\n  ");
     // The viewBox carries the content's own origin, so shapes keep their document coordinates
     // instead of being translated — a diff between two exports then shows real changes only.
     return [

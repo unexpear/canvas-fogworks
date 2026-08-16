@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/tests, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, jest.config.js, scripts/check-module-headers.js -->
 
-> 🔒 Frozen contract · schema v69 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1611) + `src/core/runtime/World.test.ts` (89) + `src/core/runtime/Rules.test.ts` (16) + `src/core/runtime/Parts.test.ts` (25) + `src/core/import/tiledPlacements.test.ts` (10) + `src/core/runtime/Camera.test.ts` (20) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (67) + `src/renderer/emitSVG.test.ts` (11) = 1940 tests.
+> 🔒 Frozen contract · schema v70 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins) + M3 render-model extraction + viewport culling + ellipse/line/path node types + Canvas backend + effects + M4 pan/zoom + box-select + DOM-free handle picking + rotate + live Canvas backend + snapping/guides (move + resize) + rulers + canvas images + group snapping/rotate. Suites: `src/core/tests/document.test.ts` (1618) + `src/core/runtime/World.test.ts` (89) + `src/core/runtime/Rules.test.ts` (16) + `src/core/runtime/Parts.test.ts` (25) + `src/core/import/tiledPlacements.test.ts` (10) + `src/core/runtime/Camera.test.ts` (20) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (67) + `src/renderer/emitSVG.test.ts` (11) = 1947 tests.
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 1940 tests
+npm test                                   # jest (ts-jest), 1947 tests
 npm run header-claims                      # ADVISORY: module-header sentences with a shelf life
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
@@ -58,7 +58,7 @@ node scripts/menu-command.js "Zoom to Fit"
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (1940 tests)
+## What is covered (1947 tests)
 
 | Area | Representative cases |
 |------|----------------------|

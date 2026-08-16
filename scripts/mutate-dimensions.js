@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1940;
+const EXPECTED_TESTS = 1947;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1648,6 +1648,25 @@ const MUTANTS = [
       from: "    return Math.max(0, gravity);\n}",
       to: "    return Math.max(0, gravity) / 2;\n}",
       note: "the push stops being ONE gravity, so it no longer equals the default surface's friction — the era identity this slice is built on — and the run-up silently doubles to three tiles" },
+
+    // THE DOCUMENT BACKGROUND (schema 70). A document had no sky at all: what a level appeared to
+    // sit on was the EDITOR'S chrome, so a run had none and an export emitted none.
+    { id: "BG1", file: "src/core/document/Document.ts",
+      from: '    if (background.trim() === "") return "background must not be empty',
+      to: '    if (false) return "background must not be empty',
+      note: "an EMPTY background is accepted, so a field somebody cleared and did not remove loads as a colour — and every backend then paints nothing while the document insists it has a sky" },
+    { id: "BG2", file: "src/renderer/RenderModel.ts",
+      from: '        ...(doc.background !== undefined ? { background: doc.background } : {}),',
+      to: '',
+      note: "the background never reaches the display list, so all three backends draw the editor's own backdrop and a document's sky is invisible everywhere except the exporter — which reads the document directly and would go on being right, hiding it" },
+    { id: "BG3", file: "src/core/export/ExportSVG.ts",
+      from: "    const body = [sky, ...parts]",
+      to: "    const body = [...parts, sky]",
+      note: "the background rect is emitted LAST, so it covers the entire drawing instead of sitting behind it — an exported file that is one flat rectangle, which only an ORDER assertion can see" },
+    { id: "BG4", file: "src/core/import/TiledMap.ts",
+      from: '        : /^#[0-9a-f]{8}$/i.test(declared) ? `#${declared.slice(3)}${declared.slice(1, 3)}`',
+      to: '        : /^#[0-9a-f]{8}$/i.test(declared) ? declared',
+      note: "Tiled's alpha-FIRST #aarrggbb is passed through as CSS's alpha-LAST #rrggbbaa, so an opaque colour arrives nearly transparent — both are eight hex characters and nothing about the string says which end the alpha is on" },
 ];
 
 function runSuite() {
