@@ -1094,8 +1094,8 @@ const MUTANTS = [
     // what changes is where it ends up, or how fast it got there, which is the class of defect a
     // "does it move" assertion cannot see.
     { id: "RN1", file: "src/core/runtime/World.ts",
-      from: "        let vy = was.vy + gravity * FIXED_STEP;",
-      to: "        let vy = was.vy + gravity;",
+      from: "        let vy = was.vy + (heldJump ? gravity * HELD_JUMP_GRAVITY : gravity) * FIXED_STEP;",
+      to: "        let vy = was.vy + (heldJump ? gravity * HELD_JUMP_GRAVITY : gravity);",
       note: "gravity is applied per STEP rather than per second, so the world falls sixty times too fast and a jump height depends on the step size — the exact mistake a fixed timestep exists to prevent" },
     { id: "RN2", file: "src/core/runtime/World.ts",
       from: "            if (vy > 0) { y = s.y - h; onGround = true; groundFriction = s.friction; }",
