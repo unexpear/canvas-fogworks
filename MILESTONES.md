@@ -1777,6 +1777,31 @@ comment, because it is read as current.
 
 2 tests, 2 mutants, 2/2 killed.
 
+**Slice 28 — THE COIN THE BLOCK THROWS OUT CAN ACTUALLY BE PICKED UP.** Two defects, both found by
+making the LEVEL use what the last three slices built rather than by reading the code.
+
+**COLLECTING READ ONLY `enter`, so slice 27 broke it the moment it landed.** A coin sitting in a
+niche declares no `bodyType` and is a REGION — touching it is an `enter`. A coin thrown out of a
+block declares `dynamic` and is a BODY — touching it is a `contact`. Letting a spawn MOVE therefore
+made exactly the shape a level uses uncollectable. The deadly and goal rules already accepted both
+kinds, for this reason; collecting now does too. CO3 is the mutant, and no fixture whose coin sits
+still can see it.
+
+**AND A SPAWNED COPY INHERITED `hidden`.** A template is a real node in the document and draws — mine
+was parked at y=-100, and the level's bounds start at 0, so "off-screen" was never off-canvas. The
+fix is to hide it; the flag then copied through, `dropHidden` removed every spawn from the scene, and
+the physics went on colliding with something nobody could see. `applySpawns` now clears it: a
+template is hidden BECAUSE it is a template, and its instances are not. **I had written a comment
+asserting copies do not inherit it, then checked — the spread copies every field, which is exactly
+what it is for, and this is the one that must not be.**
+
+**THE COUNT DID NOT MOVE and the battery said so.** The `hidden` assertions joined an existing test
+rather than adding one; bumping `EXPECTED_TESTS` anyway made the run report UNVERIFIED (did not
+compile) — which is the pre-flight working, and the fourth distinct way a mutation run has reported
+something other than what it found.
+
+2 tests, 2 mutants, 2/2 killed.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

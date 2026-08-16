@@ -161,10 +161,21 @@ export function marioRules(
     // the same refusal `Parts` was built on, and the corpus's twelve coin objects carry zero
     // properties between them, so their word could not have meant anything anyway.
     //
-    // ON `enter`, WHICH IS ALREADY AN EDGE: a region reports entering once, not on all sixty frames
-    // the body spends inside it, so this cannot fire twice for one pickup.
+    // `enter` OR `contact`, because a collectible may be either shape and the author chooses which.
+    // A coin sitting in a niche declares no `bodyType` and is a REGION, so touching it is an enter;
+    // a coin thrown out of a block declares `dynamic` and is a BODY, so touching it is a contact.
+    // Reading only enters made the second kind uncollectable the moment slice 27 let it move — the
+    // deadly and goal rules below already accept both, for exactly this reason.
+    //
+    // BOTH ARE ALREADY EDGES: a region reports entering once rather than on all sixty frames the
+    // body spends inside it, and a contact fires once per pair. So this cannot fire twice for one
+    // pickup without a set to remember it.
+    //
+    // AND THE SIDE DOES NOT MATTER, unlike a stomp. Walking into a coin collects it; there is no
+    // way to touch one that should not.
     for (const e of world.events) {
-        if (e.kind !== "enter" || e.bodyId !== me) continue;
+        if (e.kind !== "enter" && e.kind !== "contact") continue;
+        if (e.bodyId !== me) continue;
         const got = doc.nodes.get(e.nodeId);
         if (got && partOf(got).collectible) out.push({ kind: "despawn", bodyId: e.nodeId });
     }

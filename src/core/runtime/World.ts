@@ -1576,6 +1576,12 @@ export function applySpawns(doc: ReadonlyDocument, world: WorldState): ReadonlyD
             // that offset a second time — the exact defect slice 6 was written to fix.
             parent: null,
             children: [],
+            // A TEMPLATE IS HIDDEN BECAUSE IT IS A TEMPLATE, and its instances are not. Copying the
+            // flag through made every spawn invisible — `dropHidden` takes a hidden node out of the
+            // scene entirely — so the one way to keep a template out of the picture also stopped
+            // anything it spawned from appearing. Measured, not assumed: the spread copies every
+            // field, which is exactly what it is for, and this is the one field that must not be.
+            hidden: undefined,
             geometry: { ...template.geometry, x: s.x, y: s.y }
         } as Node);
         roots.push(s.id);

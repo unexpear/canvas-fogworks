@@ -511,6 +511,15 @@ describe("spawn — the fifth verb, and the only one that ADDS", () => {
         // …and the STORED document never had a coin in it.
         expect(doc.nodes.has("coin#0")).toBe(false);
         expect(applySpawns(doc, worldFrom(doc))).toBe(doc);
+        // A HIDDEN TEMPLATE SPAWNS VISIBLE COPIES. Hiding it is the only way to keep a template out
+        // of the picture, and the spread copied the flag through — so every spawn was invisible and
+        // `dropHidden` took it out of the scene entirely. The one field a copy must not inherit.
+        const tucked = withTemplate();
+        (tucked.nodes.get("coin") as Node).hidden = true;
+        const tw = applyCommands(worldFrom(tucked), [{ kind: "spawn", templateId: "coin", x: 1, y: 2 }]);
+        expect((applySpawns(tucked, tw).nodes.get("coin#0") as Node).hidden).toBeUndefined();
+        // …and the template itself stays hidden, which is the whole reason it was marked.
+        expect((applySpawns(tucked, tw).nodes.get("coin") as Node).hidden).toBe(true);
     });
 
     it("REACHES THE PHYSICS, which is the whole reason it runs before the step", () => {
@@ -588,6 +597,42 @@ describe("spawn — the fifth verb, and the only one that ADDS", () => {
             { kind: "spawn", templateId: "coin", x: 0, y: 0, body: { vx: -50, vy: 0 } }
         ]);
         expect(left.bodies.get("coin#0")!.facing).toBe(-1);
+    });
+
+    it("A BODY coin is collected too, not only a region one", () => {
+        // Slice 27 let a spawned thing MOVE, and a moving thing is a BODY — so touching it reports
+        // `contact`, not `enter`. Reading only enters made exactly the coin the block throws out
+        // uncollectable, which is the shape a level actually uses.
+        const doc = docWith([
+            { id: "floor", x: -100, y: 100, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "coin", x: 0, y: 88, w: 10, h: 10, className: "coin",
+              userData: { bodyType: prop("dynamic"), "vde.collect": prop("true") } },
+            { id: "hero", x: 4, y: 88, w: 10, h: 10, userData: { bodyType: prop("dynamic") } }
+        ]);
+        let w = worldFrom(doc);
+        let got = false;
+        for (let i = 0; i < 30 && !got; i++) {
+            w = stepWorld(doc, w, { controlled: "hero" });
+            const cmds = marioRules(doc, w, { controlled: "hero" });
+            got = cmds.some(c => c.kind === "despawn" && c.bodyId === "coin");
+            w = applyCommands(w, cmds);
+        }
+        expect(got).toBe(true);
+        expect(w.bodies.has("coin")).toBe(false);
+        expect([...w.despawned]).toContain("coin");
+        // AND A BODY THAT DECLARES NOTHING IS NOT COLLECTED, so an ordinary crate survives being
+        // walked into — the declaration is what decides, not the fact of touching.
+        const plain = docWith([
+            { id: "floor", x: -100, y: 100, w: 400, h: 20, userData: { bodyType: prop("static") } },
+            { id: "crate", x: 0, y: 88, w: 10, h: 10, userData: { bodyType: prop("dynamic") } },
+            { id: "hero", x: 4, y: 88, w: 10, h: 10, userData: { bodyType: prop("dynamic") } }
+        ]);
+        let p2 = worldFrom(plain);
+        for (let i = 0; i < 30; i++) {
+            p2 = stepWorld(plain, p2, { controlled: "hero" });
+            p2 = applyCommands(p2, marioRules(plain, p2, { controlled: "hero" }));
+        }
+        expect(p2.bodies.has("crate")).toBe(true);
     });
 
     it("and the APP steps against the spawned document, not the stored one", () => {

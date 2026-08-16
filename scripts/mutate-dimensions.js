@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1983;
+const EXPECTED_TESTS = 1984;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1778,6 +1778,16 @@ const MUTANTS = [
       from: "                const moves = template !== undefined && bodyTypeOf(template) === \"dynamic\";",
       to: "                const moves = template !== undefined;",
       note: "EVERY spawned template becomes a body, so a coin meant to sit in a niche falls out of it and a decorative spawn gains physics nobody asked for — the template's own bodyType is what decides, and ignoring it makes the declaration meaningless" },
+
+    { id: "CO3", file: "src/core/runtime/Rules.ts",
+      from: "        if (e.kind !== \"enter\" && e.kind !== \"contact\") continue;",
+      to: "        if (e.kind !== \"enter\") continue;",
+      note: "only REGION collectibles are picked up, so the coin a block throws out — which declares a bodyType and is therefore a BODY, reporting `contact` rather than `enter` — sits there for ever. Exactly the shape a level uses, and invisible to any fixture whose coin does not move" },
+
+    { id: "SP4", file: "src/core/runtime/World.ts",
+      from: "            hidden: undefined,",
+      to: "            hidden: template.hidden,",
+      note: "a spawned copy inherits the template's `hidden`, so the one way to keep a template out of the picture also makes every spawn invisible — `dropHidden` removes it from the scene entirely, and the physics goes on colliding with a thing nobody can see" },
 ];
 
 function runSuite() {
