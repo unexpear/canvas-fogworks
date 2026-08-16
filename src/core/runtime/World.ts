@@ -154,6 +154,7 @@ import { ReadonlyDocument, ProjectDocument } from "../document/Document";
 import { Node, UserData } from "../document/Node";
 import { ReadonlyTilemap, TILE_EMPTY, tileAt, visibleCells } from "../document/Tilemap";
 import { Tileset, findTileset, tilesetTile } from "../document/Tileset";
+import { depthOf } from "../document/Depth";
 
 /** One tick, in seconds. 60Hz: the rate every measurement in this module's tests assumes. */
 export const FIXED_STEP = 1 / 60;
@@ -681,9 +682,34 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
+/**
+ * Is this node at a DEPTH — and therefore invisible to the physics?
+ *
+ * THE PHYSICS MUST NOT COLLIDE WITH SOMETHING WHOSE POSITION DEPENDS ON WHERE YOU ARE LOOKING, and
+ * that is the whole rule. `applyParallax` shifts a layered node by an offset derived from the
+ * VIEWPORT, so a depth-1 cloud is drawn in a different place on every frame of a pan while its
+ * stored geometry never moves. Collide against the stored box and the wall is nowhere near the
+ * picture; collide against the drawn one and the level plays differently depending on the camera,
+ * which is the same class of defect as a frame-rate-dependent jump and far harder to notice.
+ *
+ * FOUND BY PUTTING SCENERY IN THE TEST LEVEL. Solidity is a property of the TILESET TILE, and every
+ * layer drawing that tile shares it — the Kenney map draws all three of its tile layers from ONE
+ * tileset — so a background built from the same sheet as the ground was a wall in the sky. Measured
+ * on the real level: 0 solids up there before adding the layer, 2 after.
+ *
+ * DEPTH RATHER THAN A NEW DECLARATION, because it is a consequence rather than a choice. Nothing
+ * had to be invented and no property added: a layer says it is scenery by being at a depth, which
+ * is the same statement that makes it parallax. A level that wants solid ground keeps it at 0,
+ * which is where every node already is.
+ */
+function isLayered(node: { depth?: number }): boolean {
+    return depthOf(node) !== 0;
+}
+
 export function solidsOf(doc: ReadonlyDocument): Solid[] {
     const out: Solid[] = [];
     for (const node of doc.nodes.values()) {
+        if (isLayered(node)) continue;                 // see `isLayered`
         const kind = bodyTypeOf(node);
         if (kind !== "static" && kind !== "oneway") continue;
         const at = worldOffsetOf(doc, node.id);
@@ -742,6 +768,7 @@ export function tileSolidsNear(
     for (const node of doc.nodes.values()) {
         const map = node.tilemap as ReadonlyTilemap | undefined;
         if (node.type !== "core.tilemap" || !map) continue;
+        if (isLayered(node)) continue;                 // see `isLayered`
         const set = findTileset(doc.tilesets, map.tilesetId) as Tileset | null;
         // NO SET, NO SOLIDS — a dangling id draws nothing and must collide with nothing, or a level
         // whose tileset was deleted becomes an invisible wall.
@@ -846,6 +873,7 @@ export function runtimeExclusions(doc: ReadonlyDocument): { nodeId: string; why:
 export function regionsOf(doc: ReadonlyDocument): Region[] {
     const out: Region[] = [];
     for (const node of doc.nodes.values()) {
+        if (isLayered(node)) continue;                 // see `isLayered`
         const className = node.className;
         if (!className || bodyTypeOf(node) !== null) continue;
         const g = node.geometry;

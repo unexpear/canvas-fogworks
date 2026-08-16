@@ -1776,3 +1776,80 @@ describe("the dirty set names what changed since the LAST frame", () => {
         }
     });
 });
+
+describe("SCENERY: a layered node is invisible to the physics", () => {
+    /**
+     * THE RULE: the physics must not collide with something whose position depends on where you
+     * are looking. `applyParallax` shifts a layered node by an offset derived from the VIEWPORT, so
+     * a depth-1 cloud is drawn somewhere different on every frame of a pan while its stored
+     * geometry never moves. Collide against the stored box and the wall is nowhere near the
+     * picture; collide against the drawn one and the level plays differently depending on the
+     * camera.
+     */
+    const withGround = () => {
+        const doc = docWith([
+            { id: "floor", x: 0, y: 100, w: 200, h: 20, userData: { bodyType: prop("static") } },
+            { id: "coin", x: 0, y: 40, w: 20, h: 20 },
+            { id: "b", x: 10, y: 80, userData: { bodyType: prop("dynamic") } }
+        ]);
+        (doc.nodes.get("coin") as Node).className = "coin";
+        return doc;
+    };
+
+    it("a layered SOLID stops being solid, and depth 0 is untouched", () => {
+        const doc = withGround();
+        // The control FIRST, so a later empty answer cannot pass for the wrong reason.
+        expect(solidsOf(doc)).toHaveLength(1);
+        (doc.nodes.get("floor") as Node).depth = 1;
+        expect(solidsOf(doc)).toEqual([]);
+        // …and back again: depth is the whole of the statement, so removing it restores the floor.
+        (doc.nodes.get("floor") as Node).depth = 0;
+        expect(solidsOf(doc)).toHaveLength(1);
+    });
+
+    it("a layered REGION reports nothing, or a coin is collected where it is not drawn", () => {
+        const doc = withGround();
+        expect(regionsOf(doc).map(r => r.nodeId)).toEqual(["coin"]);
+        (doc.nodes.get("coin") as Node).depth = -1;      // FOREGROUND is layered too
+        expect(regionsOf(doc)).toEqual([]);
+    });
+
+    it("A LAYERED TILEMAP IS NOT A WALL IN THE SKY — the defect this was found by", () => {
+        // SOLIDITY IS THE TILESET TILE'S, and every layer drawing that tile shares it. The Kenney
+        // map draws all three of its tile layers from ONE tileset, so a background built from the
+        // same sheet as the ground was solid — measured on the real level as 0 solids up in the sky
+        // before adding a scenery layer and 2 after.
+        const doc = createEmptyDocument();
+        doc.tilesets = [{
+            id: "set", name: "s", src: "x.png", offsetX: 0, offsetY: 0,
+            sheet: { columns: 2, tileWidth: 16, tileHeight: 16, spacing: 0, margin: 0 },
+            tiles: [{ id: 0, userData: { bodyType: prop("static") } }]
+        }] as unknown as ProjectDocument["tilesets"];
+        const layer = (id: string, y: number, depth?: number) => {
+            doc.nodes.set(id, {
+                id, type: "core.tilemap", parent: null, children: [],
+                geometry: { x: 0, y, width: 32, height: 16 },
+                style: { fill: "#888888", opacity: 1 }, layout: {},
+                ...(depth !== undefined ? { depth } : {}),
+                tilemap: { cols: 2, rows: 1, tileWidth: 16, tileHeight: 16, tilesetId: "set",
+                           tiles: [0, 0] }
+            } as unknown as Node);
+            doc.rootNodeUuids.push(id);
+        };
+        layer("ground", 100);
+        // THE CONTROL, and it is the assertion my first fixture got wrong: a box that merely RESTS
+        // on a surface does not overlap it, and reported zero solids for the floor as well — a
+        // vacuous pass. It has to sink INTO the row.
+        const near = (y: number) => tileSolidsNear(doc, { x: 0, y, width: 16, height: 16 }).length;
+        expect(near(110)).toBeGreaterThan(0);
+        expect(near(10)).toBe(0);                       // nothing up there yet
+
+        layer("clouds", 0, 1);                          // scenery, at a depth
+        expect(near(10)).toBe(0);                       // …and still nothing: it is not a wall
+        expect(near(110)).toBeGreaterThan(0);           // while the ground is untouched
+        // The same layer at depth 0 IS solid, which is what says the depth is doing the work rather
+        // than something incidental about the second node.
+        (doc.nodes.get("clouds") as Node).depth = 0;
+        expect(near(10)).toBeGreaterThan(0);
+    });
+});

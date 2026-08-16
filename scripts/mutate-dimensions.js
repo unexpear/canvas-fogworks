@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1950;
+const EXPECTED_TESTS = 1953;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1677,6 +1677,19 @@ const MUTANTS = [
       from: "    doc.nodes.forEach((n, id) => { if (depthOf(n) !== 0) out.add(id); });",
       to: "    doc.nodes.forEach(() => { });",
       note: "nothing is reported, so a layered node keeps the geometry it had when the camera was somewhere else — the exact defect this function was written for, measured at 300px on one layer after a 600px pan" },
+
+    // SCENERY (M18). A layered node is invisible to the PHYSICS, because a parallax layer's drawn
+    // position depends on the camera while its stored one does not — collide with either and
+    // something is wrong. Found by putting scenery back in the test level: every one of that
+    // tileset's 29 tiles is solid, so a background drawn from the same sheet was a wall in the sky.
+    { id: "SC1", file: "src/core/runtime/World.ts",
+      from: "function isLayered(node: { depth?: number }): boolean {\n    return depthOf(node) !== 0;",
+      to: "function isLayered(node: { depth?: number }): boolean {\n    return false;",
+      note: "a layered node is solid again, so scenery drawn from the level's own sheet becomes a wall in the sky — at a position that is not even where it draws, since the drawn one moves with the camera" },
+    { id: "SC2", file: "src/core/runtime/World.ts",
+      from: "function isLayered(node: { depth?: number }): boolean {\n    return depthOf(node) !== 0;",
+      to: "function isLayered(node: { depth?: number }): boolean {\n    return depthOf(node) > 0;",
+      note: "only BACKGROUND layers are excused and a FOREGROUND one (negative depth) still collides — which is the half a fixture written around clouds would never reach, since scenery in front of the player is the rarer case and the one nobody thinks to place" },
 ];
 
 function runSuite() {

@@ -1485,6 +1485,41 @@ KEEPS THE PICTURE CORRECT, so only a test that asks which ids come back can see 
 
 3 tests, 2 mutants, 2/2 killed.
 
+**Slice 20 — SCENERY, and it was a hole in the engine.** The Kenney map ships four layers and the
+wide level had rebuilt terrain on ONE of them. Putting the other two back found that a layered
+tilemap was **solid**: every one of that tileset's 29 declared tiles is `bodyType=static`, and
+solidity belongs to the TILESET TILE, so every layer drawing that tile shares it. Measured on the
+real level: **0 solids up in the empty sky before adding a scenery layer, 2 after**.
+
+**THE RULE: the physics must not collide with something whose position depends on where you are
+looking.** `applyParallax` shifts a layered node by an offset derived from the VIEWPORT, so a
+depth-1 cloud is drawn somewhere different on every frame of a pan while its stored geometry never
+moves. Collide against the stored box and the wall is nowhere near the picture; collide against the
+drawn one and the level plays differently depending on the camera — the same class of defect as a
+frame-rate-dependent jump, and far harder to notice. `isLayered` guards all three runtime scans:
+solids, tile solids, and REGIONS (a coin at a depth would be collected where it is not drawn).
+
+**DEPTH RATHER THAN A NEW DECLARATION, because it is a consequence rather than a choice.** Nothing
+was invented and no property added: a layer says it is scenery by being at a depth, which is the
+same statement that makes it parallax. A level that wants solid ground keeps it at 0, where every
+node already is. SC2 is the mutant that excuses only BACKGROUND layers and leaves a FOREGROUND one
+solid — the half a fixture written around clouds would never reach.
+
+**THE PROOF THE SCENERY IS INERT is that the playthrough did not change.** 189 far-hill cells at
+depth 2 and 90 bush cells at depth 1 were added to the level, and all three scripted runs end at the
+identical step, the identical x, with the identical cause and the identical enemy positions.
+
+**AND THE LEVEL HAS A SKY**, `#5c94fc`, which is the original's own — schema 70 gave the document
+somewhere to put it one slice earlier, and this is the first content that uses it.
+
+**AN OBSERVATION FROM THE PICTURE, recorded rather than silently accepted:** `parallaxOffset` shifts
+BOTH axes, so with the camera panned vertically the hills ride up off the horizon instead of sitting
+on it. That is right for a design canvas — a layered card lifts in both directions — and it is not
+what a side-scroller wants, where parallax is horizontal and the ground is fixed. It is a missing
+per-layer axis rather than a defect, and nothing in the corpus asks for one yet.
+
+3 tests, 2 mutants, 2/2 killed.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.
