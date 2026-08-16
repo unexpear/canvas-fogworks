@@ -7,6 +7,9 @@
      them. This audit tracked "built, unreachable" CAPABILITIES and never asked whether a reachable
      capability's IMPLEMENTATION was reachable — the same question, one level down. Now extracted,
      tested (10) and mutated (4). The row below is otherwise accurate. -->
+<!-- re-read 2026-08-16 after the document background (schema 70). A NEW ROW is below: it is
+     the first document-level field in this codebase whose write path shipped in the same
+     commit as the field, which is what the clips and tilesets rows exist to warn about. -->
 <!-- re-read 2026-08-13 after the column recovery: the .tmx import row records it. -->
 <!-- re-read 2026-08-13 after the tile-anchoring fix: the .tmx import row now records the
      anchoring and the columns gap. -->
@@ -99,6 +102,7 @@ broke a test whose subject was still true. Both are fixed.
 | Paint / bucket / erase tiles, pick from the sheet | **have** | `TileTool`, Map workspace |
 | Resize the grid | **have** | keeps cells by coordinate |
 | Dual-grid autotiling arithmetic | **have** | `document/Autotile`, STORED as `Tilemap.terrain` since schema 63 — the row said "no field yet" for four schemas after it shipped. A mask holds a LIST of candidates (schema 67), chosen deterministically by weight and cell position |
+| **Document background** | **have** (schema 70) | `Document.background` — what the document sits ON. Until this, nothing in the tree carried one, so a level appeared to sit on the EDITOR'S chrome: a run had no sky, an export emitted no ground colour, and `<map backgroundcolor>` was read by nothing (3 of the 24 maps here declare one). Document-level rather than a giant rectangle, which would be selectable and inside `contentBounds` — the bounds the camera clamps to and the death plane comes from. Painted in SCREEN space by all three backends, exported as a real `<rect>`, and set by `SetBackgroundAction` + a colour input in the toolbar, ALL IN THE SAME COMMIT AS THE FIELD. Known divergence: the GPU parses hex only and falls back on names/`rgb()` |
 | **Tileset as a document object** | **partial** (schema 67) | `Document.tilesets` — a set is the DOCUMENT's, so any number of layers name one, which ended a measured 2.5x image duplication. Sheet-backed OR collection; sparse per-tile records carry `probability` and `userData`. The panel retargets a layer, renames a set and sets a tile's weight, through `SetTilesetsAction`. STILL ABSENT: adding, duplicating or deleting a TILE, and a collection set is representable but not yet drawable |
 | **Paint PIXELS on a tilemap layer** (Manual / Auto / Stack) | **absent** | Pixelorama's headline tilemap feature: draw pixels and the tileset updates or grows |
 | Autotiling bits painted per tile | **absent** | Pixelorama has a tool for exactly this; VDE's table is authored, not painted |

@@ -7,6 +7,8 @@
 > [MILESTONES.md](MILESTONES.md) and [docs/README.md](docs/README.md).
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-08-16 after schema 70 (the document background): still accurate BECAUSE IT IS
+     FROZEN. This file is the 2026-07-23 record and the background is not in it. -->
 <!-- re-read 2026-08-15 after schema 69 (a node's own playhead): still accurate BECAUSE IT IS FROZEN.
      The step moves no data — a node without a frame reads the document's, which is what every node
      already did — so nothing this record decided is affected. -->
