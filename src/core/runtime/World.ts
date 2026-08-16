@@ -475,12 +475,25 @@ export interface WorldState {
      */
     despawned: ReadonlySet<string>;
     /**
+     * Cells this run has CHANGED, keyed `nodeId NUL col NUL row` — a NUL cannot occur in a node id.
+     *
+     * THE SAME SHAPE AS `despawned`, and for the same reason: a run's changes are the WORLD's, not
+     * the document's, so Stop throws them away and the level is whole again. Empty for every
+     * document that never bumps anything, which is all of them until a rule says otherwise.
+     */
+    cells: ReadonlyMap<string, number>;
+    /**
      * Whether this run is still going. Set only by an `endRun` command — the physics never decides
      * that a game is over, for the same reason it never decides what a stomp means.
      */
     outcome: RunOutcome;
     /** What the step that produced this world noticed. Empty on most steps, by design. */
     events: readonly WorldEvent[];
+}
+
+/** The key for one CELL of one tilemap. Same NUL reasoning as `pairKey`. */
+export function cellKey(nodeId: string, col: number, row: number): string {
+    return nodeId + "\u0000" + col + "\u0000" + row;
 }
 
 /** The key for one (body, region) pair. A NUL separator cannot collide with any node id. */
@@ -714,7 +727,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
             travelled: 0
         });
     }
-    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), outcome: "running", jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
+    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), cells: new Map(), outcome: "running", jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
@@ -1260,7 +1273,7 @@ export function stepWorld(
             className: doc.nodes.get(first)?.className ?? "" });
     }
 
-    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, outcome: world.outcome, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
+    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, cells: world.cells, outcome: world.outcome, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
 }
 
 /**
@@ -1346,7 +1359,20 @@ export type RuntimeCommand =
      * because a later command must not overwrite an ending that already happened; and a run that
      * has ended issues nothing further at all.
      */
-    | { kind: "endRun"; outcome: Exclude<RunOutcome, "running"> };
+    | { kind: "endRun"; outcome: Exclude<RunOutcome, "running"> }
+    /**
+     * A CELL BECOMES A DIFFERENT TILE — the fourth verb, and the one the block bump demanded.
+     *
+     * THE FIRST COMMAND THAT DOES NOT NAME A BODY. Despawn, setVelocity and endRun are all about
+     * things that move; a level made of tiles has ten thousand cells and one node, and until now
+     * nothing could touch one of them. A `?` block that stays a `?` after you hit it is the whole
+     * of what was missing.
+     *
+     * IT DOES NOT EDIT THE DOCUMENT, exactly as despawn does not delete a node. The change lives on
+     * the WORLD and is stamped onto a derived copy, so Stop restores the level and nothing lands on
+     * the undo stack — a run is not an edit.
+     */
+    | { kind: "setCell"; nodeId: string; col: number; row: number; tile: number };
 
 /**
  * A world with the commands applied, in array order.
@@ -1365,11 +1391,19 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
     if (commands.length === 0) return world;
     let bodies: Map<string, Body> | null = null;
     let despawned: Set<string> | null = null;
+    let cells: Map<string, number> | null = null;
     let outcome: RunOutcome | null = null;
     for (const c of commands) {
         if (c.kind === "endRun") {
             // FIRST ONE WINS, and the world's own is checked too: nothing may un-end a run.
             if (outcome === null && world.outcome === "running") outcome = c.outcome;
+            continue;
+        }
+        if (c.kind === "setCell") {
+            // BEFORE THE BODY LOOKUP, because this command names no body — the guard below would
+            // drop every one of them.
+            if (!cells) cells = new Map(world.cells);
+            cells.set(cellKey(c.nodeId, c.col, c.row), c.tile);
             continue;
         }
         // ACCUMULATING MAP, never `world.bodies` — see above.
@@ -1394,9 +1428,10 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
             onGround: (c.vy !== undefined && c.vy < 0) ? false : body.onGround
         });
     }
-    if (!bodies && !despawned && !outcome) return world;
+    if (!bodies && !despawned && !outcome && !cells) return world;
     return {
         ...world,
+        cells: cells ?? world.cells,
         bodies: bodies ?? world.bodies,
         despawned: despawned ?? world.despawned,
         outcome: outcome ?? world.outcome
@@ -1421,6 +1456,43 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
  * rather than assumed: a pose that changed a node's BOX would feed back into policy through
  * `contentBounds` and move the death plane, which is why the frame half of this is not here yet.
  */
+/**
+ * The document with every cell this run has CHANGED stamped onto a copy.
+ *
+ * A SIBLING OF `applyWorld`, and the same bargain: the STORED level is never touched, so Stop
+ * restores it and a run leaves nothing on the undo stack. `applyWorld` stamps positions and the
+ * `hidden` flag; this stamps tiles.
+ *
+ * THE SAME REFERENCE WHEN NOTHING CHANGED, which is every document until a rule bumps something —
+ * this runs on every frame of every run and a tilemap's `tiles` array is thousands of entries, so
+ * copying one speculatively would be the most expensive thing in the loop.
+ *
+ * A CHANGE TO A CELL THAT NO LONGER EXISTS IS INERT — a tilemap deleted or resized mid-run leaves
+ * the override naming nothing, and naming nothing does nothing. The dangling-reference rule this
+ * schema follows everywhere, and the alternative is a run that throws because a level was edited.
+ */
+export function applyCells(doc: ReadonlyDocument, world: WorldState): ReadonlyDocument {
+    if (world.cells.size === 0) return doc;
+    let nodes: Map<string, Node> | null = null;
+    for (const [key, tile] of world.cells) {
+        const sep = key.indexOf("\u0000");
+        const nodeId = key.slice(0, sep);
+        const rest = key.slice(sep + 1).split("\u0000");
+        const col = Number(rest[0]), row = Number(rest[1]);
+        const node = (nodes ?? doc.nodes).get(nodeId) as Node | undefined;
+        const map = node?.tilemap as ReadonlyTilemap | undefined;
+        if (!node || !map) continue;
+        const i = row * map.cols + col;
+        if (i < 0 || i >= map.tiles.length || map.tiles[i] === tile) continue;
+        if (!nodes) nodes = new Map(doc.nodes as ReadonlyMap<string, Node>);
+        const tiles = [...map.tiles];
+        tiles[i] = tile;
+        nodes.set(nodeId, { ...node, tilemap: { ...map, tiles } } as Node);
+    }
+    if (!nodes) return doc;
+    return { ...(doc as ProjectDocument), nodes } as ReadonlyDocument;
+}
+
 export function applyFacing(doc: ReadonlyDocument, world: WorldState): ReadonlyDocument {
     let nodes: Map<string, Node> | null = null;
     for (const [id, body] of world.bodies) {

@@ -1633,6 +1633,49 @@ the same thing.
 
 3 tests, 2 mutants, 2/2 killed.
 
+**Slice 24 — A CELL BECOMES SOMETHING: the fourth command verb, and the first that names no body.**
+Slice 23 made the block bump reportable and deliberately stopped there. This is the half that acts:
+a `?` that stays a `?` after you hit it was the whole of what remained.
+
+**DESPAWN, SETVELOCITY AND ENDRUN ARE ALL ABOUT THINGS THAT MOVE.** A level made of tiles has ten
+thousand cells and one node, and nothing in the command channel could touch one of them —
+`applyCommands` looked up `c.bodyId` before doing anything, so a command naming no body was dropped
+before it was read. `setCell` is handled ahead of that lookup, which is the one structural change.
+
+**IT DOES NOT EDIT THE DOCUMENT**, exactly as despawn does not delete a node. `WorldState.cells`
+holds the run's overrides keyed `nodeId NUL col NUL row` — the same shape and the same NUL reasoning
+as `despawned` and `overlaps` — and `applyCells` stamps them onto a derived copy beside the moved
+bodies. Stop throws them away and the level is whole; a run leaves nothing on the undo stack.
+
+**THE TILE SAYS WHAT IT BECOMES.** A `?` block declares `vde.bumpsTo` on its TILESET entry and the
+rule reads it, so no index is hard-coded in `Rules`, a level may use any sheet, and a brick that
+declares nothing simply does not change. `TilesetTile.userData` was already how a tile declares its
+`bodyType`, so this adds a WORD to a vocabulary rather than a channel.
+
+**`Number("")` IS 0 AND FINITE, and 0 IS A REAL TILE INDEX** — so an empty declaration would silently
+turn a bumped block into whatever tile zero happens to be. The third time this project has paid for
+that constant (after `frictionOf` and `speedOf`), and the first time it was checked before shipping
+rather than after. CE2 is the mutant; a declared `0` still goes through, which is the other half.
+
+**TWO MUTANTS SURVIVED FIRST TIME, AND BOTH WERE BLIND FIXTURES rather than missing rules.** CE1:
+nothing asserted that an override matching the tile already there returns the SAME reference, so
+rebuilding a thousands-entry tile array on every frame of a run was invisible — the picture stays
+perfectly correct while doing it, which is why the assertion has to be on identity. CE3: every
+fixture bumped exactly ONE cell, and starting a fresh map per command loses only the EARLIER ones.
+Two cells is the smallest number that can tell the difference.
+
+**WHAT THIS STILL CANNOT DO, and it is the honest remaining half of "acting on events": put a coin
+above the block.** That needs a way to bring a thing into EXISTENCE, and all four verbs act on things
+that are already there. Spawning wants its own design — an id to mint, a lifetime, and a decision
+about what a spawned node belongs to — and inventing it inside a collision resolver is how a physics
+loop becomes a game.
+
+**AND A LITERAL NUL BYTE REACHED THE SOURCE AGAIN**, at `World.ts:478` — a `\\0` in a heredoc that
+python resolved to the byte rather than the escape. `check-module-headers` caught it, which is what
+it was written for after the last time; nothing else notices, because it compiles, bundles and runs.
+
+6 tests, 3 mutants, 3/3 killed.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

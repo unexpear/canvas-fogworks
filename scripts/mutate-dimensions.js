@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1968;
+const EXPECTED_TESTS = 1974;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1727,6 +1727,20 @@ const MUTANTS = [
       from: "            if (vy > 0) { y = s.y - h; onGround = true; groundFriction = s.friction; }",
       to: "            if (vy < 0) { y = s.y - h; onGround = true; groundFriction = s.friction; }",
       note: "LANDING and HEAD-HITTING swap, so standing on a tile floor bumps sixty times a second while hitting a block from below sets onGround — the event this slice adds becomes noise and the ground becomes a ceiling" },
+
+    // A CELL BECOMES SOMETHING (M18) — the fourth command verb, and the first that names no body.
+    { id: "CE1", file: "src/core/runtime/World.ts",
+      from: "        if (i < 0 || i >= map.tiles.length || map.tiles[i] === tile) continue;",
+      to: "        if (i < 0 || i >= map.tiles.length) continue;",
+      note: "a cell already showing the wanted tile is copied ANYWAY, so every frame of every run rebuilds a thousands-entry tile array for a change that already happened — the picture stays correct, which is why only a reference check can see it" },
+    { id: "CE2", file: "src/core/runtime/Rules.ts",
+      from: "        if (becomes.trim() === \"\" || !Number.isFinite(index)) continue;",
+      to: "        if (!Number.isFinite(index)) continue;",
+      note: "an EMPTY `vde.bumpsTo` becomes tile ZERO, because `Number(\"\")` is 0 and finite — the trap this project has already paid for in frictionOf and in speedOf, now turning a bumped block into whatever tile 0 happens to be" },
+    { id: "CE3", file: "src/core/runtime/World.ts",
+      from: "            if (!cells) cells = new Map(world.cells);",
+      to: "            cells = new Map();",
+      note: "each setCell starts a FRESH map, so a run keeps only the last cell it changed and every block bumped before this one silently reverts — invisible to any fixture that bumps exactly one" },
 ];
 
 function runSuite() {

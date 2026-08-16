@@ -30,9 +30,11 @@
  */
 import { ReadonlyDocument } from "../document/Document";
 import {
-    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed
+    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed, propertyOf
 } from "./World";
-import { partOf } from "./Parts";
+import { partOf, PART_PREFIX } from "./Parts";
+import { findTileset, tilesetTile } from "../document/Tileset";
+import { tileAt } from "../document/Tilemap";
 
 /** What the rules need that the world does not carry: which body the player drives. */
 export interface RuleContext {
@@ -106,6 +108,34 @@ export function marioRules(
             out.push({ kind: "endRun", outcome: "lost" });
             return out;                          // nothing that happened this step outlives the fall
         }
+    }
+
+    // ── BUMPING A BLOCK ──────────────────────────────────────────────────────────────────────────
+    // THE TILE SAYS WHAT IT BECOMES, which is the parts vocabulary applied one level down. A `?`
+    // block declares `vde.bumpsTo` on its TILESET entry and the rule reads it — so no index is
+    // hard-coded here, a level can use any sheet, and a brick that declares nothing simply does not
+    // change. `TilesetTile.userData` is already how a tile declares its bodyType, so this adds a
+    // word to a vocabulary rather than a channel.
+    //
+    // WHAT THIS STILL CANNOT DO: put a coin above the block. That needs a way to bring a thing into
+    // EXISTENCE, which `applyCommands` has no verb for — despawn, setVelocity, endRun and setCell
+    // all act on things that are already there. Spawning wants its own design and is the honest
+    // remaining half of "acting on events".
+    for (const e of world.events) {
+        if (e.kind !== "bump" || e.bodyId !== me || e.cell === undefined) continue;
+        const node = doc.nodes.get(e.nodeId);
+        const map = node?.tilemap;
+        if (!map) continue;
+        const set = findTileset(doc.tilesets, map.tilesetId);
+        const tile = set ? tilesetTile(set, tileAt(map, e.cell.col, e.cell.row)) : null;
+        const becomes = tile ? propertyOf(tile.userData, PART_PREFIX + "bumpsTo") : null;
+        if (becomes === null) continue;
+        const index = Number(becomes.trim());
+        // `Number("")` IS 0 AND FINITE, and 0 is a real tile index — so an empty declaration would
+        // silently turn a bumped block into tile zero. The trap this project has already paid for
+        // twice, checked rather than remembered.
+        if (becomes.trim() === "" || !Number.isFinite(index)) continue;
+        out.push({ kind: "setCell", nodeId: e.nodeId, col: e.cell.col, row: e.cell.row, tile: index });
     }
 
     let bounced = false;

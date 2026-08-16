@@ -139,7 +139,7 @@ import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
 import { naturalSize, surfaceUrl, imageSizeAsync } from "../../src/renderer/ImageCache";
-import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds } from "../core/runtime/World";
+import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds, applyCells } from "../core/runtime/World";
 import { marioRules } from "../core/runtime/Rules";
 import { applyPose } from "../core/runtime/Parts";
 import { followCamera } from "../core/runtime/Camera";
@@ -1455,7 +1455,11 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 // the stamp and the mirror, and the last of them that changes what is DRAWN without
                 // changing what is THERE — `sourceRect` reaches no geometry, so no bounds, no
                 // camera clamp and no death plane can move because a character took a step.
-                played = applyPose(applyFacing(applyWorld(timed, world), world), world);
+                // …and the CELLS this run has changed, stamped like the bodies are (M18). A bumped
+                // block is the level looking different for the length of a run, so it belongs on the
+                // derived copy beside the moved bodies rather than in the file.
+                played = applyCells(
+                    applyPose(applyFacing(applyWorld(timed, world), world), world), world);
             }
             const stored = applyParallax(played as ProjectDocument, es.viewport) as ReadonlyDocument;
             const doc: ReadonlyDocument = !es.playing

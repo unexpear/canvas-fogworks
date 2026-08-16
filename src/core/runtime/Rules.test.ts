@@ -6,6 +6,9 @@ import {
     worldFrom, stepWorld, applyWorld, applyCommands, movedIds, WorldState
 } from "./World";
 import { marioRules } from "./Rules";
+import { applyCells, cellKey } from "./World";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 
 /**
  * Every number is hand-computed. A bounce launches at `jumpLaunchSpeed(900)`, which is the speed
@@ -284,5 +287,127 @@ describe("the stomp, end to end", () => {
         expect(fresh.despawned.size).toBe(0);
         expect(applyWorld(doc, fresh).nodes.has("enemy")).toBe(true);
         expect(resolveScene(doc).nodes.has("enemy")).toBe(true);
+    });
+});
+
+describe("setCell — a bumped block BECOMES something, without editing the level", () => {
+    const CELL = 16;
+    /** A one-cell ceiling of tile 1, a floor, and a hero under it. Tile 1 declares what it becomes. */
+    const room = (bumpsTo?: string) => {
+        const doc = createEmptyDocument();
+        doc.tilesets = [{
+            id: "ts", name: "T", src: "t.png", offsetX: 0, offsetY: 0,
+            sheet: { columns: 4, tileWidth: CELL, tileHeight: CELL, spacing: 0, margin: 0 },
+            tiles: [{ id: 1, userData: {
+                bodyType: prop("static"),
+                ...(bumpsTo !== undefined ? { "vde.bumpsTo": prop(bumpsTo) } : {})
+            } }]
+        }] as unknown as ProjectDocument["tilesets"];
+        doc.nodes.set("blocks", {
+            id: "blocks", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 32, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            tilemap: { cols: 2, rows: 1, tileWidth: CELL, tileHeight: CELL, tilesetId: "ts",
+                       tiles: [1, 0] }
+        } as unknown as Node);
+        doc.nodes.set("floor", {
+            id: "floor", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: -100, y: 100, width: 400, height: 20 },
+            style: { fill: "#888888", opacity: 1 }, layout: {},
+            userData: { bodyType: prop("static") }
+        } as Node);
+        doc.nodes.set("hero", {
+            id: "hero", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 2, y: 88, width: 12, height: 12 },
+            style: { fill: "#888888", opacity: 1 }, layout: {},
+            userData: { bodyType: prop("dynamic") }
+        } as Node);
+        doc.rootNodeUuids.push("blocks", "floor", "hero");
+        return doc;
+    };
+    /** Launch the hero into the ceiling and run the rules, exactly as the app does. */
+    const bumpIt = (doc: ProjectDocument) => {
+        const w0 = worldFrom(doc);
+        let w: WorldState = { ...w0,
+            bodies: new Map(w0.bodies).set("hero", { ...w0.bodies.get("hero")!, y: 30, vy: -300 }) };
+        for (let i = 0; i < 12; i++) {
+            w = stepWorld(doc, w, { controlled: "hero" });
+            w = applyCommands(w, marioRules(doc, w, { controlled: "hero" }));
+        }
+        return w;
+    };
+
+    it("THE TILE SAYS WHAT IT BECOMES, so no index is hard-coded in the rule", () => {
+        const w = bumpIt(room("2"));
+        expect(w.cells.get(cellKey("blocks", 0, 0))).toBe(2);
+        // …and the STORED level is untouched, which is what makes Stop restore it.
+        expect(room("2").nodes.get("blocks")!.tilemap!.tiles[0]).toBe(1);
+    });
+
+    it("a tile that declares NOTHING does not change — a brick is not a question block", () => {
+        expect(bumpIt(room()).cells.size).toBe(0);
+        // `Number("")` IS 0 AND FINITE, and 0 is a real tile index, so an empty declaration would
+        // silently turn a bumped block into tile zero. The trap this project has paid for twice.
+        expect(bumpIt(room("")).cells.size).toBe(0);
+        expect(bumpIt(room("   ")).cells.size).toBe(0);
+        expect(bumpIt(room("nonsense")).cells.size).toBe(0);
+        // …but a declared ZERO is a real answer and must go through.
+        expect(bumpIt(room("0")).cells.get(cellKey("blocks", 0, 0))).toBe(0);
+    });
+
+    it("STAMPS ONTO A COPY, and returns the same reference when nothing changed", () => {
+        const doc = room("2");
+        const w = bumpIt(doc);
+        const played = applyCells(doc, w);
+        expect(played.nodes.get("blocks")!.tilemap!.tiles[0]).toBe(2);
+        // THE STORED DOCUMENT IS UNTOUCHED — the whole bargain, and the reason a run leaves nothing
+        // on the undo stack.
+        expect(doc.nodes.get("blocks")!.tilemap!.tiles[0]).toBe(1);
+        // …and the neighbouring cell is carried through rather than lost to the rebuild.
+        expect(played.nodes.get("blocks")!.tilemap!.tiles[1]).toBe(0);
+        // A run that bumped nothing pays nothing: same reference, no copied tile array.
+        expect(applyCells(doc, worldFrom(doc))).toBe(doc);
+        // …AND NEITHER DOES A CELL ALREADY SHOWING THE WANTED TILE. A mutant survived here: without
+        // the equality check the array is rebuilt on every frame of the whole run for a change that
+        // already happened, and the picture stays perfectly correct while doing it. Only a
+        // REFERENCE check can see that, which is why this asserts identity and not contents.
+        const already: WorldState = { ...worldFrom(doc), cells: new Map([[cellKey("blocks", 0, 0), 1]]) };
+        expect(applyCells(doc, already)).toBe(doc);
+    });
+
+    it("KEEPS EVERY CELL, not just the last one bumped", () => {
+        // A mutant survived a fixture that bumped exactly one block: starting a fresh map per
+        // command loses every earlier change, and with one change there is nothing to lose. Two
+        // cells is the smallest number that can tell the difference.
+        const doc = room("2");
+        const w = applyCommands(worldFrom(doc), [
+            { kind: "setCell", nodeId: "blocks", col: 0, row: 0, tile: 2 },
+            { kind: "setCell", nodeId: "blocks", col: 1, row: 0, tile: 3 }
+        ]);
+        expect(w.cells.size).toBe(2);
+        expect(w.cells.get(cellKey("blocks", 0, 0))).toBe(2);
+        expect(w.cells.get(cellKey("blocks", 1, 0))).toBe(3);
+        // …and across SEPARATE calls too, which is how a real run arrives at them: one per step.
+        const later = applyCommands(w, [{ kind: "setCell", nodeId: "blocks", col: 0, row: 0, tile: 9 }]);
+        expect(later.cells.size).toBe(2);
+        expect(later.cells.get(cellKey("blocks", 0, 0))).toBe(9);   // last write wins for one cell
+        expect(later.cells.get(cellKey("blocks", 1, 0))).toBe(3);   // …and the other survives
+        // Both reach the derived document, which is the point of keeping them.
+        const played = applyCells(doc, later);
+        expect(played.nodes.get("blocks")!.tilemap!.tiles).toEqual([9, 3]);
+    });
+
+    it("an override naming a cell that is GONE is inert, not a crash", () => {
+        // The dangling-reference rule this schema follows everywhere. A level edited or resized
+        // mid-run must not take the run down.
+        const doc = room("2");
+        const w: WorldState = { ...worldFrom(doc),
+            cells: new Map([[cellKey("blocks", 99, 99), 3], [cellKey("ghost", 0, 0), 3]]) };
+        expect(applyCells(doc, w)).toBe(doc);
+    });
+
+    it("and the APP stamps them — a derivation nothing calls is not a feature", () => {
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/applyCells\(/);
     });
 });
