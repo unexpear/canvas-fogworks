@@ -141,6 +141,7 @@ import { generateUUID } from "../core/ids/UUID";
 import { naturalSize, surfaceUrl, imageSizeAsync } from "../../src/renderer/ImageCache";
 import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds } from "../core/runtime/World";
 import { marioRules } from "../core/runtime/Rules";
+import { applyPose } from "../core/runtime/Parts";
 import { followCamera } from "../core/runtime/Camera";
 import { SourceRect } from "../core/document/Node";
 import { Action } from "../core/actions/Action";
@@ -1450,7 +1451,11 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 // …and the bodies reach the scene the way the PLAYHEAD does: stamped onto a copy.
                 // …and then MIRRORED to face the way it is going. A sibling of applyWorld rather
                 // than part of it: this changes no box, so nothing derived from bounds can shift.
-                played = applyFacing(applyWorld(timed, world), world);
+                // …and POSED at the frame its distance has reached (M18). A third sibling, after
+                // the stamp and the mirror, and the last of them that changes what is DRAWN without
+                // changing what is THERE — `sourceRect` reaches no geometry, so no bounds, no
+                // camera clamp and no death plane can move because a character took a step.
+                played = applyPose(applyFacing(applyWorld(timed, world), world), world);
             }
             const stored = applyParallax(played as ProjectDocument, es.viewport) as ReadonlyDocument;
             const doc: ReadonlyDocument = !es.playing

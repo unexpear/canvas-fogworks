@@ -1556,6 +1556,51 @@ horizontally, and the playthrough is byte-identical to every run before the scen
 
 4 tests, 2 mutants, 6/6 killed across the parallax and scenery families.
 
+**Slice 22 — THE WALK CYCLE, and the animation gap's runtime half is closed.** Slice 15 did facing
+and stopped, because a design review had recorded four blockers between here and selecting a frame
+from a velocity. Re-measured against the tree first, and **two of them had dissolved**:
+
+- **`applyFrame`'s gate — resolved at schema 69.** `doc.frame` is a DEFAULT, not a gate.
+- **A pose feeding back into policy through `contentBounds` and the death plane — DOES NOT APPLY.**
+  Measured rather than assumed: `sourceRect` appears NOWHERE in `core/geometry` or `core/runtime` —
+  only the render model, the image cache and the Tiled exporter read it. So a frame change cannot
+  shift a node's AABB, which means it cannot move the camera's clamp or the death plane. The same
+  escape hatch facing used: change what is DRAWN without changing what is THERE.
+- **`clipFrameAt`'s elapsed semantics and `importTrack` replacing a whole track — AVOIDED, not
+  solved.** Both are real and both only bite on the CLIP PLAYER's path. Nothing here has a clock.
+- **Per FRAME versus per STEP — the one that was real**, and solved the way facing was: it lives on
+  the `Body` and is updated inside `stepWorld`, which is per-step by construction.
+
+**DISTANCE, NOT A CLOCK, and that is the era's own answer.** `Body.travelled` accumulates while a
+body is ON THE GROUND, and the frame is `floor(travelled / stride) % frames`. The original's walk
+animation advances as the character covers ground — it visibly speeds up as you do, stops dead when
+you stop, and has no playback rate that can drift out of sync with the physics. A clock would have
+needed one, plus the two clip-player blockers, to arrive somewhere worse.
+
+**GROUND ONLY, so a jump holds one pose** rather than flickering through the cycle mid-air. WK1 is
+that mutant, and the position is identical either way — only a fixture watching the POSE while
+airborne can see it.
+
+**FLOOR, NOT ROUND.** Rounding gives the first and last frames of every cycle half a stride and the
+others a whole one, which is a limp rather than a walk. WK2, and invisible to a fixture that samples
+only whole strides.
+
+**THE DECLARATION ADDS NO COORDINATES.** `vde.walk: "4"` says the next three frames sit beside the
+`sourceRect` the node already carries, one width apart — which is how every sheet in `freeassets` is
+cut, and it means the artist positions frame one by eye in the inspector as they already do.
+`vde.walkStride` defaults to the node's own WIDTH, the one default that needs no number invented.
+Fewer than two frames is not a cycle: one is the pose the node has, and zero or negative would index
+backwards off the sheet (WK3). A sheet laid out vertically or ragged is NOT expressible, stated
+rather than guessed — 57% of Kenney's 421 atlases are irregularly packed and none of them are walks.
+
+**AND THERE IS NO `posedIds`, deliberately.** `facedIds` exists because a mirror is a TRANSFORM,
+which the incremental geometry path reuses and would otherwise keep stale. A `sourceRect` is rebuilt
+into the display list every frame from the document, so there is no reused entry to go stale — the
+same measurement that killed blocker two answers this too.
+
+8 tests, 3 mutants, 3/3 killed. `clipFrameAt` still has zero production callers, which is now a
+statement about a path not taken rather than an unreachable feature.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

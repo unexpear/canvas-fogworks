@@ -1,10 +1,21 @@
 import { createEmptyDocument, ProjectDocument } from "../document/Document";
 import { Node, UserData } from "../document/Node";
 import { worldFrom, stepWorld, applyCommands, applyFacing, facedIds, MOVE_SPEED, FIXED_STEP } from "./World";
-import { partOf, hasParts, INERT, PART_PREFIX } from "./Parts";
+import { partOf, hasParts, INERT, PART_PREFIX, walkOf, applyPose } from "./Parts";
+import { WorldState, NO_INPUT } from "./World";
+import { computeGeometry, contentBounds } from "../geometry/GeometryEngine";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import { marioRules } from "./Rules";
 
 const prop = (v: string) => ({ type: "string", value: v });
+
+/** Run `n` steps with no input — settling a body onto the floor before a fixture measures it. */
+const steps = (doc: ProjectDocument, w: WorldState, n: number): WorldState => {
+    let out = w;
+    for (let i = 0; i < n; i++) out = stepWorld(doc, out);
+    return out;
+};
 const node = (userData?: UserData) => ({ userData });
 
 function docWith(nodes: { id: string; x: number; y: number; w?: number; h?: number;
@@ -361,5 +372,125 @@ describe("facing — a character looks the way it is going", () => {
         const doc = pen("60");
         const w = step(doc, 3);
         expect(applyFacing(doc, w)).toBe(doc);
+    });
+});
+
+describe("A WALK CYCLE, driven by DISTANCE — the runtime half of the animation gap", () => {
+    const sheet = (extra: Record<string, unknown> = {}) => {
+        const doc = docWith([
+            { id: "floor", x: -500, y: 100, w: 2000, h: 20, userData: { bodyType: prop("static") } },
+            { id: "hero", x: 0, y: 80, w: 20, h: 20, userData: {
+                bodyType: prop("dynamic"), "vde.walk": prop("4"), ...(extra as UserData) } }
+        ]);
+        (doc.nodes.get("hero") as Node).sourceRect = { x: 100, y: 0, width: 20, height: 20 };
+        return doc;
+    };
+    const frameX = (doc: ProjectDocument, w: WorldState) =>
+        (applyPose(doc, w).nodes.get("hero") as Node).sourceRect!.x;
+    /** Hand a body a distance directly: this is about POSING, not about how it got there. */
+    const at = (doc: ProjectDocument, travelled: number): WorldState => {
+        const w = worldFrom(doc);
+        return { ...w, bodies: new Map(w.bodies).set("hero", { ...w.bodies.get("hero")!, travelled }) };
+    };
+
+    it("reads the declaration, and refuses one that is not a cycle", () => {
+        const node = (v: string) => ({ userData: { "vde.walk": prop(v) } });
+        expect(walkOf(node("4")).frames).toBe(4);
+        expect(walkOf(node("4.7")).frames).toBe(4);            // floored, not rounded up
+        // FEWER THAN TWO IS NOT A CYCLE. One frame is the pose the node already has; zero and
+        // negative are declarations nobody meant, and all three must read as "does not walk"
+        // rather than as a cycle that divides by zero or indexes backwards.
+        for (const bad of ["1", "0", "-3", "", "   ", "lots"]) {
+            expect(walkOf(node(bad)).frames).toBeNull();
+        }
+        expect(walkOf({}).frames).toBeNull();
+        // `Number("")` IS 0 AND FINITE — the trap already paid for in `frictionOf`, which is why
+        // the empty case above is asserted rather than assumed.
+        expect(Number("")).toBe(0);
+    });
+
+    it("advances ONE FRAME PER STRIDE and WRAPS, and the stride defaults to the body's width", () => {
+        const doc = sheet();
+        // No declaration, so the stride is the node's own width: 20px per frame, 4 frames.
+        expect(frameX(doc, at(doc, 0))).toBe(100);            // frame 0 is the authored pose
+        expect(frameX(doc, at(doc, 19.99))).toBe(100);        // …and it LASTS a whole stride
+        expect(frameX(doc, at(doc, 20))).toBe(120);
+        expect(frameX(doc, at(doc, 41))).toBe(140);
+        expect(frameX(doc, at(doc, 61))).toBe(160);
+        expect(frameX(doc, at(doc, 80))).toBe(100);           // wrapped, back to frame 0
+        // …and it keeps wrapping for ever: 1000/20 = 50 strides, 50 % 4 = frame 2.
+        expect(frameX(doc, at(doc, 1000))).toBe(140);
+    });
+
+    it("uses a DECLARED stride when there is one", () => {
+        const doc = sheet({ "vde.walkStride": prop("5") });
+        expect(frameX(doc, at(doc, 4))).toBe(100);
+        expect(frameX(doc, at(doc, 5))).toBe(120);
+        expect(frameX(doc, at(doc, 15))).toBe(160);
+        expect(frameX(doc, at(doc, 20))).toBe(100);
+    });
+
+    it("POSES NOTHING it was not asked to, and returns the SAME document reference", () => {
+        // A node that declares no walk, and a node with no sourceRect to step through, must both
+        // come back untouched — and the document itself must be the same object, because this runs
+        // on every frame of every run and a new Map per frame is a cost with no cause.
+        const plain = docWith([{ id: "hero", x: 0, y: 0, userData: { bodyType: prop("dynamic") } }]);
+        const w = worldFrom(plain);
+        expect(applyPose(plain, w)).toBe(plain);
+        const doc = sheet();
+        expect(applyPose(doc, at(doc, 0))).toBe(doc);         // frame 0 changes nothing
+        expect(applyPose(doc, at(doc, 25))).not.toBe(doc);    // …and frame 1 does
+    });
+
+    it("CANNOT MOVE ANYTHING — the blocker that stopped this slice for two rounds", () => {
+        // `sourceRect` reaches no geometry (measured: it appears nowhere in core/geometry or
+        // core/runtime), so a frame change cannot shift the node's box — which means it cannot move
+        // contentBounds, the camera's clamp, or the death plane. That is what makes posing safe
+        // where a pose that resized a node would not be.
+        const doc = sheet();
+        const before = contentBounds(computeGeometry(doc));
+        const posed = applyPose(doc, at(doc, 61));
+        expect((posed.nodes.get("hero") as Node).sourceRect!.x).toBe(160);   // it really did pose
+        expect(contentBounds(computeGeometry(posed))).toEqual(before);
+        expect((posed.nodes.get("hero") as Node).geometry).toEqual((doc.nodes.get("hero") as Node).geometry);
+    });
+
+    it("winds on with DISTANCE, per STEP, and stops dead when the body does", () => {
+        const doc = sheet();
+        const RIGHT = { left: false, right: true, jump: false };
+        let w = steps(doc, worldFrom(doc), 5);                // settle onto the floor
+        expect(w.bodies.get("hero")!.travelled).toBe(0);
+        for (let i = 0; i < 60; i++) w = stepWorld(doc, w, { input: RIGHT, controlled: "hero" });
+        const walked = w.bodies.get("hero")!.travelled;
+        expect(walked).toBeGreaterThan(0);
+        // …and it only ever increases, so the cycle never runs backwards.
+        expect(stepWorld(doc, w, { input: RIGHT, controlled: "hero" }).bodies.get("hero")!.travelled)
+            .toBeGreaterThan(walked);
+        // STANDING STILL WINDS NOTHING. Friction brings it to rest, and from there the distance is
+        // frozen — a character jogging on the spot is the tell that this read a wanted velocity
+        // rather than a settled one.
+        let rest = w;
+        for (let i = 0; i < 120; i++) rest = stepWorld(doc, rest, { input: NO_INPUT, controlled: "hero" });
+        expect(rest.bodies.get("hero")!.vx).toBe(0);
+        const frozen = rest.bodies.get("hero")!.travelled;
+        expect(stepWorld(doc, rest, { controlled: "hero" }).bodies.get("hero")!.travelled).toBe(frozen);
+    });
+
+    it("does not wind in the AIR, so a jump holds one pose", () => {
+        const doc = sheet();
+        let w = steps(doc, worldFrom(doc), 5);
+        w = stepWorld(doc, w, { input: { left: false, right: true, jump: true }, controlled: "hero" });
+        expect(w.bodies.get("hero")!.onGround).toBe(false);
+        const air = w.bodies.get("hero")!.travelled;
+        for (let i = 0; i < 10; i++) {
+            w = stepWorld(doc, w, { input: { left: false, right: true, jump: true }, controlled: "hero" });
+        }
+        expect(w.bodies.get("hero")!.onGround).toBe(false);
+        expect(w.bodies.get("hero")!.travelled).toBe(air);
+    });
+
+    it("and the APP poses — a derivation nothing calls is not a feature", () => {
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/applyPose\(applyFacing\(applyWorld\(timed, world\), world\), world\)/);
     });
 });

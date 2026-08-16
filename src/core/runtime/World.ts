@@ -397,6 +397,21 @@ export interface Body {
      * the body means it is updated exactly as often as the physics is, and never more.
      */
     facing: 1 | -1;
+    /**
+     * How far this body has WALKED, in pixels, only ever increasing.
+     *
+     * A FACT ABOUT MOTION, like `facing`, and here for the same two reasons. It is per STEP by
+     * construction — a frame may spend zero to five steps, so anything accumulated once per FRAME
+     * gives a different animation on a different monitor, which is the defect already measured at
+     * 14.25px when rules were sampled per frame. And a walk cycle driven by DISTANCE rather than by
+     * a clock is what the era does: the original's animation advances as the character covers
+     * ground, so it visibly speeds up as you do and stops dead when you stop, with no separate
+     * playback rate to keep in sync with the physics.
+     *
+     * GROUND ONLY. A body in mid-air is not taking steps, so a jump does not wind the cycle on —
+     * which is also what keeps a single jump-frame pose stable for the whole arc.
+     */
+    travelled: number;
 }
 
 /** The run's whole mutable state. Keyed by STORED node id, never serialized. */
@@ -675,7 +690,8 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
         if (!at) continue;                        // refused, and `runtimeExclusions` says why
         bodies.set(node.id, {
             x: node.geometry.x + at.dx, y: node.geometry.y + at.dy,
-            vx: 0, vy: 0, onGround: false, groundFriction: 1, blockedX: false, facing: 1
+            vx: 0, vy: 0, onGround: false, groundFriction: 1, blockedX: false, facing: 1,
+            travelled: 0
         });
     }
     return { bodies, time: 0, contacts: new Set(), despawned: new Set(), outcome: "running", jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
@@ -1088,7 +1104,11 @@ export function stepWorld(
         // FACING KEEPS ITS LAST NON-ZERO DIRECTION. Read from the SETTLED vx, so a body stopped by
         // a wall goes on facing the wall it walked into rather than flipping the instant it stops.
         const facing: 1 | -1 = vx > 0 ? 1 : vx < 0 ? -1 : was.facing;
-        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX, facing });
+        // DISTANCE WALKED, from the SETTLED velocity so a body held against a wall stops winding
+        // its cycle on — a character jogging on the spot against a wall is the tell that this read
+        // the velocity it wanted rather than the one it got.
+        const travelled = was.travelled + (onGround ? Math.abs(vx) * FIXED_STEP : 0);
+        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX, facing, travelled });
     }
 
     // OVERLAPS ARE COMPUTED AFTER EVERYTHING HAS MOVED, once, on the settled positions — asking

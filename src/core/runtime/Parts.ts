@@ -43,8 +43,9 @@
  * no score, no doors, no spawners. The level's loudest gap is that a run cannot be lost or ended —
  * and that is not a part's declaration, it is a run lifecycle, which wants its own design.
  */
-import { UserData } from "../document/Node";
-import { propertyOf } from "./World";
+import { Node, UserData } from "../document/Node";
+import { ReadonlyDocument, ProjectDocument } from "../document/Document";
+import { propertyOf, WorldState } from "./World";
 
 /** The prefix that marks a property as VDE's own vocabulary rather than an imported file's. */
 export const PART_PREFIX = "vde.";
@@ -127,4 +128,79 @@ function speedOf(raw: string | null): number | null {
     if (!Number.isFinite(n)) return null;
     // A NEGATIVE SPEED IS A DIRECTION, not an error: it starts the part walking left.
     return n;
+}
+
+/**
+ * A WALK CYCLE, declared: how many frames it has and how far the part walks per frame.
+ *
+ * FRAMES LIE TO THE RIGHT OF THE POSE THE NODE ALREADY CARRIES. A node's `sourceRect` is where its
+ * first frame is; `vde.walk: "4"` says the next three sit beside it, one `sourceRect.width` apart.
+ * That is how every sprite sheet in `freeassets` is cut and it means the declaration adds no
+ * coordinates — the artist positions frame one by eye in the inspector, as they already do, and the
+ * rest follow. A sheet laid out vertically or ragged is NOT expressible, which is stated rather
+ * than guessed at: 57% of Kenney's 421 atlases are irregularly packed and none of them are walks.
+ *
+ * `vde.walkStride` IS THE DISTANCE PER FRAME, defaulting to the node's own width. A character
+ * whose cycle advances once per body-width covers ground at a believable rate whatever its size,
+ * which is the only default that does not need a number invented for it.
+ */
+export interface Walk {
+    /** How many frames, counting the authored one. Null means the part does not walk. */
+    frames: number | null;
+    /** Pixels of travel per frame, or null to mean "the node's own width". */
+    stride: number | null;
+}
+
+export const INERT_WALK: Walk = { frames: null, stride: null };
+
+export function walkOf(node: { userData?: UserData }): Walk {
+    const frames = speedOf(propertyOf(node.userData, PART_PREFIX + "walk"));
+    // FEWER THAN TWO FRAMES IS NOT A CYCLE. One frame is the pose the node already has, and zero or
+    // a negative count is a declaration nobody meant — all three read as "does not walk" rather
+    // than as a cycle that divides by zero or indexes backwards.
+    return {
+        frames: frames !== null && Number.isFinite(frames) && frames >= 2 ? Math.floor(frames) : null,
+        stride: speedOf(propertyOf(node.userData, PART_PREFIX + "walkStride"))
+    };
+}
+
+/**
+ * The document with every walking body posed at the frame its DISTANCE has reached.
+ *
+ * A SIBLING OF `applyFacing`, and chosen over the clip player for the reasons the design review
+ * recorded. `clipFrameAt` counts elapsed from the CLIP's start rather than the run's, and
+ * `importTrack` replaces a whole track so a node holds one clip spanning an entire sheet — both are
+ * real, both were blockers, and both are simply not on this path. Nothing here has a clock.
+ *
+ * IT CANNOT MOVE ANYTHING, checked rather than assumed: `sourceRect` appears nowhere in
+ * `core/geometry` or `core/runtime` — only the render model, the image cache and the Tiled exporter
+ * read it. So a frame change cannot shift the node's AABB, which means it cannot move
+ * `contentBounds`, the camera's clamp, or the death plane. That was the fourth recorded blocker and
+ * it is the same escape hatch facing used: change what is DRAWN without changing what is THERE.
+ *
+ * AND THAT IS ALSO WHY THERE IS NO `posedIds`. `facedIds` exists because a mirror is a TRANSFORM,
+ * which geometry reuses and would otherwise keep stale; a `sourceRect` is rebuilt into the display
+ * list every frame from the document, so there is no reused entry to go stale.
+ */
+export function applyPose(doc: ReadonlyDocument, world: WorldState): ReadonlyDocument {
+    let nodes: Map<string, Node> | null = null;
+    for (const [id, body] of world.bodies) {
+        const node = doc.nodes.get(id);
+        if (!node || !node.sourceRect) continue;
+        const walk = walkOf(node);
+        if (walk.frames === null) continue;
+        const rect = node.sourceRect;
+        const stride = walk.stride !== null && walk.stride > 0 ? walk.stride
+            : (node.geometry.width > 0 ? node.geometry.width : rect.width);
+        if (!(stride > 0)) continue;
+        // FLOOR, NOT ROUND: a frame must last a whole stride rather than half of one at each end,
+        // or the first and last frames of the cycle show for half as long as the others.
+        const step = Math.floor(body.travelled / stride) % walk.frames;
+        const want = rect.x + step * rect.width;
+        if (want === rect.x) continue;               // frame 0 is what the node already carries
+        if (!nodes) nodes = new Map(doc.nodes as ReadonlyMap<string, Node>);
+        nodes.set(id, { ...(node as Node), sourceRect: { ...rect, x: want } } as Node);
+    }
+    if (!nodes) return doc;
+    return { ...(doc as ProjectDocument), nodes } as ReadonlyDocument;
 }

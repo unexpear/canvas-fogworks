@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1957;
+const EXPECTED_TESTS = 1965;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1701,6 +1701,21 @@ const MUTANTS = [
       from: "    return depthOf(node) !== 0 || depthYOf(node) !== 0;",
       to: "    return depthOf(node) !== 0;",
       note: "a node layered ONLY vertically reads as unlayered, so it is left out of the dirty set that keeps parallax fresh AND left solid to a runtime that must not collide with anything the camera can move" },
+
+    // THE WALK CYCLE (M18) — the runtime half of the animation gap, driven by DISTANCE rather than
+    // by a clock, which is what the era does and what avoids the clip player's two blockers.
+    { id: "WK1", file: "src/core/runtime/World.ts",
+      from: "        const travelled = was.travelled + (onGround ? Math.abs(vx) * FIXED_STEP : 0);",
+      to: "        const travelled = was.travelled + Math.abs(vx) * FIXED_STEP;",
+      note: "distance winds on IN THE AIR too, so a jump flickers through the walk cycle instead of holding one pose — the position is identical either way, so only a fixture that watches the POSE mid-jump can see it" },
+    { id: "WK2", file: "src/core/runtime/Parts.ts",
+      from: "        const step = Math.floor(body.travelled / stride) % walk.frames;",
+      to: "        const step = Math.round(body.travelled / stride) % walk.frames;",
+      note: "ROUND instead of FLOOR, so the first and last frames of every cycle show for HALF a stride and the others for a whole one — a limp rather than a walk, and invisible to any fixture that samples only whole strides" },
+    { id: "WK3", file: "src/core/runtime/Parts.ts",
+      from: "        frames: frames !== null && Number.isFinite(frames) && frames >= 2 ? Math.floor(frames) : null,",
+      to: "        frames: frames !== null && Number.isFinite(frames) && frames >= 1 ? Math.floor(frames) : null,",
+      note: "a ONE-frame declaration counts as a cycle, so `% 1` pins every such part to frame 0 for ever while the engine does the modulo work anyway — and a zero or negative count would index backwards off the sheet" },
 ];
 
 function runSuite() {
