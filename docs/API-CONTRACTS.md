@@ -370,6 +370,13 @@ function parallaxRate(depth: number): number;                // 1/(1+d) behind, 
 function parallaxOffset(depth: number, vp: {x,y,zoom}): {x: number; y: number};   // WORLD units
 function depthToClipZ(depth: number): number;                // DECREASING in depth, clamped inside the volume
 function applyParallax<T>(doc: T, vp: {x,y,zoom}): T;        // same reference when nothing is layered
+function parallaxIds<T>(doc: T): Set<string>;                // which nodes the above would MOVE —
+    // the DIRTY SET's half of the same question, and it must be asked whenever the viewport moves.
+    // The geometry engine decides reuse by SET MEMBERSHIP and never compares geometry, so a layered
+    // node shifted by a pan (which dispatches no action and moves no body) kept the position it had
+    // when the camera was elsewhere: 300px on one depth-1 layer after a 600px pan, in the editor as
+    // well as during a run. Depth 0 is EXCLUDED because its offset is exactly zero — including it
+    // would dirty every node of every document on every frame of every pan.
 // ORDER is sorted in the render MODEL (far first, tree order breaking ties) so all three backends
 // agree; the GPU additionally writes the clip z and runs a real DEPTH_TEST, so nearer wins whatever
 // order a draw call arrived in. PARALLAX is applied at the DISPLAY SEAM, before geometry, so a

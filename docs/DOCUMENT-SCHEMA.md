@@ -103,6 +103,22 @@ interface Node {
 interface Geometry { x: number; y: number; width: number; height: number; }
 // COORDINATE SPACE: x/y are PARENT-RELATIVE. See the rule below.
 
+// BACKGROUND (schema 70). Document.background?: string — what the document SITS ON: the sky, the
+// paper, the stage. Absent = transparent, which is what every document was: nothing in the tree
+// carried a background of any kind, so what a level appeared to sit on was the EDITOR'S chrome. A
+// run therefore had no sky, an export emitted no ground colour, and a Tiled map's own
+// `backgroundcolor` (3 of the 24 maps here declare one) was read by nothing.
+// DOCUMENT-LEVEL RATHER THAN A NODE, for the reason `lights` is: it is a property of the SCENE. A
+// giant rectangle behind everything would be selectable, draggable, deletable and INSIDE
+// `contentBounds` — the bounds the follow camera clamps to and the death plane is derived from — so
+// the sky would move the edge of the world.
+// One string, because that is what the corpus declares. Validated for SHAPE, not colour: these are
+// whatever CSS accepts, so a hex-only rule would refuse documents the renderer draws perfectly. An
+// EMPTY string is refused — absent is how a document says it has no sky, empty is a typo.
+// Written only by `SetBackgroundAction`, painted in SCREEN space by all three backends, and
+// exported as a real `<rect>` rather than a style on the root. KNOWN DIVERGENCE: `gl.clearColor`
+// takes floats, so the GPU parses hex and falls back to the editor backdrop on names and `rgb()`.
+//
 // LIGHTING (schema 42). Document.lights?: Light[] (max 4) + Document.ambient?: 0..1.
 interface Light { x: number; y: number; z: number; color: string; intensity: number }
 // DIRECTIONAL only, and that is a decision: a design document has no scale — a 200-unit rectangle

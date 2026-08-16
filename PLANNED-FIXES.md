@@ -7,6 +7,7 @@
 > [MILESTONES.md](MILESTONES.md) and [docs/README.md](docs/README.md).
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-08-16 after the parallax dirty-set fix: still accurate BECAUSE IT IS FROZEN. -->
 <!-- re-read 2026-08-16 after schema 70 (the document background): still accurate BECAUSE IT IS
      FROZEN. This file is the 2026-07-23 record and the background is not in it. -->
 <!-- re-read 2026-08-15 after schema 69 (a node's own playhead): still accurate BECAUSE IT IS FROZEN.
