@@ -1397,7 +1397,21 @@ export type RuntimeCommand =
      * A TEMPLATE THAT IS NOT THERE SPAWNS NOTHING, inertly — the dangling-reference rule this schema
      * follows everywhere. A level whose template was deleted keeps playing.
      */
-    | { kind: "spawn"; templateId: string; x: number; y: number };
+    | { kind: "spawn"; templateId: string; x: number; y: number;
+        /**
+         * The velocity to bring it into the world MOVING with, and the thing that makes it a BODY.
+         *
+         * WHY THE COMMAND CARRIES THIS AND NOT THE DERIVE. `worldFrom` establishes bodies ONCE, at
+         * Play, so a node that appears later never becomes one — and `applySpawns` cannot fix that,
+         * because it returns a DOCUMENT. Letting a derive write to `world.bodies` would give the
+         * runtime a second producer of world state; `stepWorld` and `applyCommands` are the only
+         * two, and that is what makes a run replayable from its inputs.
+         *
+         * THE RULE DECIDES, because the rule has the document: it reads the template's `bodyType`
+         * and asks for a body or does not. The channel stays ignorant, exactly as it is about what
+         * a stomp means.
+         */
+        body?: { vx: number; vy: number } };
 
 /**
  * A world with the commands applied, in array order.
@@ -1429,8 +1443,16 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
             // NAMES NO BODY EITHER, so it goes above the lookup with setCell. The id is the INDEX,
             // which is what makes a replayed run produce the same ids.
             if (!spawns) spawns = [...world.spawns];
-            spawns.push({ id: c.templateId + "#" + spawns.length,
-                          templateId: c.templateId, x: c.x, y: c.y });
+            const id = c.templateId + "#" + spawns.length;
+            spawns.push({ id, templateId: c.templateId, x: c.x, y: c.y });
+            // A SPAWN THAT ASKED TO MOVE BECOMES A BODY, minted with the same defaults `worldFrom`
+            // gives every other one — at the position the spawn named, on nothing, with grip.
+            if (c.body) {
+                if (!bodies) bodies = new Map(world.bodies);
+                bodies.set(id, { x: c.x, y: c.y, vx: c.body.vx, vy: c.body.vy,
+                    onGround: false, groundFriction: 1, blockedX: false,
+                    facing: c.body.vx < 0 ? -1 : 1, travelled: 0 });
+            }
             continue;
         }
         if (c.kind === "setCell") {

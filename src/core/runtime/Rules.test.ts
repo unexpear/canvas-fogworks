@@ -420,6 +420,33 @@ describe("setCell — a bumped block BECOMES something, without editing the leve
         expect(applyCells(doc, w)).toBe(doc);
     });
 
+    it("THE TEMPLATE'S OWN bodyType decides whether the spawn moves", () => {
+        // A mutant survived a fixture that called `applyCommands` directly with a body: that never
+        // asks the RULE anything. This bumps a real block whose tile names a template, twice, with
+        // the only difference being what the template declares about itself.
+        const build = (declares: UserData | undefined) => {
+            const doc = room("2");
+            const set = (doc.tilesets as unknown as { tiles: { id: number; userData: UserData }[] }[])[0];
+            set.tiles[0].userData["vde.spawns"] = prop("thing");
+            doc.nodes.set("thing", {
+                id: "thing", type: "core.rectangle", parent: null, children: [],
+                geometry: { x: 0, y: -200, width: 6, height: 6 },
+                style: { fill: "#ffd75e", opacity: 1 }, layout: {}, className: "coin",
+                ...(declares ? { userData: declares } : {})
+            } as Node);
+            doc.rootNodeUuids.push("thing");
+            return doc;
+        };
+        // DECLARES NOTHING: a region, which appears and stays where it was put.
+        const still = bumpIt(build(undefined));
+        expect(still.spawns.map(s => s.templateId)).toEqual(["thing"]);
+        expect(still.bodies.has("thing#0")).toBe(false);
+        // DECLARES `dynamic`: a body, minted moving upward at a jump's launch speed.
+        const moving = bumpIt(build({ bodyType: prop("dynamic") }));
+        expect(moving.bodies.has("thing#0")).toBe(true);
+        expect(moving.bodies.get("thing#0")!.vy).toBeLessThan(0);
+    });
+
     it("and the APP stamps them — a derivation nothing calls is not a feature", () => {
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         expect(app).toMatch(/applyCells\(/);
@@ -535,6 +562,32 @@ describe("spawn — the fifth verb, and the only one that ADDS", () => {
         expect(regionsOf(applySpawns(doc, w)).map(r => r.nodeId)).toEqual(["coin"]);
         // A TEMPLATE THAT DECLARES NOTHING IS NOT COLLECTIBLE, so a spawned platform stays put.
         expect(partOf(doc.nodes.get("coin")!).collectible).toBe(true);
+    });
+
+    it("A SPAWN THAT ASKED TO MOVE BECOMES A BODY, minted like every other one", () => {
+        // `worldFrom` establishes bodies ONCE, at Play, so a node that appears later never becomes
+        // one — and `applySpawns` cannot fix that, because it returns a DOCUMENT. Letting a derive
+        // write to `world.bodies` would give the runtime a second producer of world state, and
+        // `stepWorld` plus `applyCommands` being the only two is what makes a run replayable.
+        const doc = withTemplate();
+        const w = applyCommands(worldFrom(doc), [
+            { kind: "spawn", templateId: "coin", x: 40, y: 60, body: { vx: 0, vy: -216 } }
+        ]);
+        const made = w.bodies.get("coin#0")!;
+        expect(made).toEqual({ x: 40, y: 60, vx: 0, vy: -216, onGround: false,
+                               groundFriction: 1, blockedX: false, facing: 1, travelled: 0 });
+        // …and it MOVES, which is the whole difference from a region appearing.
+        const stepped = stepWorld(applySpawns(doc, w), w);
+        expect(stepped.bodies.get("coin#0")!.y).toBeLessThan(60);
+
+        // A SPAWN THAT ASKED FOR NOTHING IS NOT A BODY, so a coin sitting in a niche stays a region.
+        const still = applyCommands(worldFrom(doc), [{ kind: "spawn", templateId: "coin", x: 0, y: 0 }]);
+        expect(still.bodies.has("coin#0")).toBe(false);
+        // FACING COMES FROM THE VELOCITY, like every other body's does.
+        const left = applyCommands(worldFrom(doc), [
+            { kind: "spawn", templateId: "coin", x: 0, y: 0, body: { vx: -50, vy: 0 } }
+        ]);
+        expect(left.bodies.get("coin#0")!.facing).toBe(-1);
     });
 
     it("and the APP steps against the spawned document, not the stored one", () => {

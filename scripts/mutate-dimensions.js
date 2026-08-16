@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1981;
+const EXPECTED_TESTS = 1983;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1767,6 +1767,17 @@ const MUTANTS = [
       from: "        if (got && partOf(got).collectible) out.push({ kind: \"despawn\", bodyId: e.nodeId });",
       to: "        if (got) out.push({ kind: \"despawn\", bodyId: e.nodeId });",
       note: "EVERY region entered is taken away, declared collectible or not — so a checkpoint, a trigger volume and the level's own exit all vanish the first time the player walks through one" },
+
+    // A SPAWNED BODY (M18). `worldFrom` establishes bodies once, at Play, so a node that appears
+    // later never becomes one — the COMMAND mints it, because a derive returns a document.
+    { id: "SB1", file: "src/core/runtime/World.ts",
+      from: "                    facing: c.body.vx < 0 ? -1 : 1, travelled: 0 });",
+      to: "                    facing: 1, travelled: 0 });",
+      note: "a spawned body always faces RIGHT however it was thrown, so a thing popped leftwards is drawn mirrored against its own motion from the moment it exists — the position is identical, which is why only an assertion on facing can see it" },
+    { id: "SB2", file: "src/core/runtime/Rules.ts",
+      from: "                const moves = template !== undefined && bodyTypeOf(template) === \"dynamic\";",
+      to: "                const moves = template !== undefined;",
+      note: "EVERY spawned template becomes a body, so a coin meant to sit in a niche falls out of it and a decorative spawn gains physics nobody asked for — the template's own bodyType is what decides, and ignoring it makes the declaration meaningless" },
 ];
 
 function runSuite() {

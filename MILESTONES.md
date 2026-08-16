@@ -1749,6 +1749,34 @@ set to remember it.
 
 2 tests, 2 mutants, 2/2 killed.
 
+**Slice 27 — A SPAWNED BODY: the coin that POPS rather than sits.** Slice 25 could bring a node into
+existence and slice 26 could take it away, but a spawned thing could never MOVE — `worldFrom`
+establishes bodies once, at Play, so a node that appears later never became one.
+
+**THE COMMAND MINTS IT, AND THAT WAS THE DESIGN QUESTION.** The other candidate was for
+`applySpawns` to add bodies for spawned nodes declaring a `bodyType` — and it is the wrong one:
+`applySpawns` returns a DOCUMENT, so letting it write to `world.bodies` would give the runtime a
+SECOND producer of world state. `stepWorld` and `applyCommands` being the only two is exactly what
+makes a run replayable from its inputs, and it is not worth trading for a shorter diff.
+
+**SO THE COMMAND CARRIES THE VELOCITY, and the RULE decides.** `applyCommands` cannot see the
+document, so it cannot know whether a template is a body; the rule can, and does —
+`bodyTypeOf(template) === "dynamic"` is the whole test. The channel stays as ignorant of what a coin
+is as it already is of what a stomp means. Everything else the body needs has the same default
+`worldFrom` gives every other one: at the spawn's position, on nothing, with grip, and facing the
+way it was thrown.
+
+**SB2 SURVIVED FIRST TIME, on a fixture that called `applyCommands` DIRECTLY with a body** — which
+never asks the rule anything. It took a fixture that bumps a real block twice, with the only
+difference being what the template declares about itself, to see it. The same blindness as SP2 and
+CE1 and CO1 before it: the assertion has to reach the decision, not the result.
+
+**AND A COMMENT THAT HAD BECOME A LIE WAS FIXED.** `Rules` said "what this still cannot do is put a
+coin above the block" — true for exactly one slice. A stale comment in the source is worse than no
+comment, because it is read as current.
+
+2 tests, 2 mutants, 2/2 killed.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

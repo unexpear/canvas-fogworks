@@ -30,7 +30,7 @@
  */
 import { ReadonlyDocument } from "../document/Document";
 import {
-    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed, propertyOf, worldOffsetOf
+    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed, propertyOf, worldOffsetOf, bodyTypeOf
 } from "./World";
 import { partOf, PART_PREFIX } from "./Parts";
 import { findTileset, tilesetTile } from "../document/Tileset";
@@ -117,10 +117,9 @@ export function marioRules(
     // change. `TilesetTile.userData` is already how a tile declares its bodyType, so this adds a
     // word to a vocabulary rather than a channel.
     //
-    // WHAT THIS STILL CANNOT DO: put a coin above the block. That needs a way to bring a thing into
-    // EXISTENCE, which `applyCommands` has no verb for — despawn, setVelocity, endRun and setCell
-    // all act on things that are already there. Spawning wants its own design and is the honest
-    // remaining half of "acting on events".
+    // IT ALSO PUTS SOMETHING OUT, since slice 25 — see `vde.spawns` below. This comment used to end
+    // "what this still cannot do is put a coin above the block", which was true for exactly one
+    // slice; leaving it would have been a lie in the source, which is worse than no comment.
     for (const e of world.events) {
         if (e.kind !== "bump" || e.bodyId !== me || e.cell === undefined) continue;
         const node = doc.nodes.get(e.nodeId);
@@ -143,9 +142,16 @@ export function marioRules(
         if (spawns !== null && spawns.trim() !== "") {
             const origin = worldOffsetOf(doc, e.nodeId);
             if (origin) {
+                // A TEMPLATE THAT DECLARES A bodyType COMES OUT MOVING. The rule reads that here
+                // because it has the document and the channel does not; a template that declares
+                // none is a region and simply appears, which is what a coin sitting in a niche is.
+                // The pop is a jump's launch speed, so it adds no constant of its own.
+                const template = doc.nodes.get(spawns.trim());
+                const moves = template !== undefined && bodyTypeOf(template) === "dynamic";
                 out.push({ kind: "spawn", templateId: spawns.trim(),
                     x: origin.dx + node!.geometry.x + e.cell.col * map.tileWidth,
-                    y: origin.dy + node!.geometry.y + (e.cell.row - 1) * map.tileHeight });
+                    y: origin.dy + node!.geometry.y + (e.cell.row - 1) * map.tileHeight,
+                    ...(moves ? { body: { vx: 0, vy: -jumpLaunchSpeed(ctx.gravity ?? DEFAULT_GRAVITY) } } : {}) });
             }
         }
     }
