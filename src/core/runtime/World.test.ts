@@ -11,7 +11,7 @@ import { createEmptyDocument, ProjectDocument } from "../document/Document";
 import { Node, UserData } from "../document/Node";
 import {
     FIXED_STEP, MAX_STEPS_PER_FRAME, DEFAULT_GRAVITY, MAX_FALL_SPEED, MOVE_SPEED, JUMP_HEIGHT,
-    NO_INPUT, Input, WorldState, jumpSpeedFor,
+    NO_INPUT, Input, WorldState, jumpSpeedFor, jumpLaunchSpeed, HELD_JUMP_GRAVITY,
     bodyTypeOf, worldFrom, solidsOf, stepWorld, applyWorld, movedIds, stepsFor, propertyOf,
     tileIsSolid, tileSolidsNear, documentHasSolidTiles, frictionOf, regionsOf,
     worldOffsetOf, runtimeRefusal, runtimeExclusions, applyWorld as applyWorldFn,
@@ -352,30 +352,169 @@ describe("input — the controlled body, and only it", () => {
         expect(w.bodies.get("other")!.onGround).toBe(true);
     });
 
-    it("jumps to the stated HEIGHT, which is the number a level is built from", () => {
-        const doc = level();
+    /**
+     * Jump, holding the key for `hold` steps, and report how high it got and where it ended.
+     *
+     * THE HOLD IS COUNTED FROM THE LAUNCH STEP INCLUSIVE, so `hold = 1` is the shortest press the
+     * runtime can represent — one step down, released on the next — and that is the "tap" every
+     * assertion below means.
+     */
+    const jumpHolding = (doc: ProjectDocument, hold: number, total = 240) => {
         const w = grounded(doc);
         const y0 = w.bodies.get("hero")!.y;
-        // v = sqrt(2*g*h): the speed that reaches exactly JUMP_HEIGHT under this gravity.
-        expect(jumpSpeedFor(72, 900)).toBeCloseTo(360, 6);
-        let jumping = stepWorld(doc, w, {
-            input: { left: false, right: false, jump: true }, controlled: "hero" });
-        // EXACTLY the launch speed: the jump SETS vy rather than adding to it, so that step's
-        // gravity is discarded. That is what makes `jumpSpeedFor` mean what it says — adding would
-        // make the real launch speed depend on the step size, and the peak below would drift.
-        expect(jumping.bodies.get("hero")!.vy).toBeCloseTo(-jumpSpeedFor(), 6);
-        let peak = jumping.bodies.get("hero")!.y;
-        for (let i = 0; i < 60; i++) {
-            jumping = stepWorld(doc, jumping, { input: NO_INPUT, controlled: "hero" });
-            peak = Math.min(peak, jumping.bodies.get("hero")!.y);
+        const DOWN = { left: false, right: false, jump: true };
+        let out = w, peak = y0, launch = 0;
+        for (let i = 0; i < total; i++) {
+            out = stepWorld(doc, out, { input: i < hold ? DOWN : NO_INPUT, controlled: "hero" });
+            if (i === 0) launch = out.bodies.get("hero")!.vy;
+            peak = Math.min(peak, out.bodies.get("hero")!.y);
         }
+        return { rise: y0 - peak, launch, end: out.bodies.get("hero")!, y0 };
+    };
+
+    it("jumps to the stated HEIGHT when the key is HELD, which is the number a level is built from", () => {
+        const doc = level();
+        // v = sqrt(2*g*h) is still the kinematic identity, and 360 px/s is still what reaches 72px
+        // under a full 900 — it is simply no longer the speed a jump starts at, because a held jump
+        // does not rise under a full 900.
+        expect(jumpSpeedFor(72, 900)).toBeCloseTo(360, 6);
+        const held = jumpHolding(doc, 200);
+        // EXACTLY the launch speed: the jump SETS vy rather than adding to it, so that step's
+        // gravity is discarded. That is what makes the launch speed mean what it says — adding would
+        // make the real one depend on the step size, and the peak below would drift.
+        expect(held.launch).toBeCloseTo(-jumpLaunchSpeed(), 6);
+        expect(jumpLaunchSpeed(900, 72)).toBe(Math.sqrt(2 * 900 * 25.92));   // 9/25 of 72 is 25.92
+        expect(jumpLaunchSpeed(900, 72)).toBe(216);
         // WITHIN A STEP'S WORTH of the stated height: a discrete integrator overshoots slightly,
         // and asserting the exact continuous number would be asserting the wrong model.
-        expect(y0 - peak).toBeGreaterThan(JUMP_HEIGHT - 6);
-        expect(y0 - peak).toBeLessThan(JUMP_HEIGHT + 6);
+        expect(held.rise).toBeGreaterThan(JUMP_HEIGHT - 6);
+        expect(held.rise).toBeLessThan(JUMP_HEIGHT + 6);
         // …and it comes back down to exactly where it started, on the ground.
-        expect(jumping.bodies.get("hero")!.y).toBe(y0);
-        expect(jumping.bodies.get("hero")!.onGround).toBe(true);
+        expect(held.end.y).toBe(held.y0);
+        expect(held.end.onGround).toBe(true);
+    });
+
+    it("a TAP is a SHORT jump — the height is the hold, which is the era's signature rule", () => {
+        const doc = level();
+        const tap = jumpHolding(doc, 1);
+        const held = jumpHolding(doc, 200);
+        // THE SHORTEST PRESS RISES `HELD_JUMP_GRAVITY` OF THE FULL HEIGHT, and that identity is the
+        // reason the constant is a fraction rather than a second speed: same launch, full gravity.
+        expect(tap.launch).toBeCloseTo(held.launch, 10);          // the LAUNCH is not what differs
+        expect(tap.rise).toBeGreaterThan(JUMP_HEIGHT * HELD_JUMP_GRAVITY - 2);
+        expect(tap.rise).toBeLessThan(JUMP_HEIGHT * HELD_JUMP_GRAVITY + 2);
+        // On this project's 18px grid that is 1.44 tiles against 4 — a tap clears a block and a hold
+        // clears a wall, which is the whole of what a level author is being handed, and it is the
+        // shape the era's own level-design writing describes: "a little over one block" and
+        // "almost exactly 4 blocks".
+        expect(tap.rise / 18).toBeGreaterThan(1.4);
+        expect(tap.rise / 18).toBeLessThan(1.55);
+        expect(held.rise / 18).toBeGreaterThan(3.7);
+        // …and BOTH land back where they started, so a short jump is a shorter arc, not a broken one.
+        expect(tap.end.y).toBe(tap.y0);
+        expect(held.end.y).toBe(held.y0);
+    });
+
+    it("every hold in between gives its OWN height — VARIABLE, not two settings", () => {
+        const doc = level();
+        // A two-height jump would pass both assertions above and be a lie about what this is. The
+        // claim is that the arc answers the KEY continuously, so the whole ramp is asserted.
+        // 40 IS THE LAST HOLD THAT BUYS ANYTHING — the apex is exactly there — so the ramp stops at
+        // 39 and saturation is asserted separately below rather than being smuggled into the ramp.
+        const rises = [1, 5, 10, 20, 30, 39].map(h => jumpHolding(doc, h).rise);
+        for (let i = 1; i < rises.length; i++) expect(rises[i]).toBeGreaterThan(rises[i - 1]);
+        // …and it SATURATES rather than growing without bound: past the apex the key buys nothing,
+        // because there is no rise left to weaken the gravity on.
+        expect(jumpHolding(doc, 60).rise).toBeCloseTo(jumpHolding(doc, 200).rise, 10);
+    });
+
+    it("holding the key does NOT slow the FALL, or a jump would be a glide", () => {
+        const doc = level();
+        // The same jump, held all the way up; the only difference is whether the key stays down
+        // AFTER the apex. `was.vy < 0` is the line that makes these identical, and without it a
+        // player could hover by never letting go.
+        // The apex is at `v0 / (g*9/25)` = 216/324 = 2/3s = 40 steps exactly, so 55 is just past it.
+        const upOnly = jumpHolding(doc, 55);
+        const throughout = jumpHolding(doc, 200);
+        expect(throughout.rise).toBeCloseTo(upOnly.rise, 10);
+        // Landing at the same STEP is the sharp half: a weaker gravity on the way down would land
+        // late even with an identical apex.
+        const landStep = (hold: number) => {
+            const w = grounded(doc);
+            const y0 = w.bodies.get("hero")!.y;
+            let out = w;
+            for (let i = 0; i < 240; i++) {
+                out = stepWorld(doc, out, {
+                    input: i < hold ? { left: false, right: false, jump: true } : NO_INPUT,
+                    controlled: "hero" });
+                if (i > 5 && out.bodies.get("hero")!.onGround && out.bodies.get("hero")!.y === y0) return i;
+            }
+            return -1;
+        };
+        expect(landStep(200)).toBeGreaterThan(0);
+        expect(landStep(200)).toBe(landStep(55));
+    });
+
+    it("LATCHES: letting go commits the arc, so fluttering the key is not a higher jump", () => {
+        const doc = level();
+        const DOWN = { left: false, right: false, jump: true };
+        // Hold for 10 steps, release for 3, then hold again for the rest of the rise. Without the
+        // latch the second press buys the weak gravity back and this out-jumps the honest 10-step
+        // hold; with it, the arc was decided the moment the key came up.
+        const flutter = (() => {
+            let out = grounded(doc);
+            const y0 = out.bodies.get("hero")!.y;
+            let peak = y0;
+            for (let i = 0; i < 120; i++) {
+                const down = i < 10 || i >= 13;
+                out = stepWorld(doc, out, { input: down ? DOWN : NO_INPUT, controlled: "hero" });
+                peak = Math.min(peak, out.bodies.get("hero")!.y);
+            }
+            return y0 - peak;
+        })();
+        expect(flutter).toBeCloseTo(jumpHolding(doc, 10).rise, 10);
+        // …and it is strictly SHORTER than never letting go, or the assertion above would also pass
+        // on a runtime where the key did nothing at all after the tenth step.
+        expect(flutter).toBeLessThan(jumpHolding(doc, 200).rise);
+        // THE OTHER JAW OF THE LATCH is the apex: past it the key is spent even if it was never
+        // released, which is what makes an upward push DURING a jump — a stomp bounce — rise under
+        // full gravity. Nothing else in this runtime can express that, so it is asserted here.
+        let w = grounded(doc);
+        for (let i = 0; i < 50; i++) w = stepWorld(doc, w, { input: DOWN, controlled: "hero" });
+        expect(w.bodies.get("hero")!.vy).toBeGreaterThan(0);          // past the apex, still held
+        expect(w.jumpCut).toBe(true);
+        const bodies = new Map(w.bodies);
+        bodies.set("hero", { ...bodies.get("hero")!, vy: -jumpLaunchSpeed() });
+        const bounced = stepWorld(doc, { ...w, bodies }, { input: DOWN, controlled: "hero" });
+        // FULL gravity on the way back up: -216 + 15, not -216 + 5.4.
+        expect(bounced.bodies.get("hero")!.vy).toBeCloseTo(-jumpLaunchSpeed() + DEFAULT_GRAVITY * FIXED_STEP, 10);
+    });
+
+    it("holds only the CONTROLLED body up — the rest are not holding anything", () => {
+        const doc = level();
+        // Both bodies are given the SAME upward velocity and the player holds jump the whole time.
+        // Without `id === controlled` the second one rises just as far, which is every enemy in the
+        // level floating the moment the player jumps.
+        const w = grounded(doc);
+        const bodies = new Map(w.bodies);
+        for (const id of ["hero", "other"]) {
+            bodies.set(id, { ...bodies.get(id)!, vy: -jumpLaunchSpeed(), onGround: false });
+        }
+        // `jumpCut: false` because these bodies were PLACED in flight rather than launched, and the
+        // five settling steps that grounded them closed the latch. Without this the hero gets full
+        // gravity too, both bodies rise the same distance, and the test passes for the wrong reason.
+        const launched: WorldState = { ...w, bodies, jumpCut: false };
+        let out = launched;
+        const peak = { hero: launched.bodies.get("hero")!.y, other: launched.bodies.get("other")!.y };
+        for (let i = 0; i < 60; i++) {
+            out = stepWorld(doc, out, {
+                input: { left: false, right: false, jump: true }, controlled: "hero" });
+            peak.hero = Math.min(peak.hero, out.bodies.get("hero")!.y);
+            peak.other = Math.min(peak.other, out.bodies.get("other")!.y);
+        }
+        const rose = (id: "hero" | "other") => launched.bodies.get(id)!.y - peak[id];
+        expect(rose("hero")).toBeGreaterThan(JUMP_HEIGHT - 6);
+        expect(rose("other")).toBeLessThan(JUMP_HEIGHT * HELD_JUMP_GRAVITY + 2);
     });
 
     it("a HELD jump is ONE jump — the press is an edge, not a state", () => {
@@ -400,7 +539,7 @@ describe("input — the controlled body, and only it", () => {
         let again = stepWorld(doc, held, { input: NO_INPUT, controlled: "hero" });
         again = stepWorld(doc, again, {
             input: { left: false, right: false, jump: true }, controlled: "hero" });
-        expect(again.bodies.get("hero")!.vy).toBeLessThan(-300);
+        expect(again.bodies.get("hero")!.vy).toBeCloseTo(-jumpLaunchSpeed(), 6);
     });
 
     it("cannot jump in mid-air, which is what `onGround` was for", () => {
@@ -459,18 +598,26 @@ describe("terminal velocity, a COLLISION bound before it is a feel decision", ()
         ]);
         const w = stepWorld(doc, steps(doc, worldFrom(doc), 5),
             { input: { left: false, right: false, jump: true }, controlled: "b" });
-        expect(w.bodies.get("b")!.vy).toBeLessThan(-300);
+        expect(w.bodies.get("b")!.vy).toBeCloseTo(-jumpLaunchSpeed(), 6);
 
         // AND THE CAP MUST BE DIRECTIONAL, which the assertion above CANNOT see: the ordinary jump
-        // launches at 360 px/s and the cap is 1200, so a cap written `Math.abs(vy) > MAX` never
+        // launches at 216 px/s and the cap is 1200, so a cap written `Math.abs(vy) > MAX` never
         // fires and survives. A mutant said so. Seeing it needs a rise FASTER than the cap, which
-        // a strong gravity produces — sqrt(2 * 20000 * 72) is about 1697 px/s. Applied to the rise,
-        // the cap would turn that launch into a fall at +1200 on the very step it happened.
-        const strong = { gravity: 20000, input: { left: false, right: false, jump: true },
+        // a strong gravity produces — sqrt(2 * 70000 * 72 * 2/7) is about 1697 px/s. Applied to the
+        // rise, the cap would turn that launch into a fall at +1200 on the very step it happened.
+        //
+        // THE GRAVITY HERE WENT 20,000 -> 30,000 WITH SLICE 16, because a launch is now sized for
+        // `HELD_JUMP_GRAVITY` of the height rather than all of it: at 20,000 it is 1,018 px/s, UNDER
+        // the cap, and this test would have gone on passing while asserting nothing about direction
+        // at all. The control below is what says so out loud, rather than leaving the reader to
+        // recompute it — a fixture that cannot see the mutant is the failure this project keeps
+        // finding, and a number that quietly slipped under a threshold is how it happens.
+        const strong = { gravity: 30000, input: { left: false, right: false, jump: true },
             controlled: "b" };
         const hard = stepWorld(doc, steps(doc, worldFrom(doc), 5), strong);
-        expect(jumpSpeedFor(JUMP_HEIGHT, 20000)).toBeGreaterThan(MAX_FALL_SPEED);
-        expect(hard.bodies.get("b")!.vy).toBeCloseTo(-jumpSpeedFor(JUMP_HEIGHT, 20000), 6);
+        expect(jumpLaunchSpeed(20000)).toBeLessThan(MAX_FALL_SPEED);      // the control: 1,018 px/s
+        expect(jumpLaunchSpeed(30000)).toBeGreaterThan(MAX_FALL_SPEED);   // …against 1,247
+        expect(hard.bodies.get("b")!.vy).toBeCloseTo(-jumpLaunchSpeed(30000), 6);
         expect(hard.bodies.get("b")!.vy).toBeLessThan(-MAX_FALL_SPEED);
     });
 });
@@ -1050,10 +1197,15 @@ describe("one-way platforms — the first thing here that is an INVENTION", () =
         expect(w.bodies.get("b")!.y).toBe(140);            // on the floor, UNDER the platform
         expect(w.bodies.get("b")!.onGround).toBe(true);
 
-        w = stepWorld(doc, w, { input: { left: false, right: false, jump: true }, controlled: "b" });
+        // THE KEY IS HELD ALL THE WAY UP, and since slice 16 that is what makes this a jump that
+        // reaches the slab at all: a tap now rises 18px, and the platform's underside is 30px above
+        // this body's head. Released, the body would stop short of the case this test exists for and
+        // the assertion below would fail for a reason that has nothing to do with one-way platforms.
+        const HELD = { left: false, right: false, jump: true };
+        w = stepWorld(doc, w, { input: HELD, controlled: "b" });
         let peak = w.bodies.get("b")!.y;
         for (let i = 0; i < 25; i++) {
-            w = stepWorld(doc, w, { input: NO_INPUT, controlled: "b" });
+            w = stepWorld(doc, w, { input: HELD, controlled: "b" });
             peak = Math.min(peak, w.bodies.get("b")!.y);
         }
         // IT WENT THROUGH: the peak is above the platform's top rather than stopped under its

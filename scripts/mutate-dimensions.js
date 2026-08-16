@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1933;
+const EXPECTED_TESTS = 1938;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1248,12 +1248,12 @@ const MUTANTS = [
       to: "            const held = (input.left ? -MOVE_SPEED : 0) + (input.right ? MOVE_SPEED : 0);\n            vx += held;",
       note: "the walk ACCUMULATES instead of being set, so holding right builds speed without limit and releasing keeps it — the character skates, and every distance assertion becomes a function of how long the key was held" },
     { id: "KB2", file: "src/core/runtime/World.ts",
-      from: "            if (input.jump && !world.jumpWas && was.onGround) vy = -jumpSpeedFor(JUMP_HEIGHT, gravity);",
-      to: "            if (input.jump && was.onGround) vy = -jumpSpeedFor(JUMP_HEIGHT, gravity);",
+      from: "            if (input.jump && !world.jumpWas && was.onGround) vy = -jumpLaunchSpeed(gravity);",
+      to: "            if (input.jump && was.onGround) vy = -jumpLaunchSpeed(gravity);",
       note: "the jump stops being an EDGE, so a held key re-launches on every grounded step and the body bunny-hops for as long as the button is down" },
     { id: "KB3", file: "src/core/runtime/World.ts",
-      from: "            if (input.jump && !world.jumpWas && was.onGround) vy = -jumpSpeedFor(JUMP_HEIGHT, gravity);",
-      to: "            if (input.jump && !world.jumpWas) vy = -jumpSpeedFor(JUMP_HEIGHT, gravity);",
+      from: "            if (input.jump && !world.jumpWas && was.onGround) vy = -jumpLaunchSpeed(gravity);",
+      to: "            if (input.jump && !world.jumpWas) vy = -jumpLaunchSpeed(gravity);",
       note: "the ground check goes, so a body jumps in mid-air — which is what `onGround` was computed for in the first place" },
     { id: "KB4", file: "src/core/runtime/World.ts",
       from: "        if (vy > MAX_FALL_SPEED) vy = MAX_FALL_SPEED;",
@@ -1575,6 +1575,43 @@ const MUTANTS = [
       from: "        if (authored !== body.facing * Math.abs(authored)) out.add(id);",
       to: "        out.add(id);",
       note: "every body is reported as needing a mirror on every frame, so the dirty set never empties and the incremental geometry path this runtime is built on stops being incremental" },
+
+    // VARIABLE JUMP HEIGHT (M18 slice 16). The 8-bit rung's signature vertical rule, and a hole this
+    // project INTRODUCED rather than found — slice 2 gave the runtime one fixed 72px arc. Every
+    // mutant below survives a fixture that only ever HOLDS the key, which is what every jump fixture
+    // did before this slice: the range only exists if something releases.
+    { id: "JV1", file: "src/core/runtime/World.ts",
+      from: "export const HELD_JUMP_GRAVITY = 9 / 25;",
+      to: "export const HELD_JUMP_GRAVITY = 1;",
+      note: "the jump goes back to being FIXED — held and tapped reach the same height — which is the whole of what this slice added, and it is invisible to any fixture that never lets go of the key" },
+    { id: "JV2", file: "src/core/runtime/World.ts",
+      from: "        const heldJump = id === controlled && input.jump && was.vy < 0;",
+      to: "        const heldJump = id === controlled && input.jump;",
+      note: "holding the key weakens gravity on the way DOWN too, so a player hovers by never letting go — a glide, not a jump — and the apex is unchanged, so only a fixture that watches the FALL can see it" },
+    { id: "JV3", file: "src/core/runtime/World.ts",
+      from: "        const heldJump = id === controlled && input.jump && was.vy < 0;",
+      to: "        const heldJump = input.jump && was.vy < 0;",
+      note: "every rising body in the level gets the weak gravity when the PLAYER holds jump, so a stomped enemy or anything else moving upward floats on the player's input — the controlled-body check is what keeps one key from reaching the whole world" },
+    { id: "JV4", file: "src/core/runtime/World.ts",
+      from: "export function jumpLaunchSpeed(gravity = DEFAULT_GRAVITY, height = JUMP_HEIGHT): number {\n    return jumpSpeedFor(Math.max(0, height) * HELD_JUMP_GRAVITY, gravity);",
+      to: "export function jumpLaunchSpeed(gravity = DEFAULT_GRAVITY, height = JUMP_HEIGHT): number {\n    return jumpSpeedFor(Math.max(0, height), gravity);",
+      note: "the launch is sized for the FULL height instead of the shortest jump's, so a tap clears the wall the level was built around and a hold flies four times past it — the identity `tap = f * hold` is what makes one constant enough" },
+    { id: "JV5", file: "src/core/runtime/Rules.ts",
+      from: "                vy: -jumpLaunchSpeed(ctx.gravity ?? DEFAULT_GRAVITY) });",
+      to: "                vy: -jumpLaunchSpeed(ctx.gravity ?? DEFAULT_GRAVITY, 288) });",
+      note: "the stomp bounce stops sharing the jump's launch speed, so \"the bounce is exactly a jump's height\" quietly becomes four times it — and holding the key during the bounce then throws the player off the top of the level" },
+    { id: "JV6", file: "src/core/runtime/World.ts",
+      from: "    const cutNow = world.jumpCut || !input.jump || driver === undefined || driver.vy >= 0;",
+      to: "    const cutNow = !input.jump || driver === undefined || driver.vy >= 0;",
+      note: "THE LATCH STOPS LATCHING: releasing the key and pressing it again buys the weak gravity back, so the highest jump is a FLUTTERED one — a technique rather than an aim, and invisible to any fixture whose hold is one contiguous run" },
+    { id: "JV7", file: "src/core/runtime/World.ts",
+      from: "    const cutNow = world.jumpCut || !input.jump || driver === undefined || driver.vy >= 0;",
+      to: "    const cutNow = world.jumpCut || !input.jump || driver === undefined;",
+      note: "the APEX no longer closes the latch, so an upward push during a held jump — a stomp bounce — rises under the weak gravity and carries nearly three times as far as it should. The key check alone cannot see this: the player never let go" },
+    { id: "JV8", file: "src/core/runtime/World.ts",
+      from: "jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };",
+      to: "jumpWas: input.jump, jumpCut: cutNow, overlaps: inside, events };",
+      note: "a fresh launch never REOPENS the latch, so the first jump of a run is variable and every one after it is stuck at the minimum — which a fixture that jumps once cannot possibly notice" },
 ];
 
 function runSuite() {

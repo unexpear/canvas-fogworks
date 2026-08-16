@@ -1290,6 +1290,54 @@ this runtime has one fixed 72px jump with no analogue component at all. Both are
 introduced rather than found, and the jump is the smaller and sharper of the two — it is also the
 first test of whether the input path can carry an analogue value.
 
+**Slice 16 — VARIABLE JUMP HEIGHT, the 8-bit rung's signature vertical rule.** Slice 15's research
+found two choices of mine that do not match the art; this closes the smaller and sharper of them.
+The runtime had ONE fixed 72px arc: press, and the rest was decided. It now answers how long you
+hold the key — a tap clears 25.92px and a full hold 72, which on this 18px grid is 1.44 tiles against
+four.
+
+**THE INPUT PATH DID NOT NEED TO CARRY AN ANALOGUE VALUE AFTER ALL**, which is what slice 15 expected
+this to test. `Input.jump` was ALREADY a held boolean; only the launch had ever read it. The height
+comes out of reading it a second time, for a different question — "did it just go down" against "is
+it still down".
+
+**TWO GRAVITIES, NOT A VELOCITY CUT, and the mechanism was checked rather than chosen.** The original
+sets `VerticalForce` and `VerticalForceDown` at jump time and only ever applies the first; its
+`JumpSwimSub` overwrites it with the second. Nothing touches `Player_Y_Speed`. Cutting the velocity
+on release is the commoner tutorial answer and gives a visible KINK at the moment of release; two
+gravities give one smooth arc whose curvature changes, which is what the 1985 game looks like.
+
+**THE FRACTION IS THE RATIO OF THE SHORTEST JUMP TO THE TALLEST, exactly**, which is why
+`HELD_JUMP_GRAVITY` is one constant instead of two heights: same launch speed, rising under `g*f`
+against a full `g`. So `JUMP_HEIGHT` still means what it always meant — how high a fully held jump
+goes — and the launch speed is the SHORTEST jump's, which is also what a stomp bounce uses.
+
+**9/25 IS MEASURED, AND THE OBVIOUS ARITHMETIC IS WRONG.** The original's `JumpMForceData` and
+`FallMForceData` hold `$20`/`$70`, `$1e`/`$60` and `$28`/`$90` across three speed tiers — ratios of
+3.5, 3.2 and 3.6, so "a third" looks like the answer. It is not: its launch frame is exempt from the
+switch and its integrator is fractional, and simulating the tables frame by frame gives min/max
+heights of 0.350, 0.371 and 0.344. 0.36 sits in the middle of THAT, and is also the value that comes
+out whole here — launch exactly 216 px/s, apex exactly on step 40. The published block figures agree
+from the other side: "a little over one block" and "almost exactly 4 blocks" against our 1.44 and 4.
+
+**AND THE RESEARCH OVERTURNED A CLAIM I HAD ALREADY WRITTEN INTO A COMMENT.** I had said a stomp
+bounce taken with the key held carries higher, "which is the original's behaviour". It is not. The
+original's stomp writes a bare `-4` into `Player_Y_Speed` and never reloads the rising acceleration,
+so by then the falling one is latched in and A does nothing — the popular framing is false for
+ordinary stomps, and true only for the from-below case and for jumpsprings. The fix was not to
+special-case the bounce but to implement the LATCH the original actually has: `WorldState.jumpCut`
+closes on the first step the key comes up OR the rise ends, whichever is first, and only a fresh
+launch reopens it. That one field buys three era behaviours at once — fluttering the button cannot
+out-jump an honest hold, a bounce does not answer the key, and the arc past the apex is committed.
+
+**WHAT IS DELIBERATELY NOT COPIED:** the original's initial velocity depends on how fast Mario is
+RUNNING (-4 px/frame walking, -5 flat out, a jump about 25% taller). This runtime has no run to read
+— its walk is a single set speed — so a speed tier here would be a table indexed by a constant.
+That belongs to the OTHER era mismatch, acceleration and skid, which is now the last one outstanding.
+
+Eight mutants, and every one of them survives a fixture that only ever HOLDS the key — which is what
+every jump fixture in this repo did before this slice. The range only exists if something releases.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

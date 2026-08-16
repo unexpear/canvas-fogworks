@@ -30,7 +30,7 @@
  */
 import { ReadonlyDocument } from "../document/Document";
 import {
-    JUMP_HEIGHT, DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpSpeedFor
+    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed
 } from "./World";
 import { partOf } from "./Parts";
 
@@ -120,8 +120,18 @@ export function marioRules(
         out.push({ kind: "despawn", bodyId: e.nodeId });
         if (!bounced) {
             bounced = true;
+            // THE SAME SPEED A JUMP LAUNCHES AT, which since slice 16 is the SHORTEST jump's speed
+            // rather than the tallest's.
+            //
+            // AND THE KEY DOES NOT MAKE IT HIGHER, which is worth saying because the obvious guess
+            // is the opposite one. A stomp requires falling onto the thing, `stepWorld`'s jump latch
+            // closes the moment a body stops rising, and a closed latch means full gravity — so the
+            // bounce is the same height whether the player is leaning on the button or not. That is
+            // the original's behaviour too, for exactly the same reason: it dumps its falling
+            // acceleration in on the frame the rise ends, and a stomp never reloads the rising one.
+            // Nothing here had to know any of that; it falls out of `jumpCut`.
             out.push({ kind: "setVelocity", bodyId: me,
-                vy: -jumpSpeedFor(JUMP_HEIGHT, ctx.gravity ?? DEFAULT_GRAVITY) });
+                vy: -jumpLaunchSpeed(ctx.gravity ?? DEFAULT_GRAVITY) });
         }
     }
 

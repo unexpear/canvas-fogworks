@@ -2,14 +2,20 @@ import { createEmptyDocument, ProjectDocument } from "../document/Document";
 import { Node, UserData } from "../document/Node";
 import { resolveScene } from "../document/Components";
 import {
-    FIXED_STEP, JUMP_HEIGHT, DEFAULT_GRAVITY, jumpSpeedFor,
+    FIXED_STEP, DEFAULT_GRAVITY, jumpLaunchSpeed,
     worldFrom, stepWorld, applyWorld, applyCommands, movedIds, WorldState
 } from "./World";
 import { marioRules } from "./Rules";
 
 /**
- * Every number is hand-computed. `jumpSpeedFor(72, 900)` is `sqrt(2*900*72)` = `sqrt(129600)` = 360
- * EXACTLY, so a bounce is `vy = -360` and the step after it is `-360 + 15 = -345`.
+ * Every number is hand-computed. A bounce launches at `jumpLaunchSpeed(900)`, which is the speed
+ * that reaches 9/25 of `JUMP_HEIGHT` under a full gravity — `sqrt(2*900*25.92)` = `sqrt(46656)` =
+ * 216 EXACTLY — so a bounce is `vy = -216` and the step after it is `-216 + 15 = -201`.
+ *
+ * IT WAS 360 UNTIL SLICE 16, and the change is the point rather than an accident: a bounce and a
+ * jump start at the SAME speed, and since a jump's height became something the player buys by
+ * holding the key, that shared speed is the SHORTEST jump's. These steps hold nothing, so they
+ * measure the floor of the range — the ceiling is `World.test.ts`'s business, where the key is held.
  */
 
 const prop = (v: string) => ({ type: "string", value: v });
@@ -121,9 +127,9 @@ describe("marioRules — the game, which the engine does not know about", () => 
         expect(step).toBe(25);                       // free fall from 600 reaches the enemy here
         expect(commands).toEqual([
             { kind: "despawn", bodyId: "enemy" },
-            { kind: "setVelocity", bodyId: "hero", vy: -jumpSpeedFor(JUMP_HEIGHT, DEFAULT_GRAVITY) }
+            { kind: "setVelocity", bodyId: "hero", vy: -jumpLaunchSpeed(DEFAULT_GRAVITY) }
         ]);
-        expect(jumpSpeedFor(JUMP_HEIGHT, DEFAULT_GRAVITY)).toBe(360);
+        expect(jumpLaunchSpeed(DEFAULT_GRAVITY)).toBe(216);
     });
 
     it("does NOTHING to a body that DECLARES NOTHING, however it is classed", () => {
@@ -214,7 +220,7 @@ describe("the stomp, end to end", () => {
         expect(step).toBe(25);
         // The hero is where the step left it — a command moves nothing — and rising.
         expect(world.bodies.get("hero")!.y).toBe(681.25);
-        expect(world.bodies.get("hero")!.vy).toBe(-360);
+        expect(world.bodies.get("hero")!.vy).toBe(-216);
         expect(world.bodies.get("hero")!.onGround).toBe(false);
 
         // The DERIVED document hides it; the STORED one is untouched, so Stop brings it back.
@@ -225,11 +231,20 @@ describe("the stomp, end to end", () => {
         expect(resolveScene(played).nodes.has("enemy")).toBe(false);
         expect(resolveScene(played).nodes.has("hero")).toBe(true);
 
-        // One more step and the bounce is really carrying it upward: -360 + 15 = -345.
+        // One more step and the bounce is really carrying it upward: -216 + 15 = -201.
         const after = stepWorld(doc, world, { controlled: "hero" });
-        expect(after.bodies.get("hero")!.vy).toBe(-345);
-        expect(after.bodies.get("hero")!.y).toBe(681.25 - 345 * FIXED_STEP);
-        expect(after.bodies.get("hero")!.y).toBe(675.5);
+        expect(after.bodies.get("hero")!.vy).toBe(-201);
+        expect(after.bodies.get("hero")!.y).toBe(681.25 - 201 * FIXED_STEP);
+        expect(after.bodies.get("hero")!.y).toBe(677.9);
+        // …AND THE KEY DOES NOT MAKE THE BOUNCE HIGHER, which is the half of slice 16 that would be
+        // easy to get backwards. A stomp requires FALLING onto the thing, and `stepWorld`'s jump
+        // latch closes the moment a body stops rising — so this arc is already committed to full
+        // gravity and leaning on the button buys nothing. Identical to the step above, to the pixel,
+        // and identical for the same reason the original's stomps do not answer the A button.
+        const heldBounce = stepWorld(doc, world,
+            { controlled: "hero", input: { left: false, right: false, jump: true } });
+        expect(heldBounce.bodies.get("hero")!.vy).toBe(-201);
+        expect(heldBounce.bodies.get("hero")!.y).toBe(after.bodies.get("hero")!.y);
     });
 
     it("HIDES A DESPAWNED NODE ON A FRAME WHERE NOTHING MOVED", () => {

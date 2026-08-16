@@ -189,14 +189,75 @@ export const MOVE_SPEED = 220;
 export const JUMP_HEIGHT = 72;
 
 /**
+ * The fraction of gravity that pulls on a RISING body whose jump key is still HELD, and with it the
+ * whole of variable jump height (M18 slice 16).
+ *
+ * THE ERA ASKED FOR THIS. Slice 2 gave the runtime one fixed 72px jump: press, and the arc is
+ * decided. Super Mario Bros.' signature vertical rule is that the arc is decided by YOU — a tap
+ * clears one block and a full hold clears four — and the ladder this project climbs starts at 8-bit,
+ * so a fixed jump is a hole the project INTRODUCED rather than one it found. It is also the first
+ * test of whether the input path can carry something other than a boolean edge, and the answer is
+ * that it did not need to: `Input.jump` was already a HELD state and only the launch read it.
+ *
+ * TWO GRAVITIES, NOT A VELOCITY CUT, which is the mechanism the original uses and not the one most
+ * tutorials reach for. Cutting `vy` toward zero on release gives the same range of heights and a
+ * visible KINK at the moment of release; a weaker gravity while the button is down gives one smooth
+ * arc whose curvature changes, which is what the 1985 game does and what it looks like.
+ *
+ * THE FRACTION IS THE RATIO OF THE SHORTEST JUMP TO THE TALLEST, exactly, and that identity is why
+ * this is one constant rather than two. Launch at `v0`, rise under `g*f` while held: the apex is
+ * `v0^2 / (2*g*f)`. Release immediately and the same `v0` rises under the full `g` to `v0^2 / (2*g)`
+ * — `f` times as far. So `f` is not a tuning knob standing next to a height; it IS the height range,
+ * and `JUMP_HEIGHT` keeps meaning what it always meant: how high a FULLY HELD jump goes.
+ *
+ * WHY 9/25, AND IT IS MEASURED RATHER THAN CHOSEN. The original's `JumpMForceData` and
+ * `FallMForceData` tables hold its two vertical accelerations — `$20`/`$70`, `$1e`/`$60`, `$28`/`$90`
+ * across three speed tiers — but their ratio is NOT the height ratio, because its launch frame is
+ * exempt from the switch and its integrator is fractional. Simulating those tables frame by frame
+ * gives minimum-to-maximum jump heights of 0.350, 0.371 and 0.344. 9/25 = 0.36 sits in the middle of
+ * that, and it is also the value that comes out whole here: the launch speed is EXACTLY 216 px/s
+ * under the default gravity and the apex lands on step 40 exactly, so this module's tests stay
+ * hand-computable. The published block figures agree from the other side — a tap is documented as
+ * "a little over one block" and a full jump as "almost exactly 4 blocks", and 0.36 of `JUMP_HEIGHT`
+ * is 25.92px, which on this project's 18px grid is 1.44 tiles against 4.
+ *
+ * WHAT IS NOT COPIED, said plainly: the original's initial velocity depends on how fast Mario is
+ * RUNNING (-4 px/frame walking, -5 flat out, a jump about 25% taller), and this runtime has no run
+ * to read — its walk is a single set speed. That gap belongs to the acceleration-and-skid hole, not
+ * to this one, and pretending otherwise would put a speed tier on a body with one speed.
+ */
+export const HELD_JUMP_GRAVITY = 9 / 25;
+
+/**
  * The upward speed that reaches exactly `height` under `gravity` — `v = sqrt(2*g*h)`.
  *
  * STATED AS A HEIGHT rather than as a speed, because a height is the thing a level is built from:
  * a jump that clears a three-tile wall is a sentence about the art, and 360 px/s is not. It also
  * means changing gravity keeps the jump clearing the same wall.
+ *
+ * THIS IS THE KINEMATIC IDENTITY AND NOTHING MORE — it does not know that a jump can be held. What
+ * a jump actually launches at is `jumpLaunchSpeed`, and the two were deliberately not merged: a
+ * caller asking "how fast to reach 40px" is asking physics, and a caller asking "how fast does a
+ * jump start" is asking this runtime's policy.
  */
 export function jumpSpeedFor(height = JUMP_HEIGHT, gravity = DEFAULT_GRAVITY): number {
     return Math.sqrt(2 * gravity * Math.max(0, height));
+}
+
+/**
+ * The upward speed a jump — or a bounce off something stomped — actually launches at.
+ *
+ * IT IS THE SHORTEST JUMP'S SPEED, not the tallest's, and that is the whole trick: the launch alone
+ * carries you `height * HELD_JUMP_GRAVITY`, and every pixel above that is bought by keeping the key
+ * down. A launch sized for the full height would make the tap the only jump and the hold a rocket.
+ *
+ * THE BOUNCE USES IT TOO, so "the bounce is exactly a jump's height" survives the change — and it
+ * survives it in the interesting direction: a stomp with the key held carries as high as a jump, and
+ * a stomp with the key released does not. Nothing had to be added for that; it falls out of the
+ * bounce and the jump starting at the same speed.
+ */
+export function jumpLaunchSpeed(gravity = DEFAULT_GRAVITY, height = JUMP_HEIGHT): number {
+    return jumpSpeedFor(Math.max(0, height) * HELD_JUMP_GRAVITY, gravity);
 }
 
 /**
@@ -280,6 +341,23 @@ export interface WorldState {
      * steps from it, and the second step must already know the first consumed the press.
      */
     jumpWas: boolean;
+    /**
+     * Whether the jump in progress has already been COMMITTED to full gravity (slice 16).
+     *
+     * VARIABLE JUMP HEIGHT NEEDS A LATCH OR IT IS A PUMP. Without this, letting go of the key and
+     * pressing it again mid-rise buys back the weak gravity, so the way to jump highest is to
+     * flutter the button — which is not a jump the player is aiming, it is a technique. The original
+     * latches for exactly this reason: its `JumpSwimSub` overwrites the rising acceleration with the
+     * falling one and never puts it back until a NEW jump reloads it.
+     *
+     * IT CLOSES ON EITHER OF TWO THINGS, and the second is the one that is easy to miss: the key
+     * being released, OR the body stopping rising. The original tests `Player_Y_Speed` first and
+     * dumps to fall gravity the moment it is non-negative, holding the key or not — so once you are
+     * past the apex the arc is decided, and anything that pushes you up again during it (a stomp
+     * bounce) rises under FULL gravity. That is why a bounce in the original does not answer the
+     * button, and it falls out of this one field rather than needing a rule of its own.
+     */
+    jumpCut: boolean;
     /**
      * Which (body, region) pairs were overlapping at the END of the last step.
      *
@@ -528,7 +606,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
             vx: 0, vy: 0, onGround: false, groundFriction: 1, blockedX: false, facing: 1
         });
     }
-    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), outcome: "running", jumpWas: false, overlaps: new Set(), events: [] };
+    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), outcome: "running", jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
@@ -754,6 +832,12 @@ export function stepWorld(
     // keeps them paying nothing for a feature they never asked for.
     const tiles = opts?.tileSolids ?? documentHasSolidTiles(doc);
     const next = new Map<string, Body>();
+    // THE JUMP LATCH, decided ONCE for the step rather than per body, because it is a fact about the
+    // player's key and the body that key drives — see `WorldState.jumpCut`. It closes when the key is
+    // released or when the driven body stops rising, and only a fresh launch below reopens it.
+    const driver = controlled !== null ? world.bodies.get(controlled) : undefined;
+    const cutNow = world.jumpCut || !input.jump || driver === undefined || driver.vy >= 0;
+    let launched = false;
 
     for (const [id, was] of world.bodies) {
         const node = doc.nodes.get(id);
@@ -767,7 +851,20 @@ export function stepWorld(
         // before onGround is even declared.
         let blockedX = false;
         let vx = was.vx;
-        let vy = was.vy + gravity * FIXED_STEP;
+        // GRAVITY IS NOT ONE NUMBER while a jump is being held (slice 16). A RISING controlled body
+        // whose jump key is still down is pulled by `HELD_JUMP_GRAVITY` of it, and that is the whole
+        // of variable jump height — see the constant for why it is two gravities rather than a
+        // velocity cut, and for why the fraction IS the ratio of the shortest jump to the tallest.
+        //
+        // THREE CONDITIONS, AND EACH IS LOAD-BEARING. `id === controlled` because nothing else has a
+        // key to hold, and without it every enemy in the level floats the moment the player jumps.
+        // `input.jump` because that is the question. `was.vy < 0` because holding the key must not
+        // slow the FALL — a jump that hangs on the way down is a glide, not a jump, and asking the
+        // PRE-gravity velocity is what keeps the apex step from picking up half a weak step. And
+        // `!world.jumpCut` is the latch: once this arc has been committed to full gravity, pressing
+        // the key again does not buy any of it back.
+        const heldJump = id === controlled && input.jump && was.vy < 0 && !world.jumpCut;
+        let vy = was.vy + (heldJump ? gravity * HELD_JUMP_GRAVITY : gravity) * FIXED_STEP;
         let x = was.x, y = was.y;
 
         // THE CONTROLLED BODY, and only it. Which node that is comes from the caller: nothing in
@@ -806,7 +903,15 @@ export function stepWorld(
             // A JUMP IS AN EDGE, not a state: it fires on the step the key GOES DOWN while the
             // body is on the ground. Holding it must not bunny-hop, and `jumpWas` is what
             // remembers the press across the several steps one frame may take.
-            if (input.jump && !world.jumpWas && was.onGround) vy = -jumpSpeedFor(JUMP_HEIGHT, gravity);
+            //
+            // THE LAUNCH IS AN EDGE; THE HEIGHT IS NOT (slice 16). Keeping the key down after this
+            // line has fired buys altitude through the weaker gravity above, so the two readings of
+            // `input.jump` are asking different questions — "did it just go down" here, "is it still
+            // down" there — and the edge is what stops the second one re-launching.
+            if (input.jump && !world.jumpWas && was.onGround) {
+                vy = -jumpLaunchSpeed(gravity);
+                launched = true;                  // …and a fresh launch is what REOPENS the latch
+            }
         }
 
         // TERMINAL VELOCITY, which is a collision bound before it is a feel decision — see
@@ -964,7 +1069,7 @@ export function stepWorld(
             className: doc.nodes.get(first)?.className ?? "" });
     }
 
-    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, outcome: world.outcome, jumpWas: input.jump, overlaps: inside, events };
+    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, outcome: world.outcome, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
 }
 
 /**

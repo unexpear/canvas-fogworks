@@ -2709,7 +2709,7 @@ interface Body { x; y; vx; vy; onGround: boolean; groundFriction: number }
 // `overlaps` and `contacts` are what make enter/leave and contact/separate EDGES rather than states;
 // `jumpWas` is what makes a held jump key one jump. All three are carried, none are serialized.
 interface WorldState {
-    bodies: ReadonlyMap<string, Body>; time: number; jumpWas: boolean;
+    bodies: ReadonlyMap<string, Body>; time: number; jumpWas: boolean; jumpCut: boolean;
     overlaps: ReadonlySet<string>; contacts: ReadonlySet<string>; events: readonly WorldEvent[];
 }
 // A surface's Coulomb coefficient: 0 is ice, 1 decelerates a body at exactly one gravity. It is the
@@ -2770,8 +2770,21 @@ const MAX_FALL_SPEED: number;          // 1200 px/s. A COLLISION bound before it
                                        // than a function of how far the body fell.
 const MOVE_SPEED: number;              // 220 px/s — a speed you HAVE while held, never accumulated
 const JUMP_HEIGHT: number;             // 72 px, stated as a HEIGHT because that is what a level is
-                                       // built from; the launch speed is derived from it
-function jumpSpeedFor(height?, gravity?): number;      // v = sqrt(2*g*h)
+                                       // built from; the launch speed is derived from it. It is the
+                                       // height of a FULLY HELD jump (slice 16), not of every jump.
+const HELD_JUMP_GRAVITY: number;       // 9/25. The fraction of gravity acting on a RISING controlled
+                                       // body whose jump key is still down — variable jump height,
+                                       // by two gravities rather than a velocity cut. The fraction
+                                       // IS the ratio of the shortest jump to the tallest (same v0,
+                                       // full g vs f*g), so it is one constant and not two heights:
+                                       // a tap clears 25.92px and a hold 72. Measured against the
+                                       // original's own acceleration tables, whose simulated
+                                       // min/max heights are 0.350 / 0.371 / 0.344.
+function jumpSpeedFor(height?, gravity?): number;      // v = sqrt(2*g*h) — the kinematic identity
+function jumpLaunchSpeed(gravity?, height?): number;   // what a jump (or a stomp bounce) STARTS at:
+                                       // `jumpSpeedFor(height * HELD_JUMP_GRAVITY, gravity)` = 216
+                                       // px/s by default. The launch alone carries the SHORTEST
+                                       // jump; every pixel above that is bought by holding the key.
 
 interface Input { left: boolean; right: boolean; jump: boolean }
 const NO_INPUT: Input;
@@ -2779,7 +2792,11 @@ const NO_INPUT: Input;
 // `controlled` names the body the input drives, and it comes from the CALLER: nothing in the corpus
 // says which object is the player, so the app passes whatever was SELECTED when Play was pressed.
 // A jump is an EDGE — `WorldState.jumpWas` is what makes a held key one jump rather than a bounce —
-// and it fires only when `onGround`.
+// and it fires only when `onGround`. The LAUNCH is an edge; the HEIGHT is not (slice 16): keeping
+// the key down weakens gravity while the body rises, and `WorldState.jumpCut` LATCHES that off on
+// the first step the key comes up OR the rise ends, whichever is first. Only a fresh launch reopens
+// it, which is what stops fluttering the button from out-jumping an honest hold — and it is also
+// why a stomp bounce does not answer the key: a stomp requires falling, so the latch is shut.
 function stepWorld(doc, world,
     opts?: { gravity?; solids?; tileSolids?; regions?; input?: Input; controlled?: string | null }): WorldState;
 
