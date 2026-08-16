@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1965;
+const EXPECTED_TESTS = 1968;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1716,6 +1716,17 @@ const MUTANTS = [
       from: "        frames: frames !== null && Number.isFinite(frames) && frames >= 2 ? Math.floor(frames) : null,",
       to: "        frames: frames !== null && Number.isFinite(frames) && frames >= 1 ? Math.floor(frames) : null,",
       note: "a ONE-frame declaration counts as a cycle, so `% 1` pins every such part to frame 0 for ever while the engine does the modulo work anyway — and a zero or negative count would index backwards off the sheet" },
+
+    // BUMPING A BLOCK (M18) — the collision a level made of tiles could not report. Every collision
+    // here was against a NODE; a tilemap collided perfectly and said nothing about which cell.
+    { id: "BP1", file: "src/core/runtime/World.ts",
+      from: "                if (s.nodeId !== undefined && s.cell !== undefined) {",
+      to: "                if (s.nodeId !== undefined && s.cell === undefined) {",
+      note: "the cell test is inverted, so a bump fires only for solids that have NO cell — which is none of them — and hitting a block reports nothing at all while every assertion about landing still passes" },
+    { id: "BP2", file: "src/core/runtime/World.ts",
+      from: "            if (vy > 0) { y = s.y - h; onGround = true; groundFriction = s.friction; }",
+      to: "            if (vy < 0) { y = s.y - h; onGround = true; groundFriction = s.friction; }",
+      note: "LANDING and HEAD-HITTING swap, so standing on a tile floor bumps sixty times a second while hitting a block from below sets onGround — the event this slice adds becomes noise and the ground becomes a ceiling" },
 ];
 
 function runSuite() {

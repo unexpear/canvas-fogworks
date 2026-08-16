@@ -495,6 +495,17 @@ export interface Solid {
     width: number;
     height: number;
     /**
+     * The tilemap node and CELL this box came from, when it came from a tilemap (M18).
+     *
+     * A SOLID WAS A BARE BOX, and that is why a block could not be hit. Every collision in this
+     * runtime was reported against a BODY or a REGION — both of which are nodes — while a level made
+     * of tiles collided perfectly and said NOTHING about which tile. The one thing an author most
+     * wants to act on in this era, bumping the block above your head, was the one collision the
+     * world could not name. Absent for a node solid, whose own id is already the answer.
+     */
+    nodeId?: string;
+    cell?: { col: number; row: number };
+    /**
      * The Coulomb coefficient of whatever a body stands on: 0 is ice, 1 decelerates it at exactly
      * one gravity.
      *
@@ -625,12 +636,21 @@ export function oppositeSide(side: ContactSide): ContactSide {
  * direction for a contact that has ended would be a fact about the past dressed as one about now.
  */
 export interface WorldEvent {
-    kind: "enter" | "leave" | "contact" | "separate";
+    kind: "enter" | "leave" | "contact" | "separate" | "bump";
     bodyId: string;
-    /** The region entered, or the OTHER body met. */
+    /** The region entered, the OTHER body met, or the TILEMAP whose cell was hit. */
     nodeId: string;
     className: string;
     side?: ContactSide;
+    /**
+     * WHICH CELL was hit, for a `bump`. Absent for every other kind.
+     *
+     * The column and row rather than a tile index, because a rule wants to act on the PLACE — that
+     * cell becomes a used block, that cell spawns something — and the index is already readable
+     * from the map at those coordinates. Reporting the index instead would be reporting the answer
+     * to a different question.
+     */
+    cell?: { col: number; row: number };
 }
 
 /** A surface's `friction`, read leniently and clamped — 0 is ice, 1 stops a body dead. */
@@ -810,7 +830,9 @@ export function tileSolidsNear(
                     width: map.tileWidth, height: map.tileHeight,
                     friction: tile && propertyOf(tile.userData, "friction") !== null
                         ? frictionOf(tile) : frictionOf(node),
-                    oneWay: kind === "oneway"
+                    oneWay: kind === "oneway",
+                    nodeId: node.id,
+                    cell: { col, row }
                 });
             }
         }
@@ -947,6 +969,9 @@ export function stepWorld(
     // keeps them paying nothing for a feature they never asked for.
     const tiles = opts?.tileSolids ?? documentHasSolidTiles(doc);
     const next = new Map<string, Body>();
+    // COLLECTED IN THE BODY LOOP, which runs before the event list below exists — a tile bump is
+    // discovered during collision resolution and there is nowhere else it could be noticed.
+    const bumps: WorldEvent[] = [];
     // THE JUMP LATCH, decided ONCE for the step rather than per body, because it is a fact about the
     // player's key and the body that key drives — see `WorldState.jumpCut`. It closes when the key is
     // released or when the driven body stops rising, and only a fresh launch below reopens it.
@@ -1097,7 +1122,24 @@ export function stepWorld(
             // equal to `s.y`, and `<` drops it through the platform it just landed on.
             if (s.oneWay && !(was.y + h <= s.y)) continue;
             if (vy > 0) { y = s.y - h; onGround = true; groundFriction = s.friction; }
-            else { y = s.y + s.height; }
+            else {
+                y = s.y + s.height;
+                // A HEAD HIT ON A TILE, REPORTED (M18). The `else` is the whole condition: the body
+                // was rising and something stopped it from below, which is what hitting a block IS.
+                // Landing on one is the branch above and is not a bump — a floor you stand on must
+                // not fire an event sixty times a second.
+                //
+                // THE WORLD REPORTS AND DOES NOT ACT, which is slice 5's rule and the reason this
+                // is an event rather than a rule. Turning a `?` into a used block and putting a coin
+                // above it are a GAME's decisions, and they need something the command channel does
+                // not have yet: a way to change a CELL, and a way to bring a thing into existence.
+                // Both want their own design. This is the half that is a measurement.
+                if (s.nodeId !== undefined && s.cell !== undefined) {
+                    bumps.push({ kind: "bump", bodyId: id, nodeId: s.nodeId,
+                        className: doc.nodes.get(s.nodeId)?.className ?? "", side: "above",
+                        cell: s.cell });
+                }
+            }
             vy = 0;
         }
 
@@ -1117,7 +1159,9 @@ export function stepWorld(
     // NOT `overlaps` — that is the box test used a dozen lines up, and shadowing it inside the same
     // function turns every collision check into a call on a Set.
     const inside = new Set<string>();
-    const events: WorldEvent[] = [];
+    // BUMPS FIRST, because they happened first: a head hit is resolved during the step, while
+    // enters and contacts are diffed from the SETTLED positions afterwards.
+    const events: WorldEvent[] = [...bumps];
     for (const [id, body] of next) {
         const node = doc.nodes.get(id);
         if (!node) continue;

@@ -808,9 +808,14 @@ describe("a level made of TILES, not rectangles", () => {
         const doc = level(FLOOR);
         // The bottom row starts at y = 100 + 3*16 = 148. A box over columns 0-1 sees two cells.
         const near = tileSolidsNear(doc, { x: 0, y: 148, width: 20, height: 10 });
+        // AND EACH NAMES THE CELL IT CAME FROM (M18). A solid used to be a bare box, which is why a
+        // block could not be hit: every collision here was reported against a node, and a level made
+        // of tiles collided perfectly while saying nothing about WHICH tile.
         expect(near).toEqual([
-            { x: 0, y: 148, width: CELL, height: CELL, friction: 1, oneWay: false },
-            { x: 16, y: 148, width: CELL, height: CELL, friction: 1, oneWay: false }
+            { x: 0, y: 148, width: CELL, height: CELL, friction: 1, oneWay: false,
+              nodeId: "map", cell: { col: 0, row: 3 } },
+            { x: 16, y: 148, width: CELL, height: CELL, friction: 1, oneWay: false,
+              nodeId: "map", cell: { col: 1, row: 3 } }
         ]);
         // OVER THE HOLE it sees nothing, which is what makes this a cell question and not a node one.
         expect(tileSolidsNear(doc, { x: 50, y: 148, width: 10, height: 10 })).toEqual([]);
@@ -892,7 +897,8 @@ describe("a level made of TILES, not rectangles", () => {
         // Col 1 row 1 of a 32x8 grid sits at (32, 8) and is 32 by 8. Swap either dimension and it
         // lands at (8, 8), (32, 32) or with the wrong size — all four are different numbers here.
         expect(tileSolidsNear(doc, { x: 0, y: 0, width: 96, height: 16 }))
-            .toEqual([{ x: 32, y: 8, width: 32, height: 8, friction: 1, oneWay: false }]);
+            .toEqual([{ x: 32, y: 8, width: 32, height: 8, friction: 1, oneWay: false,
+                        nodeId: "map", cell: { col: 1, row: 1 } }]);
     });
 
     it("a dangling tilesetId collides with NOTHING, rather than becoming an invisible wall", () => {
@@ -1296,7 +1302,8 @@ describe("world space — a node's geometry is its PARENT's, not the world's", (
         doc.rootNodeUuids = ["frame"];
         // The solid cell is col 0 of a grid whose origin is 200+5, 300+7.
         expect(tileSolidsNear(doc, { x: 200, y: 300, width: 60, height: 40 }))
-            .toEqual([{ x: 205, y: 307, width: 16, height: 16, friction: 1, oneWay: false }]);
+            .toEqual([{ x: 205, y: 307, width: 16, height: 16, friction: 1, oneWay: false,
+                        nodeId: "map", cell: { col: 0, row: 0 } }]);
     });
 });
 
@@ -1852,5 +1859,109 @@ describe("SCENERY: a layered node is invisible to the physics", () => {
         // than something incidental about the second node.
         (doc.nodes.get("clouds") as Node).depth = 0;
         expect(near(10)).toBeGreaterThan(0);
+    });
+});
+
+describe("BUMPING A BLOCK — the collision a level made of tiles could not report", () => {
+    /**
+     * A one-cell ceiling at (0,0)-(16,16) with a floor well below it, and a body under the ceiling.
+     * 16px cells so the numbers are the fixture's rather than a grid's.
+     */
+    const CEIL = 16;
+    const roomWithCeiling = () => {
+        const doc = createEmptyDocument();
+        doc.tilesets = [{
+            id: "ts", name: "T", src: "t.png", offsetX: 0, offsetY: 0,
+            sheet: { columns: 2, tileWidth: CEIL, tileHeight: CEIL, spacing: 0, margin: 0 },
+            tiles: [{ id: 1, userData: { bodyType: prop("static") } }]
+        }] as unknown as ProjectDocument["tilesets"];
+        doc.nodes.set("blocks", {
+            id: "blocks", type: "core.tilemap", parent: null, children: [], className: "brick",
+            geometry: { x: 0, y: 0, width: 32, height: 16 },
+            style: { fill: "none", opacity: 1 }, layout: {},
+            tilemap: { cols: 2, rows: 1, tileWidth: CEIL, tileHeight: CEIL, tilesetId: "ts",
+                       tiles: [1, 0] }              // ONE solid cell, col 0 row 0
+        } as unknown as Node);
+        doc.rootNodeUuids.push("blocks");
+        doc.nodes.set("floor", {
+            id: "floor", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: -100, y: 100, width: 400, height: 20 },
+            style: { fill: "#888888", opacity: 1 }, layout: {},
+            userData: { bodyType: prop("static") }
+        } as Node);
+        doc.rootNodeUuids.push("floor");
+        doc.nodes.set("hero", {
+            id: "hero", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 2, y: 88, width: 12, height: 12 },
+            style: { fill: "#888888", opacity: 1 }, layout: {},
+            userData: { bodyType: prop("dynamic") }
+        } as Node);
+        doc.rootNodeUuids.push("hero");
+        return doc;
+    };
+    const bumps = (w: WorldState) => w.events.filter(e => e.kind === "bump");
+
+    it("fires on a HEAD HIT, naming the tilemap AND the cell", () => {
+        const doc = roomWithCeiling();
+        // Launched straight up from under the solid cell. Nothing else in this fixture can stop it.
+        const w0 = worldFrom(doc);
+        let w: WorldState = { ...w0,
+            bodies: new Map(w0.bodies).set("hero", { ...w0.bodies.get("hero")!, y: 30, vy: -300 }) };
+        let seen: typeof w.events = [];
+        for (let i = 0; i < 12 && seen.length === 0; i++) {
+            w = stepWorld(doc, w, { controlled: "hero" });
+            seen = bumps(w);
+        }
+        expect(seen).toHaveLength(1);
+        expect(seen[0].nodeId).toBe("blocks");
+        expect(seen[0].cell).toEqual({ col: 0, row: 0 });
+        // THE SIDE IS `above`, said from the BODY's point of view exactly as a contact is: the
+        // thing that stopped it is above it.
+        expect(seen[0].side).toBe("above");
+        // …and the class travels with it, so a rule can tell a brick from a question block without
+        // reaching back into the document.
+        expect(seen[0].className).toBe("brick");
+        // The body really was stopped: it sits directly under the cell with no upward speed left.
+        expect(w.bodies.get("hero")!.y).toBe(CEIL);
+        expect(w.bodies.get("hero")!.vy).toBe(0);
+    });
+
+    it("does NOT fire on LANDING, or a floor would bump sixty times a second", () => {
+        // THE HALF THAT MATTERS MOST. Standing on tiles is the common case in a level made of them,
+        // and an event per step per cell would drown every real one.
+        const doc = roomWithCeiling();
+        let w = worldFrom(doc);
+        for (let i = 0; i < 120; i++) w = stepWorld(doc, w, { controlled: "hero" });
+        expect(w.bodies.get("hero")!.onGround).toBe(true);
+        expect(bumps(w)).toEqual([]);
+        // …and it keeps not firing while the body rests there.
+        for (let i = 0; i < 30; i++) {
+            w = stepWorld(doc, w, { controlled: "hero" });
+            expect(bumps(w)).toEqual([]);
+        }
+    });
+
+    it("says nothing for a NODE solid, whose own id was already the answer", () => {
+        // A rectangle body has an id; a cell does not, which is the entire reason this exists. A
+        // node solid firing a cell-less bump would be a second, weaker way to say what `contact`
+        // already says properly.
+        const doc = docWith([
+            { id: "roof", x: -50, y: 0, w: 200, h: 16, userData: { bodyType: prop("static") } },
+            { id: "b", x: 0, y: 60, userData: { bodyType: prop("dynamic") } }
+        ]);
+        const w0 = worldFrom(doc);
+        let w: WorldState = { ...w0,
+            bodies: new Map(w0.bodies).set("b", { ...w0.bodies.get("b")!, vy: -400 }) };
+        // THE MINIMUM y, not the final one: it hits the roof and then falls back, so asking at the
+        // end would ask whether gravity works rather than whether the roof stopped it.
+        let highest = w.bodies.get("b")!.y;
+        let fired = 0;
+        for (let i = 0; i < 12; i++) {
+            w = stepWorld(doc, w, { controlled: "b" });
+            highest = Math.min(highest, w.bodies.get("b")!.y);
+            fired += bumps(w).length;
+        }
+        expect(highest).toBe(16);                       // it really did hit the roof
+        expect(fired).toBe(0);
     });
 });

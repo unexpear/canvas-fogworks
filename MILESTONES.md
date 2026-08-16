@@ -1601,6 +1601,38 @@ same measurement that killed blocker two answers this too.
 8 tests, 3 mutants, 3/3 killed. `clipFrameAt` still has zero production callers, which is now a
 statement about a path not taken rather than an unreachable feature.
 
+**Slice 23 — BUMPING A BLOCK, the collision a level made of tiles could not report.** Placing pipes,
+bricks and `?` blocks in the test level exposed it immediately: they were solid, you could stand on
+them and jump into them, and **hitting one produced nothing at all**.
+
+**A SOLID WAS A BARE BOX, and that is the whole defect.** Every collision this runtime reported was
+against a NODE — a body meeting a body, a body entering a region — because both have ids. A tilemap
+is ONE node holding ten thousand cells, so it collided perfectly and said nothing about WHICH cell.
+The single thing an author most wants to act on in this era, bumping the block above your head, was
+the one collision the world could not name. `Solid` now carries `nodeId` and `cell`, and
+`tileSolidsNear` fills them.
+
+**THE `else` IS THE WHOLE CONDITION.** A head hit is "the body was rising and something stopped it
+from below", which is exactly the branch the vertical resolution already had — landing is the other
+one. No new test, no threshold, no guess. BP2 swaps them and 49 fixtures fail: a floor that bumps
+sixty times a second and a ceiling you stand on.
+
+**THE WORLD REPORTS AND DOES NOT ACT**, which is slice 5's rule and deliberate here. Turning a `?`
+into a used block and putting a coin above it are a GAME's decisions, and they need two things the
+command channel does not have: a way to change a CELL mid-run, and a way to bring a thing into
+EXISTENCE. `applyCommands` can despawn and set a velocity; it cannot create. Both want their own
+design, and inventing either inside a collision resolver is how a physics loop becomes a game.
+
+**THE CELL, NOT THE TILE INDEX.** A rule wants to act on the PLACE — that cell becomes used, that
+cell spawns something — and the index is already readable from the map at those coordinates.
+Reporting the index would answer a different question.
+
+**NOTHING FIRES FOR A NODE SOLID**, and that is a decision rather than an omission: a rectangle has
+an id, so `contact` already says it properly. A cell-less bump would be a second, weaker way to say
+the same thing.
+
+3 tests, 2 mutants, 2/2 killed.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.
