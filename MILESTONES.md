@@ -1870,6 +1870,16 @@ the floor. A wide level opens on its beginning at the scale a screen of it was d
 opens on its top. Measured on the real level: the ground is **21% of the canvas** where the ask was
 a quarter or less, and the sky is the rest.
 
+**AND WHAT SET THE DOCUMENT'S HEIGHT WAS NOT THE LEVEL.** Filling the view left a band of sky under
+the floor anyway, and the arithmetic said why: the framing chose 176% where 188% fills a 474px
+canvas, which is 474/270 rather than 474/252. The terrain is 14 rows; the two DECORATIVE parallax
+layers were still 15, their last row entirely empty, and a left-wall rectangle was still 270 tall.
+`contentBounds` is the union over every node, so an empty trailing row in a layer that draws nothing
+there set the document's height — and with it the open framing, the camera clamp and the death
+plane. The third instance of a geometry-derived value moving for a reason that had nothing to do
+with it, after the parallax dirty set and the spawned bodies. Trimming the empty tails put the
+ground at **21.5% of the frame** with nothing below it.
+
 **STILL OPEN, and stated rather than fixed:** the background is painted in SCREEN space
 (`svg.style.background`) by every backend, deliberately — a level three screens wide needs no
 three-screen rectangle behind it, and in PLAY that is simply correct. The cost is that the EDITOR
