@@ -24559,34 +24559,42 @@ describe("Zoom to fit", () => {
         expect(centre.y * vp.zoom - vp.y).toBeCloseTo(size.height / 2, 9);
     });
 
-    test("OPENING a document never shows it smaller than actual size", () => {
-        const size = { width: 554, height: 622 };
-        // THE LEVEL THAT PROVED FIT WAS THE WRONG QUESTION — 3618x270, measured in the app: fitting
-        // it picks zoom 0.15 and leaves the whole level occupying 7.9% of the canvas, every tile
-        // under three pixels across.
-        const level = { x: -18, y: 0, width: 3618, height: 270 };
-        expect(viewportToFit(level, size, FIT_PADDING_PX, 1).zoom).toBeLessThan(0.2);
-        const open = viewportToOpen(level, size, FIT_PADDING_PX);
-        expect(open.zoom).toBe(1);
-        // The axis that FITS is centred — this is the defect the user reported, a ground plane
-        // hard against the top of the frame with empty sky under it, because nothing framed it.
-        expect(level.y + level.height / 2 - open.y).toBeCloseTo(size.height / 2, 9);
-        // …and the axis that does NOT fit opens on the document's own start, not its middle.
-        expect(open.x).toBe(level.x - FIT_PADDING_PX);
+    test("OPENING a document FILLS the view when it cannot be framed at actual size", () => {
+        const size = { width: 1010, height: 885 };
+        // THE LEVEL THAT PROVED FIT WAS THE WRONG QUESTION — measured in the app, fitting a
+        // 3618x252 side-scroller picks zoom 0.28 and leaves it a strip across the middle.
+        const level = { x: -18, y: 0, width: 3618, height: 252 };
+        expect(viewportToFit(level, size, FIT_PADDING_PX, 1).zoom).toBeLessThan(0.3);
 
-        // A TALL DOCUMENT IS THE SAME RULE THE OTHER WAY UP: opened on its top, centred across.
+        const open = viewportToOpen(level, size, FIT_PADDING_PX);
+        // The looser axis sets the zoom, so the document's HEIGHT matches the canvas exactly —
+        // no margin, because a margin here is sky under the floor.
+        expect(level.height * open.zoom).toBeCloseTo(size.height, 9);
+        // …and the axis that runs off the side opens at the document's start, not its middle.
+        expect(level.x * open.zoom - open.x).toBeCloseTo(0, 9);
+
+        // THE PROPORTION THAT WAS ASKED FOR, and the reason any of this is a number rather than a
+        // taste: an 8-bit level is fifteen tiles tall with its ground in the bottom few, and that
+        // ground must be a QUARTER of the screen or less. At actual size on this canvas it is not —
+        // forty-nine rows of a fifteen-row level puts the horizon a fifth of the way down.
+        const groundTop = 198;                   // the grass line, 11 rows of 18px
+        const groundOnScreen = (level.height - groundTop) * open.zoom;
+        expect(groundOnScreen / size.height).toBeLessThanOrEqual(0.25);
+        const atActualSize = (level.height - groundTop) * 1;
+        expect(atActualSize / size.height).toBeLessThan(0.25);   // …the trap: small for the WRONG reason
+        expect(groundTop * open.zoom).toBeGreaterThan(size.height * 0.7);   // sky is the rest
+
+        // A TALL DOCUMENT IS THE SAME RULE THE OTHER WAY UP: its width fills, and it opens on its top.
         const tower = { x: 0, y: 0, width: 270, height: 3618 };
         const up = viewportToOpen(tower, size, FIT_PADDING_PX);
-        expect(up.y).toBe(-FIT_PADDING_PX);
-        expect(tower.width / 2 - up.x).toBeCloseTo(size.width / 2, 9);
+        expect(tower.width * up.zoom).toBeCloseTo(size.width, 9);
+        expect(tower.y * up.zoom - up.y).toBeCloseTo(0, 9);
 
         // AND A DOCUMENT THAT FITS IS FRAMED EXACTLY AS THE MENU FRAMES IT — no second answer to
-        // one question. This one is smaller than the viewport, so fitting MAGNIFIES it, and the
-        // floor must not clip that: it is a floor on shrinking, not a cap on zoom.
+        // one question, and no crop of a drawing that had room to spare.
         const small = { x: 100, y: 100, width: 200, height: 100 };
         expect(viewportToOpen(small, size, FIT_PADDING_PX))
             .toEqual(viewportToFit(small, size, FIT_PADDING_PX, 1));
-        expect(viewportToOpen(small, size, FIT_PADDING_PX).zoom).toBeGreaterThan(1);
     });
 
     test("the app FRAMES the document it opened with, rather than starting at the origin", () => {

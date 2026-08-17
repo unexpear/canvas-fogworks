@@ -1853,11 +1853,22 @@ the same reachability shape as Escape and the GPU backend.
 
 **AND FIT WAS THE WRONG QUESTION, which only the running app said.** Framing on load with
 `viewportToFit` put the 3618x270 level at zoom 0.15, occupying **7.9% of the canvas**, every tile
-under three pixels. So `viewportToOpen` is its own function with its own rule: fit, but never show a
-document SMALLER than actual size — the axis that fits is centred, the axis that overflows opens at
-the document's own start. A wide level opens on its beginning, a tall one on its top, and a drawing
-smaller than the canvas is framed exactly as the menu frames it. Measured after: 7.9% -> 37.6%, at
-100%, opening on the level's left edge.
+under three pixels. **SO WAS "ACTUAL SIZE", which took a second measurement and a second report to
+see.** An 8-bit level is fifteen tiles tall by construction and its ground occupies four of them —
+proportions that are CORRECT in the document and only look wrong on screen. Opening it at 100% on an
+885px canvas shows forty-nine rows of a level drawn for fifteen, so the horizon lands a fifth of the
+way down with sky beneath it. The pixels were honest and the picture was wrong, and my first answer
+to that — deepening the level's floor until it covered the frame — treated the symptom, wrecked the
+level's proportions, and tripled how long a pit took to kill (0.47s to 1.27s, measured). It was
+reverted.
+
+**`viewportToOpen` FILLS THE VIEW instead.** A document that fits at actual size or larger is framed
+exactly as the menu frames it; one that does not has its LOOSER axis set the zoom, so one axis
+matches the canvas exactly and the other opens at the document's own start. No padding on the filled
+axis — a margin there puts background where the document should be, which for a level is sky under
+the floor. A wide level opens on its beginning at the scale a screen of it was drawn for; a tall one
+opens on its top. Measured on the real level: the ground is **21% of the canvas** where the ask was
+a quarter or less, and the sky is the rest.
 
 **STILL OPEN, and stated rather than fixed:** the background is painted in SCREEN space
 (`svg.style.background`) by every backend, deliberately — a level three screens wide needs no
@@ -1865,7 +1876,7 @@ three-screen rectangle behind it, and in PLAY that is simply correct. The cost i
 gives no indication of where the document ends, so a framed level still floats in an unbounded sky.
 That is a decision about what an editor shows, not a defect in the runtime.
 
-4 tests, 2 mutants.
+4 tests, 3 mutants (VO1-VO3).
 
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,

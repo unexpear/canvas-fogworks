@@ -1603,6 +1603,7 @@ function zoomAt(vp, factor: number, cursorX: number, cursorY: number): void; // 
 // PROTOTYPE NAVIGATION (schema 36) — pure, and RETURNING a viewport rather than mutating one,
 // because a navigation needs both ends to interpolate between.
 function viewportToFit(bounds: Rect, size: Size, padding: number, fallbackZoom: number): EditorState["viewport"]; // "zoom to this frame": the tighter axis wins, the rect is centred, the result is CLAMPED; a degenerate rect keeps the current zoom rather than dividing by zero
+function viewportToOpen(bounds: Rect, size: Size, padding: number): EditorState["viewport"];         // "what you see when a document OPENS": FRAMED if it fits at actual size or larger, otherwise FILLING the view — the looser axis sets the zoom and the other opens at the document's start, with no padding on the filled axis
 const FIT_PADDING_PX = 24;
 function overlayTransform(world: Mat2D, vp): string;   // a node's world matrix as the CSS transform
                              // that puts a DOM overlay exactly on it — the on-canvas text field.

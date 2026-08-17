@@ -183,21 +183,29 @@ export const FIT_PADDING_PX = 24;
  * somewhere reachable instead of somewhere the user cannot get back from.
  */
 /**
- * The viewport a document is OPENED at — framed, but never shown smaller than actual size.
+ * The viewport a document is OPENED at — framed if it fits, and FILLING the view if it does not.
  *
  * NOT THE SAME QUESTION AS `viewportToFit`, and measuring is what said so. "Fit the whole document"
  * is right for a frame you asked to zoom to; applied to a 3618x270 side-scrolling level in a 554px
  * viewport it picks zoom 0.15 and the level occupies **7.9% of the canvas** — every tile under three
- * pixels. Measured in the running app, which is the only reason this function exists rather than a
- * second call to the first one.
+ * pixels.
  *
- * SO THE ZOOM HAS A FLOOR OF 1. A document that fits is framed exactly as the menu would frame it.
- * One that does not is shown at 100% — actual size, the thing the author drew — with each axis
- * treated on its own: the axis that fits is CENTRED, and the axis that overflows is anchored at the
- * document's own start, so a wide level opens on its beginning and a tall one on its top.
+ * AND "ACTUAL SIZE" WAS THE WRONG ANSWER TOO, which took a second measurement to see. An 8-bit level
+ * is fifteen tiles tall by construction, and its ground occupies four of them — proportions that are
+ * correct in the DOCUMENT and only look wrong on screen. Opening it at 100% on an 885px canvas shows
+ * forty-nine rows of a level drawn for fifteen, so the ground lands a fifth of the way down with sky
+ * under it; the pixels are honest and the picture is wrong. Nobody views pixel art at 1:1 on a
+ * modern display.
  *
- * The alternative was "fill the viewport and crop", which is right for this level and wrong for
- * every document smaller than the canvas — it would crop a 400x300 drawing that had room to spare.
+ * SO A DOCUMENT TOO BIG TO FRAME AT ACTUAL SIZE FILLS THE VIEW: the LOOSER axis sets the zoom, so
+ * one axis matches the canvas exactly and the other runs off the side, opening at the document's own
+ * start. A wide level opens on its beginning at the scale a screen of it was drawn for; a tall one
+ * opens on its top. NO PADDING on the filled axis — a margin there puts background where the
+ * document should be, which for a level means sky under the floor, the exact defect that was
+ * reported.
+ *
+ * The crop this can cause is bounded by the two axes' aspect mismatch, so it is nothing for a
+ * document shaped like the canvas and everything for a level strip — which is the whole point.
  */
 export function viewportToOpen(
     bounds: { x: number; y: number; width: number; height: number },
@@ -206,12 +214,15 @@ export function viewportToOpen(
 ): EditorState["viewport"] {
     const fit = viewportToFit(bounds, size, padding, 1);
     if (fit.zoom >= 1) return fit;
-    const fitsX = bounds.width + padding * 2 <= size.width;
-    const fitsY = bounds.height + padding * 2 <= size.height;
+    const zoom = Math.max(size.width / bounds.width, size.height / bounds.height);
+    // The axis the zoom came from matches the canvas exactly, so centring and anchoring agree on it;
+    // this only decides the OTHER one, which opens at the document's start rather than its middle.
     const vp = {
-        zoom: 1,
-        x: fitsX ? bounds.x + bounds.width / 2 - size.width / 2 : bounds.x - padding,
-        y: fitsY ? bounds.y + bounds.height / 2 - size.height / 2 : bounds.y - padding
+        zoom,
+        x: bounds.width * zoom <= size.width
+            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * bounds.x,
+        y: bounds.height * zoom <= size.height
+            ? zoom * (bounds.y + bounds.height / 2) - size.height / 2 : zoom * bounds.y
     };
     clampViewport(vp);
     return vp;
