@@ -140,7 +140,7 @@ import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
 import { naturalSize, surfaceUrl, imageSizeAsync } from "../../src/renderer/ImageCache";
-import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds, applyCells, applySpawns } from "../core/runtime/World";
+import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds, applyCells, applySpawns, playBounds } from "../core/runtime/World";
 import { marioRules } from "../core/runtime/Rules";
 import { applyPose } from "../core/runtime/Parts";
 import { followCamera } from "../core/runtime/Camera";
@@ -1557,7 +1557,10 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             // O(nodes); the frame it is captured on is the first the camera has a limit, which is a
             // frame at the position the editor was already showing.
             if (es.playing && es.world && runBoundsRef.current === null) {
-                runBoundsRef.current = contentBounds(computed);
+                // THROUGH `playBounds`, so a DECLARED screen (schema 72) pins the run's vertical
+                // extent — the death plane and the camera's clamp stop being a measurement an
+                // empty scenery row can move. Without one this is `contentBounds` exactly.
+                runBoundsRef.current = playBounds(contentBounds(computed), dispatcher.getDocument().screen);
             }
             prevPendingRef.current = pendingKeys;
             dirtyNodesRef.current = new Set();

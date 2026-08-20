@@ -1921,6 +1921,28 @@ plays.
 6 tests, 3 mutants (DS1-DS3 — DS because SC was already the setCell family; the EX1-EX7 collision
 lesson, checked before writing this time).
 
+**Slice 32 — THE RUNTIME READS THE SCREEN: `playBounds`.** The gap slice 31 stated, closed the next
+slice rather than silently inside it. A declared screen now pins the run's VERTICAL extent — the
+death plane and the camera's clamp — while the horizontal span stays measured, because a
+side-scroller is as LONG as its content but as TALL as one screen: SMB1 scrolls five screens of
+length and not one pixel of height, and its pits kill at the screen's bottom even though the shaft
+is drawn below it.
+
+**THIS IS THE SLICE-30 DEFECT CLOSED PROPERLY, not worked around.** Trimming the empty scenery rows
+fixed the LEVEL; any future decoration below the floor would have moved the death plane again,
+because the play area was a measurement. It is now a statement: the fall-time fixture reproduces
+the deepened-floor shape (content 900 tall, screen 220) and dies in less than half the steps, with
+the level's 3618px width asserted untouched — the axis a screen must never pin.
+
+**WITHOUT A SCREEN, `playBounds(content)` RETURNS THE SAME OBJECT** — not an equal one — so every
+pre-72 level plays identically by identity, not by coincidence.
+
+**STATED LIMIT, in the docstring rather than discovered later:** a vertically scrolling level wants
+the opposite axes and is not served; its author should not declare a screen yet. The tower level on
+M18's ladder will find this hole, which is what the ladder is for.
+
+4 tests, 3 mutants (RB1-RB3; RB3 is the Escape-key shape — the app not asking).
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

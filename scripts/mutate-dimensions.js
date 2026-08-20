@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1994;
+const EXPECTED_TESTS = 1998;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1810,6 +1810,21 @@ const MUTANTS = [
       from: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * bounds.x,",
       to: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * (bounds.x + bounds.width / 2) - size.width / 2,",
       note: "the axis that runs off the side is CENTRED instead of opened at the document's start, so a 200-column level opens on column 100 — the middle of a level nobody has played yet, and a tall document opens halfway down" },
+
+    // PLAY BOUNDS (M18 slice 32) — a declared screen pins the run's vertical extent, so decoration
+    // below the floor stops moving the death plane (0.47s -> 1.27s, measured, twice).
+    { id: "RB1", file: "src/core/runtime/World.ts",
+      from: "    if (!screen) return content;",
+      to: "    if (true) return content;",
+      note: "the declared screen is ignored entirely, so the death plane and the camera clamp go back to being a measurement — the exact defect this function exists to close, and a fixture that never declares a screen cannot see it" },
+    { id: "RB2", file: "src/core/runtime/World.ts",
+      from: "    return { x: content.x, y: 0, width: content.width, height: screen.height };",
+      to: "    return { x: 0, y: 0, width: screen.width, height: screen.height };",
+      note: "the HORIZONTAL span is pinned to one screen too, so the camera cannot scroll a 3618px level past its first 432px and the death plane is right while the game is unplayable — only an assertion on the width can see it" },
+    { id: "RB3", file: "src/app/App.tsx",
+      from: "                runBoundsRef.current = playBounds(contentBounds(computed), dispatcher.getDocument().screen);",
+      to: "                runBoundsRef.current = contentBounds(computed);",
+      note: "the app stops asking, so the function is right, tested, and unreachable — the Escape-key shape, a green suite over code nothing calls" },
 
     // THE DOCUMENT'S SCREEN (schema 72) — one screenful of the game, drawn as chrome. DS, because
     // SC was already the setCell family: the id-collision lesson EX1-EX7 paid for, checked this

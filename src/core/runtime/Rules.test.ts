@@ -6,7 +6,7 @@ import {
     worldFrom, stepWorld, applyWorld, applyCommands, movedIds, WorldState
 } from "./World";
 import { marioRules } from "./Rules";
-import { applyCells, cellKey, applySpawns, regionsOf, facedIds } from "./World";
+import { applyCells, cellKey, applySpawns, regionsOf, facedIds, playBounds } from "./World";
 import { partOf } from "./Parts";
 import { readFileSync } from "fs";
 import { resolve } from "path";
@@ -450,6 +450,63 @@ describe("setCell — a bumped block BECOMES something, without editing the leve
     it("and the APP stamps them — a derivation nothing calls is not a feature", () => {
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         expect(app).toMatch(/applyCells\(/);
+    });
+});
+
+describe("playBounds — a declared screen pins the run's vertical extent", () => {
+    it("closes the slice-30 defect: decoration below the floor stops moving the death plane", () => {
+        // MEASURED TWICE BEFORE THIS EXISTED: an empty trailing scenery row moved `contentBounds`
+        // from 252 to 270, and a floor deepened for looks moved it to 900 — tripling how long a
+        // pit took to kill (0.47s to 1.27s). The play area must be a STATEMENT, not a measurement.
+        const decorated = { x: -18, y: 0, width: 3618, height: 900 };
+        const held = playBounds(decorated, { width: 432, height: 252 });
+        expect(held).toEqual({ x: -18, y: 0, width: 3618, height: 252 });
+        // The HORIZONTAL span stays measured — a side-scroller is as LONG as its content but as
+        // TALL as one screen; SMB1 scrolls five screens of length and not one pixel of height.
+        expect(held!.x).toBe(decorated.x);
+        expect(held!.width).toBe(decorated.width);
+    });
+
+    it("without a screen it IS the content — every pre-72 level plays identically", () => {
+        const content = { x: -18, y: 0, width: 3618, height: 270 };
+        expect(playBounds(content)).toBe(content);
+        expect(playBounds(content, undefined)).toBe(content);
+        expect(playBounds(null)).toBeNull();
+        // …and an empty document with a screen is one screen — there is nothing else to measure.
+        expect(playBounds(null, { width: 432, height: 252 }))
+            .toEqual({ x: 0, y: 0, width: 432, height: 252 });
+    });
+
+    it("REACHES THE RUN: the fall that took three times as long is short again", () => {
+        // The same fixture shape the deepened level had — a floor with a pit, and dirt drawn far
+        // below it — stepped through the REAL rules with and without a declared screen. Without,
+        // the body must fall past the decoration's bottom to die; with, it dies at the screen's.
+        const doc = docWith([
+            { id: "floorL", x: 0, y: 200, w: 100, h: 700, userData: { bodyType: prop("static") } },
+            { id: "floorR", x: 150, y: 200, w: 100, h: 700, userData: { bodyType: prop("static") } },
+            { id: "hero", x: 110, y: 180, w: 18, h: 18, userData: { bodyType: prop("dynamic") } }
+        ]);
+        const content = { x: 0, y: 0, width: 250, height: 900 };   // the decoration's extent
+        const fallTime = (bounds: { x: number; y: number; width: number; height: number }) => {
+            let w = worldFrom(doc);
+            for (let i = 0; i < 600; i++) {
+                w = stepWorld(doc, w, { controlled: "hero", input: { left: false, right: false, jump: false } });
+                w = applyCommands(w, marioRules(doc, w, { controlled: "hero", bounds }));
+                if (w.outcome !== "running") return i;
+            }
+            return -1;
+        };
+        const slow = fallTime(content);
+        const fast = fallTime(playBounds(content, { width: 250, height: 220 })!);
+        expect(fast).toBeGreaterThan(0);
+        // Dying at the screen's bottom instead of the decoration's is what "faster" means here —
+        // the margin is real (hundreds of pixels of extra fall), not a rounding artefact.
+        expect(fast).toBeLessThan(slow / 2);
+    });
+
+    it("…and the APP asks it, or the field changes nothing anybody can see", () => {
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/playBounds\(contentBounds\(computed\), dispatcher\.getDocument\(\)\.screen\)/);
     });
 });
 

@@ -129,9 +129,11 @@ interface Geometry { x: number; y: number; width: number; height: number; }
 // default) and GameMaker its room views; the outline here is editor CHROME, emitted first in the
 // render model's overlay, never a node and never exported. Validated FINITE AND POSITIVE, nothing
 // else. Written only by `SetScreenAction`; a Tiled import declares the map's own pixel size in the
-// same transaction, and never resizes a screen the document already declares. NOT yet read by the
-// follow camera or the death plane — that is a later slice, and this sentence is the honest
-// statement of the gap.
+// same transaction, and never resizes a screen the document already declares. READ by the runtime
+// through `playBounds` (M18 slice 32): a declared screen pins the run's VERTICAL extent — the death
+// plane and the camera's clamp — while the horizontal span stays measured, because a side-scroller
+// is as long as its content but as tall as one screen. A vertically scrolling level wants the
+// opposite axes and is not served yet; its author should not declare a screen.
 //
 // LIGHTING (schema 42). Document.lights?: Light[] (max 4) + Document.ambient?: 0..1.
 interface Light { x: number; y: number; z: number; color: string; intensity: number }

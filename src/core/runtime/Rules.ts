@@ -42,9 +42,10 @@ export interface RuleContext {
     /**
      * The level's extent, for the one ending that no part can declare: falling out of the world.
      *
-     * A LEVEL HAS NO EDGE OF ITS OWN — nothing in the document says "the level stops here" — so the
-     * caller supplies the content's bounds, which is the same rectangle the camera already refuses
-     * to scroll past. Absent means no floor of last resort, which is what the runtime did before.
+     * A LEVEL'S EDGE IS `playBounds` — the content's measured extent, unless the document DECLARES
+     * a screen (schema 72), which pins the vertical span. The caller supplies it, and it is the
+     * same rectangle the camera refuses to scroll past — one edge of the world, not two. Absent
+     * means no floor of last resort, which is what the runtime did before.
      */
     bounds?: { x: number; y: number; width: number; height: number } | null;
     /** Matches `stepWorld`'s, so a level with a different gravity keeps the bounce proportionate. */
@@ -99,8 +100,9 @@ export function marioRules(
     // level's bottom is gone: it will never come back, terminal velocity is 1200 px/s, and the run
     // that produced this rule had reached y=4658 with nothing to do but press Stop.
     //
-    // ONE BODY HEIGHT OF SLACK, so standing on the very lowest floor is not death. `bounds` is the
-    // CONTENT's extent, so its bottom edge is the underside of the lowest thing in the level.
+    // ONE BODY HEIGHT OF SLACK, so standing on the very lowest floor is not death. `bounds` is
+    // `playBounds` — the content's extent, unless the document DECLARES a screen (schema 72), in
+    // which case the bottom edge is the screen's and decoration drawn below it kills nothing.
     const body = world.bodies.get(me);
     const node = doc.nodes.get(me);
     if (body && node && ctx.bounds) {

@@ -727,6 +727,33 @@ export function bodyTypeOf(node: { userData?: UserData }): "static" | "dynamic" 
  * copy of something the document already states — and the two could disagree the moment somebody
  * edits the level. They are read fresh from the document every step, by `solidsOf`.
  */
+/**
+ * The rectangle a RUN is held inside — the camera's clamp and the death plane's floor.
+ *
+ * WITHOUT A DECLARED SCREEN IT IS THE CONTENT'S EXTENT, exactly as before, and every level authored
+ * before schema 72 plays identically. WITH ONE, the VERTICAL span is the screen's — [0, height],
+ * anchored where the screen is — and the horizontal span stays measured, because a side-scroller is
+ * as LONG as its content but as TALL as one screen: SMB1 scrolls five screens of length and not one
+ * pixel of height, and its pits kill at the screen's bottom even though the shaft is drawn below.
+ *
+ * THIS IS THE SLICE-30 DEFECT CLOSED PROPERLY. An empty trailing scenery row moved `contentBounds`
+ * from 252 to 270 and the death plane with it; deepening a floor for looks once moved it to 900 and
+ * TRIPLED how long a pit took to kill (0.47s to 1.27s, measured). A declared screen makes the play
+ * area a statement instead of a measurement, so decoration below the floor changes nothing.
+ *
+ * STATED LIMIT: a VERTICALLY scrolling level wants the opposite axes, and this function does not
+ * serve one — its author should not declare a screen yet. The tower level that reaches M18's ladder
+ * will find this hole, which is what the ladder is for.
+ */
+export function playBounds(
+    content: { x: number; y: number; width: number; height: number } | null,
+    screen?: { readonly width: number; readonly height: number }
+): { x: number; y: number; width: number; height: number } | null {
+    if (!screen) return content;
+    if (!content) return { x: 0, y: 0, width: screen.width, height: screen.height };
+    return { x: content.x, y: 0, width: content.width, height: screen.height };
+}
+
 export function worldFrom(doc: ReadonlyDocument): WorldState {
     const bodies = new Map<string, Body>();
     for (const node of doc.nodes.values()) {
