@@ -10,7 +10,7 @@
  * corrupting state later.
  */
 
-import { ReadonlyDocument, backgroundError } from "./Document";
+import { ReadonlyDocument, backgroundError, screenError } from "./Document";
 import { ReadonlyNode } from "./SceneGraph";
 import { transformError, layoutError, dimensionError, pathError, booleanOpError, srcError, sourceRectError, nineSliceError, styleError, nodeIdError, variantError, variantSelectionError, slotError, slotContentError, variantNameError, classNameError, userDataError } from "./Node";
 import { interactionsError } from "./Prototype";
@@ -186,6 +186,10 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
     // it has no sky and empty is how a field gets cleared by accident.
     const bgErr = backgroundError(doc.background);
     if (bgErr) throw new Error(`Invalid document: ${bgErr}.`);
+    // THE SCREEN (schema 72): finite and positive, nothing else — the loader's copy of the same
+    // rule `SetScreenAction` runs, so an action cannot author what a reload would refuse.
+    const scErr = screenError(doc.screen);
+    if (scErr) throw new Error(`Invalid document: ${scErr}.`);
     const tlErr = timelineError(doc.timeline);
     if (tlErr) throw new Error(`Invalid document: ${tlErr}.`);
     // CLIPS are checked against the timeline they name frames in, so a range over a clock that

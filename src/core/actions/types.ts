@@ -174,7 +174,10 @@ export type NodeDelta =
     /** WHAT THE DOCUMENT SITS ON (schema 70). Whole-value under its own document key, like the
      *  tileset table and the clock. `undefined` removes it, which is how a document says it has no
      *  sky — the state every document was in before this field existed. */
-    | { kind: "background"; background: string | undefined };
+    | { kind: "background"; background: string | undefined }
+    /** ONE SCREEN OF THE GAME (schema 72). Whole-value under its own document key, like the sky it
+     *  sits beside. `undefined` removes the declaration — the state of every pre-72 document. */
+    | { kind: "screen"; screen: { width: number; height: number } | undefined };
 
 /** The result of an action execution. Communicates changes without coupling services. */
 export interface MutationResult {

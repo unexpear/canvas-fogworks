@@ -114,6 +114,7 @@ export interface SerializedDocument {
         ambient?: number;
         /** What the document sits on (schema 70). Absent = transparent, as every document was. */
         background?: string;
+        screen?: { width: number; height: number };
     };
 }
 
@@ -153,7 +154,8 @@ export function serializeDocument(doc: ReadonlyDocument): string {
             ...(doc.ambient !== undefined ? { ambient: doc.ambient } : {}),
             // Omitted when absent, so a document with no sky serialises byte-for-byte as it did
             // before schema 70 — the same rule every optional field here follows.
-            ...(doc.background !== undefined ? { background: doc.background } : {})
+            ...(doc.background !== undefined ? { background: doc.background } : {}),
+            ...(doc.screen !== undefined ? { screen: { width: doc.screen.width, height: doc.screen.height } } : {})
         }
     };
 
@@ -250,6 +252,9 @@ export function deserializeDocument(json: string): ProjectDocument {
     }
     if ("background" in migrated.document) {
         doc.background = migrated.document.background as string;
+    }
+    if ("screen" in migrated.document) {
+        doc.screen = migrated.document.screen as { width: number; height: number };
     }
 
     // Reconstruct the Map, validating each node's shape and key/id agreement.
@@ -399,6 +404,11 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     // required all the same — a schema-70 build would load a side-scroller's scenery and lift it
     // off the horizon on every vertical pan, which is the defect this field exists to end.
     if (version === "70") { raw = { ...raw, version: "71" }; version = "71"; }
+    // 71 -> 72: a document gained a SCREEN — the play area's size, one screenful of the game.
+    // Named and empty: absent means "undeclared", which is what every document was, and nothing
+    // reads the field on an old file. The bump is required all the same — a schema-71 build would
+    // load a document that declares its screen and silently drop the declaration on save.
+    if (version === "71") { raw = { ...raw, version: "72" }; version = "72"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {

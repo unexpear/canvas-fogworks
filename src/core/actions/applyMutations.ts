@@ -200,6 +200,12 @@ export function applyMutationsToDocument(
                 doc.background = delta.background;
                 return;
             }
+            case "screen": {
+                // One screen of the game (schema 72). `undefined` removes the declaration, so a
+                // cleared screen serialises byte-for-byte as a document that never declared one.
+                doc.screen = delta.screen;
+                return;
+            }
             case "activeState": {
                 // Document-level state (M7): which named state everything resolves against.
                 doc.activeState = delta.activeState;

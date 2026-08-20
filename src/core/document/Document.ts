@@ -164,7 +164,7 @@ import type { TimelineSettings } from "./Timeline";
 import type { Light } from "./Light";
 import type { Tileset } from "./Tileset";
 
-export const SCHEMA_VERSION = "71";
+export const SCHEMA_VERSION = "72";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
@@ -263,6 +263,29 @@ export interface ProjectDocument {
      */
     background?: string;
 
+    /**
+     * ONE SCREEN OF THE GAME (schema 72) — the play area's size in world units.
+     *
+     * THE RECTANGLE AN EDITOR SHOULD SHOW IS NOT THE CONTENT'S EXTENT, and both engines that have
+     * a document agree: Godot draws the project's viewport size as four translucent lines
+     * (`editors/2d/viewport_border_color`, on by default) and GameMaker's room views are "an
+     * outline where the view boundaries would be" — while content past the edge stays fully
+     * visible and editable in both. Content outside one screen is NORMAL in a scrolling level;
+     * the question a boundary answers is "what does the player see at once", and nothing in this
+     * document could answer it: `contentBounds` measures where things happen to be, which is why
+     * an empty scenery row once moved the death plane.
+     *
+     * ANCHORED AT THE ORIGIN, like Godot's — a size, not a rect. The one document whose play area
+     * starts elsewhere can be authored by moving its content, and two more numbers here would be
+     * two more numbers every consumer must remember to add.
+     *
+     * ABSENT MEANS UNDECLARED, which is what every document before schema 72 was — drawing
+     * nothing, changing nothing. It is a statement about the GAME, so it lives beside
+     * `background`, not in editor state: the same level opened on another machine has the same
+     * screen.
+     */
+    screen?: { width: number; height: number };
+
     /** The named STATE every node resolves against (Milestone 7, schema 30) — the same
      *  document-level-selection shape as `activeTheme`. Absent/empty = the base state. */
     activeState?: string;
@@ -289,6 +312,25 @@ export type ReadonlyDocument = DeepReadonly<ProjectDocument>;
  * shape: a non-string, or an empty one, which is a field somebody meant to clear and did not.
  * ABSENT is the way to say "no background"; empty string is a typo.
  */
+/**
+ * Why `screen` is not a valid play-area size, or null.
+ *
+ * FINITE AND POSITIVE, nothing else: a zero or negative screen is a division waiting to happen in
+ * whatever fits a camera to it, and a NaN is a document that silently stops meaning anything.
+ * There is no upper bound and no integer rule — a 480.5-unit screen is unusual, not invalid, and
+ * the corpus's maps declare sizes this validator has no business second-guessing.
+ */
+export function screenError(screen: unknown): string | null {
+    if (screen === undefined) return null;
+    if (typeof screen !== "object" || screen === null) return "screen must be {width, height} or absent";
+    const { width, height } = screen as { width?: unknown; height?: unknown };
+    if (typeof width !== "number" || !Number.isFinite(width) || width <= 0)
+        return "screen.width must be a positive finite number";
+    if (typeof height !== "number" || !Number.isFinite(height) || height <= 0)
+        return "screen.height must be a positive finite number";
+    return null;
+}
+
 export function backgroundError(background: unknown): string | null {
     if (background === undefined) return null;
     if (typeof background !== "string") return "background must be a string or absent";

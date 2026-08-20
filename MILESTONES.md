@@ -1888,6 +1888,39 @@ That is a decision about what an editor shows, not a defect in the runtime.
 
 4 tests, 3 mutants (VO1-VO3).
 
+**Slice 31 — THE DOCUMENT DECLARES ITS SCREEN (schema 72), and the editor draws it.** The user
+asked for a cue where a level ends, and to look at how Unity, Godot and GameMaker handle it first.
+
+**THE RESEARCH CHANGED THE RECTANGLE.** I was going to outline `contentBounds`. Both engines that
+have a document outline ONE SCREEN instead: Godot draws its project viewport as four translucent
+lines (`editors/2d/viewport_border_color`, `Color(0.4, 0.4, 1.0, 0.4)`, on by default — read from
+`canvas_item_editor_plugin.cpp`, not from documentation), GameMaker outlines its room views, and
+neither dims anything outside. Content past the edge is NORMAL in a scrolling level; the question a
+boundary answers is "what does the player see at once", and nothing in this document could answer
+it — `contentBounds` measures where things happen to be, which is how an empty scenery row moved
+the death plane in slice 30. Unity was the third data point and turned into its own lesson: the
+quote I first offered for "scenes are unbounded" was invented by a search summariser and its URL
+404s. Retracted, re-verified from pages actually fetched, and recorded as a rule — quote only what
+came out of a fetch.
+
+**`Document.screen` IS A SIZE, NOT A RECT** — anchored at the origin like Godot's, because the one
+document whose play area starts elsewhere can move its content, and two more numbers would be two
+more numbers every consumer must remember to add. Absent means undeclared, which is every pre-72
+document: drawing nothing, changing nothing. Validated FINITE AND POSITIVE and nothing else.
+`SetScreenAction` ships in the same commit — the clips/tilesets rule, third time it has needed
+following. The outline is CHROME: four `role: "guide"` lines emitted FIRST in the render model's
+overlay, hairline at every zoom, clicks passing through; never a node, never exported. A Tiled
+import declares the map's own pixel size in the same transaction and never resizes a screen the
+document already has — the background's two rules, applied to the field beside it.
+
+**STILL OPEN, stated:** nothing READS the screen yet. The follow camera still clamps to
+`contentBounds` and the death plane still derives from it; pointing both at a declared screen is
+its own slice, and doing it silently inside this one would have changed how every existing level
+plays.
+
+6 tests, 3 mutants (DS1-DS3 — DS because SC was already the setCell family; the EX1-EX7 collision
+lesson, checked before writing this time).
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

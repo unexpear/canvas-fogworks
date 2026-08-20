@@ -85,6 +85,7 @@ import { Tilemap, tileSourceRect as sheetTileRect, tileIndexAt,
 import { EyedropperTool } from "../editor/tools/EyedropperTool";
 import { SetLightingAction } from "../core/actions/SetLightingAction";
 import { SetBackgroundAction } from "../core/actions/SetBackgroundAction";
+import { SetScreenAction } from "../core/actions/SetScreenAction";
 import { restMesh, MESH_MAX_DIVISIONS, copyMeshPoint, Mesh, ReadonlyMesh } from "../core/document/Mesh";
 import { BLEND_MODES, BlendMode } from "../core/document/Node";
 import { boneChoices, bonesAt, withBone, withoutBone, withBoneWeight, autoBindMesh, PAINT_STRENGTH } from "../core/document/MeshEdit";
@@ -1963,7 +1964,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
      * satisfies it honestly instead of by exemption.
      */
     const importTiles = useCallback((placements: TilePlacement[], tilesets: Tileset[] = [],
-                                     background?: string) => {
+                                     background?: string, screen?: { width: number; height: number }) => {
         if (placements.length === 0) return;
         const doc = dispatcher.getDocument();
         const { actions, ids } = tileImportActions(doc, placements);
@@ -1983,7 +1984,13 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         const withSky = background !== undefined && doc.background === undefined
             ? [new SetBackgroundAction(doc, background), ...withSets]
             : withSets;
-        dispatcher.dispatchAction(new TransactionAction(doc, "import-tiles", withSky));
+        // AND THE MAP'S OWN SIZE AS THE SCREEN (schema 72), by the same two rules: one import is
+        // one undo step, and a document that already declares its screen keeps it — a second map
+        // must not resize the first one's play area. A Tiled map states exactly this, in tiles.
+        const withScreen = screen !== undefined && doc.screen === undefined
+            ? [new SetScreenAction(doc, screen), ...withSky]
+            : withSky;
+        dispatcher.dispatchAction(new TransactionAction(doc, "import-tiles", withScreen));
         es.selectedNodeIds = ids.slice(0, 1);
         refresh();
     }, [dispatcher, es, refresh]);
@@ -2417,6 +2424,53 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                         onClick={() => {
                             dispatcher.dispatchAction(
                                 new SetBackgroundAction(dispatcher.getDocument(), undefined));
+                            refresh();
+                        }}
+                        style={{ fontSize: 11, padding: "3px 6px", marginLeft: 2, background: "transparent",
+                                 color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3, cursor: "pointer" }}
+                    >✕</button>
+                )}
+                {/* ONE SCREEN OF THE GAME (schema 72), drawn on the canvas as a translucent
+                    outline. TWO NUMBER FIELDS rather than a picker, because the field is a size.
+                    Absent shows both empty; committing a size on an empty document declares one,
+                    and the CLEAR button puts it back to undeclared — the pre-72 state, which is
+                    a different document from any declared size. */}
+                <span title="One screen of the game: the play area's size, drawn as an outline on the canvas. The camera and death plane will read this in a later slice."
+                      style={{ marginLeft: 8, fontSize: 11, color: "#888" }}>screen</span>
+                <input
+                    type="number" min={1} data-doc-screen="w" placeholder="w"
+                    value={dispatcher.getDocument().screen?.width ?? ""}
+                    onChange={e => {
+                        const w = Number(e.target.value);
+                        const now = dispatcher.getDocument().screen;
+                        if (!Number.isFinite(w) || w <= 0) return;
+                        dispatcher.dispatchAction(new SetScreenAction(dispatcher.getDocument(),
+                            { width: w, height: now?.height ?? w }));
+                        refresh();
+                    }}
+                    style={{ width: 46, fontSize: 11, marginLeft: 3, padding: "2px 3px", background: "transparent",
+                             color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3 }}
+                />
+                <input
+                    type="number" min={1} data-doc-screen="h" placeholder="h"
+                    value={dispatcher.getDocument().screen?.height ?? ""}
+                    onChange={e => {
+                        const h = Number(e.target.value);
+                        const now = dispatcher.getDocument().screen;
+                        if (!Number.isFinite(h) || h <= 0) return;
+                        dispatcher.dispatchAction(new SetScreenAction(dispatcher.getDocument(),
+                            { width: now?.width ?? h, height: h }));
+                        refresh();
+                    }}
+                    style={{ width: 46, fontSize: 11, marginLeft: 2, padding: "2px 3px", background: "transparent",
+                             color: "#ccc", border: "1px solid #2a2a4a", borderRadius: 3 }}
+                />
+                {dispatcher.getDocument().screen !== undefined && (
+                    <button
+                        data-doc-screen-clear="1"
+                        title="Remove the screen declaration, so the document has none again."
+                        onClick={() => {
+                            dispatcher.dispatchAction(new SetScreenAction(dispatcher.getDocument(), undefined));
                             refresh();
                         }}
                         style={{ fontSize: 11, padding: "3px 6px", marginLeft: 2, background: "transparent",
@@ -5109,7 +5163,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     onImportSvg: (specs: SvgNodeSpec[]) => void;
     /** Apply a registered family to the selected node — the point of loading one. */
     editContentFont: (family: string) => void;
-    onImportTiles: (placements: TilePlacement[], tilesets?: Tileset[], background?: string) => void;
+    onImportTiles: (placements: TilePlacement[], tilesets?: Tileset[], background?: string, screen?: { width: number; height: number }) => void;
     /** The swatch a palette click writes to, and what it currently holds. */
     paintColour: string;
     onPickColour: (hex: string) => void;
@@ -5651,7 +5705,11 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                             + `${TILE_PLACE_MAX} this will place at once.`);
                                         return;
                                     }
-                                    onImportTiles(tiles, newTilesets, map.background);
+                                    onImportTiles(tiles, newTilesets, map.background,
+                                        map.width > 0 && map.tileWidth > 0
+                                            ? { width: map.width * map.tileWidth,
+                                                height: map.height * map.tileHeight }
+                                            : undefined);
                                     setImportNote(tiledImportNote(map, built));
                                 } catch (err) {
                                     setImportNote(`Cannot read that map: ${String(err)}`);

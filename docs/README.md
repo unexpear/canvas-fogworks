@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document/Document.ts, src/core/tests -->
 
-> **Frozen contracts · schema v71 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins).**
+> **Frozen contracts · schema v72 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins).**
 > These documents describe the *current, verified* implementation and lock the
 > contracts the rest of the engine builds on. See [`../MILESTONES.md`](../MILESTONES.md)
 > for the roadmap and where each layer fits.
@@ -47,7 +47,7 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck + lint + test + build).
-- **Tests:** 1988 — `src/core/tests/document.test.ts` (1627) + `src/core/runtime/World.test.ts` (95) + `src/core/runtime/Rules.test.ts` (34) + `src/core/runtime/Parts.test.ts` (33) + `src/core/import/tiledPlacements.test.ts` (10) + `src/core/runtime/Camera.test.ts` (20) + `src/electron/confine.test.ts` (7) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (67) + `src/renderer/emitSVG.test.ts` (11).  <!-- re-read 2026-08-17 after frame-on-load and the spawned-body dirty set: accurate. -->
+- **Tests:** 1994 — `src/core/tests/document.test.ts` (1633) + `src/core/runtime/World.test.ts` (95) + `src/core/runtime/Rules.test.ts` (34) + `src/core/runtime/Parts.test.ts` (33) + `src/core/import/tiledPlacements.test.ts` (10) + `src/core/runtime/Camera.test.ts` (20) + `src/electron/confine.test.ts` (7) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (67) + `src/renderer/emitSVG.test.ts` (11).  <!-- re-read 2026-08-17 after frame-on-load and the spawned-body dirty set: accurate. -->
 - **Verify the tests themselves:** `npm run mutate:dimensions` (215/215) — breaks the paint arithmetic
   on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
   and it refuses a dirty tree. See TESTING.md § Fixture design.

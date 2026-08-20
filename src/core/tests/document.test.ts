@@ -6,7 +6,7 @@
 import { readFileSync, readdirSync } from "fs";
 import { resolve } from "path";
 import { inflateSync } from "zlib";
-import { createEmptyDocument, ProjectDocument, ReadonlyDocument, CURRENT_VERSION, SCHEMA_VERSION, backgroundError } from "../document/Document";
+import { createEmptyDocument, ProjectDocument, ReadonlyDocument, CURRENT_VERSION, SCHEMA_VERSION, backgroundError, screenError } from "../document/Document";
 import { variableStoreError, variableKeyError, resolveVariable, resolveColor, resolveNumber, isTokenRef, tokenRefFor, tokenKeyOf, Variable, VariableStore, VARIABLES_MAX, VARIABLE_FALLBACK_COLOR } from "../document/Variables";
 import { SetVariableAction, DeleteVariableAction, SetActiveThemeAction } from "../actions/VariableActions";
 import { CreateInstanceAction } from "../actions/CreateInstanceAction";
@@ -181,6 +181,7 @@ import { tilesetError, tilesetsError, findTileset, tilesetTile, copyTileset, wit
 import { withTilesetId } from "../document/TilemapEdit";
 import { SetTilesetsAction } from "../actions/SetTilesetsAction";
 import { SetBackgroundAction } from "../actions/SetBackgroundAction";
+import { SetScreenAction } from "../actions/SetScreenAction";
 import { TOOL_CURSORS } from "../../app/theme/Cursors";
 import { SEQUENCE_IMPORT_MAX } from "../../app/App";
 import { sequenceImportActions, SEQUENCE_DEFAULT_FPS } from "../actions/sequenceImport";
@@ -4619,10 +4620,10 @@ describe("Guards the suite did not previously protect", () => {
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
         // time a real migration is added — most recently when 67→68 landed, taking the sheet OFF
         // the node, which 66→67 had moved and the importer had gone on writing anyway.)
-        // (Most recently 70->71, a SECOND parallax axis on a node. Absent means "the same as
-        // `depth`", which is what one scalar driving both axes already did — but a schema-70 build
-        // would load a side-scroller's scenery and lift it off the horizon on every vertical pan.)
-        expect(() => migrateIfNeeded(legacy, "72")).toThrow('Migration not implemented for document schema "71"');
+        // (Most recently 71->72, the document's SCREEN — one screenful of the game. Absent means
+        // "undeclared", which every pre-72 document is; a schema-71 build would load a file that
+        // declares its play area and silently drop the declaration on save.)
+        expect(() => migrateIfNeeded(legacy, "73")).toThrow('Migration not implemented for document schema "72"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -20248,7 +20249,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // …and the IMPORTER's tilesets actually reach the document, which is the bug above. The
         // call gained the map's BACKGROUND at schema 70, travelling the same seam for the same
         // reason: a thing the importer reads and cannot deliver is a thing it did not read.
-        expect(app).toMatch(/onImportTiles\(tiles, newTilesets, map\.background\)/);
+        expect(app).toMatch(/onImportTiles\(tiles, newTilesets, map\.background,/);
         expect(app).toMatch(/new SetTilesetsAction\(doc, \[\.\.\.\(doc\.tilesets \?\? \[\]\)/);
     });
 
@@ -31754,6 +31755,115 @@ describe("the document's BACKGROUND (schema 70) — what a level sits on", () =>
         expect(map("backgroundcolor=\"#ff27b99a\"").background).toBe("#27b99aff");
         // Anything else is passed through as written rather than guessed at.
         expect(map("backgroundcolor=\"skyblue\"").background).toBe("skyblue");
+    });
+});
+
+describe("the document's SCREEN (schema 72) — one screenful of the game", () => {
+    /**
+     * THE RECTANGLE AN EDITOR SHOULD SHOW IS NOT THE CONTENT'S EXTENT. Both engines that have a
+     * document draw ONE SCREEN as a translucent outline with nothing outside dimmed — Godot its
+     * project viewport (four `canvas_item_add_line` calls, read from its own source), GameMaker its
+     * room views. Content past the edge is normal in a scrolling level; `contentBounds` measures
+     * where things happen to be, which is how an empty scenery row once moved the death plane.
+     */
+    test("FINITE AND POSITIVE, nothing else — the loader's rule, shared with the write path", () => {
+        expect(screenError(undefined)).toBeNull();
+        expect(screenError({ width: 480, height: 270 })).toBeNull();
+        // No integer rule and no upper bound: unusual is not invalid.
+        expect(screenError({ width: 480.5, height: 1 })).toBeNull();
+        // …but zero and negative are divisions waiting to happen in whatever fits a camera to it,
+        // and a NaN is a document that silently stops meaning anything.
+        expect(screenError({ width: 0, height: 270 })).not.toBeNull();
+        expect(screenError({ width: 480, height: -1 })).not.toBeNull();
+        expect(screenError({ width: NaN, height: 270 })).not.toBeNull();
+        expect(screenError({ width: Infinity, height: 270 })).not.toBeNull();
+        expect(screenError({ width: 480 })).not.toBeNull();
+        expect(screenError("480x270")).not.toBeNull();
+        expect(screenError(null)).not.toBeNull();
+    });
+
+    test("round-trips, and a document with NO screen serialises exactly as it always did", () => {
+        const doc = createEmptyDocument();
+        expect(JSON.parse(serializeDocument(doc)).document).not.toHaveProperty("screen");
+        doc.screen = { width: 480, height: 270 };
+        const wire = JSON.parse(serializeDocument(doc));
+        expect(wire.document.screen).toEqual({ width: 480, height: 270 });
+        expect(wire.version).toBe(SCHEMA_VERSION);
+        expect(deserializeDocument(serializeDocument(doc)).screen).toEqual({ width: 480, height: 270 });
+        doc.screen = undefined;
+        expect(JSON.parse(serializeDocument(doc)).document).not.toHaveProperty("screen");
+    });
+
+    test("a schema-71 file opens, and is stamped 72 with no screen invented for it", () => {
+        const doc = createEmptyDocument();
+        const old = JSON.parse(serializeDocument(doc));
+        old.version = "71";
+        const migrated = migrateIfNeeded(old);
+        expect(migrated.version).toBe(SCHEMA_VERSION);
+        expect(migrated.document).not.toHaveProperty("screen");
+        expect(deserializeDocument(JSON.stringify(old)).screen).toBeUndefined();
+    });
+
+    test("THE WRITE PATH EXISTS, in the same commit as the field — the standing rule", () => {
+        const doc = createEmptyDocument();
+        const set = new SetScreenAction(doc, { width: 480, height: 270 });
+        expect(set.validate()).toBe(true);
+        expect([...set.execute().propertyDeltas.values()][0])
+            .toEqual({ kind: "screen", screen: { width: 480, height: 270 } });
+        // A document-level action must NOT name a node, or it seeds the dirty-tracker with a ghost.
+        expect(set.execute().updatedNodeIds.size).toBe(0);
+        expect(new SetScreenAction(doc, undefined).validate()).toBe(true);
+        expect(new SetScreenAction(doc, { width: 0, height: 270 }).validate()).toBe(false);
+        expect(() => new SetScreenAction(doc, { width: 0, height: 270 }).execute()).toThrow();
+        // …and the delta LANDS: dispatched, the document declares it; undefined removes it, and a
+        // cleared screen serialises byte-for-byte as a document that never declared one.
+        const dispatcher = new ActionDispatcher(createEmptyDocument());
+        dispatcher.dispatchAction(new SetScreenAction(dispatcher.getDocument(), { width: 480, height: 270 }));
+        expect(dispatcher.getDocument().screen).toEqual({ width: 480, height: 270 });
+        dispatcher.dispatchAction(new SetScreenAction(dispatcher.getDocument(), undefined));
+        expect(dispatcher.getDocument().screen).toBeUndefined();
+        expect(JSON.parse(serializeDocument(dispatcher.getDocument() as ProjectDocument)).document)
+            .not.toHaveProperty("screen");
+    });
+
+    test("DRAWS as four translucent lines in the overlay — an outline, nothing dimmed", () => {
+        const doc = createEmptyDocument();
+        const state = { viewport: { x: 0, y: 0, zoom: 2 }, selectedNodeIds: [], hoveredNodeId: null,
+            computed: computeGeometry(doc) } as unknown as Parameters<typeof buildRenderModel>[2];
+        // ABSENT DRAWS NOTHING — every pre-72 document must render exactly as before.
+        const before = buildRenderModel({ width: 100, height: 100 }, doc, state);
+        expect(before.overlay.filter(i => i.shape.kind === "line")).toHaveLength(0);
+        doc.screen = { width: 480, height: 270 };
+        const model = buildRenderModel({ width: 100, height: 100 }, doc, state);
+        const lines = model.overlay.filter(i => i.shape.kind === "line");
+        expect(lines).toHaveLength(4);
+        // The four sides of [0,0 .. 480,270], because the screen is a SIZE anchored at the origin.
+        const sides = lines.map(l => l.shape as { x1: number; y1: number; x2: number; y2: number });
+        expect(sides.some(l => l.y1 === 0 && l.y2 === 0)).toBe(true);
+        expect(sides.some(l => l.y1 === 270 && l.y2 === 270)).toBe(true);
+        expect(sides.some(l => l.x1 === 480 && l.x2 === 480)).toBe(true);
+        // Translucent and hairline, like Godot's `viewport_border_color` — visible, not shouting;
+        // 1/z so it stays one screen pixel at every zoom.
+        for (const l of lines) {
+            expect(l.paint.stroke).toContain("rgba");
+            expect(l.paint.strokeWidth).toBeCloseTo(0.5, 9);
+            expect(l.paint.fill).toBeNull();           // an OUTLINE: nothing filled, nothing dimmed
+            expect(l.paint.pointerEvents).toBe(false); // chrome — clicks go through to the content
+            expect(l.role).toBe("guide");
+        }
+        // FIRST in the overlay, so selection chrome and guides draw on top of it.
+        expect(model.overlay.indexOf(lines[0])).toBe(0);
+    });
+
+    test("a TILED IMPORT declares the map's own size, and never resizes a declared one", () => {
+        // The app-side rule mirrors the background's: same transaction, and a document that already
+        // declares its screen keeps it — a second map must not resize the first one's play area.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/screen !== undefined && doc\.screen === undefined/);
+        expect(app).toMatch(/width: map\.width \* map\.tileWidth/);
+        // …and the control exists, so the field is authorable without an import.
+        expect(app).toMatch(/data-doc-screen="w"/);
+        expect(app).toMatch(/data-doc-screen-clear="1"/);
     });
 });
 

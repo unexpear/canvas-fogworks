@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1988;
+const EXPECTED_TESTS = 1994;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1810,6 +1810,22 @@ const MUTANTS = [
       from: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * bounds.x,",
       to: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * (bounds.x + bounds.width / 2) - size.width / 2,",
       note: "the axis that runs off the side is CENTRED instead of opened at the document's start, so a 200-column level opens on column 100 — the middle of a level nobody has played yet, and a tall document opens halfway down" },
+
+    // THE DOCUMENT'S SCREEN (schema 72) — one screenful of the game, drawn as chrome. DS, because
+    // SC was already the setCell family: the id-collision lesson EX1-EX7 paid for, checked this
+    // time before writing.
+    { id: "DS1", file: "src/renderer/RenderModel.ts",
+      from: "    if (doc.screen) {",
+      to: "    if (doc.screen && doc.screen.width > 1000) {",
+      note: "the outline draws only for screens wider than 1000 units, so the 8-bit sizes this exists for — 480x270, 256x240 — declare a screen and see nothing, while a fixture that picked a big round number would still pass" },
+    { id: "DS2", file: "src/renderer/RenderModel.ts",
+      from: "        const corners = [[0, 0, sw, 0], [sw, 0, sw, sh], [sw, sh, 0, sh], [0, sh, 0, 0]] as const;",
+      to: "        const corners = [[0, 0, sw, 0], [sw, 0, sw, sh]] as const;",
+      note: "only the top and right edges draw, so the outline reads as complete on a level whose left and bottom edges sit off-canvas — which at the open framing is exactly where they sit" },
+    { id: "DS3", file: "src/app/App.tsx",
+      from: "        const withScreen = screen !== undefined && doc.screen === undefined",
+      to: "        const withScreen = screen !== undefined",
+      note: "a second Tiled import RESIZES the play area the first one declared — the no-overwrite rule the background already states one paragraph up, and a fixture that imports a single map cannot see it" },
 
     { id: "SP6", file: "src/core/runtime/World.ts",
       from: "    const live = applySpawns(doc, world);\n    const out = new Set<string>();\n    for (const [id, body] of world.bodies) {",

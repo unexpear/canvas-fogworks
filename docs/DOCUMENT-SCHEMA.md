@@ -17,7 +17,7 @@
 <!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
      below. The earlier note stands — the rectangle gesture added no field. -->
 
-> 🔒 Frozen contract · schema v71 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v72 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
 
 ## ProjectDocument
 
@@ -118,6 +118,20 @@ interface Geometry { x: number; y: number; width: number; height: number; }
 // Written only by `SetBackgroundAction`, painted in SCREEN space by all three backends, and
 // exported as a real `<rect>` rather than a style on the root. KNOWN DIVERGENCE: `gl.clearColor`
 // takes floats, so the GPU parses hex and falls back to the editor backdrop on names and `rgb()`.
+//
+// SCREEN (schema 72). Document.screen?: { width, height } — ONE SCREEN of the game: the play
+// area's size in world units, anchored at the origin (a size, not a rect — the one document whose
+// play area starts elsewhere moves its content). Absent = undeclared, which is every pre-72
+// document: drawing nothing, changing nothing. THE RECTANGLE AN EDITOR SHOULD SHOW IS NOT THE
+// CONTENT'S EXTENT — content past the edge is normal in a scrolling level, and `contentBounds`
+// measures where things happen to be (an empty scenery row once moved the death plane by 18px).
+// Godot draws its project viewport this way (four translucent lines, nothing dimmed, on by
+// default) and GameMaker its room views; the outline here is editor CHROME, emitted first in the
+// render model's overlay, never a node and never exported. Validated FINITE AND POSITIVE, nothing
+// else. Written only by `SetScreenAction`; a Tiled import declares the map's own pixel size in the
+// same transaction, and never resizes a screen the document already declares. NOT yet read by the
+// follow camera or the death plane — that is a later slice, and this sentence is the honest
+// statement of the gap.
 //
 // LIGHTING (schema 42). Document.lights?: Light[] (max 4) + Document.ambient?: 0..1.
 interface Light { x: number; y: number; z: number; color: string; intensity: number }

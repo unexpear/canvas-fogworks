@@ -1065,6 +1065,32 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument, po
     const computed = state.computed;
     const selectedSet = new Set(state.selectedNodeIds);
 
+    // ONE SCREEN OF THE GAME (schema 72) — the declared play area, drawn the way Godot draws its
+    // project viewport and GameMaker its room views: an OUTLINE, translucent, with nothing outside
+    // it dimmed, because content past the edge is normal in a scrolling level and an editor that
+    // shades it is arguing with the author. FIRST in the overlay, so every other piece of chrome —
+    // selection, handles, guides — draws on top of it, and never behind the content either: this is
+    // chrome, not scene, which is why it is here and not a node (`Document.screen` says the rest).
+    //
+    // A LINE LOOP, not a stroked rect: `role: "outline"` paints would centre a stroke on the edge
+    // and put half of it inside the play area at every zoom. Four lines have no inside.
+    if (doc.screen) {
+        const { width: sw, height: sh } = doc.screen;
+        const corners = [[0, 0, sw, 0], [sw, 0, sw, sh], [sw, sh, 0, sh], [0, sh, 0, 0]] as const;
+        for (const [x1, y1, x2, y2] of corners) {
+            items.push({
+                shape: { kind: "line", x1, y1, x2, y2 },
+                paint: {
+                    fill: null, opacity: null, stroke: "rgba(102, 102, 255, 0.55)", strokeWidth: 1 / z,
+                    strokeDash: null, radius: null, cursor: null, pointerEvents: false, shadow: null, blur: null, blendMode: null
+                },
+                world: null,
+                nodeId: null,
+                role: "guide"
+            });
+        }
+    }
+
     // Selection + hover outlines, in the same computed draw order as the content.
     computed.order.forEach((id: string) => {
         const c = computed.nodes.get(id);
