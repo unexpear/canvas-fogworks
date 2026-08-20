@@ -1814,9 +1814,9 @@ const MUTANTS = [
     // PLAY BOUNDS (M18 slice 32) — a declared screen pins the run's vertical extent, so decoration
     // below the floor stops moving the death plane (0.47s -> 1.27s, measured, twice).
     { id: "RB1", file: "src/core/runtime/World.ts",
-      from: "    if (!screen) return content;",
-      to: "    if (true) return content;",
-      note: "the declared screen is ignored entirely, so the death plane and the camera clamp go back to being a measurement — the exact defect this function exists to close, and a fixture that never declares a screen cannot see it" },
+      from: "    return { x: content.x, y: 0, width: content.width, height: screen.height };",
+      to: "    return { x: content.x, y: content.y, width: content.width, height: content.height };",
+      note: "the screen is read and then not APPLIED — the result is the content's own extent on every axis, so the death plane goes back to being a measurement, which is the exact defect this function exists to close. RE-AUTHORED on arrival: the first version guarded with `if (true)`, which makes the rest of the function unreachable and does not COMPILE — UNVERIFIED at 199 tests, the fifth way a run reports something other than what it found" },
     { id: "RB2", file: "src/core/runtime/World.ts",
       from: "    return { x: content.x, y: 0, width: content.width, height: screen.height };",
       to: "    return { x: 0, y: 0, width: screen.width, height: screen.height };",
