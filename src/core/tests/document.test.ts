@@ -24598,6 +24598,23 @@ describe("Zoom to fit", () => {
             .toEqual(viewportToFit(small, size, FIT_PADDING_PX, 1));
     });
 
+    test("a document that DECLARES its screen OPENS on it, whatever the content measures", () => {
+        // The open-framing half of the slice-30 defect. `playBounds` stopped decoration below the
+        // floor from moving the death plane; until this branch the same decoration still moved
+        // what you SAW on open, because the framing measured `contentBounds`. Measured on the
+        // deepened level: content 900 tall put the ground back near the top of the frame, while
+        // the screen rect gives the same 188% fill the trimmed level had — the two levels now
+        // OPEN identically because they declare the same screen.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(
+            /doc\.screen[\s\S]{0,20}\? \{ x: 0, y: 0, width: doc\.screen\.width, height: doc\.screen\.height \}/);
+        // …and the content path SURVIVES as the fallback — an undeclared document still frames on
+        // what it measures, which is every document written before schema 72.
+        expect(app).toMatch(/: contentBounds\(computeGeometry\(resolveScene\(doc\)\)\)/);
+        // The screen rect goes through the SAME viewportToOpen — one framing rule, two rectangles.
+        expect(app).toMatch(/viewportToOpen\(box,/);
+    });
+
     test("the app FRAMES the document it opened with, rather than starting at the origin", () => {
         // A STRUCTURAL ASSERTION, because the gap was reachability rather than arithmetic —
         // `viewportToFit` was correct, tested, and reached only from a menu item. The editor's
@@ -24609,7 +24626,7 @@ describe("Zoom to fit", () => {
         expect(createEditorState().viewport).toEqual({ x: 0, y: 0, zoom: 1 });
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
         // The same three pieces `view.zoomFit` uses, so the two framings cannot drift apart.
-        expect(app).toMatch(/framedOnLoad\.current = true;[\s\S]{0,400}?viewportToOpen\(box,/);
+        expect(app).toMatch(/framedOnLoad\.current = true;[\s\S]{0,1400}?viewportToOpen\(box,/);
         expect(app).toMatch(/if \(framedOnLoad\.current \|\| !initialDocument\) return;/);
         // …and it waits for a laid-out canvas rather than dividing by a zero-width box.
         expect(app).toMatch(/el\.clientWidth === 0 \|\| el\.clientHeight === 0/);

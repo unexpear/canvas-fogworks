@@ -1666,7 +1666,19 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         // divide by a zero-width box, so this waits for a frame that has one rather than guessing.
         if (!el || el.clientWidth === 0 || el.clientHeight === 0) return;
         framedOnLoad.current = true;
-        const box = contentBounds(computeGeometry(resolveScene(dispatcher.getDocument())));
+        // THE DECLARED SCREEN WINS (schema 72): a document that states its play area opens ON it,
+        // and what the content happens to measure cannot move that. This is the open-framing half
+        // of the slice-30 defect — `playBounds` stopped decoration below the floor from moving the
+        // death plane, and until this line the same decoration still moved what you saw on open,
+        // because the framing measured. Through the SAME `viewportToOpen`: a screen taller or wider
+        // than the canvas FILLS it (the height matches exactly, the level runs off the side, no
+        // band of background under the floor), and a screen smaller than the canvas is framed as
+        // the menu would frame it. It also skips computing geometry entirely — a statement needs
+        // no measuring.
+        const doc = dispatcher.getDocument();
+        const box = doc.screen
+            ? { x: 0, y: 0, width: doc.screen.width, height: doc.screen.height }
+            : contentBounds(computeGeometry(resolveScene(doc)));
         if (!box) return;                        // an empty document has nothing to frame
         es.viewport = viewportToOpen(box, { width: el.clientWidth, height: el.clientHeight },
             FIT_PADDING_PX);

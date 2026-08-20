@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1998;
+const EXPECTED_TESTS = 1999;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1810,6 +1810,12 @@ const MUTANTS = [
       from: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * bounds.x,",
       to: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * (bounds.x + bounds.width / 2) - size.width / 2,",
       note: "the axis that runs off the side is CENTRED instead of opened at the document's start, so a 200-column level opens on column 100 — the middle of a level nobody has played yet, and a tall document opens halfway down" },
+
+    // OPEN-ON-SCREEN (M18 slice 33) — the open framing's half of the same defect playBounds closed.
+    { id: "VO4", file: "src/app/App.tsx",
+      from: "        const box = doc.screen\n            ? { x: 0, y: 0, width: doc.screen.width, height: doc.screen.height }\n            : contentBounds(computeGeometry(resolveScene(doc)));",
+      to: "        const box = contentBounds(computeGeometry(resolveScene(doc)));",
+      note: "the open framing goes back to MEASURING, so a document that declares its screen opens on whatever the content happens to span — decoration below the floor puts the ground back near the top of the frame on open, the exact half of slice 30 this branch exists to close" },
 
     // PLAY BOUNDS (M18 slice 32) — a declared screen pins the run's vertical extent, so decoration
     // below the floor stops moving the death plane (0.47s -> 1.27s, measured, twice).

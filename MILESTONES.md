@@ -1943,6 +1943,25 @@ M18's ladder will find this hole, which is what the ladder is for.
 
 4 tests, 3 mutants (RB1-RB3; RB3 is the Escape-key shape — the app not asking).
 
+**Slice 33 — A DECLARED SCREEN IS ALSO WHAT YOU OPEN ON.** The other half of what `playBounds`
+closed: the death plane stopped being a measurement in slice 32, but the load-time framing still
+measured `contentBounds`, so decoration below the floor still moved what you SAW on open — content
+900 tall put the ground back near the top of the frame, the original complaint by a new route.
+
+The frame-on-load branch now hands `viewportToOpen` the SCREEN rect when one is declared, and the
+content bounds only as the fallback every pre-72 document uses. Same function, two rectangles: a
+screen taller or wider than the canvas FILLS it exactly as before (188% on the reference level, no
+band under the floor), and one smaller than the canvas is framed as the menu frames it. A statement
+needs no measuring, so the declared path also skips `computeGeometry` at load entirely.
+
+Verified in the app on the WRECKED level — floor deepened to 900px, screen declared: opens at the
+same 188% with the ground low and covered, identical to the trimmed level, because the two declare
+the same screen. Decoration can no longer move the open, the clamp, or the death plane.
+
+1 test, 1 mutant (VO4). And the third `
+`-became-a-real-newline generator failure in two days —
+one in a mutant anchor, one in a test regex, one here — each caught by the next gate in line.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.
