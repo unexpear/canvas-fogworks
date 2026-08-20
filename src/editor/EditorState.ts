@@ -207,6 +207,32 @@ export const FIT_PADDING_PX = 24;
  * The crop this can cause is bounded by the two axes' aspect mismatch, so it is nothing for a
  * document shaped like the canvas and everything for a level strip — which is the whole point.
  */
+/**
+ * The viewport a DECLARED screen (schema 72) opens at: the VERTICAL axis pinned, exactly as
+ * `playBounds` pins it for the run — one axis rule for the whole feature.
+ *
+ * NOT `viewportToOpen`, and a measurement said so. Handing that function the screen rect took its
+ * FIT branch on a 613x474 canvas (432+padding fits at zoom 1.26) and centred the screen with a band
+ * of background above and below — under the FLOOR, which is the reported defect this whole thread
+ * exists to remove. And its FILL branch fails the other way on a WIDE canvas: cover picks the
+ * horizontal ratio and crops the bottom of the screen off, so a maximised window opens on sky with
+ * the ground below the view.
+ *
+ * HEIGHT EXACT, ALWAYS: `zoom = canvas.height / screen.height`, origin at the screen's. The ground
+ * a game keeps at the bottom of its screen is at the bottom of the canvas on every canvas shape;
+ * the horizontal axis shows however much level that zoom reaches, which is how a side-scroller
+ * already thinks. The stated limit is the same one `playBounds` carries: a vertically scrolling
+ * game wants the opposite axis and should not declare a screen yet.
+ */
+export function viewportToScreen(
+    screen: { readonly width: number; readonly height: number },
+    size: { width: number; height: number }
+): EditorState["viewport"] {
+    const vp = { zoom: size.height / screen.height, x: 0, y: 0 };
+    clampViewport(vp);
+    return vp;
+}
+
 export function viewportToOpen(
     bounds: { x: number; y: number; width: number; height: number },
     size: { width: number; height: number },

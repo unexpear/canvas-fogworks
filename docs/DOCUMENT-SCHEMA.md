@@ -130,9 +130,10 @@ interface Geometry { x: number; y: number; width: number; height: number; }
 // render model's overlay, never a node and never exported. Validated FINITE AND POSITIVE, nothing
 // else. Written only by `SetScreenAction`; a Tiled import declares the map's own pixel size in the
 // same transaction, and never resizes a screen the document already declares. A document that
-// declares its screen also OPENS on it (M18 slice 33): the load-time framing passes the screen
-// rect to `viewportToOpen` instead of measuring the content, so decoration cannot move what you
-// see on open either — and no geometry is computed to frame a statement. READ by the runtime
+// declares its screen also OPENS on it (M18 slice 33): `viewportToScreen` pins the vertical axis
+// (height exact, origin at the screen's — the same axis rule `playBounds` gives the run), so
+// decoration cannot move what you see on open and no geometry is computed to frame a statement.
+// READ by the runtime
 // through `playBounds` (M18 slice 32): a declared screen pins the run's VERTICAL extent — the death
 // plane and the camera's clamp — while the horizontal span stays measured, because a side-scroller
 // is as long as its content but as tall as one screen. A vertically scrolling level wants the

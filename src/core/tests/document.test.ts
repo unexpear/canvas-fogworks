@@ -194,7 +194,7 @@ import { compileScript, snapshotFor, actionRequestError, SCRIPT_MAX_REQUESTS } f
 import { WORKER_BOOTSTRAP } from "../../editor/ScriptRunner";
 import { layoutChildren, layoutGridChildren, resolveGridTracks, placeGridItems, breakFlexLines, resolveMargin, expandDirtyForLayout, isLayoutContainer, measureIntrinsicSizes, resolveConstraints } from "../geometry/LayoutEngine";
 import { translation, compose, multiply, invert, applyToPoint, transformRectToAABB, IDENTITY } from "../geometry/Matrix";
-import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld, viewportToOpen, EditorState } from "../../editor/EditorState";
+import { clampViewport, createEditorState, panBy, zoomAt, screenToWorld, viewportToOpen, viewportToScreen, EditorState } from "../../editor/EditorState";
 import { selectionHandles, selectionFrame, handleAtPoint, groupRotateHandle, groupHandleAtPoint, groupCornerHandles, HANDLE_SIZE_PX, ROTATE_OFFSET_PX , pathVertexHandles, vertexIndexOf, vertexHandleAtPoint} from "../geometry/SelectionHandles";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable } from "../geometry/GroupTransform";
 import { computeSnap, snapPoint, guidesForRect, snapTargetsExcludingSubtree, snapTargetsExcludingSubtrees, isTranslationOnlyChain } from "../geometry/Snapping";
@@ -24599,20 +24599,32 @@ describe("Zoom to fit", () => {
     });
 
     test("a document that DECLARES its screen OPENS on it, whatever the content measures", () => {
-        // The open-framing half of the slice-30 defect. `playBounds` stopped decoration below the
-        // floor from moving the death plane; until this branch the same decoration still moved
-        // what you SAW on open, because the framing measured `contentBounds`. Measured on the
-        // deepened level: content 900 tall put the ground back near the top of the frame, while
-        // the screen rect gives the same 188% fill the trimmed level had — the two levels now
-        // OPEN identically because they declare the same screen.
+        // The open-framing half of the slice-30 defect, and TWO wrong answers preceded this one,
+        // both killed by measurement. Handing `viewportToOpen` the screen rect took its FIT branch
+        // on the real canvas (432+padding fits 613 at zoom 1.26) and CENTRED the screen — a band of
+        // background under the floor, the reported defect back again. Its FILL branch fails the
+        // other way on a wide canvas: cover picks the horizontal ratio and crops the ground off the
+        // bottom, so a maximised window would open on sky.
+        //
+        // `viewportToScreen` pins the VERTICAL axis instead — the same axis rule `playBounds` gives
+        // the run. Height exact on every canvas shape, origin at the screen's.
+        const vp = viewportToScreen({ width: 432, height: 252 }, { width: 613, height: 474 });
+        expect(vp.zoom).toBeCloseTo(474 / 252, 9);           // 188%: the height matches exactly
+        expect(vp.x).toBe(0);
+        expect(vp.y).toBe(0);
+        // A WIDE canvas keeps the same zoom — more level shows to the right, the ground stays at
+        // the bottom. Cover would have picked 1061/432 = 2.46 here and cropped the ground off.
+        expect(viewportToScreen({ width: 432, height: 252 }, { width: 1061, height: 474 }).zoom)
+            .toBeCloseTo(474 / 252, 9);
+        // …and an absurd screen still lands inside the editor's own zoom limits.
+        expect(viewportToScreen({ width: 1, height: 100000 }, { width: 613, height: 474 }).zoom)
+            .toBeGreaterThanOrEqual(0.05);
+
+        // THE APP ASKS IT for a declared screen, computes no geometry doing so, and the content
+        // path survives as the fallback every pre-72 document uses.
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
-        expect(app).toMatch(
-            /doc\.screen[\s\S]{0,20}\? \{ x: 0, y: 0, width: doc\.screen\.width, height: doc\.screen\.height \}/);
-        // …and the content path SURVIVES as the fallback — an undeclared document still frames on
-        // what it measures, which is every document written before schema 72.
-        expect(app).toMatch(/: contentBounds\(computeGeometry\(resolveScene\(doc\)\)\)/);
-        // The screen rect goes through the SAME viewportToOpen — one framing rule, two rectangles.
-        expect(app).toMatch(/viewportToOpen\(box,/);
+        expect(app).toMatch(/if \(doc\.screen\) \{[\s\S]{0,200}?viewportToScreen\(doc\.screen,/);
+        expect(app).toMatch(/: contentBounds\(computeGeometry\(resolveScene\(doc\)\)\)|const box = contentBounds\(computeGeometry\(resolveScene\(doc\)\)\)/);
     });
 
     test("the app FRAMES the document it opened with, rather than starting at the origin", () => {

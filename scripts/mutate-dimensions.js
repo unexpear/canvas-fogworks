@@ -1813,9 +1813,13 @@ const MUTANTS = [
 
     // OPEN-ON-SCREEN (M18 slice 33) — the open framing's half of the same defect playBounds closed.
     { id: "VO4", file: "src/app/App.tsx",
-      from: "        const box = doc.screen\n            ? { x: 0, y: 0, width: doc.screen.width, height: doc.screen.height }\n            : contentBounds(computeGeometry(resolveScene(doc)));",
-      to: "        const box = contentBounds(computeGeometry(resolveScene(doc)));",
-      note: "the open framing goes back to MEASURING, so a document that declares its screen opens on whatever the content happens to span — decoration below the floor puts the ground back near the top of the frame on open, the exact half of slice 30 this branch exists to close" },
+      from: "        if (doc.screen) {",
+      to: "        if (doc.screen && doc.screen.height > 500) {",
+      note: "only screens taller than 500 units open on themselves, so the 8-bit sizes this exists for fall through to MEASURING — decoration below the floor moves what you see on open again, the exact half of slice 30 this branch closes. RE-AUTHORED with slice 33's correction: the first version anchored the viewportToOpen(screen-rect) approach, which a live measurement falsified (fit branch, 126%, band under the floor)" },
+    { id: "VO5", file: "src/editor/EditorState.ts",
+      from: "    const vp = { zoom: size.height / screen.height, x: 0, y: 0 };",
+      to: "    const vp = { zoom: Math.min(size.width / screen.width, size.height / screen.height), x: 0, y: 0 };",
+      note: "the open zoom becomes CONTAIN, so a wide canvas letterboxes the screen with background under the floor — height-exact is the rule on every canvas shape, and only an assertion at a SECOND aspect ratio can see it" },
 
     // PLAY BOUNDS (M18 slice 32) — a declared screen pins the run's vertical extent, so decoration
     // below the floor stops moving the death plane (0.47s -> 1.27s, measured, twice).
