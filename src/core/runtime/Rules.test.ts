@@ -453,6 +453,169 @@ describe("setCell — a bumped block BECOMES something, without editing the leve
     });
 });
 
+describe("power and breaking — Mario's own eligibility rules (M18 slice 34)", () => {
+    /**
+     * A 3x3 tilemap standing over the player: row 2 is the floor (tile 0, solid), and cell (1,0)
+     * two rows up carries whatever tile the test declares. The player at (20,26) under it can jump
+     * into it. Tile indices declare their own behaviour on the TILESET, exactly as the app's do.
+     */
+    const TILE = 18;
+    const blockLevel = (blockTile: { [k: string]: { type: string; value: string } },
+                        templates: Parameters<typeof docWith>[0] = []) => {
+        const doc = docWith([
+            // ON the floor, not IN it: the floor row's top is 36 and the body is 16 tall, so 20
+            // exactly. Seeded 6px deep, the HORIZONTAL resolver reads the overlap as a wall and
+            // shoves the body sideways out from under the block — an hour of debugging that turned
+            // out to be the fixture, with the engine right all along.
+            { id: "player", x: 20, y: 20, w: 12, h: 16, userData: { bodyType: prop("dynamic") } },
+            ...templates
+        ]);
+        const tiles = [
+            -1, 1, -1,
+            -1, -1, -1,
+            0, 0, 0
+        ];
+        doc.nodes.set("map", {
+            id: "map", type: "core.tilemap", parent: null, children: [],
+            geometry: { x: 0, y: 0, width: 3 * TILE, height: 3 * TILE },
+            style: { fill: "#888", opacity: 1 }, layout: {},
+            tilemap: { cols: 3, rows: 3, tileWidth: TILE, tileHeight: TILE,
+                       tilesetId: "ts", tiles }
+        } as unknown as Node);
+        doc.rootNodeUuids.push("map");
+        (doc as ProjectDocument).tilesets = [{
+            id: "ts", name: "ts", src: "t.png",
+            sheet: { columns: 4, tileWidth: TILE, tileHeight: TILE, spacing: 0, margin: 0 },
+            tiles: [
+                { id: 0, userData: { bodyType: prop("static") } },
+                { id: 1, userData: { bodyType: prop("static"), ...blockTile } },
+                { id: 2, userData: { bodyType: prop("static") } }
+            ],
+            offsetX: 0, offsetY: 0
+        }] as unknown as ProjectDocument["tilesets"];
+        return doc;
+    };
+
+    /** Jump into the block and apply the rules per step, against the CELL-STAMPED document. */
+    const hitIt = (doc: ProjectDocument, power = 0, steps = 90) => {
+        let w = worldFrom(doc);
+        if (power > 0) w = applyCommands(w, [{ kind: "setPower", bodyId: "player", power }]);
+        for (let i = 0; i < steps; i++) {
+            const live = applyCells(applySpawns(doc, w), w);
+            w = stepWorld(live, w, { controlled: "player",
+                input: { left: false, right: false, jump: i >= 2 && i < 20 } });
+            w = applyCommands(w, marioRules(live, w, { controlled: "player" }));
+        }
+        return w;
+    };
+
+    it("setPower is a channel verb: absolute, body-scoped, and a no-op when nothing changes", () => {
+        const doc = docWith([{ id: "a", x: 0, y: 0, userData: { bodyType: prop("dynamic") } }]);
+        const w = worldFrom(doc);
+        expect(w.bodies.get("a")!.power).toBe(0);            // every body starts small
+        const up = applyCommands(w, [{ kind: "setPower", bodyId: "a", power: 1 }]);
+        expect(up.bodies.get("a")!.power).toBe(1);
+        expect(applyCommands(up, [{ kind: "setPower", bodyId: "a", power: 1 }])).toBe(up);
+        // …and the STEP carries it — the seventh field-by-field body literal, and the sixth one
+        // dropped fields, so this is the assertion that sees the drop.
+        const stepped = stepWorld(doc, up);
+        expect(stepped.bodies.get("a")!.power).toBe(1);
+    });
+
+    it("COLLECTING a part that declares vde.powers raises the collector — higher tier kept", () => {
+        // The mushroom: collectible AND powering. The player stands inside it, so the enter fires
+        // on the first step and both commands come out of one pickup.
+        const doc = docWith([
+            { id: "floor", x: 0, y: 400, w: 200, h: 20, userData: { bodyType: prop("static") } },
+            { id: "hero", x: 50, y: 384, w: 12, h: 16, userData: { bodyType: prop("dynamic") } },
+            // CLASSED, because a region is "a class and no bodyType" — the corpus's own split.
+            { id: "shroom", x: 52, y: 386, w: 12, h: 12, className: "mushroom",
+              userData: { "vde.collect": prop("true"), "vde.powers": prop("1") } }
+        ]);
+        let w = stepWorld(doc, worldFrom(doc), { controlled: "hero" });
+        const commands = marioRules(doc, w, { controlled: "hero" });
+        expect(commands).toEqual([
+            { kind: "despawn", bodyId: "shroom" },
+            { kind: "setPower", bodyId: "hero", power: 1 }
+        ]);
+        w = applyCommands(w, commands);
+        expect(w.bodies.get("hero")!.power).toBe(1);
+        // THE HIGHER TIER IS KEPT — SMB1's mushroom does nothing for Fire Mario. A second, weaker
+        // part despawns but grants nothing: no setPower command at all.
+        const again = docWith([
+            { id: "floor", x: 0, y: 400, w: 200, h: 20, userData: { bodyType: prop("static") } },
+            { id: "hero", x: 50, y: 384, w: 12, h: 16, userData: { bodyType: prop("dynamic") } },
+            { id: "weak", x: 52, y: 386, w: 12, h: 12, className: "mushroom",
+              userData: { "vde.collect": prop("true"), "vde.powers": prop("1") } }
+        ]);
+        let w2 = applyCommands(worldFrom(again), [{ kind: "setPower", bodyId: "hero", power: 2 }]);
+        w2 = stepWorld(again, w2, { controlled: "hero" });
+        const c2 = marioRules(again, w2, { controlled: "hero" });
+        expect(c2).toEqual([{ kind: "despawn", bodyId: "weak" }]);
+    });
+
+    it("a SMALL bumper breaks nothing: the brick gives nothing at all", () => {
+        const w = hitIt(blockLevel({ "vde.breaks": prop("true") }), 0);
+        expect(w.cells.size).toBe(0);                        // the brick is exactly as authored
+        expect(w.spawns).toHaveLength(0);                    // and nothing came out — SMB1's jiggle
+    });
+
+    it("a SUPER bumper breaks an empty brick: the cell empties and stops being solid", () => {
+        const doc = blockLevel({ "vde.breaks": prop("true") });
+        const w = hitIt(doc, 1);
+        expect(w.cells.get(cellKey("map", 1, 0))).toBe(-1);  // broken to EMPTY, not to a tile
+        // …and the physics sees the hole: a fresh jump from rest passes straight through where
+        // the brick was. The stamped document is what the step reads — the same chain the app runs.
+        let w2 = w;
+        let peak = Infinity;
+        for (let i = 0; i < 60; i++) {
+            const live = applyCells(applySpawns(doc, w2), w2);
+            w2 = stepWorld(live, w2, { controlled: "player",
+                input: { left: false, right: false, jump: i < 18 } });
+            peak = Math.min(peak, w2.bodies.get("player")!.y);
+        }
+        // The brick's underside is at y=18; a 16-tall body whose top passes it has y < 2. With the
+        // brick present the first jump bumped and stopped there — without it the arc continues.
+        expect(peak).toBeLessThan(0);
+    });
+
+    it("? BLOCKS NEVER BREAK, whoever hits them — they do not declare vde.breaks", () => {
+        // A ? block declares its CONTENTS; a super bumper pops them and the block becomes spent.
+        // No declaration of vde.breaks means no eligibility, which is Mario's own taxonomy.
+        const w = hitIt(blockLevel({ "vde.bumpsTo": prop("2") }), 1);
+        expect(w.cells.get(cellKey("map", 1, 0))).toBe(2);   // spent, not gone
+    });
+
+    it("CONTENTS WIN: a brick that pays out becomes spent even under a Super bumper", () => {
+        // SMB1's coin brick never shatters while it has coins. A tile declaring BOTH contents and
+        // breaks delivers the contents — the break clause never fires on the same hit.
+        const w = hitIt(blockLevel(
+            { "vde.bumpsTo": prop("2"), "vde.breaks": prop("true") }), 1);
+        expect(w.cells.get(cellKey("map", 1, 0))).toBe(2);
+    });
+
+    it("a SPENT block answers the next bump with ITS OWN tile — the infinite ? block is closed", () => {
+        // MEASURED IN THE APP BEFORE THE FIX: 2 spawns where the level authored 1, because the
+        // step and the rules read a document nothing had stamped the override onto, so the
+        // original ? tile still declared its contents on the second hit. The chain
+        // `applyCells(applySpawns(base))` is what this fixture steps against — the app's own.
+        const doc = blockLevel({ "vde.bumpsTo": prop("2"), "vde.spawns": prop("gift") },
+            [{ id: "gift", x: 200, y: -40, w: 8, h: 8,
+               userData: { "vde.collect": prop("true") } }]);
+        let w = worldFrom(doc);
+        for (let i = 0; i < 200; i++) {
+            const live = applyCells(applySpawns(doc, w), w);
+            // two full jump arcs into the same cell: press, release, press again
+            const jump = (i >= 2 && i < 20) || (i >= 100 && i < 118);
+            w = stepWorld(live, w, { controlled: "player",
+                input: { left: false, right: false, jump } });
+            w = applyCommands(w, marioRules(live, w, { controlled: "player" }));
+        }
+        expect(w.spawns).toHaveLength(1);
+        expect(w.cells.get(cellKey("map", 1, 0))).toBe(2);
+    });
+});
+
 describe("playBounds — a declared screen pins the run's vertical extent", () => {
     it("closes the slice-30 defect: decoration below the floor stops moving the death plane", () => {
         // MEASURED TWICE BEFORE THIS EXISTED: an empty trailing scenery row moved `contentBounds`
@@ -681,7 +844,7 @@ describe("spawn — the fifth verb, and the only one that ADDS", () => {
         ]);
         const made = w.bodies.get("coin#0")!;
         expect(made).toEqual({ x: 40, y: 60, vx: 0, vy: -216, onGround: false,
-                               groundFriction: 1, blockedX: false, facing: 1, travelled: 0 });
+                               groundFriction: 1, blockedX: false, facing: 1, travelled: 0, power: 0 });
         // …and it MOVES, which is the whole difference from a region appearing.
         const stepped = stepWorld(applySpawns(doc, w), w);
         expect(stepped.bodies.get("coin#0")!.y).toBeLessThan(60);
@@ -734,7 +897,7 @@ describe("spawn — the fifth verb, and the only one that ADDS", () => {
 
     it("and the APP steps against the spawned document, not the stored one", () => {
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
-        expect(app).toMatch(/const live = applySpawns\(base, world\)/);
+        expect(app).toMatch(/const live = applyCells\(applySpawns\(base, world\), world\)/);
         expect(app).toMatch(/stepWorld\(live, world/);
         // BOTH halves: it must feed the picture too, or a coin is collided with and never seen.
         expect(app).toMatch(/applyWorld\(applySpawns\(timed, world\)/);

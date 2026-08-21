@@ -75,10 +75,20 @@ export interface Part {
      * three; nothing here reads one from another.
      */
     collectible: boolean;
+    /**
+     * Collecting it raises the collector to this POWER tier (M18 slice 34). The mushroom.
+     *
+     * A NUMBER, NOT A FLAG, because SMB1's tiers are ordered — small, Super, Fire — and "which
+     * mushroom beats which" is exactly the kind of policy a part should declare rather than a rule
+     * should hard-code. Null means collecting it powers nothing, which is every coin. It reads
+     * `vde.powers` and does nothing WITHOUT `vde.collect` — power arrives by collecting, and a
+     * region nobody can pick up has nothing to grant.
+     */
+    powers: number | null;
 }
 
 /** A part that declares nothing — what every node in the corpus and every older document is. */
-export const INERT: Part = { stompable: false, patrol: null, deadly: false, goal: false, collectible: false };
+export const INERT: Part = { stompable: false, patrol: null, deadly: false, goal: false, collectible: false, powers: null };
 
 /**
  * What this node declares, read LENIENTLY for the reason the whole runtime reads leniently: the same
@@ -98,7 +108,8 @@ export function partOf(node: { userData?: UserData }): Part {
         patrol: speedOf(patrol),
         deadly: yes(node, "deadly"),
         goal: yes(node, "goal"),
-        collectible: yes(node, "collect")
+        collectible: yes(node, "collect"),
+        powers: speedOf(propertyOf(node.userData, PART_PREFIX + "powers"))
     };
 }
 

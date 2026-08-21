@@ -130,31 +130,49 @@ export function marioRules(
         const set = findTileset(doc.tilesets, map.tilesetId);
         const tile = set ? tilesetTile(set, tileAt(map, e.cell.col, e.cell.row)) : null;
         const becomes = tile ? propertyOf(tile.userData, PART_PREFIX + "bumpsTo") : null;
-        if (becomes === null) continue;
-        const index = Number(becomes.trim());
+        const index = becomes === null ? NaN : Number(becomes.trim());
         // `Number("")` IS 0 AND FINITE, and 0 is a real tile index — so an empty declaration would
         // silently turn a bumped block into tile zero. The trap this project has already paid for
         // twice, checked rather than remembered.
-        if (becomes.trim() === "" || !Number.isFinite(index)) continue;
-        out.push({ kind: "setCell", nodeId: e.nodeId, col: e.cell.col, row: e.cell.row, tile: index });
-        // …AND WHAT IT PUTS OUT. `vde.spawns` names a TEMPLATE node the author made in the editor,
-        // so this rule invents no geometry and no node shape — it places a copy, one cell above the
-        // block that was hit, which is where a coin goes.
-        const spawns = tile ? propertyOf(tile.userData, PART_PREFIX + "spawns") : null;
-        if (spawns !== null && spawns.trim() !== "") {
-            const origin = worldOffsetOf(doc, e.nodeId);
-            if (origin) {
-                // A TEMPLATE THAT DECLARES A bodyType COMES OUT MOVING. The rule reads that here
-                // because it has the document and the channel does not; a template that declares
-                // none is a region and simply appears, which is what a coin sitting in a niche is.
-                // The pop is a jump's launch speed, so it adds no constant of its own.
-                const template = doc.nodes.get(spawns.trim());
-                const moves = template !== undefined && bodyTypeOf(template) === "dynamic";
-                out.push({ kind: "spawn", templateId: spawns.trim(),
-                    x: origin.dx + node!.geometry.x + e.cell.col * map.tileWidth,
-                    y: origin.dy + node!.geometry.y + (e.cell.row - 1) * map.tileHeight,
-                    ...(moves ? { body: { vx: 0, vy: -jumpLaunchSpeed(ctx.gravity ?? DEFAULT_GRAVITY) } } : {}) });
+        if (becomes !== null && becomes.trim() !== "" && Number.isFinite(index)) {
+            out.push({ kind: "setCell", nodeId: e.nodeId, col: e.cell.col, row: e.cell.row, tile: index });
+            // …AND WHAT IT PUTS OUT. `vde.spawns` names a TEMPLATE node the author made in the
+            // editor, so this rule invents no geometry and no node shape — it places a copy, one
+            // cell above the block that was hit, which is where a coin goes.
+            const spawns = tile ? propertyOf(tile.userData, PART_PREFIX + "spawns") : null;
+            if (spawns !== null && spawns.trim() !== "") {
+                const origin = worldOffsetOf(doc, e.nodeId);
+                if (origin) {
+                    // A TEMPLATE THAT DECLARES A bodyType COMES OUT MOVING. The rule reads that
+                    // here because it has the document and the channel does not; a template that
+                    // declares none is a region and simply appears, which is what a coin sitting
+                    // in a niche is. The pop is a jump's launch speed, so it adds no constant.
+                    const template = doc.nodes.get(spawns.trim());
+                    const moves = template !== undefined && bodyTypeOf(template) === "dynamic";
+                    out.push({ kind: "spawn", templateId: spawns.trim(),
+                        x: origin.dx + node!.geometry.x + e.cell.col * map.tileWidth,
+                        y: origin.dy + node!.geometry.y + (e.cell.row - 1) * map.tileHeight,
+                        ...(moves ? { body: { vx: 0, vy: -jumpLaunchSpeed(ctx.gravity ?? DEFAULT_GRAVITY) } } : {}) });
+                }
             }
+            continue;   // CONTENTS WIN: a block that pays out never also breaks — SMB1's coin
+                        // brick pops its coin and becomes spent, even under a Super bumper.
+        }
+        // ── BREAKING (M18 slice 34) — Mario's own eligibility, all three clauses ──────────────
+        // A tile BREAKS only when: it DECLARES `vde.breaks` (bricks do, ? blocks never do, and a
+        // spent block's own tile declares nothing, so it is inert however hard it is hit); it has
+        // NO CONTENTS this hit should deliver — checked above, contents win; and the bumper's
+        // POWER is above small. A small player bumping a brick gets nothing at all, which is the
+        // "can also give nothing" case — SMB1 jiggles the brick, and the jiggle is a cosmetic gap
+        // stated here rather than half-built.
+        //
+        // BREAKING IS `setCell` TO EMPTY — the run's override, never the file. -1 has no tileset
+        // entry, so the cell stops drawing AND stops being solid the moment the step reads the
+        // stamped document; Stop restores the brick like every other override.
+        const breaks = tile ? propertyOf(tile.userData, PART_PREFIX + "breaks") : null;
+        if (breaks !== null && breaks.trim() !== "" && breaks.trim() !== "false"
+            && (world.bodies.get(me)?.power ?? 0) > 0) {
+            out.push({ kind: "setCell", nodeId: e.nodeId, col: e.cell.col, row: e.cell.row, tile: -1 });
         }
     }
 
@@ -179,7 +197,18 @@ export function marioRules(
         if (e.kind !== "enter" && e.kind !== "contact") continue;
         if (e.bodyId !== me) continue;
         const got = doc.nodes.get(e.nodeId);
-        if (got && partOf(got).collectible) out.push({ kind: "despawn", bodyId: e.nodeId });
+        if (got && partOf(got).collectible) {
+            out.push({ kind: "despawn", bodyId: e.nodeId });
+            // …AND WHAT COLLECTING IT GRANTS (M18 slice 34). `vde.powers` names a TIER, and the
+            // SMB1 arithmetic lives here, not in the channel: the HIGHER tier is kept, so a
+            // mushroom collected by Fire Mario grants nothing and a flower collected by small
+            // grants everything. The command carries the absolute result.
+            const powers = partOf(got).powers;
+            const held = world.bodies.get(me)?.power ?? 0;
+            if (powers !== null && powers > held) {
+                out.push({ kind: "setPower", bodyId: me, power: powers });
+            }
+        }
     }
 
     let bounced = false;

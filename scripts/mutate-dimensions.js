@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 1999;
+const EXPECTED_TESTS = 2006;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1753,7 +1753,7 @@ const MUTANTS = [
       to: "            parent: template.parent,",
       note: "a spawned copy KEEPS THE TEMPLATE'S PARENT, so `worldOffsetOf` composes a frame's offset the thing was never positioned against — slice 6's defect, arriving by a new route" },
     { id: "SP3", file: "src/app/App.tsx",
-      from: "                    const live = applySpawns(base, world);",
+      from: "                    const live = applyCells(applySpawns(base, world), world);",
       to: "                    const live = base;",
       note: "the STEP goes back to reading the stored document, so everything this run spawned is drawn and untouchable — not a solid, not a region, not collidable. The picture is perfect and the game is not there" },
 
@@ -1810,6 +1810,28 @@ const MUTANTS = [
       from: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * bounds.x,",
       to: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * (bounds.x + bounds.width / 2) - size.width / 2,",
       note: "the axis that runs off the side is CENTRED instead of opened at the document's start, so a 200-column level opens on column 100 — the middle of a level nobody has played yet, and a tall document opens halfway down" },
+
+    // POWER AND BREAKING (M18 slice 34) — Mario's own eligibility, each clause its own mutant.
+    { id: "PW1", file: "src/core/runtime/World.ts",
+      from: "        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX, facing, travelled,\n                       power: was.power });",
+      to: "        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX, facing, travelled,\n                       power: 0 });",
+      note: "the step DROPS the power — the seventh field-by-field body literal doing exactly what the sixth did — so a mushroom grants Super for one step and the next step is small again, and every position stays identical" },
+    { id: "PW2", file: "src/core/runtime/Rules.ts",
+      from: "            if (powers !== null && powers > held) {",
+      to: "            if (powers !== null) {",
+      note: "the HIGHER-tier rule goes: a weaker part now overwrites a stronger power, so SMB1's mushroom DEMOTES Fire Mario — only a fixture already holding a higher tier can see it" },
+    { id: "BR1", file: "src/core/runtime/Rules.ts",
+      from: "        if (breaks !== null && breaks.trim() !== \"\" && breaks.trim() !== \"false\"\n            && (world.bodies.get(me)?.power ?? 0) > 0) {",
+      to: "        if (breaks !== null && breaks.trim() !== \"\" && breaks.trim() !== \"false\") {",
+      note: "SMALL Mario breaks bricks — the power clause is the whole of Mario's eligibility, and a fixture that only ever hits blocks while Super cannot see it" },
+    { id: "BR2", file: "src/core/runtime/Rules.ts",
+      from: "            continue;   // CONTENTS WIN: a block that pays out never also breaks — SMB1's coin",
+      to: "            ;   // CONTENTS WIN: a block that pays out never also breaks — SMB1's coin",
+      note: "contents stop winning: a coin brick pays out AND shatters on the same hit under a Super bumper — two setCells for one cell, the second emptying what the first just spent" },
+    { id: "BR3", file: "src/core/runtime/Rules.ts",
+      from: "            out.push({ kind: \"setCell\", nodeId: e.nodeId, col: e.cell.col, row: e.cell.row, tile: -1 });",
+      to: "            out.push({ kind: \"setCell\", nodeId: e.nodeId, col: e.cell.col, row: e.cell.row, tile: 0 });",
+      note: "a broken brick becomes TILE ZERO instead of EMPTY — drawn as whatever tile 0 is and still solid, so breaking visibly does something and the hole is not there. -1 is load-bearing, and ‘the cell changed’ cannot see which value it changed to" },
 
     // OPEN-ON-SCREEN (M18 slice 33) — the open framing's half of the same defect playBounds closed.
     { id: "VO4", file: "src/app/App.tsx",

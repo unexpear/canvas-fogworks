@@ -1401,7 +1401,13 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     // three and step four must be able to collide with it; it returns the same
                     // reference until something is spawned, so a run that spawns nothing pays
                     // nothing for asking.
-                    const live = applySpawns(base, world);
+                    // …AND THE RUN'S CELLS (M18 slice 34), for two reasons measured on the same
+                    // day: a spent ? block's own tile is what must answer the NEXT bump — read
+                    // un-stamped, the original tile still declared its contents and every re-hit
+                    // popped another coin, 2 spawns where the level authored 1 — and a BROKEN
+                    // brick's cell must stop being solid, which only a step that reads the
+                    // stamped document can see.
+                    const live = applyCells(applySpawns(base, world), world);
                     world = stepWorld(live, world, { input: es.input, controlled: es.controlled });
                     // THE RULES RUN PER STEP, INSIDE THE LOOP. A frame may earn five steps, and
                     // batching the commands to the end of it would delay every bounce by up to four

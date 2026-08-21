@@ -87,7 +87,7 @@ describe("what counts as a body", () => {
         // AT REST, WHERE THE DOCUMENT PUTS IT — the world does not invent a position.
         expect(world.bodies.get("crate"))
             .toEqual({ x: 10, y: 20, vx: 0, vy: 0, onGround: false, groundFriction: 1, blockedX: false, facing: 1,
-                       travelled: 0 });
+                       travelled: 0, power: 0 });
         expect(world.time).toBe(0);
         // A STATIC BODY IS NOT IN THE WORLD, because its position is the document's to state and
         // two copies of one fact can disagree the moment somebody edits the level.

@@ -1970,6 +1970,37 @@ VO5, which needs a second aspect ratio to see). And the third `
 failure in two days — one in a mutant anchor, one in a test regex, one here — each caught by the
 next gate in line.
 
+**Slice 34 — POWER AND BREAKING: Mario's own eligibility, each clause a declaration.** The ask was
+the full block-hit taxonomy — a block can pop a power-up or coins, can give nothing, and bricks
+break by Mario's rules. Decomposed against SMB1: a ? block pops its authored content and becomes
+spent, never breakable; an EMPTY brick gives nothing and breaks — but only under Super; a brick
+WITH contents acts like a ? block, contents win, no shatter; small Mario hitting a brick gets
+nothing at all.
+
+**THE MEASUREMENT CAME FIRST AND FOUND A LIVE DEFECT: the app had an INFINITE ? block.** The run
+recorded the cell override, but the step and the rules read a document nothing stamped it onto — so
+the spent block's original tile still declared its contents, and every re-hit popped another coin.
+Measured headlessly: 2 spawns where the level authors 1. The step chain is now
+`applyCells(applySpawns(base))`, which closes that and is also what lets a broken cell stop being
+solid — one fix, three consumers.
+
+**`Body.power` (0 is small), the `setPower` verb, `vde.powers` on a collectible, `vde.breaks` on a
+tileset tile.** The rule keeps SMB1's arithmetic — the HIGHER tier survives, so a mushroom does
+nothing for Fire Mario — and the channel records the absolute result. Breaking is `setCell` to
+EMPTY (-1): the run's override, never the file; Stop restores the brick. Eligibility is all three
+clauses in one guard: declares `vde.breaks`, has no contents this hit delivers (contents win), and
+the BUMPER's power is above small. Not resized: SMB1's Super is also taller, and resizing a body
+changes every collision — a separate decision, stated not smuggled.
+
+**AN HOUR OF DEBUGGING THAT WAS THE FIXTURE, with the engine right all along.** The block-hit
+fixture seeded the body 6px INSIDE the floor; the horizontal resolver read that overlap as a wall
+and shoved the body sideways out from under the block, so the jump rose through empty air. Found by
+instrumenting the vertical pass and reading the query box: x=36 where the body was seeded at 20.
+The fixture comment now warns the next author.
+
+7 tests, 5 mutants (PW1-PW2, BR1-BR3). PW1 is the seventh field-by-field body literal doing what
+the sixth did — dropping a field — and BR3 is -1 vs 0, which "the cell changed" cannot see.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

@@ -2712,8 +2712,13 @@ const MAX_STEPS_PER_FRAME: number;     // 5 — the spiral guard. A backgrounded
 const DEFAULT_GRAVITY: number;         // 900 px/s². Positive is DOWN; y grows downward here.
 
 // Body coordinates are WORLD space (slice 6 composes ancestor translations; applyWorld writes back
-// through them). `groundFriction` is carried one step behind on purpose - see slice 4.
-interface Body { x; y; vx; vy; onGround: boolean; groundFriction: number }
+// through them). `groundFriction` is carried one step behind on purpose - see slice 4. `blockedX`,
+// `facing` and `travelled` are facts about MOTION the step keeps so no rule re-derives them.
+// `power` (slice 34) is the body's tier — 0 is small — written only by the `setPower` command, read
+// by rules (a brick breaks under a Super bumper), and untouched by the physics: a powered body
+// collides exactly like a small one, and resizing it is a decision deliberately not taken.
+interface Body { x; y; vx; vy; onGround: boolean; groundFriction: number; blockedX: boolean;
+                 facing: 1 | -1; travelled: number; power: number }
 // `overlaps` and `contacts` are what make enter/leave and contact/separate EDGES rather than states;
 // `jumpWas` is what makes a held jump key one jump. All three are carried, none are serialized.
 interface WorldState {

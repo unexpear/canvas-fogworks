@@ -412,6 +412,19 @@ export interface Body {
      * which is also what keeps a single jump-frame pose stable for the whole arc.
      */
     travelled: number;
+    /**
+     * The body's POWER tier (M18 slice 34): 0 is small, and the numbers above it are whatever the
+     * game's parts declare — SMB1 would say 1 is Super and 2 is Fire, and nothing here knows that.
+     *
+     * ON THE BODY, because it is a fact about ONE body that other rules read per body — a brick is
+     * breakable by a SUPER bumper, not by a super game. It only ever arrives through the `setPower`
+     * command, so what raises it is a RULE's decision (collecting a part that declares
+     * `vde.powers`), and the physics neither reads nor writes it: a powered body jumps, falls and
+     * collides exactly like a small one. SMB1's Super Mario is also TALLER, and this deliberately
+     * is not — resizing a body changes every collision, and that is a separate decision to make on
+     * purpose or not at all.
+     */
+    power: number;
 }
 
 /** The run's whole mutable state. Keyed by STORED node id, never serialized. */
@@ -763,7 +776,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
         bodies.set(node.id, {
             x: node.geometry.x + at.dx, y: node.geometry.y + at.dy,
             vx: 0, vy: 0, onGround: false, groundFriction: 1, blockedX: false, facing: 1,
-            travelled: 0
+            travelled: 0, power: 0
         });
     }
     return { bodies, time: 0, contacts: new Set(), despawned: new Set(), cells: new Map(), spawns: [], outcome: "running", jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
@@ -1202,7 +1215,11 @@ export function stepWorld(
         // its cycle on — a character jogging on the spot against a wall is the tell that this read
         // the velocity it wanted rather than the one it got.
         const travelled = was.travelled + (onGround ? Math.abs(vx) * FIXED_STEP : 0);
-        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX, facing, travelled });
+        // `power` is CARRIED, never computed: the step is the seventh literal in this codebase that
+        // rebuilds an object field-by-field, and the sixth one dropped a renderer's fields — so the
+        // one field the physics does not touch is named here rather than trusted to be remembered.
+        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX, facing, travelled,
+                       power: was.power });
     }
 
     // OVERLAPS ARE COMPUTED AFTER EVERYTHING HAS MOVED, once, on the settled positions — asking
@@ -1391,6 +1408,13 @@ export type RuntimeCommand =
     /** Absent components are LEFT ALONE, so a bounce can set vy without touching a walk in progress. */
     | { kind: "setVelocity"; bodyId: string; vx?: number; vy?: number }
     /**
+     * SET A BODY'S POWER TIER (M18 slice 34). A command, not a physics event, because what grants
+     * power is a RULE's reading of a part (`vde.powers` on the thing collected) — the channel stays
+     * as ignorant of what a mushroom is as it is of what a stomp means. Absolute, not additive:
+     * the rule decides the arithmetic (SMB1 keeps the higher tier), the channel records it.
+     */
+    | { kind: "setPower"; bodyId: string; power: number }
+    /**
      * The run is over. THE THIRD VERB, and the one the built level demanded loudest — before it a
      * run had no way to end, so a level could not be lost, won, or taught.
      *
@@ -1478,7 +1502,7 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
                 if (!bodies) bodies = new Map(world.bodies);
                 bodies.set(id, { x: c.x, y: c.y, vx: c.body.vx, vy: c.body.vy,
                     onGround: false, groundFriction: 1, blockedX: false,
-                    facing: c.body.vx < 0 ? -1 : 1, travelled: 0 });
+                    facing: c.body.vx < 0 ? -1 : 1, travelled: 0, power: 0 });
             }
             continue;
         }
@@ -1507,6 +1531,12 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
         const live = bodies ?? world.bodies;
         const body = live.get(c.bodyId);
         if (!body) continue;                       // already gone, or never a body
+        if (c.kind === "setPower") {
+            if (body.power === c.power) continue;  // nothing to change, so nothing is copied
+            if (!bodies) bodies = new Map(world.bodies);
+            bodies.set(c.bodyId, { ...body, power: c.power });
+            continue;
+        }
         if (c.vx === undefined && c.vy === undefined) continue;
         if (!bodies) bodies = new Map(world.bodies);
         bodies.set(c.bodyId, {
