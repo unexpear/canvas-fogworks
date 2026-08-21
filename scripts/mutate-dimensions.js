@@ -1771,8 +1771,8 @@ const MUTANTS = [
     // A SPAWNED BODY (M18). `worldFrom` establishes bodies once, at Play, so a node that appears
     // later never becomes one — the COMMAND mints it, because a derive returns a document.
     { id: "SB1", file: "src/core/runtime/World.ts",
-      from: "                    facing: c.body.vx < 0 ? -1 : 1, travelled: 0, power: 0 });",
-      to: "                    facing: 1, travelled: 0, power: 0 });",
+      from: "                    facing: c.body.vx < 0 ? -1 : 1, travelled: 0, power: 0, star: 0 });",
+      to: "                    facing: 1, travelled: 0, power: 0, star: 0 });",
       note: "a spawned body always faces RIGHT however it was thrown, so a thing popped leftwards is drawn mirrored against its own motion from the moment it exists — the position is identical, which is why only an assertion on facing can see it" },
     { id: "SB2", file: "src/core/runtime/Rules.ts",
       from: "                const moves = template !== undefined && bodyTypeOf(template) === \"dynamic\";",
@@ -1850,8 +1850,8 @@ const MUTANTS = [
 
     // POWER AND BREAKING (M18 slice 34) — Mario's own eligibility, each clause its own mutant.
     { id: "PW1", file: "src/core/runtime/World.ts",
-      from: "        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX, facing, travelled,\n                       power: was.power });",
-      to: "        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX, facing, travelled,\n                       power: 0 });",
+      from: "        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX, facing, travelled,\n                       power: was.power, star: was.star });",
+      to: "        next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX, facing, travelled,\n                       power: 0, star: was.star });",
       note: "the step DROPS the power — the seventh field-by-field body literal doing exactly what the sixth did — so a mushroom grants Super for one step and the next step is small again, and every position stays identical" },
     { id: "PW2", file: "src/core/runtime/Rules.ts",
       from: "            if (powers !== null && powers > held) {",

@@ -467,10 +467,12 @@ describe("the star and the 1-up — spawned movers, and what collecting them mea
 
     it("a part that BOUNCES rebounds on every landing to its own declared apex", () => {
         // The declaration is a HEIGHT; the speed comes through the same identity every jump uses.
-        // 32px, deliberately NOT the default jump's height, so a mutant that swaps the derivation
-        // for jumpLaunchSpeed overshoots and is seen.
+        // 80px, deliberately FAR from the default tapped jump's 25.92 — the first version used 32,
+        // and BN2 SURVIVED it: 32 and 25.92 sit six pixels apart inside a sixteen-pixel band, so a
+        // mutant that swapped the derivation for jumpLaunchSpeed was inside the assertion. A band
+        // only means something when the wrong answers are outside it.
         const doc = arena([{ id: "ball", x: 300, y: 384, w: 12, h: 12,
-            userData: { bodyType: prop("dynamic"), "vde.bounces": prop("32") } }]);
+            userData: { bodyType: prop("dynamic"), "vde.bounces": prop("80") } }]);
         let w = worldFrom(doc);
         // REBOUNDS ARE vy SIGN FLIPS (falling to rising), not onGround edges: the bounce command
         // itself clears onGround in the same tick, so the flag is false again before a test can
@@ -483,10 +485,10 @@ describe("the star and the 1-up — spawned movers, and what collecting them mea
             if (lastVy >= 0 && b.vy < 0) rebounds++;
             lastVy = b.vy;
         }
-        // The floor's top is 400, the ball 12 tall: rest is 388; a 32px apex reaches ~356. One
+        // The floor's top is 400, the ball 12 tall: rest is 388; an 80px apex reaches ~308. One
         // step of gravity before the bounce command applies costs a few px — assert the band.
-        expect(apex).toBeLessThan(388 - 24);
-        expect(apex).toBeGreaterThan(388 - 40);
+        expect(apex).toBeLessThan(388 - 66);
+        expect(apex).toBeGreaterThan(388 - 92);
         expect(rebounds).toBeGreaterThan(2);          // it KEEPS bouncing — a body that never rests
     });
 
