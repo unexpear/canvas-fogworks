@@ -526,8 +526,20 @@ The checklist, applied when the fixture is written:
 This is checked, not asserted. **`npm run mutate:dimensions`** (`scripts/mutate-dimensions.js`)
 runs the dimension-confusion family — and its neighbours, the mutations any *convenient* fixture
 cannot see — over the paint modules, the Tiled reader, the mesh, nine-slice, the tile grid, the tile
-brush and the autotiler, exiting non-zero on a survivor: the battery holds **402 mutants**. The last
-FULL run was 2026-08-12 at **215 mutants, 215 killed** and 1,734 tests (**56m20s, 16s per mutant**,
+brush and the autotiler, exiting non-zero on a survivor: the battery holds **402 mutants**.
+
+**THE FIRST COMPLETE 402 VERDICT LANDED 2026-08-21, in two sessions.** A full pass on a clean
+machine killed **350** with both deliberate controls (`EX20`, `RN3`) surviving as designed and one
+real survivor, before the final 49 hit jest-spawn exhaustion (verdicts of "0 tests" after ~3 hours
+of consecutive suite runs — the machine, not the code; the same run repeated the night before at a
+different index). Those 49 were rerun the same day as a clean filtered batch at 2,021 tests:
+**50/50 killed, 37s per mutant** — the fiftieth being `RU1`, the one real survivor, killed by a new
+fixture (a stomp squashes a BODY; a region declaring stompable is not squashed by landing).
+**Net: 400 of 400 killable mutants killed; the only survivors are the two controls, by design.**
+Known harness debt from the exercise: a long run needs a periodic jest cache/worker teardown or a
+0-tests circuit breaker that aborts loudly instead of unverifying everything after it.
+
+The PREVIOUS full run was 2026-08-12 at **215 mutants, 215 killed** and 1,734 tests (**56m20s, 16s per mutant**,
 nothing NOT APPLIED and nothing AMBIGUOUS); the eight added since — `EX15`–`EX22`, the exporter's
 multi-tileset family — were run FILTERED at 1,757 tests, seven killed and one the deliberate
 control; `TS1`–`TS2` (schema 68) filtered at 1,759, both killed; `CT1`–`CT4` (the collection draw

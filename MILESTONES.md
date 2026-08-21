@@ -2185,7 +2185,12 @@ by COMMAND LINE, never `taskkill node.exe` — the session itself runs on node. 
 on a cleaned machine: **350/402 KILLED, both intended-survivor controls SURVIVED (harness sanity
 holds on a full run), one real survivor, and the last 49 again UNVERIFIED at 0 tests** — the same
 exhaustion at a different index, so it is hours-of-spawns, not any specific mutant. The 49 rerun
-clean in a fresh batch. HARNESS LESSON, not yet built: the battery needs a periodic cache/worker
+clean in a fresh batch the same day: **50/50 killed (the fiftieth being RU1 under its new fixture),
+37s per mutant — so the battery's first complete verdict is 400/400 killable mutants killed, the
+only survivors the two controls, by design.** The run's own bookkeeping fumbled twice before the
+progress page told the truth: a `| tail` pipe kept six lines of the first log, and a
+stdout-redirect launcher buffered the second into a `process.exit` void — capture to a plain file,
+nothing cleverer. HARNESS LESSON, not yet built: the battery needs a periodic cache/worker
 teardown or a 0-tests circuit breaker that aborts loudly instead of unverifying everything after.
 
 **RU1 WAS THE ONE REAL SURVIVOR, and it had drifted rather than lied.** Authored when stomps were
