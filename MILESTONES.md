@@ -1998,7 +1998,19 @@ and shoved the body sideways out from under the block, so the jump rose through 
 instrumenting the vertical pass and reading the query box: x=36 where the body was seeded at 20.
 The fixture comment now warns the next author.
 
-7 tests, 5 mutants (PW1-PW2, BR1-BR3). PW1 is the seventh field-by-field body literal doing what
+**AND THE ARC REPLAY FOUND A SECOND LIVE HOLE: a HIDDEN dynamic template became a real body.**
+`worldFrom` minted the parked mushroom template, it fell from its parking spot through the sky, and
+the player collected the TEMPLATE mid-level — the first level to park a dynamic template is what
+exposed it. `hidden` already means "out of the displayed scene"; the world now honours the same
+word in `worldFrom`, `solidsOf`, `regionsOf` and `tileSolidsNear`. A spawned COPY still lives,
+because `applySpawns` clears the flag — the mould stays a mould, the casting is real.
+
+Verified end to end on the real level, stepped exactly as the app steps: small hits the brick —
+nothing, no spawn, still small; the power block pops the mushroom (block spent to 31, the mushroom
+arcs and lands on it); collected — power 1; back to the SAME brick as Super — broken to -1, and the
+physics walks through the hole.
+
+8 tests, 5 mutants (PW1-PW2, BR1-BR3). PW1 is the seventh field-by-field body literal doing what
 the sixth did — dropping a field — and BR3 is -1 vs 0, which "the cell changed" cannot see.
 
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,

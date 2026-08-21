@@ -770,6 +770,12 @@ export function playBounds(
 export function worldFrom(doc: ReadonlyDocument): WorldState {
     const bodies = new Map<string, Body>();
     for (const node of doc.nodes.values()) {
+        // A HIDDEN NODE IS NOT IN THE WORLD (M18 slice 34). `hidden` already means "out of the
+        // DISPLAYED scene, subtree and all" — and a TEMPLATE is hidden precisely to be a mould
+        // rather than a thing. Minting it anyway made the mushroom template a live body that fell
+        // from its parking spot through the sky and was COLLECTED mid-level, template and all —
+        // found the first time a level parked a dynamic template, measured in the arc replay.
+        if (node.hidden) continue;
         if (bodyTypeOf(node) !== "dynamic") continue;
         const at = worldOffsetOf(doc, node.id);
         if (!at) continue;                        // refused, and `runtimeExclusions` says why
@@ -810,6 +816,7 @@ function isLayered(node: { depth?: number; depthY?: number }): boolean {
 export function solidsOf(doc: ReadonlyDocument): Solid[] {
     const out: Solid[] = [];
     for (const node of doc.nodes.values()) {
+        if (node.hidden) continue;                     // out of the scene, out of the world
         if (isLayered(node)) continue;                 // see `isLayered`
         const kind = bodyTypeOf(node);
         if (kind !== "static" && kind !== "oneway") continue;
@@ -869,6 +876,7 @@ export function tileSolidsNear(
     for (const node of doc.nodes.values()) {
         const map = node.tilemap as ReadonlyTilemap | undefined;
         if (node.type !== "core.tilemap" || !map) continue;
+        if (node.hidden) continue;                     // out of the scene, out of the world
         if (isLayered(node)) continue;                 // see `isLayered`
         const set = findTileset(doc.tilesets, map.tilesetId) as Tileset | null;
         // NO SET, NO SOLIDS — a dangling id draws nothing and must collide with nothing, or a level
@@ -976,6 +984,7 @@ export function runtimeExclusions(doc: ReadonlyDocument): { nodeId: string; why:
 export function regionsOf(doc: ReadonlyDocument): Region[] {
     const out: Region[] = [];
     for (const node of doc.nodes.values()) {
+        if (node.hidden) continue;                     // out of the scene, out of the world
         if (isLayered(node)) continue;                 // see `isLayered`
         const className = node.className;
         if (!className || bodyTypeOf(node) !== null) continue;

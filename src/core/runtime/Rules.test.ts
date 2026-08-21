@@ -509,6 +509,38 @@ describe("power and breaking — Mario's own eligibility rules (M18 slice 34)", 
         return w;
     };
 
+    it("a HIDDEN node is not in the world: no body, no solid, no region", () => {
+        // Found the first time a level parked a DYNAMIC template: `worldFrom` minted the hidden
+        // mushroom template as a live body, it fell from its parking spot through the sky, and the
+        // player collected the TEMPLATE mid-level. Hidden already means "out of the displayed
+        // scene"; the world now honours the same word.
+        const doc = docWith([
+            { id: "floor", x: 0, y: 400, w: 200, h: 20, userData: { bodyType: prop("static") } },
+            { id: "hero", x: 50, y: 384, w: 12, h: 16, userData: { bodyType: prop("dynamic") } },
+            { id: "tpl", x: 52, y: 386, w: 12, h: 12, className: "mushroom",
+              userData: { bodyType: prop("dynamic"), "vde.collect": prop("true") } },
+            { id: "wall", x: 60, y: 380, w: 10, h: 20, userData: { bodyType: prop("static") } }
+        ]);
+        (doc.nodes.get("tpl") as Node).hidden = true;
+        (doc.nodes.get("wall") as Node).hidden = true;
+        const w = worldFrom(doc);
+        expect(w.bodies.has("tpl")).toBe(false);         // no body minted from a mould
+        expect(regionsOf(doc).map(r => r.nodeId)).toEqual([]);
+        // …and the hidden wall stops nothing: the hero walks through where it stands.
+        let w2 = w;
+        for (let i = 0; i < 30; i++) w2 = stepWorld(doc, w2,
+            { controlled: "hero", input: { left: false, right: true, jump: false } });
+        expect(w2.bodies.get("hero")!.x).toBeGreaterThan(70);
+        // The SPAWNED COPY is different from its mould — applySpawns clears the flag, so a copy
+        // draws and is in the world. (This template is DYNAMIC, so its copy is a body-to-be, not
+        // a region — regionsOf demands a class and NO bodyType, and asserting a region here was
+        // this test's own first defect.)
+        const sp = applyCommands(w, [{ kind: "spawn", templateId: "tpl", x: 100, y: 100 }]);
+        const copy = applySpawns(doc, sp).nodes.get("tpl#0");
+        expect(copy).toBeDefined();
+        expect(copy!.hidden).toBeUndefined();
+    });
+
     it("setPower is a channel verb: absolute, body-scoped, and a no-op when nothing changes", () => {
         const doc = docWith([{ id: "a", x: 0, y: 0, userData: { bodyType: prop("dynamic") } }]);
         const w = worldFrom(doc);
