@@ -1213,8 +1213,8 @@ const MUTANTS = [
       to: "            vx = vx > 0 ? vx - drop : vx + drop;",
       note: "the deceleration overshoots past zero, so a body that should have stopped reverses and creeps backwards — friction turned into a spring" },
     { id: "FR6", file: "src/core/runtime/World.ts",
-      from: "            if (push !== 0) {\n                const skid",
-      to: "            if (push === 0) vx = 0;\n            if (push !== 0) {\n                const skid",
+      from: "            if (push !== 0) {\n                // THE TIER IS THE BUTTON'S (M18 slice 38): cap and rate both step up while run is",
+      to: "            if (push === 0) vx = 0;\n            if (push !== 0) {\n                // THE TIER IS THE BUTTON'S (M18 slice 38): cap and rate both step up while run is",
       note: "releasing the key SETS the speed to zero rather than handing the body to the surface, so friction means nothing for the one body a player controls: no slide on ice, and no air control, because letting go mid-jump kills the flight. RETARGETED IN SLICE 17 AS AN INSERTION, because the defect stopped being expressible as an edit: `if (push !== 0)` multiplies the rate BY the push, so opening the guard changes nothing at all and the first retarget was an equivalent mutant" },
 
     // PER-TILE COLLISION (M18 slice 3). A level here is ONE node holding ten thousand cells, so
@@ -1617,8 +1617,8 @@ const MUTANTS = [
     // ACCELERATION AND SKID (M18 slice 17), the LAST era mismatch this project introduced. The walk
     // was a SET speed; it now builds up over a stated run-up, and a turn has its own shorter one.
     { id: "AS1", file: "src/core/runtime/World.ts",
-      from: "                vx = Math.abs(want) > MOVE_SPEED && Math.abs(vx) <= MOVE_SPEED\n                    ? push * MOVE_SPEED : want;",
-      to: "                vx = want;",
+      from: "                    vx = Math.abs(want) > cap && Math.abs(vx) <= cap ? push * cap : want;",
+      to: "                    vx = want;",
       note: "THE CAP GOES: holding right builds speed without limit, so a walk becomes a skate and every distance in the level turns into a function of how long the key was held. This is what was actually wrong with what the retired KB1 described, now that accumulating is the intended behaviour" },
     { id: "AS2", file: "src/core/runtime/World.ts",
       from: "                const skid = vx !== 0 && Math.sign(vx) !== push;",
@@ -1633,12 +1633,12 @@ const MUTANTS = [
       to: "        if (was.onGround && was.groundFriction > 0 && vx !== 0) {",
       note: "friction COMPOSES with the walk instead of being suppressed by it, so the effective acceleration is `a - mu*g` — and since the push IS one gravity and the default mu is exactly 1, the two cancel to ZERO and the player cannot move at all on the surface 44 of the corpus's 45 declare" },
     { id: "AS5", file: "src/core/runtime/World.ts",
-      from: "                vx = Math.abs(want) > MOVE_SPEED && Math.abs(vx) <= MOVE_SPEED",
-      to: "                vx = Math.abs(want) > MOVE_SPEED && Math.abs(vx) < MOVE_SPEED",
+      from: "                    vx = Math.abs(want) > cap && Math.abs(vx) <= cap ? push * cap : want;",
+      to: "                    vx = Math.abs(want) > cap && Math.abs(vx) < cap ? push * cap : want;",
       note: "the clamp stops applying at EXACTLY the top speed — which is the one value it always lands on, because the clamp itself assigns it — so the cap holds for a single step and then leaks upward for ever" },
     { id: "AS6", file: "src/core/runtime/World.ts",
-      from: "                const rate = skid ? skidAccel(gravity) : walkAccel(gravity);",
-      to: "                const rate = skid ? walkAccel(gravity) : skidAccel(gravity);",
+      from: "                const rate = (skid ? skidAccel(gravity) : walkAccel(gravity))",
+      to: "                const rate = (skid ? walkAccel(gravity) : skidAccel(gravity))",
       note: "the two rates are swapped, so starting is sharp and turning is sludge — exactly backwards, with both numbers still in use so nothing reads as missing" },
     { id: "AS7", file: "src/core/runtime/World.ts",
       from: "export const SKID_TURN = 2;",
