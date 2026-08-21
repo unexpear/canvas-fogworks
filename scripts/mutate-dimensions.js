@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 2013;
+const EXPECTED_TESTS = 2014;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1810,6 +1810,16 @@ const MUTANTS = [
       from: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * bounds.x,",
       to: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * (bounds.x + bounds.width / 2) - size.width / 2,",
       note: "the axis that runs off the side is CENTRED instead of opened at the document's start, so a 200-column level opens on column 100 — the middle of a level nobody has played yet, and a tall document opens halfway down" },
+
+    // THE HUD (M18 slice 37) — the run state that was visible only in a debugger.
+    { id: "HD1", file: "src/core/runtime/World.ts",
+      from: "        starLeft: Math.max(0, (body?.star ?? 0) - world.time)",
+      to: "        starLeft: (body?.star ?? 0) - world.time",
+      note: "the star countdown goes NEGATIVE after expiry instead of stopping at zero, so the HUD reports how long ago protection ended for the rest of the run — and every strip drawing it shows STAR -41.3s" },
+    { id: "HD2", file: "src/app/App.tsx",
+      from: "                    {es.playing && es.world && (() => {",
+      to: "                    {false && es.playing && es.world && (() => {",
+      note: "the HUD never draws, so tallies, power and the star clock go back to being debugger-only state — the disease the slice exists to cure, and only the reachability assertions can see it" },
 
     // THE STAR AND THE 1-UP (M18 slice 36) — spawned movers and what collecting them means.
     { id: "BN1", file: "src/core/runtime/Rules.ts",

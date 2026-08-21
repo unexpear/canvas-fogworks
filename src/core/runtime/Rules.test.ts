@@ -6,7 +6,7 @@ import {
     worldFrom, stepWorld, applyWorld, applyCommands, movedIds, WorldState
 } from "./World";
 import { marioRules } from "./Rules";
-import { applyCells, cellKey, applySpawns, regionsOf, facedIds, playBounds } from "./World";
+import { applyCells, cellKey, applySpawns, regionsOf, facedIds, playBounds, runReadout } from "./World";
 import { partOf } from "./Parts";
 import { readFileSync } from "fs";
 import { resolve } from "path";
@@ -553,6 +553,38 @@ describe("the star and the 1-up — spawned movers, and what collecting them mea
         }
         expect(w2.outcome).toBe("lost");
         expect(w2.bodies.has("gmba2")).toBe(true);
+    });
+
+    it("runReadout is the HUD's one read: tallies, power, and a star countdown that stops at 0", () => {
+        // The state this surfaces landed readable only in a debugger — the fifth invisible field
+        // this project has caught. The pure half is what a test can hold; the strip is chrome.
+        const doc = arena([]);
+        let w = worldFrom(doc);
+        expect(runReadout(w, "hero")).toEqual({ tallies: [], power: 0, starLeft: 0 });
+        w = applyCommands(w, [
+            { kind: "tally", key: "coin" }, { kind: "tally", key: "coin" },
+            { kind: "tally", key: "1up" },
+            { kind: "setPower", bodyId: "hero", power: 1 },
+            { kind: "setStar", bodyId: "hero", until: 2 }
+        ]);
+        for (let i = 0; i < 30; i++) w = stepWorld(doc, w, { controlled: "hero" });
+        const r = runReadout(w, "hero");
+        expect(r.tallies).toEqual([["coin", 2], ["1up", 1]]);   // first-collected order, counted
+        expect(r.power).toBe(1);
+        expect(r.starLeft).toBeCloseTo(2 - 0.5, 9);             // counting DOWN from the end time
+        // …and once the clock passes the end, it reads zero — never negative. A HUD counts down
+        // and stops; how long ago protection ended is nobody's business.
+        for (let i = 0; i < 120; i++) w = stepWorld(doc, w, { controlled: "hero" });
+        expect(runReadout(w, "hero").starLeft).toBe(0);
+        // Driving nothing reads as small and unprotected, not as a crash.
+        expect(runReadout(w, null)).toEqual({ tallies: [["coin", 2], ["1up", 1]], power: 0, starLeft: 0 });
+
+        // AND THE APP DRAWS IT — a readout nothing renders is the disease this cures.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/data-run-hud="1"/);
+        expect(app).toMatch(/runReadout\(es\.world, es\.controlled\)/);
+        expect(app).toMatch(/data-hud-tally=\{k\}/);
+        expect(app).toMatch(/data-hud-star="1"/);
     });
 
     it("TALLIES count by class, accumulating — CoinTally's shape", () => {

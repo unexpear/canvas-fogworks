@@ -140,7 +140,7 @@ import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
 import { naturalSize, surfaceUrl, imageSizeAsync } from "../../src/renderer/ImageCache";
-import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds, applyCells, applySpawns, playBounds } from "../core/runtime/World";
+import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds, applyCells, applySpawns, playBounds, runReadout } from "../core/runtime/World";
 import { marioRules } from "../core/runtime/Rules";
 import { applyPose } from "../core/runtime/Parts";
 import { followCamera } from "../core/runtime/Camera";
@@ -2967,6 +2967,31 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                         ref={canvasRef}
                         style={{ position: "absolute", inset: 0, cursor: canvasCursor }}
                     />
+                    {/* THE RUN'S HUD (M18 slice 37): tallies, power tier, star countdown — over
+                        the canvas only while a world runs, reading `runReadout` fresh each frame
+                        (the play loop already repaints every frame). This is the smallest honest
+                        surface for state that was otherwise visible only in a debugger — the same
+                        reasoning as the event status line, one shelf up. */}
+                    {es.playing && es.world && (() => {
+                        const r = runReadout(es.world, es.controlled);
+                        if (r.tallies.length === 0 && r.power === 0 && r.starLeft === 0) return null;
+                        return (
+                            <div data-run-hud="1" style={{ position: "absolute", top: 8, left: 8,
+                                display: "flex", gap: 10, padding: "4px 10px", borderRadius: 4,
+                                background: "rgba(10, 10, 24, 0.72)", color: "#eee", fontSize: 12,
+                                fontFamily: "monospace", pointerEvents: "none", zIndex: 5 }}>
+                                {r.tallies.map(([k, n]) => (
+                                    <span key={k} data-hud-tally={k}>{k} ×{n}</span>
+                                ))}
+                                {r.power > 0 && <span data-hud-power={r.power}>POWER {r.power}</span>}
+                                {r.starLeft > 0 && (
+                                    <span data-hud-star="1" style={{ color: "#f8d838" }}>
+                                        STAR {r.starLeft.toFixed(1)}s
+                                    </span>
+                                )}
+                            </div>
+                        );
+                    })()}
                     {/* IN-PLACE TEXT EDITING. A real textarea laid over the node by the same
                         transform the renderer places it with, so the caret is in the letters
                         rather than beside them. */}

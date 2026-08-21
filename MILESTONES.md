@@ -2056,6 +2056,14 @@ shove decayed under friction and the enemy stalled short of contact. The engine 
 4 tests, 5 mutants (BN1-2, ST1-2, TY1). ST2 is absolute-vs-relative time, visible only to a fixture
 that collects later than its star's own length.
 
+**Slice 37 — THE HUD: the run state that was visible only in a debugger.** Tallies, the power tier
+and the star clock all landed as world state nothing rendered — the fifth invisible field this
+project has caught, and the standing reachability lesson applied to itself. `runReadout` is the
+pure half: every tally in first-collected order, the controlled body's power, and a star countdown
+CLAMPED AT ZERO (a HUD counts down and stops; how long ago protection ended is nobody's business).
+The strip is chrome in `App`, over the canvas only while a world runs, reading fresh each frame the
+play loop already repaints. 1 test, 2 mutants (HD2 is the strip never drawing — the disease itself).
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

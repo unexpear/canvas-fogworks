@@ -785,6 +785,32 @@ export function bodyTypeOf(node: { userData?: UserData }): "static" | "dynamic" 
  * serve one — its author should not declare a screen yet. The tower level that reaches M18's ladder
  * will find this hole, which is what the ladder is for.
  */
+/**
+ * What a HUD should say about a running world (M18 slice 37) — the run's visible state, in one pure
+ * read: every tally in first-collected order, the controlled body's power tier, and how many
+ * seconds of star protection remain.
+ *
+ * THIS EXISTS BECAUSE THE STATE WAS INVISIBLE. Tallies, power and the star clock all landed as
+ * world state readable only in a debugger — the exact shape of unreachable feature this project
+ * has now found five fields in (events had it, `side` had it, the clip player still has it). A
+ * pure function is the testable half; the strip that draws it is chrome in `App`.
+ *
+ * `starLeft` is CLAMPED AT ZERO rather than signed: a HUD counts down and stops, it does not
+ * report how long ago protection ended.
+ */
+export function runReadout(world: WorldState, controlled: string | null): {
+    tallies: readonly [string, number][];
+    power: number;
+    starLeft: number;
+} {
+    const body = controlled ? world.bodies.get(controlled) : undefined;
+    return {
+        tallies: [...world.tallies.entries()],
+        power: body?.power ?? 0,
+        starLeft: Math.max(0, (body?.star ?? 0) - world.time)
+    };
+}
+
 export function playBounds(
     content: { x: number; y: number; width: number; height: number } | null,
     screen?: { readonly width: number; readonly height: number }
