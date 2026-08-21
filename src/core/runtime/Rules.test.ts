@@ -453,6 +453,38 @@ describe("setCell — a bumped block BECOMES something, without editing the leve
     });
 });
 
+describe("a STOMP needs a BODY — a region declaring stompable is not squashed by landing", () => {
+    it("entering a stompable REGION from above despawns nothing and bounces nobody", () => {
+        // THE FIRST FULL-BATTERY RUN'S ONLY REAL SURVIVOR (RU1, 2026-08-21). Deleting the stomp
+        // loop's contact-only guard changed exactly one observable thing: a region carrying
+        // `vde.stompable` would be despawned and bounced off when landed on — because an `enter`
+        // carries a side too, which is what made the mutant look right. No fixture had ever put
+        // stompable on a REGION, so nothing could say the contract out loud: a stomp squashes a
+        // BODY under your boots; a volume with no body is not squashable, whatever it declares.
+        const doc = docWith([
+            { id: "floor", x: 0, y: 400, w: 200, h: 20, userData: { bodyType: prop("static") } },
+            { id: "hero", x: 50, y: 300, w: 12, h: 16, userData: { bodyType: prop("dynamic") } },
+            // A classed REGION (no bodyType) declaring stompable — an authoring choice the runtime
+            // must ignore, not honour by accident.
+            { id: "pad", x: 44, y: 380, w: 30, h: 20, className: "pad",
+              userData: { "vde.stompable": prop("true") } }
+        ]);
+        let w = worldFrom(doc);
+        let sawEnterBelow = false;
+        for (let i = 0; i < 60; i++) {
+            w = stepWorld(doc, w, { controlled: "hero" });
+            if (w.events.some(e => e.kind === "enter" && e.nodeId === "pad" && e.side === "below"))
+                sawEnterBelow = true;
+            w = applyCommands(w, marioRules(doc, w, { controlled: "hero" }));
+        }
+        expect(sawEnterBelow).toBe(true);              // the fall really did enter it from above
+        expect(w.despawned.size).toBe(0);              // …and nothing was squashed
+        const hero = w.bodies.get("hero")!;
+        expect(hero.y).toBe(384);                      // resting on the FLOOR, through the region
+        expect(hero.onGround).toBe(true);              // no bounce ever launched it
+    });
+});
+
 describe("pipes — DOWN inside a warp region moves you where the author pointed (M18 s39)", () => {
     /** Hero standing on a floor, inside a classed region that names an anchor far away. */
     const pipeWorld = (warpsTo?: string) => {

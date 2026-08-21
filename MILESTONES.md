@@ -2176,6 +2176,25 @@ to 2013 under a correct 2020 total — `confine.test.ts` omitted, a drift class 
 cannot see; fixed same day. The full-battery run is queued. The TMX silent drop and the lit-unlit
 backend divergence are the next honesty slices.
 
+**THE FIRST FULL BATTERY RUN, AND WHAT IT COST TO GET (2026-08-21).** Two attempts. The first
+degraded partway and reported 96/402 with the tail failing at "0 tests" in 10s each — a report
+about the MACHINE, not the code: 402 consecutive jest spawns leak workers and cache state until
+later invocations starve, and 28 zombie node processes kept the box degraded into the next
+morning (an isolated mutant that takes 18s healthy timed out at five minutes). Kill the workers
+by COMMAND LINE, never `taskkill node.exe` — the session itself runs on node. The second attempt,
+on a cleaned machine: **350/402 KILLED, both intended-survivor controls SURVIVED (harness sanity
+holds on a full run), one real survivor, and the last 49 again UNVERIFIED at 0 tests** — the same
+exhaustion at a different index, so it is hours-of-spawns, not any specific mutant. The 49 rerun
+clean in a fresh batch. HARNESS LESSON, not yet built: the battery needs a periodic cache/worker
+teardown or a 0-tests circuit breaker that aborts loudly instead of unverifying everything after.
+
+**RU1 WAS THE ONE REAL SURVIVOR, and it had drifted rather than lied.** Authored when stomps were
+class-inferred, its blast radius shrank as the parts vocabulary landed, until its only observable
+difference was: a REGION declaring `vde.stompable` gets despawned and bounced off when landed on —
+an `enter` carries a side too, which is what made it look right. No fixture had ever put stompable
+on a region, so the contract was never said out loud: a stomp squashes a BODY; a volume is not
+squashable, whatever it declares. The fixture now says it. 1 test.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.
