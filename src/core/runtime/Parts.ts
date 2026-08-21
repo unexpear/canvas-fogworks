@@ -85,10 +85,29 @@ export interface Part {
      * region nobody can pick up has nothing to grant.
      */
     powers: number | null;
+    /**
+     * Collecting it makes the collector INVINCIBLE for this many seconds (M18 slice 36). The star.
+     *
+     * The duration is the part's, so the LEVEL declares the era's number rather than the engine
+     * hard-coding it: SMB1 sets `StarInvincibleTimer` to $23 ticks of a 21-frame interval — 735
+     * frames, 12.25 seconds — and a different game may declare differently. Null means collecting
+     * it protects nothing, which is every coin and mushroom.
+     */
+    stars: number | null;
+    /**
+     * It REBOUNDS on landing to this apex height in pixels (M18 slice 36). The star's motion.
+     *
+     * SMB1's star is `MoveJumpingEnemy` + `EnemyJump`: every landing sets the upward speed again,
+     * a body that never rests. The declaration is a HEIGHT and the speed is derived through the
+     * same kinematic identity every jump uses — no new constant. Null means it lands and stays,
+     * which is everything else. Compose with `vde.patrol` for the drift; the patrol rule sets
+     * velocity every step, airborne included, so the two declarations are independent.
+     */
+    bounces: number | null;
 }
 
 /** A part that declares nothing — what every node in the corpus and every older document is. */
-export const INERT: Part = { stompable: false, patrol: null, deadly: false, goal: false, collectible: false, powers: null };
+export const INERT: Part = { stompable: false, patrol: null, deadly: false, goal: false, collectible: false, powers: null, stars: null, bounces: null };
 
 /**
  * What this node declares, read LENIENTLY for the reason the whole runtime reads leniently: the same
@@ -109,7 +128,9 @@ export function partOf(node: { userData?: UserData }): Part {
         deadly: yes(node, "deadly"),
         goal: yes(node, "goal"),
         collectible: yes(node, "collect"),
-        powers: speedOf(propertyOf(node.userData, PART_PREFIX + "powers"))
+        powers: speedOf(propertyOf(node.userData, PART_PREFIX + "powers")),
+        stars: speedOf(propertyOf(node.userData, PART_PREFIX + "stars")),
+        bounces: speedOf(propertyOf(node.userData, PART_PREFIX + "bounces"))
     };
 }
 

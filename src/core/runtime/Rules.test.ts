@@ -453,6 +453,120 @@ describe("setCell — a bumped block BECOMES something, without editing the leve
     });
 });
 
+describe("the star and the 1-up — spawned movers, and what collecting them means (M18 s36)", () => {
+    const arena = (extra: Parameters<typeof docWith>[0]) => docWith([
+        { id: "floor", x: 0, y: 400, w: 600, h: 20, userData: { bodyType: prop("static") } },
+        { id: "hero", x: 50, y: 384, w: 12, h: 16, userData: { bodyType: prop("dynamic") } },
+        ...extra
+    ]);
+    const tick = (doc: ProjectDocument, w: WorldState, input = { left: false, right: false, jump: false }) => {
+        const live = applyCells(applySpawns(doc, w), w);
+        const stepped = stepWorld(live, w, { controlled: "hero", input });
+        return applyCommands(stepped, marioRules(live, stepped, { controlled: "hero" }));
+    };
+
+    it("a part that BOUNCES rebounds on every landing to its own declared apex", () => {
+        // The declaration is a HEIGHT; the speed comes through the same identity every jump uses.
+        // 32px, deliberately NOT the default jump's height, so a mutant that swaps the derivation
+        // for jumpLaunchSpeed overshoots and is seen.
+        const doc = arena([{ id: "ball", x: 300, y: 384, w: 12, h: 12,
+            userData: { bodyType: prop("dynamic"), "vde.bounces": prop("32") } }]);
+        let w = worldFrom(doc);
+        // REBOUNDS ARE vy SIGN FLIPS (falling to rising), not onGround edges: the bounce command
+        // itself clears onGround in the same tick, so the flag is false again before a test can
+        // read it — this fixture's own first defect.
+        let apex = Infinity, rebounds = 0, lastVy = 0;
+        for (let i = 0; i < 300; i++) {
+            w = tick(doc, w);
+            const b = w.bodies.get("ball")!;
+            apex = Math.min(apex, b.y);
+            if (lastVy >= 0 && b.vy < 0) rebounds++;
+            lastVy = b.vy;
+        }
+        // The floor's top is 400, the ball 12 tall: rest is 388; a 32px apex reaches ~356. One
+        // step of gravity before the bounce command applies costs a few px — assert the band.
+        expect(apex).toBeLessThan(388 - 24);
+        expect(apex).toBeGreaterThan(388 - 40);
+        expect(rebounds).toBeGreaterThan(2);          // it KEEPS bouncing — a body that never rests
+    });
+
+    it("a SPAWNED mover patrols: the 1-up walks away from where it popped", () => {
+        // The patrol rule iterates world.bodies against the LIVE document, so a spawned body whose
+        // template declares vde.patrol walks — measured here, not assumed from the code.
+        const doc = arena([{ id: "oneup", x: -60, y: -100, w: 12, h: 12, className: "1up",
+            userData: { bodyType: prop("dynamic"), "vde.patrol": prop("40"),
+                        "vde.collect": prop("true") } }]);
+        (doc.nodes.get("oneup") as Node).hidden = true;
+        let w = applyCommands(worldFrom(doc), [
+            { kind: "spawn", templateId: "oneup", x: 300, y: 380, body: { vx: 0, vy: 0 } }]);
+        for (let i = 0; i < 120; i++) w = tick(doc, w);
+        const b = w.bodies.get("oneup#0")!;
+        expect(b.x).toBeGreaterThan(340);             // two seconds at 40px/s, minus settle
+    });
+
+    it("a STAR protects for its OWN declared seconds — then death works again", () => {
+        // Timing is the test's whole content. Collected at ~0.5s with a 2s declaration: an END
+        // TIME of now+2 protects at 2.2s and not at 2.7s; a mutant that stores the duration as an
+        // ABSOLUTE end (2.0) has already expired at 2.2 and is seen. The enemy is parked away from
+        // the hero and driven onto it later by patrol.
+        const doc = arena([
+            // PARKED OUT OF REACH: overlapping the hero from step 0 collects at t=0 and the
+            // whole point is the collect TIME — this fixture's other first defect.
+            { id: "star", x: 100, y: 386, w: 10, h: 10, className: "star",
+              userData: { "vde.collect": prop("true"), "vde.stars": prop("2") } },
+            { id: "gmba", x: 500, y: 388, w: 12, h: 12, className: "enemy",
+              userData: { bodyType: prop("dynamic"), "vde.deadly": prop("true") } }
+        ]);
+        let w = worldFrom(doc);
+        for (let i = 0; i < 30; i++) w = tick(doc, w);       // settle to ~0.5s, star untouched
+        expect(w.bodies.get("hero")!.star).toBe(0);
+        // …then WALK to it, so the collect happens at a measured, non-zero time.
+        for (let i = 0; i < 120 && w.bodies.get("hero")!.star === 0; i++)
+            w = tick(doc, w, { left: false, right: true, jump: false });
+        const until = w.bodies.get("hero")!.star;
+        expect(until).toBeGreaterThan(2);                    // collected late enough that an
+        expect(until).toBeCloseTo(w.time + 2, 0);            // ABSOLUTE-duration mutant expires early
+        expect(w.tallies.get("star")).toBe(1);
+        // FIRST CONTACT AT ~2.2s: protected — the ENEMY dies, the run continues.
+        while (w.time < 2.2) w = tick(doc, w);
+        // RE-SHOVED EVERY TICK: a single shove decays under friction and the enemy stalls short —
+        // this fixture's third first-defect.
+        for (let i = 0; i < 60 && w.bodies.has("gmba"); i++) {
+            w = applyCommands(w, [{ kind: "setVelocity", bodyId: "gmba", vx: -800 }]);
+            w = tick(doc, w);
+        }
+        expect(w.bodies.has("gmba")).toBe(false);
+        expect(w.outcome).toBe("running");
+        // A SECOND ENEMY AT ~2.7s: the star has run out, and deadly means dead again.
+        const doc2 = arena([
+            { id: "gmba2", x: 500, y: 388, w: 12, h: 12, className: "enemy",
+              userData: { bodyType: prop("dynamic"), "vde.deadly": prop("true") } }
+        ]);
+        let w2 = applyCommands(worldFrom(doc2), [
+            { kind: "setStar", bodyId: "hero", until: 2.5 }]);
+        while (w2.time < 2.7) w2 = tick(doc2, w2);
+        for (let i = 0; i < 80 && w2.outcome === "running"; i++) {
+            w2 = applyCommands(w2, [{ kind: "setVelocity", bodyId: "gmba2", vx: -800 }]);
+            w2 = tick(doc2, w2);
+        }
+        expect(w2.outcome).toBe("lost");
+        expect(w2.bodies.has("gmba2")).toBe(true);
+    });
+
+    it("TALLIES count by class, accumulating — CoinTally's shape", () => {
+        const doc = arena([
+            { id: "c1", x: 54, y: 388, w: 8, h: 8, className: "coin",
+              userData: { "vde.collect": prop("true") } },
+            { id: "c2", x: 46, y: 388, w: 8, h: 8, className: "coin",
+              userData: { "vde.collect": prop("true") } }
+        ]);
+        let w = worldFrom(doc);
+        for (let i = 0; i < 20; i++) w = tick(doc, w);
+        expect(w.tallies.get("coin")).toBe(2);        // accumulated, not overwritten
+        expect(w.tallies.size).toBe(1);
+    });
+});
+
 describe("power and breaking — Mario's own eligibility rules (M18 slice 34)", () => {
     /**
      * A 3x3 tilemap standing over the player: row 2 is the floor (tile 0, solid), and cell (1,0)
@@ -568,7 +682,8 @@ describe("power and breaking — Mario's own eligibility rules (M18 slice 34)", 
         const commands = marioRules(doc, w, { controlled: "hero" });
         expect(commands).toEqual([
             { kind: "despawn", bodyId: "shroom" },
-            { kind: "setPower", bodyId: "hero", power: 1 }
+            { kind: "setPower", bodyId: "hero", power: 1 },
+            { kind: "tally", key: "mushroom" }
         ]);
         w = applyCommands(w, commands);
         expect(w.bodies.get("hero")!.power).toBe(1);
@@ -583,7 +698,8 @@ describe("power and breaking — Mario's own eligibility rules (M18 slice 34)", 
         let w2 = applyCommands(worldFrom(again), [{ kind: "setPower", bodyId: "hero", power: 2 }]);
         w2 = stepWorld(again, w2, { controlled: "hero" });
         const c2 = marioRules(again, w2, { controlled: "hero" });
-        expect(c2).toEqual([{ kind: "despawn", bodyId: "weak" }]);
+        expect(c2).toEqual([{ kind: "despawn", bodyId: "weak" },
+            { kind: "tally", key: "mushroom" }]);   // counted even when it grants nothing
     });
 
     it("a MULTI-PAY block pays per hit inside its window, then pays AND converts (M18 s35)", () => {
@@ -952,7 +1068,7 @@ describe("spawn — the fifth verb, and the only one that ADDS", () => {
         ]);
         const made = w.bodies.get("coin#0")!;
         expect(made).toEqual({ x: 40, y: 60, vx: 0, vy: -216, onGround: false,
-                               groundFriction: 1, blockedX: false, facing: 1, travelled: 0, power: 0 });
+                               groundFriction: 1, blockedX: false, facing: 1, travelled: 0, power: 0, star: 0 });
         // …and it MOVES, which is the whole difference from a region appearing.
         const stepped = stepWorld(applySpawns(doc, w), w);
         expect(stepped.bodies.get("coin#0")!.y).toBeLessThan(60);

@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 2009;
+const EXPECTED_TESTS = 2013;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1810,6 +1810,28 @@ const MUTANTS = [
       from: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * bounds.x,",
       to: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * (bounds.x + bounds.width / 2) - size.width / 2,",
       note: "the axis that runs off the side is CENTRED instead of opened at the document's start, so a 200-column level opens on column 100 — the middle of a level nobody has played yet, and a tall document opens halfway down" },
+
+    // THE STAR AND THE 1-UP (M18 slice 36) — spawned movers and what collecting them means.
+    { id: "BN1", file: "src/core/runtime/Rules.ts",
+      from: "        if (!body.onGround) continue;",
+      to: "        if (body.onGround) continue;",
+      note: "the bounce fires only while AIRBORNE, so a resting star never launches and a flying one is re-launched sixty times a second — the rebound count and the apex band both die" },
+    { id: "BN2", file: "src/core/runtime/Rules.ts",
+      from: "        out.push({ kind: \"setVelocity\", bodyId: id, vy: -jumpSpeedFor(apex, ctx.gravity ?? DEFAULT_GRAVITY) });",
+      to: "        out.push({ kind: \"setVelocity\", bodyId: id, vy: -jumpLaunchSpeed(ctx.gravity ?? DEFAULT_GRAVITY) });",
+      note: "the declared apex is ignored for the default jump's launch speed, so every bouncing part rises exactly like a tapped jump whatever it declared — the fixture declares 32px, deliberately not the default, to see this" },
+    { id: "ST1", file: "src/core/runtime/Rules.ts",
+      from: "                const starred = (world.bodies.get(me)?.star ?? 0) > world.time;",
+      to: "                const starred = (world.bodies.get(me)?.star ?? 0) > 0;",
+      note: "a star never EXPIRES — one touch of one star and every deadly thing in the level dies for the rest of the run. Only a fixture that waits past its own declared seconds can see it" },
+    { id: "ST2", file: "src/core/runtime/Rules.ts",
+      from: "                out.push({ kind: \"setStar\", bodyId: me, until: world.time + stars });",
+      to: "                out.push({ kind: \"setStar\", bodyId: me, until: stars });",
+      note: "the DURATION is stored as the end time, so a star collected any later than its own length has already expired when it is picked up — the fixture collects at ~1s with a 2s star and touches the enemy at 2.2s, inside now+2 and past the bare 2" },
+    { id: "TY1", file: "src/core/runtime/World.ts",
+      from: "            tallies.set(c.key, (tallies.get(c.key) ?? 0) + 1);",
+      to: "            tallies.set(c.key, 1);",
+      note: "the tally stops accumulating — every coin is the FIRST coin, and a counter that always reads 1 is CoinTally with amnesia. Only collecting two of one class can see it" },
 
     // THE MULTI-PAY BLOCK (M18 slice 35) — SMB1's coin brick, its window measured from the
     // disassembly: BrickCoinTimer $0B x 21-frame interval = 231 frames = 3.85s.

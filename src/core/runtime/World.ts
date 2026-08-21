@@ -425,6 +425,14 @@ export interface Body {
      * purpose or not at all.
      */
     power: number;
+    /**
+     * When this body's INVINCIBILITY ends, in world seconds — 0 means never had any (M18 slice 36).
+     *
+     * An END TIME, not a countdown: the world's clock is already deterministic, so storing "until"
+     * makes the state pure and the step untouched — nothing decrements, rules compare. Written only
+     * by `setStar`; the physics neither reads nor writes it, exactly like `power`.
+     */
+    star: number;
 }
 
 /** The run's whole mutable state. Keyed by STORED node id, never serialized. */
@@ -519,6 +527,13 @@ export interface WorldState {
      * quirk of one flag byte, not a design worth reproducing; a declared divergence.
      */
     cellClocks: ReadonlyMap<string, number>;
+    /**
+     * What this run has COLLECTED, counted by class (M18 slice 36) — SMB1's own bookkeeping shape:
+     * `CoinTally` and `NumberofLives` are counters, and a 1-up IS its counter, which is why this
+     * arrives with the 1-up rather than as a scoring system nobody asked for. Written only by the
+     * `tally` command; keyed by the collected node's class, dead at Stop like everything else.
+     */
+    tallies: ReadonlyMap<string, number>;
     /**
      * Whether this run is still going. Set only by an `endRun` command — the physics never decides
      * that a game is over, for the same reason it never decides what a stomp means.
@@ -794,10 +809,10 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
         bodies.set(node.id, {
             x: node.geometry.x + at.dx, y: node.geometry.y + at.dy,
             vx: 0, vy: 0, onGround: false, groundFriction: 1, blockedX: false, facing: 1,
-            travelled: 0, power: 0
+            travelled: 0, power: 0, star: 0
         });
     }
-    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), cells: new Map(), cellClocks: new Map(), spawns: [], outcome: "running", jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
+    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), cells: new Map(), cellClocks: new Map(), tallies: new Map(), spawns: [], outcome: "running", jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
@@ -1240,7 +1255,7 @@ export function stepWorld(
         // rebuilds an object field-by-field, and the sixth one dropped a renderer's fields — so the
         // one field the physics does not touch is named here rather than trusted to be remembered.
         next.set(id, { x, y, vx, vy, onGround, groundFriction, blockedX, facing, travelled,
-                       power: was.power });
+                       power: was.power, star: was.star });
     }
 
     // OVERLAPS ARE COMPUTED AFTER EVERYTHING HAS MOVED, once, on the settled positions — asking
@@ -1350,7 +1365,7 @@ export function stepWorld(
             className: doc.nodes.get(first)?.className ?? "" });
     }
 
-    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, cells: world.cells, cellClocks: world.cellClocks, spawns: world.spawns, outcome: world.outcome, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
+    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, cells: world.cells, cellClocks: world.cellClocks, tallies: world.tallies, spawns: world.spawns, outcome: world.outcome, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
 }
 
 /**
@@ -1443,6 +1458,16 @@ export type RuntimeCommand =
      */
     | { kind: "startCellClock"; nodeId: string; col: number; row: number }
     /**
+     * MAKE A BODY INVINCIBLE UNTIL a world time (M18 slice 36). Absolute, like `setPower`: the
+     * rule owns the arithmetic (now + the part's declared seconds), the channel records the result.
+     */
+    | { kind: "setStar"; bodyId: string; until: number }
+    /**
+     * COUNT ONE COLLECTED THING under a key (M18 slice 36) — the run's tallies, SMB1's CoinTally
+     * shape. The channel neither knows nor cares what a key means.
+     */
+    | { kind: "tally"; key: string }
+    /**
      * The run is over. THE THIRD VERB, and the one the built level demanded loudest — before it a
      * run had no way to end, so a level could not be lost, won, or taught.
      *
@@ -1511,6 +1536,7 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
     let despawned: Set<string> | null = null;
     let cells: Map<string, number> | null = null;
     let clocks: Map<string, number> | null = null;
+    let tallies: Map<string, number> | null = null;
     let spawns: { id: string; templateId: string; x: number; y: number }[] | null = null;
     let outcome: RunOutcome | null = null;
     for (const c of commands) {
@@ -1531,7 +1557,7 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
                 if (!bodies) bodies = new Map(world.bodies);
                 bodies.set(id, { x: c.x, y: c.y, vx: c.body.vx, vy: c.body.vy,
                     onGround: false, groundFriction: 1, blockedX: false,
-                    facing: c.body.vx < 0 ? -1 : 1, travelled: 0, power: 0 });
+                    facing: c.body.vx < 0 ? -1 : 1, travelled: 0, power: 0, star: 0 });
             }
             continue;
         }
@@ -1540,6 +1566,11 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
             // drop every one of them.
             if (!cells) cells = new Map(world.cells);
             cells.set(cellKey(c.nodeId, c.col, c.row), c.tile);
+            continue;
+        }
+        if (c.kind === "tally") {
+            if (!tallies) tallies = new Map(world.tallies);
+            tallies.set(c.key, (tallies.get(c.key) ?? 0) + 1);
             continue;
         }
         if (c.kind === "startCellClock") {
@@ -1575,6 +1606,12 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
             bodies.set(c.bodyId, { ...body, power: c.power });
             continue;
         }
+        if (c.kind === "setStar") {
+            if (body.star === c.until) continue;
+            if (!bodies) bodies = new Map(world.bodies);
+            bodies.set(c.bodyId, { ...body, star: c.until });
+            continue;
+        }
         if (c.vx === undefined && c.vy === undefined) continue;
         if (!bodies) bodies = new Map(world.bodies);
         bodies.set(c.bodyId, {
@@ -1586,11 +1623,12 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
             onGround: (c.vy !== undefined && c.vy < 0) ? false : body.onGround
         });
     }
-    if (!bodies && !despawned && !outcome && !cells && !spawns && !clocks) return world;
+    if (!bodies && !despawned && !outcome && !cells && !spawns && !clocks && !tallies) return world;
     return {
         ...world,
         cells: cells ?? world.cells,
         cellClocks: clocks ?? world.cellClocks,
+        tallies: tallies ?? world.tallies,
         spawns: spawns ?? world.spawns,
         bodies: bodies ?? world.bodies,
         despawned: despawned ?? world.despawned,

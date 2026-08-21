@@ -2032,6 +2032,30 @@ And the FIFTH
 -became-a-newline generator failure — the fix is now line surgery by quote parity,
 not more careful escaping.
 
+**Slice 36 — THE STAR AND THE 1-UP: spawned movers, and what collecting them means.** Everything
+measured before built. The star's duration is the disassembly's: `StarInvincibleTimer = $23` ticks
+of the 21-frame interval — 735 frames, 12.25 seconds — declared by the LEVEL as `vde.stars`. Its
+motion is the disassembly's too: `MoveJumpingEnemy` + `EnemyJump`, a body that never rests, is
+`vde.bounces` — an apex HEIGHT whose speed comes through the same identity every jump uses, no new
+constant — composed with `vde.patrol`, which already set velocity every step, airborne included.
+The 1-up needed NOTHING new to move: patrol iterates `world.bodies` against the live document, so a
+spawned body walks — measured, not assumed.
+
+**WHAT COLLECTING MEANS, in the corpus's own shapes.** A star grants invincibility until an ABSOLUTE
+world time (`Body.star`, the `setStar` verb — rules own the now+duration arithmetic); a starred
+player's deadly contact DESPAWNS the enemy instead of ending the run, which is SMB1's star. A 1-up
+is its counter: `WorldState.tallies`, keyed by class, written by the `tally` verb on every classed
+collect — `CoinTally` and `NumberofLives` are both exactly this, so coins now count too. NOT built:
+lives-as-respawn, which is a run-restart system, not a number.
+
+**THREE FIXTURE DEFECTS BEFORE ANY CODE DEFECT, all mine:** the bounce test read `onGround` after
+the bounce command had already cleared it (rebounds are vy sign flips); the star overlapped the hero
+at step 0 and was collected at t=0 when the collect TIME was the test's whole content; a single
+shove decayed under friction and the enemy stalled short of contact. The engine was right each time.
+
+4 tests, 5 mutants (BN1-2, ST1-2, TY1). ST2 is absolute-vs-relative time, visible only to a fixture
+that collects later than its star's own length.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

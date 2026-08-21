@@ -30,7 +30,7 @@
  */
 import { ReadonlyDocument } from "../document/Document";
 import {
-    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed, propertyOf, worldOffsetOf, bodyTypeOf, cellKey } from "./World";
+    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed, propertyOf, worldOffsetOf, bodyTypeOf, cellKey, jumpSpeedFor } from "./World";
 import { partOf, PART_PREFIX } from "./Parts";
 import { findTileset, tilesetTile } from "../document/Tileset";
 import { tileAt } from "../document/Tilemap";
@@ -88,6 +88,21 @@ export function marioRules(
         const dir = body.vx === 0 ? Math.sign(speed) : Math.sign(body.vx);
         const turned = body.blockedX ? -dir : dir;
         out.push({ kind: "setVelocity", bodyId: id, vx: turned * Math.abs(speed) });
+    }
+
+    // ── PARTS THAT BOUNCE (M18 slice 36) ────────────────────────────────────────────
+    // SMB1's star is a body that never rests: every landing sets the upward speed again
+    // (`EnemyJump` writes the Y speed on every touch-down). The declaration is an apex HEIGHT and
+    // the speed is derived through the same identity every jump uses — no constant of its own.
+    // ON LANDING ONLY: firing while airborne would re-launch sixty times a second and the body
+    // would simply fly. Composes with `vde.patrol`, which sets vx every step, airborne included.
+    for (const [id, body] of world.bodies) {
+        if (!body.onGround) continue;
+        const node = doc.nodes.get(id);
+        if (!node) continue;
+        const apex = partOf(node).bounces;
+        if (apex === null || apex <= 0) continue;
+        out.push({ kind: "setVelocity", bodyId: id, vy: -jumpSpeedFor(apex, ctx.gravity ?? DEFAULT_GRAVITY) });
     }
 
     // ── STOMPS ───────────────────────────────────────────────────────────────────────────────────
@@ -226,6 +241,16 @@ export function marioRules(
             if (powers !== null && powers > held) {
                 out.push({ kind: "setPower", bodyId: me, power: powers });
             }
+            // …INVINCIBILITY, for the part's own declared seconds (M18 slice 36). The rule owns
+            // the arithmetic — now + duration — and a fresh star simply moves the end time out.
+            const stars = partOf(got).stars;
+            if (stars !== null && stars > 0) {
+                out.push({ kind: "setStar", bodyId: me, until: world.time + stars });
+            }
+            // …AND THE COUNT. A collected thing is TALLIED under its class — CoinTally's shape,
+            // and the whole of what SMB1's 1-up pickup does. A classless collectible counts as
+            // nothing, which is what having no name means.
+            if (got.className) out.push({ kind: "tally", key: got.className });
         }
     }
 
@@ -275,6 +300,14 @@ export function marioRules(
             const part = partOf(other);
             if (part.goal) { out.push({ kind: "endRun", outcome: "won" }); return out; }
             if (part.deadly && e.side !== "below") {
+                // A STARRED PLAYER KILLS WHAT WOULD KILL IT (M18 slice 36) — SMB1's star, where
+                // any contact destroys the enemy. The comparison is against the world's own clock,
+                // so expiry needs no event: the first deadly touch past `star` is death as usual.
+                const starred = (world.bodies.get(me)?.star ?? 0) > world.time;
+                if (starred) {
+                    out.push({ kind: "despawn", bodyId: e.nodeId });
+                    continue;
+                }
                 out.push({ kind: "endRun", outcome: "lost" });
                 return out;
             }
