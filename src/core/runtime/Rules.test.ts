@@ -623,6 +623,25 @@ describe("power and breaking — Mario's own eligibility rules (M18 slice 34)", 
             w = applyCommands(w, marioRules(live, w, { controlled: "player" }));
         }
         expect(w.spawns.length).toBe(spent);
+
+        // A MALFORMED WINDOW IS A ONE-SHOT: `paysFor: "-1"` must behave exactly like absent —
+        // first hit pays and converts. The guard is `window > 0`, and this fixture is what makes
+        // it load-bearing: MC1 weakened it to `!== 0` and SURVIVED, because the note describing
+        // the kill-condition had been written while the fixture declaring a negative window had
+        // not. A survivor is a blind fixture; this is the fixture.
+        const bad = blockLevel({ "vde.bumpsTo": prop("2"), "vde.spawns": prop("gift"),
+                                 "vde.paysFor": prop("-1") },
+            [{ id: "gift", x: 200, y: -40, w: 8, h: 8, className: "coin",
+               userData: { "vde.collect": prop("true") } }]);
+        let bw = worldFrom(bad);
+        for (let i = 0; i < 60; i++) {
+            const live = applyCells(applySpawns(bad, bw), bw);
+            bw = stepWorld(live, bw, { controlled: "player",
+                input: { left: false, right: false, jump: i >= 2 && i < 20 } });
+            bw = applyCommands(bw, marioRules(live, bw, { controlled: "player" }));
+        }
+        expect(bw.cells.get(cellKey("map", 1, 0))).toBe(2);   // converted on the FIRST hit
+        expect(bw.spawns).toHaveLength(1);                     // …and it still paid once
     });
 
     it("startCellClock is IDEMPOTENT and per cell — the declared divergence from SMB1", () => {
