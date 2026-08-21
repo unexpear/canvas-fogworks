@@ -2137,6 +2137,45 @@ the per-tile speed scale (our slices verified RATIOS against the disassembly, ne
 tile rate), the timer-as-spine observation, and "the enemy reads as a platform", which no
 mechanics test could ever say.
 
+**THE GAUNTLET VERDICT ON THE ENGINE ITSELF (2026-08-20)** — a second Gauntlet pass, this time over
+VDE as an engine, judged code-against-code: Godot 4.4 source on disk (tilemap, tileset, the whole
+2D canvas editor plugin), LDtk's published schema, Unity's RuleTile, Aseprite/Godot/GameMaker/Tiled
+docs fetched and placeholder-checked. Ten agents, 294 tool calls of reading both sides. **1 MATCH,
+8 LOSE** — with per-piece strengths named, several genuinely above the bar.
+
+THE MATCH: **testing-quality.** The critic's words: the mutation harness is "genuinely above the
+bar" — Godot has no mutation testing and its 6,410-line canvas editor has zero tests, against our
+39,077 test lines on 52,137 source lines. Held to MATCHES by two absences: no automated
+enforcement (no CI by rule, no hooks), and THE FULL BATTERY HAS NEVER RUN END-TO-END — the last
+full run was 215 mutants on 2026-08-12; everything since ran as filtered increments.
+
+THE LOSSES, each with the critic's one most valuable fix:
+- **tilemap-autotile** — side/edge-aware matching: our only model is the corner dual-grid; Godot
+  ships three modes, Unity full 3x3 neighbor rules, LDtk rule groups with chance and modulo.
+- **runtime-physics** — RUN FLOW: `endRun` freezes the world and shows a label; no respawn, no
+  restart, no way for won or a warp to lead anywhere. One document is the whole game.
+- **animation** — a REACHABLE clip player (clips exist, tested, and nothing lists or plays them —
+  the standing unreachable-feature lesson, confirmed by an outside reader), plus a runtime hook
+  for state-driven clips (idle/walk/jump) beside the distance-driven pose.
+- **editor-canvas** — GRID SNAPPING: the editor draws a zoom-adaptive grid and nothing snaps to
+  it; the only snapping is smart node-alignment at a hard-coded 6px, disabled under rotation.
+- **art-paint** — selection CONTENT: no move/cut/copy/paste/clear of the pixels a selection holds;
+  the mask only clips paint. The door Aseprite's own docs call "transforming selected content".
+- **document-format** — TYPED ENTITY FIELDS: LDtk gives entities validated Int/Float/Bool/Enum/
+  Point/EntityRef fields; our whole game now hangs off verbatim-text `userData`.
+- **interop** — the TILESET half of TMX does not survive import: per-tile collision, animation
+  frames, wangsets, per-tile properties — all unread, and deliberately NOT counted in `notes`,
+  the one silent drop in an otherwise report-everything importer.
+- **rendering** — LIGHTING is a missing class AND a parity hole: only 4 directional lights +
+  ambient, rendered ONLY by WebGL — the default SVG backend has zero light code, so a lit document
+  silently draws unlit. (Named strength: the one-quad GPU tilemap beats Godot's per-cell quadrant
+  items; the round-trip TMX writer beats what Godot/Unity ship natively.)
+
+DEFECT-GRADE FACTS THE PASS PRODUCED (acted on or queued): TESTING.md's suite itemization summed
+to 2013 under a correct 2020 total — `confine.test.ts` omitted, a drift class the doc-drift tool
+cannot see; fixed same day. The full-battery run is queued. The TMX silent drop and the lit-unlit
+backend divergence are the next honesty slices.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.
