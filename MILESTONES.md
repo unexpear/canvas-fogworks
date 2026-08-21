@@ -2080,6 +2080,27 @@ landing exactly on the cap.
 4 tests, 4 mutants (RS1-RS4; RS4 is the ease, visible only to a fixture that releases run at full
 speed and watches the next fifteen steps).
 
+**Slice 39 — PIPES: down inside a warp region moves you where the author pointed.** `vde.warpsTo`
+names a NODE, not coordinates — the same reason `vde.spawns` names a template — and the ideal
+anchor is a HIDDEN node, which slice 34 made mean "out of the world entirely": it neither draws nor
+collides, it only names a place. The gesture is the original's: DOWN while inside, a STATE read
+that needs no latch because the teleport un-makes its own condition. The `teleport` verb lands you
+standing ON the anchor, centred, at rest — pipes emit you standing still, and 366 px/s of run speed
+carried through a warp would fling you off the destination.
+
+**AND THE RULES CAN NOW SEE THE BUTTONS** — `ctx.input`, optional. The rules are the game, and a
+game reads its buttons; every rule written before this reads nothing from it. The app passes the
+run's input and CUTS the camera on a teleport of the controlled body (the follow camera closes a
+fraction per step, so a 3000px warp would swoosh across the whole level; the original cuts).
+
+**IN-DOCUMENT, deliberately.** SMB1's 1-1 underground is an area of the same level, and a filmstrip
+of areas side by side inside one document needs no document-loading machinery, no run-state
+hand-off, and no new bounds rules — the camera clamp already spans the content. A warp to a
+DIFFERENT document is a real thing this is not; stated, not smuggled.
+
+2 tests, 3 mutants (WP1: fires on touch; WP2: velocity carried through; WP3: one sign, and every
+pipe dumps its traveller a body-height too low).
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

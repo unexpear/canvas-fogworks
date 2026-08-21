@@ -1242,10 +1242,12 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
          * the same reason. None of it is configurable yet — that is a settings surface, and this
          * slice is the loop.
          */
-        const intentFor = (key: string): "left" | "right" | "jump" | "run" | null => {
+        const intentFor = (key: string): "left" | "right" | "jump" | "run" | "down" | null => {
             // SHIFT IS RUN (M18 slice 38) — the same reasoning as the three keys above: both
             // shifts, so neither hand's layout is a decision made for the player.
             if (key === "Shift") return "run";
+            // DOWN IS THE PIPE'S BUTTON (M18 slice 39), on both layouts like everything else.
+            if (key === "ArrowDown" || key === "s" || key === "S") return "down";
             switch (key) {
                 case "ArrowLeft": case "a": case "A": return "left";
                 case "ArrowRight": case "d": case "D": return "right";
@@ -1417,8 +1419,22 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     // — measured at 14.25px on a stomp. The physics still decides nothing: it
                     // produced events, this reads them, and `applyCommands` answers a FINISHED
                     // world. `marioRules` is the game; swapping it changes no line below.
-                    world = applyCommands(world, marioRules(live, world,
-                        { controlled: es.controlled, bounds: runBoundsRef.current }));
+                        const commands = marioRules(live, world,
+                        { controlled: es.controlled, bounds: runBoundsRef.current, input: es.input });
+                    world = applyCommands(world, commands);
+                    // A WARP CUTS THE CAMERA (M18 slice 39): the follow camera closes a fraction
+                    // per step, so a 3000px teleport would swoosh across the whole level. The
+                    // original cuts, and so does this — by finishing the follow in one go.
+                    if (canvasRef.current && commands.some(c =>
+                            c.kind === "teleport" && c.bodyId === es.controlled)) {
+                        const b = es.controlled ? world.bodies.get(es.controlled) : undefined;
+                        const n = es.controlled ? base.nodes.get(es.controlled) : undefined;
+                        if (b && n) Object.assign(es.viewport, followCamera(
+                            es.viewport,
+                            { width: canvasRef.current.clientWidth, height: canvasRef.current.clientHeight },
+                            { x: b.x, y: b.y, width: n.geometry.width, height: n.geometry.height },
+                            runBoundsRef.current, 10000));
+                    }
                 }
                 es.world = world;
                 es.worldClock = { accumulator: spend.accumulator, lastAt: now };

@@ -104,10 +104,25 @@ export interface Part {
      * velocity every step, airborne included, so the two declarations are independent.
      */
     bounces: number | null;
+    /**
+     * Standing in it and pressing DOWN teleports the body to the NAMED node (M18 slice 39). The
+     * pipe. A node id rather than coordinates, because a level author points at a thing they made
+     * — the same reason `vde.spawns` names a template — and the target may be HIDDEN, which is the
+     * ideal anchor: hidden nodes are out of the world entirely (slice 34), so an anchor neither
+     * draws nor collides, it only names a place. A dangling id warps nowhere, inertly.
+     */
+    warpsTo: string | null;
 }
 
 /** A part that declares nothing — what every node in the corpus and every older document is. */
-export const INERT: Part = { stompable: false, patrol: null, deadly: false, goal: false, collectible: false, powers: null, stars: null, bounces: null };
+export const INERT: Part = { stompable: false, patrol: null, deadly: false, goal: false, collectible: false, powers: null, stars: null, bounces: null, warpsTo: null };
+
+/** A declared id, or null — empty and whitespace mean nothing was named. */
+function textOf(raw: string | null): string | null {
+    if (raw === null) return null;
+    const t = raw.trim();
+    return t === "" ? null : t;
+}
 
 /**
  * What this node declares, read LENIENTLY for the reason the whole runtime reads leniently: the same
@@ -130,7 +145,8 @@ export function partOf(node: { userData?: UserData }): Part {
         collectible: yes(node, "collect"),
         powers: speedOf(propertyOf(node.userData, PART_PREFIX + "powers")),
         stars: speedOf(propertyOf(node.userData, PART_PREFIX + "stars")),
-        bounces: speedOf(propertyOf(node.userData, PART_PREFIX + "bounces"))
+        bounces: speedOf(propertyOf(node.userData, PART_PREFIX + "bounces")),
+        warpsTo: textOf(propertyOf(node.userData, PART_PREFIX + "warpsTo"))
     };
 }
 

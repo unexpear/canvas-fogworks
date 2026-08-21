@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 2018;
+const EXPECTED_TESTS = 2020;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1810,6 +1810,20 @@ const MUTANTS = [
       from: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * bounds.x,",
       to: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * (bounds.x + bounds.width / 2) - size.width / 2,",
       note: "the axis that runs off the side is CENTRED instead of opened at the document's start, so a 200-column level opens on column 100 — the middle of a level nobody has played yet, and a tall document opens halfway down" },
+
+    // PIPES (M18 slice 39) — down inside a warp region moves you where the author pointed.
+    { id: "WP1", file: "src/core/runtime/Rules.ts",
+      from: "    if (ctx.input?.down) {",
+      to: "    if (ctx.input) {",
+      note: "the pipe fires on TOUCH instead of on DOWN, so walking past any pipe mouth swallows you — the button is the whole of the original's gesture, and only a fixture standing inside without pressing can see it" },
+    { id: "WP2", file: "src/core/runtime/World.ts",
+      from: "            bodies.set(c.bodyId, { ...body, x: c.x, y: c.y, vx: 0, vy: 0, onGround: false });",
+      to: "            bodies.set(c.bodyId, { ...body, x: c.x, y: c.y, onGround: false });",
+      note: "a warp keeps your velocity, so 366 px/s of run speed carries through the pipe and flings the body off the destination before a frame draws it — the original emits you standing still" },
+    { id: "WP3", file: "src/core/runtime/Rules.ts",
+      from: "                y: at.dy + target.geometry.y - h });",
+      to: "                y: at.dy + target.geometry.y + h });",
+      note: "you arrive INSIDE the anchor's row instead of standing on it — one sign, and every pipe in every level dumps its traveller a body-height too low, into whatever solid is there" },
 
     // THE RUN TIER (M18 slice 38) — every number a ratio of the walk, chosen by the button.
     { id: "RS1", file: "src/core/runtime/World.ts",

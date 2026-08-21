@@ -40,7 +40,7 @@ describe("the vocabulary a part declares about itself", () => {
         expect(partOf(node(undefined))).toEqual(INERT);
         expect(partOf(node({ bodyType: prop("dynamic"), friction: prop("0.45") }))).toEqual(INERT);
         // …including a node carrying a CLASS, which is what slice 10 read as "actor" and no longer does.
-        expect(partOf(node({ bodyType: prop("dynamic") }))).toEqual({ stompable: false, patrol: null, deadly: false, goal: false, collectible: false, powers: null, stars: null, bounces: null });
+        expect(partOf(node({ bodyType: prop("dynamic") }))).toEqual({ stompable: false, patrol: null, deadly: false, goal: false, collectible: false, powers: null, stars: null, bounces: null, warpsTo: null });
     });
 
     it("reads stompable leniently, and reads the words that mean NO as no", () => {

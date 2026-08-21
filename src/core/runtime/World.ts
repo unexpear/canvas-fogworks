@@ -363,6 +363,8 @@ export interface Input {
     /** The RUN button (M18 slice 38). Optional so every fixture and caller written before the tier
      *  existed still means what it meant: absent is a walk. */
     run?: boolean;
+    /** DOWN (M18 slice 39) — what a pipe asks for. Optional for the same reason `run` is. */
+    down?: boolean;
 }
 
 /** Nothing held — the input a run starts with and the one a test uses when it means "no input". */
@@ -1534,6 +1536,13 @@ export type RuntimeCommand =
      */
     | { kind: "tally"; key: string }
     /**
+     * MOVE A BODY SOMEWHERE ELSE, at rest (M18 slice 39) — the warp's channel half. Velocity is
+     * ZEROED because the original's pipes emit you standing still, and carrying 366 px/s of run
+     * speed through a warp would fling the body off the destination before a frame drew it.
+     * Everything else the body knows — power, star, facing, travelled — survives by spread.
+     */
+    | { kind: "teleport"; bodyId: string; x: number; y: number }
+    /**
      * The run is over. THE THIRD VERB, and the one the built level demanded loudest — before it a
      * run had no way to end, so a level could not be lost, won, or taught.
      *
@@ -1676,6 +1685,13 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
             if (body.star === c.until) continue;
             if (!bodies) bodies = new Map(world.bodies);
             bodies.set(c.bodyId, { ...body, star: c.until });
+            continue;
+        }
+        if (c.kind === "teleport") {
+            if (!bodies) bodies = new Map(world.bodies);
+            // At REST and off the ground: the next step's own resolution decides what it stands
+            // on at the destination, exactly as it does for a freshly spawned body.
+            bodies.set(c.bodyId, { ...body, x: c.x, y: c.y, vx: 0, vy: 0, onGround: false });
             continue;
         }
         if (c.vx === undefined && c.vy === undefined) continue;

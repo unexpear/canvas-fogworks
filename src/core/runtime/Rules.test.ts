@@ -453,6 +453,79 @@ describe("setCell — a bumped block BECOMES something, without editing the leve
     });
 });
 
+describe("pipes — DOWN inside a warp region moves you where the author pointed (M18 s39)", () => {
+    /** Hero standing on a floor, inside a classed region that names an anchor far away. */
+    const pipeWorld = (warpsTo?: string) => {
+        const doc = docWith([
+            { id: "floor", x: 0, y: 400, w: 4000, h: 20, userData: { bodyType: prop("static") } },
+            { id: "hero", x: 50, y: 384, w: 12, h: 16, userData: { bodyType: prop("dynamic") } },
+            { id: "mouth", x: 40, y: 380, w: 40, h: 24, className: "warp",
+              userData: warpsTo !== undefined ? { "vde.warpsTo": prop(warpsTo) } : {} },
+            { id: "anchor", x: 3000, y: 380, w: 18, h: 18 }
+        ]);
+        // THE ANCHOR IS HIDDEN — the ideal warp target: out of the world entirely (slice 34), it
+        // neither draws nor collides, it only names a place.
+        (doc.nodes.get("anchor") as Node).hidden = true;
+        return doc;
+    };
+    const step = (doc: ProjectDocument, w: WorldState, down: boolean) => {
+        const stepped = stepWorld(doc, w, { controlled: "hero",
+            input: { left: false, right: false, jump: false, down } });
+        return applyCommands(stepped, marioRules(doc, stepped, { controlled: "hero",
+            input: { left: false, right: false, jump: false, down } }));
+    };
+
+    it("warps ON DOWN, to standing ON the anchor — and not without down, and not dangling", () => {
+        const doc = pipeWorld("anchor");
+        let w = worldFrom(doc);
+        for (let i = 0; i < 10; i++) w = step(doc, w, false);
+        expect(w.bodies.get("hero")!.x).toBe(50);            // inside, not pressing: nothing
+        w = step(doc, w, true);
+        const b = w.bodies.get("hero")!;
+        expect(b.x).toBe(3000 + (18 - 12) / 2);              // centred on the anchor
+        expect(b.y).toBe(380 - 16);                          // standing ON it
+        expect(b.vx).toBe(0);                                // at rest — pipes emit you standing
+        // …and the destination is not itself a warp region, so nothing chains: pressing down
+        // where you landed does nothing.
+        const there = step(doc, w, true);
+        expect(there.bodies.get("hero")!.x).toBe(b.x);
+
+        // A DANGLING TARGET WARPS NOWHERE, inertly — the project's standing reference rule.
+        const dangling = pipeWorld("ghost");
+        let w2 = worldFrom(dangling);
+        for (let i = 0; i < 10; i++) w2 = step(dangling, w2, false);
+        w2 = step(dangling, w2, true);
+        expect(w2.bodies.get("hero")!.x).toBe(50);
+        // …and a region declaring NOTHING is just a region.
+        const plain = pipeWorld(undefined);
+        let w3 = worldFrom(plain);
+        for (let i = 0; i < 10; i++) w3 = step(plain, w3, false);
+        w3 = step(plain, w3, true);
+        expect(w3.bodies.get("hero")!.x).toBe(50);
+    });
+
+    it("teleport is the channel half: position and rest, everything else by spread", () => {
+        const doc = pipeWorld("anchor");
+        let w = worldFrom(doc);
+        w = applyCommands(w, [
+            { kind: "setPower", bodyId: "hero", power: 1 },
+            { kind: "setStar", bodyId: "hero", until: 99 },
+            { kind: "setVelocity", bodyId: "hero", vx: 300, vy: -100 },
+            { kind: "teleport", bodyId: "hero", x: 700, y: 100 }
+        ]);
+        const b = w.bodies.get("hero")!;
+        expect([b.x, b.y, b.vx, b.vy, b.onGround]).toEqual([700, 100, 0, 0, false]);
+        expect(b.power).toBe(1);                             // survives the trip
+        expect(b.star).toBe(99);
+        // …AND THE APP GIVES THE RULES THE BUTTONS, and cuts the camera on a warp — without
+        // either, pipes exist and cannot fire, or fire and swoosh across the level.
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        expect(app).toMatch(/bounds: runBoundsRef\.current, input: es\.input/);
+        expect(app).toMatch(/c\.kind === "teleport" && c\.bodyId === es\.controlled/);
+        expect(app).toMatch(/if \(key === "ArrowDown" \|\| key === "s" \|\| key === "S"\) return "down";/);
+    });
+});
+
 describe("the star and the 1-up — spawned movers, and what collecting them means (M18 s36)", () => {
     const arena = (extra: Parameters<typeof docWith>[0]) => docWith([
         { id: "floor", x: 0, y: 400, w: 600, h: 20, userData: { bodyType: prop("static") } },

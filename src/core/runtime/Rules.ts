@@ -30,7 +30,7 @@
  */
 import { ReadonlyDocument } from "../document/Document";
 import {
-    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed, propertyOf, worldOffsetOf, bodyTypeOf, cellKey, jumpSpeedFor } from "./World";
+    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed, propertyOf, worldOffsetOf, bodyTypeOf, cellKey, jumpSpeedFor, Input } from "./World";
 import { partOf, PART_PREFIX } from "./Parts";
 import { findTileset, tilesetTile } from "../document/Tileset";
 import { tileAt } from "../document/Tilemap";
@@ -47,6 +47,13 @@ export interface RuleContext {
      * means no floor of last resort, which is what the runtime did before.
      */
     bounds?: { x: number; y: number; width: number; height: number } | null;
+    /**
+     * WHAT THE PLAYER IS HOLDING (M18 slice 39). The rules are the game, and a game reads its
+     * buttons — the original's pipes fire on DOWN, not on touching. Optional: every rule written
+     * before this reads nothing from it, and a caller that passes none has a game whose pipes
+     * simply do not fire, which is inert rather than wrong.
+     */
+    input?: Input;
     /** Matches `stepWorld`'s, so a level with a different gravity keeps the bounce proportionate. */
     gravity?: number;
 }
@@ -251,6 +258,31 @@ export function marioRules(
             // and the whole of what SMB1's 1-up pickup does. A classless collectible counts as
             // nothing, which is what having no name means.
             if (got.className) out.push({ kind: "tally", key: got.className });
+        }
+    }
+
+    // ── PIPES (M18 slice 39) ──────────────────────────────────────────────────────────────
+    // DOWN while INSIDE a region that names a destination — a STATE read, not an edge, and that is
+    // safe without a latch because the teleport removes the body from the region: the condition
+    // un-makes itself. The destination is a NODE, and the body lands standing ON it, centred —
+    // the original's pipes emit you at a place an author chose, not at coordinates. One warp per
+    // step, because two regions under one body must not chain in a single instant.
+    if (ctx.input?.down) {
+        for (const key of world.overlaps) {
+            const nul = key.indexOf("\u0000");
+            if (key.slice(0, nul) !== me) continue;
+            const region = doc.nodes.get(key.slice(nul + 1));
+            const to = region ? partOf(region).warpsTo : null;
+            if (to === null) continue;
+            const target = doc.nodes.get(to);
+            const at = target ? worldOffsetOf(doc, to) : null;
+            if (!target || !at) continue;              // dangling: warps nowhere, inertly
+            const mine = doc.nodes.get(me);
+            const w = mine?.geometry.width ?? 0, h = mine?.geometry.height ?? 0;
+            out.push({ kind: "teleport", bodyId: me,
+                x: at.dx + target.geometry.x + (target.geometry.width - w) / 2,
+                y: at.dy + target.geometry.y - h });
+            break;
         }
     }
 
