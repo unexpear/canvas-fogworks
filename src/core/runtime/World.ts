@@ -508,6 +508,18 @@ export interface WorldState {
      */
     spawns: readonly { id: string; templateId: string; x: number; y: number }[];
     /**
+     * When each cell's PAYOUT CLOCK started, in world seconds (M18 slice 35) — the state a
+     * multi-coin brick needs and nothing else has: SMB1's coin brick pays from the first hit until
+     * a timer runs out, and a stateless rule can only implement a timer if the world remembers
+     * when it began. Written only by the `startCellClock` command, so what starts a clock is a
+     * RULE's decision; keyed like `cells`, and it dies with the run the same way.
+     *
+     * PER CELL, where SMB1's is famously GLOBAL — one `BrickCoinTimerFlag` per area, so hitting a
+     * second coin brick while another's timer runs joins the first one's countdown. That is a
+     * quirk of one flag byte, not a design worth reproducing; a declared divergence.
+     */
+    cellClocks: ReadonlyMap<string, number>;
+    /**
      * Whether this run is still going. Set only by an `endRun` command — the physics never decides
      * that a game is over, for the same reason it never decides what a stomp means.
      */
@@ -785,7 +797,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
             travelled: 0, power: 0
         });
     }
-    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), cells: new Map(), spawns: [], outcome: "running", jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
+    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), cells: new Map(), cellClocks: new Map(), spawns: [], outcome: "running", jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
@@ -1338,7 +1350,7 @@ export function stepWorld(
             className: doc.nodes.get(first)?.className ?? "" });
     }
 
-    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, cells: world.cells, spawns: world.spawns, outcome: world.outcome, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
+    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, cells: world.cells, cellClocks: world.cellClocks, spawns: world.spawns, outcome: world.outcome, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
 }
 
 /**
@@ -1424,6 +1436,13 @@ export type RuntimeCommand =
      */
     | { kind: "setPower"; bodyId: string; power: number }
     /**
+     * START A CELL'S PAYOUT CLOCK (M18 slice 35), at the world's CURRENT time. Idempotent: a clock
+     * already running is left alone, which is what lets the rule issue it on every paying hit
+     * without tracking whether it already did — the disassembly's own shape, where the flag guards
+     * the store.
+     */
+    | { kind: "startCellClock"; nodeId: string; col: number; row: number }
+    /**
      * The run is over. THE THIRD VERB, and the one the built level demanded loudest — before it a
      * run had no way to end, so a level could not be lost, won, or taught.
      *
@@ -1491,6 +1510,7 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
     let bodies: Map<string, Body> | null = null;
     let despawned: Set<string> | null = null;
     let cells: Map<string, number> | null = null;
+    let clocks: Map<string, number> | null = null;
     let spawns: { id: string; templateId: string; x: number; y: number }[] | null = null;
     let outcome: RunOutcome | null = null;
     for (const c of commands) {
@@ -1520,6 +1540,15 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
             // drop every one of them.
             if (!cells) cells = new Map(world.cells);
             cells.set(cellKey(c.nodeId, c.col, c.row), c.tile);
+            continue;
+        }
+        if (c.kind === "startCellClock") {
+            const key = cellKey(c.nodeId, c.col, c.row);
+            // Idempotent by contract — see the command's docstring.
+            if (!(clocks ?? world.cellClocks).has(key)) {
+                if (!clocks) clocks = new Map(world.cellClocks);
+                clocks.set(key, world.time);
+            }
             continue;
         }
         if (c.kind === "despawn") {
@@ -1557,10 +1586,11 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
             onGround: (c.vy !== undefined && c.vy < 0) ? false : body.onGround
         });
     }
-    if (!bodies && !despawned && !outcome && !cells && !spawns) return world;
+    if (!bodies && !despawned && !outcome && !cells && !spawns && !clocks) return world;
     return {
         ...world,
         cells: cells ?? world.cells,
+        cellClocks: clocks ?? world.cellClocks,
         spawns: spawns ?? world.spawns,
         bodies: bodies ?? world.bodies,
         despawned: despawned ?? world.despawned,

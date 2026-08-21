@@ -2013,6 +2013,25 @@ physics walks through the hole.
 8 tests, 5 mutants (PW1-PW2, BR1-BR3). PW1 is the seventh field-by-field body literal doing what
 the sixth did — dropping a field — and BR3 is -1 vs 0, which "the cell changed" cannot see.
 
+**Slice 35 — THE MULTI-COIN BRICK, its window read off the disassembly.** `vde.paysFor` declares a
+payout window in SECONDS from the FIRST hit: every hit inside it pays without converting, and the
+first hit past it pays AND converts — the original's own behaviour, where the timed-out hit still
+yields its coin while writing the spent metatile. The number is derived, not quoted:
+`BrickCoinTimer = $0B` ticks of an interval timer that fires every 21 frames — 231 frames, 3.85
+seconds — and the LEVEL declares it, not the engine.
+
+**THE STATE IS THE RUN'S: `WorldState.cellClocks`,** written only by the idempotent
+`startCellClock` command, keyed like the cell overrides, dead at Stop like everything else. ONE
+DECLARED DIVERGENCE: SMB1's `BrickCoinTimerFlag` is GLOBAL — every coin brick in an area joins one
+countdown — which is one flag byte's quirk, not a design; ours is per cell. Absent `paysFor` is
+byte-identical to before: first hit converts.
+
+2 tests, 3 mutants (MC1-MC3; MC2 is the clock-refresh, killable only because the fixture's third
+arc is inside the window measured from the SECOND hit and outside it measured from the FIRST).
+And the FIFTH 
+-became-a-newline generator failure — the fix is now line surgery by quote parity,
+not more careful escaping.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

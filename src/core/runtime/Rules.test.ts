@@ -586,6 +586,63 @@ describe("power and breaking — Mario's own eligibility rules (M18 slice 34)", 
         expect(c2).toEqual([{ kind: "despawn", bodyId: "weak" }]);
     });
 
+    it("a MULTI-PAY block pays per hit inside its window, then pays AND converts (M18 s35)", () => {
+        // THE NUMBERS ARE THE DISASSEMBLY'S, derived not quoted: BrickCoinTimer = $0B ticks of an
+        // interval timer that fires every 21 frames = 231 frames = 3.85s. The fixture uses 1.5s so
+        // three one-second arcs cross the boundary: hits at ~0.32s, ~1.32s, ~2.32s — the first two
+        // pay and leave the block, the third pays and spends it. That spacing is also what kills
+        // the clock-REFRESH mutant: measured from the third hit back to the SECOND, 1.0s is inside
+        // the window, so a clock that restarts per hit never expires and the block never converts.
+        const doc = blockLevel({ "vde.bumpsTo": prop("2"), "vde.spawns": prop("gift"),
+                                 "vde.paysFor": prop("1.5") },
+            [{ id: "gift", x: 200, y: -40, w: 8, h: 8, className: "coin",
+               userData: { "vde.collect": prop("true") } }]);
+        let w = worldFrom(doc);
+        const arcs: { spawns: number; cell: number | undefined }[] = [];
+        for (let arc = 0; arc < 3; arc++) {
+            for (let i = 0; i < 60; i++) {
+                const live = applyCells(applySpawns(doc, w), w);
+                w = stepWorld(live, w, { controlled: "player",
+                    input: { left: false, right: false, jump: i >= 2 && i < 20 } });
+                w = applyCommands(w, marioRules(live, w, { controlled: "player" }));
+            }
+            arcs.push({ spawns: w.spawns.length, cell: w.cells.get(cellKey("map", 1, 0)) });
+        }
+        // EVERY hit pays — including the expiring one, exactly as the original's does.
+        expect(arcs.map(a => a.spawns)).toEqual([1, 2, 3]);
+        // …and only the expiring hit converts.
+        expect(arcs.map(a => a.cell)).toEqual([undefined, undefined, 2]);
+        // The clock is the run's, keyed like the overrides, started once.
+        expect(w.cellClocks.size).toBe(1);
+        // A spent block's own tile declares nothing, so a FOURTH arc changes nothing more.
+        const spent = w.spawns.length;
+        for (let i = 0; i < 60; i++) {
+            const live = applyCells(applySpawns(doc, w), w);
+            w = stepWorld(live, w, { controlled: "player",
+                input: { left: false, right: false, jump: i >= 2 && i < 20 } });
+            w = applyCommands(w, marioRules(live, w, { controlled: "player" }));
+        }
+        expect(w.spawns.length).toBe(spent);
+    });
+
+    it("startCellClock is IDEMPOTENT and per cell — the declared divergence from SMB1", () => {
+        // SMB1's BrickCoinTimerFlag is GLOBAL: every coin brick in an area joins one countdown —
+        // one flag byte's quirk. Ours is per cell, and a clock already running is left alone.
+        const doc = blockLevel({ "vde.bumpsTo": prop("2") });
+        let w = worldFrom(doc);
+        for (let i = 0; i < 30; i++) w = stepWorld(doc, w, { controlled: "player" });
+        const early = w.time;
+        w = applyCommands(w, [{ kind: "startCellClock", nodeId: "map", col: 1, row: 0 }]);
+        for (let i = 0; i < 30; i++) w = stepWorld(doc, w, { controlled: "player" });
+        w = applyCommands(w, [
+            { kind: "startCellClock", nodeId: "map", col: 1, row: 0 },   // must NOT restart
+            { kind: "startCellClock", nodeId: "map", col: 2, row: 0 }    // its own clock
+        ]);
+        expect(w.cellClocks.get(cellKey("map", 1, 0))).toBeCloseTo(early, 9);
+        expect(w.cellClocks.get(cellKey("map", 2, 0))).toBeCloseTo(early + 0.5, 9);
+        expect(w.cellClocks.size).toBe(2);
+    });
+
     it("a SMALL bumper breaks nothing: the brick gives nothing at all", () => {
         const w = hitIt(blockLevel({ "vde.breaks": prop("true") }), 0);
         expect(w.cells.size).toBe(0);                        // the brick is exactly as authored

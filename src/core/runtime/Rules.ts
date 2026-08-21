@@ -30,8 +30,7 @@
  */
 import { ReadonlyDocument } from "../document/Document";
 import {
-    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed, propertyOf, worldOffsetOf, bodyTypeOf
-} from "./World";
+    DEFAULT_GRAVITY, RuntimeCommand, WorldState, jumpLaunchSpeed, propertyOf, worldOffsetOf, bodyTypeOf, cellKey } from "./World";
 import { partOf, PART_PREFIX } from "./Parts";
 import { findTileset, tilesetTile } from "../document/Tileset";
 import { tileAt } from "../document/Tilemap";
@@ -135,7 +134,26 @@ export function marioRules(
         // silently turn a bumped block into tile zero. The trap this project has already paid for
         // twice, checked rather than remembered.
         if (becomes !== null && becomes.trim() !== "" && Number.isFinite(index)) {
-            out.push({ kind: "setCell", nodeId: e.nodeId, col: e.cell.col, row: e.cell.row, tile: index });
+            // A MULTI-PAY BLOCK (M18 slice 35): `vde.paysFor` is a payout window in SECONDS from
+            // the FIRST hit — every hit inside it pays WITHOUT converting, and the first hit past
+            // it pays AND converts. The numbers are the disassembly's, derived not quoted:
+            // BrickCoinTimer = $0B ticks of an interval timer that fires every 21 frames, so
+            // 231 frames = 3.85s — the level declares that, not this file. Absent means the block
+            // converts on its first hit, which is every block authored before this slice.
+            //
+            // ONE DECLARED DIVERGENCE: SMB1's timer flag is GLOBAL — every coin brick in an area
+            // joins one countdown, hit any of them — which is one flag byte's quirk, not a design.
+            // Ours is per cell, and the clock starts idempotently through the channel.
+            const paysFor = tile ? propertyOf(tile.userData, PART_PREFIX + "paysFor") : null;
+            const window = paysFor === null ? NaN : Number(paysFor.trim());
+            const clock = world.cellClocks.get(cellKey(e.nodeId, e.cell.col, e.cell.row));
+            const paying = Number.isFinite(window) && window > 0
+                && (clock === undefined || world.time - clock < window);
+            if (paying) {
+                out.push({ kind: "startCellClock", nodeId: e.nodeId, col: e.cell.col, row: e.cell.row });
+            } else {
+                out.push({ kind: "setCell", nodeId: e.nodeId, col: e.cell.col, row: e.cell.row, tile: index });
+            }
             // …AND WHAT IT PUTS OUT. `vde.spawns` names a TEMPLATE node the author made in the
             // editor, so this rule invents no geometry and no node shape — it places a copy, one
             // cell above the block that was hit, which is where a coin goes.

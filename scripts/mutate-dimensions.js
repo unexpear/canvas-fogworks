@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 2007;
+const EXPECTED_TESTS = 2009;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1810,6 +1810,21 @@ const MUTANTS = [
       from: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * bounds.x,",
       to: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * (bounds.x + bounds.width / 2) - size.width / 2,",
       note: "the axis that runs off the side is CENTRED instead of opened at the document's start, so a 200-column level opens on column 100 — the middle of a level nobody has played yet, and a tall document opens halfway down" },
+
+    // THE MULTI-PAY BLOCK (M18 slice 35) — SMB1's coin brick, its window measured from the
+    // disassembly: BrickCoinTimer $0B x 21-frame interval = 231 frames = 3.85s.
+    { id: "MC1", file: "src/core/runtime/Rules.ts",
+      from: "            const paying = Number.isFinite(window) && window > 0",
+      to: "            const paying = Number.isFinite(window) && window !== 0",
+      note: "a NEGATIVE window pays forever: the clock comparison `time - clock < window` is false from the first re-hit, but `window > 0` is also what refuses the malformed declaration — weakened to !== 0, a paysFor of \"-1\" makes an infinite coin block again, the exact defect slice 34 closed" },
+    { id: "MC2", file: "src/core/runtime/World.ts",
+      from: "            if (!(clocks ?? world.cellClocks).has(key)) {",
+      to: "            if (true) {",
+      note: "the clock RESTARTS on every paying hit, so a block mashed faster than its window never expires — the fixture's third arc measures 1.0s from the SECOND hit and 2.0s from the first, and only the per-first-hit clock converts it" },
+    { id: "MC3", file: "src/core/runtime/Rules.ts",
+      from: "                out.push({ kind: \"setCell\", nodeId: e.nodeId, col: e.cell.col, row: e.cell.row, tile: index });\n            }",
+      to: "                out.push({ kind: \"setCell\", nodeId: e.nodeId, col: e.cell.col, row: e.cell.row, tile: index });\n                continue;\n            }",
+      note: "the EXPIRING hit converts without paying — one coin short of the original, whose timed-out hit still yields its coin while writing the spent metatile. Only counting spawns on the exact converting arc can see it" },
 
     // POWER AND BREAKING (M18 slice 34) — Mario's own eligibility, each clause its own mutant.
     { id: "PW1", file: "src/core/runtime/World.ts",
