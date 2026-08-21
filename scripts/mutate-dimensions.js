@@ -41,7 +41,7 @@ const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 const ROOT = path.resolve(__dirname, "..");
 
 /** The suite's size. Anything less means the mutant did not compile. */
-const EXPECTED_TESTS = 2014;
+const EXPECTED_TESTS = 2018;
 
 const MUTANTS = [
     { id: "SY1", file: "src/core/paint/Symmetry.ts",
@@ -1810,6 +1810,24 @@ const MUTANTS = [
       from: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * bounds.x,",
       to: "            ? zoom * (bounds.x + bounds.width / 2) - size.width / 2 : zoom * (bounds.x + bounds.width / 2) - size.width / 2,",
       note: "the axis that runs off the side is CENTRED instead of opened at the document's start, so a 200-column level opens on column 100 — the middle of a level nobody has played yet, and a tall document opens halfway down" },
+
+    // THE RUN TIER (M18 slice 38) — every number a ratio of the walk, chosen by the button.
+    { id: "RS1", file: "src/core/runtime/World.ts",
+      from: "export const RUN_SPEED = MOVE_SPEED * 5 / 3;",
+      to: "export const RUN_SPEED = MOVE_SPEED;",
+      note: "the tier collapses: run and walk share a cap and the button buys nothing but the accel — the $18/$28 ratio is the feature, and only an assertion on the reached cap can see it" },
+    { id: "RS2", file: "src/core/runtime/World.ts",
+      from: "                    * (input.run ? RUN_ACCEL : 1);",
+      to: "                    * 1;",
+      note: "run accelerates at the walk rate, so the tier arrives late everywhere — the $98/$e4 ratio, visible only below both caps where the clamp has not yet flattened the difference" },
+    { id: "RS3", file: "src/core/runtime/World.ts",
+      from: "                const fast = Math.abs(vx) > MOVE_SPEED;",
+      to: "                const fast = false;",
+      note: "a full-run jump is the walking jump — the speed-dependent launch is the era rule, and a fixture that only ever jumps from a walk cannot see it" },
+    { id: "RS4", file: "src/core/runtime/World.ts",
+      from: "                    vx = Math.max(cap, Math.abs(vx) - walkAccel(gravity) * FIXED_STEP) * push;",
+      to: "                    vx = want;",
+      note: "above the cap with the key held, the body ACCELERATES instead of easing back — the unbounded-speed defect the ease exists to close, since the clamp only checks the crossing step. Only releasing run at full speed and watching the next fifteen steps can see it" },
 
     // THE HUD (M18 slice 37) — the run state that was visible only in a debugger.
     { id: "HD1", file: "src/core/runtime/World.ts",

@@ -190,6 +190,26 @@ export const MOVE_SPEED = 220;
 export const JUMP_HEIGHT = 72;
 
 /**
+ * The RUN tier (M18 slice 38), and every number in it is a RATIO of the walk's, because that is
+ * what the era declares. SMB1's caps are $18 walking and $28 running — 24 and 40, exactly 5/3 —
+ * and its acceleration bytes are $98 and $e4 — exactly 3/2. Declaring absolute run numbers would
+ * put two constants where the original has one relationship, and let the ratio drift unnoticed;
+ * the trap slice 17 already named.
+ *
+ * A tier is chosen by the BUTTON, never by the speed — the correction the research made in slice
+ * 17, now load-bearing: with no run held, a body above the walk cap is eased back to it rather
+ * than clamped (see the step), which is what releasing B does in the original.
+ *
+ * `RUN_JUMP_BOOST`: the original's initial jump velocity depends on horizontal speed — three
+ * physics sets, a full-run jump ~25% taller — so the boost multiplies HEIGHT by 5/4, and the
+ * launch speed by its square root. It applies when the press happens ABOVE the walk cap, which is
+ * a speed only the run tier can reach.
+ */
+export const RUN_SPEED = MOVE_SPEED * 5 / 3;
+export const RUN_ACCEL = 3 / 2;
+export const RUN_JUMP_BOOST = 5 / 4;
+
+/**
  * How much harder a TURN pushes than a start — the whole of the skid (M18 slice 17), and the only
  * new magnitude the slice introduces.
  *
@@ -340,6 +360,9 @@ export interface Input {
     left: boolean;
     right: boolean;
     jump: boolean;
+    /** The RUN button (M18 slice 38). Optional so every fixture and caller written before the tier
+     *  existed still means what it meant: absent is a walk. */
+    run?: boolean;
 }
 
 /** Nothing held — the input a run starts with and the one a test uses when it means "no input". */
@@ -1185,15 +1208,27 @@ export function stepWorld(
             // is the SAME acceleration applied against the motion, so no direction logic is needed
             // — only the rate changes.
             if (push !== 0) {
+                // THE TIER IS THE BUTTON'S (M18 slice 38): cap and rate both step up while run is
+                // held, by the era's own ratios — see `RUN_SPEED`.
+                const cap = input.run ? RUN_SPEED : MOVE_SPEED;
                 const skid = vx !== 0 && Math.sign(vx) !== push;
-                const rate = skid ? skidAccel(gravity) : walkAccel(gravity);
+                const rate = (skid ? skidAccel(gravity) : walkAccel(gravity))
+                    * (input.run ? RUN_ACCEL : 1);
                 const want = vx + push * rate * FIXED_STEP;
-                // CLAMPED TO THE TOP SPEED, BUT NEVER BRAKING. A body already travelling faster than
-                // MOVE_SPEED — thrown, or carried out of a bounce — must not be slammed down to it
-                // by its own input; the clamp catches the step that CROSSES the cap and nothing
-                // else. Above it, the surface is what brings a body back, on the frames it can.
-                vx = Math.abs(want) > MOVE_SPEED && Math.abs(vx) <= MOVE_SPEED
-                    ? push * MOVE_SPEED : want;
+                if (Math.abs(vx) > cap && Math.sign(vx) === push) {
+                    // ABOVE THE TIER'S CAP AND STILL PUSHING: eased back down to it at the walk
+                    // rate, which is what releasing B while running does in the original. Without
+                    // this, dropping from run to walk left `want` above a cap the clamp only
+                    // checks on the CROSSING step, so a walker who had ever run accelerated
+                    // without bound — found by asking what the clamp does the step after.
+                    vx = Math.max(cap, Math.abs(vx) - walkAccel(gravity) * FIXED_STEP) * push;
+                } else {
+                    // CLAMPED TO THE TOP SPEED, BUT NEVER BRAKING. A body already travelling
+                    // faster than the cap — thrown, or carried out of a bounce — must not be
+                    // slammed down to it by its own input; the clamp catches the step that
+                    // CROSSES the cap and nothing else.
+                    vx = Math.abs(want) > cap && Math.abs(vx) <= cap ? push * cap : want;
+                }
             }
             // A JUMP IS AN EDGE, not a state: it fires on the step the key GOES DOWN while the
             // body is on the ground. Holding it must not bunny-hop, and `jumpWas` is what
@@ -1204,7 +1239,12 @@ export function stepWorld(
             // `input.jump` are asking different questions — "did it just go down" here, "is it still
             // down" there — and the edge is what stops the second one re-launching.
             if (input.jump && !world.jumpWas && was.onGround) {
-                vy = -jumpLaunchSpeed(gravity);
+                // A FULL-RUN JUMP IS TALLER (M18 slice 38): the original's initial velocity
+                // depends on horizontal speed, ~25% more height flat out. The gate is the WALK
+                // cap — a speed only the run tier reaches — and the boost multiplies the HEIGHT,
+                // so the whole arc (tap and held alike) scales by one declared ratio.
+                const fast = Math.abs(vx) > MOVE_SPEED;
+                vy = -jumpLaunchSpeed(gravity, JUMP_HEIGHT * (fast ? RUN_JUMP_BOOST : 1));
                 launched = true;                  // …and a fresh launch is what REOPENS the latch
             }
         }

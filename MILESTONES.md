@@ -2064,6 +2064,22 @@ CLAMPED AT ZERO (a HUD counts down and stops; how long ago protection ended is n
 The strip is chrome in `App`, over the canvas only while a world runs, reading fresh each frame the
 play loop already repaints. 1 test, 2 mutants (HD2 is the strip never drawing — the disease itself).
 
+**Slice 38 — THE RUN TIER, every number a ratio of the walk.** SMB1's caps are $18 and $28 — 5/3
+exactly — and its acceleration bytes $98 and $e4 — 3/2 exactly; `RUN_SPEED` and `RUN_ACCEL` are
+those RATIOS, not absolute numbers, so the relationship cannot drift (slice 17's trap, applied).
+The tier is chosen by the BUTTON — `Input.run`, both Shifts — which was the correction the research
+made in slice 17 and is now load-bearing. A full-run jump is 25% taller (`RUN_JUMP_BOOST` on the
+HEIGHT, gated on a speed only the run tier reaches, so the whole arc scales by one ratio).
+
+**AND THE EASE-BACK CLOSED A LATENT UNBOUNDED-SPEED DEFECT** found by asking what the clamp does
+the step after: it only catches the step that CROSSES a cap, so releasing run at full speed left
+the body above a cap nothing re-checked, and every pushed step accelerated it further, forever.
+Above-cap-and-pushing now eases down at the walk rate — what releasing B does in the original —
+landing exactly on the cap.
+
+4 tests, 4 mutants (RS1-RS4; RS4 is the ease, visible only to a fixture that releases run at full
+speed and watches the next fifteen steps).
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.

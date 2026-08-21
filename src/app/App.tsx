@@ -1242,7 +1242,10 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
          * the same reason. None of it is configurable yet — that is a settings surface, and this
          * slice is the loop.
          */
-        const intentFor = (key: string): "left" | "right" | "jump" | null => {
+        const intentFor = (key: string): "left" | "right" | "jump" | "run" | null => {
+            // SHIFT IS RUN (M18 slice 38) — the same reasoning as the three keys above: both
+            // shifts, so neither hand's layout is a decision made for the player.
+            if (key === "Shift") return "run";
             switch (key) {
                 case "ArrowLeft": case "a": case "A": return "left";
                 case "ArrowRight": case "d": case "D": return "right";

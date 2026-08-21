@@ -18,6 +18,7 @@ import {
     worldOffsetOf, runtimeRefusal, runtimeExclusions, applyWorld as applyWorldFn,
     sideOf, ContactSide, oppositeSide
 } from "./World";
+import { RUN_SPEED, RUN_ACCEL, RUN_JUMP_BOOST } from "./World";
 
 const prop = (v: string, type = "string") => ({ type, value: v });
 
@@ -52,6 +53,81 @@ function steps(doc: ProjectDocument, world: WorldState, n: number): WorldState {
  */
 const atWalk = (w: WorldState, id: string, vx = MOVE_SPEED): WorldState =>
     ({ ...w, bodies: new Map(w.bodies).set(id, { ...w.bodies.get(id)!, vx }) });
+
+describe("the RUN tier (M18 slice 38) — chosen by the button, in the era's own ratios", () => {
+    const prop2 = (v: string) => ({ type: "string", value: v });
+    const track = () => {
+        const doc = createEmptyDocument();
+        doc.nodes.set("floor", { id: "floor", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 400, width: 100000, height: 20 },
+            style: { fill: "#888", opacity: 1 }, layout: {},
+            userData: { bodyType: prop2("static") } } as unknown as Node);
+        doc.nodes.set("hero", { id: "hero", type: "core.rectangle", parent: null, children: [],
+            geometry: { x: 0, y: 384, width: 12, height: 16 },
+            style: { fill: "#888", opacity: 1 }, layout: {},
+            userData: { bodyType: prop2("dynamic") } } as unknown as Node);
+        doc.rootNodeUuids.push("floor", "hero");
+        return doc;
+    };
+    const held = (run: boolean, jump = false) => ({ left: false, right: true, jump, run });
+
+    it("caps at 5/3 of the walk with run held, and at the walk without — the $18/$28 ratio", () => {
+        expect(RUN_SPEED).toBeCloseTo(MOVE_SPEED * 5 / 3, 9);
+        const doc = track();
+        let walk = worldFrom(doc), run = worldFrom(doc);
+        for (let i = 0; i < 120; i++) {
+            walk = stepWorld(doc, walk, { controlled: "hero", input: held(false) });
+            run = stepWorld(doc, run, { controlled: "hero", input: held(true) });
+        }
+        expect(walk.bodies.get("hero")!.vx).toBe(MOVE_SPEED);
+        expect(run.bodies.get("hero")!.vx).toBe(RUN_SPEED);
+    });
+
+    it("accelerates at 3/2 the walk rate — the $98/$e4 ratio, read below both caps", () => {
+        const doc = track();
+        let walk = worldFrom(doc), run = worldFrom(doc);
+        for (let i = 0; i < 6; i++) {
+            walk = stepWorld(doc, walk, { controlled: "hero", input: held(false) });
+            run = stepWorld(doc, run, { controlled: "hero", input: held(true) });
+        }
+        const w = walk.bodies.get("hero")!.vx, r = run.bodies.get("hero")!.vx;
+        expect(w).toBeGreaterThan(0);
+        expect(r / w).toBeCloseTo(RUN_ACCEL, 9);
+    });
+
+    it("releasing run EASES back to the walk cap — never a slam, never unbounded", () => {
+        // The clamp only catches the step that CROSSES a cap, so before this rule a walker who had
+        // ever run sat above a cap the clamp never re-checked and accelerated without bound —
+        // found by asking what the clamp does the step after.
+        const doc = track();
+        let w = worldFrom(doc);
+        for (let i = 0; i < 120; i++) w = stepWorld(doc, w, { controlled: "hero", input: held(true) });
+        expect(w.bodies.get("hero")!.vx).toBe(RUN_SPEED);
+        const eased: number[] = [];
+        for (let i = 0; i < 15; i++) {
+            w = stepWorld(doc, w, { controlled: "hero", input: held(false) });
+            eased.push(w.bodies.get("hero")!.vx);
+        }
+        // Monotone descent, one walk-accel step at a time, landing EXACTLY on the cap and staying.
+        for (let i = 1; i < eased.length; i++) expect(eased[i]).toBeLessThanOrEqual(eased[i - 1]);
+        expect(eased[eased.length - 1]).toBe(MOVE_SPEED);
+        expect(Math.min(...eased)).toBeGreaterThanOrEqual(MOVE_SPEED);
+    });
+
+    it("a FULL-RUN jump is 25% taller — the boost gates on the walk cap, a run-only speed", () => {
+        const doc = track();
+        let w = worldFrom(doc);
+        for (let i = 0; i < 120; i++) w = stepWorld(doc, w, { controlled: "hero", input: held(true) });
+        w = stepWorld(doc, w, { controlled: "hero", input: held(true, true) });
+        expect(w.bodies.get("hero")!.vy)
+            .toBeCloseTo(-jumpLaunchSpeed(undefined, JUMP_HEIGHT * RUN_JUMP_BOOST), 6);
+        // …and at walking speed the launch is exactly what it always was.
+        let w2 = worldFrom(doc);
+        for (let i = 0; i < 120; i++) w2 = stepWorld(doc, w2, { controlled: "hero", input: held(false) });
+        w2 = stepWorld(doc, w2, { controlled: "hero", input: held(false, true) });
+        expect(w2.bodies.get("hero")!.vy).toBeCloseTo(-jumpLaunchSpeed(), 6);
+    });
+});
 
 describe("what counts as a body", () => {
     it("reads bodyType from userData — the field the art already uses", () => {
