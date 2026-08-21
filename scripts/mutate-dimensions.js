@@ -1817,9 +1817,9 @@ const MUTANTS = [
       to: "        starLeft: (body?.star ?? 0) - world.time",
       note: "the star countdown goes NEGATIVE after expiry instead of stopping at zero, so the HUD reports how long ago protection ended for the rest of the run — and every strip drawing it shows STAR -41.3s" },
     { id: "HD2", file: "src/app/App.tsx",
-      from: "                    {es.playing && es.world && (() => {",
-      to: "                    {false && es.playing && es.world && (() => {",
-      note: "the HUD never draws, so tallies, power and the star clock go back to being debugger-only state — the disease the slice exists to cure, and only the reachability assertions can see it" },
+      from: "                        const r = runReadout(es.world, es.controlled);",
+      to: "                        const r = { tallies: [] as [string, number][], power: 0, starLeft: 0 };",
+      note: "the HUD reads an EMPTY readout and the all-empty guard then draws nothing, ever — tallies, power and the star clock go back to being debugger-only state, the disease the slice exists to cure. RE-AUTHORED on arrival: the first version prefixed the JSX guard with false, which does not compile" },
 
     // THE STAR AND THE 1-UP (M18 slice 36) — spawned movers and what collecting them means.
     { id: "BN1", file: "src/core/runtime/Rules.ts",
