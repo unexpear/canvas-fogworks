@@ -2101,6 +2101,42 @@ DIFFERENT document is a real thing this is not; stated, not smuggled.
 2 tests, 3 mutants (WP1: fires on touch; WP2: velocity carried through; WP3: one sign, and every
 pipe dumps its traveller a body-height too low).
 
+**THE GAUNTLET VERDICT ON THE 8-BIT RUNG (2026-08-20)** — a Gauntlet Loop pass (Shumer's method:
+agent-side decomposition, fresh-context critics, a fetchable bar) judged the rung piece by piece
+against REAL SMB1: the disassembly with line citations as the mechanical bar, the classic 1-1
+screenshot as the visual bar, and fresh engine measurements as our side. Eight pieces, eight
+critics: **2 MATCH the bar, 6 LOSE.**
+
+MATCHES: **jump-arc** (all three heights land in SMB1's tile envelope; noted gap: our gravity is
+~half SMB1's in tile units, so an equal-height jump hangs ~25% longer — floatier) and
+**item-timers** (coin window and star duration exact to the frame; noted gap: no star-expiry
+warning — SMB1 slows the flash and reverts the music, ours switches off).
+
+LOSSES, each with the critic's single most valuable fix:
+- **ground-speeds** — our caps are 12.2/20.4 tiles/s against SMB1's 5.625/9.375: the RATIOS are
+  exact (5/3 cap, 2x skid) but the absolute tile-scale is ~2.17x too fast, and time-to-cap 0.25s
+  vs ~0.67s means far less inertia. A FEEL DECISION, not a bug — but now a measured one.
+- **blocks-and-pickups** — `superHeightChange`: SMB1 gates its whole brick branch and its damage
+  downgrade on PlayerSize (asm 7223-7225); without the taller hitbox the tiers are palette swaps.
+  Fragments and fireballs queue behind it.
+- **enemy-interactions** — the Koopa SHELL lifecycle (stomp-to-shell, kickable, shell-vs-enemy
+  chain kills); three of the four missing interaction classes hang off that one mechanic. Also
+  structurally absent: side-contact injury tiers, a stomp-immune Spiny, points.
+- **hud-and-meta** — a persistent status bar driven by a real countdown TIMER is the spine (hurry
+  music at 100, death at 0, time-to-score at the flag); audio=false silences every event SMB1
+  announces. Our tally HUD covers none of the six meta systems.
+- **scene-grammar** — the level composes like a physics test: isolated single blocks where SMB1's
+  unit is the CLUSTER (?-brick-? runs with airborne coins above), no free coins in frame, no
+  decoration vocabulary at the ground line. LEVEL AUTHORING, not engine.
+- **art-fidelity** — the enemy sprite reads as a PLATFORM (faceless rounded slab); the popped coin
+  is a raw yellow rectangle; the style is pastel-modern, not NES. Function-legibility failures,
+  named concretely.
+
+THE METHOD EARNED ITS KEEP: the critics found things this project's own reviews had not framed —
+the per-tile speed scale (our slices verified RATIOS against the disassembly, never the absolute
+tile rate), the timer-as-spine observation, and "the enemy reads as a platform", which no
+mechanics test could ever say.
+
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.
