@@ -27,6 +27,8 @@ export interface MeshPrimitive {
     normals: Float32Array | null;
     /** Flat uv pairs, or null. */
     uvs: Float32Array | null;
+    /** Optional second glTF UV set. Other formats may leave it absent. */
+    uvs1?: Float32Array | null;
     /**
      * Triangle indices, three per face. ALWAYS present: a source with no indices of its own is
      * given the implied `0..n-1`, so consumers have one path rather than two that can drift.

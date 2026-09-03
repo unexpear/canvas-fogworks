@@ -25,7 +25,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     // document came from and let Ctrl+S write back to that same file.
     onFileOpened: (callback) => subscribe("file-opened", callback, (payload) => payload),
     onRequestSave: (callback) => subscribe("request-save", callback, (filePath) => filePath),
+    // Fixed-shape acknowledgement used only when main explicitly runs the project-open smoke.
+    reportProjectOpened: (filePath, ok, error) =>
+        ipcRenderer.send("project-open-result", { filePath, ok, error }),
     saveFile: (filePath, content) => ipcRenderer.invoke("save-file", filePath, content),
+    readLevelFile: (currentFilePath, target) => ipcRenderer.invoke("read-level-file", currentFilePath, target),
     writePngIntoFolder: (folder, filename, dataUrl) =>
         ipcRenderer.invoke("write-png-into-folder", folder, filename, dataUrl),
     requestSaveAs: () => ipcRenderer.invoke("request-save-as"),
@@ -36,7 +40,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     readAssetFolder: (folder) => ipcRenderer.invoke("read-asset-folder", folder),
     readFontFolder: (folder) => ipcRenderer.invoke("read-font-folder", folder),
     readFontBytes: (filePath) => ipcRenderer.invoke("read-font-bytes", filePath),
-    readImageDataUrl: (filePath) => ipcRenderer.invoke("read-image-data-url", filePath),
+    readImageDataUrl: (folder, filePath) => ipcRenderer.invoke("read-image-data-url", folder, filePath),
     readPaletteFolder: (folder) => ipcRenderer.invoke("read-palette-folder", folder),
     readPaletteFile: (folder, filePath) => ipcRenderer.invoke("read-palette-file", folder, filePath),
     readTiledFolder: (folder) => ipcRenderer.invoke("read-tiled-folder", folder),
@@ -45,6 +49,22 @@ contextBridge.exposeInMainWorld("electronAPI", {
     readUnityPackage: (folder, filePath) => ipcRenderer.invoke("read-unity-package", folder, filePath),
     readAsepriteFolder: (folder) => ipcRenderer.invoke("read-aseprite-folder", folder),
     readAsepriteBytes: (folder, filePath) => ipcRenderer.invoke("read-aseprite-bytes", folder, filePath),
+    read3DFolder: (folder) => ipcRenderer.invoke("read-3d-folder", folder),
+    readEnvironmentFolder: (folder) => ipcRenderer.invoke("read-environment-folder", folder),
+    readEnvironmentFile: (folder, filePath) => ipcRenderer.invoke("read-environment-file", folder, filePath),
+    read3DFile: (folder, filePath) => ipcRenderer.invoke("read-3d-file", folder, filePath),
+    read3DSidecar: (folder, modelPath, relative) =>
+        ipcRenderer.invoke("read-3d-sidecar", folder, modelPath, relative),
+    project3DSource: (projectFilePath, modelPath) =>
+        ipcRenderer.invoke("project-3d-source", projectFilePath, modelPath),
+    projectEnvironmentSource: (projectFilePath, filePath) =>
+        ipcRenderer.invoke("project-environment-source", projectFilePath, filePath),
+    readProjectEnvironmentFile: (projectFilePath, source) =>
+        ipcRenderer.invoke("read-project-environment-file", projectFilePath, source),
+    readProject3DFile: (projectFilePath, source) =>
+        ipcRenderer.invoke("read-project-3d-file", projectFilePath, source),
+    readProject3DSidecar: (projectFilePath, modelSource, relative) =>
+        ipcRenderer.invoke("read-project-3d-sidecar", projectFilePath, modelSource, relative),
     readTiledTileset: (folder, mapPath, relative) =>
         ipcRenderer.invoke("read-tiled-tileset", folder, mapPath, relative),
     readTiledImage: (folder, mapPath, relative) =>

@@ -20,7 +20,7 @@
      not its readers; API-CONTRACTS carries the reader's surface. -->
 
 
-> 🔒 Frozen contract · schema v72 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins; see MILESTONES.md for deferred layout deliverables) + M3 renderer (shapes + culling + effects + Canvas backend) + M4 editor (pan/zoom, box-select, DOM-free handle picking, rotate, live SVG/Canvas backends, snapping/guides, group snapping + rotate). Describes the verified current implementation.
+> 🔒 Frozen contract · schema v76 (app v0.0.5). Describes the verified current implementation, including typed entities, deterministic 2D/3D run flow, rich Tiled metadata, and production HDR lighting.
 
 ## 1. The five invariants
 
@@ -1829,13 +1829,15 @@ the encoder has already been asked for a gigabyte.
 |-------|-------|----------------|
 | Document | `core/document/{Document,Node,Serializer}.ts`, `core/ids/UUID.ts` | Source of truth, types, (de)serialization, identity |
 | Document integrity | `core/document/{SceneGraph,Integrity}.ts` | Tree traversal/draw order; structural + range validation on load |
-| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine,SelectionHandles,Snapping,Ruler,GroupTransform,Tessellate,StrokeOutline,ConvexDecompose,Resolve}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**); DOM-free handle geometry + alignment snapping (move + resize; any translation-only chain) + group ops — union-box snapping, a group rotate knob + corner handles, `GroupTransform.rotateGroup` (rigid multi-node rotation about a shared pivot) and `scaleGroup` (proportional group resize about a fixed corner; transform-free groups only — a rotated set would shear) (**M4**) |
-| Paint | `core/paint/{PixelBuffer,PixelPatch,PixelCodec,Brush,Stroke,Symmetry,SurfaceSpace,Palette,Quantize,Selection,SelectionOutline,Adjust}.ts` | Pixels a person put there, as PURE FUNCTIONS over a buffer rather than methods on a canvas — a `CanvasRenderingContext2D` would do all of it and could not be unit-tested, undone or replayed, and the action layer needs all three. A stroke is therefore a VALUE. Which pixels an edit may touch is a binary MASK (`Selection`), handed to the primitives as a `PixelClip` predicate so nothing down here knows what a selection is: `stampBrush` tests it per DAB, `floodFill` tests it where NEIGHBOURS ARE QUEUED (a wall, not a filter), and a whole-surface edit is confined by restoring what fell outside. The mask is EDITOR state, never the schema. `Adjust` is the destructive colour family, and every one of its functions is shaped `(buffer, ...args) => number` — the shape `surfaceEditAction` takes — so an adjustment becomes a panel button by being written, obeys the selection for free, and leaves no undo step when it changes nothing |
+| Computed state | `core/geometry/{Matrix,GeometryEngine,LayoutEngine,SelectionHandles,Snapping,EditorGrid,Ruler,GroupTransform,Tessellate,StrokeOutline,ConvexDecompose,Resolve}.ts` | 2D affine primitive; world matrices, local rects, rotation-aware bounds, draw order, DOM-free hit-testing (**M1**); auto-layout containers + bottom-up intrinsic ("hug") sizing computed inside the same pass (**M2**); DOM-free handle geometry + alignment and visible-grid snapping (move + resize; any translation-only chain) + group ops — union-box snapping, a group rotate knob + corner handles, `GroupTransform.rotateGroup` (rigid multi-node rotation about a shared pivot) and `scaleGroup` (proportional group resize about a fixed corner; transform-free groups only — a rotated set would shear) (**M4**) |
+| Paint | `core/paint/{PixelBuffer,PixelPatch,PixelCodec,Brush,Stroke,Symmetry,SurfaceSpace,Palette,Quantize,Selection,SelectionContent,SelectionOutline,Adjust}.ts` | Pixels a person put there, as PURE FUNCTIONS over a buffer rather than methods on a canvas — a `CanvasRenderingContext2D` would do all of it and could not be unit-tested, undone or replayed, and the action layer needs all three. A stroke is therefore a VALUE. Which pixels an edit may touch is a binary MASK (`Selection`), handed to the primitives as a `PixelClip` predicate so nothing down here knows what a selection is: `stampBrush` tests it per DAB, `floodFill` tests it where NEIGHBOURS ARE QUEUED (a wall, not a filter), and a whole-surface edit is confined by restoring what fell outside. `SelectionContent` copies that mask with tight RGBA payloads for move/cut/copy/paste/clear and lossless flips/quarter-turns; holes survive and destination writes clip at the surface edge. The mask and clipboard are EDITOR state, never the schema. `Adjust` is the destructive colour family, and every one of its functions is shaped `(buffer, ...args) => number` — the shape `surfaceEditAction` takes — so an adjustment becomes a panel button by being written, obeys the selection for free, and leaves no undo step when it changes nothing |
 | Actions | `core/actions/{Action,types,applyMutations}.ts` + `*Action.ts` | Declarative mutations + delta protocol |
 | Dispatch/History | `core/actions/{ActionDispatcher,HistoryManager}.ts` | Only write path; snapshot undo/redo |
-| Editor | `editor/EditorState.ts`, `editor/tools/*`, `editor/{shortcuts,layerDrop,layerSelection,layerFilter}.ts` | Ephemeral state; input → Actions. The RULES a panel or tool applies are pure modules with tests, not logic inside a handler: which command a chord means, what a layer drag resolves to (parent + an index measured AFTER the node is detached), what a row click selects (a shift range spans the VISIBLE order, and the anchor does not move), and which rows a search leaves (a match keeps every ancestor, so the panel shows the path to it) |
+| Editor / file boundary | `editor/EditorState.ts`, `editor/tools/*`, `editor/{shortcuts,layerDrop,layerSelection,layerFilter}.ts`, `app/{ProjectFileWorkflow,AssetImportWorkflow}.ts`, `electron/{confine,atomicWrite}.js` | Ephemeral state; input → Actions. Panel/tool rules are pure tested modules. File workflows adopt only valid projects, refuse partial image sequences, confine asset reads to the chosen folder, and replace project/export files only after a sibling temporary file is flushed |
 | Renderer | `renderer/{RenderModel,emitSVG,emitCanvas,emitWebGL,SVGRenderer,CanvasRenderer,WebGLRenderer,renderScene}.ts` | Pure `(doc, state) → DisplayList`, then thin SVG + Canvas + WebGL backends (Canvas lazily loads + caches images, word-wraps text via `measureText`; WebGL triangulates fills via `geometry/Tessellate` and falls back to Canvas when no context can be had — and SAYS SO, in the toolbar and the console, because a silent fallback hid a dead GPU backend for months: a shader identifier named `packed` is a reserved word in GLSL ES 1.00, and a shader is the only code here that nothing in the gate compiles); `renderScene` selects the live backend; every COLOR slot resolves `$token` references against `doc.variables` under `doc.activeTheme` in the model (M5). The overlay carries the editor's ephemerals — selection frames, handles, guides, the node marquee, and the PIXEL selection's marching ants, which are merged runs of grid line placed through `SurfaceSpace.surfaceCornerToWorld` so they turn with a rotated canvas |
-| App | `app/App.tsx`, `app/index.tsx`, `app/index.html` | React shell + wiring |
+| 3D renderer | `renderer/{Scene3D,EnvironmentIbl3D,emitWebGL3D,CameraOrbit3D,Gizmo3D,emitGizmo3D}.ts` | Backend-neutral authored frame and fitted directional-shadow camera; deterministic HDR convolution; WebGL 1 PBR, prefiltered IBL, packed shadow pass, picking, bounded uploads, capability reporting, context restoration and eager resource disposal; Action-backed camera/gizmo editing |
+| Runtime | `core/runtime/{World,World3D,RunFlow,Rules,Parts,Camera}.ts` | Separate deterministic transient 2D and 3D projections. Both preserve the authored document, spend bounded fixed steps and expose restart/respawn/transitions; `World3D` adds typed box/sphere queries, runtime camera following and replay digests |
+| App | `app/{App,AppShellControls,ThreeDInspector}.tsx`, `app/index.tsx`, `app/index.html` | React shell + wiring; DOM-tested workspace/runtime controls and 3D inspector are isolated from the remaining shell |
 | Shell | `electron/{main.js,preload.js}` | Native window, menus, file IO via IPC |
 | Build | `scripts/build.js` | Three esbuild bundles → `dist/` |
 
@@ -1847,3 +1849,25 @@ the encoder has already been asked for a gigabyte.
 - Nothing may hold a long-lived reference into a history snapshot, and hydrated
   snapshots must be deep-cloned before use (see [ACTION-SYSTEM.md](ACTION-SYSTEM.md)).
 - `EditorState` is never serialized into the document.
+## Runtime flow and typed entities (schema 73)
+
+`Node.entity` is the engine-owned gameplay contract. Runtime readers prefer it and retain legacy
+`userData` fallback, while migration and Tiled import project recognized legacy declarations into
+typed fields without deleting imported metadata. `RunFlow` owns pure restart/respawn behavior.
+Cross-document goals issue a transition command; the Electron boundary confines the relative target
+to the opened project's real sibling directory, validates the complete document, then adopts it.
+The 3D play path projects `Spatial3D` transforms and colliders into `World3D`, advances the same
+bounded-clock pattern, and stamps only a derived render document. Schema 76's `composition2d`
+component is the explicit bridge between workspaces: plane mode follows its 3D transform and
+billboard mode faces the active camera; a node cannot also carry an asset-backed renderable.
+
+## SVG and Canvas scene lighting parity
+
+`renderer/Lighting` computes the flat-surface ambient plus coloured directional Lambert factors once
+from the `DisplayList`. SVG transcribes those factors as an sRGB `feComponentTransfer`; Canvas uses
+the same component-transfer document through its URL-backed filter support. Applying the filter to
+content items keeps the document background, grid and editor overlay unchanged and places lighting
+before each item's blend operation. Invalid non-hex light colours are skipped exactly as WebGL skips
+them, and no valid lights means an identity/unlit frame. WebGL remains the higher-fidelity backend
+for meshed surfaces because it interpolates their normals and ray-marches their height field per
+fragment; SVG and Canvas currently light those shapes as flat 2D content.

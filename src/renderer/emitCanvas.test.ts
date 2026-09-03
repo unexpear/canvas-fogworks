@@ -174,6 +174,22 @@ describe("emitCanvas — frame scaffold", () => {
     });
 });
 
+describe("emitCanvas — scene lighting", () => {
+    test("applies the shared sRGB lighting filter to content but not editor chrome", () => {
+        const doc = docWith({ type: "core.rectangle", style: { fill: "#ffffff", opacity: 1 } });
+        doc.lights = [{ x: 0, y: 0, z: -1, color: "#ff0000", intensity: 0.5 }];
+        doc.ambient = 0.25;
+        const calls = run(doc).calls;
+        const rect = bracket(calls, "rect", a => a[0] === 0 && a[1] === 0);
+        const filter = call(rect, "set filter");
+        expect(filter).toBeDefined();
+        const decoded = decodeURIComponent(String(filter!.args[0]));
+        expect(decoded).toContain('feFuncR type="linear" slope="0.75"');
+        expect(decoded).toContain('feFuncG type="linear" slope="0.25"');
+        expect(decoded).toContain('feFuncB type="linear" slope="0.25"');
+    });
+});
+
 // ─── Shapes ──────────────────────────────────────────────────────────────────
 describe("emitCanvas — shapes", () => {
     test("rectangle (fill + stroke): translate, path, fill then stroke", () => {

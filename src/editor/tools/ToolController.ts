@@ -22,7 +22,8 @@ import { UpdateNodePathAction } from "../../core/actions/UpdateNodePathAction";
 import { rotateGroup, isGroupRotatable, scaleGroup, isGroupResizable, GroupRotateInput, GroupScaleInput } from "../../core/geometry/GroupTransform";
 import { resolveScene } from "../../core/document/Components";
 import { geometryActionFor, styleActionFor, isHandleOffered, isEditableNode, transformActionFor } from "../../core/actions/nodeEdit";
-import { snapPoint, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
+import { snapPointWithGrid, guidesForRect, snapTargetsExcludingSubtree, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
+import { GRID_BASE, visibleGridSize } from "../../core/geometry/EditorGrid";
 import { Rect, Mat2D, IDENTITY } from "../../core/geometry/Matrix";
 import { localLinear, resizeBox, worldDeltaToLocal } from "../../core/geometry/OrientedBox";
 import { ReadonlyDocument } from "../../core/document/Document";
@@ -57,6 +58,7 @@ export class ToolController {
     // The node's WORLD-minus-STORED origin offset (constant for a translation chain), so the snap
     // (which runs in world) maps to the stored-geometry resize: {0,0} for a top-level node.
     private resizeSnapOffset: { x: number; y: number } = { x: 0, y: 0 };
+    private resizeGridSize = GRID_BASE;
     // The node's frame AT THE PRESS: its world matrix (world delta → the box's own units), the
     // local rotate∘scale that maps a box vector into PARENT space, and its transform-origin
     // fraction. Captured once rather than re-read per frame, because the live preview changes the
@@ -218,8 +220,8 @@ export class ToolController {
                 const node = hit ? resolveScene(doc).nodes.get(hit.nodeId) : undefined;
                 if (hit && c && node) {
                     if (!isHandleOffered(doc, hit.nodeId, hit.handle)) {
-                        // An instance COPY offers only the handles whose edit it can record: no
-                        // rotate knob (a TRANSFORM override is a later slice), and nothing at all
+                        // An instance COPY offers only the handles whose edit this path can record:
+                        // no rotate knob (the transform-override action is not routed here), and nothing at all
                         // for a copy nested inside another instance's expansion. The renderer
                         // draws exactly this set, so falling through to the tool is what the user
                         // sees — better than a control that silently does nothing.
@@ -304,6 +306,7 @@ export class ToolController {
                     if (isTranslationOnlyChain(doc, hit.nodeId)) {
                         this.resizeSnapTargets = snapTargetsExcludingSubtree(doc, computed, hit.nodeId);
                         this.resizeSnapOffset = { x: c.bounds.x - node.geometry.x, y: c.bounds.y - node.geometry.y };
+                        this.resizeGridSize = visibleGridSize(canvasRect.width, canvasRect.height, this.editorState.viewport.zoom);
                     } else {
                         this.resizeSnapTargets = null;
                     }
@@ -537,7 +540,7 @@ export class ToolController {
             const off = this.resizeSnapOffset;
             if (this.resizeSnapTargets) {
                 const corner = this.movingCorner(this.resizeHandle, this.resizeOrigin);
-                const snap = snapPoint(corner.x + off.x + dx, corner.y + off.y + dy, this.resizeSnapTargets, SNAP_THRESHOLD_PX / zoom);
+                const snap = snapPointWithGrid(corner.x + off.x + dx, corner.y + off.y + dy, this.resizeSnapTargets, SNAP_THRESHOLD_PX / zoom, this.resizeGridSize);
                 dx += snap.dx;
                 dy += snap.dy;
             }

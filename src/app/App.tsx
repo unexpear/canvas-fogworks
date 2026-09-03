@@ -5,13 +5,16 @@
  */
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import "./ElectronAPI";
+import { bindProjectFileWorkflow } from "./ProjectFileWorkflow";
+import { prepareSequenceImport } from "./AssetImportWorkflow";
 import { ActionDispatcher } from "../core/actions/ActionDispatcher";
 import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document";
 import { Node, Shadow, flatFill, UserData } from "../core/document/Node";
 import { Gradient, GradientStop } from "../core/document/Gradient";
 import { resolveTypography } from "../renderer/RenderModel";
 import { gradientFromColor, withStop, withoutStop, withStopColor, withStopOffset, withKind, GRADIENT_MIN_STOPS } from "../core/document/GradientEdit";
-import { Serializer, serializeDocument, deserializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
+import { Serializer, serializeDocument, CORRUPT_BACKUP_KEY } from "../core/document/Serializer";
 import { traverseSceneGraph, ReadonlyNode } from "../core/document/SceneGraph";
 import { computeGeometry, ComputedState, contentBounds, selectionBounds, hitTest } from "../core/geometry/GeometryEngine";
 import { geometryActionFor, styleActionFor, contentActionFor, layoutActionFor, transformActionFor } from "../core/actions/nodeEdit";
@@ -67,6 +70,9 @@ import { BucketTool } from "../editor/tools/BucketTool";
 import { PixelSelectTool, PixelSelectMode, PixelSelectConfig, WAND_TOLERANCE_MAX, wandMatcher } from "../editor/tools/PixelSelectTool";
 import { SelectionMask, emptyMask, fullMask, invertSelection, growSelection, borderSelection,
     isEmptySelection, selectedCount } from "../core/paint/Selection";
+import { PixelSelectionClipboard, PixelSelectionTransform, clearSelectionContent,
+    copySelectionContent, moveSelectionContent, pasteSelectionContent,
+    transformSelectionContent } from "../core/paint/SelectionContent";
 import { Palette, parsePaletteFile, paletteAt } from "../core/paint/Palette";
 import { quantizeAction, surfaceEditAction } from "../core/actions/surfaceEdit";
 import { SetTilemapAction } from "../core/actions/SetTilemapAction";
@@ -119,7 +125,7 @@ import { exportSVG, TextLines } from "../core/export/ExportSVG";
 import { exportTiledMap } from "../core/export/ExportTiled";
 import { planSheet, sheetAtlas, sheetTooLarge, drawSheet, SheetPlan } from "../core/export/SpriteSheet";
 import { sliceGrid, sliceCells, sliceTrack, blankCells } from "../core/import/SheetSlice";
-import { groupSequences, sequenceTrack } from "../core/import/Sequence";
+import { groupSequences } from "../core/import/Sequence";
 import { sequenceImportActions } from "../core/actions/sequenceImport";
 import { asepriteImportActions, AsepritePlacement } from "../core/actions/asepriteImport";
 import { Tileset, findTileset, tilesetTile, copyTileset, withTileWeight } from "../core/document/Tileset";
@@ -140,15 +146,34 @@ import { registerFont, registeredFonts } from "../renderer/FontCache";
 import { UpdateNodePathAction } from "../core/actions/UpdateNodePathAction";
 import { generateUUID } from "../core/ids/UUID";
 import { naturalSize, surfaceUrl, imageSizeAsync } from "../../src/renderer/ImageCache";
-import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds, applyCells, applySpawns, playBounds, runReadout } from "../core/runtime/World";
+import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, applyFacing, facedIds, applyCells, applySpawns, applyTileAnimations, playBounds, runReadout } from "../core/runtime/World";
 import { marioRules } from "../core/runtime/Rules";
 import { applyPose } from "../core/runtime/Parts";
+import { restartRun, respawnRun } from "../core/runtime/RunFlow";
+import { advanceWorld3D, applyWorld3D, respawnRun3D, restartRun3D, World3DState } from "../core/runtime/World3D";
+import { Entity, playerEntityId } from "../core/document/Entity";
+import { loadLevelTransition } from "./LevelTransitionWorkflow";
 import { followCamera } from "../core/runtime/Camera";
 import { SourceRect } from "../core/document/Node";
 import { Action } from "../core/actions/Action";
 import { textLinesFor } from "../renderer/TextRaster";
 import { ReadonlyDocument, ProjectDocument } from "../core/document/Document";
 import { AddNodeAction } from "../core/actions/AddNodeAction";
+import { asset3DImportActions, environment3DImportActions, loadAsset3D, loadEnvironment3D,
+    LoadedAsset3D, rehydrateAssets3D, rehydrateEnvironments3D } from "./Asset3DImportWorkflow";
+import { buildFrame3D, MeshAsset3D } from "../renderer/Scene3D";
+import { HdrEnvironmentImage } from "../renderer/HdrEnvironment";
+import { disposeWebGL3D, emitWebGL3D, invalidateWebGL3DSource, lastWebGL3DFailure,
+    pickWebGL3D } from "../renderer/emitWebGL3D";
+import { buildRotateGizmo3D, buildTranslateGizmo3D, copySpatial3D, GizmoMode3D, GizmoSpace3D,
+    hitRotateGizmo3D, hitTranslateGizmo3D, RotateHandle3D, rotatedSpatial3D, scaledSpatial3D,
+    TranslateHandle3D, translatedSpatial3D } from "../renderer/Gizmo3D";
+import { emitRotateGizmo3D, emitScaleGizmo3D, emitTranslateGizmo3D } from "../renderer/emitGizmo3D";
+import { Spatial3D } from "../core/document/Spatial3D";
+import { SetSpatial3DAction } from "../core/actions/SetSpatial3DAction";
+import { dollyCamera3D, orbitCamera3D, panCamera3D } from "../renderer/CameraOrbit3D";
+import { RuntimeControls, Workspace, WorkspaceControls, WORKSPACES } from "./AppShellControls";
+import { ThreeDInspector } from "./ThreeDInspector";
 
 
 /**
@@ -375,40 +400,6 @@ import { rulerTicks } from "../core/geometry/Ruler";
 
 const RULER = 18; // ruler bar thickness in px
 
-declare global {
-    interface Window {
-        electronAPI?: {
-            onMenuCommand: (cb: (command: string) => void) => () => void;
-            onFileOpened: (cb: (payload: { filePath: string; content: string }) => void) => () => void;
-            onRequestSave: (cb: (filePath: string) => void) => () => void;
-            saveFile: (filePath: string, content: string) => Promise<boolean>;
-            requestSaveAs: () => Promise<boolean>;
-            pickFolder: () => Promise<string | null>;
-            readSourceFolder: (folder: string) => Promise<{ path: string; content: string }[]>;
-            readAssetFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
-            readImageDataUrl: (filePath: string) => Promise<string>;
-            writeIntoFolder: (folder: string, filename: string, content: string) => Promise<string>;
-            writePngIntoFolder: (folder: string, filename: string, dataUrl: string) => Promise<string>;
-            readFontFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
-            readFontBytes: (filePath: string) => Promise<string>;
-            readPaletteFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
-            readPaletteFile: (folder: string, filePath: string) => Promise<string>;
-            readTiledFolder: (folder: string) => Promise<{ path: string; name: string; relative: string }[]>;
-            readTiledMap: (folder: string, mapPath: string) => Promise<string>;
-            readTiledTileset: (folder: string, mapPath: string, relative: string) => Promise<string>;
-            readTiledImage: (folder: string, mapPath: string, relative: string) => Promise<string>;
-            readUnityFolder: (folder: string) => Promise<{ path: string; name: string; bytes: number; relative: string }[]>;
-            readUnityPackage: (folder: string, filePath: string) => Promise<string>;
-            readAsepriteFolder: (folder: string) => Promise<{ path: string; name: string; bytes: number; relative: string }[]>;
-            readAsepriteBytes: (folder: string, filePath: string) => Promise<string>;
-            /** The one SYNCHRONOUS channel — see the preload. Returns base64, or an error to show. */
-            inflateSync: (base64: string) => { ok: boolean; data?: string; error?: string };
-            /** Its GZIP sibling: a `.unitypackage` carries a header `inflateSync` will not accept. */
-            gunzipSync: (base64: string) => { ok: boolean; data?: string; error?: string };
-        };
-    }
-}
-
 // Use the rich result: a corrupt autosave must NOT look like "no autosave".
 // Starting blank and letting the user overwrite it would destroy recoverable work.
 const initialLoad = Serializer.loadResult();
@@ -544,30 +535,6 @@ export function App() {
  * Switching is one click, and the alternative — every tool for every job, always — is the twelve
  * flat slots this replaced.
  */
-type Workspace = "design" | "paint" | "animate" | "map";
-
-const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[]; defaultTool: string }[] = [
-    // `tools` is the ORDER of the strip as well as its contents, so the two cannot disagree.
-    { id: "design", label: "Design", icon: "◱", tools: ["select", "move", "shapes", "pen"], defaultTool: "select" },
-    // Paint puts the CANVAS-maker beside the brush, out of the shape flyout: drawing a surface and
-    // painting on it are one job, and burying the first behind a menu made the second look broken.
-    // The MARQUEE sits between the canvas-maker and the brush: choosing where paint may land is the
-    // step before painting, and it is what the bucket and the panel buttons obey too.
-    { id: "paint", label: "Paint", icon: "✏", tools: ["select", "move", "raster", "marquee", "paint", "bucket", "eyedropper"], defaultTool: "paint" },
-    // Animation is done by SELECTING and MOVING things over time; a shape tool in this workspace is
-    // a way to draw a rectangle by accident while scrubbing.
-    // Rigging is ANIMATION work, so the weight brush lives here rather than beside the pixel brush
-    // it resembles: the two paint different things, and sharing a strip would put "which brush is
-    // this" between the author and every stroke.
-    { id: "animate", label: "Animate", icon: "⏱", tools: ["select", "move", "weights"], defaultTool: "select" },
-    // MAPS ARE THEIR OWN JOB, by the same rule that keeps the weight brush out of the paint strip:
-    // the tile brush and the pixel brush are the same gesture over different material, and sharing a
-    // strip would put "which brush is this" between the author and every stroke. This is also where
-    // terrain and autotiling go next, so it is a strip with somewhere to grow rather than one tool
-    // in a coat of paint.
-    { id: "map", label: "Map", icon: "▦", tools: ["select", "move", "tiles"], defaultTool: "tiles" }
-];
-
     const [lastShape, setLastShape] = useState<ShapeKind>("rectangle");
     const [workspace, setWorkspace] = useState<Workspace>("design");
     /**
@@ -694,6 +661,10 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     // Help ▸ Keyboard Shortcuts. The menu item existed from the moment the menu did and sent a
     // command NOTHING HANDLED — a dead entry, which is the thing I removed a Tiled submenu for.
     const [showShortcuts, setShowShortcuts] = useState(false);
+    const [gizmoSpace3d, setGizmoSpace3d] = useState<GizmoSpace3D>("world");
+    const gizmoSpace3dRef = useRef<GizmoSpace3D>("world");
+    const [gizmoMode3d, setGizmoMode3d] = useState<GizmoMode3D>("translate");
+    const gizmoMode3dRef = useRef<GizmoMode3D>("translate");
     // A REF, NOT STATE. The clipboard changes nothing on screen, so re-rendering on copy would be
     // a repaint for no visible reason — and it must NOT live in the document, or copying would be
     // an undoable edit and Ctrl+Z after Ctrl+C would "un-copy".
@@ -713,6 +684,29 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     });
 
     const canvasRef = useRef<HTMLDivElement>(null);
+    /** Decoded mesh arrays are derived runtime state, keyed by persisted asset id. */
+    const meshLibrary3dRef = useRef<Map<string, MeshAsset3D>>(new Map());
+    const environmentLibrary3dRef = useRef<Map<string, HdrEnvironmentImage>>(new Map());
+    const world3dRef = useRef<World3DState | null>(null);
+    const world3dLastAtRef = useRef<number | null>(null);
+    /** Invalidates an asynchronous rehydrate when another project replaces the document. */
+    const meshHydrationGenerationRef = useRef(0);
+    type GizmoDragBase = {
+        nodeId: string;
+        start: Spatial3D;
+        clientX: number;
+        clientY: number;
+    };
+    const gizmoDrag3dRef = useRef<((GizmoDragBase & {
+        mode: "translate" | "scale"; handle: TranslateHandle3D;
+    }) | (GizmoDragBase & {
+        mode: "rotate"; handle: RotateHandle3D;
+    })) | null>(null);
+    const orbitTarget3dRef = useRef({ x: 0, y: 0, z: 0 });
+    const cameraDrag3dRef = useRef<null | {
+        nodeId: string; start: Spatial3D; target: { x: number; y: number; z: number };
+        clientX: number; clientY: number; viewportHeight: number; mode: "orbit" | "pan"; buttonMask: number;
+    }>(null);
     const currentFilePathRef = useRef<string | null>(null);
     const confirmedOverwriteRef = useRef(false);
     // Dirty-state tracking (M1): the previous ComputedState to reuse clean subtrees
@@ -725,6 +719,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
     const runBoundsRef = useRef<ReturnType<typeof contentBounds>>(null);
     /** Mirrors `runOutcome`, so the frame loop can tell a NEW ending from one already shown. */
     const runOutcomeRef = useRef<import("../core/runtime/World").RunOutcome | null>(null);
+    const transitionLoadingRef = useRef<string | null>(null);
     const dirtyNodesRef = useRef<Set<string>>(new Set());
     const prevPendingRef = useRef<Set<string>>(new Set());
     /**
@@ -788,6 +783,9 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         const mask = pixelMaskFor(es, dispatcher.getDocument(), selectedRasterId);
         return mask ? selectedCount(mask) : null;
     })();
+    // Internal pixel clipboard: selection payloads retain their binary mask (including lasso holes),
+    // which the text/image OS clipboard cannot represent without a lossy side channel.
+    const pixelClipboardRef = useRef<PixelSelectionClipboard | null>(null);
 
     const toolControllerRef = useRef<ToolController | null>(null);
     if (!toolControllerRef.current) {
@@ -1207,6 +1205,67 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
 
         const handleMouseDown = (e: MouseEvent) => {
             const rect = target.getBoundingClientRect();
+            if (workspaceRef.current.id === "3d") {
+                const doc = dispatcher.getDocument();
+                const selected = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
+                const frame = buildFrame3D(doc, meshLibrary3dRef.current, rect.width, rect.height,
+                    environmentLibrary3dRef.current);
+                const cameraGesture = (e.altKey && e.button === 0) || e.button === 1;
+                if (cameraGesture && frame.cameraNodeId) {
+                    const cameraNode = doc.nodes.get(frame.cameraNodeId);
+                    if (cameraNode?.spatial3d?.camera) {
+                        const selectedWorld = selected && selected !== frame.cameraNodeId
+                            ? frame.worlds.get(selected) : null;
+                        const orbitTarget = selectedWorld
+                            ? { x: selectedWorld[12], y: selectedWorld[13], z: selectedWorld[14] }
+                            : orbitTarget3dRef.current;
+                        orbitTarget3dRef.current = orbitTarget;
+                        cameraDrag3dRef.current = {
+                            nodeId: frame.cameraNodeId, start: copySpatial3D(cameraNode.spatial3d), target: orbitTarget,
+                            clientX: e.clientX, clientY: e.clientY, viewportHeight: rect.height,
+                            mode: e.shiftKey ? "pan" : "orbit", buttonMask: e.button === 1 ? 4 : 1
+                        };
+                        e.preventDefault();
+                        return;
+                    }
+                }
+                if (selected) {
+                    const node = doc.nodes.get(selected);
+                    const mode = gizmoMode3dRef.current;
+                    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+                    const rotate = mode === "rotate"
+                        ? buildRotateGizmo3D(doc, frame, selected, rect.width, rect.height, gizmoSpace3dRef.current)
+                        : null;
+                    const axes = mode !== "rotate"
+                        ? buildTranslateGizmo3D(doc, frame, selected, rect.width, rect.height,
+                            mode === "scale" ? "local" : gizmoSpace3dRef.current)
+                        : null;
+                    const rotateHandle = rotate ? hitRotateGizmo3D(rotate, x, y) : null;
+                    const axisHandle = axes ? hitTranslateGizmo3D(axes, x, y) : null;
+                    if (node?.spatial3d && (rotateHandle || axisHandle)) {
+                        const s = node.spatial3d;
+                        const base = {
+                            nodeId: selected,
+                            start: copySpatial3D(s),
+                            clientX: e.clientX,
+                            clientY: e.clientY
+                        };
+                        gizmoDrag3dRef.current = rotateHandle
+                            ? { ...base, mode: "rotate", handle: rotateHandle }
+                            : { ...base, mode: mode as "translate" | "scale", handle: axisHandle! };
+                        e.preventDefault();
+                        return;
+                    }
+                }
+                const canvas = target.firstElementChild;
+                const hit = canvas instanceof HTMLCanvasElement
+                    ? pickWebGL3D(canvas, e.clientX - rect.left, e.clientY - rect.top, window.devicePixelRatio || 1)
+                    : null;
+                es.selectedNodeIds = hit ? [hit] : [];
+                refresh();
+                e.preventDefault();
+                return;
+            }
             toolController.onMouseDown(e, rect);
         };
         /**
@@ -1231,9 +1290,39 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         };
         const handleMouseMove = (e: MouseEvent) => {
             const rect = target.getBoundingClientRect();
+            const cameraDrag = cameraDrag3dRef.current;
+            if (cameraDrag) {
+                if ((e.buttons & cameraDrag.buttonMask) === 0) { cameraDrag3dRef.current = null; return; }
+                const dx = e.clientX - cameraDrag.clientX, dy = e.clientY - cameraDrag.clientY;
+                const result = cameraDrag.mode === "pan"
+                    ? panCamera3D(cameraDrag.start, cameraDrag.target, dx, dy, cameraDrag.viewportHeight)
+                    : { spatial: orbitCamera3D(cameraDrag.start, cameraDrag.target, dx, dy), target: cameraDrag.target };
+                orbitTarget3dRef.current = result.target;
+                dispatcher.dispatchAction(new SetSpatial3DAction(
+                    dispatcher.getDocument(), cameraDrag.nodeId, result.spatial), { coalesce: true });
+                refresh(); e.preventDefault(); return;
+            }
+            const drag = gizmoDrag3dRef.current;
+            if (drag) {
+                if ((e.buttons & 1) === 0) { gizmoDrag3dRef.current = null; return; }
+                const next = drag.mode === "rotate"
+                    ? rotatedSpatial3D(drag.start, drag.handle, drag.clientX, drag.clientY, e.clientX, e.clientY)
+                    : drag.mode === "scale"
+                        ? scaledSpatial3D(drag.start, drag.handle, e.clientX - drag.clientX, e.clientY - drag.clientY)
+                        : translatedSpatial3D(drag.start, drag.handle, e.clientX - drag.clientX, e.clientY - drag.clientY);
+                dispatcher.dispatchAction(new SetSpatial3DAction(
+                    dispatcher.getDocument(), drag.nodeId, next), { coalesce: true });
+                refresh();
+                e.preventDefault();
+                return;
+            }
             toolController.onMouseMove(e, rect);
         };
-        const handleMouseUp = (e: MouseEvent) => toolController.onMouseUp(e);
+        const handleMouseUp = (e: MouseEvent) => {
+            if (cameraDrag3dRef.current) { cameraDrag3dRef.current = null; e.preventDefault(); return; }
+            if (gizmoDrag3dRef.current) { gizmoDrag3dRef.current = null; e.preventDefault(); return; }
+            toolController.onMouseUp(e);
+        };
         /**
          * Which intent a physical key is (M18 slice 2), or null for one the game does not use.
          *
@@ -1292,6 +1381,21 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 if (e.key === "Escape") {
                     toolController.onKeyDown(e);
                     if (e.defaultPrevented) return;
+                    const drag = gizmoDrag3dRef.current;
+                    if (drag) {
+                        dispatcher.dispatchAction(new SetSpatial3DAction(
+                            dispatcher.getDocument(), drag.nodeId, drag.start), { coalesce: true });
+                        gizmoDrag3dRef.current = null;
+                        refresh();
+                        e.preventDefault();
+                        return;
+                    }
+                    const cameraDrag = cameraDrag3dRef.current;
+                    if (cameraDrag) {
+                        dispatcher.dispatchAction(new SetSpatial3DAction(
+                            dispatcher.getDocument(), cameraDrag.nodeId, cameraDrag.start), { coalesce: true });
+                        cameraDrag3dRef.current = null; refresh(); e.preventDefault(); return;
+                    }
                     const cancel = resolveShortcut(e);
                     if (cancel && runShortcut(cancel)) e.preventDefault();
                     return;
@@ -1334,6 +1438,19 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         const handleWheel = (e: WheelEvent) => {
             e.preventDefault();
             const rect = target.getBoundingClientRect();
+            if (workspaceRef.current.id === "3d") {
+                const doc = dispatcher.getDocument();
+                const frame = buildFrame3D(doc, meshLibrary3dRef.current, rect.width, rect.height,
+                    environmentLibrary3dRef.current);
+                const cameraNode = frame.cameraNodeId ? doc.nodes.get(frame.cameraNodeId) : null;
+                if (frame.cameraNodeId && cameraNode?.spatial3d?.camera) {
+                    const next = dollyCamera3D(copySpatial3D(cameraNode.spatial3d), orbitTarget3dRef.current,
+                        e.deltaY, cameraNode.spatial3d.camera);
+                    dispatcher.dispatchAction(new SetSpatial3DAction(doc, frame.cameraNodeId, next), { coalesce: true });
+                    refresh();
+                }
+                return;
+            }
             // Zoom about the cursor (the world point under the pointer stays fixed).
             const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
             zoomAt(es.viewport, zoomFactor, e.clientX - rect.left, e.clientY - rect.top);
@@ -1387,6 +1504,24 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
             // spending 600 derivations on the frame that resumes.
             let worldMoved: Set<string> | null = null;
             let played: ReadonlyDocument = timed;
+            if (es.playing && workspace === "3d" && world3dRef.current) {
+                const now3d = Date.now(), last3d = world3dLastAtRef.current ?? now3d;
+                const inputs3d = es.controlled ? new Map([[es.controlled, {
+                    x: (es.input.right ? 1 : 0) - (es.input.left ? 1 : 0), y: 0,
+                    z: (es.input.down ? 1 : 0) - (es.input.jump ? 1 : 0), speed: es.input.run ? 7 : 4
+                }]]) : new Map();
+                world3dRef.current = advanceWorld3D(base, world3dRef.current,
+                    (now3d - last3d) / 1000, inputs3d);
+                world3dLastAtRef.current = now3d;
+                if (world3dRef.current.transitionTo && es.world) {
+                    es.world = { ...es.world, transitionTo: world3dRef.current.transitionTo };
+                }
+                if (world3dRef.current.outcome !== "running"
+                    && runOutcomeRef.current !== world3dRef.current.outcome) {
+                    runOutcomeRef.current = world3dRef.current.outcome;
+                    setRunOutcome(world3dRef.current.outcome);
+                }
+            }
             if (es.playing && es.world && es.worldClock) {
                 const now = Date.now();
                 const spend = stepsFor(es.worldClock.accumulator, (now - es.worldClock.lastAt) / 1000);
@@ -1438,6 +1573,38 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 }
                 es.world = world;
                 es.worldClock = { accumulator: spend.accumulator, lastAt: now };
+                if (world.transitionTo && transitionLoadingRef.current === null) {
+                    const target = world.transitionTo;
+                    transitionLoadingRef.current = target;
+                    const api = window.electronAPI;
+                    if (!api) {
+                        es.world = applyCommands(world, [{ kind: "endRun", outcome: "lost" }]);
+                        setRunOutcome("lost");
+                    } else {
+                        loadLevelTransition(api, currentFilePathRef.current, target).then(loaded => {
+                            dispatcher.loadDocument(loaded.document);
+                            currentFilePathRef.current = loaded.filePath;
+                            es.frame = frameOnLoad(loaded.document);
+                            es.controlled = playerEntityId(loaded.document.nodes.values());
+                            es.world = restartRun(loaded.document);
+                            world3dRef.current = workspace === "3d" ? restartRun3D(loaded.document) : null;
+                            world3dLastAtRef.current = Date.now();
+                            es.worldClock = { accumulator: 0, lastAt: Date.now() };
+                            runBoundsRef.current = null;
+                            runOutcomeRef.current = null;
+                            setRunOutcome(null);
+                            setLastEvent(null);
+                            prevComputedRef.current = null;
+                            transitionLoadingRef.current = null;
+                            refresh();
+                        }).catch(error => {
+                            console.error(`Level transition to ${target} failed:`, error);
+                            if (es.world) es.world = applyCommands(es.world, [{ kind: "endRun", outcome: "lost" }]);
+                            runOutcomeRef.current = "lost";
+                            setRunOutcome("lost");
+                        });
+                    }
+                }
                 // THE PREVIOUS WORLD IS PART OF THE QUESTION. A dirty set must name what changed
                 // since the LAST frame, not what disagrees with the stored document — a body that
                 // jumps and lands back on its authored position agrees with the document again, so
@@ -1496,9 +1663,9 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 // spawned, and once so it is drawn. Feeding only the picture would put a coin on
                 // screen that nothing can touch; feeding only the step would collide with one
                 // nobody can see.
-                played = applyCells(
+                played = applyTileAnimations(applyCells(
                     applyPose(applyFacing(applyWorld(applySpawns(timed, world), world), world), world),
-                    world);
+                    world), world.time);
             }
             const stored = applyParallax(played as ProjectDocument, es.viewport) as ReadonlyDocument;
             const doc: ReadonlyDocument = !es.playing
@@ -1619,7 +1786,44 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 computed,
                 viewport: es.viewport
             };
-            renderScene(canvasRef.current, doc, rendererState, backend, refresh);
+            if (workspace === "3d") {
+                const host = canvasRef.current;
+                if (host.dataset.vdeBackend !== "webgl3d") {
+                    host.innerHTML = "";
+                    host.dataset.vdeBackend = "webgl3d";
+                    const canvas = document.createElement("canvas");
+                    canvas.style.display = "block";
+                    canvas.style.width = `${host.clientWidth}px`;
+                    canvas.style.height = `${host.clientHeight}px`;
+                    host.appendChild(canvas);
+                }
+                const canvas = host.firstElementChild as HTMLCanvasElement;
+                canvas.style.width = `${host.clientWidth}px`;
+                canvas.style.height = `${host.clientHeight}px`;
+                const scene3d = es.playing && world3dRef.current ? applyWorld3D(doc, world3dRef.current) : doc;
+                const frame3d = buildFrame3D(scene3d, meshLibrary3dRef.current, host.clientWidth, host.clientHeight,
+                    environmentLibrary3dRef.current);
+                if (!emitWebGL3D(canvas, frame3d, window.devicePixelRatio || 1)) {
+                    host.dataset.vdeGlFallback = lastWebGL3DFailure() ?? "3D WebGL unavailable";
+                } else delete host.dataset.vdeGlFallback;
+                const selected = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
+                if (gizmoMode3d === "rotate") emitRotateGizmo3D(host, selected
+                    ? buildRotateGizmo3D(doc, frame3d, selected, host.clientWidth, host.clientHeight, gizmoSpace3d)
+                    : null);
+                else {
+                    const axes = selected ? buildTranslateGizmo3D(doc, frame3d, selected,
+                        host.clientWidth, host.clientHeight, gizmoMode3d === "scale" ? "local" : gizmoSpace3d) : null;
+                    if (gizmoMode3d === "scale") emitScaleGizmo3D(host, axes);
+                    else emitTranslateGizmo3D(host, axes);
+                }
+            } else {
+                const former3d = canvasRef.current.firstElementChild as HTMLCanvasElement | null;
+                if (canvasRef.current.dataset.vdeBackend === "webgl3d" && former3d) {
+                    disposeWebGL3D(former3d); canvasRef.current.innerHTML = "";
+                    delete canvasRef.current.dataset.vdeBackend;
+                }
+                renderScene(canvasRef.current, doc, rendererState, backend, refresh);
+            }
             // GUARDED BY A REF, so this settles: the state change re-renders, the effect runs again,
             // the reason is unchanged and nothing is set. Without it, every frame would setState.
             const fell = canvasRef.current.dataset[GL_FALLBACK_ATTR] ?? null;
@@ -1640,7 +1844,7 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 requestAnimationFrame(() => refresh());
             }
         }
-    }, [ui.tick, dispatcher, backend]);
+    }, [ui.tick, dispatcher, backend, workspace, gizmoSpace3d, gizmoMode3d]);
 
     // Repaint on container-resize and DPR change. The SVG root is width/height=100% so it
     // auto-fills the pane, but the Canvas backend is sized in fixed CSS px (and its backing
@@ -1744,6 +1948,9 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 switch (command) {
                     case "file.new":
                         dispatcher.loadDocument(createEmptyDocument());
+                        meshHydrationGenerationRef.current++;
+                        meshLibrary3dRef.current.clear();
+                        environmentLibrary3dRef.current.clear();
                         currentFilePathRef.current = null;
                         es.selectedNodeIds = [];
                         refresh();
@@ -1830,23 +2037,40 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                     default: return;
                 }
             }),
-            api.onFileOpened(({ filePath, content }) => {
-                try {
-                    const opened = deserializeDocument(content);
-                    dispatcher.loadDocument(opened);
-                    // Remember where it came from so Ctrl+S writes back to the
-                    // same file instead of diverting to localStorage.
-                    currentFilePathRef.current = filePath;
-                    es.selectedNodeIds = [];
-                    es.frame = frameOnLoad(opened);
-                    refresh();
-                } catch (err) {
-                    console.error("Failed to open file:", err);
+            bindProjectFileWorkflow(api, {
+                dispatcher,
+                editorState: es,
+                currentFilePath: currentFilePathRef,
+                refresh,
+                saveTo,
+                reportError: (message, error) => console.error(message, error),
+                afterOpen: ({ filePath }) => {
+                    const generation = ++meshHydrationGenerationRef.current;
+                    meshLibrary3dRef.current.clear();
+                    environmentLibrary3dRef.current.clear();
+                    const assets = dispatcher.getDocument().assets3d ?? [];
+                    void rehydrateAssets3D(api, filePath, assets).then(({ meshes, failures }) => {
+                        if (generation !== meshHydrationGenerationRef.current
+                            || currentFilePathRef.current !== filePath) return;
+                        // Preserve anything imported while the persisted files were loading.
+                        for (const [id, mesh] of meshLibrary3dRef.current) meshes.set(id, mesh);
+                        meshLibrary3dRef.current = meshes;
+                        for (const failure of failures) {
+                            console.warn(`Could not reload 3D asset ${failure.source}: ${failure.error.message}`);
+                        }
+                        refresh();
+                    }).catch(error => console.error("3D asset reload failed:", error));
+                    void rehydrateEnvironments3D(api, filePath, assets).then(({ environments, failures }) => {
+                        if (generation !== meshHydrationGenerationRef.current
+                            || currentFilePathRef.current !== filePath) return;
+                        for (const [id, image] of environmentLibrary3dRef.current) environments.set(id, image);
+                        environmentLibrary3dRef.current = environments;
+                        for (const failure of failures) {
+                            console.warn(`Could not reload HDR environment ${failure.source}: ${failure.error.message}`);
+                        }
+                        refresh();
+                    }).catch(error => console.error("HDR environment reload failed:", error));
                 }
-            }),
-            api.onRequestSave((filePath) => {
-                currentFilePathRef.current = filePath;
-                saveTo(filePath);
             })
         ];
         return () => disposers.forEach(dispose => dispose());
@@ -1992,6 +2216,72 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         refresh();
     }, [dispatcher, es, refresh]);
 
+    /** Import one glTF/GLB as stable authored identity plus transient decoded mesh data. */
+    const import3D = useCallback(async (filePath: string, name: string, loaded: LoadedAsset3D) => {
+        const api = window.electronAPI;
+        const projectFilePath = currentFilePathRef.current;
+        if (!api || !projectFilePath) throw new Error("Save the project before importing a 3D model.");
+        const relative = await api.project3DSource(projectFilePath, filePath);
+        const doc = dispatcher.getDocument();
+        const plan = asset3DImportActions(doc, relative, name, generateUUID, loaded.materials);
+        if (dispatcher.dispatchAction(new TransactionAction(doc, "import-3d", plan.actions)).success) {
+            meshLibrary3dRef.current.set(plan.assetId, loaded.mesh);
+            const liveCanvas = canvasRef.current?.firstElementChild;
+            if (liveCanvas instanceof HTMLCanvasElement) invalidateWebGL3DSource(liveCanvas, relative);
+            es.selectedNodeIds = [plan.modelId];
+            setWorkspace("3d");
+        }
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    const importEnvironment3D = useCallback(async (filePath: string, name: string,
+                                                    image: HdrEnvironmentImage) => {
+        const api = window.electronAPI, projectFilePath = currentFilePathRef.current;
+        if (!api || !projectFilePath) throw new Error("Save the project before importing an HDR environment.");
+        const relative = await api.projectEnvironmentSource(projectFilePath, filePath);
+        const doc = dispatcher.getDocument();
+        const plan = environment3DImportActions(doc, relative, name, generateUUID);
+        if (dispatcher.dispatchAction(new TransactionAction(doc, "import-hdr-environment", plan.actions)).success) {
+            environmentLibrary3dRef.current.set(plan.assetId, image);
+            const liveCanvas = canvasRef.current?.firstElementChild;
+            if (liveCanvas instanceof HTMLCanvasElement) invalidateWebGL3DSource(liveCanvas, plan.assetId);
+            es.selectedNodeIds = [plan.nodeId]; setWorkspace("3d"); refresh();
+        }
+    }, [dispatcher, es, refresh]);
+
+    const addLight3D = useCallback((kind: "directional" | "point") => {
+        const doc = dispatcher.getDocument(), id = generateUUID();
+        const spatial: Spatial3D = {
+            transform: {
+                position: kind === "point" ? { x: 2, y: 2, z: 3 } : { x: 0, y: 0, z: 0 },
+                rotation: { x: 0, y: 0, z: 0, w: 1 }, scale: { x: 1, y: 1, z: 1 }
+            },
+            light: kind === "directional"
+                ? { kind, color: { x: 1, y: 1, z: 1 }, intensity: 1 }
+                : { kind, color: { x: 1, y: 1, z: 1 }, intensity: 10, range: 10 }
+        };
+        const actions: Action[] = [
+            new AddNodeAction(doc, "core.rectangle", 0, 0, 1, 1, "none", id),
+            new SetSpatial3DAction(doc, id, spatial)
+        ];
+        if (dispatcher.dispatchAction(new TransactionAction(doc, `add-${kind}-light-3d`, actions)).success) {
+            es.selectedNodeIds = [id];
+        }
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    const composeSelected2DIn3D = useCallback(() => {
+        const doc = dispatcher.getDocument(), id = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
+        const selected = id ? doc.nodes.get(id) : undefined;
+        if (!id || !selected || selected.spatial3d?.renderable) return;
+        const spatial: Spatial3D = selected.spatial3d ? copySpatial3D(selected.spatial3d) : {
+            transform: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 },
+                scale: { x: 1, y: 1, z: 1 } }
+        };
+        spatial.composition2d = spatial.composition2d ?? { mode: "plane", pixelsPerUnit: 100, lit: false };
+        dispatcher.dispatchAction(new SetSpatial3DAction(doc, id, spatial)); refresh();
+    }, [dispatcher, es, refresh]);
+
     /**
      * A map as nodes: a whole layer as ONE grid where it fits, and one image per cell where it does
      * not.
@@ -2103,6 +2393,82 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         refresh();
     }, [dispatcher, es, refresh]);
 
+    /** Copy, optionally clearing through the ordinary undoable surface-action seam. */
+    const copyPixelSelection = useCallback((cut: boolean) => {
+        const doc = dispatcher.getDocument();
+        const id = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
+        const mask = id ? pixelMaskFor(es, doc, id) : null;
+        const surface = id ? doc.nodes.get(id)?.surface : undefined;
+        if (!id || !mask || !surface) return;
+        const buffer = decodeSurface(surface.data, surface.width, surface.height);
+        const content = buffer ? copySelectionContent(buffer, mask) : null;
+        if (!content) return;
+        pixelClipboardRef.current = content;
+        if (cut) {
+            const action = surfaceEditAction(doc, id, b => clearSelectionContent(b, mask));
+            if (action) dispatcher.dispatchAction(action);
+        }
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    const clearPixelSelection = useCallback(() => {
+        const doc = dispatcher.getDocument();
+        const id = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
+        const mask = id ? pixelMaskFor(es, doc, id) : null;
+        if (!id || !mask) return;
+        const action = surfaceEditAction(doc, id, b => clearSelectionContent(b, mask));
+        if (action) dispatcher.dispatchAction(action);
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    const pastePixelSelection = useCallback(() => {
+        const content = pixelClipboardRef.current;
+        const doc = dispatcher.getDocument();
+        const id = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
+        if (!content || !id || !doc.nodes.get(id)?.surface) return;
+        let next: SelectionMask | null = null;
+        const action = surfaceEditAction(doc, id, b => {
+            const result = pasteSelectionContent(b, content);
+            next = result.mask;
+            return result.changed;
+        });
+        if (action) dispatcher.dispatchAction(action);
+        if (next && !isEmptySelection(next)) es.pixelSelection = { nodeId: id, mask: next };
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    const movePixelSelection = useCallback((dx: number, dy: number) => {
+        const doc = dispatcher.getDocument();
+        const id = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
+        const mask = id ? pixelMaskFor(es, doc, id) : null;
+        if (!id || !mask) return;
+        let next: SelectionMask | null = null;
+        const action = surfaceEditAction(doc, id, b => {
+            const result = moveSelectionContent(b, mask, dx, dy);
+            next = result?.mask ?? null;
+            return result?.changed ?? 0;
+        });
+        if (action) dispatcher.dispatchAction(action);
+        es.pixelSelection = next && !isEmptySelection(next) ? { nodeId: id, mask: next } : null;
+        refresh();
+    }, [dispatcher, es, refresh]);
+
+    const transformPixelSelection = useCallback((transform: PixelSelectionTransform) => {
+        const doc = dispatcher.getDocument();
+        const id = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
+        const mask = id ? pixelMaskFor(es, doc, id) : null;
+        if (!id || !mask) return;
+        let next: SelectionMask | null = null;
+        const action = surfaceEditAction(doc, id, b => {
+            const result = transformSelectionContent(b, mask, transform);
+            next = result?.mask ?? null;
+            return result?.changed ?? 0;
+        });
+        if (action) dispatcher.dispatchAction(action);
+        es.pixelSelection = next && !isEmptySelection(next) ? { nodeId: id, mask: next } : null;
+        refresh();
+    }, [dispatcher, es, refresh]);
+
     /** Transform edits — routed, so a copy gets a transform override (schema 26). */
     const editTransform = (patch: { rotation?: number; scaleX?: number; scaleY?: number }) => {
         if (!selectedNodeId) return;
@@ -2200,33 +2566,92 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
         "core.path": "Path"
     };
 
+    const toggleRuntime = () => {
+        es.playing = !es.playing;
+        es.playState = null;
+        es.transition = null;
+        es.viewportTransition = null;
+        es.world = es.playing ? worldFrom(dispatcher.getDocument()) : null;
+        world3dRef.current = es.playing && workspace === "3d"
+            ? restartRun3D(dispatcher.getDocument()) : null;
+        world3dLastAtRef.current = es.playing && workspace === "3d" ? Date.now() : null;
+        es.worldClock = es.playing ? { accumulator: 0, lastAt: Date.now() } : null;
+        es.controlled = es.playing
+            ? (playerEntityId(dispatcher.getDocument().nodes.values()) ?? es.selectedNodeIds[0] ?? null)
+            : null;
+        es.input = { left: false, right: false, jump: false };
+        setLastEvent(null);
+        setRunOutcome(null);
+        runOutcomeRef.current = null;
+        transitionLoadingRef.current = null;
+        prevComputedRef.current = null;
+        runBoundsRef.current = null;
+        if (es.playing) {
+            es.playReturnViewport = { ...es.viewport };
+        } else if (es.playReturnViewport) {
+            Object.assign(es.viewport, es.playReturnViewport);
+            es.playReturnViewport = null;
+        }
+        if (es.playing) es.selectedNodeIds = [];
+        refresh();
+    };
+
+    const restartRuntime = () => {
+        es.world = restartRun(dispatcher.getDocument());
+        if (workspace === "3d") world3dRef.current = restartRun3D(dispatcher.getDocument());
+        world3dLastAtRef.current = workspace === "3d" ? Date.now() : null;
+        es.worldClock = { accumulator: 0, lastAt: Date.now() };
+        runOutcomeRef.current = null;
+        setRunOutcome(null);
+        setLastEvent(null);
+        transitionLoadingRef.current = null;
+        prevComputedRef.current = null;
+        refresh();
+    };
+
+    const respawnRuntime = () => {
+        if (!es.world || !es.controlled) return;
+        es.world = respawnRun(dispatcher.getDocument(), es.world, es.controlled);
+        if (workspace === "3d" && world3dRef.current) {
+            world3dRef.current = respawnRun3D(dispatcher.getDocument(), world3dRef.current, es.controlled);
+            world3dLastAtRef.current = Date.now();
+        }
+        es.worldClock = { accumulator: 0, lastAt: Date.now() };
+        runOutcomeRef.current = null;
+        setRunOutcome(null);
+        setLastEvent(null);
+        prevComputedRef.current = null;
+        refresh();
+    };
+
     return (
         <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: UI.bg, color: UI.text }}>
             {/* Tools and document commands. Its height is its own again: the tool options moved
                     to their own row below, so nothing this row does can push the canvas around. */}
                 <div style={{ display: "flex", alignItems: "center", alignContent: "flex-start", flexWrap: "wrap", rowGap: 4, padding: "4px 8px", background: UI.panel, borderBottom: `1px solid ${UI.line}`, gap: 4 }}>
                 <span style={{ fontWeight: 700, marginRight: 8, color: "#00bfff", fontSize: 13 }}>VDE</span>
-                {/* WORKSPACE TABS. Top-left and first in the reading order, because this is the
-                    widest-scope choice on screen: it decides what every control below it means. */}
-                <div role="tablist" aria-label="Workspace" style={{ display: "flex", gap: 2, marginRight: 10 }}>
-                    {WORKSPACES.map(w => (
-                        <button
-                            key={w.id}
-                            role="tab"
-                            aria-selected={workspace === w.id}
-                            title={`${w.label} workspace`}
-                            onClick={() => pickWorkspace(w.id)}
-                            style={{
-                                display: "flex", alignItems: "center", gap: 4, padding: "3px 9px", fontSize: 11,
-                                background: workspace === w.id ? "#2a4a6a" : "transparent",
-                                color: workspace === w.id ? "#fff" : "#aaa",
-                                border: "none", borderRadius: 3, cursor: "pointer"
-                            }}
-                        >
-                            <span aria-hidden="true">{w.icon}</span><span>{w.label}</span>
-                        </button>
-                    ))}
-                </div>
+                <WorkspaceControls
+                    workspace={workspace}
+                    gizmoMode={gizmoMode3d}
+                    gizmoSpace={gizmoSpace3d}
+                    canCompose2D={es.selectedNodeIds.length === 1
+                        && !dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.spatial3d?.renderable}
+                    onWorkspaceChange={pickWorkspace}
+                    onGizmoModeChange={mode => {
+                        gizmoMode3dRef.current = mode;
+                        setGizmoMode3d(mode);
+                        if (mode === "scale") {
+                            gizmoSpace3dRef.current = "local";
+                            setGizmoSpace3d("local");
+                        }
+                    }}
+                    onGizmoSpaceChange={space => {
+                        gizmoSpace3dRef.current = space;
+                        setGizmoSpace3d(space);
+                    }}
+                    onAddLight={addLight3D}
+                    onCompose2D={composeSelected2DIn3D}
+                />
                 {es.selectedNodeIds.length === 1
                     && dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.type === "core.boolean" && (
                     // A LIVE boolean is selected: offer the operation itself. This is the whole
@@ -2284,67 +2709,14 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                 )}
                 <Divider />
                                 <Divider />
-                {/* PLAY (M7): run the prototype. Leaving play mode drops the run's state and its
-                    transition, so the document is exactly as it was — playing is not editing. */}
-                <button
-                    title={es.playing ? "Stop — back to editing" : "Play the prototype: clicks and hovers fire interactions"}
-                    onClick={() => {
-                        es.playing = !es.playing;
-                        es.playState = null;
-                        es.transition = null;
-                        es.viewportTransition = null;
-                        // THE RUN'S WORLD IS BUILT ON PLAY AND THROWN AWAY ON STOP (M18). Built
-                        // here rather than lazily so pressing Play twice gives the same run twice:
-                        // every body starts where the DOCUMENT puts it, which is the position the
-                        // editor is showing at that moment. Thrown away because a stopped run has
-                        // no state — the document was never touched, so there is nothing to undo
-                        // and nothing to restore.
-                        es.world = es.playing ? worldFrom(dispatcher.getDocument()) : null;
-                        es.worldClock = es.playing ? { accumulator: 0, lastAt: Date.now() } : null;
-                        // WHAT WAS SELECTED IS WHAT YOU DRIVE (M18 slice 2), captured HERE —
-                        // before the selection is emptied a few lines down, which is the whole
-                        // reason it sits above that. A run with nothing selected drives nothing,
-                        // which is the honest default rather than a guess at which body is the
-                        // player: 216 of the corpus's 248 objects carry no class to guess from.
-                        es.controlled = es.playing ? (es.selectedNodeIds[0] ?? null) : null;
-                        // AND THE KEYS ARE CLEARED BOTH WAYS: one still held when Play is pressed
-                        // never sent a keydown to the game, and one held when Stop is pressed would
-                        // still be held when the next run starts.
-                        es.input = { left: false, right: false, jump: false };
-                        setLastEvent(null);
-                        setRunOutcome(null);
-                        runOutcomeRef.current = null;
-                        // AND THE REUSE CHAIN IS CUT HERE, which cost a live bug to learn. A
-                        // world-only frame keeps its geometry so the next tick can diff against it
-                        // — that is the whole optimisation — but the frame after STOP is not a
-                        // tick: it derives the STORED document, while the dirty set names only
-                        // what an action touched, which is nothing. So the editor went on showing
-                        // the crate where it had fallen, forever, with the document saying 40,20
-                        // the entire time. A green suite of 1,793 said nothing; pressing Stop said
-                        // it immediately.
-                        prevComputedRef.current = null;
-                        // …and so is the camera's limit, both ways: a run measures the level it is
-                        // actually given, and a level edited between runs is not held to the old one.
-                        runBoundsRef.current = null;
-                        // Starting REMEMBERS where the canvas was looking; stopping puts it back.
-                        // A prototype run navigates, and being dumped three screens away from
-                        // where you pressed Play is the editor losing your place.
-                        if (es.playing) {
-                            es.playReturnViewport = { ...es.viewport };
-                        } else if (es.playReturnViewport) {
-                            Object.assign(es.viewport, es.playReturnViewport);
-                            es.playReturnViewport = null;
-                        }
-                        if (es.playing) es.selectedNodeIds = [];   // nothing is selected in a prototype
-                        refresh();
-                    }}
-                    style={{
-                        fontSize: 11, padding: "3px 10px", borderRadius: 3, cursor: "pointer",
-                        background: es.playing ? "#00bfff" : "transparent",
-                        color: es.playing ? "#0b0b18" : "#ccc",
-                        border: `1px solid ${es.playing ? "#00bfff" : "#2a2a4a"}`
-                    }}
-                >{es.playing ? "■ Stop" : "▶ Play"}</button>
+                <RuntimeControls
+                    playing={es.playing}
+                    canRestart={!!es.world}
+                    canRespawn={runOutcome === "lost" && !!es.controlled}
+                    onTogglePlay={toggleRuntime}
+                    onRestart={restartRuntime}
+                    onRespawn={respawnRuntime}
+                />
                 <Divider />
                 {ui.truncated && (
                     // Only shown once history actually truncated: undo now stops at the
@@ -2732,6 +3104,28 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                 onClick={() => reviseSelection(m => growSelection(m, -1))} />
                             <ToolButton icon="◌" label="Border of the selection"
                                 onClick={() => reviseSelection(m => borderSelection(m, 1))} />
+                            <ToolButton icon="⧉" label="Copy selected pixels"
+                                onClick={() => copyPixelSelection(false)} />
+                            <ToolButton icon="✂" label="Cut selected pixels"
+                                onClick={() => copyPixelSelection(true)} />
+                            <ToolButton icon="▤" label="Paste pixels at their copied position"
+                                onClick={pastePixelSelection} />
+                            <ToolButton icon="⌫" label="Clear selected pixels"
+                                onClick={clearPixelSelection} />
+                            <ToolButton icon="←" label="Move selected pixels left"
+                                onClick={() => movePixelSelection(-1, 0)} />
+                            <ToolButton icon="→" label="Move selected pixels right"
+                                onClick={() => movePixelSelection(1, 0)} />
+                            <ToolButton icon="↑" label="Move selected pixels up"
+                                onClick={() => movePixelSelection(0, -1)} />
+                            <ToolButton icon="↓" label="Move selected pixels down"
+                                onClick={() => movePixelSelection(0, 1)} />
+                            <ToolButton icon="↔" label="Flip selected pixels horizontally"
+                                onClick={() => transformPixelSelection("flip-horizontal")} />
+                            <ToolButton icon="↕" label="Flip selected pixels vertically"
+                                onClick={() => transformPixelSelection("flip-vertical")} />
+                            <ToolButton icon="↻" label="Rotate selected pixels clockwise"
+                                onClick={() => transformPixelSelection("rotate-clockwise")} />
                         </>)}
                     </>
                 )}
@@ -3101,6 +3495,8 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                             onImportSequence={importSequence}
                             onImportAseprite={importAseprite}
                             onImportSvg={importSvg}
+                            onImport3D={import3D}
+                            onImportEnvironment3D={importEnvironment3D}
                             editContentFont={family => { editSelected({ style: { fontFamily: family } }); refresh(); }}
                             onImportTiles={importTiles}
                             paintColour={paintColour}
@@ -3125,6 +3521,24 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                     onChange={v => { editContent({ name: v }); refresh(); }}
                                 />
                             </InspectorSection>
+
+                            {workspace === "3d" && node.spatial3d && (
+                                <ThreeDInspector
+                                    node={node as Node}
+                                    assets={dispatcher.getDocument().assets3d ?? []}
+                                    meshes={meshLibrary3dRef.current}
+                                    onChange={(spatial, coalesce) => {
+                                        const current = dispatcher.getDocument();
+                                        if (!current.nodes.get(selectedNodeId)?.spatial3d) return;
+                                        dispatcher.dispatchAction(
+                                            new SetSpatial3DAction(current, selectedNodeId, spatial),
+                                            coalesce ? { coalesce: true } : undefined
+                                        );
+                                        refresh();
+                                    }}
+                                />
+                            )}
+
 
                             {/* Authored metadata (schema 64): the author's own kind for this node,
                                 and properties this engine carries without reading. The reason it is
@@ -3164,8 +3578,9 @@ const WORKSPACES: { id: Workspace; label: string; icon: string; tools: string[];
                                         <NumInput value={Math.round(node.geometry.height)} onChange={v => { editSelected({ geometry: { height: Math.max(1, v) } }); refresh(); }} /></div>
                                 </div>
                                 {/* Rotation in DEGREES: the document stores radians, but nobody thinks in
-                                    radians. Disabled for an instance copy — a transform override is a
-                                    later slice, so the field would silently do nothing. */}
+                                    radians. Transform overrides exist, but this direct inspector field is
+                                    still disabled for virtual instance children until it routes through
+                                    the component override action seam. */}
                                 <label style={INSPECTOR_LABEL}>Rotation°</label>
                                 <NumInput
                                     value={Math.round(((node.transform?.rotation ?? 0) * 180 / Math.PI) * 10) / 10}
@@ -5213,12 +5628,14 @@ const LAYER_ICONS: Record<string, string> = {
  */
 function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion, onImportSvg,
     editContentFont, onImportTiles, paintColour, onPickColour, selectedRasterId, onQuantize,
-    onImportSequence, onImportAseprite }: {
+    onImportSequence, onImportAseprite, onImport3D, onImportEnvironment3D }: {
     onPlaceImage: (dataUrl: string, name: string) => void;
     /** A numbered run of files as one animated node: its name, frame zero's data URL, its track. */
     onImportSequence: (name: string, first: string, track: Keyframe[]) => void;
     /** An `.aseprite` as one animated node: the file's own clock and its tags, too. */
     onImportAseprite: (p: AsepritePlacementInput) => void;
+    onImport3D: (filePath: string, name: string, loaded: LoadedAsset3D) => Promise<void>;
+    onImportEnvironment3D: (filePath: string, name: string, image: HdrEnvironmentImage) => Promise<void>;
     getDocument: () => ReadonlyDocument;
     /** The selected node when it is an image with a source — what a SHEET import acts ON. */
     selectedImage: { id: string; src: string } | null;
@@ -5256,6 +5673,10 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
     const [unityAssets, setUnityAssets] = useState<UnityAsset[]>([]);
     const [aseFolder, setAseFolder] = useState<string | null>(null);
     const [aseFiles, setAseFiles] = useState<{ path: string; name: string; bytes: number; relative: string }[]>([]);
+    const [modelFolder, setModelFolder] = useState<string | null>(null);
+    const [modelFiles, setModelFiles] = useState<{ path: string; name: string; bytes: number; relative: string }[]>([]);
+    const [environmentFolder, setEnvironmentFolder] = useState<string | null>(null);
+    const [environmentFiles, setEnvironmentFiles] = useState<{ path: string; name: string; bytes: number; relative: string }[]>([]);
     const [importNote, setImportNote] = useState<string | null>(null);
     const [exported, setExported] = useState<string | null>(null);
     const [preview, setPreview] = useState<string | null>(null);
@@ -5712,7 +6133,8 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                         // A sheet-backed set has ONE image; a collection has one
                                         // per tile. Both are cached by path, so a tile referenced
                                         // a thousand times is still decoded once.
-                                        const wanted = set.image ? [set.image] : set.tiles.map(t => t.image);
+                                        const wanted = set.image ? [set.image]
+                                            : set.tiles.flatMap(t => t.image === null ? [] : [t.image]);
                                         for (const rel of wanted) {
                                             if (sheets.has(rel)) continue;
                                             try {
@@ -5784,6 +6206,76 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                         >
                             <option value="">Place a map…</option>
                             {tiledMaps.map(m => <option key={m.path} value={m.path}>{m.relative}</option>)}
+                        </select>
+                    )}
+
+                    <label style={INSPECTOR_LABEL}>Import a 3D model</label>
+                    <button
+                        data-model-3d-btn="1"
+                        disabled={busy}
+                        onClick={async () => {
+                            const folder = await api.pickFolder();
+                            if (!folder) return;
+                            setBusy(true);
+                            try {
+                                const files = await api.read3DFolder(folder);
+                                setModelFolder(folder); setModelFiles(files);
+                                setImportNote(files.length === 0 ? "No .gltf or .glb files in that folder."
+                                    : `${files.length} 3D model${files.length === 1 ? "" : "s"} found`);
+                            } finally { setBusy(false); }
+                        }}
+                        style={DRAWER_BUTTON}
+                    >{busy ? "Reading…" : "Find glTF/GLB models…"}</button>
+                    {modelFiles.length > 0 && modelFolder && (
+                        <select
+                            data-model-3d-list="1"
+                            defaultValue=""
+                            onChange={async e => {
+                                const file = modelFiles.find(f => f.path === e.target.value);
+                                if (!file) return;
+                                setBusy(true);
+                                try {
+                                    const loaded = await loadAsset3D(api, modelFolder, file.path);
+                                    await onImport3D(file.path, file.name.replace(/\.(gltf|glb)$/i, ""), loaded);
+                                    setImportNote(`Imported ${loaded.mesh.instances.length} primitive${loaded.mesh.instances.length === 1 ? "" : "s"}`
+                                        + (loaded.notes.length ? ` · ${loaded.notes[0]}` : ""));
+                                } catch (err) { setImportNote(String(err instanceof Error ? err.message : err)); }
+                                finally { setBusy(false); }
+                            }}
+                            style={{ width: "100%", fontSize: 11, marginBottom: 6, background: UI.raised,
+                                color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3 }}
+                        >
+                            <option value="">Import a model…</option>
+                            {modelFiles.map(f => <option key={f.path} value={f.path}>{f.relative}</option>)}
+                        </select>
+                    )}
+
+                    <label style={INSPECTOR_LABEL}>Import an HDR environment</label>
+                    <button disabled={busy} onClick={async () => {
+                        const folder = await api.pickFolder(); if (!folder) return;
+                        setBusy(true);
+                        try {
+                            const files = await api.readEnvironmentFolder(folder);
+                            setEnvironmentFolder(folder); setEnvironmentFiles(files);
+                            setImportNote(files.length ? `${files.length} HDR environment${files.length === 1 ? "" : "s"} found`
+                                : "No Radiance .hdr files in that folder.");
+                        } finally { setBusy(false); }
+                    }} style={DRAWER_BUTTON}>{busy ? "Reading…" : "Find Radiance HDR files…"}</button>
+                    {environmentFiles.length > 0 && environmentFolder && (
+                        <select data-environment-3d-list="1" defaultValue="" onChange={async event => {
+                            const file = environmentFiles.find(candidate => candidate.path === event.target.value);
+                            if (!file) return;
+                            setBusy(true);
+                            try {
+                                const image = await loadEnvironment3D(api, environmentFolder, file.path);
+                                await onImportEnvironment3D(file.path, file.name.replace(/\.hdr$/i, ""), image);
+                                setImportNote(`Imported HDR environment ${image.width}×${image.height}`);
+                            } catch (error) { setImportNote(String(error instanceof Error ? error.message : error)); }
+                            finally { setBusy(false); }
+                        }} style={{ width: "100%", fontSize: 11, marginBottom: 6, background: UI.raised,
+                            color: UI.text, border: `1px solid ${UI.line}`, borderRadius: 3 }}>
+                            <option value="">Use an environment…</option>
+                            {environmentFiles.map(file => <option key={file.path} value={file.path}>{file.relative}</option>)}
                         </select>
                     )}
 
@@ -6169,17 +6661,10 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                                             onClick={async () => {
                                                 setBusy(true);
                                                 try {
-                                                    const byName = new Map(assets.map(a => [a.name, a.path]));
-                                                    const hrefs = new Map<string, string>();
-                                                    for (const f of s.frames) {
-                                                        const p = byName.get(f.file);
-                                                        if (p) hrefs.set(f.file, await api.readImageDataUrl(p));
-                                                    }
-                                                    const track = sequenceTrack(s, { hrefFor: f => hrefs.get(f) ?? f });
-                                                    const first = hrefs.get(s.frames[0].file);
-                                                    if (!first) { setImportNote("Could not read the first frame."); return; }
-                                                    onImportSequence(s.name || "sequence", first, track);
-                                                    setImportNote(`${s.name || "sequence"}: ${s.frames.length} frames.`);
+                                                    const prepared = await prepareSequenceImport(api, assetFolder!, assets, s);
+                                                    if (!prepared.ok) { setImportNote(prepared.error); return; }
+                                                    onImportSequence(prepared.name, prepared.first, prepared.track);
+                                                    setImportNote(prepared.note);
                                                 } finally { setBusy(false); }
                                             }}
                                             style={{ ...DRAWER_BUTTON, textAlign: "left", opacity: tooMany ? 0.5 : 1 }}
@@ -6194,7 +6679,15 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                             <button
                                 key={a.path}
                                 title={`${a.relative} — click to place on the canvas`}
-                                onClick={async () => { onPlaceImage(await api.readImageDataUrl(a.path), a.name); }}
+                                onClick={async () => {
+                                    setBusy(true);
+                                    try {
+                                        onPlaceImage(await api.readImageDataUrl(assetFolder!, a.path), a.name);
+                                        setImportNote(`Placed ${a.relative}.`);
+                                    } catch (err) {
+                                        setImportNote(`Could not read ${a.relative}: ${String(err instanceof Error ? err.message : err)}`);
+                                    } finally { setBusy(false); }
+                                }}
                                 style={{ ...DRAWER_BUTTON, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                             >{a.name}</button>
                         ))}
@@ -6455,9 +6948,14 @@ function MetadataSection({ node, dispatcher, refresh }: { node: Node; dispatcher
     const data = node.userData ?? {};
     const names = Object.keys(data).sort();
 
-    const write = (patch: { className?: string | null; userData?: UserData | null }) => {
+    const write = (patch: { className?: string | null; userData?: UserData | null; entity?: Entity | null }) => {
         dispatcher.dispatchAction(new UpdateNodeContentAction(dispatcher.getDocument(), node.id, patch));
         refresh();
+    };
+    const setEntity = <K extends keyof Entity>(key: K, value: Entity[K] | undefined) => {
+        const next: Entity = { ...(node.entity ?? {}) };
+        if (value === undefined) delete next[key]; else next[key] = value;
+        write({ entity: Object.keys(next).length ? next : null });
     };
     /** One property replaced, or removed when `next` is null — the whole map travels, as the delta wants. */
     const setProp = (name: string, next: { type: string; propertyType?: string; value: string } | null) => {
@@ -6475,13 +6973,45 @@ function MetadataSection({ node, dispatcher, refresh }: { node: Node; dispatcher
                 placeholder="none"
                 onChange={v => write({ className: v.trim() === "" ? null : v.trim() })}
             />
+            <div style={{ color: UI.textDim, fontSize: 10, marginTop: 10, marginBottom: 4 }}>Runtime entity</div>
+            <label style={INSPECTOR_LABEL}>Body</label>
+            <SelectInput value={node.entity?.body ?? ""} options={["", "static", "dynamic", "oneway"]}
+                onChange={v => setEntity("body", v === "" ? undefined : v as Entity["body"])} />
+            <label style={{ ...INSPECTOR_LABEL, display: "flex", gap: 6 }}>
+                <input type="checkbox" checked={node.entity?.player === true}
+                    onChange={e => setEntity("player", e.target.checked || undefined)} /> Player
+            </label>
+            <label style={INSPECTOR_LABEL}>Respawn anchor node id</label>
+            <TextInput value={node.entity?.respawnAt ?? ""} placeholder="optional node id"
+                onChange={v => setEntity("respawnAt", v.trim() || undefined)} />
+            <label style={INSPECTOR_LABEL}>Next level project</label>
+            <TextInput value={node.entity?.transitionTo ?? ""} placeholder="level-2.vde"
+                onChange={v => setEntity("transitionTo", v.trim() || undefined)} />
+            <label style={INSPECTOR_LABEL}>Warp destination node id</label>
+            <TextInput value={node.entity?.warpsTo ?? ""} placeholder="optional node id"
+                onChange={v => setEntity("warpsTo", v.trim() || undefined)} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2, marginTop: 6 }}>
+                {(["stompable", "deadly", "goal", "collectible"] as const).map(key => (
+                    <label key={key} style={{ ...INSPECTOR_LABEL, display: "flex", gap: 5 }}>
+                        <input type="checkbox" checked={node.entity?.[key] === true}
+                            onChange={e => setEntity(key, e.target.checked || undefined)} /> {key}
+                    </label>
+                ))}
+            </div>
+            {(["friction", "patrol", "powers", "stars", "bounces"] as const).map(key => (
+                <div key={key}>
+                    <label style={INSPECTOR_LABEL}>{key}</label>
+                    <NumInput value={node.entity?.[key] ?? 0}
+                        onChange={v => setEntity(key, Number.isFinite(v) ? v : undefined)} />
+                </div>
+            ))}
             <datalist id="vde-prop-types">
                 {["string", "int", "float", "bool", "color", "file", "object"].map(t => <option key={t} value={t} />)}
             </datalist>
             <div style={{ color: UI.textFaint, fontSize: 10, marginTop: 8, marginBottom: 4 }}>
                 {names.length === 0
-                    ? "No properties. Nothing here is read by the engine — it is carried, so a map opened and saved is the map that was opened."
-                    : `${names.length} propert${names.length === 1 ? "y" : "ies"}, carried and never read.`}
+                    ? "No imported/custom properties. Runtime behavior uses the typed fields above."
+                    : `${names.length} imported/custom propert${names.length === 1 ? "y" : "ies"}; preserved for round trips.`}
             </div>
             {names.map(name => {
                 const p = data[name];
@@ -6877,6 +7407,7 @@ function LayerRow({ node, depth, selected, collapsed, hasChildren, isAutoLayout,
     const isGroup = hasChildren && (node.style.fill === "none" || !node.style.fill);
     return (
         <div
+            data-layer-node-id={node.id}
             draggable={!renaming}
             onDragStart={e => { e.dataTransfer.effectAllowed = "move"; onDragStart(); }}
             onDragOver={e => {

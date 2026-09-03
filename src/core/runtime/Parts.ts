@@ -46,6 +46,7 @@
 import { Node, UserData } from "../document/Node";
 import { ReadonlyDocument, ProjectDocument } from "../document/Document";
 import { propertyOf, WorldState } from "./World";
+import { Entity } from "../document/Entity";
 
 /** The prefix that marks a property as VDE's own vocabulary rather than an imported file's. */
 export const PART_PREFIX = "vde.";
@@ -132,26 +133,27 @@ function textOf(raw: string | null): string | null {
  * AN UNKNOWN `vde.` KEY IS IGNORED rather than refused. A part authored by a newer build lands in an
  * older one as decoration, which is the same bargain `bodyTypeOf` strikes for an unknown body type.
  */
-export function partOf(node: { userData?: UserData }): Part {
+export function partOf(node: { userData?: UserData; entity?: Entity }): Part {
     const stomp = propertyOf(node.userData, PART_PREFIX + "stompable");
     const patrol = propertyOf(node.userData, PART_PREFIX + "patrol");
+    const e = node.entity;
     return {
         // "false" and "0" and "" all mean NO. Anything else present means yes, because a part that
         // bothered to declare the key wants the behaviour.
-        stompable: stomp !== null && truthy(stomp),
-        patrol: speedOf(patrol),
-        deadly: yes(node, "deadly"),
-        goal: yes(node, "goal"),
-        collectible: yes(node, "collect"),
-        powers: speedOf(propertyOf(node.userData, PART_PREFIX + "powers")),
-        stars: speedOf(propertyOf(node.userData, PART_PREFIX + "stars")),
-        bounces: speedOf(propertyOf(node.userData, PART_PREFIX + "bounces")),
-        warpsTo: textOf(propertyOf(node.userData, PART_PREFIX + "warpsTo"))
+        stompable: e?.stompable ?? (stomp !== null && truthy(stomp)),
+        patrol: e?.patrol ?? speedOf(patrol),
+        deadly: e?.deadly ?? yes(node, "deadly"),
+        goal: e?.goal ?? yes(node, "goal"),
+        collectible: e?.collectible ?? yes(node, "collect"),
+        powers: e?.powers ?? speedOf(propertyOf(node.userData, PART_PREFIX + "powers")),
+        stars: e?.stars ?? speedOf(propertyOf(node.userData, PART_PREFIX + "stars")),
+        bounces: e?.bounces ?? speedOf(propertyOf(node.userData, PART_PREFIX + "bounces")),
+        warpsTo: e?.warpsTo ?? textOf(propertyOf(node.userData, PART_PREFIX + "warpsTo"))
     };
 }
 
 /** Does this document declare ANY part behaviour? One pass, for a caller deciding whether to bother. */
-export function hasParts(nodes: Iterable<{ userData?: UserData }>): boolean {
+export function hasParts(nodes: Iterable<{ userData?: UserData; entity?: Entity }>): boolean {
     for (const n of nodes) {
         const p = partOf(n);
         if (p.stompable || p.patrol !== null || p.deadly || p.goal) return true;
@@ -160,7 +162,7 @@ export function hasParts(nodes: Iterable<{ userData?: UserData }>): boolean {
 }
 
 /** A declared flag: absent is no, and every word that means no is no. */
-function yes(node: { userData?: UserData }, key: string): boolean {
+function yes(node: { userData?: UserData; entity?: Entity }, key: string): boolean {
     const raw = propertyOf(node.userData, PART_PREFIX + key);
     return raw !== null && truthy(raw);
 }

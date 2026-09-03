@@ -145,7 +145,7 @@ import { SetTilesetsAction } from "../actions/SetTilesetsAction";
 import { GlbContainer, GltfJson, GltfNode, GltfResult, GltfMeshInstance, GltfPrimitive,
     parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GLTF_IGNORABLE_REQUIRED, GLTF_MAX_VERTICES, GLTF_MAX_PRIMITIVES, GLTF_MAX_NODE_DEPTH,
-    GltfMaterial, GltfImageSource, gltfMaterials, gltfImageSource
+    GltfMaterial, GltfImageSource, GltfTextureBinding, gltfMaterials, gltfImageSource, gltfTextureBinding
 } from "../import/Gltf";
 import { ObjResult, ObjMaterial, parseObj, objError, parseMtl, mtlError, resolveObjIndex,
     OBJ_MAX_VERTICES, OBJ_MAX_GROUPS, OBJ_FACE_MAX_CORNERS } from "../import/Obj";
@@ -190,6 +190,21 @@ import { Terrain, AutotileCell, AutotileTable, AutotileChoice, AutotileResult, A
 import { TileEdit, withTiles, rectCells, fillRegion, resizeTilemap, copyTerrainMaterial, withTilesetId,
     reorderTerrainMaterial, removeTerrainMaterial, addTerrainMaterial } from "../document/TilemapEdit";
 import { SetLightingAction } from "../actions/SetLightingAction";
+import { Asset3D, Spatial3D, Transform3D, Camera3D, Light3D, Environment3D, Renderable3D, Collider3D,
+    IDENTITY_TRANSFORM_3D, assets3DError, spatial3DError, asset3DIdError, asset3DSourceError,
+    ASSETS_3D_MAX, MATERIAL_SLOTS_MAX } from "../document/Spatial3D";
+import { SetAssets3DAction } from "../actions/SetAssets3DAction";
+import { SetSpatial3DAction } from "../actions/SetSpatial3DAction";
+import { Frame3D, FrameLight3D, Draw3D, Material3D, MeshAsset3D, MeshLibrary3D, Capture3D, MAT4_IDENTITY,
+    AMBIENT_LIGHT_3D, ENVIRONMENT_COLOR_3D, ENVIRONMENT_INTENSITY_3D, MAX_FRAME_LIGHTS_3D, litColor3D,
+    multiplyMat4 as multiplySceneMat4, transformMatrix3D, invertMat4, projectionMatrix3D,
+    buildFrame3D, transformPoint4, captureFrame3D, pickCapture3D } from "../../renderer/Scene3D";
+import { emitWebGL3D, pickWebGL3D, pickColor3D, pickIndex3D, lastWebGL3DFailure } from "../../renderer/emitWebGL3D";
+import { buildRotateGizmo3D, buildTranslateGizmo3D, copySpatial3D, GizmoAxis3D, GizmoMode3D,
+    GizmoSpace3D, hitRotateGizmo3D, hitTranslateGizmo3D, rotatedSpatial3D, scaledSpatial3D,
+    translatedSpatial3D } from "../../renderer/Gizmo3D";
+import { cameraLookRotation3D, dollyCamera3D, orbitCamera3D, panCamera3D } from "../../renderer/CameraOrbit3D";
+import { decodeRadianceHdr, HdrEnvironmentImage, HDR_ENVIRONMENT_MAX_PIXELS } from "../../renderer/HdrEnvironment";
 
 /**
  * Assert an expression is ASSIGNABLE to the documented type.
@@ -224,6 +239,74 @@ export function __apiSurfacePin(): void {
     expectType<string | null>(dimensionError("core.line", 1, 0));
     expectType<string | null>(pathError("core.path", []));
     expectType<string | null>(styleError({}));
+    const transform3d: Transform3D = IDENTITY_TRANSFORM_3D;
+    const camera3d: Camera3D = { kind: "perspective", near: 0.1, far: 100, verticalFovDegrees: 60 };
+    const light3d: Light3D = { kind: "directional", color: { x: 1, y: 1, z: 1 }, intensity: 1 };
+    const renderable3d: Renderable3D = { meshAssetId: "mesh" };
+    const collider3d: Collider3D = { kind: "sphere", radius: 1 };
+    const spatial3d: Spatial3D = { transform: transform3d, camera: camera3d, light: light3d, renderable: renderable3d, collider: collider3d };
+    const asset3d: Asset3D = { id: "mesh", kind: "mesh", source: "assets/mesh.glb" };
+    expectType<string | null>(spatial3DError(spatial3d));
+    expectType<string | null>(assets3DError([asset3d]));
+    expectType<string | null>(asset3DIdError(asset3d.id));
+    expectType<string | null>(asset3DSourceError(asset3d.source));
+    expectType<number>(ASSETS_3D_MAX);
+    expectType<number>(MATERIAL_SLOTS_MAX);
+    expectType<Action>(new SetAssets3DAction(doc, [asset3d]));
+    expectType<Action>(new SetSpatial3DAction(doc, "node", spatial3d));
+    const meshLibrary3d: MeshLibrary3D = new Map<string, MeshAsset3D>();
+    const frame3d: Frame3D = buildFrame3D(doc, meshLibrary3d, 640, 480);
+    expectType<Draw3D[]>(frame3d.draws);
+    expectType<FrameLight3D[]>(frame3d.lights);
+    expectType<ReadonlyMap<string, number[]>>(frame3d.worlds);
+    expectType<number>(AMBIENT_LIGHT_3D);
+    expectType<number>(MAX_FRAME_LIGHTS_3D);
+    expectType<readonly [number, number, number]>(ENVIRONMENT_COLOR_3D);
+    expectType<number>(ENVIRONMENT_INTENSITY_3D);
+    expectType<[number, number, number, number]>(litColor3D([1, 1, 1, 1], frame3d.lights,
+        { position: [0, 0, 0], normal: [0, 0, 1] }));
+    const material3d: Material3D = { baseColor: [1, 1, 1, 1], baseColorTexture: null,
+        metallicRoughnessTexture: null, metallic: 0, roughness: 1, emissive: [0, 0, 0], unlit: false,
+        doubleSided: false };
+    expectType<Material3D>(material3d);
+    const environment3d: Environment3D = { textureAssetId: "hdr", intensity: 1, rotationDegrees: 0 };
+    expectType<Environment3D>(environment3d);
+    expectType<(bytes: Uint8Array) => HdrEnvironmentImage>(decodeRadianceHdr);
+    expectType<number>(HDR_ENVIRONMENT_MAX_PIXELS);
+    expectType<Spatial3D>(orbitCamera3D(spatial3d, { x: 0, y: 0, z: 0 }, 1, 1));
+    expectType<Spatial3D>(panCamera3D(spatial3d, { x: 0, y: 0, z: 0 }, 1, 1, 480).spatial);
+    expectType<Spatial3D>(dollyCamera3D(spatial3d, { x: 0, y: 0, z: 0 }, 1, camera3d));
+    expectType<Transform3D["rotation"]>(cameraLookRotation3D({ x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 0 }));
+    expectType<number[]>(multiplySceneMat4(MAT4_IDENTITY, MAT4_IDENTITY));
+    expectType<number[]>(transformMatrix3D(transform3d));
+    expectType<number[] | null>(invertMat4(MAT4_IDENTITY));
+    expectType<number[]>(projectionMatrix3D(camera3d, 4 / 3));
+    expectType<[number, number, number, number]>(transformPoint4(MAT4_IDENTITY, 0, 0, 0));
+    const capture3d: Capture3D = captureFrame3D(frame3d, 16, 16);
+    expectType<string | null>(pickCapture3D(capture3d, 0, 0));
+    expectType<readonly [number, number, number, number]>(pickColor3D(1));
+    expectType<number>(pickIndex3D([1, 0, 0, 255]));
+    expectType<string | null>(lastWebGL3DFailure());
+    const gizmoSpace3d: GizmoSpace3D = "world";
+    const gizmoMode3d: GizmoMode3D = "translate";
+    const gizmoAxis3d: GizmoAxis3D = "x";
+    expectType<GizmoSpace3D>(gizmoSpace3d);
+    expectType<GizmoMode3D>(gizmoMode3d);
+    expectType<GizmoAxis3D>(gizmoAxis3d);
+    const gizmo3d = buildTranslateGizmo3D(doc, frame3d, "node", 640, 480, gizmoSpace3d);
+    expectType<string | null>(gizmo3d ? hitTranslateGizmo3D(gizmo3d, 0, 0)?.axis ?? null : null);
+    expectType<Spatial3D>(copySpatial3D(spatial3d));
+    if (gizmo3d?.handles[0]) expectType<Spatial3D>(translatedSpatial3D(spatial3d, gizmo3d.handles[0], 1, 1));
+    if (gizmo3d?.handles[0]) expectType<Spatial3D>(scaledSpatial3D(spatial3d, gizmo3d.handles[0], 1, 1));
+    const rotateGizmo3d = buildRotateGizmo3D(doc, frame3d, "node", 640, 480, gizmoSpace3d);
+    expectType<string | null>(rotateGizmo3d ? hitRotateGizmo3D(rotateGizmo3d, 0, 0)?.axis ?? null : null);
+    if (rotateGizmo3d?.handles[0]) expectType<Spatial3D>(rotatedSpatial3D(
+        spatial3d, rotateGizmo3d.handles[0], 0, 0, 1, 1));
+    if (typeof document !== "undefined") {
+        const canvas = document.createElement("canvas");
+        expectType<boolean>(emitWebGL3D(canvas, frame3d));
+        expectType<string | null>(pickWebGL3D(canvas, 0, 0));
+    }
     // A fill may be a colour OR a gradient (schema 56); `flatFill` is the one-colour answer for
     // the places that cannot hold a ramp.
     expectType<string>(flatFill("#fff"));
@@ -1002,7 +1085,9 @@ export function __apiSurfacePin(): void {
     // slice of the bytes already in hand. Both appear — 4,130 and 125.
     const gimg: GltfImageSource | null = gltfImageSource(gjson, 0);
     expectType<GltfImageSource | null>(gimg);
+    expectType<GltfTextureBinding | null>(gltfTextureBinding(gjson, { index: 0 }));
     expectType<GltfImageSource | null | undefined>(gmat?.baseColorImage);
+    expectType<GltfImageSource | null | undefined>(gmat?.metallicRoughnessImage);
 
     // OBJ produces the SAME shape glTF does — `MeshData` names it once so a mesh node, a picker and
     // a GPU path are each written once rather than per format. FBX will produce it too.

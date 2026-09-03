@@ -23,6 +23,7 @@ import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
 import { srcError, sourceRectError, nineSliceError, clipsContentError, SourceRect,
     UserData, userDataError, classNameError } from "../document/Node";
+import { Entity, entityError } from "../document/Entity";
 import { NineSliceInsets } from "../geometry/NineSlice";
 import { MutationResult, ActionPayload, NodeDelta } from "./types";
 
@@ -57,6 +58,8 @@ export interface ContentPatch {
     className?: string | null;
     /** Author-defined properties (schema 64). `null` clears them; see `UserData`. */
     userData?: UserData | null;
+    /** Engine-owned gameplay declarations (schema 73). `null` clears them. */
+    entity?: Entity | null;
 }
 
 /** Longest display name a node may carry — an OOM guard on a hand-editable field. */
@@ -98,6 +101,8 @@ export class UpdateNodeContentAction extends Action {
             && this.patch.className !== "" && classNameError(this.patch.className) !== null) return false;
         if (this.patch.userData !== undefined && this.patch.userData !== null
             && userDataError(this.patch.userData) !== null) return false;
+        if (this.patch.entity !== undefined && this.patch.entity !== null
+            && entityError(this.patch.entity) !== null) return false;
         // Again the loader's own rule, so the inspector cannot author insets the document could
         // not reopen — and `null` is the clear rather than a value to check.
         if (this.patch.nineSlice !== undefined && this.patch.nineSlice !== null
@@ -132,6 +137,7 @@ export class UpdateNodeContentAction extends Action {
         // afterwards rather than asking the action what it did.
         if (this.patch.className !== undefined) delta.className = this.patch.className;
         if (this.patch.userData !== undefined) delta.userData = this.patch.userData;
+        if (this.patch.entity !== undefined) delta.entity = this.patch.entity;
 
         return {
             updatedNodeIds: new Set([this.nodeId]),

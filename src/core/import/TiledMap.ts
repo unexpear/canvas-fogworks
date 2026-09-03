@@ -80,6 +80,7 @@ import {
     Tilemap, TileSheet, TILE_EMPTY, tilemapError, tileSourceRect as sheetSourceRect,
     FLIP_H as CELL_FLIP_H, FLIP_V as CELL_FLIP_V, FLIP_D as CELL_FLIP_D
 } from "../document/Tilemap";
+import { TileAnimationFrame, TileCollisionShape, WangSet } from "../document/Tileset";
 
 /** Bounds on a hand-editable file. A corrupt size should fail, not allocate. */
 export const TILED_MAX_CELLS = 1_000_000;
@@ -136,15 +137,21 @@ export interface TiledTileset {
      */
     offsetX: number;
     offsetY: number;
+    wangsets?: WangSet[];
 }
 
 /** One tile of a collection set: its own file, at its own size. */
 export interface TiledTileImage {
     /** The tile's id WITHIN the set, so the GID is this plus `firstGid`. */
     id: number;
-    image: string;
+    image: string | null;
     width: number;
     height: number;
+    probability?: number;
+    className?: string;
+    userData?: UserData;
+    collision?: TileCollisionShape[];
+    animation?: TileAnimationFrame[];
 }
 
 /** One layer of cells. */
@@ -452,29 +459,69 @@ export function withImageSize(set: TiledTileset, width: number, height: number):
  * Read from the same text for both paths — an embedded set and an external `.tsx` are the same
  * element with the same children, so one function serves both rather than two that can drift.
  */
-function tilesetExtras(body: string): { tiles: TiledTileImage[]; offsetX: number; offsetY: number } {
+function tilesetExtras(body: string): { tiles: TiledTileImage[]; offsetX: number; offsetY: number; wangsets: WangSet[] } {
     const tiles: TiledTileImage[] = [];
-    // A `<tile>` with its OWN `<image>` is what makes this a collection. `<tile>` also appears in
-    // sheet-backed sets carrying animation or collision data, where it has no image and is not one
-    // of these — so the image is what is matched on, not the tile.
-    for (const m of body.matchAll(/<tile\b([^>]*)>\s*<image\b([^>]*)>/g)) {
+    const tileRe = /<tile\b([^>]*?)(\/\s*>|>)/g;
+    let tm: RegExpExecArray | null;
+    while ((tm = tileRe.exec(body)) !== null) {
         if (tiles.length >= TILED_MAX_TILE_IMAGES) break;
-        const ta = attributes("<tile" + m[1] + ">");
-        const ia = attributes("<image" + m[2] + ">");
-        if (ia.source === undefined) continue;
-        tiles.push({
-            id: num(ta.id, -1),
-            image: ia.source,
-            // The IMAGE's size, not the set's declared tile size: a collection set states a
-            // nominal `tilewidth` that its members freely exceed — in the measured tree the set
-            // says 232x110 while every tile in it is 256x352.
-            width: num(ia.width, 0),
-            height: num(ia.height, 0)
-        });
+        const ta = attributes("<tile" + tm[1] + ">");
+        const id = num(ta.id, -1);
+        if (id < 0) continue;
+        const element = tm[2].startsWith("/") ? null : takeElement(body, tileRe.lastIndex, "tile");
+        const inner = element?.inner ?? "";
+        if (element) tileRe.lastIndex = element.end;
+        const imageTag = /<image\b[^>]*>/.exec(inner);
+        const ia = imageTag ? attributes(imageTag[0]) : {};
+        const propBlock = /^\s*<properties\b[^>]*>([\s\S]*?)<\/properties>/.exec(inner);
+        const parsed = propBlock ? parseProperties(propBlock[1]) : { props: [], unread: [] };
+        const userData = userDataFor(parsed.props).data;
+        const animation: TileAnimationFrame[] = [];
+        const animationBody = /<animation\b[^>]*>([\s\S]*?)<\/animation>/.exec(inner)?.[1] ?? "";
+        for (const fm of animationBody.matchAll(/<frame\b[^>]*>/g)) {
+            const fa = attributes(fm[0]);
+            const tileId = num(fa.tileid, -1), duration = num(fa.duration, 0);
+            if (tileId >= 0 && duration > 0) animation.push({ tileId, duration });
+        }
+        const collision: TileCollisionShape[] = [];
+        const collisionBody = /<objectgroup\b[^>]*>([\s\S]*?)<\/objectgroup>/.exec(inner)?.[1] ?? "";
+        for (const obj of parseObjects(collisionBody)) {
+            collision.push({ x: obj.x, y: obj.y, width: obj.width, height: obj.height,
+                rotation: obj.rotation,
+                kind: obj.kind === "template" || obj.kind === "tile" || obj.kind === "text" ? "rectangle" : obj.kind,
+                ...(obj.points.length > 0 ? { points: obj.points } : {}) });
+        }
+        const meaningful = ia.source !== undefined || ta.probability !== undefined || ta.class !== undefined
+            || ta.type !== undefined || Object.keys(userData).length > 0 || collision.length > 0 || animation.length > 0;
+        if (!meaningful) continue;
+        tiles.push({ id, image: ia.source ?? null, width: num(ia.width, 0), height: num(ia.height, 0),
+            ...(ta.probability !== undefined ? { probability: num(ta.probability, 1) } : {}),
+            ...((ta.class ?? ta.type) ? { className: ta.class ?? ta.type } : {}),
+            ...(Object.keys(userData).length > 0 ? { userData } : {}),
+            ...(collision.length > 0 ? { collision } : {}),
+            ...(animation.length > 0 ? { animation } : {}) });
     }
     const off = /<tileoffset\b[^>]*>/.exec(body);
     const oa = off ? attributes(off[0]) : {};
-    return { tiles: tiles.filter(t => t.id >= 0), offsetX: num(oa.x, 0), offsetY: num(oa.y, 0) };
+    const wangsets: WangSet[] = [];
+    for (const wm of body.matchAll(/<wangset\b([^>]*)>([\s\S]*?)<\/wangset>/g)) {
+        const wa = attributes(`<wangset${wm[1]}>`), inner = wm[2];
+        const colors = [...inner.matchAll(/<wangcolor\b([^>]*?)(?:\/\s*>|>([\s\S]*?)<\/wangcolor>)/g)].map(cm => {
+            const ca = attributes(`<wangcolor${cm[1]}>`);
+            const p = cm[2] ? userDataFor(parseProperties(cm[2]).props).data : {};
+            return { name: ca.name ?? "", color: ca.color ?? "#000000", tile: num(ca.tile, -1),
+                probability: num(ca.probability, 1), ...(Object.keys(p).length ? { userData: p } : {}) };
+        });
+        const wangTiles = [...inner.matchAll(/<wangtile\b[^>]*>/g)].map(x => {
+            const xa = attributes(x[0]);
+            return { tileId: num(xa.tileid, -1), wangId: (xa.wangid ?? "").split(",").map(v => num(v, 0)) };
+        }).filter(x => x.tileId >= 0 && x.wangId.length === 8);
+        const propBlock = /^\s*<properties\b[^>]*>([\s\S]*?)<\/properties>/.exec(inner);
+        const data = propBlock ? userDataFor(parseProperties(propBlock[1]).props).data : {};
+        wangsets.push({ name: wa.name ?? "", ...(wa.class ? { className: wa.class } : {}), tile: num(wa.tile, -1),
+            ...(Object.keys(data).length ? { userData: data } : {}), colors, tiles: wangTiles });
+    }
+    return { tiles, offsetX: num(oa.x, 0), offsetY: num(oa.y, 0), wangsets };
 }
 
 /** A raw GID split into its tile and its flips. */
@@ -1118,7 +1165,7 @@ export function tileImageFor(set: TiledTileset, gid: number): TiledTileImage | n
     // needs no separate test: its `tiles` is empty, so the search below finds nothing.
     if (gid <= 0) return null;
     const id = gid - set.firstGid;
-    return set.tiles.find(t => t.id === id) ?? null;
+    return set.tiles.find(t => t.id === id && t.image !== null) ?? null;
 }
 
 /**

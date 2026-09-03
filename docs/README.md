@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document/Document.ts, src/core/tests -->
 
-> **Frozen contracts · schema v72 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins).**
+> **Frozen contracts · schema v76 (app v0.0.5) · current through the 3D production/runtime baseline.**
 > These documents describe the *current, verified* implementation and lock the
 > contracts the rest of the engine builds on. See [`../MILESTONES.md`](../MILESTONES.md)
 > for the roadmap and where each layer fits.
@@ -41,13 +41,17 @@ This is the primary defense against architectural drift.
 | [TESTING.md](TESTING.md) | Strategy, how to run, coverage, regression discipline | 🔒 |
 | [FEATURE-AUDIT.md](FEATURE-AUDIT.md) | What exists, what is built and unreachable, and what is absent — measured against Pixelorama and Tiled | — |
 | [CODING-STANDARDS.md](CODING-STANDARDS.md) | Invariants, conventions, review checklist | 🔒 |
+| [BACKLOG.json](BACKLOG.json) | Machine-readable open work, priorities, status and evidence links | — |
+| [ASSET-INVENTORY.md](ASSET-INVENTORY.md) | Tracked third-party asset audit and current repository policy | — |
+| [3D-FOUNDATION.md](3D-FOUNDATION.md) | Boundary and staged plan for extending the 2D foundation into 3D | — |
 
 ## Quick facts
 
+- **Product direction:** dual-track — visual/pixel editing and game authoring are equal products over one shared engine; 3D extends that engine through the boundary in [3D-FOUNDATION.md](3D-FOUNDATION.md).
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck + lint + test + build).
-- **Tests:** 2021 — `src/core/tests/document.test.ts` (1634) + `src/core/runtime/World.test.ts` (99) + `src/core/runtime/Rules.test.ts` (56) + `src/core/runtime/Parts.test.ts` (33) + `src/core/import/tiledPlacements.test.ts` (10) + `src/core/runtime/Camera.test.ts` (20) + `src/electron/confine.test.ts` (7) + `src/renderer/RenderModel.test.ts` (84) + `src/renderer/emitCanvas.test.ts` (67) + `src/renderer/emitSVG.test.ts` (11).  <!-- re-read 2026-08-17 after frame-on-load and the spawned-body dirty set: accurate. -->
+- **Tests:** 2053 across core, runtime, renderer, Electron confinement, project workflows, and import workflows.
 - **Verify the tests themselves:** `npm run mutate:dimensions` (215/215) — breaks the paint arithmetic
   on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
   and it refuses a dirty tree. See TESTING.md § Fixture design.

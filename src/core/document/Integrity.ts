@@ -26,6 +26,8 @@ import { ambientError, lightsError } from "./Light";
 import { overrideValueError } from "./Components";
 import { componentError, overrideAgainstMasterError, overridesError, statesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
+import { entityError } from "./Entity";
+import { assets3DError, spatial3DError } from "./Spatial3D";
 
 function checkNodeRanges(node: ReadonlyNode): void {
     const g = node.geometry;
@@ -151,6 +153,10 @@ function checkNodeRanges(node: ReadonlyNode): void {
     if (cnErr) throw new Error(`Invalid document: node "${node.id}" ${cnErr}.`);
     const udErr = userDataError(node.userData);
     if (udErr) throw new Error(`Invalid document: node "${node.id}" ${udErr}.`);
+    const entityErr = entityError(node.entity);
+    if (entityErr) throw new Error(`Invalid document: node "${node.id}" ${entityErr}.`);
+    const spatialErr = spatial3DError(node.spatial3d);
+    if (spatialErr) throw new Error(`Invalid document: node "${node.id}" ${spatialErr}.`);
     // States (M7, schema 30). Declared since M0 as `{[key: string]: any}` and validated by
     // nothing — the dead-but-consumed field the schema doc warns against. Now it obeys the
     // same per-field rules an instance override does.
@@ -202,6 +208,12 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
     // tileset able to produce a file that will not open. The layer draws nothing instead.
     const tilesetErr = tilesetsError(doc.tilesets);
     if (tilesetErr) throw new Error(`Invalid document: ${tilesetErr}.`);
+    const assetsErr = assets3DError(doc.assets3d);
+    if (assetsErr) throw new Error(`Invalid document: ${assetsErr}.`);
+    const environmentNodes = [...doc.nodes.values()].filter(node => node.spatial3d?.environment);
+    if (environmentNodes.length > 1) {
+        throw new Error("Invalid document: only one authored 3D environment is allowed.");
+    }
     if (doc.frame !== undefined && (!Number.isFinite(doc.frame) || doc.frame < 0)) {
         throw new Error(`Invalid document: frame must be a finite number >= 0.`);
     }

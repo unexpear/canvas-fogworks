@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "lastReconciled": "2026-09-03",
+  "sourceRevision": "b2c2efe",
+  "productDirection": {
+    "mode": "dual-track",
+    "summary": "VDE is both a general visual/pixel editor and a game-authoring environment.",
+    "tracks": ["visual-pixel-editing", "game-authoring"],
+    "sharedFoundation": ["document", "actions", "renderer", "assets", "animation", "production-hardening"]
+  },
+  "statuses": ["open", "deferred"],
+  "priorities": ["P0", "P1", "P2", "P3"],
+  "items": [
+    {
+      "id": "ASSET-001",
+      "area": "repository",
+      "priority": "P0",
+      "status": "open",
+      "summary": "Decide whether to rewrite Git history after removing the legacy freeassets corpus from current tracking.",
+      "evidence": ["docs/ASSET-INVENTORY.md"]
+    },
+    {
+      "id": "SHELL-001",
+      "area": "app-shell",
+      "priority": "P1",
+      "status": "open",
+      "summary": "Continue extracting cohesive panels and workflows from App.tsx; project files, image-sequence import, workspace/runtime controls and the 3D inspector are tested seams.",
+      "evidence": ["src/app/App.tsx", "src/app/AppShellControls.tsx", "src/app/ThreeDInspector.tsx"]
+    },
+    {
+      "id": "RENDER-002",
+      "area": "renderer",
+      "priority": "P2",
+      "status": "open",
+      "summary": "Decide whether SVG and Canvas need WebGL-equivalent per-fragment mesh-relief normals and self-occlusion; flat-surface scene lighting is now shared.",
+      "evidence": ["src/renderer/Lighting.ts", "docs/ARCHITECTURE.md"]
+    },
+    {
+      "id": "LAYOUT-001",
+      "area": "layout",
+      "priority": "P3",
+      "status": "deferred",
+      "summary": "Implement minmax/fit-content tracks and remaining explicit grid-placement refinements.",
+      "evidence": ["MILESTONES.md#phase-2-layout-engine"]
+    },
+    {
+      "id": "COMPONENT-001",
+      "area": "components",
+      "priority": "P3",
+      "status": "deferred",
+      "summary": "Restore incremental dirty-state reuse for documents containing component instances.",
+      "evidence": ["MILESTONES.md#phase-6-components"]
+    },
+    {
+      "id": "FUTURE-001",
+      "area": "platform",
+      "priority": "P3",
+      "status": "deferred",
+      "summary": "Defer AI, full plugins and collaboration until production-hardening work is established.",
+      "evidence": ["MILESTONES.md#phase-10-tools-assets-text-export-and-beyond"]
+    }
+  ]
+}

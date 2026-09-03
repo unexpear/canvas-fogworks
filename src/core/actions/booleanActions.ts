@@ -10,10 +10,10 @@
  * and transforms share. The result is then re-based onto its own tight box (`normalizePathNode`),
  * so the new node's stored geometry describes where its ink actually is.
  *
- * DESTRUCTIVE by design, for now: the operands are deleted and replaced by one `core.path`. The
- * non-destructive form — a `core.boolean` node that keeps its children and resolves at derivation
- * time, so the operation stays editable — is a schema change and its own slice. This one is the
- * geometry made reachable, and it is the same `booleanPaths` either version calls.
+ * DESTRUCTIVE by design: the operands are deleted and replaced by one `core.path`. The live
+ * schema-33 alternative below creates a `core.boolean` node that keeps its children and resolves
+ * at derivation time. This factory remains the explicit flatten path; both forms use the same
+ * boolean geometry.
  */
 
 import { Action } from "./Action";

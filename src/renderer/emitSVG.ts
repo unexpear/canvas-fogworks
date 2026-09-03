@@ -19,6 +19,7 @@ import { tileAt, tileSourceRect, flipAt, flipMatrix, collectionTileBox } from ".
 import { DisplayList, DrawItem, Paint, FilterDef, PaintGradient, commandsToPathData, effectFilterId } from "./RenderModel";
 import { naturalSize, surfaceUrl } from "./ImageCache";
 import { nineSliceRects } from "../core/geometry/NineSlice";
+import { LightingFactors, lightingFactors, lightingFilterId } from "./Lighting";
 
 const svgNS = "http://www.w3.org/2000/svg";
 
@@ -99,6 +100,29 @@ function buildGradients(defs: SVGDefsElement, gradients: PaintGradient[]): void 
     }
 }
 
+/** One sRGB component-transfer filter matching the WebGL fragment shader's flat-surface sum. */
+function buildLightingFilter(defs: SVGDefsElement, factors: LightingFactors): string {
+    const id = lightingFilterId(factors);
+    const filter = document.createElementNS(svgNS, "filter");
+    filter.setAttribute("id", id);
+    filter.setAttribute("x", "-50%");
+    filter.setAttribute("y", "-50%");
+    filter.setAttribute("width", "200%");
+    filter.setAttribute("height", "200%");
+    filter.setAttribute("color-interpolation-filters", "sRGB");
+    const transfer = document.createElementNS(svgNS, "feComponentTransfer");
+    for (const [tag, slope] of [["feFuncR", factors[0]], ["feFuncG", factors[1]], ["feFuncB", factors[2]]] as const) {
+        const fn = document.createElementNS(svgNS, tag);
+        fn.setAttribute("type", "linear");
+        fn.setAttribute("slope", String(slope));
+        fn.setAttribute("intercept", "0");
+        transfer.appendChild(fn);
+    }
+    filter.appendChild(transfer);
+    defs.appendChild(filter);
+    return id;
+}
+
 /**
  * What goes in a `fill` attribute: a colour verbatim, or a reference to the def (schema 56).
  *
@@ -124,7 +148,7 @@ function clearChildren(el: Element): void {
 }
 
 /** Transform, hit-test tags, and interaction styles shared by every item. */
-function applyTail(el: SVGElement, item: DrawItem): void {
+function applyTail(el: SVGElement, item: DrawItem, lightingId: string | null): void {
     if (item.world) {
         if (!isTranslationOnly(item.world)) el.setAttribute("transform", toMatrixString(item.world));
         else el.setAttribute("transform", `translate(${item.world.e}, ${item.world.f})`);
@@ -135,7 +159,8 @@ function applyTail(el: SVGElement, item: DrawItem): void {
     // Effects (schema 18): reference the deduped <filter> def. Same pure id the model deduped by,
     // so it always resolves; null (no effect / grid / overlay) emits no attr.
     const fid = effectFilterId(paint.shadow, paint.blur);
-    if (fid !== null) el.setAttribute("filter", `url(#${fid})`);
+    const filters = [fid, lightingId].filter((id): id is string => id !== null).map(id => `url(#${id})`);
+    if (filters.length > 0) el.setAttribute("filter", filters.join(" "));
     if (paint.cursor !== null) el.style.cursor = paint.cursor;
     if (!paint.pointerEvents) el.style.pointerEvents = "none";
     // BLENDING (schema 60), in the shared tail so every shape kind gets it from one line — the
@@ -170,7 +195,7 @@ function applyRectPaint(el: SVGElement, paint: Paint): void {
     applyStrokeCorners(el, paint);
 }
 
-function appendItem(group: SVGGElement, item: DrawItem): void {
+function appendItem(group: SVGGElement, item: DrawItem, lightingId: string | null = null): void {
     const shape = item.shape;
     const paint = item.paint;
 
@@ -181,7 +206,7 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         el.setAttribute("width", String(shape.width));
         el.setAttribute("height", String(shape.height));
         applyRectPaint(el, paint);
-        applyTail(el, item);
+        applyTail(el, item, lightingId);
         group.appendChild(el);
     } else if (shape.kind === "ellipse") {
         const el = document.createElementNS(svgNS, "ellipse");
@@ -190,7 +215,7 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         el.setAttribute("rx", String(shape.rx));
         el.setAttribute("ry", String(shape.ry));
         applyRectPaint(el, paint); // paint.radius is null for ellipses, so no conflicting `rx` attr
-        applyTail(el, item);
+        applyTail(el, item, lightingId);
         group.appendChild(el);
     } else if (shape.kind === "line") {
         const el = document.createElementNS(svgNS, "line");
@@ -208,14 +233,14 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         if (paint.strokeDash !== null) el.setAttribute("stroke-dasharray", paint.strokeDash);
         applyStrokeCorners(el, paint);
         if (paint.opacity !== null) el.setAttribute("opacity", String(paint.opacity));
-        applyTail(el, item);
+        applyTail(el, item, lightingId);
         group.appendChild(el);
     } else if (shape.kind === "path") {
         const el = document.createElementNS(svgNS, "path");
         const d = commandsToPathData(shape.commands); // pure, unit-tested join
         if (d) el.setAttribute("d", d);               // omit for an empty path (mirrors image's href)
         applyRectPaint(el, paint);                    // radius is null → no `rx`
-        applyTail(el, item);
+        applyTail(el, item, lightingId);
         group.appendChild(el);
     } else if (shape.kind === "text") {
         const fo = document.createElementNS(svgNS, "foreignObject");
@@ -246,7 +271,7 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         div.style.overflow = "hidden";
         div.textContent = shape.text;
         fo.appendChild(div);
-        applyTail(fo, item);
+        applyTail(fo, item, lightingId);
         group.appendChild(fo);
     } else if (shape.kind === "tilemap") {
         // ONE GROUP, ONE `<image>` PER VISIBLE CELL, each showing a window onto the sheet.
@@ -354,7 +379,7 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
             }
         }
         if (paint.opacity !== null) g.setAttribute("opacity", String(paint.opacity));
-        applyTail(g, item);
+        applyTail(g, item, lightingId);
         group.appendChild(g);
     } else if (shape.kind === "image") {
         const el = document.createElementNS(svgNS, "image");
@@ -428,14 +453,14 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
                 g.appendChild(piece(slice.src.x, slice.src.y, slice.src.width, slice.src.height,
                     slice.dst.x, slice.dst.y, slice.dst.width, slice.dst.height));
             }
-            applyTail(g, item);
+            applyTail(g, item, lightingId);
             group.appendChild(g);
             return;
         }
         if (src && natural) {
             const nested = piece(src.x, src.y, src.width, src.height,
                 shape.x, shape.y, shape.width, shape.height);
-            applyTail(nested, item);
+            applyTail(nested, item, lightingId);
             group.appendChild(nested);
             return;
         }
@@ -444,7 +469,7 @@ function appendItem(group: SVGGElement, item: DrawItem): void {
         // the wrong picture rather than a missing one. The same holds for a nine-slice, which
         // cannot be cut without knowing what it is cutting.
         if ((src || shape.nineSlice) && !natural) return;
-        applyTail(el, item);
+        applyTail(el, item, lightingId);
         group.appendChild(el);
     }
 }
@@ -469,6 +494,8 @@ export function emitSVG(container: HTMLElement, model: DisplayList): void {
     clearChildren(defs);
     buildFilters(defs, model.defs);
     buildGradients(defs, model.gradients);
+    const factors = lightingFactors(model.lights, model.ambient);
+    const lightingId = factors ? buildLightingFilter(defs, factors) : null;
 
     const z = Math.max(0.01, model.viewport.zoom);
     const g = getOrCreateGroup(svg, "viewport-transform");
@@ -526,7 +553,7 @@ export function emitSVG(container: HTMLElement, model: DisplayList): void {
             }
             parent = el;
         }
-        appendItem(parent, item);
+        appendItem(parent, item, lightingId);
     }
 
     clearChildren(overlayGroup);

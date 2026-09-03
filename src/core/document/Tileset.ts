@@ -33,11 +33,31 @@
 
 import { TileSheet, tileSheetError } from "./Tilemap";
 import { UserData, userDataError } from "./Node";
+import { entityError } from "./Entity";
 
 /** Caps, in the `TILEMAP_MAX_CELLS` tradition: a hostile file must not exhaust memory. */
 export const TILESETS_MAX = 256;
 export const TILESET_TILES_MAX = 65_536;
 export const TILESET_NAME_MAX = 120;
+
+export interface TileAnimationFrame { tileId: number; duration: number }
+
+export interface TileCollisionShape {
+    x: number; y: number; width: number; height: number; rotation: number;
+    kind: "rectangle" | "ellipse" | "point" | "polygon" | "polyline";
+    points?: { x: number; y: number }[];
+}
+
+export interface WangColor {
+    name: string; color: string; tile: number; probability: number; userData?: UserData;
+}
+
+export interface WangTile { tileId: number; wangId: number[] }
+
+export interface WangSet {
+    name: string; className?: string; tile: number; userData?: UserData;
+    colors: WangColor[]; tiles: WangTile[];
+}
 
 /**
  * One tile that has something to say — sparse, so most tiles of most sets never appear here.
@@ -63,6 +83,14 @@ export interface TilesetTile {
     probability?: number;
     /** The same shape a node carries (schema 64). Three tiles in the corpus have properties. */
     userData?: UserData;
+    /** Tiled's tile class/type, kept independently from custom properties. */
+    className?: string;
+    /** Per-tile collision shapes, in tile-local pixels. */
+    collision?: TileCollisionShape[];
+    /** The tile's single looping animation, in file order. */
+    animation?: TileAnimationFrame[];
+    /** Typed runtime declaration for this tile; legacy imported properties remain in userData. */
+    entity?: import("./Entity").Entity;
 }
 
 /** A tileset the document holds. Any number of tilemap layers may name it. */
@@ -84,6 +112,8 @@ export interface Tileset {
      */
     offsetX: number;
     offsetY: number;
+    /** Tiled terrain/autotiling metadata. It does not alter VDE's own terrain authoring model. */
+    wangsets?: WangSet[];
 }
 
 /** What is wrong with one tileset, or null. Shared by the loader and the edit path. */
@@ -133,12 +163,61 @@ export function tilesetError(set: unknown): string | null {
             const bad = userDataError(tile.userData);
             if (bad) return `tileset tile ${tile.id}: ${bad}`;
         }
+        if (tile.className !== undefined && (typeof tile.className !== "string" || tile.className.length === 0)) {
+            return `tileset tile ${tile.id}: className must be a non-empty string`;
+        }
+        if (tile.animation !== undefined) {
+            if (!Array.isArray(tile.animation) || tile.animation.length === 0) return `tileset tile ${tile.id}: animation must not be empty`;
+            for (const frame of tile.animation) {
+                if (!Number.isInteger(frame.tileId) || frame.tileId < 0
+                    || !Number.isFinite(frame.duration) || frame.duration <= 0) {
+                    return `tileset tile ${tile.id}: animation frames need tileId >= 0 and duration > 0`;
+                }
+            }
+        }
+        if (tile.collision !== undefined) {
+            if (!Array.isArray(tile.collision)) return `tileset tile ${tile.id}: collision must be an array`;
+            for (const shape of tile.collision) {
+                if (!shape || typeof shape !== "object" || !["rectangle", "ellipse", "point", "polygon", "polyline"].includes(shape.kind)
+                    || ![shape.x, shape.y, shape.width, shape.height, shape.rotation].every(Number.isFinite)
+                    || shape.width < 0 || shape.height < 0
+                    || (shape.points !== undefined && (!Array.isArray(shape.points)
+                        || shape.points.some(p => !Number.isFinite(p.x) || !Number.isFinite(p.y))))) {
+                    return `tileset tile ${tile.id}: collision shape is invalid`;
+                }
+            }
+        }
+        const ee = entityError(tile.entity);
+        if (ee) return `tileset tile ${tile.id}: ${ee}`;
+    }
+
+    if (t.wangsets !== undefined) {
+        if (!Array.isArray(t.wangsets)) return "tileset.wangsets must be an array";
+        for (const wang of t.wangsets) {
+            if (!wang || typeof wang !== "object" || typeof wang.name !== "string"
+                || !Number.isInteger(wang.tile) || !Array.isArray(wang.colors) || !Array.isArray(wang.tiles)) {
+                return "tileset wangset is invalid";
+            }
+            if (wang.userData !== undefined && userDataError(wang.userData)) return `wangset "${wang.name}" has invalid properties`;
+            for (const color of wang.colors) {
+                if (!color || typeof color.name !== "string" || typeof color.color !== "string"
+                    || !Number.isInteger(color.tile) || !Number.isFinite(color.probability)) return `wangset "${wang.name}" has an invalid color`;
+                if (color.userData !== undefined && userDataError(color.userData)) return `wang color "${color.name}" has invalid properties`;
+            }
+            for (const tile of wang.tiles) {
+                if (!Number.isInteger(tile.tileId) || tile.tileId < 0 || !Array.isArray(tile.wangId)
+                    || tile.wangId.length !== 8 || tile.wangId.some(n => !Number.isInteger(n) || n < 0)) {
+                    return `wangset "${wang.name}" has an invalid wang tile`;
+                }
+            }
+        }
     }
 
     if (hasSheet && collection > 0) return "a tileset may have a sheet or per-tile images, not both";
     if (!hasSheet && collection === 0) return "a tileset needs either a sheet or at least one tile image";
     return null;
 }
+
 
 /** What is wrong with a document's whole table, or null. */
 export function tilesetsError(sets: unknown): string | null {
@@ -198,7 +277,14 @@ export function tilesetTile<T extends { id: number }>(
  * spreading it means there is no shape a caller can assemble that omits something.
  */
 export function copyTileset(t: Tileset): Tileset {
-    return { ...t, sheet: t.sheet ? { ...t.sheet } : null, tiles: t.tiles.map(x => ({ ...x })) };
+    return { ...t, sheet: t.sheet ? { ...t.sheet } : null,
+        tiles: t.tiles.map(x => ({ ...x,
+            ...(x.entity ? { entity: { ...x.entity } } : {}),
+            ...(x.animation ? { animation: x.animation.map(f => ({ ...f })) } : {}),
+            ...(x.collision ? { collision: x.collision.map(c => ({ ...c,
+                ...(c.points ? { points: c.points.map(p => ({ ...p })) } : {}) })) } : {}) })),
+        ...(t.wangsets ? { wangsets: t.wangsets.map(w => ({ ...w,
+            colors: w.colors.map(c => ({ ...c })), tiles: w.tiles.map(x => ({ ...x, wangId: [...x.wangId] })) })) } : {}) };
 }
 
 /**

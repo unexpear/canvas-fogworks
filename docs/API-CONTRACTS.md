@@ -15,7 +15,7 @@
      sentence about a grid inheriting an object layer's opacity lived in the code comment, the
      mutant note and ACTION-SYSTEM.md — not here; `TilePlacement` is not part of this surface. -->
 
-> 🔒 Frozen contract · schema v72 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). The public surface each layer depends on.
+> 🔒 Frozen contract · schema v76 (app v0.0.5) · current through the 3D production/runtime baseline. The public surface each layer depends on.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)
@@ -23,6 +23,9 @@
 ```ts
 const CURRENT_VERSION: string;               // app/display version, from package.json
 const SCHEMA_VERSION: string;                // persisted document schema (decoupled from app version)
+// Schema 73: Node.entity is validated typed runtime data. Legacy userData remains readable and
+// migrates to a typed projection. RunFlow exposes restartRun/respawnRun; Electron readLevelFile
+// resolves only relative .vde/.json siblings of a user-approved current project.
 function createEmptyDocument(): ProjectDocument;
 
 // SceneGraph.ts — the ONLY correct node ordering (z-order / layer order)
@@ -576,7 +579,8 @@ function booleanAction(doc, computed: ComputedState, selectedNodeIds: readonly s
 // below whatever order they were clicked), in WORLD space, and replaces the operands with ONE
 // `core.path` re-based onto its own tight box, inheriting the bottom-most operand's paint. Null —
 // changing nothing — for fewer than two operands with an outline, or an empty result. DESTRUCTIVE;
-// the non-destructive `core.boolean` node is a later slice. `newId` is minted by the CALLER,
+// `makeBooleanNodeAction` is the live non-destructive `core.boolean` alternative (schema 33).
+// `newId` is minted by the CALLER,
 // because both halves of the transaction (create the node, then set its commands) must name it.
 
 // OrientedBox.ts — the node's box as DRAWN, and resizing along its own axes.
@@ -614,10 +618,17 @@ interface SnapGuide { axis: "x" | "y"; pos: number; start: number; end: number }
 interface SnapResult { dx: number; dy: number; guides: SnapGuide[] }
 function computeSnap(moving: Rect, targets: readonly Rect[], threshold: number): SnapResult; // MOVE: snap a whole box's edges/centre onto a target's; guides at each alignment
 function snapPoint(px: number, py: number, targets: readonly Rect[], threshold: number): { dx: number; dy: number }; // RESIZE: snap the dragged corner to target lines, each axis independently
+function computeSnapWithGrid(moving: Rect, targets: readonly Rect[], threshold: number, gridSize: number): SnapResult; // nearest smart/grid candidate per axis; smart wins ties
+function snapPointWithGrid(px: number, py: number, targets: readonly Rect[], threshold: number, gridSize: number): { dx: number; dy: number };
 function guidesForRect(rect: Rect, targets: readonly Rect[]): SnapGuide[]; // guides for a rect's existing alignments (merged spans)
 function snapTargetsExcludingSubtree(doc: ReadonlyDocument, computed: ComputedState, rootId: string): Rect[]; // other nodes' world bounds, minus rootId's own subtree
 function snapTargetsExcludingSubtrees(doc: ReadonlyDocument, computed: ComputedState, rootIds: readonly string[]): Rect[]; // …minus EVERY root's subtree (group move)
 function isTranslationOnlyChain(doc: ReadonlyDocument, nodeId: string): boolean; // node + all ancestors unrotated/unscaled → world snap delta == stored delta (snapping is enabled only then)
+
+// geometry/EditorGrid.ts — one visible-grid contract for rendering and interaction.
+const GRID_BASE: number; const GRID_MAX_LINES_PER_AXIS: number;
+function visibleGridSize(width: number, height: number, zoom: number): number; // zoom-aware density coarsening
+function gridSnapDelta(value: number, step: number, threshold: number): number | null; // nearest line or null
 
 // scan/CapabilityScan.ts — find capabilities a codebase has but nothing reaches. PURE: takes
 // file contents, returns findings, so the heuristic is node-tested. The RULE is a fact about
@@ -1047,11 +1058,10 @@ integer stands for a FRACTION — a byte of 255 means 1, not 255.
 **The BIN chunk is found by TYPE, not by position.** The spec allows unknown chunks between JSON
 and BIN, and taking "the second chunk" hands back an extension's private bytes as vertex data.
 
-**A required extension is refused BY NAME**, except one that provably cannot touch geometry.
-`KHR_materials_unlit` is required by 246 files and is a lighting hint; this module reads no
-materials, so refusing on it would cost 4.7% of the corpus over something that cannot change a
-vertex. `GLTF_IGNORABLE_REQUIRED` is an explicit allow-list, using it is reported louder than an
-ordinary extension, and **it must be revisited when materials land**.
+**A required extension is refused BY NAME**, except one implemented by a later material pass.
+`KHR_materials_unlit` is required by 246 files; the parser carries it and the PBR shader bypasses
+lighting for it. `GLTF_IGNORABLE_REQUIRED` admits that supported extension through the earlier
+geometry gate. Unknown required extensions remain refused.
 
 **The buffer is supplied, not fetched.** A `.glb` carries its BIN chunk; the `.gltf` files name an
 external `.bin` and most images are sidecars. The caller resolves those, exactly as it does a
@@ -1068,7 +1078,7 @@ it, every one of those files declares it REQUIRED, and the extension's object is
 `{"KHR_materials_unlit": {}}`. A reader testing that object for truthiness marks every one of them
 as lit. The requirement stays on `GLTF_IGNORABLE_REQUIRED` deliberately: refusing to open 246 models
 over a lighting hint, while nothing lights anything, costs the models and buys nothing. Carrying the
-flag means the day a lighting term arrives the answer is already in the data.
+flag is honored by the production PBR shader.
 
 **An image is LOCATED, not fetched.** `gltfImageSource(json, textureIndex)` follows TWO hops — a
 material names a texture, which names an image — and returns either `{kind:"uri"}` for a file the
@@ -1076,8 +1086,7 @@ caller opens or `{kind:"buffer", offset, length}` for a slice of the bytes alrea
 occur (4,130 and 125). Skipping the indirection reads a texture index as an image index, which
 lands on a real picture often enough to look like a mismatched skin rather than a bug.
 
-**Not read yet:** animations (154 files), skins (31), normal/metallic-roughness texture maps, sparse
-accessors, and cameras.
+**Not read yet:** animations (154 files), skins (31), sparse accessors, and cameras.
 
 ### The Electron bridge — reading what a MAP FILE names
 
@@ -1867,6 +1876,16 @@ function selectionClip(mask): PixelClip | undefined;
 // only way to honour a mask through a stranger's callback — see docs/ACTION-SYSTEM.md.
 function restoreUnselected(buffer, before, mask): number;
 
+// SelectionContent — tight, mask-preserving selected-pixel payloads and undo-ready mutations.
+interface PixelSelectionClipboard { width; height; data: Uint8ClampedArray; mask: Uint8Array; originX; originY }
+type PixelSelectionTransform = "flip-horizontal" | "flip-vertical" | "rotate-clockwise";
+function copySelectionContent(buffer, mask): PixelSelectionClipboard | null;
+function clearSelectionContent(buffer, mask): number;
+function pasteSelectionContent(buffer, content, x?, y?): { changed: number; mask: SelectionMask };
+function moveSelectionContent(buffer, mask, dx, dy): { changed: number; mask: SelectionMask } | null;
+function transformSelectionClipboard(content, transform): PixelSelectionClipboard;
+function transformSelectionContent(buffer, mask, transform): { changed: number; mask: SelectionMask } | null;
+
 // Adjust — destructive colour edits. EVERY ONE IS `(buffer, ...args) => number`, which is exactly
 // what `surfaceEditAction` takes, so a new adjustment becomes a panel button by being written: no
 // action, no plumbing. The number is pixels CHANGED, which is what decides whether there is an undo
@@ -1941,13 +1960,13 @@ interface BlurState {
 function initBlur(gl): BlurState | null;
 function ensureTarget(gl, held: BlurTarget | null, w: number, h: number): BlurTarget | null;
 function blurPass(gl, blur, from, into, sigma: number, horizontal: boolean): boolean;
-function compositeTarget(gl, blur, from, offsetX, offsetY, tint: [number,number,number,number] | null): void;
+function compositeTarget(gl, blur, from, offsetX, offsetY,
+  tint: [number,number,number,number] | null, fade?: number, clip?: DeviceClip | null): void;
 ```
 
-**`GLState.blur` is nullable and that is a real answer** — a context that cannot link the second
-program still draws every shape, losing only what this backend never had. It is built EAGERLY:
-`initGL` runs on the first frame, so the programs are compiled for every context even though
-nothing spends them until the loop wrap lands.
+**`GLState.blur` is nullable and that is a real answer** — a context that cannot link the effects
+programs still draws the base scene. It is built EAGERLY by `initGL`; the live draw loop uses it
+for opacity groups, blend modes, blur and shadows when available.
 
 **THE LOOP BOUND MUST BE A COMPILE-TIME CONSTANT.** GLSL ES 1.00 refuses `for (i < u_radius)`
 outright, so the blur loops to `BLUR_MAX_TAPS` and breaks on the uniform, with weights as a
@@ -1969,9 +1988,10 @@ not reasoned about.
 **`blurPass` returns false for an identity kernel**, so a caller skips the pass rather than
 spending a full-screen draw copying an image to itself.
 
-**NOT YET CALLED.** `ensureTarget`, `blurPass` and `compositeTarget` are absent from
-`dist/app/bundle.js` entirely — esbuild tree-shakes what nothing calls. The loop wrap in
-`emitWebGL` is what will bring them in.
+**LIVE IN THE DRAW LOOP.** `ensureTarget`, `blurPass` and `compositeTarget` now drive opacity
+groups, blend/effects targets, shadows and the final scene composite. Their target sequencing is
+covered by the WebGL model/API pins and live startup/backend checks; shader pixels still require a
+real WebGL smoke environment.
 
 ### `renderer/RenderModel` — naming a raster surface
 
@@ -2020,9 +2040,9 @@ full-size canvas per stroke for the life of the session. One entry per node, rep
 payload changes. A payload that will not decode is remembered as a failure for THAT key — so it is
 not retried every frame, while a later, different payload for the same node still decodes.
 
-**Canvas draws rasters; the GPU backend does not yet** — its `Draw` structure has no payload field,
-so threading one through `itemDraws` is a real change. It skips them, alongside the effects
-regression recorded against it in ARCHITECTURE.md.
+**All three backends draw rasters.** `Draw.image.surface` carries the run-length payload alongside
+the identity href; WebGL resolves it through the same surface cache, uploads the decoded canvas as
+a texture, and honours source regions and pixelated sampling. The href remains a key, never a URL.
 
 ### `renderer/Gaussian` — the blur kernel, as plain numbers
 
@@ -2541,6 +2561,12 @@ function buildRenderModel(
 ): DisplayList;                                          // pure, deterministic
 function emitSVG(container: HTMLElement, model: DisplayList): void;   // SVG DOM transcription
 function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dpr?: number, into?: CanvasTarget): void; // Canvas 2D transcription
+type LightingFactors = readonly [number, number, number];
+function lightingFactors(lights, ambient, normal?): LightingFactors | null; // WebGL Lambert/channel sum; null = no valid light
+function lightingFilterId(factors: LightingFactors): string;                // stable SVG-def id
+function canvasLightingFilter(factors: LightingFactors): string;            // self-contained sRGB SVG filter URL
+// SVG and Canvas apply these factors to content only, before blending. Background, grid and
+// overlays remain unlit. Mesh-relief per-fragment variation and self-occlusion remain WebGL-only.
 interface CanvasTarget {          // where, and on what, to transcribe — omitted = the whole canvas on the editor background
     x: number; y: number;         // destination offset in DEVICE px; `emitCanvas` sets the CTM absolutely, so a caller's own ctx.translate cannot survive it
     background: string | null;    // null = leave the destination TRANSPARENT (a sprite needs alpha; the editor backdrop does not belong in a texture)
@@ -2679,12 +2705,17 @@ interface ElectronAPI {
   onRequestSave(cb: (filePath: string) => void): () => void;
   saveFile(filePath: string, content: string): Promise<boolean>;
   requestSaveAs(): Promise<boolean>;   // prompts Save As for an unsaved document
+  readImageDataUrl(folder: string, filePath: string): Promise<string>; // confined to the user-picked folder
+  writeIntoFolder(folder: string, filename: string, content: string): Promise<string>;
+  writePngIntoFolder(folder: string, filename: string, dataUrl: string): Promise<string>;
 }
 ```
 
 `App` subscribes with cleanup disposers and is a no-op when `window.electronAPI` is
 undefined (browser build). Main process (`electron/main.js`) owns the window, menu,
-Open/Save dialogs, and the `"save-file"` IPC handler.
+Open/Save dialogs, and the `"save-file"` IPC handler. Project saves and both export writers use
+`electron/atomicWrite`: a sibling exclusive-create temporary file is written, synced and closed
+before a rename replaces the destination, so a failed write leaves the previous file intact.
 
 ## Build (`scripts/build.js`)
 
@@ -2908,6 +2939,117 @@ function cameraDesired(view, size, target, deadzone?): { x: number; y: number };
 function followCamera(view, size, target, bounds: CameraRect | null,
     steps: number, smoothing?, deadzone?): CameraView;
 ```
+
+### `core/document/Spatial3D` and 3D Actions (M19 slice 1)
+
+`Node.spatial3d` is distinct from the existing 2D `Node.transform` and deformation
+`Node.mesh`. `ProjectDocument.assets3d` holds stable asset ids; `source` is a normalized,
+project-relative import path and is not identity.
+
+```ts
+interface Transform3D { position: Vec3; rotation: Quaternion; scale: Vec3 }
+interface Spatial3D {
+    transform: Transform3D;
+    camera?: Camera3D;
+    light?: Light3D;
+    renderable?: { meshAssetId: string; materialAssetIds?: string[] };
+    collider?: Collider3D;
+    environment?: Environment3D;
+    composition2d?: { mode: "plane" | "billboard"; pixelsPerUnit: number; lit: boolean };
+}
+interface Asset3D { id: string; kind: "mesh" | "material" | "texture"; source: string; name?: string }
+
+function spatial3DError(value: unknown): string | null;
+function assets3DError(value: unknown): string | null;
+class SetSpatial3DAction extends Action;
+class SetAssets3DAction extends Action;
+```
+
+Rotations use unit quaternions in glTF component order `(x,y,z,w)`. Asset references may
+be temporarily unresolved—the same inert-reference rule used by tilesets—so deleting an
+asset cannot make a project unloadable.
+
+### `renderer/Scene3D` and `renderer/emitWebGL3D` (M19 slice 2)
+
+`buildFrame3D(document, meshLibrary, width, height)` resolves shared node hierarchy transforms
+against a transient `MeshLibrary3D`. The library is keyed by persisted asset id; decoded typed
+arrays and GPU resources never enter the document. The resulting `Frame3D` contains view and
+projection matrices plus indexed draw records and at most four authored frame lights. Material ids
+may repeat across primitive slots. Imported material records use `<mesh source>#material-N`, letting
+slot assignments remain stable while base color and `KHR_materials_unlit` stay in the rehydrated
+transient mesh data.
+
+`captureFrame3D` is the deterministic reference rasterizer used for camera, winding, depth and
+selection pixel assertions. `emitWebGL3D` is the GPU implementation. It requests a depth buffer,
+uses `LEQUAL`, culls back faces, and renders a second pass into a complete RGBA8/depth framebuffer.
+`pickWebGL3D` reads one pixel synchronously from that retained framebuffer and decodes its 24-bit
+object id; index zero is reserved for no object. `lastWebGL3DFailure` makes unsupported contexts or
+framebuffers observable to the workspace fallback.
+
+Directional lights emit along transformed local `-Z`; point lights use world position and the
+`KHR_lights_punctual` recommended inverse-square/range attenuation. `Frame3D` intentionally caps
+this first WebGL 1 path at four lights. `captureFrame3D` remains a deterministic diffuse/depth/id
+reference rather than pretending to reproduce texture filtering or the full GPU BRDF; imported
+unlit materials bypass its light equation.
+
+`CameraOrbit3D` supplies pure authored-camera navigation. Alt+left or middle drag orbits around the
+selected object's world position, adding Shift pans camera and target together, and wheel dollies
+within perspective near/far limits or changes orthographic vertical size. Pose writes use
+`SetSpatial3DAction`, so navigation is undoable and serializable; the orbit target itself is an
+editor affordance and is not persisted.
+
+The visible WebGL path uses the glTF metallic-roughness model: GGX distribution, Schlick Fresnel and
+geometry terms, dielectric F0 of 0.04, emissive contribution, and a neutral roughness-aware
+environment fallback. Base-color texture RGB is decoded from sRGB; metallic-roughness textures stay
+linear and multiply roughness from G and metallic from B. Embedded, data-URI and confined sidecar
+images resolve into transient data URLs and upload lazily. Normal maps use a derivative tangent
+basis when WebGL exposes `OES_standard_derivatives`; emissive texture RGB is decoded from sRGB.
+Each texture preserves its own glTF sampler, UV set and `KHR_texture_transform`; NPOT images are
+resampled to power-of-two dimensions when repeat or mip filtering requires it in WebGL 1. MASK
+fragments discard below cutoff, OPAQUE ignores source alpha, and BLEND draws back-to-front with
+source-over blending and depth writes disabled. Texture bytes and GPU handles never enter the
+document.
+
+`loadAsset3D(reader, folder, filePath)` is the pure import boundary used by the Electron UI. It
+accepts GLB, embedded-buffer glTF and confined external-buffer glTF, returning decoded mesh and
+material descriptors for the transient library plus import notes.
+`asset3DImportActions(document, source, name, newId, materials)` creates stable mesh/material records,
+the slot-bound renderable model node and—only when needed—the first perspective camera as Actions
+that the caller commits in one `TransactionAction`. Persisted asset records retain
+only normalized project-relative source paths; decoded mesh arrays remain session-local.
+
+`rehydrateAssets3D(reader, projectFilePath, assets)` reloads persisted mesh records sequentially
+through the project-confined Electron channels. It returns a fresh transient mesh map and per-asset
+failures, so a missing model cannot hide unrelated models. Import uses `project3DSource` to enforce
+the same project-relative boundary before the asset record is committed.
+
+`decodeRadianceHdr(bytes)` accepts bounded `FORMAT=32-bit_rle_rgbe` images in the common
+`-Y height +X width` orientation and decodes both modern per-channel scanline RLE and flat RGBE to
+linear `Float32Array` RGB. `environment3DImportActions` authors a texture asset plus one scene
+environment component; `rehydrateEnvironments3D` restores decoded pixels into a transient library.
+`prefilterEnvironment3D` deterministically creates transient cosine-weighted diffuse irradiance and
+GGX roughness maps. The WebGL path samples diffuse plus two specular endpoints with authored
+intensity/rotation, and falls back to the neutral analytic environment when float textures are
+unavailable. The remaining guaranteed WebGL 1 sampler is an RGBA-packed directional shadow map.
+`disposeWebGL3D`, `invalidateWebGL3DSource`, `reloadWebGL3D` and `webGL3DCapabilities` own resource
+lifetime, hot reload, restoration and capability reporting.
+
+`world3DFrom` projects authored components into transient runtime bodies. `advanceWorld3D` spends a
+bounded 60 Hz accumulator; `queryCollisions3D`, `restartRun3D`, `respawnRun3D`, `digestWorld3D` and
+`applyWorld3D` provide collision, lifecycle, replay and derived-render boundaries without mutating
+the authored document.
+
+`buildTranslateGizmo3D(document, frame, nodeId, width, height, space)` derives fixed-screen axis
+segments from the same world/view/projection matrices the viewport renders. Those segments are the
+single input to `emitTranslateGizmo3D` and `hitTranslateGizmo3D`. A handle carries its parent-local
+delta per screen pixel, so `translatedSpatial3D` can update an authored local position correctly
+even beneath scaled or rotated parents. `space` is `"world" | "local"`; camera-parallel axes use a
+diagonal fallback scaled from the visible axes rather than disappearing.
+
+`buildRotateGizmo3D` and `hitRotateGizmo3D` provide three fixed-screen rings. A ring drag uses the
+signed screen-space sweep; `rotatedSpatial3D` composes and renormalizes the quaternion in local or
+world order. `scaledSpatial3D` applies one local-axis factor and floors it at `0.01`, so an
+intermediate drag never creates the zero component `spatial3DError` rejects.
 
 **COLLISION IS DISCRETE AND IT TUNNELS**, measured: a solid thinner than one step's travel is passed
 straight through — a 2px floor lets a body reach y=11,287. The rule that follows is that a solid must

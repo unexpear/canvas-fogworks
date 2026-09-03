@@ -11,9 +11,13 @@ const path = require("path");
 // THE SECURITY BOUNDARY, in its own module because this file cannot be required by a test —
 // it is an Electron entry point. See src/electron/confine.js and its junction test.
 const { resolveConfined } = require("./confine");
+const { atomicWrite } = require("./atomicWrite");
 const fs = require("fs");
 const zlib = require("zlib");
 const pkg = require("../../package.json");
+const STARTUP_SMOKE = process.env.VDE_STARTUP_SMOKE === "1";
+const PROJECT_OPEN_SMOKE = process.env.VDE_PROJECT_OPEN_SMOKE || "";
+let projectWorkflowSmokeOpened = false;
 
 let mainWindow;
 
@@ -34,14 +38,25 @@ function createWindow() {
             contextIsolation: true,
             preload: path.join(__dirname, "preload.js")
         },
+        ...(PROJECT_OPEN_SMOKE ? { x: -10000, y: -10000 } : {}),
         show: false
     });
 
     mainWindow.loadFile(path.join(__dirname, "..", "app", "index.html")).catch((err) => {
+        if (STARTUP_SMOKE) {
+            console.error(`VDE_STARTUP_SMOKE_FAILED: ${err.message}`);
+            app.exit(1);
+            return;
+        }
         dialog.showErrorBox("Load Error", `Failed to load the application UI: ${err.message}`);
     });
 
     mainWindow.webContents.on("did-fail-load", (_e, errorCode, errorDescription) => {
+        if (STARTUP_SMOKE) {
+            console.error(`VDE_STARTUP_SMOKE_FAILED: ${errorCode} ${errorDescription}`);
+            app.exit(1);
+            return;
+        }
         dialog.showErrorBox(
             "Load Error",
             `The application UI failed to load (${errorCode}): ${errorDescription}.\n` +
@@ -50,6 +65,29 @@ function createWindow() {
     });
 
     mainWindow.once("ready-to-show", () => {
+        if (STARTUP_SMOKE) {
+            console.log("VDE_STARTUP_SMOKE_READY");
+            app.exit(0);
+            return;
+        }
+        if (PROJECT_OPEN_SMOKE) {
+            // A fully hidden Chromium window lays the flex viewport out at height zero. Show it
+            // off-screen so the smoke exercises real canvas and fixed-pixel gizmo dimensions.
+            mainWindow.showInactive();
+            // Give React's effects time to subscribe, then send exactly what the Open dialog sends.
+            setTimeout(async () => {
+                try {
+                    const filePath = path.resolve(PROJECT_OPEN_SMOKE);
+                    const content = await fs.promises.readFile(filePath, "utf-8");
+                    approvedSavePaths.add(filePath);
+                    mainWindow?.webContents.send("file-opened", { filePath, content });
+                } catch (err) {
+                    console.error(`VDE_PROJECT_OPEN_SMOKE_FAILED: ${err.message}`);
+                    app.exit(1);
+                }
+            }, 100);
+            return;
+        }
         if (mainWindow) mainWindow.show();
     });
 
@@ -196,6 +234,133 @@ function createWindow() {
     Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
 }
 
+// This acknowledgement has no authority during an ordinary run. In smoke mode it validates the
+// sender and exact path, proving the file crossed contextBridge and passed the real deserializer.
+ipcMain.on("project-open-result", (event, result) => {
+    if (!PROJECT_OPEN_SMOKE || !mainWindow || event.sender !== mainWindow.webContents) return;
+    const expected = path.resolve(PROJECT_OPEN_SMOKE);
+    if (!result || result.filePath !== expected || result.ok !== true) {
+        console.error(`VDE_PROJECT_OPEN_SMOKE_FAILED: ${result?.error || "invalid acknowledgement"}`);
+        app.exit(1);
+        return;
+    }
+    projectWorkflowSmokeOpened = true;
+    void (async () => {
+        try {
+            // Switch through the real workspace control and wait until the persisted mesh id has
+            // reached the GPU draw list. This proves open -> confined IPC -> glTF decode -> frame,
+            // rather than merely proving that the current schema deserializes.
+            const hydrated = await mainWindow.webContents.executeJavaScript(`new Promise(resolve => {
+                document.querySelector('button[title="3D workspace"]')?.click();
+                const deadline = Date.now() + 5000;
+                let selected = false;
+                const check = () => {
+                    const canvas = document.querySelector('canvas');
+                    const xAxis = document.querySelector('svg[data-vde-gizmo3d] line[data-axis="x"]');
+                    const material = document.querySelector('[data-material-slot="0"]');
+                    if (canvas?.__vde3D?.pickIds?.includes('model') && canvas?.__vde3D?.readyTextures?.size > 0
+                        && xAxis && material?.value === 'smoke-material') {
+                        const host = canvas.parentElement;
+                        const rect = host.getBoundingClientRect();
+                        const x1 = Number(xAxis.getAttribute('x1')), y1 = Number(xAxis.getAttribute('y1'));
+                        const x2 = Number(xAxis.getAttribute('x2')), y2 = Number(xAxis.getAttribute('y2'));
+                        const x = rect.left + (x1 + x2) / 2, y = rect.top + (y1 + y2) / 2;
+                        host.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y, button: 0, buttons: 1 }));
+                        window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x + 24, clientY: y, buttons: 1 }));
+                        window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x + 24, clientY: y, button: 0, buttons: 0 }));
+                        return setTimeout(() => {
+                            document.querySelector('[data-gizmo-mode="rotate"]')?.click();
+                            setTimeout(() => {
+                                const ring = document.querySelector('svg[data-vde-gizmo3d="rotate"] circle[data-axis="z"]');
+                                if (!ring) return resolve({ ok: false, stage: 'rotate-ring' });
+                                const box = host.getBoundingClientRect();
+                                const cx = Number(ring.getAttribute('cx')), cy = Number(ring.getAttribute('cy'));
+                                const radius = Number(ring.getAttribute('r'));
+                                const sx = box.left + cx + radius, sy = box.top + cy;
+                                host.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: sx, clientY: sy, button: 0, buttons: 1 }));
+                                window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: box.left + cx, clientY: box.top + cy + radius, buttons: 1 }));
+                                window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: box.left + cx, clientY: box.top + cy + radius, button: 0, buttons: 0 }));
+                                document.querySelector('[data-gizmo-mode="scale"]')?.click();
+                                setTimeout(() => {
+                                    const scaleAxis = document.querySelector('svg[data-vde-gizmo3d="scale"] line[data-axis="x"]');
+                                    if (!scaleAxis) return resolve({ ok: false, stage: 'scale-axis' });
+                                    const ax1 = Number(scaleAxis.getAttribute('x1')), ay1 = Number(scaleAxis.getAttribute('y1'));
+                                    const ax2 = Number(scaleAxis.getAttribute('x2')), ay2 = Number(scaleAxis.getAttribute('y2'));
+                                    const length = Math.hypot(ax2 - ax1, ay2 - ay1);
+                                    const scaleBox = host.getBoundingClientRect();
+                                    const mx = scaleBox.left + ax2 - (ax2 - ax1) / length * 10;
+                                    const my = scaleBox.top + ay2 - (ay2 - ay1) / length * 10;
+                                    const dx = (ax2 - ax1) / length * 24, dy = (ay2 - ay1) / length * 24;
+                                    host.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: mx, clientY: my, button: 0, buttons: 1 }));
+                                    window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: mx + dx, clientY: my + dy, buttons: 1 }));
+                                    window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: mx + dx, clientY: my + dy, button: 0, buttons: 0 }));
+                                    const orbitBox = host.getBoundingClientRect();
+                                    const ox = orbitBox.left + orbitBox.width / 2, oy = orbitBox.top + orbitBox.height / 2;
+                                    host.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: ox, clientY: oy,
+                                        button: 0, buttons: 1, altKey: true }));
+                                    window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: ox + 30,
+                                        clientY: oy - 12, buttons: 1, altKey: true }));
+                                    window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: ox + 30,
+                                        clientY: oy - 12, button: 0, buttons: 0, altKey: true }));
+                                    const addPoint = document.querySelector('[data-add-light-3d="point"]');
+                                    if (!addPoint) return resolve({ ok: false, stage: 'point-light-control' });
+                                    addPoint.click();
+                                    setTimeout(() => {
+                                        document.querySelector('[data-layer-node-id="card"]')?.click();
+                                        setTimeout(() => {
+                                            const compose = document.querySelector('[data-compose-2d-3d]');
+                                            if (!compose || compose.disabled) return resolve({ ok: false, stage: '2d-surface-control' });
+                                            compose.click();
+                                            setTimeout(() => {
+                                                const mode = document.querySelector('[data-composition-2d-mode]');
+                                                if (!mode) return resolve({ ok: false, stage: '2d-surface-inspector' });
+                                                mode.value = 'billboard';
+                                                mode.dispatchEvent(new Event('change', { bubbles: true }));
+                                                setTimeout(() => resolve({ ok: true }), 50);
+                                            }, 50);
+                                        }, 50);
+                                    }, 50);
+                                }, 50);
+                            }, 50);
+                        }, 50);
+                    }
+                    if (!selected && canvas?.__vde3D?.pickIds?.includes('model')) {
+                        selected = true;
+                        document.querySelector('[data-layer-node-id="model"]')?.click();
+                    }
+                    if (Date.now() >= deadline) return resolve({
+                        ok: false,
+                        pickIds: canvas?.__vde3D?.pickIds ?? null,
+                        backend: canvas?.parentElement?.dataset?.vdeBackend ?? null,
+                        gizmo: Boolean(document.querySelector('svg[data-vde-gizmo3d]')),
+                        lines: document.querySelectorAll('svg[data-vde-gizmo3d] line').length,
+                        layer: Boolean(document.querySelector('[data-layer-node-id="model"]')),
+                        layerBackground: document.querySelector('[data-layer-node-id="model"]')?.style?.background ?? null,
+                        material: document.querySelector('[data-material-slot="0"]')?.value ?? null,
+                        textures: canvas?.__vde3D?.textures?.size ?? null,
+                        readyTextures: canvas?.__vde3D?.readyTextures?.size ?? null,
+                        hostSize: canvas?.parentElement
+                            ? [canvas.parentElement.clientWidth, canvas.parentElement.clientHeight]
+                            : null,
+                        viewport: [window.innerWidth, window.innerHeight],
+                        rootHeight: document.getElementById('root')?.getBoundingClientRect()?.height ?? null,
+                        hostParentHeight: canvas?.parentElement?.parentElement?.clientHeight ?? null
+                    });
+                    setTimeout(check, 25);
+                };
+                check();
+            })`);
+            if (!hydrated?.ok) throw new Error(`persisted 3D mesh did not rehydrate into the viewport: ${JSON.stringify(hydrated)}`);
+            // A REAL Action-backed edit, followed by the same Save command the native menu sends.
+            mainWindow.webContents.send("menu-command", "view.timeline");
+            setTimeout(() => mainWindow?.webContents.send("menu-command", "file.save"), 50);
+        } catch (err) {
+            console.error(`VDE_PROJECT_OPEN_SMOKE_FAILED: ${err.message}`);
+            app.exit(1);
+        }
+    })();
+});
+
 async function openFileDialog() {
     if (!mainWindow) return;
     try {
@@ -261,6 +426,8 @@ const UNITY_EXT = /\.unitypackage$/i;
 // BOTH SPELLINGS. Aseprite writes `.aseprite` by default and `.ase` when asked; the 45 files
 // in this tree use both, and accepting one would silently hide the other from the picker.
 const ASEPRITE_EXT = /\.(aseprite|ase)$/i;
+const MODEL_3D_EXT = /\.(gltf|glb)$/i;
+const ENVIRONMENT_3D_EXT = /\.hdr$/i;
 // PALETTES are `.json`, which is the widest pattern here and deliberately not narrowed further:
 // there is no palette extension to match on, and guessing by filename would miss every palette not
 // called `Palette.json`. What keeps this honest is that `parsePaletteFile` returns null for a file
@@ -538,11 +705,13 @@ ipcMain.on("inflate-sync", (event, base64) => {
     }
 });
 
-ipcMain.handle("read-image-data-url", async (event, filePath) => {
+ipcMain.handle("read-image-data-url", async (event, folder, filePath) => {
+    const target = resolveConfined(folder, folder, filePath, "an image");
     if (!filePath || typeof filePath !== "string") throw new Error("Invalid file path.");
-    const ext = path.extname(filePath).slice(1).toLowerCase();
+    if (!IMAGE_EXT.test(target)) throw new Error("Not an image file.");
+    const ext = path.extname(target).slice(1).toLowerCase();
     const mime = ext === "svg" ? "svg+xml" : ext === "jpg" ? "jpeg" : ext;
-    const bytes = fs.readFileSync(filePath);
+    const bytes = fs.readFileSync(target);
     return `data:image/${mime};base64,${bytes.toString("base64")}`;
 });
 
@@ -573,7 +742,7 @@ function resolveInsideFolder(folder, filename) {
 ipcMain.handle("write-into-folder", async (event, folder, filename, content) => {
     if (typeof content !== "string") throw new Error("Invalid content: expected a string.");
     const target = resolveInsideFolder(folder, filename);
-    fs.writeFileSync(target, content, "utf8");
+    await atomicWrite(target, content);
     return target;
 });
 
@@ -593,7 +762,7 @@ ipcMain.handle("write-png-into-folder", async (event, folder, filename, dataUrl)
     if (body.length > MAX_PNG_BYTES) throw new Error("Refusing to write a PNG that large.");
     if (!/^[A-Za-z0-9+/]*={0,2}$/.test(body)) throw new Error("Invalid image: not base64.");
     const target = resolveInsideFolder(folder, filename);
-    fs.writeFileSync(target, Buffer.from(body, "base64"));
+    await atomicWrite(target, Buffer.from(body, "base64"));
     return target;
 });
 
@@ -615,8 +784,148 @@ ipcMain.handle("save-file", async (event, filePath, content) => {
     if (!approvedSavePaths.has(filePath)) {
         throw new Error("Refusing to write to an unapproved path. Use Save As.");
     }
-    await fs.promises.writeFile(filePath, content, "utf-8");
+    await atomicWrite(filePath, content);
+    if (PROJECT_OPEN_SMOKE && projectWorkflowSmokeOpened
+        && path.resolve(filePath) === path.resolve(PROJECT_OPEN_SMOKE)) {
+        try {
+            const saved = JSON.parse(content);
+            if (saved?.document?.timeline?.frames !== 24 || saved?.document?.timeline?.fps !== 12) {
+                throw new Error("the Action-backed timeline edit was not serialized");
+            }
+            if (!(saved?.document?.nodes?.model?.spatial3d?.transform?.position?.x > -1)) {
+                throw new Error("the 3D translate-gizmo edit was not serialized");
+            }
+            if (!(Math.abs(saved?.document?.nodes?.model?.spatial3d?.transform?.rotation?.z) > 0.1)) {
+                throw new Error("the 3D rotate-gizmo edit was not serialized");
+            }
+            if (!(saved?.document?.nodes?.model?.spatial3d?.transform?.scale?.x > 1)) {
+                throw new Error(`the 3D scale-gizmo edit was not serialized: ${JSON.stringify(saved?.document?.nodes?.model?.spatial3d?.transform?.scale)}`);
+            }
+            if (saved?.document?.nodes?.model?.spatial3d?.renderable?.materialAssetIds?.[0] !== "smoke-material") {
+                throw new Error("the persisted 3D material assignment was lost");
+            }
+            if (!Object.values(saved?.document?.nodes ?? {}).some(node => node?.spatial3d?.light?.kind === "point")) {
+                throw new Error("the Action-backed point light was not serialized");
+            }
+            if (!(Math.abs(saved?.document?.nodes?.camera?.spatial3d?.transform?.position?.x) > 0.1)) {
+                throw new Error("the orbit-camera edit was not serialized");
+            }
+            if (saved?.document?.nodes?.card?.spatial3d?.composition2d?.mode !== "billboard") {
+                throw new Error("the Action-backed 2D-in-3D composition was not serialized");
+            }
+            console.log("VDE_PROJECT_FILE_SMOKE_READY");
+            app.exit(0);
+        } catch (err) {
+            console.error(`VDE_PROJECT_OPEN_SMOKE_FAILED: ${err.message}`);
+            app.exit(1);
+        }
+    }
     return true;
+});
+
+/** List and read glTF models under a user-selected folder; external buffers stay confined there. */
+ipcMain.handle("read-3d-folder", async (event, folder) => {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    return walkDir(folder, name => MODEL_3D_EXT.test(name), SCAN_MAX_FILES).map(full => ({
+        path: full, name: path.basename(full), bytes: fs.statSync(full).size,
+        relative: path.relative(folder, full).replace(/\\/g, "/")
+    }));
+});
+
+ipcMain.handle("read-environment-folder", async (event, folder) => {
+    if (!folder || typeof folder !== "string") throw new Error("Invalid folder.");
+    return walkDir(folder, name => ENVIRONMENT_3D_EXT.test(name), SCAN_MAX_FILES).map(full => ({
+        path: full, name: path.basename(full), bytes: fs.statSync(full).size,
+        relative: path.relative(folder, full).replace(/\\/g, "/")
+    }));
+});
+
+ipcMain.handle("read-environment-file", async (event, folder, filePath) => {
+    const target = resolveConfined(folder, folder, filePath, "an HDR environment");
+    if (!ENVIRONMENT_3D_EXT.test(target)) throw new Error("Only Radiance .hdr environments are supported.");
+    if (fs.statSync(target).size > INFLATE_MAX_BYTES) throw new Error("HDR environment exceeds the 64MB input limit.");
+    return fs.readFileSync(target).toString("base64");
+});
+
+ipcMain.handle("read-3d-file", async (event, folder, filePath) => {
+    const target = resolveConfined(folder, folder, filePath, "a 3D model");
+    if (!MODEL_3D_EXT.test(target)) throw new Error("Only .gltf and .glb models are supported.");
+    if (fs.statSync(target).size > INFLATE_MAX_BYTES) throw new Error("3D model exceeds the 64MB input limit.");
+    return fs.readFileSync(target).toString("base64");
+});
+
+ipcMain.handle("read-3d-sidecar", async (event, folder, modelPath, relative) => {
+    const model = resolveConfined(folder, folder, modelPath, "a 3D model");
+    const target = resolveConfined(folder, path.dirname(model), relative, "a 3D buffer");
+    if (fs.statSync(target).size > INFLATE_MAX_BYTES) throw new Error("3D buffer exceeds the 64MB input limit.");
+    return fs.readFileSync(target).toString("base64");
+});
+
+/** The saved project is the authority for persisted 3D paths, not a remembered import folder. */
+function approvedProjectRoot(projectFilePath) {
+    if (!projectFilePath || typeof projectFilePath !== "string") throw new Error("Save the project before importing 3D assets.");
+    const project = path.resolve(projectFilePath);
+    if (!approvedSavePaths.has(project)) throw new Error("The project path has not been approved by Open or Save As.");
+    return path.dirname(project);
+}
+
+ipcMain.handle("project-3d-source", async (event, projectFilePath, modelPath) => {
+    const root = approvedProjectRoot(projectFilePath);
+    const target = resolveConfined(root, root, modelPath, "a 3D model");
+    if (!MODEL_3D_EXT.test(target)) throw new Error("Only .gltf and .glb models are supported.");
+    return path.relative(root, target).replace(/\\/g, "/");
+});
+
+ipcMain.handle("project-environment-source", async (event, projectFilePath, filePath) => {
+    const root = approvedProjectRoot(projectFilePath);
+    const target = resolveConfined(root, root, filePath, "an HDR environment");
+    if (!ENVIRONMENT_3D_EXT.test(target)) throw new Error("Only Radiance .hdr environments are supported.");
+    return path.relative(root, target).replace(/\\/g, "/");
+});
+
+ipcMain.handle("read-project-environment-file", async (event, projectFilePath, source) => {
+    const root = approvedProjectRoot(projectFilePath);
+    const target = resolveConfined(root, root, source, "an HDR environment");
+    if (!ENVIRONMENT_3D_EXT.test(target)) throw new Error("Only Radiance .hdr environments are supported.");
+    if (fs.statSync(target).size > INFLATE_MAX_BYTES) throw new Error("HDR environment exceeds the 64MB input limit.");
+    return fs.readFileSync(target).toString("base64");
+});
+
+ipcMain.handle("read-project-3d-file", async (event, projectFilePath, source) => {
+    const root = approvedProjectRoot(projectFilePath);
+    const target = resolveConfined(root, root, source, "a 3D model");
+    if (!MODEL_3D_EXT.test(target)) throw new Error("Only .gltf and .glb models are supported.");
+    if (fs.statSync(target).size > INFLATE_MAX_BYTES) throw new Error("3D model exceeds the 64MB input limit.");
+    return fs.readFileSync(target).toString("base64");
+});
+
+ipcMain.handle("read-project-3d-sidecar", async (event, projectFilePath, modelSource, relative) => {
+    const root = approvedProjectRoot(projectFilePath);
+    const model = resolveConfined(root, root, modelSource, "a 3D model");
+    const target = resolveConfined(root, path.dirname(model), relative, "a 3D buffer");
+    if (fs.statSync(target).size > INFLATE_MAX_BYTES) throw new Error("3D buffer exceeds the 64MB input limit.");
+    return fs.readFileSync(target).toString("base64");
+});
+
+// A level may name a sibling project, but it cannot turn authored data into an arbitrary file read.
+// The starting file must have come through Open/Save As, and the destination is confined to its
+// directory (including real-path junction resolution) and to project extensions.
+ipcMain.handle("read-level-file", async (event, currentFilePath, target) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error("Untrusted renderer.");
+    if (typeof currentFilePath !== "string" || !approvedSavePaths.has(currentFilePath)) {
+        throw new Error("The current project path was not approved by the user.");
+    }
+    if (typeof target !== "string" || target.trim() === "" || path.isAbsolute(target)) {
+        throw new Error("A level transition must name a relative project path.");
+    }
+    const folder = path.dirname(path.resolve(currentFilePath));
+    const filePath = resolveConfined(folder, folder, target, "a level project");
+    if (!/\.(vde|json)$/i.test(filePath)) throw new Error("A level transition must target a .vde or .json project.");
+    const stat = await fs.promises.stat(filePath);
+    if (stat.size > 20_000_000) throw new Error("The level project is larger than 20 MB.");
+    const content = await fs.promises.readFile(filePath, "utf-8");
+    approvedSavePaths.add(filePath);
+    return { filePath, content };
 });
 
 app.whenReady().then(createWindow);

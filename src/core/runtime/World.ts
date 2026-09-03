@@ -155,6 +155,7 @@ import { Node, UserData } from "../document/Node";
 import { ReadonlyTilemap, TILE_EMPTY, tileAt, visibleCells } from "../document/Tilemap";
 import { Tileset, findTileset, tilesetTile } from "../document/Tileset";
 import { isParallaxed } from "../document/Depth";
+import { Entity } from "../document/Entity";
 
 /** One tick, in seconds. 60Hz: the rate every measurement in this module's tests assumes. */
 export const FIXED_STEP = 1 / 60;
@@ -564,6 +565,8 @@ export interface WorldState {
      * that a game is over, for the same reason it never decides what a stomp means.
      */
     outcome: RunOutcome;
+    /** Relative project path requested by a typed transition entity; consumed by the host once. */
+    transitionTo: string | null;
     /** What the step that produced this world noticed. Empty on most steps, by design. */
     events: readonly WorldEvent[];
 }
@@ -744,7 +747,8 @@ export interface WorldEvent {
 }
 
 /** A surface's `friction`, read leniently and clamped — 0 is ice, 1 stops a body dead. */
-export function frictionOf(node: { userData?: UserData }): number {
+export function frictionOf(node: { userData?: UserData; entity?: Entity }): number {
+    if (node.entity?.friction !== undefined) return node.entity.friction;
     const raw = propertyOf(node.userData, "friction");
     if (raw === null) return 1;
     const text = raw.trim();
@@ -778,7 +782,8 @@ export function propertyOf(data: UserData | undefined, name: string): string | n
  * against an older build behaves identically, and a typo becomes decoration rather than a wall
  * somewhere unexpected.
  */
-export function bodyTypeOf(node: { userData?: UserData }): "static" | "dynamic" | "oneway" | null {
+export function bodyTypeOf(node: { userData?: UserData; entity?: Entity }): "static" | "dynamic" | "oneway" | null {
+    if (node.entity?.body !== undefined) return node.entity.body;
     const raw = propertyOf(node.userData, "bodyType");
     if (raw === null) return null;
     const lower = raw.trim().toLowerCase();
@@ -863,7 +868,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
             travelled: 0, power: 0, star: 0
         });
     }
-    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), cells: new Map(), cellClocks: new Map(), tallies: new Map(), spawns: [], outcome: "running", jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
+    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), cells: new Map(), cellClocks: new Map(), tallies: new Map(), spawns: [], outcome: "running", transitionTo: null, jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
@@ -926,7 +931,24 @@ export function tileIsSolid(set: Tileset | null, index: number): boolean {
     if (!set || index === TILE_EMPTY) return false;
     const tile = tilesetTile(set, index);
     const kind = tile === null ? null : bodyTypeOf(tile);
-    return kind === "static" || kind === "oneway";
+    return kind === "static" || kind === "oneway" || (tile?.collision?.length ?? 0) > 0;
+}
+
+function collisionBox(shape: NonNullable<import("../document/Tileset").TilesetTile["collision"]>[number]) {
+    let x = shape.x, y = shape.y, width = shape.width, height = shape.height;
+    if (shape.points && shape.points.length > 0) {
+        const xs = shape.points.map(p => p.x), ys = shape.points.map(p => p.y);
+        const minX = Math.min(...xs), minY = Math.min(...ys);
+        x += minX; y += minY; width = Math.max(...xs) - minX; height = Math.max(...ys) - minY;
+    }
+    if (shape.rotation !== 0 && width > 0 && height > 0) {
+        const r = shape.rotation * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+        const points = [{ x: 0, y: 0 }, { x: width, y: 0 }, { x: 0, y: height }, { x: width, y: height }]
+            .map(p => ({ x: x + p.x * c - p.y * s, y: y + p.x * s + p.y * c }));
+        const xs = points.map(p => p.x), ys = points.map(p => p.y);
+        x = Math.min(...xs); y = Math.min(...ys); width = Math.max(...xs) - x; height = Math.max(...ys) - y;
+    }
+    return { x, y, width, height };
 }
 
 /**
@@ -975,16 +997,21 @@ export function tileSolidsNear(
                 // icy patch. The corpus declares none, so the fallback is what it actually gets.
                 const tile = tilesetTile(set, tileAt(map, col, row));
                 const kind = tile === null ? null : bodyTypeOf(tile);
-                out.push({
-                    x: originX + col * map.tileWidth,
-                    y: originY + row * map.tileHeight,
-                    width: map.tileWidth, height: map.tileHeight,
-                    friction: tile && propertyOf(tile.userData, "friction") !== null
-                        ? frictionOf(tile) : frictionOf(node),
-                    oneWay: kind === "oneway",
-                    nodeId: node.id,
-                    cell: { col, row }
-                });
+                const shapes = tile?.collision?.length ? tile.collision.map(collisionBox)
+                    : [{ x: 0, y: 0, width: map.tileWidth, height: map.tileHeight }];
+                for (const shape of shapes) {
+                    if (shape.width <= 0 || shape.height <= 0) continue;
+                    out.push({
+                        x: originX + col * map.tileWidth + shape.x,
+                        y: originY + row * map.tileHeight + shape.y,
+                        width: shape.width, height: shape.height,
+                        friction: tile && (tile.entity?.friction !== undefined || propertyOf(tile.userData, "friction") !== null)
+                            ? frictionOf(tile) : frictionOf(node),
+                        oneWay: kind === "oneway",
+                        nodeId: node.id,
+                        cell: { col, row }
+                    });
+                }
             }
         }
     }
@@ -1433,7 +1460,7 @@ export function stepWorld(
             className: doc.nodes.get(first)?.className ?? "" });
     }
 
-    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, cells: world.cells, cellClocks: world.cellClocks, tallies: world.tallies, spawns: world.spawns, outcome: world.outcome, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
+    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, cells: world.cells, cellClocks: world.cellClocks, tallies: world.tallies, spawns: world.spawns, outcome: world.outcome, transitionTo: world.transitionTo, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
 }
 
 /**
@@ -1551,6 +1578,8 @@ export type RuntimeCommand =
      * has ended issues nothing further at all.
      */
     | { kind: "endRun"; outcome: Exclude<RunOutcome, "running"> }
+    /** Ask the host to load another authored project. First request wins, like `endRun`. */
+    | { kind: "transition"; target: string }
     /**
      * A CELL BECOMES A DIFFERENT TILE — the fourth verb, and the one the block bump demanded.
      *
@@ -1614,7 +1643,14 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
     let tallies: Map<string, number> | null = null;
     let spawns: { id: string; templateId: string; x: number; y: number }[] | null = null;
     let outcome: RunOutcome | null = null;
+    let transitionTo: string | null = null;
     for (const c of commands) {
+        if (c.kind === "transition") {
+            if (transitionTo === null && world.transitionTo === null && world.outcome === "running") {
+                transitionTo = c.target;
+            }
+            continue;
+        }
         if (c.kind === "endRun") {
             // FIRST ONE WINS, and the world's own is checked too: nothing may un-end a run.
             if (outcome === null && world.outcome === "running") outcome = c.outcome;
@@ -1705,7 +1741,7 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
             onGround: (c.vy !== undefined && c.vy < 0) ? false : body.onGround
         });
     }
-    if (!bodies && !despawned && !outcome && !cells && !spawns && !clocks && !tallies) return world;
+    if (!bodies && !despawned && !outcome && !transitionTo && !cells && !spawns && !clocks && !tallies) return world;
     return {
         ...world,
         cells: cells ?? world.cells,
@@ -1714,7 +1750,8 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
         spawns: spawns ?? world.spawns,
         bodies: bodies ?? world.bodies,
         despawned: despawned ?? world.despawned,
-        outcome: outcome ?? world.outcome
+        outcome: outcome ?? world.outcome,
+        transitionTo: transitionTo ?? world.transitionTo
     };
 }
 
@@ -1827,6 +1864,39 @@ export function applyCells(doc: ReadonlyDocument, world: WorldState): ReadonlyDo
     }
     if (!nodes) return doc;
     return { ...(doc as ProjectDocument), nodes } as ReadonlyDocument;
+}
+
+/** Resolve Tiled's single looping per-tile animation from deterministic world time. */
+export function applyTileAnimations(doc: ReadonlyDocument, seconds: number): ReadonlyDocument {
+    if (!(seconds >= 0) || !doc.tilesets) return doc;
+    let nodes: Map<string, Node> | null = null;
+    for (const node of doc.nodes.values()) {
+        if (node.type !== "core.tilemap" || !node.tilemap) continue;
+        const set = findTileset(doc.tilesets, node.tilemap.tilesetId) as Tileset | null;
+        if (!set) continue;
+        const animated = new Map(set.tiles.filter(t => t.animation?.length).map(t => [t.id, t.animation!]));
+        if (animated.size === 0) continue;
+        let tiles: number[] | null = null;
+        for (let i = 0; i < node.tilemap.tiles.length; i++) {
+            const frames = animated.get(node.tilemap.tiles[i]);
+            if (!frames) continue;
+            const total = frames.reduce((sum, frame) => sum + frame.duration, 0);
+            if (!(total > 0)) continue;
+            let at = (seconds * 1000) % total;
+            let chosen = frames[frames.length - 1].tileId;
+            for (const frame of frames) {
+                if (at < frame.duration) { chosen = frame.tileId; break; }
+                at -= frame.duration;
+            }
+            if (chosen === node.tilemap.tiles[i]) continue;
+            if (!tiles) tiles = [...node.tilemap.tiles];
+            tiles[i] = chosen;
+        }
+        if (!tiles) continue;
+        if (!nodes) nodes = new Map(doc.nodes as ReadonlyMap<string, Node>);
+        nodes.set(node.id, { ...(node as Node), tilemap: { ...node.tilemap, tiles } } as Node);
+    }
+    return nodes ? { ...(doc as ProjectDocument), nodes } as ReadonlyDocument : doc;
 }
 
 export function applyFacing(doc: ReadonlyDocument, world: WorldState): ReadonlyDocument {

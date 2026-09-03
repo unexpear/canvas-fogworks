@@ -601,6 +601,12 @@ export interface Node {
      * there was no field for it to land in.
      */
     userData?: UserData;
+
+    /** Engine-owned, validated gameplay declarations (schema 73). Imported metadata stays separate. */
+    entity?: import("./Entity").Entity;
+
+    /** Typed 3D authoring components (schemas 74-76), distinct from the 2D transform and mesh. */
+    spatial3d?: import("./Spatial3D").Spatial3D;
 }
 
 /** A master's identity within a variant set: the set's name, plus its property values. */

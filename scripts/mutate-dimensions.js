@@ -21,10 +21,11 @@
  * missing guard, not as noise.
  *
  * REFUSES TO RUN ON A DIRTY TREE. It edits real source files and restores them; if it is
- * interrupted between the two, `git checkout` is the recovery, and that is only safe when there
- * was nothing uncommitted to lose.
+ * interrupted between the two, the pending-file recovery below restores the exact original on the
+ * next run. Jest runs in-band so 402 consecutive suites do not accumulate worker processes; every
+ * 50 mutants the cache is cleared, and a zero-test result aborts the battery immediately.
  */
-const { execSync } = require("child_process");
+const { execSync, execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -39,6 +40,8 @@ const PROGRESS_PAGE = path.join(os.tmpdir(), "vde-mutation-progress.html");
 const PENDING = path.join(os.tmpdir(), "vde-mutation-pending.json");
 
 const ROOT = path.resolve(__dirname, "..");
+const JEST_BIN = require.resolve("jest/bin/jest");
+const RECYCLE_EVERY = 50;
 
 /** The suite's size. Anything less means the mutant did not compile. */
 const EXPECTED_TESTS = 2021;
@@ -839,8 +842,8 @@ const MUTANTS = [
       to: "                if (e.key === \"Escape\") {\n                    if (e.defaultPrevented) return;",
       note: "Escape is never offered to the active tool, so every cancel in the app is unreachable again" },
     { id: "EK2", file: "src/app/App.tsx",
-      from: "                    if (e.defaultPrevented) return;\n                    const cancel = resolveShortcut(e);",
-      to: "                    if (!e.defaultPrevented) return;\n                    const cancel = resolveShortcut(e);",
+      from: "                    if (e.defaultPrevented) return;\n                    const drag = gizmoDrag3dRef.current;",
+      to: "                    if (!e.defaultPrevented) return;\n                    const drag = gizmoDrag3dRef.current;",
       note: "a tool that CLAIMED the press is then also deselected, and one that declined it is not" },
     { id: "EK3", file: "src/editor/tools/TileTool.ts",
       from: "        this.rect = null;\n        e.preventDefault();",
@@ -1221,16 +1224,16 @@ const MUTANTS = [
     // every one of these still stands a body on something — what changes is WHICH cells are solid
     // and WHERE they are, which no "did it land" assertion can see.
     { id: "TC1", file: "src/core/runtime/World.ts",
-      from: "    return kind === \"static\" || kind === \"oneway\";",
+      from: "    return kind === \"static\" || kind === \"oneway\" || (tile?.collision?.length ?? 0) > 0;",
       to: "    return tile !== null;",
       note: "ANY tile with a per-tile record becomes solid, so a tile carrying `door=true` — which is what the corpus's only per-tile properties actually say — becomes a wall" },
     { id: "TC2", file: "src/core/runtime/World.ts",
-      from: "                    x: originX + col * map.tileWidth,\n                    y: originY + row * map.tileHeight,",
-      to: "                    x: col * map.tileWidth,\n                    y: row * map.tileHeight,",
+      from: "                        x: originX + col * map.tileWidth + shape.x,\n                        y: originY + row * map.tileHeight + shape.y,",
+      to: "                        x: col * map.tileWidth + shape.x,\n                        y: row * map.tileHeight + shape.y,",
       note: "the level's own position is dropped from its solid cells, so the collision sits at the origin while the art sits where the node is — a body stops in mid-air, or falls through the floor it is standing on" },
     { id: "TC3", file: "src/core/runtime/World.ts",
-      from: "                    width: map.tileWidth, height: map.tileHeight",
-      to: "                    width: map.tileHeight, height: map.tileWidth",
+      from: "                        width: shape.width, height: shape.height,",
+      to: "                        width: shape.height, height: shape.width,",
       note: "a solid cell's two dimensions are swapped — invisible on every square grid, which is what every other fixture in this file uses, and 24px out on the 32x8 one written to catch exactly this" },
     { id: "TC4", file: "src/core/runtime/World.ts",
       from: "        const acrossTiles = tiles ? tileSolidsNear(doc, { x, y, width: w, height: h }) : [];",
@@ -1488,8 +1491,8 @@ const MUTANTS = [
       to: "",
       note: "THE `Number(\\\"\\\")` TRAP, restored — it is 0 and FINITE, so an empty declaration stops meaning \\\"this part said nothing\\\" and starts meaning \\\"stand still\\\". The same trap once made an empty friction value into ice; this module's header warns about it and this mutant proves the warning is enforced rather than decorative" },
     { id: "PT3", file: "src/core/runtime/Parts.ts",
-      from: "        stompable: stomp !== null && truthy(stomp),",
-      to: "        stompable: stomp !== null,",
+      from: "        stompable: e?.stompable ?? (stomp !== null && truthy(stomp)),",
+      to: "        stompable: e?.stompable ?? (stomp !== null),",
       note: "the PRESENCE of the key is read as the answer, so every value including `false` and `0` makes a part stompable and there is no way to author one that is not" },
     { id: "PT4", file: "src/core/runtime/Parts.ts",
       from: "    if (!Number.isFinite(n)) return null;",
@@ -1536,8 +1539,8 @@ const MUTANTS = [
       to: "            outcome = c.outcome;",
       note: "an ending can be overwritten, so a later command un-ends a finished run and a step that both kills the player and reaches the goal reports whichever was pushed last" },
     { id: "RL6", file: "src/core/runtime/Parts.ts",
-      from: "    goal: yes(node, \"goal\")",
-      to: "    goal: yes(node, \"deadly\")",
+      from: "        goal: e?.goal ?? yes(node, \"goal\"),",
+      to: "        goal: e?.goal ?? yes(node, \"deadly\"),",
       note: "a deadly part is read as a GOAL, so touching a spike wins the level and no goal can ever be reached — the two endings swapped, and both look plausible from either side" },
 
     // A NODE'S OWN PLAYHEAD (M18 slice 14, schema 69). PF1 is the defect the design review caught
@@ -1961,15 +1964,26 @@ const MUTANTS = [
 
 function runSuite() {
     try {
-        return execSync("npx jest --config=./jest.config.js 2>&1",
+        return execFileSync(process.execPath,
+            [JEST_BIN, "--config=./jest.config.js", "--runInBand"],
             { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     } catch (e) {
         return (e.stdout || "") + (e.stderr || "");
     }
 }
 
+/** Jest documents `--clearCache` as a delete-and-exit operation. Run it between mutants, never
+ * while source is changed, so a failed recycle cannot strand a mutation. In-band suites prevent
+ * worker accumulation; cache recycling bounds the other state that exhausted the first full run. */
+function recycleJest() {
+    execFileSync(process.execPath,
+        [JEST_BIN, "--config=./jest.config.js", "--clearCache"],
+        { cwd: ROOT, encoding: "utf8", stdio: "pipe" });
+}
+
 function verdict(out) {
     const total = Number((/Tests:.*?(\d+) total/.exec(out) || [])[1] || 0);
+    if (total === 0) return { v: "ABORTED (zero tests)", total, ok: false, abort: true };
     if (total < EXPECTED_TESTS) return { v: "UNVERIFIED (did not compile?)", total, ok: false };
     const failed = (/Tests:.*?(\d+) failed/.exec(out) || [])[1];
     return { v: failed ? `KILLED (${failed} failing)` : "SURVIVED", total, ok: !!failed };
@@ -1979,12 +1993,6 @@ function verdict(out) {
 // file behind, which makes the tree dirty, which makes every later run refuse to start — so a
 // restore placed after the check could never once have fired. Heal first, then judge.
 restorePendingMutation();
-
-const dirty = execSync("git status --porcelain", { cwd: ROOT, encoding: "utf8" }).trim();
-if (dirty) {
-    console.error("Refusing to run: the tree has uncommitted changes.\n" + dirty);
-    process.exit(2);
-}
 
 /**
  * ONE FAMILY AT A TIME — `MUTANT_ONLY=^OL npm run mutate:dimensions`.
@@ -2051,6 +2059,14 @@ if (process.env.MUTANT_CHECK) {
     }
     console.log(`\n${selected.length - bad.length}/${selected.length} mutants still match their code.`);
     process.exit(bad.length > 0 ? 1 : 0);
+}
+
+// A pre-flight only reads sources and is deliberately useful during a refactor. The real battery
+// edits source files, so only that path requires a clean tree.
+const dirty = execSync("git status --porcelain", { cwd: ROOT, encoding: "utf8" }).trim();
+if (dirty) {
+    console.error("Refusing to run: the tree has uncommitted changes.\n" + dirty);
+    process.exit(2);
 }
 
 /**
@@ -2220,6 +2236,18 @@ if (process.env.MUTANT_POPUP) {
 let survivors = 0;
 for (const mut of selected) {
     showProgress(mut.id);
+    if (done > 0 && done % RECYCLE_EVERY === 0) {
+        try {
+            recycleJest();
+            say(`Recycled Jest cache after ${done} mutants (suites run in-band).`);
+        } catch (e) {
+            say(`ABORTED — Jest cache recycle failed after ${done} mutants: ${String(e)}`);
+            page.finished = true;
+            page.survivors++;
+            refreshPage();
+            process.exit(2);
+        }
+    }
     const file = path.join(ROOT, mut.file);
     const original = fs.readFileSync(file, "utf8");
     // LINE ENDINGS ARE NOT PART OF A MUTATION, and this is subtler than it looks. Every `from`
@@ -2269,6 +2297,12 @@ for (const mut of selected) {
     page.recent.unshift({ id: mut.id, verdict: res.v, note: mut.note, ok: res.ok });
     page.recent.length = Math.min(page.recent.length, 40);
     refreshPage();
+    if (res.abort) {
+        say("Mutation battery stopped: a zero-test run is machine/harness failure, not a verdict. Restart from a clean machine state.");
+        page.finished = true;
+        refreshPage();
+        process.exit(2);
+    }
 }
 
 clearBar();

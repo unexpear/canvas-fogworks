@@ -59,15 +59,20 @@ Assets are CC0, i.e. public domain. Attribution is not required for them; it is 
 
 <https://kenney.nl/>
 
-The `freeassets` tree used throughout development as a measurement corpus. Not redistributed with
-VDE; it is gitignored. Every reader in `core/import` was verified against it, and most of the faults
+The `freeassets` tree used throughout development as a measurement corpus. It is gitignored and
+no longer tracked in the current tree. A 2026-09-02 audit removed a legacy 469-file, ~132 MB tracked
+subset after finding packs that permit use in products but prohibit standalone redistribution.
+The local files were preserved; repository-history rewriting was deliberately left as a separate
+decision. See [docs/ASSET-INVENTORY.md](docs/ASSET-INVENTORY.md).
+
+Every reader in `core/import` was verified against the broader local corpus, and most of the faults
 found this way — interleaved glTF vertex data, OBJ's three index streams, non-unit normals in 206
 files, tilesets declaring no `columns` — were found because real files disagreed with the spec.
 
 ## Files vendored into this repository
 
-Everything above describes software *studied*, not copied. This section is the exception, and it
-is deliberately small.
+The fixtures below are the deliberately selected, provenance-checked third-party files tracked in
+the current tree.
 
 `test-fixtures/tiled/` holds **five unmodified Tiled map and tileset files** (about 43 KB of XML)
 from packs by **Kenney** (<https://kenney.nl>), each released under **Creative Commons Zero

@@ -123,6 +123,34 @@ describe("emitSVG — a raster's identity key must never become an href", () => 
     });
 });
 
+describe("emitSVG — scene lighting", () => {
+    test("builds an sRGB channel transfer and applies it to content", () => {
+        const dom = fakeDom();
+        try {
+            const item = {
+                world: null, nodeId: "lit", role: "content",
+                shape: { kind: "rect", x: 0, y: 0, width: 8, height: 4 },
+                paint: { fill: "#ffffff", opacity: 1, stroke: null, strokeWidth: null,
+                    strokeDash: null, radius: null, cursor: null, pointerEvents: true,
+                    shadow: null, blur: null, blendMode: null }
+            } as unknown as DrawItem;
+            const list = listOf([item]);
+            list.lights = [{ x: 0, y: 0, z: -1, color: "#00ff00", intensity: 0.5 }];
+            list.ambient = 0.25;
+            emitSVG(dom.container, list);
+            const all = walk(dom.container);
+            const filter = all.find(e => e.tagName === "filter" && String(e.attrs.id).startsWith("lighting_"));
+            expect(filter).toBeDefined();
+            expect(filter.getAttribute("color-interpolation-filters")).toBe("sRGB");
+            const funcs = filter.children[0].children;
+            expect(funcs.map((f: any) => [f.tagName, f.getAttribute("slope")]))
+                .toEqual([["feFuncR", "0.25"], ["feFuncG", "0.75"], ["feFuncB", "0.25"]]);
+            const rect = all.find(e => e.tagName === "rect" && e.attrs.width === "8");
+            expect(rect.getAttribute("filter")).toBe(`url(#${filter.attrs.id})`);
+        } finally { dom.restore(); }
+    });
+});
+
 /**
  * The gradient defs (schema 56), through the same fake DOM.
  *

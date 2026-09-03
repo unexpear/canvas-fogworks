@@ -7,6 +7,8 @@
 > [MILESTONES.md](MILESTONES.md) and [docs/README.md](docs/README.md).
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-09-03 for the production and 3D foundation baseline: still accurate BECAUSE
+     IT IS FROZEN. Current implementation status remains in MILESTONES.md and docs/README.md. -->
 <!-- re-read 2026-08-17 after schema 72 (the document screen + playBounds): still accurate BECAUSE
      IT IS FROZEN. This file is the 2026-07-23 record; the screen is not in it. -->
 <!-- re-read 2026-08-16 after schema 71 (per-axis parallax): still accurate BECAUSE IT IS FROZEN. -->

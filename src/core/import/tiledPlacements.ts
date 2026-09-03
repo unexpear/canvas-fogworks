@@ -24,6 +24,7 @@
  * a tile layer ends the object layer above it — is stated once, over there.
  */
 import { Tileset } from "../document/Tileset";
+import { entityFromUserData } from "../document/Entity";
 import { TilePlacement } from "../actions/tileImport";
 import {
     TiledMapResult, TiledTileset,
@@ -97,9 +98,17 @@ export function buildPlacements(
             // A COLLECTION set's per-tile images, which had nowhere to live until schema 67 —
             // 1,207 of them in this corpus.
             tiles: set.tiles.map(t => ({
-                id: t.id, src: sheets.get(t.image) ?? t.image, width: t.width, height: t.height
+                id: t.id,
+                ...(t.image !== null ? { src: sheets.get(t.image) ?? t.image, width: t.width, height: t.height } : {}),
+                ...(t.probability !== undefined ? { probability: t.probability } : {}),
+                ...(t.className !== undefined ? { className: t.className } : {}),
+                ...(t.userData !== undefined ? { userData: t.userData } : {}),
+                ...(entityFromUserData(t.userData) ? { entity: entityFromUserData(t.userData) } : {}),
+                ...(t.collision !== undefined ? { collision: t.collision } : {}),
+                ...(t.animation !== undefined ? { animation: t.animation } : {})
             })),
-            offsetX: set.offsetX, offsetY: set.offsetY
+            offsetX: set.offsetX, offsetY: set.offsetY,
+            ...(set.wangsets && set.wangsets.length > 0 ? { wangsets: set.wangsets } : {})
         });
         return id;
     };

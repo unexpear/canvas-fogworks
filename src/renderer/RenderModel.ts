@@ -51,9 +51,8 @@ import { isHandleOffered } from "../core/actions/nodeEdit";
 import { RendererState } from "./RendererState";
 import { maskOutline } from "../core/paint/SelectionOutline";
 import { SurfaceSpace, surfaceCornerToWorld } from "../core/paint/SurfaceSpace";
+import { visibleGridSize } from "../core/geometry/EditorGrid";
 
-const GRID_BASE = 20;
-const GRID_MAX_LINES_PER_AXIS = 300; // density cap: coarsen the grid instead of exploding line count
 /** Resize-handle size in SCREEN pixels (converted to world by dividing by zoom). Re-exported for backends/tools. */
 export { HANDLE_SIZE_PX };
 
@@ -593,11 +592,8 @@ function buildGrid(
     const vpW = (size.width || 800) / z;
     const vpH = (size.height || 600) / z;
 
-    // Coarsen the grid at low zoom so the visible line count stays bounded.
-    let gridSize = GRID_BASE;
-    while (vpW / gridSize > GRID_MAX_LINES_PER_AXIS || vpH / gridSize > GRID_MAX_LINES_PER_AXIS) {
-        gridSize *= 2;
-    }
+    // Shared with move/resize tools: users snap to the grid they can actually see.
+    const gridSize = visibleGridSize(size.width || 800, size.height || 600, z);
 
     const startX = Math.floor(viewport.x / z / gridSize) * gridSize;
     const startY = Math.floor(viewport.y / z / gridSize) * gridSize;
@@ -1135,8 +1131,8 @@ function buildOverlay(state: RendererState, z: number, doc: ReadonlyDocument, po
         // 0 or 1 root: per-node handles exactly as before (roots, so a parent+child selection
         // shows the parent's handles once, not one set per selected id). An instance COPY gets
         // the four RESIZE corners (they commit a per-instance override) but NOT the rotate knob —
-        // transform overrides are a later slice, and the editor refuses that grab identically,
-        // so draw and pick stay in step.
+        // transform overrides exist in the schema, but this handle path does not yet route through
+        // their action seam. The editor refuses that grab identically, so draw and pick stay in step.
         // A copy shows RESIZE corners only when the edit can actually be recorded — the shared
         // `isHandleOffered` rule, which the picker and the hover cursor read too, so what is
         // drawn, what a press grabs, and what the pointer promises cannot drift apart.

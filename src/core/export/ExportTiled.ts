@@ -153,6 +153,65 @@ function propertiesXml(
     return { xml: `${indent}<properties>\n${rows.join("\n")}\n${indent}</properties>`, notes };
 }
 
+/** Rich per-tile definitions that a plain sheet image cannot express. */
+function tileMetadataXml(set: Tileset, notes: string[]): string {
+    const rows: string[] = [];
+    for (const tile of [...set.tiles].sort((a, b) => a.id - b.id)) {
+        const attrs = [`id="${tile.id}"`];
+        if (tile.className) attrs.push(`class="${escapeXml(tile.className)}"`);
+        if (tile.probability !== undefined) attrs.push(`probability="${tile.probability}"`);
+        const parts: string[] = [];
+        const props = propertiesXml(tile.userData, `tile ${tile.id}`, "    ");
+        notes.push(...props.notes);
+        if (props.xml) parts.push(props.xml);
+        if (tile.collision && tile.collision.length > 0) {
+            const objects = tile.collision.map((shape, i) => {
+                const a = [`id="${i + 1}"`, `x="${shape.x}"`, `y="${shape.y}"`,
+                    `width="${shape.width}"`, `height="${shape.height}"`];
+                if (shape.rotation !== 0) a.push(`rotation="${shape.rotation}"`);
+                const inner = shape.kind === "ellipse" ? "<ellipse/>"
+                    : shape.kind === "point" ? "<point/>"
+                    : shape.kind === "polygon" || shape.kind === "polyline"
+                        ? `<${shape.kind} points="${(shape.points ?? []).map(p => `${p.x},${p.y}`).join(" ")}"/>`
+                        : "";
+                return inner ? `     <object ${a.join(" ")}>${inner}</object>` : `     <object ${a.join(" ")}/>`;
+            });
+            parts.push(`    <objectgroup>\n${objects.join("\n")}\n    </objectgroup>`);
+        }
+        if (tile.animation && tile.animation.length > 0) {
+            parts.push(`    <animation>\n${tile.animation.map(f =>
+                `     <frame tileid="${f.tileId}" duration="${f.duration}"/>`).join("\n")}\n    </animation>`);
+        }
+        if (parts.length > 0 || attrs.length > 1) {
+            rows.push(parts.length > 0
+                ? `   <tile ${attrs.join(" ")}>\n${parts.join("\n")}\n   </tile>`
+                : `   <tile ${attrs.join(" ")}/>`);
+        }
+    }
+    if (set.wangsets && set.wangsets.length > 0) {
+        const sets = set.wangsets.map(wang => {
+            const a = [`name="${escapeXml(wang.name)}"`, `tile="${wang.tile}"`];
+            if (wang.className) a.push(`class="${escapeXml(wang.className)}"`);
+            const parts: string[] = [];
+            const props = propertiesXml(wang.userData, `wangset "${wang.name}"`, "    ");
+            notes.push(...props.notes);
+            if (props.xml) parts.push(props.xml);
+            for (const color of wang.colors) {
+                const ca = [`name="${escapeXml(color.name)}"`, `color="${escapeXml(color.color)}"`,
+                    `tile="${color.tile}"`, `probability="${color.probability}"`];
+                const cp = propertiesXml(color.userData, `wang color "${color.name}"`, "     ");
+                notes.push(...cp.notes);
+                parts.push(cp.xml ? `    <wangcolor ${ca.join(" ")}>\n${cp.xml}\n    </wangcolor>`
+                    : `    <wangcolor ${ca.join(" ")}/>`);
+            }
+            for (const wt of wang.tiles) parts.push(`    <wangtile tileid="${wt.tileId}" wangid="${wt.wangId.join(",")}"/>`);
+            return `   <wangset ${a.join(" ")}>\n${parts.join("\n")}\n   </wangset>`;
+        });
+        rows.push(`  <wangsets>\n${sets.join("\n")}\n  </wangsets>`);
+    }
+    return rows.length > 0 ? "\n" + rows.join("\n") : "";
+}
+
 /** One object as a `.tmx` element, or null with the reason it cannot be written. */
 function objectXml(
     node: { type: string; name?: string; geometry: { x: number; y: number; width: number; height: number };
@@ -371,7 +430,8 @@ export function exportTiledMap(doc: ReadonlyDocument, image: string): TiledExpor
             + (u.set.sheet!.spacing !== 0 ? ` spacing="${u.set.sheet!.spacing}"` : "")
             + (u.set.sheet!.margin !== 0 ? ` margin="${u.set.sheet!.margin}"` : "")
             + ` tilecount="${u.tileCount}" columns="${u.set.sheet!.columns}">\n`
-            + `  <image source="${escapeXml(u.image)}"/>\n`
+            + `  <image source="${escapeXml(u.image)}"/>`
+            + tileMetadataXml(u.set, notes) + `\n`
             + ` </tileset>\n`).join("")
         + body + (objectGroups.length > 0 ? "\n" + objectGroups.join("\n") : "") + `\n</map>\n`;
     return { xml, notes };

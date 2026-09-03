@@ -159,12 +159,21 @@ export const CURRENT_VERSION: string =
  *         21 already meant — so `migrate_21_to_22` is a pass-through. The bump is still required:
  *         a schema-21 build would IGNORE the overrides and render every instance identically,
  *         silently misstating the document.
+ *
+ *   "74" — adds optional `ProjectDocument.assets3d` and `Node.spatial3d`: stable imported
+ *         asset identities plus typed transforms, cameras, lights, renderables and colliders.
+ *         Absent means no authored 3D state, so `migrate_73_to_74` is a pass-through.
+ *   "75" — adds optional `Spatial3D.environment`, referencing a texture asset. Absent preserves
+ *         schema 74's neutral renderer fallback, so migration is a pass-through.
+ *   "76" — adds optional `Spatial3D.composition2d`, making 2D planes and billboards explicit.
+ *         Absent preserves the previous separation between the 2D and 3D workspaces.
  */
 import type { TimelineSettings } from "./Timeline";
 import type { Light } from "./Light";
 import type { Tileset } from "./Tileset";
+import type { Asset3D } from "./Spatial3D";
 
-export const SCHEMA_VERSION = "72";
+export const SCHEMA_VERSION = "76";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
@@ -236,6 +245,8 @@ export interface ProjectDocument {
      * node cost a 2.5x duplication and made a collection set impossible to describe.
      */
     tilesets?: Tileset[];
+    /** Stable imported 3D asset records (schema 74). Source paths are metadata, not identity. */
+    assets3d?: Asset3D[];
     /**
      * What the document is LIT by (schema 42). Absent = unlit, which every document was.
      *

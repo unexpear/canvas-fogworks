@@ -10,7 +10,7 @@
  * the doc is flagged. Clearing the flag means committing the doc — which is the
  * re-read this exists to force.
  *
- * WHAT THIS IS NOT: it cannot tell you the prose is wrong. Nothing can. It targets
+ * WHAT THIS IS NOT: it cannot generally tell you the prose is wrong. It targets
  * the failure that actually occurred — editing one section of a document and never
  * re-reading the rest, so drift accumulated in the parts nobody was looking at.
  * It answers "did the code this describes move without you looking?", not "is this
@@ -39,6 +39,12 @@
  * below and BOTH lack the directive, so for as long as this script has existed it has looked them
  * up, found nothing, and moved on in silence. They sat at a 2026-07-23 status line with six
  * milestones marked not-started that were substantially done.
+ *
+ * THE THIRD CHECK IS NARROWLY SEMANTIC. General prose verification is impossible, but several
+ * contradictions that shipped have exact, machine-readable counterparts: the live schema number,
+ * the highest numbered runtime slice, a completed milestone's status, known stale phrases, the
+ * structured backlog, and whether a forbidden reference corpus is tracked. Those are checked below
+ * rather than hidden behind the broader claim that prose cannot be checked.
  */
 
 const { execSync } = require("child_process");
@@ -164,6 +170,111 @@ function checkStamps(current) {
     return { wrong, unstamped };
 }
 
+/** Exact consistency rules for claims that have one machine-readable answer. */
+function checkSemanticConsistency(current) {
+    const issues = [];
+    const read = rel => fs.readFileSync(path.join(rootDir, rel), "utf-8");
+    const milestones = read("MILESTONES.md");
+
+    const statusSchema = /Status reconciled[\s\S]{0,180}?schema \*\*(\d+)\*\*/.exec(milestones);
+    if (!statusSchema) issues.push("MILESTONES.md has no machine-readable reconciled schema summary");
+    else if (statusSchema[1] !== current) {
+        issues.push(`MILESTONES.md summary says schema ${statusSchema[1]}, source says ${current}`);
+    }
+
+    if (!/^M6\s+Components\s+✅/m.test(milestones)) {
+        issues.push("MILESTONES.md engine stack does not mark completed M6 Components as done");
+    }
+    if (!/^### Milestone 6 \u2014 Components ✅/m.test(milestones)) {
+        issues.push("MILESTONES.md M6 body does not mark Components as done");
+    }
+    if (!/^M15\s+Plugins\s+🚧/m.test(milestones)) {
+        issues.push("MILESTONES.md denies the landed M15 scripting foundation");
+    }
+    if (!/^M17\s+Production Hardening\s+🚧/m.test(milestones)) {
+        issues.push("MILESTONES.md does not acknowledge active production hardening");
+    }
+
+    const runtimeAt = milestones.indexOf("## Phase 18 \u2014 Game Runtime");
+    const runtime = runtimeAt >= 0 ? milestones.slice(runtimeAt) : "";
+    const sliceNumbers = [...runtime.matchAll(/\*\*Slice (\d+)\b/gi)].map(m => Number(m[1]));
+    const maxSlice = sliceNumbers.length > 0 ? Math.max(...sliceNumbers) : 0;
+    const bodyClaim = /### Milestone 18[^\n]*\(slices 1[\-–](\d+) landed\)/.exec(runtime);
+    const stackClaim = /^M18\s+Game Runtime[^\n]*slices 1[\-–](\d+)/m.exec(milestones);
+    if (maxSlice === 0) issues.push("MILESTONES.md has no numbered M18 slices");
+    if (!bodyClaim || Number(bodyClaim[1]) !== maxSlice) {
+        issues.push(`MILESTONES.md M18 heading does not match highest documented slice ${maxSlice}`);
+    }
+    if (!stackClaim || Number(stackClaim[1]) !== maxSlice) {
+        issues.push(`MILESTONES.md engine stack does not match highest documented M18 slice ${maxSlice}`);
+    }
+
+    const forbidden = [
+        ["docs/DOCUMENT-SCHEMA.md", /layout.?\/transform overrides are a later slice/i,
+            "component schema still defers live layout/transform overrides"],
+        ["docs/FEATURE-AUDIT.md", /\| \*\*Object layers\*\* \| \*\*absent\*\*/,
+            "feature audit still marks live Tiled object layers absent"],
+        ["docs/FEATURE-AUDIT.md", /collection set is representable but not yet drawable/i,
+            "feature audit still calls drawable collection tilesets undrawable"],
+        ["docs/TESTING.md", /text` \/ `src` \/ `name` branches have no producing Action/i,
+            "testing gaps still deny UpdateNodeContentAction"],
+        ["docs/DOCUMENT-SCHEMA.md", /^## Gradient \u2014 modelled, NOT yet persisted$/m,
+            "schema still presents the superseded pre-56 gradient boundary as current"],
+        ["docs/API-CONTRACTS.md", /\*\*NOT YET CALLED\.\*\* `ensureTarget`/,
+            "API contracts still call the live WebGL effects pass unreachable"],
+        ["docs/API-CONTRACTS.md", /\*\*Canvas draws rasters; the GPU backend does not yet\*\*/,
+            "API contracts still deny live WebGL raster drawing"],
+        ["docs/API-CONTRACTS.md", /the non-destructive `core\.boolean` node is a later slice/i,
+            "API contracts still defer the live schema-33 boolean node"],
+        ["docs/ACTION-SYSTEM.md", /a `core\.boolean` node[^\n]*is a later slice/i,
+            "action docs still defer the live schema-33 boolean node"],
+        ["docs/DOCUMENT-SCHEMA.md", /Reserved-but-unused today:\*\* `states`/i,
+            "schema still labels live states as unused"],
+        ["docs/DOCUMENT-SCHEMA.md", /World-position-preserving reparent is deferred to M2/i,
+            "schema assigns an open reparent limitation to completed M2"]
+    ];
+    for (const [rel, pattern, reason] of forbidden) {
+        if (pattern.test(read(rel))) issues.push(`${rel}: ${reason}`);
+    }
+
+    try {
+        const backlog = JSON.parse(read("docs/BACKLOG.json"));
+        const allowedStatus = new Set(backlog.statuses ?? []);
+        const allowedPriority = new Set(backlog.priorities ?? []);
+        const ids = new Set();
+        if (backlog.schemaVersion !== 1) issues.push("docs/BACKLOG.json has an unsupported schemaVersion");
+        if (!Array.isArray(backlog.items) || backlog.items.length === 0) {
+            issues.push("docs/BACKLOG.json has no items");
+        } else {
+            for (const item of backlog.items) {
+                if (typeof item.id !== "string" || ids.has(item.id)) issues.push(`invalid/duplicate backlog id: ${item.id}`);
+                ids.add(item.id);
+                if (!allowedStatus.has(item.status)) issues.push(`backlog ${item.id} has invalid status ${item.status}`);
+                if (!allowedPriority.has(item.priority)) issues.push(`backlog ${item.id} has invalid priority ${item.priority}`);
+                if (typeof item.summary !== "string" || item.summary.trim() === "") issues.push(`backlog ${item.id} has no summary`);
+            }
+            const direction = backlog.productDirection;
+            if (direction?.mode !== "dual-track"
+                || !Array.isArray(direction.tracks)
+                || !direction.tracks.includes("visual-pixel-editing")
+                || !direction.tracks.includes("game-authoring")) {
+                issues.push("docs/BACKLOG.json does not preserve the resolved dual-track product direction");
+            }
+            if (backlog.items.some(i => i.id === "DIRECTION-001" || i.status === "decision")) {
+                issues.push("docs/BACKLOG.json still treats the resolved product direction as an open decision");
+            }
+        }
+    } catch (e) {
+        issues.push(`docs/BACKLOG.json is not valid JSON: ${e.message}`);
+    }
+
+    const trackedAssets = git("ls-files -- freeassets");
+    if (trackedAssets) {
+        issues.push(`freeassets contains ${trackedAssets.split("\n").length} tracked reference files`);
+    }
+    return issues;
+}
+
 const stale = [];
 for (const { doc, deps } of findDeclaringDocs()) {
     const docSha = git(`log -1 --format=%H -- "${doc}"`);
@@ -183,9 +294,10 @@ for (const { doc, deps } of findDeclaringDocs()) {
 const current = currentSchemaVersion();
 const { wrong, unstamped } = checkStamps(current);
 const undeclared = checkUndeclared();
+const semantic = checkSemanticConsistency(current);
 
-if (stale.length === 0 && wrong.length === 0 && unstamped.length === 0 && undeclared.length === 0) {
-    console.log(`Doc drift: no declared doc is behind its sources, and every stamp says v${current}.`);
+if (stale.length === 0 && wrong.length === 0 && unstamped.length === 0 && undeclared.length === 0 && semantic.length === 0) {
+    console.log(`Doc drift: sources, schema-v${current} stamps, roadmap summaries, backlog and tracked-asset policy agree.`);
     process.exit(0);
 }
 
@@ -219,5 +331,10 @@ if (undeclared.length > 0) {
     for (const d of undeclared) console.log(`  ${d}`);
     console.log("\nBeing skipped in silence is indistinguishable from passing. Add a directive, e.g.");
     console.log("`<!-- describes: src/core -->`, or the doc drifts unwatched.\n");
+}
+if (semantic.length > 0) {
+    console.log("Machine-checkable documentation/repository contradictions:\n");
+    for (const issue of semantic) console.log(`  ${issue}`);
+    console.log("");
 }
 process.exit(1);

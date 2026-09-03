@@ -330,7 +330,12 @@ export function marioRules(
             const other = doc.nodes.get(e.nodeId);
             if (!other) continue;
             const part = partOf(other);
-            if (part.goal) { out.push({ kind: "endRun", outcome: "won" }); return out; }
+            if (part.goal) {
+                const target = other.entity?.transitionTo;
+                if (target) out.push({ kind: "transition", target });
+                else out.push({ kind: "endRun", outcome: "won" });
+                return out;
+            }
             if (part.deadly && e.side !== "below") {
                 // A STARRED PLAYER KILLS WHAT WOULD KILL IT (M18 slice 36) — SMB1's star, where
                 // any contact destroys the enemy. The comparison is against the world's own clock,

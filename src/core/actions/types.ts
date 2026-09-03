@@ -15,6 +15,7 @@ import { Tilemap } from "../document/Tilemap";
 import { Light } from "../document/Light";
 import { Clip } from "../document/Clips";
 import { Tileset } from "../document/Tileset";
+import { Asset3D, Spatial3D } from "../document/Spatial3D";
 
 /**
  * The reserved `propertyDeltas` key a DOCUMENT-LEVEL delta (kind "variables") travels
@@ -101,6 +102,10 @@ export type NodeDelta =
         className?: string | null;
         /** Author-defined properties (schema 64); null clears them. Whole-map, like `overrides`. */
         userData?: UserData | null;
+        /** Typed gameplay declarations (schema 73); null clears them. */
+        entity?: import("../document/Entity").Entity | null;
+        /** Typed 3D authoring components (schemas 74-75); null clears them. */
+        spatial3d?: Spatial3D | null;
         src?: string;
         name?: string;
         /** Whole-map replace of a `core.instance`'s per-instance overrides (M6 slice 2). Whole-map
@@ -177,7 +182,9 @@ export type NodeDelta =
     | { kind: "background"; background: string | undefined }
     /** ONE SCREEN OF THE GAME (schema 72). Whole-value under its own document key, like the sky it
      *  sits beside. `undefined` removes the declaration — the state of every pre-72 document. */
-    | { kind: "screen"; screen: { width: number; height: number } | undefined };
+    | { kind: "screen"; screen: { width: number; height: number } | undefined }
+    /** Stable imported 3D assets (schema 74), replaced as one validated table. */
+    | { kind: "assets3d"; assets3d: Asset3D[] | undefined };
 
 /** The result of an action execution. Communicates changes without coupling services. */
 export interface MutationResult {
@@ -225,6 +232,7 @@ export interface DocumentSnapshot {
     clips?: ProjectDocument["clips"];
     lights?: ProjectDocument["lights"];
     ambient?: ProjectDocument["ambient"];
+    assets3d?: ProjectDocument["assets3d"];
 }
 
 /** The serialized payload needed to store history for Undo/Redo */

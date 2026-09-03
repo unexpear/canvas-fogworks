@@ -17,7 +17,20 @@
 <!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
      below. The earlier note stands — the rectangle gesture added no field. -->
 
-> 🔒 Frozen contract · schema v72 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v76 (app v0.0.5). Types are in `src/core/document/`.
+
+### Typed 3D authoring state (schemas 74–76)
+
+The document may carry an `assets3d` table of stable mesh, material and texture records,
+and any node may carry `spatial3d` with a required position/quaternion/scale transform plus
+optional camera, light, asset-backed renderable, collider, environment and 2D-composition
+components. `composition2d` explicitly chooses a transform-following plane or camera-facing
+billboard, a positive pixels-per-unit scale and lit/unlit behavior. These are separate
+from the established 2D transform and deformation mesh contracts.
+
+Asset `source` values are bounded, normalized project-relative paths. They are provenance for
+reimport, not identity; scene references use `Asset3D.id`. References are allowed to be unresolved
+so an asset removal leaves an inert component rather than a document that cannot be opened.
 
 ## ProjectDocument
 
@@ -98,7 +111,30 @@ interface Node {
   hidden?: boolean;                 // schema 31 — dropped from the DISPLAYED scene with its subtree; still stored, still listed
   locked?: boolean;                 // schema 31 — still drawn, not selectable; INHERITED by the subtree
   name?: string;                    // display name
+  entity?: Entity;                  // schema 73 — validated engine-owned gameplay declarations
 }
+
+interface Entity {
+  body?: "static" | "dynamic" | "kinematic" | "sensor";
+  friction?: number;
+  player?: boolean;
+  respawnAt?: string;
+  transitionTo?: string;
+  stompable?: boolean;
+  patrol?: number;
+  deadly?: boolean;
+  goal?: boolean;
+  collectible?: "coin" | "power" | "star";
+  powers?: number;
+  stars?: number;
+  bounces?: number;
+  warpsTo?: string;
+}
+
+`entity` is the typed runtime contract. Imported and custom `userData` remains lossless; migration
+projects recognized schema-72 conventions into `entity` without deleting their original values.
+Tileset tiles use the same entity shape and may additionally preserve Tiled class, properties,
+collision, animation and wangset data.
 
 interface Geometry { x: number; y: number; width: number; height: number; }
 // COORDINATE SPACE: x/y are PARENT-RELATIVE. See the rule below.
@@ -515,7 +551,8 @@ world(node) = world(node.parent) + node.geometry.{x,y}      // root: world == st
 - Composition is full 2D affine (`Mat2D`): rotation and scale propagate from parent to
   child. World→local uses a real inverse matrix (`toLocal`), not subtraction.
 - **Reparenting keeps stored (relative) coordinates**, so a node moves with its new
-  parent. World-position-preserving reparent is deferred to M2.
+  parent. The bare reparent action still preserves stored local coordinates, not world
+  position; callers that need a visually stationary reparent pair it with a geometry move.
 
 **Rotation / scale — landed in schema 2 (Milestone 1).** `Node.transform` is optional:
 
@@ -612,7 +649,8 @@ CSS `flex-grow`), and is consumed by the container parent during positioning.
   pass, so there is no cycle and a growing child does not change a hug ancestor's size.
 - **Inert when there is no free space:** a *standalone* container that hugs its main axis,
   or one whose children already overflow, has nothing to distribute (overflow is *not*
-  shrunk — flex-shrink is deferred). `grow` and `alignItems: "stretch"` are orthogonal
+  shrunk — flex-shrink had not landed at schema 5; schema 9 added it). `grow` and
+  `alignItems: "stretch"` are orthogonal
   (main vs cross axis).
 - **grow wins over hug on a shared axis.** A node can be both a hug *container* and a grow
   *child*: it hugs its own content, but if its parent grows it, the grown size wins and its
@@ -843,11 +881,10 @@ of `deserializeDocument`, so a hand-edited or third-party file with `opacity: 5`
 `width: -10`, a dangling `parent`, or a ghost root now **fails loudly at the
 boundary** instead of corrupting state later.
 
-> **Reserved-but-unused today:** `states` and the `layout` *constraint* fields
-> (`horizontalAlignment` / `verticalAlignment` / `spacing`) are part of the schema so
-> later milestones don't require a breaking change, but the current renderer/actions do
-> not yet interpret them. **`layout.container` (M2 auto-layout) and the `variables`
-> store + `$token` resolution (M5 design tokens) are live.**
+> **Reserved-but-unused today:** the legacy `layout` constraint fields
+> (`horizontalAlignment` / `verticalAlignment` / `spacing`) round-trip but are not
+> interpreted by the current layout engine. **`states` (M7), `layout.container` plus
+> grow/shrink (M2), and the `variables` store + `$token` resolution (M5) are live.**
 
 ## RasterSurface (pixels the document OWNS — schema 55)
 
@@ -928,7 +965,7 @@ deltas travel under.
 `doc.activeTheme` ("light"/"dark", absent on the wire = "light") is persisted — a
 document reopens in the theme it was saved in — and changed only through an action.
 
-## Components & instances (schema 21, Milestone 6)
+## Components & instances (schemas 21–29, Milestone 6)
 
 A component **master** is an ordinary node subtree in the document — no new storage, so it
 reuses every existing mechanism (validation, geometry, layout, serialization, actions,
@@ -942,30 +979,40 @@ hit-testing and both backends work on an ordinary tree with no special cases. Be
 is copied into the document, editing a master updates every instance on the next frame.
 
 Virtual ids are `<instance path>::<master node id>`, so they are stable, unique and
-REVERSIBLE (`splitVirtualId` → the owning instance + the master node it copies — what
-per-child overrides will key on). Virtual nodes are **not selectable** in this slice:
-`hitTest`/`nodesInRect` skip them, so clicking instance content selects the instance.
+REVERSIBLE (`splitVirtualId` → the owning instance + the master node it copies). A plain click
+selects the owning instance; ALT-click asks `hitTest` to include virtual nodes and selects the
+copy for override editing. Marquee selection continues to select stored nodes rather than
+scattering across a component's internals.
 
-**Overrides (schema 22).** An instance may carry `overrides` — what THIS copy changes about
-one node of its master subtree, keyed by MASTER NODE ID:
+**Overrides (schemas 22–29).** An instance may carry `overrides` — what THIS copy changes about
+one node of its master subtree. Schema 28 made the key a PATH of master-node ids, so an outer
+instance can target content through a nested instance:
 
 ```ts
-interface InstanceOverride { geometry?: Partial<Geometry>; style?: Partial<Style>; text?: string; src?: string }
+interface InstanceOverride {
+  geometry?: Partial<Geometry>;
+  style?: Partial<Style>;
+  text?: string;
+  src?: string;
+  sourceRect?: SourceRect;
+  layout?: Partial<Layout>;
+  transform?: Partial<Transform>;
+  slotContent?: Record<string, string>;
+}
 ```
 
-Keying by identity (not position) means an override survives edits to the master and goes
-INERT — never invalid — if that master node is deleted. Each field is validated by the SAME
+Keying by an identity path (not position) means an override survives edits to the master and
+goes INERT — never invalid — if a target master node is deleted. Each field is validated by the SAME
 rule its stored counterpart obeys (`styleError`, finite geometry numbers), so an override can
 never smuggle in a value the node itself could not hold; the map is capped by
-`INSTANCE_MAX_OVERRIDES`. Expansion applies the overrides of the instance driving each level,
-so a nested instance applies the ones it carries from the master; overriding THROUGH a nested
-instance is deferred. A ROOT override may resize the copy but never move it — its position is
-the instance's own geometry. `layout`/`transform` overrides are a later slice.
+`INSTANCE_MAX_OVERRIDES`. Expansion applies the overrides of the instance driving each level.
+A ROOT override may resize the copy but never move it — its position is the instance's own
+geometry. Layout and transform overrides landed in schema 26; nested override paths in schema
+28; slot-content overrides in schema 29.
 
-In the editor, ALT-clicking drills into a copy (`hitTest`'s `includeVirtual`); moving or
-resizing it routes through `nodeEdit`'s action factory, which writes an override instead of a
-stored-geometry edit. The rotate knob is not offered on a copy (transform overrides are
-deferred), in both the renderer and the picker.
+In the editor, ALT-clicking drills into a copy (`hitTest`'s `includeVirtual`). Geometry, style,
+content, layout and transform edits route through `nodeEdit` factories, which write overrides
+instead of stored-node edits. Transform overrides make the rotate control live on copies.
 
 Each field is ALSO checked by `overrideAgainstMasterError`, which resolves the key's master node
 and applies the same per-type `dimensionError` a stored geometry edit obeys — `overridesError`
@@ -989,6 +1036,16 @@ several masters, and nested instances that MULTIPLY rather than add): a per-path
 `INSTANCE_MAX_NODES`. A stopped expansion draws nothing — it never throws. A **dangling**
 `componentId` is valid at rest and draws nothing, so deleting a master can never make a
 document unloadable (the same rule dangling `$token` aliases follow).
+
+**Variants (schema 27).** A master may carry a `VariantKey`; an instance carries a sparse
+property selection. `resolveVariantMaster` chooses an exact member of the same set and falls
+back to the pointed-at master when nothing matches. Switching variants remaps overrides by
+stable identity/name where possible and preserves unmatched entries inertly.
+
+**Slots (schema 29).** Any node in a master may name a slot. An instance's `slotContent` maps
+that name to a stored node used as the fill; absent or dangling fills fall back to the slot's
+own children. Slot content is a reference, not a reparent, and nested slot fills travel through
+the same override-path mechanism.
 
 ## Boolean nodes (schema 33)
 
@@ -1059,16 +1116,15 @@ from having selected that state.
 | the blended document carries NO `activeState` | every consumer resolves through `resolveScene`, which applies it again — naming the target overwrote the interpolation with the target's own values |
 | a captured state records geometry and transform, not just style | `blendStates` interpolates them, so style-only capture left most of the transition machinery with no authorable input |
 
-## Gradient — modelled, NOT yet persisted
+## Historical pre-schema-56 gradient note (superseded)
 
-`core/document/Gradient.ts` exists and **the schema is unchanged at 55**, deliberately. Nothing in
-a document can hold a gradient yet: `Style.fill` is still a colour string, so there is nothing to
-migrate and nothing to bump.
+This was the schema-55 boundary: `core/document/Gradient.ts` existed while `Style.fill` was still
+only a colour string, so there was then nothing to migrate and no schema bump to make.
 
-It is written down here because the file sits in `src/core/document` and a reader will find it and
-reasonably ask whether documents carry one. They do not.
+It remains here as migration history, not current status. Gradients became persisted `Style.fill`
+values in schema 56; the current contract is the later **Gradient (schema 56)** section below.
 
-`core/import/SvgGradient.ts` now READS them — 3,090 of the corpus's 3,127 gradient tags (the other
+At this boundary `core/import/SvgGradient.ts` read them — 3,090 of the corpus's 3,127 gradient tags (the other
 37 are duplicate ids, which a browser resolves to the first and so does this). Nothing consumes the
 result yet, for the same reason: there is nowhere in a document to put one.
 
@@ -1124,7 +1180,7 @@ There are **two independent version identifiers**. Confusing them is a data-loss
 
 | Constant | Meaning | Changes when | Used for |
 |----------|---------|--------------|----------|
-| `SCHEMA_VERSION` | on-disk document schema (currently `"66"`. The chain is NOT recited here: this cell used to carry one, it stopped at 30 while the code went to 66, and a hand-copied list of 60-odd migrations is a second source of truth that can only rot. Read `migrateIfNeeded` in `Serializer.ts` — every step states its own reason) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
+| `SCHEMA_VERSION` | on-disk document schema (read the current value and migration chain from `Document.ts` / `Serializer.ts`; do not duplicate the number here) | **only** when the persisted shape **or interpretation** changes | `document.version`, the migration gate |
 | `CURRENT_VERSION` | app/release version (injected from `package.json` via esbuild `define`; literal fallback in tests) | every release | display only (status bar, About) |
 
 They are deliberately decoupled: **shipping a new build must never orphan saved
@@ -2032,3 +2088,14 @@ never retries a failure: an href that already failed has fired its `error` and w
 so a listener attached afterwards waits forever and the import hangs with nothing reported. `complete`
 is the only thing that can tell, and a test asserts the hang by racing a timeout — it reports `"HUNG"`
 without the guard.
+Schema 75 adds `Spatial3D.environment = { textureAssetId, intensity, rotationDegrees }`. The id
+must name a project-relative texture asset for rendering; unresolved references are inert and use
+the neutral fallback. A document may author one scene environment. Decoded RGBE pixels are
+transient renderer data and never serialize.
+
+Schema 76 adds
+`Spatial3D.composition2d = { mode: "plane" | "billboard", pixelsPerUnit, lit }`. Absent keeps a
+2D node out of the 3D frame exactly as schema 75 did. Plane mode follows the authored 3D transform;
+billboard mode preserves its 3D position and faces the active camera. The 2D geometry remains in
+pixels and is converted to world units only by the positive `pixelsPerUnit` value. A node cannot
+carry both `renderable` and `composition2d`; the validator refuses that ambiguous double surface.

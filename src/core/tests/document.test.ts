@@ -121,7 +121,7 @@ import { parseTiledMap, parseTiledTileset, tiledMapError, decodeGid, tilesetFor,
     TiledObject, TiledObjectGroup, TiledProperty } from "../import/TiledMap";
 import { parseGlb, glbError, parseGltf, gltfError, readAccessor, nodeMatrix, multiplyMat4,
     GltfJson, GLTF_IGNORABLE_REQUIRED, GLTF_MAX_NODE_DEPTH,
-    gltfMaterials, gltfImageSource } from "../import/Gltf";
+    gltfMaterials, gltfImageSource, gltfTextureBinding } from "../import/Gltf";
 import { parseObj, objError, parseMtl, mtlError, resolveObjIndex,
     OBJ_FACE_MAX_CORNERS, OBJ_MAX_GROUPS } from "../import/Obj";
 import { MESH_IDENTITY } from "../import/MeshData";
@@ -217,6 +217,9 @@ import { SelectTool } from "../../editor/tools/SelectTool";
 import { ToolController } from "../../editor/tools/ToolController";
 import { Node, NODE_TYPES, nodeIdError, srcError, IMAGE_SRC_MAX, GRID_SPAN_MAX, GRID_MAX_TRACKS, dimensionError, isNodeType, pathError, PATH_MAX_COMMANDS, PathCommand, styleError, Shadow, TrackSize, layoutError, newGridPatch, mergeLayout, transformError, Layout, variantError, variantSelectionError , slotError, slotContentError, flatFill} from "../document/Node";
 import { parseTrackList, formatTrackList } from "../document/TrackList";
+import { Asset3D, Spatial3D, IDENTITY_TRANSFORM_3D, assets3DError, spatial3DError } from "../document/Spatial3D";
+import { SetAssets3DAction } from "../actions/SetAssets3DAction";
+import { SetSpatial3DAction } from "../actions/SetSpatial3DAction";
 
 /** A hand-built ComputedNode's ink: a plain square box (what every non-shape type gets). */
 const BOX = { kind: "box", radius: 0 } as const;
@@ -331,6 +334,94 @@ describe("Empty document edge cases", () => {
         const b = createEmptyDocument();
         b.metadata.date = a.metadata.date; // equalize creation timestamps
         expect(compareDocuments(a, b)).toBe(true);
+    });
+});
+
+describe("3D foundation contracts (schemas 74-76)", () => {
+    const assets: Asset3D[] = [
+        { id: "mesh-triangle", kind: "mesh", source: "assets/triangle.gltf", name: "Triangle" },
+        { id: "material-white", kind: "material", source: "assets/triangle.gltf#material-0", name: "White" },
+        { id: "environment", kind: "texture", source: "assets/studio.hdr", name: "Studio" }
+    ];
+    const spatial: Spatial3D = {
+        transform: {
+            position: { ...IDENTITY_TRANSFORM_3D.position },
+            rotation: { ...IDENTITY_TRANSFORM_3D.rotation },
+            scale: { ...IDENTITY_TRANSFORM_3D.scale }
+        },
+        camera: { kind: "perspective", near: 0.1, far: 1000, verticalFovDegrees: 60 },
+        light: { kind: "directional", color: { x: 1, y: 0.9, z: 0.8 }, intensity: 3 },
+        renderable: { meshAssetId: "mesh-triangle", materialAssetIds: ["material-white"] },
+        collider: { kind: "box", halfExtents: { x: 0.5, y: 0.5, z: 0.1 } },
+        environment: { textureAssetId: "environment", intensity: 1.5, rotationDegrees: 45 }
+    };
+
+    test("validates typed components and stable project-relative asset records", () => {
+        expect(assets3DError(assets)).toBeNull();
+        expect(spatial3DError(spatial)).toBeNull();
+        expect(assets3DError([{ ...assets[0], source: "C:/outside/triangle.gltf" }])).toMatch(/project-relative/);
+        expect(assets3DError([assets[0], { ...assets[0] }])).toMatch(/duplicate/);
+        expect(spatial3DError({ ...spatial, renderable: {
+            meshAssetId: "mesh-triangle", materialAssetIds: ["material-white", "material-white"]
+        } })).toBeNull();
+        expect(spatial3DError({ ...spatial, transform: { ...spatial.transform, rotation: { x: 0, y: 0, z: 0, w: 2 } } })).toMatch(/unit quaternion/);
+        expect(spatial3DError({ ...spatial, camera: { kind: "perspective", near: 1, far: 0.5, verticalFovDegrees: 60 } })).toMatch(/greater than near/);
+        expect(spatial3DError({ ...spatial, environment: { ...spatial.environment!, intensity: -1 } })).toMatch(/intensity/);
+        expect(spatial3DError({ ...spatial, renderable: undefined,
+            composition2d: { mode: "plane", pixelsPerUnit: 100, lit: true } })).toBeNull();
+        expect(spatial3DError({ ...spatial, composition2d: { mode: "screen", pixelsPerUnit: 100, lit: true } as any })).toMatch(/plane or billboard/);
+        expect(spatial3DError({ ...spatial, composition2d: { mode: "plane", pixelsPerUnit: 0, lit: true } })).toMatch(/pixelsPerUnit/);
+        expect(spatial3DError({ ...spatial,
+            composition2d: { mode: "plane", pixelsPerUnit: 100, lit: true } })).toMatch(/mutually exclusive/);
+        const duplicate = createDocWithRectangle(), first = duplicate.nodes.get("rectangle-001")!;
+        first.spatial3d = spatial;
+        duplicate.nodes.set("environment-2", { ...first, id: "environment-2", children: [], parent: null });
+        duplicate.rootNodeUuids.push("environment-2");
+        expect(() => validateDocumentIntegrity(duplicate)).toThrow(/only one authored 3D environment/);
+    });
+
+    test("persists Action-backed assets/components and restores them through undo/redo", () => {
+        const doc = createDocWithRectangle();
+        const dispatcher = new ActionDispatcher(doc);
+        const import3d = new TransactionAction(doc, "Import 3D asset", [
+            new SetAssets3DAction(doc, assets),
+            new SetSpatial3DAction(doc, "rectangle-001", spatial)
+        ]);
+        expect(dispatcher.dispatchAction(import3d).success).toBe(true);
+
+        const saved = serializeDocument(dispatcher.getDocument());
+        const loaded = deserializeDocument(saved);
+        expect(loaded.assets3d).toEqual(assets);
+        expect(loaded.nodes.get("rectangle-001")!.spatial3d).toEqual(spatial);
+
+        dispatcher.undo();
+        expect(dispatcher.getDocument().nodes.get("rectangle-001")!.spatial3d).toBeUndefined();
+        expect(dispatcher.getDocument().assets3d).toBeUndefined();
+        dispatcher.redo();
+        expect(dispatcher.getDocument().assets3d).toEqual(assets);
+        expect(dispatcher.getDocument().nodes.get("rectangle-001")!.spatial3d).toEqual(spatial);
+    });
+
+    test("migrates schema 73 without inventing 3D state", () => {
+        const raw = JSON.parse(serializeDocument(createDocWithRectangle()));
+        raw.version = "73";
+        const migrated = migrateIfNeeded(raw);
+        expect(migrated.version).toBe("76");
+        expect(migrated.document.assets3d).toBeUndefined();
+        expect(migrated.document.nodes["rectangle-001"].spatial3d).toBeUndefined();
+    });
+
+    test("reads the owned glTF fixture with hierarchy, normals, UVs and material slot", () => {
+        const json = JSON.parse(readFileSync(resolve(__dirname, "fixtures/triangle.gltf"), "utf8")) as GltfJson;
+        const uri = json.buffers![0].uri!;
+        const buffer = new Uint8Array(Buffer.from(uri.slice(uri.indexOf(",") + 1), "base64"));
+        const result = parseGltf(json, buffer);
+        expect(result.instances).toHaveLength(1);
+        expect(result.instances[0].matrix.slice(12, 15)).toEqual([1, 2, 3]);
+        expect(Array.from(result.instances[0].primitive.indices)).toEqual([0, 1, 2]);
+        expect(Array.from(result.instances[0].primitive.normals!)).toEqual([0, 0, 1, 0, 0, 1, 0, 0, 1]);
+        expect(Array.from(result.instances[0].primitive.uvs!)).toEqual([0, 0, 1, 0, 0, 1]);
+        expect(result.instances[0].primitive.material).toBe(0);
     });
 });
 
@@ -2295,10 +2386,13 @@ describe("Components: expandInstances", () => {
         // so the subtree walk can't see them: without the owner check every sub-threshold drag
         // would snap back to 0 and pin the instance in place.
         const doc = docWithInstance();
+        // Put the instance off-grid so a 3px drag distinguishes its own-copy candidate (307)
+        // from the visible grid (the proposed 310 is outside the 6px budget of 300/320).
+        doc.nodes.get("I")!.geometry.x = 307;
         const cs = computeGeometry(doc);
         const targets = snapTargetsExcludingSubtrees(doc, cs, ["I"]);
-        // The instance's own copies (world 300,300 and 305,305) must be absent…
-        expect(targets.some(t => t.x === 300 && t.y === 300)).toBe(false);
+        // The instance's own copies (starting at world x=307) must be absent…
+        expect(targets.some(t => t.x === 307 && t.y === 300)).toBe(false);
         // …while the MASTER's real nodes (elsewhere on canvas) remain valid targets.
         expect(targets.some(t => t.x === 10 && t.y === 20)).toBe(true);
         // A drag of the instance is therefore free to move (nothing pins it at its start).
@@ -2308,7 +2402,7 @@ describe("Components: expandInstances", () => {
         const mev = (x: number, y: number) => ({ clientX: x, clientY: y } as unknown as MouseEvent);
         tool.onMouseDown(mev(0, 0));
         tool.onMouseMove(mev(3, 0)); // a 3px drag — inside the 6px snap threshold
-        expect(es.pendingGeometry!.get("I")).toEqual({ x: 303, y: 300 }); // moved, NOT pinned at 300
+        expect(es.pendingGeometry!.get("I")).toEqual({ x: 310, y: 300 }); // moved, NOT pinned at 307
     });
 
     test("a LINE master can be instanced (the instance box follows the line/path rule)", () => {
@@ -3563,15 +3657,15 @@ describe("MoveTool snapping", () => {
     test("a dragged parent does not snap to its OWN child (the moving subtree is excluded)", () => {
         const doc = createEmptyDocument();
         doc.nodes.set("P", { id: "P", type: "core.rectangle", parent: null, children: ["C"], geometry: { x: 0, y: 0, width: 200, height: 200 }, style: { fill: "#000", opacity: 1 }, layout: {} });
-        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 10, y: 10, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} }); // world left 10
+        doc.nodes.set("C", { id: "C", type: "core.rectangle", parent: "P", children: [], geometry: { x: 13, y: 10, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} }); // world left 13
         doc.nodes.set("T", { id: "T", type: "core.rectangle", parent: null, children: [], geometry: { x: 300, y: 500, width: 50, height: 50 }, style: { fill: "#000", opacity: 1 }, layout: {} });
         doc.rootNodeUuids = ["P", "T"];
         const dispatcher = new ActionDispatcher(doc);
         const es = createEditorState(); es.selectedNodeIds = ["P"];
         const tool = new MoveTool(dispatcher, es, () => { });
         tool.onMouseDown(md(0, 0));
-        tool.onMouseMove(md(5, 0)); // P's left to 5 — within 6 of its child C's left (10), but C moves WITH P
-        expect(es.pendingGeometry!.get("P")).toEqual({ x: 5, y: 0 }); // NOT snapped to the child's 10
+        tool.onMouseMove(md(10, 0)); // grid is 10px away; child is 3px away, but moves WITH P
+        expect(es.pendingGeometry!.get("P")).toEqual({ x: 10, y: 0 }); // NOT snapped to the child's 13
         expect(es.snapGuides).toBeNull();
     });
 
@@ -3647,13 +3741,16 @@ describe("MoveTool snapping", () => {
 
     test("a group drag does NOT snap to its own members (every moving subtree is excluded)", () => {
         const doc = twoNodeDoc(); // only A,B exist — both selected/moving, so there is no external target
+        doc.nodes.get("B")!.geometry.x = 103;
         const dispatcher = new ActionDispatcher(doc);
         const es = createEditorState(); es.selectedNodeIds = ["A", "B"];
         const tool = new MoveTool(dispatcher, es, () => { });
         tool.onMouseDown(md(0, 0));
-        tool.onMouseMove(md(97, 0));
-        expect(es.pendingGeometry!.get("A")).toEqual({ x: 97, y: 0 });   // raw delta — nothing to snap to
-        expect(es.pendingGeometry!.get("B")).toEqual({ x: 197, y: 100 }); // B shifts by the same raw delta
+        tool.onMouseMove(md(104, 0));
+        // The visible grid wins (-4 to 100). If B were incorrectly retained as a target, its
+        // original x=103 would be the nearer candidate (-1) and both values would land 3px later.
+        expect(es.pendingGeometry!.get("A")).toEqual({ x: 100, y: 0 });
+        expect(es.pendingGeometry!.get("B")).toEqual({ x: 203, y: 100 });
         expect(es.snapGuides).toBeNull();
     });
 
@@ -4620,10 +4717,9 @@ describe("Guards the suite did not previously protect", () => {
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
         // time a real migration is added — most recently when 67→68 landed, taking the sheet OFF
         // the node, which 66→67 had moved and the importer had gone on writing anyway.)
-        // (Most recently 71->72, the document's SCREEN — one screenful of the game. Absent means
-        // "undeclared", which every pre-72 document is; a schema-71 build would load a file that
-        // declares its play area and silently drop the declaration on save.)
-        expect(() => migrateIfNeeded(legacy, "73")).toThrow('Migration not implemented for document schema "72"');
+        // (Most recently 73->74, typed 3D assets/components. Absent means no authored 3D state,
+        // which every pre-74 document is; an older build would silently drop those declarations.)
+        expect(() => migrateIfNeeded(legacy, "77")).toThrow('Migration not implemented for document schema "76"');
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);
@@ -15855,14 +15951,17 @@ describe("Mesh — bending a shape (schema 41)", () => {
             { id: 2, image: "good.png", width: 8, height: 8 }
         ]);
 
-        // A `<tile>` WITHOUT an image is animation or collision data, which sheet-backed sets carry
-        // and which is not a collection. Counting it would make every such set look like one.
+        // A `<tile>` WITHOUT an image is metadata, not a collection member. It is now preserved,
+        // while `tileImageFor` still refuses to mistake it for a standalone image.
         const annotated = parseTiledMap(tmxMap({ tileset:
             '<tileset firstgid="1" name="t" tilewidth="16" tileheight="16" columns="4" tilecount="16">'
             + '<image source="t.png" width="64" height="64"/>'
             + '<tile id="0"><animation><frame tileid="0" duration="100"/></animation></tile>'
             + '</tileset>' }));
-        expect(annotated.tilesets[0].tiles).toEqual([]);
+        expect(annotated.tilesets[0].tiles).toEqual([
+            { id: 0, image: null, width: 0, height: 0,
+              animation: [{ tileId: 0, duration: 100 }] }
+        ]);
         expect(annotated.tilesets[0].image).toBe("t.png");
         expect(TILED_MAX_TILE_IMAGES).toBeGreaterThan(348);
     });
@@ -16617,6 +16716,7 @@ describe("Mesh — bending a shape (schema 41)", () => {
         expect(bare.alphaCutoff).toBe(0.5);
         expect(bare.doubleSided).toBe(false);
         expect(bare.baseColorImage).toBeNull();
+        expect(bare.metallicRoughnessImage).toBeNull();
         // UNLIT DEFAULTS TO FALSE, which is what the absence of the extension means.
         expect(bare.unlit).toBe(false);
 
@@ -16663,11 +16763,13 @@ describe("Mesh — bending a shape (schema 41)", () => {
             asset: { version: "2.0" },
             textures: [{ source: 1 }, { source: 0 }],
             images: [{ uri: "wrong.png" }, { uri: "right.png", mimeType: "image/png" }],
-            materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }]
+            materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 },
+                metallicRoughnessTexture: { index: 1 } } }]
         };
         expect(gltfImageSource(json, 0)).toEqual({ kind: "uri", uri: "right.png", mimeType: "image/png" });
         expect(gltfImageSource(json, 1)).toMatchObject({ uri: "wrong.png" });
         expect(gltfMaterials(json)[0].baseColorImage).toMatchObject({ uri: "right.png" });
+        expect(gltfMaterials(json)[0].metallicRoughnessImage).toMatchObject({ uri: "wrong.png" });
 
         // A BUFFER-BACKED image is a slice of the bytes already in hand -- 125 of the measured
         // images are stored that way -- and the offset comes from its bufferView, not from itself.
@@ -16696,6 +16798,25 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // An image with neither a uri nor a bufferView has no bytes anywhere.
         expect(gltfImageSource({ asset: { version: "2.0" }, textures: [{ source: 0 }],
             images: [{ mimeType: "image/png" }] }, 0)).toBeNull();
+    });
+
+    test("texture bindings preserve sampler defaults, UV sets and KHR_texture_transform", () => {
+        const json: GltfJson = {
+            asset: { version: "2.0" }, images: [{ uri: "shared.png" }],
+            textures: [{ source: 0, sampler: 0 }],
+            samplers: [{ magFilter: 9728, minFilter: 9984, wrapS: 33071, wrapT: 33648 }]
+        };
+        expect(gltfTextureBinding(json, { index: 0, texCoord: 1, extensions: {
+            KHR_texture_transform: { offset: [0.25, 0.5], rotation: Math.PI / 2,
+                scale: [2, 3], texCoord: 0 }
+        } })).toMatchObject({ texCoord: 0,
+            sampler: { magFilter: 9728, minFilter: 9984, wrapS: 33071, wrapT: 33648 },
+            transform: { offset: [0.25, 0.5], rotation: Math.PI / 2, scale: [2, 3] } });
+        expect(gltfTextureBinding({ asset: { version: "2.0" }, images: [{ uri: "a.png" }],
+            textures: [{ source: 0 }] }, { index: 0 })).toMatchObject({ texCoord: 0,
+            sampler: { magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 },
+            transform: { offset: [0, 0], rotation: 0, scale: [1, 1] } });
+        expect(gltfTextureBinding(json, { index: 99 })).toBeNull();
     });
 
     test("a glTF names what it will not read", () => {
@@ -18758,10 +18879,20 @@ describe("Mesh — bending a shape (schema 41)", () => {
         // apiSurface, and unopenable from the app. A green suite proves behaviour, never that
         // anything runs it — see the cursor key, the terrain copier, and Escape before them.
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const workflow = readFileSync(resolve(__dirname, "../../app/AssetImportWorkflow.ts"), "utf8");
+        const main = readFileSync(resolve(__dirname, "../../electron/main.js"), "utf8");
         expect(app).toMatch(/from "\.\.\/core\/import\/Sequence"/);
         expect(app).toMatch(/groupSequences\(assets\.map\(a => a\.name\)\)/);
         expect(app).toMatch(/onImportSequence=\{importSequence\}/);
-        expect(app).toMatch(/sequenceTrack\(s, \{ hrefFor:/);
+        expect(app).toMatch(/prepareSequenceImport\(api, assetFolder!, assets, s\)/);
+        expect(workflow).toMatch(/sequenceTrack\(sequence, \{ hrefFor:/);
+        // Every frame must become an embedded image or the whole import is refused; a filename
+        // fallback would save a document that only works while its source folder stays put.
+        expect(workflow).toMatch(/Missing frame:/);
+        expect(workflow).toMatch(/Frame name is ambiguous in subfolders:/);
+        expect(workflow).not.toMatch(/hrefs\.get\(file\) \?\? file/);
+        // Image reads are confined to the folder chosen in the native dialog, just like maps.
+        expect(main).toMatch(/resolveConfined\(folder, folder, filePath, "an image"\)/);
 
         // THE HANDLER HOLDS ONLY THE PLACEMENT. Everything else is `sequenceImportActions`, whose
         // behaviour the test below actually runs — because this handler cannot be run by anything:
@@ -25378,11 +25509,11 @@ describe("The playhead a saved file remembers", () => {
         // `UpdateNodeContentAction` had with nine-slice, and it survives a mutation of either
         // assignment. There are exactly two ways a document arrives — the autosave at startup and
         // File > Open — and a third would need this line too.
-        const src = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
-        const asks = src.match(/frameOnLoad\(/g) ?? [];
-        expect(asks).toHaveLength(2);
-        expect(src).toMatch(/editorStateRef\.current\.frame = frameOnLoad\(initialDocument/);
-        expect(src).toMatch(/es\.frame = frameOnLoad\(opened\)/);
+        const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const open = readFileSync(resolve(__dirname, "../../app/ProjectFileWorkflow.ts"), "utf8");
+        expect(app).toMatch(/editorStateRef\.current\.frame = frameOnLoad\(initialDocument/);
+        expect(app).toMatch(/bindProjectFileWorkflow\(api/);
+        expect(open).toMatch(/target\.editorState\.frame = frameOnLoad\(opened\)/);
     });
 
     test("a frame past the END of the timeline is clamped back onto the scrubber", () => {
@@ -26222,8 +26353,9 @@ describe("The weight brush, as a gesture", () => {
         expect(src).toMatch(/const posed = resolveScene\(doc\)/);
         // And the App hands the tool the panel's brush rather than a copy of the defaults.
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const shell = readFileSync(resolve(__dirname, "../../app/AppShellControls.tsx"), "utf8");
         expect(app).toMatch(/weights: new WeightTool\(dispatcher, es, refresh, \(\) => weightBrushRef\.current\)/);
-        expect(app).toMatch(/tools: \["select", "move", "weights"\]/);
+        expect(shell).toMatch(/tools: \["select", "move", "weights"\]/);
     });
 });
 
@@ -26684,11 +26816,12 @@ describe("The eyedropper as a gesture", () => {
         expect(src).toMatch(/resolveScene\(this\.dispatcher\.getDocument\(\)\)/);
         // …and the App hands it the SWATCH setter, not a document action.
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const shell = readFileSync(resolve(__dirname, "../../app/AppShellControls.tsx"), "utf8");
         expect(app).toMatch(/new EyedropperTool\(dispatcher, es, refresh, setPaintColour\)/);
         // THE PAINT STRIP CONTAINS IT, rather than the strip being exactly this list: the literal
         // match broke the day a bucket was added between "paint" and "eyedropper", which is a
         // guard failing for the one reason it should not — the thing it protects was still true.
-        expect(app).toMatch(/id: "paint",.*"eyedropper"/);
+        expect(shell).toMatch(/id: "paint",.*"eyedropper"/);
     });
 });
 
@@ -27989,12 +28122,13 @@ describe("The paint bucket, as a gesture — the door onto a fill nothing called
         // colour row shows while it is selected (a bucket whose colour is off screen is a click with
         // an invisible outcome, which is exactly how the eyedropper shipped once).
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const shell = readFileSync(resolve(__dirname, "../../app/AppShellControls.tsx"), "utf8");
         expect(app).toMatch(/bucket: new BucketTool\(dispatcher, es, refresh,/);
         // THE STRIP CONTAINS IT, rather than the strip being exactly one list. The eyedropper's own
         // guard next door was written the literal way and broke the moment this bucket was inserted
         // between "paint" and "eyedropper" — a guard failing for the one reason it must not, since
         // the thing it protects was still true.
-        expect(app).toMatch(/id: "paint",.*"bucket"/);
+        expect(shell).toMatch(/id: "paint",.*"bucket"/);
         expect(app).toMatch(/toolName === "bucket"/);
         // …and the core function has a caller at last.
         const tool = readFileSync(resolve(__dirname, "../../editor/tools/BucketTool.ts"), "utf8");
@@ -28141,6 +28275,7 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         // `default`. A cursor is reached by `TOOL_CURSORS[toolName]`, so the rule is: every key
         // must be a name `setTool` can actually receive.
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const shell = readFileSync(resolve(__dirname, "../../app/AppShellControls.tsx"), "utf8");
         expect(app).toMatch(/\?\? TOOL_CURSORS\[toolName\]/);
 
         // The live set, derived rather than restated — a second hand-written list is what went
@@ -28149,7 +28284,7 @@ describe("surfaceEdit — a whole-canvas edit as an Action, and the panel that r
         // KIND. Getting this wrong in the obvious direction is what made the first attempt at this
         // fix a regression — it moved the fallback onto `"shapes"`, which no tool is ever named.
         const tools = new Set<string>(SHAPE_KINDS);
-        for (const row of app.match(/tools: \[[^\]]*\]/g) ?? []) {
+        for (const row of shell.match(/tools: \[[^\]]*\]/g) ?? []) {
             for (const q of row.match(/"[a-zA-Z]+"/g) ?? []) tools.add(q.slice(1, -1));
         }
         expect(tools.size).toBeGreaterThanOrEqual(16);     // the parse found the arrays, not nothing
@@ -29161,8 +29296,9 @@ describe("The marquee, as a gesture — four shapes, four operators, no history 
         // the verbs — `fullMask`, `invertSelection`, `growSelection` and `borderSelection` have no
         // other caller in the app, so without these buttons they are arithmetic nobody can run.
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
+        const shell = readFileSync(resolve(__dirname, "../../app/AppShellControls.tsx"), "utf8");
         expect(app).toMatch(/marquee: new PixelSelectTool\(dispatcher, es, refresh,/);
-        expect(app).toMatch(/id: "paint",.*"marquee"/);
+        expect(shell).toMatch(/id: "paint",.*"marquee"/);
         expect(app).toMatch(/toolName === "marquee"/);
         expect(app).toMatch(/reviseSelection\(m => fullMask\(m\.width, m\.height\)\)/);
         expect(app).toMatch(/reviseSelection\(invertSelection\)/);
@@ -29172,6 +29308,15 @@ describe("The marquee, as a gesture — four shapes, four operators, no history 
         // And the canvas is told about the selection, validated through the one door.
         expect(app).toMatch(/pixelSelection: es\.pixelSelection/);
         expect(app).toMatch(/pixelMaskFor\(es, doc, es\.pixelSelection\.nodeId\)/);
+        // Selection content is a feature only if the marquee row reaches every pure operation.
+        expect(app).toMatch(/copySelectionContent\(buffer, mask\)/);
+        expect(app).toMatch(/clearSelectionContent\(b, mask\)/);
+        expect(app).toMatch(/pasteSelectionContent\(b, content\)/);
+        expect(app).toMatch(/moveSelectionContent\(b, mask, dx, dy\)/);
+        expect(app).toMatch(/transformSelectionContent\(b, mask, transform\)/);
+        expect(app).toMatch(/transformPixelSelection\("flip-horizontal"\)/);
+        expect(app).toMatch(/transformPixelSelection\("flip-vertical"\)/);
+        expect(app).toMatch(/transformPixelSelection\("rotate-clockwise"\)/);
     });
 });
 

@@ -13,6 +13,7 @@ import { Rect } from "./Matrix";
 import { ComputedState } from "./GeometryEngine";
 import { ReadonlyDocument } from "../document/Document";
 import { ownerInstanceOf } from "../document/Components";
+import { gridSnapDelta } from "./EditorGrid";
 
 /** A smart-guide line: "x" = a VERTICAL line at world x=`pos`; "y" = a HORIZONTAL line at world y=`pos`. */
 export interface SnapGuide {
@@ -49,8 +50,8 @@ function linesY(r: Rect): [number, number, number] {
  * `threshold` — 0 when nothing is close enough (no snap). Ties keep the first (smallest-index)
  * candidate, so the result is deterministic.
  */
-function bestDelta(moving: readonly number[], targetLines: readonly (readonly number[])[], threshold: number): number {
-    let best = 0;
+function bestDelta(moving: readonly number[], targetLines: readonly (readonly number[])[], threshold: number): number | null {
+    let best: number | null = null;
     let bestAbs = Infinity;
     for (const t of targetLines) {
         for (const m of moving) {
@@ -67,6 +68,13 @@ function bestDelta(moving: readonly number[], targetLines: readonly (readonly nu
     return best;
 }
 
+/** Choose the nearest candidate. Smart guides win exact ties for stable guide feedback. */
+function nearestDelta(smart: number | null, grid: number | null): number {
+    if (smart === null) return grid ?? 0;
+    if (grid === null) return smart;
+    return Math.abs(smart) <= Math.abs(grid) ? smart : grid;
+}
+
 /**
  * @param moving the moving node's proposed WORLD bounds (pre-snap).
  * @param targets other nodes' WORLD bounds (the moving node's own subtree must be excluded by the caller).
@@ -75,9 +83,24 @@ function bestDelta(moving: readonly number[], targetLines: readonly (readonly nu
 export function computeSnap(moving: Rect, targets: readonly Rect[], threshold: number): SnapResult {
     const targetX = targets.map(linesX);
     const targetY = targets.map(linesY);
-    const dx = bestDelta(linesX(moving), targetX, threshold);
-    const dy = bestDelta(linesY(moving), targetY, threshold);
+    const dx = bestDelta(linesX(moving), targetX, threshold) ?? 0;
+    const dy = bestDelta(linesY(moving), targetY, threshold) ?? 0;
     const snapped: Rect = { x: moving.x + dx, y: moving.y + dy, width: moving.width, height: moving.height };
+    return { dx, dy, guides: guidesForRect(snapped, targets) };
+}
+
+/** Snap a moving box to the nearest smart-guide or visible-grid candidate on each axis. */
+export function computeSnapWithGrid(
+    moving: Rect,
+    targets: readonly Rect[],
+    threshold: number,
+    gridSize: number
+): SnapResult {
+    const smartX = bestDelta(linesX(moving), targets.map(linesX), threshold);
+    const smartY = bestDelta(linesY(moving), targets.map(linesY), threshold);
+    const dx = nearestDelta(smartX, gridSnapDelta(moving.x, gridSize, threshold));
+    const dy = nearestDelta(smartY, gridSnapDelta(moving.y, gridSize, threshold));
+    const snapped = { x: moving.x + dx, y: moving.y + dy, width: moving.width, height: moving.height };
     return { dx, dy, guides: guidesForRect(snapped, targets) };
 }
 
@@ -88,8 +111,22 @@ export function computeSnap(moving: Rect, targets: readonly Rect[], threshold: n
  */
 export function snapPoint(px: number, py: number, targets: readonly Rect[], threshold: number): { dx: number; dy: number } {
     return {
-        dx: bestDelta([px], targets.map(linesX), threshold),
-        dy: bestDelta([py], targets.map(linesY), threshold)
+        dx: bestDelta([px], targets.map(linesX), threshold) ?? 0,
+        dy: bestDelta([py], targets.map(linesY), threshold) ?? 0
+    };
+}
+
+/** Point form used by resize handles; each axis chooses the nearest smart or grid line. */
+export function snapPointWithGrid(
+    px: number,
+    py: number,
+    targets: readonly Rect[],
+    threshold: number,
+    gridSize: number
+): { dx: number; dy: number } {
+    return {
+        dx: nearestDelta(bestDelta([px], targets.map(linesX), threshold), gridSnapDelta(px, gridSize, threshold)),
+        dy: nearestDelta(bestDelta([py], targets.map(linesY), threshold), gridSnapDelta(py, gridSize, threshold))
     };
 }
 

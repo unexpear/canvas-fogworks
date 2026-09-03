@@ -46,29 +46,17 @@ const CHUNK_JSON = 0x4e4f534a;   // "JSON"
 const CHUNK_BIN = 0x004e4942;    // "BIN\0"
 
 /**
- * Required extensions this may ignore, because they cannot change the GEOMETRY.
+ * Required extensions admitted by the geometry gate because a later pass implements them.
  *
  * The spec says a client MUST NOT load an asset requiring an extension it does not implement, and
- * that rule exists so nothing is drawn confidently wrong. This module reads geometry and no
- * materials at all, so an extension that only decorates a material cannot make its output wrong —
- * and refusing on one costs 246 files, 4.7% of the tree, over a lighting hint.
+ * that rule exists so nothing is drawn confidently wrong. The material reader and production
+ * renderer implement `KHR_materials_unlit`; the earlier geometry gate therefore admits it.
  *
  * IT IS AN ALLOW-LIST, NOT A LENIENCY. Anything not named here is still refused by name.
  *
- * REVISITED WHEN MATERIALS LANDED, as the previous note demanded. The answer did not change, and
- * the reason is worth pinning down: `gltfMaterials` now reads base colour, metallic, roughness and
- * emissive, but NOTHING LIGHTS THEM — there is no 3D renderer. `KHR_materials_unlit` says "do not
- * light this material", which cannot change an unlit reading of it.
- *
- * THE EXTENSION IS NOW READ, even though it is still ignorable: `GltfMaterial.unlit` carries it,
- * so the information those 246 files insist on is no longer discarded. What stays ignorable is the
- * REQUIREMENT — refusing to open a file over a lighting hint, while nothing lights anything, would
- * cost 246 models for no benefit.
- *
- * THE EXACT TRIGGER for removing it from this list: the first time a lighting term is applied to a
- * glTF material. On that day these files must honour `unlit` — and now they can, because the flag
- * is already there — or be refused, because from then on ignoring it means shading something the
- * file said to leave flat.
+ * "ADMITTED" DOES NOT MEAN IGNORED AT RENDER TIME. `GltfMaterial.unlit` carries the flag and the
+ * PBR shader bypasses lighting and emissive terms when it is true. Anything not named here is still
+ * refused by name.
  */
 export const GLTF_IGNORABLE_REQUIRED = ["KHR_materials_unlit"];
 
@@ -100,6 +88,7 @@ export interface GltfJson {
     buffers?: { byteLength?: number; uri?: string }[];
     materials?: GltfMaterialJson[];
     textures?: { source?: number; sampler?: number }[];
+    samplers?: { magFilter?: number; minFilter?: number; wrapS?: number; wrapT?: number }[];
     images?: { uri?: string; mimeType?: string; bufferView?: number }[];
     extensionsUsed?: string[];
     extensionsRequired?: string[];
@@ -146,15 +135,25 @@ interface GltfMaterialJson {
     alphaMode?: string;
     alphaCutoff?: number;
     emissiveFactor?: number[];
-    normalTexture?: { index?: number };
+    normalTexture?: GltfTextureInfoJson & { scale?: number };
+    emissiveTexture?: GltfTextureInfoJson;
     /** Kept LOOSE: a file may name any extension, and this reader only asks whether a key exists. */
     extensions?: Record<string, unknown>;
     pbrMetallicRoughness?: {
         baseColorFactor?: number[];
-        baseColorTexture?: { index?: number; texCoord?: number };
+        baseColorTexture?: GltfTextureInfoJson;
+        metallicRoughnessTexture?: GltfTextureInfoJson;
         metallicFactor?: number;
         roughnessFactor?: number;
     };
+}
+
+export interface GltfTextureInfoJson {
+    index?: number;
+    texCoord?: number;
+    extensions?: { KHR_texture_transform?: {
+        offset?: number[]; rotation?: number; scale?: number[]; texCoord?: number;
+    } };
 }
 
 /**
@@ -169,6 +168,13 @@ export type GltfImageSource =
     | { kind: "uri"; uri: string; mimeType: string | null }
     | { kind: "buffer"; offset: number; length: number; mimeType: string | null };
 
+export interface GltfTextureBinding {
+    image: GltfImageSource;
+    texCoord: number;
+    sampler: { magFilter: number; minFilter: number; wrapS: number; wrapT: number };
+    transform: { offset: [number, number]; rotation: number; scale: [number, number] };
+}
+
 /** One material, as the PBR model states it. Colours are linear RGBA, 0..1. */
 export interface GltfMaterial {
     name: string;
@@ -176,6 +182,13 @@ export interface GltfMaterial {
     baseColor: [number, number, number, number];
     /** The IMAGE this material paints with, or null. Resolved through `textures` to `images`. */
     baseColorImage: GltfImageSource | null;
+    /** Linear texture: roughness in G and metallic in B, per glTF. */
+    metallicRoughnessImage: GltfImageSource | null;
+    baseColorTexture: GltfTextureBinding | null;
+    metallicRoughnessTexture: GltfTextureBinding | null;
+    normalTexture: GltfTextureBinding | null;
+    normalScale: number;
+    emissiveTexture: GltfTextureBinding | null;
     metallic: number;
     roughness: number;
     emissive: [number, number, number];
@@ -253,6 +266,32 @@ export function gltfImageSource(json: GltfJson, textureIndex: number): GltfImage
     return null;
 }
 
+/** Resolves a texture's image plus the sampler and KHR_texture_transform state attached to it. */
+export function gltfTextureBinding(json: GltfJson, info: GltfTextureInfoJson | undefined): GltfTextureBinding | null {
+    if (info?.index === undefined) return null;
+    const image = gltfImageSource(json, info.index);
+    const texture = (json.textures ?? [])[info.index];
+    if (!image || !texture) return null;
+    const sampler = texture.sampler === undefined ? undefined : (json.samplers ?? [])[texture.sampler];
+    const transform = info.extensions?.KHR_texture_transform;
+    const offset = transform?.offset, scale = transform?.scale;
+    return {
+        image,
+        texCoord: transform?.texCoord ?? info.texCoord ?? 0,
+        sampler: {
+            magFilter: sampler?.magFilter ?? 9729,
+            minFilter: sampler?.minFilter ?? 9987,
+            wrapS: sampler?.wrapS ?? 10497,
+            wrapT: sampler?.wrapT ?? 10497
+        },
+        transform: {
+            offset: offset && offset.length >= 2 ? [offset[0], offset[1]] : [0, 0],
+            rotation: transform?.rotation ?? 0,
+            scale: scale && scale.length >= 2 ? [scale[0], scale[1]] : [1, 1]
+        }
+    };
+}
+
 /**
  * The document's materials, with every default the spec states filled in.
  *
@@ -266,13 +305,20 @@ export function gltfMaterials(json: GltfJson): GltfMaterial[] {
         const pbr = m.pbrMetallicRoughness ?? {};
         const base = pbr.baseColorFactor;
         const emissive = m.emissiveFactor;
-        const textureIndex = pbr.baseColorTexture?.index;
+        const baseColorTexture = gltfTextureBinding(json, pbr.baseColorTexture);
+        const metallicRoughnessTexture = gltfTextureBinding(json, pbr.metallicRoughnessTexture);
         return {
             name: m.name ?? "",
             baseColor: base && base.length >= 4
                 ? [base[0], base[1], base[2], base[3]]
                 : [1, 1, 1, 1],
-            baseColorImage: textureIndex === undefined ? null : gltfImageSource(json, textureIndex),
+            baseColorImage: baseColorTexture?.image ?? null,
+            metallicRoughnessImage: metallicRoughnessTexture?.image ?? null,
+            baseColorTexture,
+            metallicRoughnessTexture,
+            normalTexture: gltfTextureBinding(json, m.normalTexture),
+            normalScale: m.normalTexture?.scale ?? 1,
+            emissiveTexture: gltfTextureBinding(json, m.emissiveTexture),
             // 1 and 1 are the spec's defaults — fully metallic and fully rough — and 7,476 of the
             // measured materials state metallic explicitly while only 3,488 state roughness, so
             // the default is load-bearing for over half of them.
@@ -471,8 +517,10 @@ function readPrimitive(
 
     const normalIndex = prim.attributes.NORMAL;
     const uvIndex = prim.attributes.TEXCOORD_0;
+    const uv1Index = prim.attributes.TEXCOORD_1;
     const normals = normalIndex === undefined ? null : readAccessor(json, normalIndex, buffer);
     const uvs = uvIndex === undefined ? null : readAccessor(json, uvIndex, buffer);
+    const uvs1 = uv1Index === undefined ? null : readAccessor(json, uv1Index, buffer);
 
     let indices: Uint32Array;
     if (prim.indices === undefined) {
@@ -491,6 +539,7 @@ function readPrimitive(
         positions: Float32Array.from(positions),
         normals: normals ? Float32Array.from(normals) : null,
         uvs: uvs ? Float32Array.from(uvs) : null,
+        uvs1: uvs1 ? Float32Array.from(uvs1) : null,
         indices,
         material: prim.material ?? null
     };

@@ -13,6 +13,7 @@ import { Tileset } from "./Tileset";
 import { Node, isNodeType, srcError, srcValueError } from "./Node";
 import { variableError, variableKeyError, VARIABLES_MAX } from "./Variables";
 import { validateDocumentIntegrity } from "./Integrity";
+import { entityFromUserData } from "./Entity";
 
 /** Structural check for a persisted node — guards against malformed input. */
 function isPlainObject(v: any): boolean {
@@ -85,6 +86,8 @@ function isValidNode(n: any): n is Node {
         (n.locked === undefined || typeof n.locked === "boolean") &&
         (n.slotContent === undefined || isPlainObject(n.slotContent)) &&
         (n.states === undefined || isPlainObject(n.states)) &&
+        (n.entity === undefined || isPlainObject(n.entity)) &&
+        (n.spatial3d === undefined || isPlainObject(n.spatial3d)) &&
         (n.transform === undefined || (isPlainObject(n.transform) &&
             (n.transform.rotation === undefined || typeof n.transform.rotation === "number") &&
             (n.transform.scaleX === undefined || typeof n.transform.scaleX === "number") &&
@@ -112,6 +115,8 @@ export interface SerializedDocument {
         /** The scene's lighting (schema 42). Absent = unlit. */
         lights?: readonly import("./Light").Light[];
         ambient?: number;
+        /** Stable imported 3D assets (schema 74). */
+        assets3d?: readonly import("./Spatial3D").Asset3D[];
         /** What the document sits on (schema 70). Absent = transparent, as every document was. */
         background?: string;
         screen?: { width: number; height: number };
@@ -152,6 +157,7 @@ export function serializeDocument(doc: ReadonlyDocument): string {
             ...(doc.frame !== undefined ? { frame: doc.frame } : {}),
             ...(doc.lights !== undefined ? { lights: doc.lights } : {}),
             ...(doc.ambient !== undefined ? { ambient: doc.ambient } : {}),
+            ...(doc.assets3d !== undefined ? { assets3d: doc.assets3d } : {}),
             // Omitted when absent, so a document with no sky serialises byte-for-byte as it did
             // before schema 70 — the same rule every optional field here follows.
             ...(doc.background !== undefined ? { background: doc.background } : {}),
@@ -255,6 +261,9 @@ export function deserializeDocument(json: string): ProjectDocument {
     }
     if ("screen" in migrated.document) {
         doc.screen = migrated.document.screen as { width: number; height: number };
+    }
+    if ("assets3d" in migrated.document) {
+        doc.assets3d = migrated.document.assets3d as import("./Spatial3D").Asset3D[];
     }
 
     // Reconstruct the Map, validating each node's shape and key/id agreement.
@@ -409,6 +418,18 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     // reads the field on an old file. The bump is required all the same — a schema-71 build would
     // load a document that declares its screen and silently drop the declaration on save.
     if (version === "71") { raw = { ...raw, version: "72" }; version = "72"; }
+    // 72 -> 73: nodes gained optional typed entity declarations and tilesets gained optional
+    // authored metadata. Existing documents already mean exactly the same thing with both absent.
+    if (version === "72") { raw = migrate_72_to_73(raw); version = "73"; }
+    // 73 -> 74: documents gain optional stable 3D asset records and typed node components.
+    // Absent means no authored 3D state, exactly what every older document already meant.
+    if (version === "73") { raw = { ...raw, version: "74" }; version = "74"; }
+    // 74 -> 75: nodes may reference an authored environment texture. Absent preserves the neutral
+    // renderer fallback exactly, so every schema-74 document is already a valid schema-75 one.
+    if (version === "74") { raw = { ...raw, version: "75" }; version = "75"; }
+    // 75 -> 76: nodes may explicitly project their 2D visual as a plane or billboard in 3D.
+    // Absent keeps the workspaces separate, exactly matching schema 75.
+    if (version === "75") { raw = { ...raw, version: "76" }; version = "76"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {
@@ -419,6 +440,25 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
         `Migration not implemented for document schema "${version}". ` +
         `Current schema: "${currentSchema}".`
     );
+}
+
+function migrate_72_to_73(raw: any): any {
+    const nodes = raw?.document?.nodes;
+    if (!nodes || typeof nodes !== "object") return { ...raw, version: "73" };
+    const out: Record<string, unknown> = {};
+    for (const [id, node] of Object.entries<any>(nodes)) {
+        const entity = node?.entity ?? entityFromUserData(node?.userData);
+        out[id] = entity ? { ...node, entity } : node;
+    }
+    const tilesets = Array.isArray(raw.document.tilesets) ? raw.document.tilesets.map((set: any) => ({
+        ...set,
+        tiles: Array.isArray(set.tiles) ? set.tiles.map((tile: any) => {
+            const entity = tile?.entity ?? entityFromUserData(tile?.userData);
+            return entity ? { ...tile, entity } : tile;
+        }) : set.tiles
+    })) : raw.document.tilesets;
+    return { ...raw, version: "73", document: { ...raw.document, nodes: out,
+        ...(tilesets !== undefined ? { tilesets } : {}) } };
 }
 
 /**

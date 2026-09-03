@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "hold_engine_remote",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+hold_engine = { path = "hold_engine_remote" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.8"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

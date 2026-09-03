@@ -43,7 +43,8 @@ import { ClipRegion, DisplayList, DrawItem, Paint, PaintGradient, Shape, layerTr
 import { GradientStop } from "../core/document/Gradient";
 import { nineSliceRects } from "../core/geometry/NineSlice";
 import { tileAt, tileSourceRect, flipAt, flipMatrix, collectionTileBox } from "../core/document/Tilemap";
-import { parseColor } from "./emitWebGL";
+import { parseColor } from "./Color";
+import { canvasLightingFilter, LightingFactors, lightingFactors } from "./Lighting";
 import { resolveSurface, resolveImage, setImageReadyCallback } from "./ImageCache";
 import { drawTextInto } from "./TextRaster";
 
@@ -365,19 +366,22 @@ const CANVAS_SHADOW_SIGMA_SCALE = 2;
  * DEVICE space (the CTM never touches them), so the backend that owns the CTM must replay its uniform
  * scale on the world-unit effect values — the ONE arithmetic exception to "the backend does no maths".
  */
-function applyEffects(ctx: CanvasRenderingContext2D, paint: Paint, scale: number): void {
+function applyEffects(ctx: CanvasRenderingContext2D, paint: Paint, scale: number,
+                      lighting: LightingFactors | null): void {
     if (paint.shadow !== null) {
         ctx.shadowColor = paint.shadow.color;
         ctx.shadowBlur = paint.shadow.blur * scale * CANVAS_SHADOW_SIGMA_SCALE;
         ctx.shadowOffsetX = paint.shadow.dx * scale;
         ctx.shadowOffsetY = paint.shadow.dy * scale;
     }
-    if (paint.blur !== null && paint.blur > 0) {
-        ctx.filter = `blur(${paint.blur * scale}px)`;
-    }
+    const filters: string[] = [];
+    if (lighting) filters.push(canvasLightingFilter(lighting));
+    if (paint.blur !== null && paint.blur > 0) filters.push(`blur(${paint.blur * scale}px)`);
+    if (filters.length > 0) ctx.filter = filters.join(" ");
 }
 
-function drawItem(ctx: CanvasRenderingContext2D, item: DrawItem, scale: number): void {
+function drawItem(ctx: CanvasRenderingContext2D, item: DrawItem, scale: number,
+                  lighting: LightingFactors | null = null): void {
     // save/restore brackets the world transform, paint state AND shadow*/filter, so a null Paint
     // field behaves like SVG's per-element attribute independence (globalAlpha→1, no shadow…).
     ctx.save();
@@ -387,7 +391,7 @@ function drawItem(ctx: CanvasRenderingContext2D, item: DrawItem, scale: number):
         if (isTranslationOnly(w)) ctx.translate(w.e, w.f);
         else ctx.transform(w.a, w.b, w.c, w.d, w.e, w.f);
     }
-    applyEffects(ctx, item.paint, scale);
+    applyEffects(ctx, item.paint, scale, lighting);
     drawShape(ctx, item.shape, item.paint, item.localBox);
     ctx.restore();
 }
@@ -433,6 +437,7 @@ export function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dp
     // shadow*/filter are device-space (untouched by the CTM), so effect values are replayed × scale.
     const scale = z * dpr;
     model.grid.lines.forEach(item => drawItem(ctx, item, scale));
+    const lighting = lightingFactors(model.lights, model.ambient);
     // OPACITY GROUPS (schema 32) get a REAL LAYER, one offscreen canvas per group run.
     //
     // This used to fold each group's alpha into its items, and said so: overlapping children inside
@@ -509,7 +514,7 @@ export function emitCanvas(ctx: CanvasRenderingContext2D, model: DisplayList, dp
             const region = groupClip.get(id);
             if (region) openClip(region);
         }
-        drawItem(target, item, scale);
+        drawItem(target, item, scale, lighting);
         openPath = next;
     }
     // EVERYTHING STILL OPEN, closed in the order it was opened. A clip left open would leak its

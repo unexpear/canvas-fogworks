@@ -132,6 +132,7 @@ export class TransactionAction extends Action {
         let tilesetsDelta: Extract<NodeDelta, { kind: "tilesets" }> | null = null;
         let backgroundDelta: Extract<NodeDelta, { kind: "background" }> | null = null;
         let screenDelta: Extract<NodeDelta, { kind: "screen" }> | null = null;
+        let assets3dDelta: Extract<NodeDelta, { kind: "assets3d" }> | null = null;
 
         for (const action of this.componentActions) {
             action.rebind(working);
@@ -172,6 +173,8 @@ export class TransactionAction extends Action {
                     backgroundDelta = delta;
                 } else if (delta.kind === "screen") {
                     screenDelta = delta;
+                } else if (delta.kind === "assets3d") {
+                    assets3dDelta = delta;
                 } else {
                     const prev = propertyEdits.get(nodeId) ?? { kind: "patch" as const };
                     propertyEdits.set(nodeId, mergePatch(prev, delta));
@@ -212,7 +215,7 @@ export class TransactionAction extends Action {
         // `applyMutations` was already indifferent — "the key is ignored, the KIND carries the
         // meaning" — so the change is confined to who may share the map.
         const documentDeltas = [variablesDelta, activeStateDelta, timelineDelta, lightingDelta,
-            clipsDelta, tilesetsDelta, backgroundDelta, screenDelta].filter(d => d !== null);
+            clipsDelta, tilesetsDelta, backgroundDelta, screenDelta, assets3dDelta].filter(d => d !== null);
         for (const delta of documentDeltas) {
             finalDeltas.set(documentDeltaKey((delta as NodeDelta & { kind: string }).kind), delta as NodeDelta);
         }

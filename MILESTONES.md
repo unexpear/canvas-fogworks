@@ -2,7 +2,8 @@
 
 > The engine is built in **layers**, where each milestone proves **one new
 > architectural capability** before the next begins. This is the canonical roadmap.
-> Status current as of **2026-08-13**, engine **v0.0.5**, schema **68**.
+> Status reconciled **2026-09-03** against the schema-76 source and the 2026-08-21
+> mutation-battery close-out; engine **v0.0.5**, schema **76**.
 >
 > **Seven rows below said ⬜ for capabilities that had shipped.** They said it for three weeks
 > because this file declared no `describes:` directive: `check-doc-drift` named it, looked it
@@ -10,6 +11,7 @@
 > passing, which is now itself a reported condition.
 
 <!-- describes: src/core, src/editor, src/renderer -->
+<!-- re-read 2026-09-03: summary reconciled through schema 76 and the 3D production/runtime baseline. -->
 <!-- re-read 2026-08-14 after M18 slice 9 (body-vs-body contact): the runtime section below is current, including the
      two things that went wrong and were kept — the reuse chain held across Stop, and my first
      claim about which key the game has to take from the editor. -->
@@ -20,6 +22,23 @@
 ## Legend
 
 `✅ done` · `🔒 frozen` (contract locked, see `/docs`) · `🚧 in progress` · `⬜ planned`
+
+---
+
+## Product Direction — Dual Track
+
+VDE is intentionally **both** a general visual/pixel editor and a game-authoring
+environment. Neither track is subordinate or temporary. They share one document model,
+action/history system, renderer, asset pipeline, animation system and production gate:
+
+- **Visual/pixel editing:** drawing, layout, components, typography, raster selection and
+  transforms, grid-aware editing, import and export.
+- **Game authoring:** tilemaps, typed entities, clips, runtime rules, level transitions,
+  play flow and Tiled fidelity.
+
+Work should strengthen the shared foundation when possible and keep track-specific UI or
+runtime behavior behind explicit seams. AI, collaboration and a full plugin ecosystem remain
+deferred until the shared production-hardening baseline is mature.
 
 ---
 
@@ -39,7 +58,7 @@ M3  Renderer                 ✅   SVG renderer (shapes + culling + effects) + C
 M4  Editor                   ✅*  pan/zoom + box-select + DOM-free handles + rotate + canvas wiring + snapping/guides
       │
 M5  Variables & Tokens       ✅*  typed store + light/dark themes + $token references + aliases; radius/fontSize tokens live (schema 20); layout-side spacing tokens deferred
-M6  Components                🚧   masters + instances + resolution + per-instance overrides (schema 22); variants/slots next
+M6  Components                ✅   masters + instances + nested resolution + overrides + detach + variants + slots (schemas 21-29)
 M7  States                    ✅   `Node.states` + `activeState` (schema 30, the first SANITIZING migration) + `SetStateAction`
 M8  Animation Engine          ✅   timeline + keyframes + cubic-Bézier easing + HOLDS (cel) + onion skin — `Timeline` (407), `Bezier` (172), `Clips` (105)
 M9  Interaction Graph         ✅*  `Node.interactions`: trigger → state, with duration/easing, plus NAVIGATE to a node (schema 36), and a Play mode that fires them. A state machine, not a node GRAPH — the name overpromises
@@ -48,10 +67,11 @@ M11 Assets                    ✅*  16 importers: Tiled (maps, tilesets, objects
 M12 Text Engine               ✅*  typesetting, wrapping and on-canvas editing, shared by all three backends and the exporter. ONE style per node — no per-run styling
 M13 Export                    ✅*  SVG, Tiled `.tmx` (tile AND object layers, one `<tileset>` per distinct set with its own `firstgid`), sprite sheet (`sheet.json` + `sheet.png`). No PNG or PDF of the canvas
 M14 AI Integration            ⬜
-M15 Plugins                   ⬜
+M15 Plugins                   🚧   sandboxed script worker + request-to-Action API + script panel landed; plugin packages/discovery/extensions remain
 M16 Collaboration             ⬜
-M17 Production Hardening      ⬜
-M18 Game Runtime              🚧   slices 1-9: a fixed-step world that PLAYS inside the editor — a character you drive, a level of TILES, ground you can slip on, regions that report, a camera that follows, and bodies that notice each other
+M17 Production Hardening      🚧   CI + semantic doc gate + full mutation battery + installer/startup/Open-Edit-Save smoke; autosave/crash recovery/full UI tiers remain
+M18 Game Runtime              🚧   slices 1-40: fixed-step play, collision/camera/rules, spawning, pickups, animation poses, HUD, power tiers, pipes, restart/respawn, typed entities and confined level transitions
+M19 3D Foundation             ✅*  schema 76: authored scenes, PBR/IBL/shadows, resilient WebGL, deterministic runtime and explicit 2D surfaces
 ```
 
 \* **Note on M3/M4:** a working **vertical-slice prototype** of the renderer, the
@@ -608,8 +628,15 @@ change. This closes Milestone 4.
 pure `snapPoint(px, py, targets, threshold)` snaps the DRAGGED corner (the fixed corner stays) to target
 lines; `ToolController` folds it into a corner-resize of a single top-level unrotated node (the shared
 `snapTargetsExcludingSubtree` + `guidesForRect` helpers, extracted from `MoveTool`), snapping the pending +
-committed geometry and showing the same guides. Still deferred: artboard/grid snapping (the pure snap already
-generalises to any rects — only the per-gesture tool wiring is scoped).
+committed geometry and showing the same guides. At that point artboard/grid snapping remained deferred
+(the pure snap already generalised to any rects); the follow-up below closes the grid half.
+
+**Follow-up (deferral addressed) — visible-grid snapping (2026-09-02):** `EditorGrid.visibleGridSize`
+is now the one zoom/density rule used by both `RenderModel` and the move/resize gestures. Each axis
+chooses the nearest in-threshold candidate from the visible grid and smart alignment lines; smart
+guides win exact ties so guide feedback is stable. Move preview and commit share the same captured
+grid step, and resize uses the same point rule. Rotated/scaled chains remain outside snapping's
+translation-only scope.
 
 **Follow-up (deferral addressed) — group operations (multi-select snapping + rotate):** a multi-selection now
 acts as ONE object. **Group move-snapping:** `MoveTool` snaps the *union* box of all moving roots
@@ -720,7 +747,7 @@ excluded from `updatedNodeIds`.
 
 ## Phase 6 — Components
 
-### Milestone 6 — Components 🚧 (slices 1–2 landed: masters + instances + overrides, schema 22)
+### Milestone 6 — Components ✅ (planned scope landed; schemas 21–29)
 Reusable objects: components · instances · overrides · nested components · slots ·
 variants. Similar to Figma Components.
 
@@ -793,16 +820,20 @@ so MoveTool and the resize commit each call one factory rather than learning abo
 — a missed site would otherwise dispatch an action that fails validation and looks like an edit
 that silently did nothing. **ALT-click** deep-picks a copy (`hitTest`'s `includeVirtual`); a
 plain click still selects the instance, and a marquee never scatters into instance internals.
-A copy shows its four RESIZE corners but NOT the rotate knob — transform overrides are a later
-slice, and the renderer and the picker refuse it identically, so no dead control appears.
+A copy initially showed its four RESIZE corners but not the rotate knob; that was the slice-2
+boundary, not the final M6 state.
 
-Deferred to later slices: **variants/slots**, "detach instance", `layout`/`transform`
-overrides, overriding THROUGH a nested instance (the outer instance changing a node inside an
-inner one — `overrideTargetFor` refuses it rather than mis-target), instance content that
-overflows the instance box being unpickable (the pick box is the instance's own), and
-incremental dirty-tracking reuse for instanced documents (the dirty set names stored ids, not
-the virtual copies a master edit changes, so instanced documents recompute fully — always
-correct, just not incremental).
+**Landed after slice 2 (M6 close-out; schemas 23–29):** image-source validation was shared across
+stored nodes and overrides (23–24); layout and transform overrides made copied content fully
+editable, including rotation (26); variants and per-instance variant selection landed with
+override remapping (27); override keys became nested master-node paths so an outer instance can
+edit through an inner one (28); slots and per-instance slot content landed (29). Slice 3 added
+`DetachInstanceAction`, which bakes exactly the materialized tree that was drawn while preserving
+its parent position and z-order. The inspector and `nodeEdit` routing seam expose geometry, style,
+content, layout and transform edits for virtual nodes, plus variant and slot controls. The stated
+M6 deliverables — components, instances, overrides, nested components, variants, slots and detach —
+are therefore complete. Full incremental dirty reuse for instanced documents remains a performance
+refinement, not a missing component capability.
 
 ---
 
@@ -861,7 +892,7 @@ resolution needs. These are dividends of the Milestone 0 invariants.
 
 ## Phase 18 — Game Runtime
 
-### Milestone 18 — Game Runtime 🚧 (slices 1-9 landed)
+### Milestone 18 — Game Runtime 🚧 (slices 1–40 landed)
 A 2D game that RUNS inside VDE rather than being exported to something else that runs it.
 
 **The architecture was already there, in a shape nobody had used for this.** `applyFrame(doc, frame)`
@@ -2101,6 +2132,23 @@ DIFFERENT document is a real thing this is not; stated, not smuggled.
 2 tests, 3 mutants (WP1: fires on touch; WP2: velocity carried through; WP3: one sign, and every
 pipe dumps its traveller a body-height too low).
 
+**Slice 40 — RUN FLOW, TYPED ENTITIES AND CROSS-DOCUMENT LEVELS.** Restart now constructs a clean
+world from the current document. Respawn reconstructs the level at a typed anchor while preserving
+the run's tallies and player power. A typed goal may name a sibling project document; Electron
+confines that relative path to the opened project's directory, reads a bounded `.vde`/`.json` file,
+fully validates it, and only then adopts it as the next level.
+
+Schema 73 gives nodes and tiles engine-owned `entity` fields for body, player, respawn, transition,
+warp and rule declarations. Migration and Tiled import project recognized legacy `userData` into
+that typed shape without deleting the original metadata, and runtime readers keep a compatibility
+fallback. Tiled tilesets now preserve and export classes, typed properties, collision objects,
+animation frames and wangsets. Runtime animation follows authored millisecond frame durations;
+collision currently consumes each authored shape's AABB, so exact polygon/ellipse narrow phase is
+still open.
+
+10 focused tests across entity migration/projection, restart/respawn, transition adoption and rich
+Tiled metadata, plus the Electron production smoke gate.
+
 **THE GAUNTLET VERDICT ON THE 8-BIT RUNG (2026-08-20)** — a Gauntlet Loop pass (Shumer's method:
 agent-side decomposition, fresh-context critics, a fetchable bar) judged the rung piece by piece
 against REAL SMB1: the disassembly with line citations as the mechanical bar, the classic 1-1
@@ -2145,36 +2193,41 @@ docs fetched and placeholder-checked. Ten agents, 294 tool calls of reading both
 
 THE MATCH: **testing-quality.** The critic's words: the mutation harness is "genuinely above the
 bar" — Godot has no mutation testing and its 6,410-line canvas editor has zero tests, against our
-39,077 test lines on 52,137 source lines. Held to MATCHES by two absences: no automated
-enforcement (no CI by rule, no hooks), and THE FULL BATTERY HAS NEVER RUN END-TO-END — the last
-full run was 215 mutants on 2026-08-12; everything since ran as filtered increments.
+39,077 test lines on 52,137 source lines. **At the time of the 2026-08-20 verdict**, two absences
+held it to MATCHES: no automated enforcement and no end-to-end full battery after 2026-08-12.
+The battery completed on 2026-08-21; CI, semantic docs, installer build and startup gates landed
+2026-09-02. Hooks and the broader M17 UI/recovery tiers remain open.
 
 THE LOSSES, each with the critic's one most valuable fix:
 - **tilemap-autotile** — side/edge-aware matching: our only model is the corner dual-grid; Godot
   ships three modes, Unity full 3x3 neighbor rules, LDtk rule groups with chance and modulo.
-- **runtime-physics** — RUN FLOW: `endRun` freezes the world and shows a label; no respawn, no
-  restart, no way for won or a warp to lead anywhere. One document is the whole game.
+- **runtime-physics** — RUN FLOW shipped in schema 73: restart clears a run, respawn uses a typed
+  anchor while retaining tallies/power, and typed goals can load confined sibling level documents.
 - **animation** — a REACHABLE clip player (clips exist, tested, and nothing lists or plays them —
   the standing unreachable-feature lesson, confirmed by an outside reader), plus a runtime hook
   for state-driven clips (idle/walk/jump) beside the distance-driven pose.
-- **editor-canvas** — GRID SNAPPING: the editor draws a zoom-adaptive grid and nothing snaps to
-  it; the only snapping is smart node-alignment at a hard-coded 6px, disabled under rotation.
-- **art-paint** — selection CONTENT: no move/cut/copy/paste/clear of the pixels a selection holds;
-  the mask only clips paint. The door Aseprite's own docs call "transforming selected content".
-- **document-format** — TYPED ENTITY FIELDS: LDtk gives entities validated Int/Float/Bool/Enum/
-  Point/EntityRef fields; our whole game now hangs off verbatim-text `userData`.
-- **interop** — the TILESET half of TMX does not survive import: per-tile collision, animation
-  frames, wangsets, per-tile properties — all unread, and deliberately NOT counted in `notes`,
-  the one silent drop in an otherwise report-everything importer.
-- **rendering** — LIGHTING is a missing class AND a parity hole: only 4 directional lights +
-  ambient, rendered ONLY by WebGL — the default SVG backend has zero light code, so a lit document
-  silently draws unlit. (Named strength: the one-quad GPU tilemap beats Godot's per-cell quadrant
+- **editor-canvas** — GRID SNAPPING CLOSED 2026-09-02: move and resize use the same zoom-adaptive
+  step the renderer displays, composed with smart alignment under the existing 6-screen-pixel budget.
+- **art-paint** — selection CONTENT CLOSED 2026-09-02: the marquee row exposes move, cut, copy,
+  paste, clear, horizontal/vertical flip and clockwise quarter-turn. Operations preserve mask holes,
+  clip at surface edges and commit through the undoable surface action.
+- **document-format** — TYPED ENTITY FIELDS shipped in schema 73: validated body, player,
+  respawn/transition references and runtime-rule values replace engine dependence on verbatim text;
+  legacy and imported `userData` remains intact and readable as a compatibility fallback.
+- **interop** — the TILESET half of TMX now preserves and exports per-tile collision, animation
+  frames, wangsets, classes and per-tile properties. Play mode resolves tile animation from world
+  time; AABB physics consumes collision bounds. Exact curved/polygon narrow-phase remains open.
+- **rendering** — FLAT-SURFACE LIGHTING PARITY CLOSED 2026-09-02: SVG and Canvas now consume the
+  same ambient + coloured directional Lambert sum as WebGL, in explicit sRGB component-transfer
+  filters, while backgrounds and editor chrome stay unlit. A production Electron pixel smoke test
+  guards Canvas's URL-backed filter path. Mesh-relief per-fragment normals and self-occlusion remain
+  WebGL's higher-fidelity path. (Named strength: the one-quad GPU tilemap beats Godot's per-cell quadrant
   items; the round-trip TMX writer beats what Godot/Unity ship natively.)
 
 DEFECT-GRADE FACTS THE PASS PRODUCED (acted on or queued): TESTING.md's suite itemization summed
 to 2013 under a correct 2020 total — `confine.test.ts` omitted, a drift class the doc-drift tool
-cannot see; fixed same day. The full-battery run is queued. The TMX silent drop and the lit-unlit
-backend divergence are the next honesty slices.
+cannot see; fixed same day. The full-battery run is queued. The TMX silent drop and flat-surface
+lit-unlit backend divergence have since been closed.
 
 **THE FIRST FULL BATTERY RUN, AND WHAT IT COST TO GET (2026-08-21).** Two attempts. The first
 degraded partway and reported 96/402 with the tail failing at "0 tests" in 10s each — a report
@@ -2190,8 +2243,9 @@ clean in a fresh batch the same day: **50/50 killed (the fiftieth being RU1 unde
 only survivors the two controls, by design.** The run's own bookkeeping fumbled twice before the
 progress page told the truth: a `| tail` pipe kept six lines of the first log, and a
 stdout-redirect launcher buffered the second into a `process.exit` void — capture to a plain file,
-nothing cleverer. HARNESS LESSON, not yet built: the battery needs a periodic cache/worker
-teardown or a 0-tests circuit breaker that aborts loudly instead of unverifying everything after.
+nothing cleverer. **HARNESS LESSON CLOSED 2026-09-02:** every suite now runs in-band, the Jest
+cache is cleared after each 50-mutant batch, and a zero-test result aborts the run immediately
+instead of unverifying everything after it.
 
 **RU1 WAS THE ONE REAL SURVIVOR, and it had drifted rather than lied.** Authored when stomps were
 class-inferred, its blast radius shrank as the parts vocabulary landed, until its only observable
@@ -2203,3 +2257,75 @@ squashable, whatever it declares. The fixture now says it. 1 test.
 **STILL NOT DONE**, each a decision rather than a measurement: acting on an event (spawning, scripts,
 level transitions), slopes, rotation, restitution, and anything configurable about the keys. The corpus's other property vocabulary — `spawncount`,
 `spawntype`, `script`, `triggering`, `map` — is the map of what comes next.
+
+---
+
+## Phase 19 — 3D Foundation
+
+### Milestone 19 — Versioned 3D contracts ✅
+
+VDE's 3D work begins as an extension of the working document and runtime boundaries,
+not as a merge of the preserved first engine. The first slice defines typed 3D
+transforms, cameras, lights, asset-backed renderables, materials and colliders; imports
+one minimal owned glTF fixture; and proves save/load plus Action undo/redo before a
+viewport is added.
+
+The staged architecture, adoption rules and explicit legacy boundary are in
+[`docs/3D-FOUNDATION.md`](docs/3D-FOUNDATION.md). The Morphic/Hold source snapshot is
+preserved under [`legacy/morphic-engine`](legacy/morphic-engine/README.md) at revision
+`a414cde62fcec4ead3d52172b7441fadf608fb56` as evidence and reference code, not as a
+runtime dependency.
+
+**Slice 1 landed (schema 74):** `Spatial3D.ts` defines distinct 3D transforms, perspective and
+orthographic cameras, directional and point lights, asset-backed renderables, box/sphere colliders,
+and stable mesh/material/texture records. `SetSpatial3DAction` and `SetAssets3DAction` provide the
+only write paths; Integrity and Serializer share their validation, schema 73 migrates without
+inventing state, and undo/redo plus round-trip tests pin the contract. The owned `triangle.gltf`
+fixture proves hierarchy transforms, indexed geometry, normals, UVs and material slots through the
+existing Khronos-aligned reader. The next slice was **3D-1 viewport proof**, not a legacy renderer merge.
+
+**Slice 2 landed (3D-1 complete):** `Scene3D.ts` derives a backend-neutral frame from the
+schema-74 node hierarchy and a transient asset-id mesh library, with distinct perspective and
+orthographic projections plus camera-pose inversion. `emitWebGL3D.ts` submits indexed triangles,
+enables depth/culling, and retains an RGBA8 plus depth framebuffer for synchronous color-id picking.
+A deterministic software capture pins projection, hierarchy, winding, depth and picking in five
+tests. The live 3D workspace imports confined glTF/GLB files as one undoable asset/model/camera
+transaction, renders through that backend and selects nodes through GPU ids. `smoke:3d` verifies
+indexed depth rendering and readback against Electron's real GPU path. 3D-2 begins with rehydrating
+persisted project-relative mesh sources after reopen, then adds gizmos, materials and lighting.
+
+**Slice 3 started (3D-2):** import now normalizes model sources against the saved project and
+refuses assets outside that root. Opening a project reloads each persisted mesh through confined
+IPC into the transient library; failures are isolated per asset, and asynchronous results cannot
+leak across a later project switch. The Open–Edit–Save Electron smoke now waits for a restored mesh
+id in the GPU draw list before editing and saving. A selected 3D node now has fixed-screen X/Y/Z
+translation handles with world/local orientation, parent-correct movement, Action-backed undo and
+an Electron drag/save assertion. Color-coded rotation rings add normalized local/world quaternion
+composition; local scale handles preserve non-zero schema-valid components. Imported glTF materials
+now receive stable source-fragment asset ids, can be reassigned per primitive slot, and carry
+base-color plus `KHR_materials_unlit` into rendering. Authored directional and point lights use node
+world transforms, a bounded four-light WebGL diffuse path, Khronos range attenuation and a matching
+CPU reference capture. The Electron smoke performs all three gizmo edits, resolves the persisted
+material, renders a directional light, creates a point light through the UI, and verifies every
+authored result after save. Alt/middle drag now orbits the authored camera around the selected object,
+Shift adds camera-plane panning, and the wheel dollies perspective cameras or scales orthographic
+views; all poses remain Action-backed. Rehydrated glTF materials now carry metallic, roughness,
+emissive, base-color textures and linear G/B metallic-roughness textures into a GGX/Schlick WebGL
+path. Texture RGB is decoded from sRGB as glTF requires, shared images are read/uploaded once, and a
+neutral roughness-aware environment term keeps metals legible without authored punctual lights.
+The live Electron smoke loads a real texture into the GPU cache and serializes an orbit gesture.
+Normal and emissive maps, glTF sampler state, two UV sets, `KHR_texture_transform`, and sorted
+OPAQUE/MASK/BLEND rendering are now live. The GPU smoke compiles the exact production shader rather
+than a stand-in. Schema 75 adds an authored environment component referencing a project-relative
+Radiance texture asset. Import and reopen decode bounded flat or scanline-RLE RGBE into transient
+linear floats; the inspector edits intensity and horizontal rotation through Actions, and WebGL
+samples the equirectangular map with a neutral fallback when float textures are unavailable.
+**Slice 4 landed (3D-2 through 3D-4 baseline):** schema 76 makes 2D-in-3D composition explicit as
+an authored plane or billboard. HDR environments are offline-convolved into diffuse irradiance and
+GGX roughness prefilters; the WebGL 1 path reserves its eighth texture unit for a fitted,
+RGBA-packed directional shadow map. Renderer resources have eager disposal, bounded uploads,
+capability reporting, source invalidation, clean reload and context-loss restoration. The new
+transient 3D runtime projects authored bodies/colliders, advances deterministic fixed steps,
+queries collisions, follows the controlled body with the camera, and covers restart, respawn,
+cross-document transitions and replay digests. The Electron GPU smoke compiles these production
+shaders and exercises recovery and clean reload.

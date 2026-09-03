@@ -13,7 +13,8 @@ import { selectionRoots } from "../../core/document/SceneGraph";
 import { isAbsolute, isLayoutContainer } from "../../core/geometry/LayoutEngine";
 import { computeGeometry, selectionBounds } from "../../core/geometry/GeometryEngine";
 import { resolveScene, isVirtualId } from "../../core/document/Components";
-import { computeSnap, snapTargetsExcludingSubtrees, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
+import { computeSnapWithGrid, snapTargetsExcludingSubtrees, isTranslationOnlyChain, SNAP_THRESHOLD_PX } from "../../core/geometry/Snapping";
+import { GRID_BASE, visibleGridSize } from "../../core/geometry/EditorGrid";
 import { Rect } from "../../core/geometry/Matrix";
 import { Tool } from "./ToolController";
 
@@ -38,6 +39,7 @@ export class MoveTool implements Tool {
     // moving box is (worldOrigin + drag delta); the snap delta then applies 1:1 to every root's
     // stored geometry because all chains are translation-only.
     private snapWorldOrigin: { x: number; y: number } = { x: 0, y: 0 };
+    private snapGridSize = GRID_BASE;
 
     constructor(dispatcher: ActionDispatcher, editorState: EditorState, refresh: () => void) {
         this.dispatcher = dispatcher;
@@ -45,7 +47,7 @@ export class MoveTool implements Tool {
         this.refresh = refresh;
     }
 
-    onMouseDown(e: MouseEvent): void {
+    onMouseDown(e: MouseEvent, canvasRect?: DOMRect): void {
         const doc = this.dispatcher.getDocument();
         // Track only the roots of the selection. Stored geometry is parent-relative,
         // so moving a parent already moves its children through composition —
@@ -83,6 +85,7 @@ export class MoveTool implements Tool {
         this.editorState.isDragging = true;
         this.startX = e.clientX;
         this.startY = e.clientY;
+        this.snapGridSize = visibleGridSize(canvasRect?.width ?? 800, canvasRect?.height ?? 600, this.editorState.viewport.zoom);
         this.captureSnapTargets(doc);
     }
 
@@ -126,7 +129,7 @@ export class MoveTool implements Tool {
         // Snap in WORLD space (the group box's worldOrigin + drag), then apply the world snap
         // delta 1:1 to each root's stored delta — valid because every chain is translation-only.
         const moving = { x: this.snapWorldOrigin.x + dx, y: this.snapWorldOrigin.y + dy, width: this.snapSize.width, height: this.snapSize.height };
-        const snap = computeSnap(moving, this.snapTargets, SNAP_THRESHOLD_PX / zoom);
+        const snap = computeSnapWithGrid(moving, this.snapTargets, SNAP_THRESHOLD_PX / zoom, this.snapGridSize);
         return { dx: dx + snap.dx, dy: dy + snap.dy, guides: snap.guides.length > 0 ? snap.guides : null };
     }
 

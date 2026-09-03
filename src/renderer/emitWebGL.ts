@@ -103,6 +103,9 @@ import { resolveRings } from "../core/geometry/Resolve";
 import { depthToClipZ } from "../core/document/Depth";
 import { ReadonlyMesh, heightRange, surfaceNormal, warpHeight } from "../core/document/Mesh";
 import { marchOccluded } from "../core/geometry/RayMarch";
+import { parseColor } from "./Color";
+
+export { parseColor } from "./Color";
 import { Light, normalize } from "../core/document/Light";
 import { ellipseCommands, rectCommands, transformCommands } from "../core/geometry/ShapeToPath";
 import { PathCommand } from "../core/document/Node";
@@ -1126,21 +1129,6 @@ export function initGL(canvas: HTMLCanvasElement): GLState | null {
         sceneTargets: [null, null],
         blendSource: null
     };
-}
-
-/**
- * A CSS colour as GPU components. Understands the forms this codebase's model actually emits —
- * `#rgb`, `#rrggbb`, `#rrggbbaa` — and answers null for anything else so the caller can skip the
- * shape instead of drawing it in a wrong colour.
- */
-export function parseColor(css: string): [number, number, number, number] | null {
-    const s = css.trim();
-    const m = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(s);
-    if (!m) return null;
-    const h = m[1];
-    const full = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
-    const n = (i: number): number => parseInt(full.slice(i * 2, i * 2 + 2), 16) / 255;
-    return [n(0), n(1), n(2), full.length === 8 ? n(3) : 1];
 }
 
 /**

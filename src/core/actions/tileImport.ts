@@ -36,6 +36,7 @@ import { UpdateNodePathAction } from "./UpdateNodePathAction";
 import { UpdateNodeStyleAction } from "./UpdateNodeStyleAction";
 import { SetNodeFlagsAction } from "./SetNodeFlagsAction";
 import { generateUUID } from "../ids/UUID";
+import { entityFromUserData } from "../document/Entity";
 
 /** One thing a map import places — a whole layer as a grid, or a single cell as an image. */
 export type TilePlacement =
@@ -174,7 +175,8 @@ export function tileImportActions(
             // one imported object.
             const meta = {
                 ...(t.className !== "" ? { className: t.className } : {}),
-                ...(Object.keys(t.userData).length > 0 ? { userData: t.userData } : {})
+                ...(Object.keys(t.userData).length > 0 ? { userData: t.userData } : {}),
+                ...(entityFromUserData(t.userData) ? { entity: entityFromUserData(t.userData) } : {})
             };
             actions.push(new UpdateNodeContentAction(doc, id,
                 t.shape === "image"

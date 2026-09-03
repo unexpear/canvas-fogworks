@@ -9,7 +9,8 @@
  * master edit is reflected by every instance on the next frame.
  *
  * The instance's own size DEFAULTS to the master's box, so a fresh instance looks exactly like
- * its master; the caller may override it (per-instance sizing is otherwise a later slice).
+ * its master; callers may supply a different initial size, and child geometry overrides remain
+ * available after creation.
  */
 
 import { Action } from "./Action";
