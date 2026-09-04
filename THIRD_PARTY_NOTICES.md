@@ -59,11 +59,12 @@ Assets are CC0, i.e. public domain. Attribution is not required for them; it is 
 
 <https://kenney.nl/>
 
-The `freeassets` tree used throughout development as a measurement corpus. It is gitignored and
-no longer tracked in the current tree. A 2026-09-02 audit removed a legacy 469-file, ~132 MB tracked
-subset after finding packs that permit use in products but prohibit standalone redistribution.
-The local files were preserved; repository-history rewriting was deliberately left as a separate
-decision. See [docs/ASSET-INVENTORY.md](docs/ASSET-INVENTORY.md).
+The `freeassets` tree is a local-only corpus for development examples, importer measurements and
+manual tests. It is gitignored and excluded from source control and releases because licences vary:
+some packs require credit and some permit product use while restricting standalone redistribution.
+Each pack's own local licence/readme remains authoritative for use in a game. A 2026-09-02 audit
+removed a legacy 469-file, ~132 MB subset from the current tree; existing Git history is retained by
+the project owner's decision. See [docs/ASSET-INVENTORY.md](docs/ASSET-INVENTORY.md).
 
 Every reader in `core/import` was verified against the broader local corpus, and most of the faults
 found this way — interleaved glTF vertex data, OBJ's three index streams, non-unit normals in 206

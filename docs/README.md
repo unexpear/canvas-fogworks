@@ -42,7 +42,7 @@ This is the primary defense against architectural drift.
 | [FEATURE-AUDIT.md](FEATURE-AUDIT.md) | What exists, what is built and unreachable, and what is absent — measured against Pixelorama and Tiled | — |
 | [CODING-STANDARDS.md](CODING-STANDARDS.md) | Invariants, conventions, review checklist | 🔒 |
 | [BACKLOG.json](BACKLOG.json) | Machine-readable open work, priorities, status and evidence links | — |
-| [ASSET-INVENTORY.md](ASSET-INVENTORY.md) | Tracked third-party asset audit and current repository policy | — |
+| [ASSET-INVENTORY.md](ASSET-INVENTORY.md) | Local-only third-party example/test corpus audit and repository policy | — |
 | [3D-FOUNDATION.md](3D-FOUNDATION.md) | Boundary and staged plan for extending the 2D foundation into 3D | — |
 
 ## Quick facts

@@ -12,14 +12,6 @@
   "priorities": ["P0", "P1", "P2", "P3"],
   "items": [
     {
-      "id": "ASSET-001",
-      "area": "repository",
-      "priority": "P0",
-      "status": "open",
-      "summary": "Decide whether to rewrite Git history after removing the legacy freeassets corpus from current tracking.",
-      "evidence": ["docs/ASSET-INVENTORY.md"]
-    },
-    {
       "id": "SHELL-001",
       "area": "app-shell",
       "priority": "P1",

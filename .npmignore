@@ -1,0 +1,10 @@
+# Local-only licensed examples and test corpus. Never publish these files.
+freeassets/
+
+# Local reference tools and generated desktop artifacts.
+possable tools/
+release/
+exe/
+
+node_modules/
+*.log
