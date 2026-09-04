@@ -51,8 +51,8 @@ This is the primary defense against architectural drift.
 - **Stack:** TypeScript (strict) · React 19 · Electron 43 · esbuild · Jest (ts-jest).
 - **Engine version:** `CURRENT_VERSION = "0.0.5"` (`src/core/document/Document.ts`).
 - **Verify everything:** `npm run check` (typecheck + lint + test + build).
-- **Tests:** 2053 across core, runtime, renderer, Electron confinement, project workflows, and import workflows.
-- **Verify the tests themselves:** `npm run mutate:dimensions` (215/215) — breaks the paint arithmetic
+- **Tests:** more than 2,000 across core, runtime, renderer, Electron confinement, project workflows, and import workflows; the test runner reports the exact current count.
+- **Verify the tests themselves:** `npm run mutate:dimensions` (402 mutants; 400 killable plus two deliberate controls) — breaks the paint arithmetic
   on purpose in the ways a square fixture cannot see. Not in `check`: it runs the suite per mutant,
   and it refuses a dirty tree. See TESTING.md § Fixture design.
 

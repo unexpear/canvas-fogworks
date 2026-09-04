@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "lastReconciled": "2026-09-03",
-  "sourceRevision": "b2c2efe",
+  "sourceRevision": "2fbd982",
   "productDirection": {
     "mode": "dual-track",
     "summary": "Canvas Fogworks is both a general visual/pixel editor and a game-authoring environment.",
@@ -18,6 +18,46 @@
       "status": "open",
       "summary": "Continue extracting cohesive panels and workflows from App.tsx; project files, image-sequence import, workspace/runtime controls and the 3D inspector are tested seams.",
       "evidence": ["src/app/App.tsx", "src/app/AppShellControls.tsx", "src/app/ThreeDInspector.tsx"]
+    },
+    {
+      "id": "ANIMATION-001",
+      "area": "animation",
+      "priority": "P1",
+      "status": "open",
+      "summary": "Make named clips reachable through browser, preview and runtime state-driven playback workflows shared by 2D and 3D authoring.",
+      "evidence": ["src/core/document/Clips.ts", "MILESTONES.md#phase-18-game-runtime"]
+    },
+    {
+      "id": "GAMEPLAY-001",
+      "area": "runtime",
+      "priority": "P1",
+      "status": "open",
+      "summary": "Map runtime events and typed triggers to undo-safe authoring commands and sandboxed gameplay scripts.",
+      "evidence": ["src/core/runtime/World.ts", "src/core/script/ScriptApi.ts", "MILESTONES.md#phase-18-game-runtime"]
+    },
+    {
+      "id": "EXPORT-001",
+      "area": "distribution",
+      "priority": "P1",
+      "status": "open",
+      "summary": "Create and smoke-test a standalone game export path distinct from packaging the Canvas Fogworks editor.",
+      "evidence": ["package.json", "scripts/smoke-startup.js"]
+    },
+    {
+      "id": "PHYSICS-001",
+      "area": "runtime",
+      "priority": "P2",
+      "status": "open",
+      "summary": "Add measured production physics fidelity: rotated colliders, slopes, restitution and a replaceable backend boundary.",
+      "evidence": ["src/core/runtime/World.ts", "src/core/runtime/World3D.ts", "docs/3D-FOUNDATION.md"]
+    },
+    {
+      "id": "AUDIO-001",
+      "area": "runtime",
+      "priority": "P2",
+      "status": "open",
+      "summary": "Define persisted audio assets and reachable authoring/runtime playback without coupling audio state to document history each frame.",
+      "evidence": ["MILESTONES.md#phase-18-game-runtime"]
     },
     {
       "id": "RENDER-002",

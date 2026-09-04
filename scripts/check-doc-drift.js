@@ -231,10 +231,30 @@ function checkSemanticConsistency(current) {
         ["docs/DOCUMENT-SCHEMA.md", /Reserved-but-unused today:\*\* `states`/i,
             "schema still labels live states as unused"],
         ["docs/DOCUMENT-SCHEMA.md", /World-position-preserving reparent is deferred to M2/i,
-            "schema assigns an open reparent limitation to completed M2"]
+            "schema assigns an open reparent limitation to completed M2"],
+        ["docs/README.md", /\b2053\b|215\/215/,
+            "documentation overview carries obsolete test or mutation totals"],
+        ["docs/TESTING.md", /(?:suite contains|jest \(ts-jest\)|What is covered)[^\n]*\b2053\b/i,
+            "testing overview carries the obsolete 2053-test total"],
+        ["docs/FEATURE-AUDIT.md", /Import glTF \/ OBJ geometry\s*\|\s*\*\*built, BLOCKED\*\*/i,
+            "feature audit still calls the live glTF/GLB workflow blocked"]
     ];
     for (const [rel, pattern, reason] of forbidden) {
         if (pattern.test(read(rel))) issues.push(`${rel}: ${reason}`);
+    }
+
+    try {
+        const mutationOutput = execSync(`${JSON.stringify(process.execPath)} scripts/mutate-dimensions.js --count`, {
+            cwd: rootDir,
+            stdio: "pipe"
+        }).toString().trim();
+        if (!/^\d+$/.test(mutationOutput)) {
+            issues.push("mutation manifest did not report a numeric mutant count");
+        } else if (!new RegExp(`\\b${mutationOutput} mutants\\b`).test(read("docs/README.md"))) {
+            issues.push(`docs/README.md does not state the live ${mutationOutput}-mutant battery size`);
+        }
+    } catch (e) {
+        issues.push(`mutation preflight failed: ${e.message}`);
     }
 
     try {

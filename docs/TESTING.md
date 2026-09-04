@@ -1,10 +1,10 @@
 # Testing Strategy
 
-<!-- describes: src/core/tests, src/core/runtime/World3D.test.ts, src/app/ProjectFileWorkflow.ts, src/app/ProjectFileWorkflow.test.ts, src/app/AssetImportWorkflow.ts, src/app/AssetImportWorkflow.test.ts, src/app/Asset3DImportWorkflow.ts, src/app/Asset3DImportWorkflow.test.ts, src/app/AppShellControls.tsx, src/app/AppShellControls.test.tsx, src/app/ThreeDInspector.tsx, src/app/ThreeDInspector.test.tsx, src/electron, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, src/renderer/Scene3D.test.ts, src/renderer/EnvironmentIbl3D.test.ts, jest.config.js, scripts/check-module-headers.js, scripts/smoke-startup.js, scripts/smoke-3d.js -->
+<!-- describes: src/core/tests, src/core/runtime/World3D.test.ts, src/app/ProjectFileWorkflow.ts, src/app/ProjectFileWorkflow.test.ts, src/app/AssetImportWorkflow.ts, src/app/AssetImportWorkflow.test.ts, src/app/Asset3DImportWorkflow.ts, src/app/Asset3DImportWorkflow.test.ts, src/app/AppShellControls.tsx, src/app/AppShellControls.test.tsx, src/app/ThreeDInspector.tsx, src/app/ThreeDInspector.test.tsx, src/electron, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, src/renderer/Scene3D.test.ts, src/renderer/EnvironmentIbl3D.test.ts, jest.config.js, scripts/check-module-headers.js, scripts/mutate-dimensions.js, scripts/smoke-startup.js, scripts/smoke-3d.js -->
 <!-- re-read 2026-09-03 for the Canvas Fogworks rename: test behavior, compatibility identifiers,
      suite count and verification contract remain unchanged. -->
 
-> 🔒 Frozen contract · schema v76 (app v0.0.5) · current through tested DOM shell controls, 3D runtime projection, explicit 2D planes/billboards, prefiltered HDR IBL, directional shadows, context recovery and object-id picking. The suite contains 2100 tests.
+> 🔒 Frozen contract · schema v76 (app v0.0.5) · current through tested DOM shell controls, 3D runtime projection, explicit 2D planes/billboards, prefiltered HDR IBL, directional shadows, context recovery and object-id picking. The suite contains more than 2,000 tests; Jest reports the exact current count.
 
 ## Philosophy
 
@@ -31,8 +31,9 @@ a test that is proven to fail before the fix and pass after (see *regression dis
 ## Commands
 
 ```bash
-npm test                                   # jest (ts-jest), 2053 tests
+npm test                                   # jest (ts-jest); prints the exact current test count
 npm run header-claims                      # ADVISORY: module-header sentences with a shelf life
+npm run mutate:check                       # fast mutation-manifest/source preflight used by CI
 npx tsc --noEmit                           # typecheck the app
 npx tsc --noEmit -p tsconfig.test.json     # typecheck the tests too
 npm run lint                               # module-header rule (no ESLint dependency)
@@ -65,7 +66,7 @@ node scripts/menu-command.js "Zoom to Fit"
 - `tsconfig.json` excludes `*.test.ts` from the app build; `tsconfig.test.json` type-checks
   them. Both must be clean.
 
-## What is covered (2053 tests)
+## What is covered
 
 | Area | Representative cases |
 |------|----------------------|

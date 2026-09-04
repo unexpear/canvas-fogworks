@@ -8,7 +8,7 @@
     "test": "jest --config=./jest.config.js",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "check": "npm run typecheck && npm run lint && npm test && npm run build",
-    "ci": "npm run typecheck && npm run lint && npm run doc-drift && npm run header-claims && npm test -- --runInBand && npm run build && npm run smoke:startup && npm run smoke:file-workflow && npm run smoke:lighting && npm run smoke:3d",
+    "ci": "npm run typecheck && npm run lint && npm run doc-drift && npm run header-claims && npm run mutate:check && npm test -- --runInBand && npm run build && npm run smoke:startup && npm run smoke:file-workflow && npm run smoke:lighting && npm run smoke:3d",
     "dev": "node scripts/build.js --watch --electron",
     "dist": "node scripts/build.js && npx electron-builder",
     "smoke:startup": "node scripts/smoke-startup.js",
@@ -20,6 +20,7 @@
     "lint": "node scripts/check-module-headers.js",
     "doc-drift": "node scripts/check-doc-drift.js",
     "mutate:dimensions": "node scripts/mutate-dimensions.js",
+    "mutate:check": "node scripts/mutate-dimensions.js --check",
     "header-claims": "node scripts/check-header-claims.js"
   },
   "dependencies": {

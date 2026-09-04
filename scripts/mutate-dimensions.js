@@ -2021,6 +2021,13 @@ if (dupes.length > 0) {
     process.exit(2);
 }
 
+// A documentation check needs the manifest size, not 402 filesystem match checks. Keep this query
+// inside the manifest owner so no second parser or copied constant can drift from the real array.
+if (process.argv.includes("--count")) {
+    console.log(MUTANTS.length);
+    process.exit(0);
+}
+
 const only = process.env.MUTANT_ONLY ? new RegExp(process.env.MUTANT_ONLY) : null;
 const selected = only ? MUTANTS.filter(m => only.test(m.id)) : MUTANTS;
 if (only && selected.length === 0) {
@@ -2050,7 +2057,7 @@ function matchCount(mut) {
  * The run below keeps its own checks — this exits before reaching them, so they stay live for a
  * file that changes underfoot, and both ask `matchCount`.
  */
-if (process.env.MUTANT_CHECK) {
+if (process.env.MUTANT_CHECK || process.argv.includes("--check")) {
     const bad = selected
         .map(mut => ({ mut, n: matchCount(mut) }))
         .filter(({ n }) => n !== 1);

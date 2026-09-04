@@ -22,7 +22,10 @@ describe("resolveConfined — the folder a renderer-supplied path may not leave"
     let linked = false;
 
     beforeAll(() => {
-        base = realpathSync(mkdtempSync(join(tmpdir(), "vde-confine-")));
+        // The boundary uses the native resolver, so its fixture must use the same canonical form.
+        // On GitHub's Windows runner the non-native resolver may return an equivalent 8.3 alias
+        // (`RUNNER~1`) while the native resolver returns the long path (`runneradmin`).
+        base = realpathSync.native(mkdtempSync(join(tmpdir(), "vde-confine-")));
         pack = join(base, "pack");
         outside = join(base, "private");
         mkdirSync(join(pack, "maps"), { recursive: true });
