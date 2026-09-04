@@ -5,7 +5,7 @@
  * GENERATED — see `scripts/gen-cursors.js`. Kenney's Cursor Pack (CC0), the Outline set, whose
  * white keyline keeps a dark cursor legible over dark art and a light one over light.
  *
- * WHY THIS AND NOT A SKIN. VDE had eight tools that all showed the same arrow: the toolbar knew
+ * WHY THIS AND NOT A SKIN. Canvas Fogworks had eight tools that all showed the same arrow: the toolbar knew
  * which was active and the pointer did not, so the one place you are actually looking said nothing.
  * These are the assets whose vocabulary matches the tools exactly — brush, bucket, picker, pen,
  * pencil, spray — which is what makes this a theme rather than a costume. The dense panels, the

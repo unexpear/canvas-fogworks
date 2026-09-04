@@ -4,7 +4,7 @@
   "sourceRevision": "b2c2efe",
   "productDirection": {
     "mode": "dual-track",
-    "summary": "VDE is both a general visual/pixel editor and a game-authoring environment.",
+    "summary": "Canvas Fogworks is both a general visual/pixel editor and a game-authoring environment.",
     "tracks": ["visual-pixel-editing", "game-authoring"],
     "sharedFoundation": ["document", "actions", "renderer", "assets", "animation", "production-hardening"]
   },

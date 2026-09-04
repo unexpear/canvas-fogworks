@@ -31,7 +31,7 @@ function createWindow() {
         height: 900,
         minWidth: 800,
         minHeight: 600,
-        title: "Visual Design Engine",
+        title: "Canvas Fogworks",
         backgroundColor: "#1a1a2e",
         webPreferences: {
             nodeIntegration: false,
@@ -216,13 +216,13 @@ function createWindow() {
                 { label: "Keyboard Shortcuts", click: send("help.shortcuts") },
                 { type: "separator" },
                 {
-                    label: "About Visual Design Engine",
+                    label: "About Canvas Fogworks",
                     click: () => {
                         if (!mainWindow) return;
                         dialog.showMessageBox(mainWindow, {
                             type: "info",
                             title: "About",
-                            message: `Visual Design Engine v${pkg.version}`,
+                            message: `Canvas Fogworks v${pkg.version}`,
                             detail: "Document-based visual programming engine for interfaces."
                         });
                     }
@@ -366,7 +366,7 @@ async function openFileDialog() {
     try {
         const result = await dialog.showOpenDialog(mainWindow, {
             title: "Open Project",
-            filters: [{ name: "Visual Design Engine", extensions: ["vde", "json"] }],
+            filters: [{ name: "Canvas Fogworks", extensions: ["vde", "json"] }],
             properties: ["openFile"]
         });
         if (!mainWindow) return;
@@ -388,7 +388,7 @@ async function saveFileDialog() {
     try {
         const result = await dialog.showSaveDialog(mainWindow, {
             title: "Save Project",
-            filters: [{ name: "Visual Design Engine", extensions: ["vde"] }],
+            filters: [{ name: "Canvas Fogworks", extensions: ["vde"] }],
             defaultPath: "project.vde"
         });
         if (!mainWindow) return;

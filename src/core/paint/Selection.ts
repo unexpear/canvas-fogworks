@@ -5,7 +5,7 @@
  * A feature audit put this first among the real gaps, and the reason is that almost nothing on the
  * paint side is a feature of its own: crop, cut, copy, paste, "transform this region", "fill only
  * inside here", grow/shrink/border are all the SAME question with different verbs, and the question
- * is which pixels. VDE had no answer at all — `EditorState.marqueeRect` selects NODES.
+ * is which pixels. Canvas Fogworks had no answer at all — `EditorState.marqueeRect` selects NODES.
  *
  * A MASK, NOT A RECTANGLE, and that decision is the whole module. A rectangle cannot express a lasso,
  * a magic wand, or a rectangle minus a bite; and a system that starts with rectangles grows a special

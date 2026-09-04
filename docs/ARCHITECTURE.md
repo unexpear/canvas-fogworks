@@ -1613,7 +1613,7 @@ Settle that before writing any of it.
 
 
 **Every node type this engine has is composed from geometry or references an image someone else
-made.** Nothing holds pixels VDE authored, which is why no amount of import work adds up to pixel
+made.** Nothing holds pixels Canvas Fogworks authored, which is why no amount of import work adds up to pixel
 art: a sprite editor's whole subject is a buffer you can change one dot at a time.
 
 **THE OPERATIONS ARE PURE FUNCTIONS OVER A BUFFER, not methods on a canvas.** A 2D context would do
@@ -1659,7 +1659,7 @@ beside `ImageCache`, for the same reason: it needs a DOM, and keeping it out of 
 every rule above be tested without one.
 ### SVG documents — flattened, because the transform model does not reach
 
-**A `<g transform>` cannot become a node transform.** VDE's `Transform` is rotation, scale and an
+**A `<g transform>` cannot become a node transform.** Canvas Fogworks' `Transform` is rotation, scale and an
 origin; SVG's is an arbitrary affine matrix, and `matrix()` accounts for 23,276 of the 24,861
 transforms in the measured art. Decomposing one into rotate-and-scale works only when it contains
 no skew, and silently produces the wrong shape when it does.
@@ -1698,7 +1698,7 @@ is a liability. What it cannot make sense of it names.
 ### SVG path data — the one format that has to be converted, not just read
 
 **Vector art is the largest remaining import gap: 5,279 files holding 95,160 `<path>` elements.**
-Unlike a sheet or an atlas, this cannot be read across — VDE's `PathCommand` is `M`/`L`/`C`/`Q`/`Z`
+Unlike a sheet or an atlas, this cannot be read across — Canvas Fogworks' `PathCommand` is `M`/`L`/`C`/`Q`/`Z`
 and absolute, while SVG's `d` grammar has twenty letters, relative forms, implicit repetition and
 elliptical arcs. Every one of those appears in the measured tree, so the conversion is the feature.
 

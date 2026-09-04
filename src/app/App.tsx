@@ -527,7 +527,7 @@ export function App() {
 /**
  * WHICH JOB THE WINDOW IS SET UP FOR.
  *
- * VDE is not one app: it is a vector editor, a pixel editor and an animation system sharing a
+ * Canvas Fogworks is not one app: it is a vector editor, a pixel editor and an animation system sharing a
  * document, with a 3D layer to come. That is Blender's problem exactly, and workspaces are how
  * Blender avoids offering sculpting tools to somebody editing video.
  *
@@ -2629,7 +2629,7 @@ export function App() {
             {/* Tools and document commands. Its height is its own again: the tool options moved
                     to their own row below, so nothing this row does can push the canvas around. */}
                 <div style={{ display: "flex", alignItems: "center", alignContent: "flex-start", flexWrap: "wrap", rowGap: 4, padding: "4px 8px", background: UI.panel, borderBottom: `1px solid ${UI.line}`, gap: 4 }}>
-                <span style={{ fontWeight: 700, marginRight: 8, color: "#00bfff", fontSize: 13 }}>VDE</span>
+                <span style={{ fontWeight: 700, marginRight: 8, color: "#00bfff", fontSize: 13 }}>CF</span>
                 <WorkspaceControls
                     workspace={workspace}
                     gizmoMode={gizmoMode3d}
@@ -5014,7 +5014,7 @@ export function App() {
                     </span>
                 )}
                 <span>{Math.round(vp.zoom * 100)}% · {Math.round(vp.x)}, {Math.round(vp.y)}</span>
-                <span>Visual Design Engine v{CURRENT_VERSION}</span>
+                <span>Canvas Fogworks v{CURRENT_VERSION}</span>
             </div>
         </div>
     );
@@ -6481,7 +6481,7 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                         style={DRAWER_BUTTON}
                     >{busy ? "Writing…" : "Export SVG to a folder…"}</button>
 
-                    {/* A MAP CAN LEAVE AGAIN (2026-08-10). VDE reads a Tiled map, turns each layer
+                    {/* A MAP CAN LEAVE AGAIN (2026-08-10). Canvas Fogworks reads a Tiled map, turns each layer
                         into one grid, places its objects and authors terrain — and until now
                         nothing went the other way, which made this tool a one-way door for art.
                         The sheet is named rather than copied: a `.tmx` states a relative path, and

@@ -1,6 +1,6 @@
 /**
  * @module PixelBuffer
- * @description A surface VDE authored, rather than one it borrowed.
+ * @description A surface Canvas Fogworks authored, rather than one it borrowed.
  *
  * Every node type this engine has is composed from geometry or references an image someone else
  * made. Nothing holds pixels the user put there, which is why no amount of import work adds up to

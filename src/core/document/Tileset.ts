@@ -112,7 +112,7 @@ export interface Tileset {
      */
     offsetX: number;
     offsetY: number;
-    /** Tiled terrain/autotiling metadata. It does not alter VDE's own terrain authoring model. */
+    /** Tiled terrain/autotiling metadata. It does not alter Canvas Fogworks' own terrain authoring model. */
     wangsets?: WangSet[];
 }
 

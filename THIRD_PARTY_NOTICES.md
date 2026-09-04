@@ -1,6 +1,6 @@
 # Third-party notices
 
-This file records work by others that VDE draws on, and the terms it comes under. It exists so
+This file records work by others that Canvas Fogworks draws on, and the terms it comes under. It exists so
 credit is a standing practice rather than something remembered at release time.
 
 **Nothing listed here has had its source code copied into `src/`.** Everything in this project is
@@ -18,12 +18,12 @@ MIT obligation and it is not onerous.
 
 Copyright Thorbjørn Lindeijer and contributors. <https://www.mapeditor.org/>
 
-VDE reads `.tmx` and `.tsx` files. **The reader was written from the file format**, by measuring the
+Canvas Fogworks reads `.tmx` and `.tsx` files. **The reader was written from the file format**, by measuring the
 20 maps and 13 tilesets in a real asset pack — which is how the image-collection tilesets, the
 single-quoted attributes and the `<tileoffset>` were found at all.
 
 **This one is not permissive.** GPL v2 is share-alike: distributing modified or unmodified Tiled
-source obliges the distributor to the same terms. Taking code from Tiled would therefore oblige VDE
+source obliges the distributor to the same terms. Taking code from Tiled would therefore oblige Canvas Fogworks
 to GPL. We have not, and should not without deciding that deliberately.
 
 ## Pixelorama — MIT (code)
@@ -31,7 +31,7 @@ to GPL. We have not, and should not without deciding that deliberately.
 Copyright Orama Interactive and contributors. <https://github.com/Orama-Interactive/Pixelorama>
 
 Used as a **specification for the pixel-art feature set**, not as a source of code. Its shipped data
-was measured to learn three things VDE's brush model lacked: that a brush is an image stamp rather
+was measured to learn three things Canvas Fogworks' brush model lacked: that a brush is an image stamp rather
 than a shape, that brushes are not necessarily square, and that a `~` filename prefix denotes random
 variants of one brush. Its palette files were measured to learn that a palette carries a grid
 layout, not merely a list of colours.
@@ -44,13 +44,13 @@ and none of the data is shipped.
 
 Copyright RodZilla and contributors. <https://github.com/RodZill4/material-maker>
 
-Its node graphs were read to check VDE's gaussian blur against another implementation. Two design
+Its node graphs were read to check Canvas Fogworks' gaussian blur against another implementation. Two design
 choices were independently confirmed — separable per-axis passes, and normalising by the accumulated
 weight sum rather than an analytic constant.
 
 **One genuinely useful fact came from it**: its blur loops a fixed `-50..50` regardless of sigma,
 which is not a shortcut but a GLSL ES 1.00 constraint showing through — a uniform cannot bound a
-loop. That constraint was then **verified independently in VDE's own renderer** rather than taken on
+loop. That constraint was then **verified independently in Canvas Fogworks' own renderer** rather than taken on
 trust, and it determined the shape of `BLUR_MAX_TAPS`.
 
 Assets are CC0, i.e. public domain. Attribution is not required for them; it is given anyway.

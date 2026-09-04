@@ -4,23 +4,23 @@
 
 ## Decision
 
-VDE remains one product for visual/pixel design and game authoring. Three-dimensional
+Canvas Fogworks remains one product for visual/pixel design and game authoring. Three-dimensional
 authoring extends the existing document, Action, history, asset and editor contracts; it
 does not embed a second editor or make the legacy Rust scene format authoritative.
 
 The preserved Morphic/Hold engine is a reference implementation under
 [`../legacy/morphic-engine`](../legacy/morphic-engine/README.md). Its strongest ideas can
-graduate into VDE, but its Win32 shell, native editor, `.hsc`/`.hscene` formats and
-renderers remain isolated until a measured VDE requirement justifies replacing a
+graduate into Canvas Fogworks, but its Win32 shell, native editor, `.hsc`/`.hscene` formats and
+renderers remain isolated until a measured Canvas Fogworks requirement justifies replacing a
 specific subsystem.
 
 ## Ownership boundaries
 
 | Concern | Authority | Rule |
 |---|---|---|
-| Authored project and scene data | VDE `ProjectDocument` | Persisted changes require schema migration, Actions and round-trip tests. |
-| Editing and undo/redo | VDE Dispatcher | No 3D tool or native process mutates a document directly. |
-| Computed authoring state | VDE geometry pipeline | 2D and 3D projections may differ, but both are pure derivations. |
+| Authored project and scene data | Canvas Fogworks `ProjectDocument` | Persisted changes require schema migration, Actions and round-trip tests. |
+| Editing and undo/redo | Canvas Fogworks Dispatcher | No 3D tool or native process mutates a document directly. |
+| Computed authoring state | Canvas Fogworks geometry pipeline | 2D and 3D projections may differ, but both are pure derivations. |
 | Running game state | Runtime world | Transient simulation never enters document history every frame. |
 | Rendering | Backend-neutral frame description | Editor chrome and scene submission stay separate from backend implementation. |
 | Native acceleration | Narrow optional boundary | Rust is introduced only for a profiled workload with a deterministic fallback or typed failure. |
@@ -46,7 +46,7 @@ specific subsystem.
 
 Promote the behavior, tests and invariants before considering a direct code port:
 
-| Legacy subsystem | VDE use |
+| Legacy subsystem | Canvas Fogworks use |
 |---|---|
 | Compiled-asset envelope | Version, kind, declared lengths, checksum and corruption tests for derived assets. |
 | Reload generations | Last-generation-wins asset compilation with stale-result rejection. |
@@ -56,7 +56,7 @@ Promote the behavior, tests and invariants before considering a direct code port
 | Editor scene session | Preserve authored identity while rebuilding or patching transient runtime state. |
 
 Do not port the raw Win32 layer, native editor UI, hand-written OpenGL/Vulkan FFI,
-software renderer, or duplicate browser scene codec. VDE already owns those boundaries
+software renderer, or duplicate browser scene codec. Canvas Fogworks already owns those boundaries
 in a form compatible with its product.
 
 ## Delivery sequence
@@ -85,7 +85,7 @@ verifies indexed depth rendering and synchronous readback in Electron's real GPU
 
 - Render one indexed mesh through the existing GPU backend.
 - Add perspective and orthographic cameras, depth buffering and object-id picking.
-- Keep selection, hierarchy, inspector and history on existing VDE interfaces.
+- Keep selection, hierarchy, inspector and history on existing Canvas Fogworks interfaces.
 - Establish pixel captures for camera, depth, winding and lighting correctness.
 
 ### 3D-2 — authored scene

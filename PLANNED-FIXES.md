@@ -7,6 +7,8 @@
 > [MILESTONES.md](MILESTONES.md) and [docs/README.md](docs/README.md).
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-09-03 for the Canvas Fogworks rename: still accurate BECAUSE IT IS FROZEN;
+     persisted `.vde` and `vde.*` compatibility identifiers intentionally remain unchanged. -->
 <!-- re-read 2026-09-03 for the production and 3D foundation baseline: still accurate BECAUSE
      IT IS FROZEN. Current implementation status remains in MILESTONES.md and docs/README.md. -->
 <!-- re-read 2026-08-17 after schema 72 (the document screen + playBounds): still accurate BECAUSE

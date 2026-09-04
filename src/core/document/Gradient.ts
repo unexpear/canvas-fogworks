@@ -2,7 +2,7 @@
  * @module Gradient
  * @description A fill that changes across the shape — the largest hole in this engine's 2D model.
  *
- * VDE has had one kind of fill since the beginning: a single colour. 2,491 fills in the measured
+ * Canvas Fogworks has had one kind of fill since the beginning: a single colour. 2,491 fills in the measured
  * SVG corpus reference a gradient, and every one of them currently flattens to its first stop —
  * the import says so out loud, which is honest and still means 516 files arrive wrong.
  *

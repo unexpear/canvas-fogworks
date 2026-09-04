@@ -1,5 +1,5 @@
 {
-  "name": "visual-design-engine",
+  "name": "canvas-fogworks",
   "version": "0.0.5",
   "description": "A document-based visual programming engine for interfaces.",
   "main": "dist/electron/main.js",
@@ -16,7 +16,7 @@
     "smoke:file-workflow": "node scripts/smoke-startup.js --project-open",
     "smoke:lighting": "electron scripts/smoke-lighting.js",
     "smoke:3d": "electron scripts/smoke-3d.js",
-    "smoke:package": "node scripts/build.js && npx electron-builder --win nsis --publish never -c.directories.output=release && node scripts/smoke-startup.js --packaged \"release/win-unpacked/Visual Design Engine.exe\" && node scripts/smoke-startup.js --project-open --packaged \"release/win-unpacked/Visual Design Engine.exe\"",
+    "smoke:package": "node scripts/build.js && npx electron-builder --win nsis --publish never -c.directories.output=release && node scripts/smoke-startup.js --packaged \"release/win-unpacked/Canvas Fogworks.exe\" && node scripts/smoke-startup.js --project-open --packaged \"release/win-unpacked/Canvas Fogworks.exe\"",
     "lint": "node scripts/check-module-headers.js",
     "doc-drift": "node scripts/check-doc-drift.js",
     "mutate:dimensions": "node scripts/mutate-dimensions.js",
@@ -40,8 +40,8 @@
     "typescript": "~5.4.0"
   },
   "build": {
-    "appId": "com.visualdesignengine.app",
-    "productName": "Visual Design Engine",
+    "appId": "com.canvasfogworks.app",
+    "productName": "Canvas Fogworks",
     "directories": {
       "output": "dist"
     },

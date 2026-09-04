@@ -1801,7 +1801,7 @@ chain, gesture is unsnapped (deferred).
 ## Paint (`core/paint/`)
 
 ```ts
-// PixelBuffer — a surface VDE authored, straight RGBA, not premultiplied
+// PixelBuffer — a surface Canvas Fogworks authored, straight RGBA, not premultiplied
 interface PixelBuffer { width: number; height: number; data: Uint8ClampedArray }
 function createPixelBuffer(w, h): PixelBuffer;      function setPixel(b, x, y, colour): void;
 function getPixel(b, x, y): Rgba | null;            function inBounds(b, x, y): boolean;

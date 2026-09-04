@@ -2,7 +2,7 @@
  * @module World
  * @description The runtime's mutable half — bodies that move, stepped at a fixed rate (M18 slice 1).
  *
- * VDE derives everything it draws from one immutable document. A game does not: a falling crate has
+ * Canvas Fogworks derives everything it draws from one immutable document. A game does not: a falling crate has
  * a velocity, and a velocity is a fact about *this run* rather than about the file. So this module
  * holds the part that changes and keeps the document exactly as it was — the same bargain
  * `EditorState` already strikes for selection ("Runtime editor context. Never serialized").

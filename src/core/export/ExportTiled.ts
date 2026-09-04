@@ -2,7 +2,7 @@
  * @module ExportTiled
  * @description A document's tile layers back out as a `.tmx` — so a map authored here can leave.
  *
- * VDE can read a Tiled map, turn each layer into one `core.tilemap`, place its objects, and author
+ * Canvas Fogworks can read a Tiled map, turn each layer into one `core.tilemap`, place its objects, and author
  * terrain that derives its own picture. Nothing could go the other way, which makes this tool a
  * one-way door: art comes in and never returns to the pipeline it came from.
  *

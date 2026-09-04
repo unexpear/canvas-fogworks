@@ -2,7 +2,7 @@
  * @module Palette
  * @description A set of colours with the layout the artist chose.
  *
- * VDE already stores colours — `VariableStore` holds design tokens — but as a flat keyed set,
+ * Canvas Fogworks already stores colours — `VariableStore` holds design tokens — but as a flat keyed set,
  * because a token is looked up by NAME. A pixel-art palette is looked at by EYE, and its grid is
  * part of the artist's meaning: DawnBringer's 32 colours laid out 8x4 group ramps into rows, and a
  * picker that reflowed them to fit its panel would destroy the grouping while keeping every colour.

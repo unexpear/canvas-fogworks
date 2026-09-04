@@ -1,7 +1,7 @@
 # Morphic / Hold Engine — legacy source snapshot
 
 This directory preserves the first game-engine implementation as design evidence for
-VDE's future 3D work. It is a source snapshot, not a second application core and not a
+Canvas Fogworks' future 3D work. It is a source snapshot, not a second application core and not a
 dependency of the TypeScript build.
 
 ## Provenance
@@ -14,13 +14,13 @@ dependency of the TypeScript build.
 
 The original folder and its Git history remain in place. Nested `.git` metadata,
 Codex/Claude workspace metadata, and Cargo `target` directories were deliberately not
-copied. Generated targets can be recreated and do not belong in VDE's history.
+copied. Generated targets can be recreated and do not belong in Canvas Fogworks' history.
 
 ## Boundary
 
 - Nothing under `src/` may import this directory.
-- VDE's document, Action, history, editor, and renderer contracts remain authoritative.
-- Code is promoted from here only as a small reviewed implementation with VDE-native
+- Canvas Fogworks' document, Action, history, editor, and renderer contracts remain authoritative.
+- Code is promoted from here only as a small reviewed implementation with Canvas Fogworks-native
   tests and an explicit interface.
 - See [`../../docs/3D-FOUNDATION.md`](../../docs/3D-FOUNDATION.md) for the adoption plan.
 
@@ -34,4 +34,3 @@ copied. Generated targets can be recreated and do not belong in VDE's history.
 - `hold_engine_remote/src/editor/session.rs` — authored/runtime state separation
 
 Run the preserved Rust tests from this directory with `cargo test --workspace`.
-

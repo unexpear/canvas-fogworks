@@ -1,6 +1,8 @@
 # Document Schema
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-09-03 for the Canvas Fogworks rename: persisted schema and compatibility
+     identifiers are unchanged; only product-facing prose changed. Schema remains v76. -->
 <!-- re-read 2026-08-14 after the dropHidden fix: accurate, and NO field moved. `hidden` (line 94)
      is described exactly right and always was — the defect was that `dropHidden` returned an
      enumerated literal and lost the document's OPTIONAL fields alongside the node, which this file

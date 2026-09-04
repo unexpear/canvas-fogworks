@@ -115,7 +115,7 @@ export function renderWebGL(
     container.dataset[GL_FALLBACK_ATTR] = why;
     if (!warned.has(why)) {
         warned.add(why);
-        console.warn(`[VDE] The WebGL backend is drawing through Canvas instead: ${why}`);
+        console.warn(`[Canvas Fogworks] The WebGL backend is drawing through Canvas instead: ${why}`);
     }
     container.innerHTML = "";
     renderCanvas(container, doc, state, onAsyncReady);

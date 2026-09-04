@@ -1,4 +1,4 @@
-# Feature audit — VDE against Pixelorama and Tiled
+# Feature audit — Canvas Fogworks against Pixelorama and Tiled
 
 <!-- describes: src/editor/tools, src/core/paint, src/core/import, src/core/export -->
 <!-- re-read 2026-08-14 after extracting the Tiled placement logic into core/import/tiledPlacements.
@@ -63,7 +63,7 @@ broke a test whose subject was still true. Both are fixed.
 
 ## Paint side — against Pixelorama
 
-| Feature | VDE | Note |
+| Feature | Canvas Fogworks | Note |
 |---|---|---|
 | Pencil / brush, eraser, size, roundness | **have** | `RasterTool`, `paint/Brush` |
 | Symmetry guides | **have** | `paint/Symmetry`, reachable |
@@ -82,7 +82,7 @@ broke a test whose subject was still true. Both are fixed.
 | Rotation algorithms (nearest, OmniScale, rotxel, cleanEdge) | **absent** | rotation is a node transform, resampled by the backend |
 | Indexed colour mode | **absent** | Pixelorama carries index maps and a palette index per pixel |
 | Onion skinning, animation tags, timeline | **have** | schema 39 |
-| GIF export | **absent** | VDE exports SVG and a sprite-sheet atlas |
+| GIF export | **absent** | Canvas Fogworks exports SVG and a sprite-sheet atlas |
 | Import Aseprite | **have** | `import/Aseprite` — reachable since 2026-08-13. One `.aseprite` becomes one animated node with the file's OWN frame rate and its TAGS as clips (a rename, not a translation). Opening the door needed three things that were not about Aseprite: `composeFrame` (the reader could describe a file and draw nothing), `SetClipsAction` (`Document.clips` had no write path at all), and document deltas keyed by kind (a transaction could carry only one document-level change; this carries the clock and the ranges that index into it). Measured on the real tree: 23 files composite to real pixels, 96 tags, and the seven refusals are all `__MACOSX/._*` stubs |
 | Import Krita, Photoshop | **absent** | Pixelorama parses both |
 | Import a NUMBERED FRAME RUN | **have** | `import/Sequence` was the fourth unreachable importer and is now wired: the Assets drawer lists the runs a folder holds and imports one as a single `core.image` with a keyframed `src`. The guard is the interesting part — a tileset exported one file per tile is a numbered run by every rule a name reader has, and one pack here groups to **11,846 frames**, so runs longer than 240 are refused with the reason. Reliability follow-up 2026-09-02: every frame must read as an embedded image before anything is placed; missing/unreadable frames and duplicate basenames across subfolders refuse the whole run, and reads are confined to the chosen folder |
@@ -95,7 +95,7 @@ broke a test whose subject was still true. Both are fixed.
 
 ## Map side — against Tiled and Pixelorama's tilemap layers
 
-| Feature | VDE | Note |
+| Feature | Canvas Fogworks | Note |
 |---|---|---|
 | Tilemap as a grid of indices | **have** | `core.tilemap`, schema 61 |
 | Per-cell orientation (3 flip bits) | **have** | schema 62, all three backends |
@@ -106,10 +106,10 @@ broke a test whose subject was still true. Both are fixed.
 | **Document background** | **have** (schema 70) | `Document.background` — what the document sits ON. Until this, nothing in the tree carried one, so a level appeared to sit on the EDITOR'S chrome: a run had no sky, an export emitted no ground colour, and `<map backgroundcolor>` was read by nothing (3 of the 24 maps here declare one). Document-level rather than a giant rectangle, which would be selectable and inside `contentBounds` — the bounds the camera clamps to and the death plane comes from. Painted in SCREEN space by all three backends, exported as a real `<rect>`, and set by `SetBackgroundAction` + a colour input in the toolbar, ALL IN THE SAME COMMIT AS THE FIELD. Known divergence: the GPU parses hex only and falls back on names/`rgb()` |
 | **Tileset as a document object** | **partial** (schemas 67–68, 73) | `Document.tilesets` is shared by layers. Sparse tile records now preserve probability, class, custom properties, collision objects and animation; sets preserve wangsets. Collection sets draw on SVG and Canvas; WebGL still needs a runtime atlas. STILL ABSENT: adding, duplicating or deleting a tile in the panel |
 | **Paint PIXELS on a tilemap layer** (Manual / Auto / Stack) | **absent** | Pixelorama's headline tilemap feature: draw pixels and the tileset updates or grows |
-| Autotiling bits painted per tile | **absent** | Pixelorama has a tool for exactly this; VDE's table is authored, not painted |
+| Autotiling bits painted per tile | **absent** | Pixelorama has a tool for exactly this; Canvas Fogworks' table is authored, not painted |
 | Tile probability / random variants | **have** | `TilesetTile.probability` (schema 67), un-normalised as Tiled writes it, READ by the autotiler: a mask with several drawn tiles picks among them by weight, seeded by the cell and the material so a derived picture does not shimmer as you pan |
 | Tile user data | **have** | `TilesetTile.userData` round-trips through TMX import/export and validates; runtime conventions are additionally projected into typed entity fields. No panel field edits tile metadata yet |
-| Rotate / flip a tile in the tileset (not the cell) | **absent** | VDE turns CELLS, not tiles |
+| Rotate / flip a tile in the tileset (not the cell) | **absent** | Canvas Fogworks turns CELLS, not tiles |
 | Export a tileset (image, Godot `.tres`) | **absent** | |
 | Hexagonal and staggered maps | **absent** | reported by the importer, not placed |
 | Isometric maps | **partial** | `tilePosition` places them; no isometric map in the corpus has a single non-empty cell, so the formula is untested by real data |
@@ -118,7 +118,7 @@ broke a test whose subject was still true. Both are fixed.
 | Image layers | **absent** | counted and reported |
 | Group layers (nesting preserved) | **absent** | flattened; offset and opacity of the group are lost |
 | Tile animations | **have** | frame ids and millisecond durations import/export; play mode resolves loops from deterministic world time without editing stored cells |
-| Wangsets / terrains | **partial** | wangset names/classes/properties, colors and 8-entry wang ids import/export. VDE preserves this independently from its own dual-grid terrain authoring model |
+| Wangsets / terrains | **partial** | wangset names/classes/properties, colors and 8-entry wang ids import/export. Canvas Fogworks preserves this independently from its own dual-grid terrain authoring model |
 | Open a `.unitypackage` | **have** | `import/UnityPackage` — gzip+tar, assets by GUID folder, paths recovered. Verified on all 7 packages in this tree: 523 files, 27.7 MB, zero notes. REACHABLE from the Folders drawer: `read-unity-folder` + `read-unity-package` (path-confined) and a `gunzip-sync` channel separate from `inflate-sync`, since a package is gzip and not raw zlib. Driven live — 7 packages found, a 5.3MB one opened in 609ms, and a path escape refused. Images place; everything else is counted |
 | Unity sprite SLICING rects | **absent, and unbuildable here** | the valuable part of a `.meta`, and every one of the 96 sprites in the 2D package is `spriteMode: 0` with `sprites: []`. There is nothing in this tree to design against |
 | Unity prefabs / scenes | **absent** | BINARY serialized type-trees in these packages, not YAML. The same models ship beside them as FBX and glTF, which `import/Gltf` already reads |

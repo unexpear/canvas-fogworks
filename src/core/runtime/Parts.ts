@@ -13,7 +13,7 @@
  * SO A PART CARRIES ITS OWN RULE. This is Super Mario Maker's shape rather than a level format's: a
  * goomba there is not a name the engine looks up, it is a part that brings its behaviour with it,
  * and the editor's palette IS the vocabulary. That makes the rules DATA authored in the editor,
- * which is what VDE already is.
+ * which is what Canvas Fogworks already is.
  *
  * WHY THIS IS NOT "SCHEMA INVENTED AHEAD OF CONTENT", the charge that refused `core.entity`. That
  * charge is about inventing a shape and WAITING for content to justify it. The corpus cannot justify
@@ -48,7 +48,7 @@ import { ReadonlyDocument, ProjectDocument } from "../document/Document";
 import { propertyOf, WorldState } from "./World";
 import { Entity } from "../document/Entity";
 
-/** The prefix that marks a property as VDE's own vocabulary rather than an imported file's. */
+/** The prefix that marks a property as Canvas Fogworks' own vocabulary rather than an imported file's. */
 export const PART_PREFIX = "vde.";
 
 /**

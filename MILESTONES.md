@@ -1,4 +1,4 @@
-# MILESTONES.md — Visual Design Engine
+# MILESTONES.md — Canvas Fogworks
 
 > The engine is built in **layers**, where each milestone proves **one new
 > architectural capability** before the next begins. This is the canonical roadmap.
@@ -27,7 +27,7 @@
 
 ## Product Direction — Dual Track
 
-VDE is intentionally **both** a general visual/pixel editor and a game-authoring
+Canvas Fogworks is intentionally **both** a general visual/pixel editor and a game-authoring
 environment. Neither track is subordinate or temporary. They share one document model,
 action/history system, renderer, asset pipeline, animation system and production gate:
 
@@ -893,7 +893,7 @@ resolution needs. These are dividends of the Milestone 0 invariants.
 ## Phase 18 — Game Runtime
 
 ### Milestone 18 — Game Runtime 🚧 (slices 1–40 landed)
-A 2D game that RUNS inside VDE rather than being exported to something else that runs it.
+A 2D game that RUNS inside Canvas Fogworks rather than being exported to something else that runs it.
 
 **The architecture was already there, in a shape nobody had used for this.** `applyFrame(doc, frame)`
 takes the document and a moment and returns a NEW document showing that moment; everything below it
@@ -2186,7 +2186,7 @@ tile rate), the timer-as-spine observation, and "the enemy reads as a platform",
 mechanics test could ever say.
 
 **THE GAUNTLET VERDICT ON THE ENGINE ITSELF (2026-08-20)** — a second Gauntlet pass, this time over
-VDE as an engine, judged code-against-code: Godot 4.4 source on disk (tilemap, tileset, the whole
+Canvas Fogworks as an engine, judged code-against-code: Godot 4.4 source on disk (tilemap, tileset, the whole
 2D canvas editor plugin), LDtk's published schema, Unity's RuleTile, Aseprite/Godot/GameMaker/Tiled
 docs fetched and placeholder-checked. Ten agents, 294 tool calls of reading both sides. **1 MATCH,
 8 LOSE** — with per-piece strengths named, several genuinely above the bar.
@@ -2264,7 +2264,7 @@ level transitions), slopes, rotation, restitution, and anything configurable abo
 
 ### Milestone 19 — Versioned 3D contracts ✅
 
-VDE's 3D work begins as an extension of the working document and runtime boundaries,
+Canvas Fogworks' 3D work begins as an extension of the working document and runtime boundaries,
 not as a merge of the preserved first engine. The first slice defines typed 3D
 transforms, cameras, lights, asset-backed renderables, materials and colliders; imports
 one minimal owned glTF fixture; and proves save/load plus Action undo/redo before a

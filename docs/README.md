@@ -1,4 +1,4 @@
-# Visual Design Engine — Core Documentation
+# Canvas Fogworks — Core Documentation
 
 <!-- describes: src/core/document/Document.ts, src/core/tests -->
 
