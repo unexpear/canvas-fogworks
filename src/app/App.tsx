@@ -8,6 +8,12 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from "react"
 import "./ElectronAPI";
 import { bindProjectFileWorkflow } from "./ProjectFileWorkflow";
 import { prepareSequenceImport } from "./AssetImportWorkflow";
+import { AnimationPanel } from "./AnimationPanel";
+import { SetClipsAction } from "../core/actions/SetClipsAction";
+import { SetAnimationControllerAction } from "../core/actions/SetAnimationControllerAction";
+import { findClip } from "../core/document/Clips";
+import { applyAnimations, sampleClip } from "../core/runtime/AnimationPlayback";
+import { animateWorld2D } from "../core/runtime/AnimationWorld";
 import { ActionDispatcher } from "../core/actions/ActionDispatcher";
 import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document";
 import { Node, Shadow, flatFill, UserData } from "../core/document/Node";
@@ -669,6 +675,7 @@ export function App() {
     // a repaint for no visible reason — and it must NOT live in the document, or copying would be
     // an undoable edit and Ctrl+Z after Ctrl+C would "un-copy".
     const clipboardRef = useRef<ClipboardContents | null>(null);
+    const [previewClipName, setPreviewClipName] = useState("");
     // The layer drag in flight: what is being dragged, and where the pointer currently is.
     // Kept in React state (not a ref) because the row that is being hovered has to REDRAW to
     // show the indicator — a ref would move the data without moving the picture.
@@ -903,18 +910,23 @@ export function App() {
      * at 12 fps whether the machine manages 60 redraws a second or 20. It LOOPS, because the
      * thing you want while animating is to watch the same second over and over.
      */
+    const previewTimeline = dispatcher.getDocument().timeline;
+    const previewClip = findClip(dispatcher.getDocument().clips, previewClipName);
     useEffect(() => {
-        const timeline = dispatcher.getDocument().timeline;
-        if (!es.playingTimeline || !timeline) return;
+        const timeline = previewTimeline;
+        if (!es.playingTimeline || es.playing || !timeline) return;
         const startedAt = Date.now();
-        const from = Math.round(es.frame ?? 0);
+        const clip = previewClip ?? { name: "", from: 0, to: timeline.frames - 1 };
+        const from = es.frame !== undefined && es.frame >= clip.from && es.frame <= clip.to
+            ? es.frame - clip.from : 0;
         const id = window.setInterval(() => {
-            const elapsed = ((Date.now() - startedAt) / 1000) * timeline.fps;
-            es.frame = (from + Math.floor(elapsed)) % timeline.frames;
+            const sample = sampleClip(clip, (Date.now() - startedAt) / 1000 + from / timeline.fps, timeline.fps);
+            es.frame = sample.frame;
+            if (sample.finished) es.playingTimeline = false;
             refresh();
         }, 1000 / Math.min(60, timeline.fps * 2));
         return () => window.clearInterval(id);
-    }, [dispatcher, es, refresh, es.playingTimeline]);
+    }, [es, refresh, es.playingTimeline, es.playing, previewTimeline, previewClip]);
 
     /**
      * Put a KEYFRAME on the selected node at the playhead, holding what it looks like NOW.
@@ -1557,6 +1569,7 @@ export function App() {
                         const commands = marioRules(live, world,
                         { controlled: es.controlled, bounds: runBoundsRef.current, input: es.input });
                     world = applyCommands(world, commands);
+                    world = animateWorld2D(live, world);
                     // A WARP CUTS THE CAMERA (M18 slice 39): the follow camera closes a fraction
                     // per step, so a 3000px teleport would swoosh across the whole level. The
                     // original cuts, and so does this — by finishing the follow in one go.
@@ -1667,6 +1680,8 @@ export function App() {
                     applyPose(applyFacing(applyWorld(applySpawns(timed, world), world), world), world),
                     world), world.time);
             }
+            if (es.playing) played = applyAnimations(played, workspace === "3d"
+                ? world3dRef.current?.animations : es.world?.animations);
             const stored = applyParallax(played as ProjectDocument, es.viewport) as ReadonlyDocument;
             const doc: ReadonlyDocument = !es.playing
                 ? stored
@@ -1918,6 +1933,10 @@ export function App() {
     // (selection, hover, viewport, drag previews) doesn't flow through the dispatcher,
     // so tools call `refresh()` directly for those (no document nodes are dirtied).
     useEffect(() => dispatcher.onChange(result => {
+        if (result.fullReload) {
+            es.playingTimeline = false;
+            setPreviewClipName("");
+        }
         result.updatedNodeIds.forEach(id => dirtyNodesRef.current.add(id));
         refresh();
     }), [dispatcher, refresh]);
@@ -1992,8 +2011,12 @@ export function App() {
                     }
                     case "view.timeline": {
                         const d = dispatcher.getDocument();
+                        if (es.playing || d.clips?.length) return;
+                        const removing = !!d.timeline;
                         dispatcher.dispatchAction(new SetTimelineAction(d, d.timeline ? undefined : { frames: 24, fps: 12 }));
-                        es.frame = d.timeline ? undefined : 0;
+                        es.playingTimeline = false;
+                        setPreviewClipName("");
+                        es.frame = removing ? undefined : 0;
                         refresh();
                         return;
                     }
@@ -2567,6 +2590,7 @@ export function App() {
     };
 
     const toggleRuntime = () => {
+        es.playingTimeline = false;
         es.playing = !es.playing;
         es.playState = null;
         es.transition = null;
@@ -2782,11 +2806,16 @@ export function App() {
                                                                                 {/* A document has no clock until somebody asks for one, so a still drawing carries
                     no timeline strip and serialises exactly as it did before animation existed. */}
                 <button
-                    title="Give this document a timeline (24 frames at 12fps), or take it away again"
+                    title={dispatcher.getDocument().clips?.length ? "Remove named clips before removing their timeline" : "Give this document a timeline (24 frames at 12fps), or take it away again"}
+                    disabled={es.playing || !!dispatcher.getDocument().clips?.length}
                     onClick={() => {
                         const d = dispatcher.getDocument();
+                        if (es.playing || d.clips?.length) return;
+                        const removing = !!d.timeline;
                         dispatcher.dispatchAction(new SetTimelineAction(d, d.timeline ? undefined : { frames: 24, fps: 12 }));
-                        es.frame = d.timeline ? undefined : 0;
+                        es.playingTimeline = false;
+                        setPreviewClipName("");
+                        es.frame = removing ? undefined : 0;
                         refresh();
                     }}
                     style={{ fontSize: 11, padding: "3px 8px", marginLeft: 4, background: "transparent",
@@ -4946,17 +4975,34 @@ export function App() {
 
             {/* THE TIMELINE (schema 39). Shown once a document has a clock, so a still document
                 is exactly as uncluttered as it was before animation existed. */}
+            {dispatcher.getDocument().timeline && <AnimationPanel document={dispatcher.getDocument()}
+                nodeId={es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null}
+                selectedClip={previewClip?.name ?? ""} disabled={es.playing}
+                onSelectClip={name => {
+                    es.playingTimeline = false;
+                    setPreviewClipName(name);
+                    es.frame = findClip(dispatcher.getDocument().clips, name)?.from ?? 0;
+                    refresh();
+                }}
+                onClipsChange={clips => dispatcher.dispatchAction(new SetClipsAction(dispatcher.getDocument(), clips)).success}
+                onControllerChange={controller => {
+                    const id = es.selectedNodeIds[0];
+                    return !!id && dispatcher.dispatchAction(new SetAnimationControllerAction(dispatcher.getDocument(), id, controller)).success;
+                }} />}
             {(() => { const timeline = dispatcher.getDocument().timeline; return timeline ? (
                 <div style={{ padding: "4px 10px", background: UI.panel, borderTop: `1px solid ${UI.line}`,
                               display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#ccc" }}>
-                    <button style={ALIGN_BUTTON_STYLE} title="Play the timeline from the playhead"
-                        onClick={() => { es.playingTimeline = !es.playingTimeline; refresh(); }}>
+                    <button style={ALIGN_BUTTON_STYLE} title="Play the selected clip or timeline from the playhead" disabled={es.playing}
+                        onClick={() => {
+                            if (!es.playingTimeline && previewClip?.loop === false && (es.frame ?? 0) >= previewClip.to) es.frame = previewClip.from;
+                            es.playingTimeline = !es.playingTimeline; refresh();
+                        }}>
                         {es.playingTimeline ? "⏸" : "▶"}
                     </button>
                     <input
-                        type="range" min={0} max={timeline.frames - 1} step={1}
+                        type="range" min={previewClip?.from ?? 0} max={previewClip?.to ?? timeline.frames - 1} step={1} disabled={es.playing}
                         value={Math.round(es.frame ?? 0)}
-                        onChange={e => { es.frame = parseInt(e.target.value, 10); refresh(); }}
+                        onChange={e => { es.playingTimeline = false; es.frame = parseInt(e.target.value, 10); refresh(); }}
                         style={{ flex: 1 }}
                         title="Scrub the playhead. Scrubbing is not an edit — it pushes no undo step."
                     />
@@ -4991,6 +5037,10 @@ export function App() {
 
             <div style={{ padding: "3px 10px", background: UI.panel, borderTop: `1px solid ${UI.line}`, fontSize: 10, color: "#555", display: "flex", justifyContent: "space-between" }}>
                 <span>{toolName.charAt(0).toUpperCase() + toolName.slice(1)} tool</span>
+                {es.playing && <span data-animation-states style={{ color: UI.accent }}>
+                    {[...(workspace === "3d" ? world3dRef.current?.animations : es.world?.animations) ?? []]
+                        .slice(0, 4).map(([id, player]) => `${dispatcher.getDocument().nodes.get(id)?.name || id}: ${player.state} · ${player.frame}`).join(" | ")}
+                </span>}
                 {/* WHAT THE RUN JUST NOTICED (M18 slice 5). The world reports overlaps and does not
                     act on them — nothing here spawns, runs a script or loads a map — so without a
                     place for an event to LAND the whole feature would be unreachable, which is the

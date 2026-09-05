@@ -353,7 +353,35 @@ ipcMain.on("project-open-result", (event, result) => {
             if (!hydrated?.ok) throw new Error(`persisted 3D mesh did not rehydrate into the viewport: ${JSON.stringify(hydrated)}`);
             // A REAL Action-backed edit, followed by the same Save command the native menu sends.
             mainWindow.webContents.send("menu-command", "view.timeline");
-            setTimeout(() => mainWindow?.webContents.send("menu-command", "file.save"), 50);
+            const animated = await mainWindow.webContents.executeJavaScript(`(async () => {
+                const pause = () => new Promise(resolve => setTimeout(resolve, 40));
+                for (let i = 0; i < 50 && !document.querySelector('[data-animation-panel]'); i++) await pause();
+                const panel = document.querySelector('[data-animation-panel]');
+                if (!panel) throw new Error('Animation panel did not appear');
+                panel.open = true;
+                await pause();
+                const name = panel.querySelector('[aria-label="Clip name"]');
+                Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(name, 'smoke-clip');
+                name.dispatchEvent(new Event('input', { bubbles: true })); await pause();
+                const button = text => [...panel.querySelectorAll('button')].find(b => b.textContent === text);
+                button('Add clip').click(); await pause();
+                button('Add controller').click(); await pause();
+                if (!panel.querySelector('[aria-label="Initial state"]')) throw new Error('Controller was not authored: ' + panel.textContent
+                    + ' | selected=' + panel.querySelector('[aria-label="Preview clip"]')?.value);
+                const runtime = title => document.querySelector('button[title="' + title + '"]');
+                runtime('Play the prototype: clicks and hovers fire interactions').click();
+                let seen = false;
+                for (let i = 0; i < 50; i++) {
+                    await pause();
+                    const text = document.querySelector('[data-animation-states]')?.textContent || '';
+                    if (/card: idle · [1-9]/.test(text)) { seen = true; break; }
+                }
+                if (!seen) throw new Error('Authored clip did not advance in the 3D runtime');
+                runtime('Stop — back to editing').click(); await pause();
+                return true;
+            })()`);
+            if (!animated) throw new Error("animation workflow did not finish");
+            mainWindow.webContents.send("menu-command", "file.save");
         } catch (err) {
             console.error(`VDE_PROJECT_OPEN_SMOKE_FAILED: ${err.message}`);
             app.exit(1);
@@ -812,6 +840,11 @@ ipcMain.handle("save-file", async (event, filePath, content) => {
             }
             if (saved?.document?.nodes?.card?.spatial3d?.composition2d?.mode !== "billboard") {
                 throw new Error("the Action-backed 2D-in-3D composition was not serialized");
+            }
+            if (saved?.document?.nodes?.card?.animation?.states?.[0]?.clip !== "smoke-clip"
+                || saved?.document?.clips?.[0]?.name !== "smoke-clip"
+                || saved?.document?.nodes?.card?.frame !== undefined) {
+                throw new Error("animation authoring was lost or a transient playhead leaked into the saved node");
             }
             console.log("VDE_PROJECT_FILE_SMOKE_READY");
             app.exit(0);

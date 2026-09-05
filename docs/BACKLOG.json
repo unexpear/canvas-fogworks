@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "lastReconciled": "2026-09-03",
-  "sourceRevision": "2fbd982",
+  "lastReconciled": "2026-09-05",
+  "sourceRevision": "e6004d8",
   "productDirection": {
     "mode": "dual-track",
     "summary": "Canvas Fogworks is both a general visual/pixel editor and a game-authoring environment.",
@@ -20,12 +20,12 @@
       "evidence": ["src/app/App.tsx", "src/app/AppShellControls.tsx", "src/app/ThreeDInspector.tsx"]
     },
     {
-      "id": "ANIMATION-001",
+      "id": "ANIMATION-002",
       "area": "animation",
       "priority": "P1",
       "status": "open",
-      "summary": "Make named clips reachable through browser, preview and runtime state-driven playback workflows shared by 2D and 3D authoring.",
-      "evidence": ["src/core/document/Clips.ts", "MILESTONES.md#phase-18-game-runtime"]
+      "summary": "Extend the delivered named-clip controllers with native glTF animation import, 3D transform tracks and skeletal skinning; add crossfades and component-instance playback with explicit tests.",
+      "evidence": ["docs/ANIMATION.md", "src/core/import/Gltf.ts", "src/core/runtime/AnimationPlayback.ts"]
     },
     {
       "id": "GAMEPLAY-001",

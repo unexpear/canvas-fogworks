@@ -11,7 +11,7 @@
      one validator shared by the load and edit paths, and a header that says WHY the value is
      text rather than what it is. -->
 
-> 🔒 Frozen contract · schema v76 (app v0.0.5) · current through the 3D production/runtime baseline. Conventions + the hard rules that protect the invariants.
+> 🔒 Frozen contract · schema v77 (app v0.0.5) · current through shared animation controllers. Conventions + the hard rules that protect the invariants.
 
 ## Hard rules (never violate)
 

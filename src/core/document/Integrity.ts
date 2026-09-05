@@ -27,6 +27,7 @@ import { overrideValueError } from "./Components";
 import { componentError, overrideAgainstMasterError, overridesError, statesError } from "./Components";
 import { variableStoreError, THEME_MODES } from "./Variables";
 import { entityError } from "./Entity";
+import { animationControllerError } from "./AnimationController";
 import { assets3DError, spatial3DError } from "./Spatial3D";
 
 function checkNodeRanges(node: ReadonlyNode): void {
@@ -154,6 +155,8 @@ function checkNodeRanges(node: ReadonlyNode): void {
     const udErr = userDataError(node.userData);
     if (udErr) throw new Error(`Invalid document: node "${node.id}" ${udErr}.`);
     const entityErr = entityError(node.entity);
+    const animationErr = animationControllerError(node.animation);
+    if (animationErr) throw new Error(`Invalid document: node "${node.id}" ${animationErr}.`);
     if (entityErr) throw new Error(`Invalid document: node "${node.id}" ${entityErr}.`);
     const spatialErr = spatial3DError(node.spatial3d);
     if (spatialErr) throw new Error(`Invalid document: node "${node.id}" ${spatialErr}.`);

@@ -406,7 +406,7 @@ describe("3D foundation contracts (schemas 74-76)", () => {
         const raw = JSON.parse(serializeDocument(createDocWithRectangle()));
         raw.version = "73";
         const migrated = migrateIfNeeded(raw);
-        expect(migrated.version).toBe("76");
+        expect(migrated.version).toBe(SCHEMA_VERSION);
         expect(migrated.document.assets3d).toBeUndefined();
         expect(migrated.document.nodes["rectangle-001"].spatial3d).toBeUndefined();
     });
@@ -4717,9 +4717,9 @@ describe("Guards the suite did not previously protect", () => {
         // (The boundary tracks the last IMPLEMENTED step, so it moves up by one each
         // time a real migration is added — most recently when 67→68 landed, taking the sheet OFF
         // the node, which 66→67 had moved and the importer had gone on writing anyway.)
-        // (Most recently 73->74, typed 3D assets/components. Absent means no authored 3D state,
-        // which every pre-74 document is; an older build would silently drop those declarations.)
-        expect(() => migrateIfNeeded(legacy, "77")).toThrow('Migration not implemented for document schema "76"');
+        // The next unsupported schema must fail, even as the current migration chain grows.
+        expect(() => migrateIfNeeded(legacy, String(Number(SCHEMA_VERSION) + 1)))
+            .toThrow(`Migration not implemented for document schema "${SCHEMA_VERSION}"`);
 
         // At the current schema it loads, having been migrated through the whole chain.
         expect(migrateIfNeeded(legacy).version).toBe(SCHEMA_VERSION);

@@ -27,6 +27,10 @@ specific subsystem.
 
 ## Model rules
 
+Schema 77 adds shared clip controllers. The 3D runtime advances their movement/outcome conditions;
+composed 2D visuals sample timeline tracks and sprite atlas crops. Native glTF animation/skin
+import is still future work (`ANIMATION-002`), detailed in [ANIMATION.md](ANIMATION.md).
+
 1. Keep `Transform2D` and `Transform3D` distinct. A 2D field must not acquire
    a new meaning merely because a 3D viewport exists.
 2. Do not overload the current deformation `Node.mesh` with imported triangle meshes.

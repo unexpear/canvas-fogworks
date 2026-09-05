@@ -299,6 +299,7 @@ interface State3D {
     shadowDepth: WebGLRenderbuffer;
     shadowSize: number;
     textures: Map<string, WebGLTexture>;
+    textureSizes: Map<string, { width: number; height: number }>;
     readyTextures: Set<string>;
     environmentTextures: Map<string, { image: object; texture: WebGLTexture }>;
     redraw: (() => void) | null;
@@ -406,6 +407,7 @@ function init(canvas: HTMLCanvasElement): State3D | null {
         shadowMvpLoc: gl.getUniformLocation(shadowProgram, "u_mvp"), shadowFramebuffer, shadowTexture, shadowDepth,
         shadowSize: 0,
         textures: new Map(),
+        textureSizes: new Map(),
         environmentTextures: new Map(),
         readyTextures: new Set(), redraw: null,
         pickFramebuffer, pickTexture, pickDepth, pickIds: [null], width: 0, height: 0,
@@ -496,7 +498,7 @@ function textureFor(state: State3D, source: string, info: TextureInfo3D | null):
         new Uint8Array([255, 255, 255, 255]));
     const image = new Image();
     image.onload = () => enqueueUpload(state, () => {
-        if (state.disposed) return;
+        if (state.disposed || state.textures.get(key) !== texture) return;
         gl.bindTexture(gl.TEXTURE_2D, texture);
         gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
         gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
@@ -519,6 +521,7 @@ function textureFor(state: State3D, source: string, info: TextureInfo3D | null):
         if (sampler.minFilter >= 9984) gl.generateMipmap(gl.TEXTURE_2D);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, sampler.minFilter);
         state.readyTextures.add(key);
+        state.textureSizes.set(source, { width: image.width, height: image.height });
     });
     // Keep the initialized white texel on decode failure. Deleting the cache entry would make
     // every subsequent frame retry the same broken image and churn GPU objects forever.
@@ -730,6 +733,12 @@ function drawFrame(state: State3D, frame: Frame3D, picking: boolean, hasShadow =
             const transform = info?.transform;
             offsetScale.set([transform?.offset[0] ?? 0, transform?.offset[1] ?? 0,
                 transform?.scale[0] ?? 1, transform?.scale[1] ?? 1], index * 4);
+            const size = draw.baseColorTexture && state.textureSizes.get(draw.baseColorTexture);
+            const crop = draw.baseColorSourceRect;
+            if (index === 0 && crop && size) {
+                offsetScale.set([crop.x / size.width, crop.y / size.height,
+                    crop.width / size.width, crop.height / size.height], 0);
+            }
             rotations[index] = transform?.rotation ?? 0;
             uvSets[index] = info?.texCoord === 1 ? 1 : 0;
         });
@@ -817,6 +826,7 @@ export function disposeWebGL3D(canvas: HTMLCanvasElement): void {
 export function invalidateWebGL3DSource(canvas: HTMLCanvasElement, sourceOrAssetId: string): void {
     const state = (canvas as Canvas3D).__vde3D;
     if (!state) return;
+    state.textureSizes.delete(sourceOrAssetId);
     for (const [key, texture] of [...state.textures]) if (key.startsWith(`${sourceOrAssetId}\n`)) {
         state.gl.deleteTexture(texture); state.textures.delete(key); state.readyTextures.delete(key);
     }

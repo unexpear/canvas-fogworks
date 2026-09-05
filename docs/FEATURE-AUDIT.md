@@ -1,5 +1,10 @@
 # Feature audit — Canvas Fogworks against Pixelorama and Tiled
 
+Shared clip reachability updated 2026-09-05: named clips are listed and editable in the animation
+panel, previewed through the timeline controls, and assigned to per-node runtime states/transitions.
+This includes composed 2D animation in 3D scenes; native glTF animation and skinning remain absent.
+See [Animation workflow](ANIMATION.md).
+
 <!-- describes: src/editor/tools, src/core/paint, src/core/import, src/core/export -->
 <!-- re-read 2026-08-14 after extracting the Tiled placement logic into core/import/tiledPlacements.
      THE UNREACHABLE LIST WAS MISSING ITS LARGEST ENTRY: 241 lines deciding what a .tmx places lived

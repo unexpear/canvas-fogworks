@@ -156,6 +156,7 @@ import { ReadonlyTilemap, TILE_EMPTY, tileAt, visibleCells } from "../document/T
 import { Tileset, findTileset, tilesetTile } from "../document/Tileset";
 import { isParallaxed } from "../document/Depth";
 import { Entity } from "../document/Entity";
+import { animateWorld2D } from "./AnimationWorld";
 
 /** One tick, in seconds. 60Hz: the rate every measurement in this module's tests assumes. */
 export const FIXED_STEP = 1 / 60;
@@ -463,6 +464,8 @@ export interface Body {
 
 /** The run's whole mutable state. Keyed by STORED node id, never serialized. */
 export interface WorldState {
+    /** Transient named-clip players, stepped after gameplay rules. */
+    animations?: import("./AnimationPlayback").AnimationPlayers;
     bodies: ReadonlyMap<string, Body>;
     /** Seconds since the run began, advanced only by whole steps. */
     time: number;
@@ -868,7 +871,7 @@ export function worldFrom(doc: ReadonlyDocument): WorldState {
             travelled: 0, power: 0, star: 0
         });
     }
-    return { bodies, time: 0, contacts: new Set(), despawned: new Set(), cells: new Map(), cellClocks: new Map(), tallies: new Map(), spawns: [], outcome: "running", transitionTo: null, jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] };
+    return animateWorld2D(doc, { bodies, time: 0, contacts: new Set(), despawned: new Set(), cells: new Map(), cellClocks: new Map(), tallies: new Map(), spawns: [], outcome: "running", transitionTo: null, jumpWas: false, jumpCut: false, overlaps: new Set(), events: [] });
 }
 
 /** Every static body's box, read from the document each step so a level edit is picked up. */
@@ -1460,7 +1463,7 @@ export function stepWorld(
             className: doc.nodes.get(first)?.className ?? "" });
     }
 
-    return { bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, cells: world.cells, cellClocks: world.cellClocks, tallies: world.tallies, spawns: world.spawns, outcome: world.outcome, transitionTo: world.transitionTo, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
+    return { ...world, bodies: next, time: world.time + FIXED_STEP, contacts: touching, despawned: world.despawned, cells: world.cells, cellClocks: world.cellClocks, tallies: world.tallies, spawns: world.spawns, outcome: world.outcome, transitionTo: world.transitionTo, jumpWas: input.jump, jumpCut: launched ? false : cutNow, overlaps: inside, events };
 }
 
 /**

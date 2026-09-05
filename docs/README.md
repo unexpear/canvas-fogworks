@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document/Document.ts, src/core/tests -->
 
-> **Frozen contracts · schema v76 (app v0.0.5) · current through the 3D production/runtime baseline.**
+> **Frozen contracts · schema v77 (app v0.0.5) · current through shared clip preview and runtime animation controllers.**
 > These documents describe the *current, verified* implementation and lock the
 > contracts the rest of the engine builds on. See [`../MILESTONES.md`](../MILESTONES.md)
 > for the roadmap and where each layer fits.
@@ -31,6 +31,8 @@ the corresponding step to `migrateIfNeeded`.
 This is the primary defense against architectural drift.
 
 ## Documents
+
+For clip browsing, preview and state-driven playback, see [Animation workflow](ANIMATION.md).
 
 | Doc | Covers | Status |
 |-----|--------|--------|

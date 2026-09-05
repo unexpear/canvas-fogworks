@@ -4,7 +4,14 @@
 <!-- re-read 2026-09-03 for the Canvas Fogworks rename: test behavior, compatibility identifiers,
      suite count and verification contract remain unchanged. -->
 
-> 🔒 Frozen contract · schema v76 (app v0.0.5) · current through tested DOM shell controls, 3D runtime projection, explicit 2D planes/billboards, prefiltered HDR IBL, directional shadows, context recovery and object-id picking. The suite contains more than 2,000 tests; Jest reports the exact current count.
+> 🔒 Frozen contract · schema v77 (app v0.0.5) · current through tested DOM shell controls, 3D runtime projection, shared animation controllers, prefiltered HDR IBL, directional shadows, context recovery and object-id picking. The suite contains more than 2,000 tests; Jest reports the exact current count.
+
+`AnimationPlayback.test.ts` covers inclusive frame timing, independent clocks, priority,
+one-shot completion, missing clips, child scopes, Actions, migration, 2D event/outcome
+adapters and 3D batch equivalence. `AnimationPanel.test.tsx` authors and edits actual controllers
+through DOM controls. The Electron Open–Edit–Save smoke creates a clip/controller through the
+panel, observes runtime advancement and checks persisted authoring without transient node frames.
+The GPU smoke switches between two cells of an owned atlas and checks actual red/green pixels.
 
 ## Philosophy
 
@@ -23,7 +30,7 @@ selection overlay, and a clean SVG↔Canvas toggle). The Open–Edit–Save Elec
 project-relative glTF and waits until its persisted mesh id reaches the GPU draw list before it
 selects the model, performs translate/rotate/scale drags, and verifies those edits plus the timeline
 edit in the saved project. It also authors a selected 2D rectangle as a billboard through the live
-3D toolbar/inspector and verifies schema-76 persistence after save.
+3D toolbar/inspector and verifies current-schema persistence after save.
 
 **Milestone 0 bar:** no change to a frozen contract lands without a test. Regressions get
 a test that is proven to fail before the fix and pass after (see *regression discipline*).

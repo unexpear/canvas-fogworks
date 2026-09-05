@@ -167,13 +167,15 @@ export const CURRENT_VERSION: string =
  *         schema 74's neutral renderer fallback, so migration is a pass-through.
  *   "76" — adds optional `Spatial3D.composition2d`, making 2D planes and billboards explicit.
  *         Absent preserves the previous separation between the 2D and 3D workspaces.
+ *   "77" — adds optional `Node.animation`, naming clip states and ordered runtime transitions.
+ *         Absent retains the prior timeline and distance-driven playback paths.
  */
 import type { TimelineSettings } from "./Timeline";
 import type { Light } from "./Light";
 import type { Tileset } from "./Tileset";
 import type { Asset3D } from "./Spatial3D";
 
-export const SCHEMA_VERSION = "76";
+export const SCHEMA_VERSION = "77";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

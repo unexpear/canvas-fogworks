@@ -104,6 +104,7 @@ export type NodeDelta =
         userData?: UserData | null;
         /** Typed gameplay declarations (schema 73); null clears them. */
         entity?: import("../document/Entity").Entity | null;
+        animation?: import("../document/AnimationController").AnimationController | null;
         /** Typed 3D authoring components (schemas 74-75); null clears them. */
         spatial3d?: Spatial3D | null;
         src?: string;

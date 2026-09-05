@@ -2,7 +2,7 @@
 
 <!-- describes: src/core/document -->
 <!-- re-read 2026-09-03 for the Canvas Fogworks rename: persisted schema and compatibility
-     identifiers are unchanged; only product-facing prose changed. Schema remains v76. -->
+     identifiers were unchanged; only product-facing prose changed at schema 76. -->
 <!-- re-read 2026-08-14 after the dropHidden fix: accurate, and NO field moved. `hidden` (line 94)
      is described exactly right and always was — the defect was that `dropHidden` returned an
      enumerated literal and lost the document's OPTIONAL fields alongside the node, which this file
@@ -19,7 +19,21 @@
 <!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
      below. The earlier note stands — the rectangle gesture added no field. -->
 
-> 🔒 Frozen contract · schema v76 (app v0.0.5). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v77 (app v0.0.5). Types are in `src/core/document/`.
+
+### Animation controllers (schema 77)
+
+`Node.animation?: AnimationController` stores `initial`, an optional driver node id,
+1–64 named `{ name, clip, speed? }` states and up to 256 ordered `{ from, to, when }`
+transitions. State names are unique, bounded to 64 characters; speed is finite, >0 and ≤16.
+Initial/from/to references must resolve within the controller. Clip and driver references
+may be unresolved after editing or importing; the panel reports them and affected playback
+is inert. `when` is one of the typed conditions in `AnimationController.ts`.
+
+The controller drives the node and descendants until another controller establishes a scope.
+Runtime playheads and entry times are transient. `SetAnimationControllerAction` is the write
+path, sharing validation with load. The 76→77 migration adds no fields to older documents.
+See [Animation workflow](ANIMATION.md) for transition timing and current 3D limits.
 
 ### Typed 3D authoring state (schemas 74–76)
 

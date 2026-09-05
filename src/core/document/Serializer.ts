@@ -430,6 +430,8 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     // 75 -> 76: nodes may explicitly project their 2D visual as a plane or billboard in 3D.
     // Absent keeps the workspaces separate, exactly matching schema 75.
     if (version === "75") { raw = { ...raw, version: "76" }; version = "76"; }
+    // 76 -> 77: optional node animation controllers. Absent retains the existing playback paths.
+    if (version === "76") { raw = { ...raw, version: "77" }; version = "77"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {

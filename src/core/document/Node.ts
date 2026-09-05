@@ -604,6 +604,8 @@ export interface Node {
 
     /** Engine-owned, validated gameplay declarations (schema 73). Imported metadata stays separate. */
     entity?: import("./Entity").Entity;
+    /** Named clip playback and runtime transitions (schema 77). */
+    animation?: import("./AnimationController").AnimationController;
 
     /** Typed 3D authoring components (schemas 74-76), distinct from the 2D transform and mesh. */
     spatial3d?: import("./Spatial3D").Spatial3D;

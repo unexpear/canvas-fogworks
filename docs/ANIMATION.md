@@ -1,0 +1,58 @@
+# Animation workflow
+
+<!-- describes: src/core/document/AnimationController.ts, src/core/runtime/AnimationPlayback.ts, src/core/runtime/AnimationWorld.ts, src/app/AnimationPanel.tsx, src/app/App.tsx -->
+
+Delivered in schema 77: named timeline clips, preview and per-node runtime controllers,
+shared by 2D editing and animated 2D planes/billboards in the 3D workspace.
+
+## Author and preview
+
+1. Enable Timeline or import an Aseprite file (its tags become clips).
+2. Expand **Animation clips and states** above the timeline. Choose a clip or create one
+   with a name, inclusive From/To frames and Loop setting.
+3. Use timeline Play to preview the chosen range. Scrubbing pauses preview. A one-shot
+   holds the final frame for one frame duration before stopping. Play restarts a finished shot.
+4. Select the character/root node and click **Add controller** with a clip selected.
+5. Add named states, assign clips and playback speeds, and select the initial state.
+6. Add From/To/Condition transitions. Move higher-priority rules up. Choose another node
+   as Driver when the art is separate from the physics body. Runtime Play shows active states
+   and frames in the status bar.
+
+Controller and clip edits are undoable and saved. Preview selection and running clocks are not.
+Timeline removal is disabled while named clips still depend on it; remove those clips first.
+The panel refuses deletion/renaming of a clip still used by a controller. Imported or manually
+edited missing clip/driver references remain loadable and are reported for repair.
+
+## Runtime contract
+
+Controllers drive the authored node and its descendants; a descendant with its own controller
+owns a separate playback scope. A state entry starts at its clip's first frame. Frames advance
+at timeline fps × state speed using simulation time, independent of display refresh rate.
+First matching outgoing transition wins; at most one transition occurs per step. A self-transition
+restarts the clip. `finished` means the complete inclusive duration of a non-looping clip elapsed;
+looping clips never fire it. State switches are immediate; crossfading is not implemented.
+
+2D supports moving/idle (horizontal velocity), grounded/airborne, rising/falling, enter/leave,
+contact/separate, bump and won/lost. Events belong to the selected driver. The shell adapts
+settled simulation facts after gameplay commands on every fixed step. 3D currently supports
+moving/idle (3D speed), won/lost and clip completion; it does not infer 2D ground/contact events.
+Restart, respawn and level changes create fresh players. The existing stopped/finished-world
+behavior freezes simulation time and therefore freezes animations too.
+
+Unconfigured nodes keep their previous animation behavior, including distance-driven poses.
+Configured node playheads take priority on the derived render document. Physics continues to
+read authored geometry, never animated render geometry. Missing target clips cannot be entered;
+a missing active clip is inert until repaired. Runtime edits to controller/clip/timeline definitions
+reset the affected clock. Component-instance animation expansion is not part of this slice.
+
+## 3D boundary and next work
+
+Composed 2D visuals now sample timeline tracks and image source rectangles in the 3D renderer.
+Sprite atlas crops share one uploaded texture and preserve nearest-neighbor filtering when authored.
+This does not add glTF animation import, skeletal skinning, morph targets, or 3D transform tracks.
+Those remain `ANIMATION-002`; the glTF importer currently supplies static mesh instances.
+
+The implementation follows the existing inclusive `Clips.ts` contract. Transition condition/at-end
+behavior was checked against [Godot's animation state machine documentation](https://docs.godotengine.org/en/stable/tutorials/animation/animation_tree.html);
+preview timer lifetime against [React's Effect contract](https://react.dev/reference/react/useEffect);
+texture upload orientation against the [Khronos WebGL specification](https://registry.khronos.org/webgl/specs/1.0/).

@@ -11,7 +11,12 @@
      terrain's material LIST position by position, because reordering two materials redraws every
      shore while touching no cell — an edit a set-comparison would refuse as nothing. -->
 
-> 🔒 Frozen contract · schema v76 (app v0.0.5) · current through Milestone 2 (layout: flex, hug, grow, shrink, wrap+align, grid (+rows/auto/hug/spans/flow/placement), constraints, absolute + per-side margins). Code in `src/core/actions/`.
+> 🔒 Frozen contract · schema v77 (app v0.0.5) · includes animation-controller authoring. Code in `src/core/actions/`.
+
+`SetAnimationControllerAction(document, nodeId, controller | undefined)` validates and copies
+the complete controller into a node patch. `animation: null` clears it. State names and
+transition references are validated together; deleting a state in the panel repairs its
+initial/transition references in the same Action. Preview and runtime playback create no revisions.
 
 The action system is the engine's spine: it is **the only way the document changes**,
 and it is what makes undo/redo, and later AI, plugins, and collaboration, safe.

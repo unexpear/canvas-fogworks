@@ -21,7 +21,7 @@ app.whenReady().then(async () => {
             bundle: true, platform: "browser", format: "iife", globalName: "Vde3D", write: false
         }).outputFiles[0].text;
         await win.webContents.executeJavaScript(`${rendererBundle}\nglobalThis.Vde3DModule = Vde3D; undefined;`);
-        const result = await win.webContents.executeJavaScript(`(() => {
+        const result = await win.webContents.executeJavaScript(`(async () => {
             try {
             const canvas = document.getElementById("c");
             const gl = canvas.getContext("webgl", { alpha: false, depth: true, antialias: false });
@@ -97,6 +97,29 @@ app.whenReady().then(async () => {
             canvas.dispatchEvent(new Event("webglcontextrestored"));
             const recovered = Vde3DModule.emitWebGL3D(canvas, frame, 1);
             const reloaded = Vde3DModule.reloadWebGL3D(canvas);
+            // An owned two-cell atlas proves crop sampling changes the visible GPU pixels.
+            const atlas = document.createElement('canvas'); atlas.width = 2; atlas.height = 1;
+            const context = atlas.getContext('2d');
+            context.fillStyle = '#ff0000'; context.fillRect(0, 0, 1, 1);
+            context.fillStyle = '#00ff00'; context.fillRect(1, 0, 1, 1);
+            const animated = drawRecord('animated', 0);
+            animated.primitive.uvs = new Float32Array([0,0, 1,0, 0.5,1]);
+            animated.baseColorTexture = atlas.toDataURL();
+            animated.baseColorTextureInfo = { texCoord: 0, transform: { offset: [0,0], scale: [1,1], rotation: 0 },
+                sampler: { magFilter: 9728, minFilter: 9728, wrapS: 33071, wrapT: 33071 } };
+            const atlasFrame = { ...frame, draws: [animated], environment: null, shadow: null };
+            const readCrop = async x => {
+                animated.baseColorSourceRect = { x, y: 0, width: 1, height: 1 };
+                let rgba = new Uint8Array(4);
+                for (let attempt = 0; attempt < 40; attempt++) {
+                    Vde3DModule.emitWebGL3D(canvas, atlasFrame, 1);
+                    gl.readPixels(16, 16, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+                    if (x === 0 ? rgba[0] > 240 && rgba[1] < 10 : rgba[1] > 240 && rgba[0] < 10) return true;
+                    await new Promise(resolve => setTimeout(resolve, 25));
+                }
+                throw new Error('Animated atlas crop ' + x + ' rendered ' + Array.from(rgba));
+            };
+            await readCrop(0); await readCrop(1);
             const glError = gl.getError();
             Vde3DModule.disposeWebGL3D(canvas);
             return { ok: emitted && recovered && reloaded && lost.defaultPrevented && capabilities.available && glError === gl.NO_ERROR,
@@ -110,7 +133,7 @@ app.whenReady().then(async () => {
             throw new Error(`3D WebGL result ${JSON.stringify(result)}, expected id pixel [1,2,3,255], production pick "near", and >=16 depth bits.`);
         }
         clearTimeout(timeout);
-        console.log(`3D WebGL smoke passed (${result.depthBits}-bit depth, IBL/shadow shaders, context recovery, indexed draw and picking).`);
+        console.log(`3D WebGL smoke passed (${result.depthBits}-bit depth, IBL/shadow shaders, context recovery, animated atlas crops, indexed draw and picking).`);
         app.exit(0);
     } catch (error) {
         clearTimeout(timeout);

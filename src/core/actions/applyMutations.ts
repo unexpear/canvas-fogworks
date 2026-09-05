@@ -175,6 +175,10 @@ export function applyMutationsToDocument(
                     if (delta.spatial3d === null) delete node.spatial3d;
                     else node.spatial3d = delta.spatial3d;
                 }
+                if (delta.animation !== undefined) {
+                    if (delta.animation === null) delete node.animation;
+                    else node.animation = delta.animation;
+                }
                 if (delta.sourceRect !== undefined) {
                     if (delta.sourceRect === null) delete node.sourceRect;
                     else node.sourceRect = delta.sourceRect;

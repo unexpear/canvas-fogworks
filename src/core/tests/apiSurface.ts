@@ -1540,3 +1540,18 @@ function _clipboardSurface(): void {
 function _svgGradientSurface(): void {
     expectType<Map<string, Gradient>>(parseSvgGradients("<svg></svg>"));
 }
+
+import { AnimationController, animationControllerError, ANIMATION_CONDITIONS } from "../document/AnimationController";
+import { AnimationPlayers, stepAnimations, sampleClip, applyAnimations } from "../runtime/AnimationPlayback";
+import { animateWorld2D, animateWorld3D } from "../runtime/AnimationWorld";
+import { SetAnimationControllerAction } from "../actions/SetAnimationControllerAction";
+function _animationControllerSurface(doc: ReadonlyDocument, controller: AnimationController): void {
+    expectType<string | null>(animationControllerError(controller));
+    expectType<readonly string[]>(ANIMATION_CONDITIONS);
+    expectType<AnimationPlayers | undefined>(stepAnimations(doc, undefined, 0, () => new Set()));
+    expectType<{ frame: number; finished: boolean }>(sampleClip({ name: "idle", from: 0, to: 1 }, 1, 12, 1));
+    expectType<ReadonlyDocument>(applyAnimations(doc, undefined));
+    expectType<Action>(new SetAnimationControllerAction(doc, "node", controller));
+    expectType<(d: ReadonlyDocument, w: import("../runtime/World").WorldState) => import("../runtime/World").WorldState>(animateWorld2D);
+    expectType<(d: ReadonlyDocument, w: import("../runtime/World3D").World3DState) => import("../runtime/World3D").World3DState>(animateWorld3D);
+}

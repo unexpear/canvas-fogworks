@@ -15,7 +15,22 @@
      sentence about a grid inheriting an object layer's opacity lived in the code comment, the
      mutant note and ACTION-SYSTEM.md — not here; `TilePlacement` is not part of this surface. -->
 
-> 🔒 Frozen contract · schema v76 (app v0.0.5) · current through the 3D production/runtime baseline. The public surface each layer depends on.
+> 🔒 Frozen contract · schema v77 (app v0.0.5) · current through shared animation controllers. The public surface each layer depends on.
+
+### Shared animation playback
+
+`AnimationController.ts` exports the persisted `AnimationController`, `AnimationState`,
+`AnimationTransition`, `AnimationCondition`, `ANIMATION_CONDITIONS` and the shared
+`animationControllerError(unknown): string | null` validator. `SetAnimationControllerAction`
+writes or removes `Node.animation`.
+
+`AnimationPlayback.ts` exports `sampleClip(clip, elapsedSeconds, fps, speed?)`, returning
+`{ frame, finished }`, and `stepAnimations(doc, previous, time, signals?)`, returning optional
+`AnimationPlayers`. `applyAnimations(doc, players)` derives scoped node playheads without
+mutation. `animateWorld2D(doc, world)` must run after gameplay commands on each fixed step;
+`World3D` steps its adapter internally. Runtime worlds optionally carry `animations`.
+`Draw3D.baseColorSourceRect` is a transient pixel crop; GPU texture dimensions normalize it
+after decoding. See [ANIMATION.md](ANIMATION.md) for behavior and limits.
 > Signatures here are the contract; changing one is a versioned, documented change.
 
 ## Document (`core/document/`)

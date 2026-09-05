@@ -2,8 +2,8 @@
 
 > The engine is built in **layers**, where each milestone proves **one new
 > architectural capability** before the next begins. This is the canonical roadmap.
-> Status reconciled **2026-09-03** against the schema-76 source and the 2026-08-21
-> mutation-battery close-out; engine **v0.0.5**, schema **76**.
+> Status reconciled **2026-09-05** against the shared animation-controller implementation and the 2026-08-21
+> mutation-battery close-out; engine **v0.0.5**, schema **77**.
 >
 > **Seven rows below said ⬜ for capabilities that had shipped.** They said it for three weeks
 > because this file declared no `describes:` directive: `check-doc-drift` named it, looked it
@@ -63,14 +63,14 @@ M7  States                    ✅   `Node.states` + `activeState` (schema 30, th
 M8  Animation Engine          ✅   timeline + keyframes + cubic-Bézier easing + HOLDS (cel) + onion skin — `Timeline` (407), `Bezier` (172), `Clips` (105)
 M9  Interaction Graph         ✅*  `Node.interactions`: trigger → state, with duration/easing, plus NAVIGATE to a node (schema 36), and a Play mode that fires them. A state machine, not a node GRAPH — the name overpromises
 M10 Drawing System            ✅   12 paint modules / 2,107 lines: buffer, patch, brush, stroke, fill, selection + outline, symmetry, palette, quantize, adjust, codec, surface space — with a Paint workspace and its tools
-M11 Assets                    ✅*  16 importers: Tiled (maps, tilesets, objects), SVG, fonts, atlases, `.unitypackage`, sheets, numbered frame runs, and now ASEPRITE — a file arrives as one node that plays, with the file's own timing and its tags as clips, through a confined bytes channel. glTF and OBJ are BLOCKED rather than unwired — every `NODE_TYPE` is 2D, so there is no node to import a mesh into, and 10,937 files here are waiting on that. A TILESET IS NOW A THING THE DOCUMENT HOLDS (schema 67-68, 2026-08-13): shared by every layer that names it. The duplication took TWO schemas to actually end — 67 moved the picture and the importer went on writing the old copy, so a six-layer import stored the sheet SEVEN times (1,374KB against 202KB) until 68 refused the field. Collection sets now draw as ONE node too, on SVG and Canvas — anchored bottom-left so tall art stands over the row behind it. The GPU does not and its header says so: one quad sampling one sheet cannot hold a picture per tile. The per-cell import path anchors a tile at the BOTTOM of its cell now, so art taller than the grid stands up (measured: 348 tiles move 4px in one real map, 51 move 384px in another). A collection set has its own PICKER too — one button per tile, keyed by the id a cell stores — and the tile panel no longer vanishes for a layer whose tileset has no sheet, which had made pointing a layer at a collection set a one-click dead end. Built on request against a measurement that said otherwise — the corpus holds ZERO orthogonal tile layers drawing from a collection set. And a tileset that states neither its column count nor its image's size is now MEASURED rather than dropped: one file in the tree, 79 cells that had resolved to nothing, while the 25 sets that declare a size were already recovered in the parser. See FEATURE-AUDIT.md
+M11 Assets                    ✅*  Tiled, SVG, fonts, atlases, Unity packages, sheets, sequences and Aseprite imports are reachable; glTF/GLB imports and rehydration are live in the 3D workspace. OBJ remains parser-only. Named imported clips now reach preview and runtime controllers. See docs/FEATURE-AUDIT.md for format fidelity and remaining limits.
 M12 Text Engine               ✅*  typesetting, wrapping and on-canvas editing, shared by all three backends and the exporter. ONE style per node — no per-run styling
 M13 Export                    ✅*  SVG, Tiled `.tmx` (tile AND object layers, one `<tileset>` per distinct set with its own `firstgid`), sprite sheet (`sheet.json` + `sheet.png`). No PNG or PDF of the canvas
 M14 AI Integration            ⬜
 M15 Plugins                   🚧   sandboxed script worker + request-to-Action API + script panel landed; plugin packages/discovery/extensions remain
 M16 Collaboration             ⬜
 M17 Production Hardening      🚧   CI + semantic doc gate + full mutation battery + installer/startup/Open-Edit-Save smoke; autosave/crash recovery/full UI tiers remain
-M18 Game Runtime              🚧   slices 1-40: fixed-step play, collision/camera/rules, spawning, pickups, animation poses, HUD, power tiers, pipes, restart/respawn, typed entities and confined level transitions
+M18 Game Runtime              🚧   slices 1-41: fixed-step play, collision/camera/rules, spawning, pickups, animation poses, HUD, power tiers, pipes, restart/respawn, typed entities, confined level transitions and shared clip controllers
 M19 3D Foundation             ✅*  schema 76: authored scenes, PBR/IBL/shadows, resilient WebGL, deterministic runtime and explicit 2D surfaces
 ```
 
@@ -892,7 +892,7 @@ resolution needs. These are dividends of the Milestone 0 invariants.
 
 ## Phase 18 — Game Runtime
 
-### Milestone 18 — Game Runtime 🚧 (slices 1–40 landed)
+### Milestone 18 — Game Runtime 🚧 (slices 1–41 landed)
 A 2D game that RUNS inside Canvas Fogworks rather than being exported to something else that runs it.
 
 **The architecture was already there, in a shape nobody had used for this.** `applyFrame(doc, frame)`
@@ -1629,7 +1629,7 @@ which the incremental geometry path reuses and would otherwise keep stale. A `so
 into the display list every frame from the document, so there is no reused entry to go stale — the
 same measurement that killed blocker two answers this too.
 
-8 tests, 3 mutants, 3/3 killed. `clipFrameAt` still has zero production callers, which is now a
+8 tests, 3 mutants, 3/3 killed. At slice 22, `clipFrameAt` still had zero production callers, which was then a
 statement about a path not taken rather than an unreachable feature.
 
 **Slice 23 — BUMPING A BLOCK, the collision a level made of tiles could not report.** Placing pipes,
@@ -2149,6 +2149,16 @@ still open.
 10 focused tests across entity migration/projection, restart/respawn, transition adoption and rich
 Tiled metadata, plus the Electron production smoke gate.
 
+**Slice 41 — SHARED CLIP PLAYBACK AND CONTROLLERS (2026-09-05, schema 77).** `ANIMATION-001`
+is delivered: an extracted clip browser/editor, inclusive-loop/one-shot preview, persisted per-node
+states and ordered transition conditions, independent transient clocks, and fixed-step runtime
+adapters. Controllers drive descendants until a nested controller owns its scope. 2D movement,
+ground/air, contact/region/bump events and outcomes can trigger transitions. 3D supports movement,
+outcomes and completion; its composed 2D surfaces now sample tracks and sprite atlas crops.
+Actions, migration, round trips, DOM authoring and Electron author/play/save plus GPU crop pixels
+have coverage. Native glTF clips/skinning, crossfades and instance expansion remain separate work.
+See [Animation workflow](docs/ANIMATION.md).
+
 **THE GAUNTLET VERDICT ON THE 8-BIT RUNG (2026-08-20)** — a Gauntlet Loop pass (Shumer's method:
 agent-side decomposition, fresh-context critics, a fetchable bar) judged the rung piece by piece
 against REAL SMB1: the disassembly with line citations as the mechanical bar, the classic 1-1
@@ -2203,9 +2213,9 @@ THE LOSSES, each with the critic's one most valuable fix:
   ships three modes, Unity full 3x3 neighbor rules, LDtk rule groups with chance and modulo.
 - **runtime-physics** — RUN FLOW shipped in schema 73: restart clears a run, respawn uses a typed
   anchor while retaining tallies/power, and typed goals can load confined sibling level documents.
-- **animation** — a REACHABLE clip player (clips exist, tested, and nothing lists or plays them —
-  the standing unreachable-feature lesson, confirmed by an outside reader), plus a runtime hook
-  for state-driven clips (idle/walk/jump) beside the distance-driven pose.
+- **animation** — REACHABILITY CLOSED 2026-09-05: clip browsing, preview and state-driven
+  runtime playback ship in slice 41 beside the existing distance-driven pose. Native glTF animation
+  and skinning are recorded separately in `ANIMATION-002`.
 - **editor-canvas** — GRID SNAPPING CLOSED 2026-09-02: move and resize use the same zoom-adaptive
   step the renderer displays, composed with smart alignment under the existing 6-screen-pixel budget.
 - **art-paint** — selection CONTENT CLOSED 2026-09-02: the marquee row exposes move, cut, copy,

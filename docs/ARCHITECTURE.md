@@ -20,7 +20,13 @@
      not its readers; API-CONTRACTS carries the reader's surface. -->
 
 
-> 🔒 Frozen contract · schema v76 (app v0.0.5). Describes the verified current implementation, including typed entities, deterministic 2D/3D run flow, rich Tiled metadata, and production HDR lighting.
+> 🔒 Frozen contract · schema v77 (app v0.0.5). Describes the verified current implementation, including typed entities, deterministic 2D/3D run flow, rich Tiled metadata, production HDR lighting, and shared clip controllers.
+
+Animation controllers are authored per node through Actions. `AnimationPlayback` owns pure
+state transitions and clip-relative clocks; `AnimationWorld` adapts settled world facts.
+The 2D shell calls the adapter after rules on every fixed step; `World3D` calls its adapter
+inside each fixed step. `applyAnimations` stamps only derived node playheads, which timeline
+sampling consumes in both 2D and composed 3D surfaces. See [ANIMATION.md](ANIMATION.md).
 
 ## 1. The five invariants
 

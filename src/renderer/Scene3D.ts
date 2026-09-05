@@ -8,6 +8,7 @@
  */
 
 import { ReadonlyDocument } from "../core/document/Document";
+import { applyFrame } from "../core/document/Timeline";
 import { Camera3D, Transform3D } from "../core/document/Spatial3D";
 import { MeshInstance, MeshPrimitive } from "../core/import/MeshData";
 import { HdrEnvironmentImage } from "./HdrEnvironment";
@@ -54,6 +55,8 @@ export type MeshLibrary3D = ReadonlyMap<string, MeshAsset3D>;
 export type EnvironmentLibrary3D = ReadonlyMap<string, HdrEnvironmentImage>;
 
 export interface Draw3D {
+    /** Pixel-space crop for an animated 2D image; normalized after image decoding. */
+    baseColorSourceRect?: import("../core/document/Node").SourceRect;
     nodeId: string;
     model: Mat4;
     primitive: MeshPrimitive;
@@ -228,6 +231,7 @@ const DEFAULT_CAMERA_WORLD = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 5, 1];
 
 export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width: number, height: number,
                              environments: EnvironmentLibrary3D = new Map()): Frame3D {
+    doc = applyFrame(doc, doc.frame);
     const worlds = new Map<string, Mat4>();
     const visit = (id: string, parent: readonly number[]): void => {
         const node = doc.nodes.get(id);
@@ -322,7 +326,11 @@ export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width
                 material: null };
             draws.push({ nodeId: id, model, primitive, color, unlit: !composition.lit,
                 baseColorTexture: node.type === "core.image" ? node.src ?? null : null,
-                metallicRoughnessTexture: null, baseColorTextureInfo: null, metallicRoughnessTextureInfo: null,
+                ...(node.type === "core.image" && node.sourceRect ? { baseColorSourceRect: node.sourceRect } : {}),
+                metallicRoughnessTexture: null, baseColorTextureInfo: {
+                    texCoord: 0, transform: { offset: [0, 0], scale: [1, 1], rotation: 0 },
+                    sampler: { magFilter: node.pixelated ? 9728 : 9729, minFilter: node.pixelated ? 9728 : 9729, wrapS: 33071, wrapT: 33071 }
+                }, metallicRoughnessTextureInfo: null,
                 normalTexture: null, normalTextureInfo: null, normalScale: 1, emissiveTexture: null,
                 emissiveTextureInfo: null, metallic: 0, roughness: 1, emissive: [0, 0, 0], doubleSided: true,
                 alphaMode: color[3] < 1 || node.type === "core.image" ? "BLEND" : "OPAQUE", alphaCutoff: 0.5 });

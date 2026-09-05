@@ -6,6 +6,7 @@
 
 import { ReadonlyDocument } from "../document/Document";
 import { Collider3D, Transform3D, Vec3 } from "../document/Spatial3D";
+import { animateWorld3D } from "./AnimationWorld";
 
 export const FIXED_STEP_3D = 1 / 60;
 export const MAX_STEPS_PER_FRAME_3D = 5;
@@ -19,6 +20,7 @@ export interface Body3D {
 }
 
 export interface World3DState {
+    animations?: import("./AnimationPlayback").AnimationPlayers;
     bodies: ReadonlyMap<string, Body3D>;
     time: number;
     accumulator: number;
@@ -43,7 +45,7 @@ export function world3DFrom(doc: ReadonlyDocument): World3DState {
             collider: node.spatial3d.collider ?? null,
             dynamic: node.entity?.body === "dynamic", velocity: { x: 0, y: 0, z: 0 } });
     }
-    return { bodies, time: 0, accumulator: 0, outcome: "running", transitionTo: null, cameraNodeId };
+    return animateWorld3D(doc, { bodies, time: 0, accumulator: 0, outcome: "running", transitionTo: null, cameraNodeId });
 }
 
 function extents(body: Body3D): Vec3 {
@@ -127,7 +129,7 @@ export function stepWorld3D(doc: ReadonlyDocument, world: World3DState,
             }
         }
     }
-    return { ...world, bodies, time: world.time + FIXED_STEP_3D, outcome, transitionTo };
+    return animateWorld3D(doc, { ...world, bodies, time: world.time + FIXED_STEP_3D, outcome, transitionTo });
 }
 
 /** Runs a bounded fixed-step accumulator, preventing a stalled frame from spiralling. */
