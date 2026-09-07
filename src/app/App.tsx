@@ -6,7 +6,12 @@
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import "./ElectronAPI";
-import { bindProjectFileWorkflow } from "./ProjectFileWorkflow";
+import { applyOpenedProject, bindProjectFileWorkflow, ProjectFileTarget } from "./ProjectFileWorkflow";
+import { ProjectSession } from "./ProjectSession";
+import { exportCanvasPng } from "./CanvasExport";
+import { stepGameplay } from "../core/runtime/GameplaySession";
+import { RuntimeAudio } from "./RuntimeAudio";
+import { GameplayPanel } from "./GameplayPanel";
 import { prepareSequenceImport } from "./AssetImportWorkflow";
 import { AnimationPanel } from "./AnimationPanel";
 import { SetClipsAction } from "../core/actions/SetClipsAction";
@@ -158,7 +163,7 @@ import { applyPose } from "../core/runtime/Parts";
 import { restartRun, respawnRun } from "../core/runtime/RunFlow";
 import { advanceWorld3D, applyWorld3D, respawnRun3D, restartRun3D, World3DState } from "../core/runtime/World3D";
 import { Entity, playerEntityId } from "../core/document/Entity";
-import { loadLevelTransition } from "./LevelTransitionWorkflow";
+import { RuntimeProject } from "./LevelTransitionWorkflow";
 import { followCamera } from "../core/runtime/Camera";
 import { SourceRect } from "../core/document/Node";
 import { Action } from "../core/actions/Action";
@@ -727,6 +732,8 @@ export function App() {
     /** Mirrors `runOutcome`, so the frame loop can tell a NEW ending from one already shown. */
     const runOutcomeRef = useRef<import("../core/runtime/World").RunOutcome | null>(null);
     const transitionLoadingRef = useRef<string | null>(null);
+    const runtimeProjectRef = useRef(new RuntimeProject());
+    const runtimeEntryFrameRef = useRef<number | undefined>(undefined);
     const dirtyNodesRef = useRef<Set<string>>(new Set());
     const prevPendingRef = useRef<Set<string>>(new Set());
     /**
@@ -757,6 +764,49 @@ export function App() {
         dispatcherRef.current = new ActionDispatcher(initialDocument || createEmptyDocument());
     }
     const dispatcher = dispatcherRef.current;
+    const [fileStatus, setFileStatus] = useState("");
+    const audioRef = useRef<RuntimeAudio | null>(null);
+    if (!audioRef.current) audioRef.current = new RuntimeAudio(setFileStatus);
+    useEffect(() => () => audioRef.current?.dispose(), []);
+    const projectSessionRef = useRef<ProjectSession | null>(null);
+    if (!projectSessionRef.current) {
+        projectSessionRef.current = new ProjectSession({
+            serialize: () => serializeDocument(dispatcher.getDocument()),
+            path: currentFilePathRef,
+            write: async (path, content, source) => {
+                const api = window.electronAPI;
+                if (api) return api.saveFile(path, content, source);
+                localStorage.setItem("vde-document", content);
+                return true;
+            },
+            recover: async snapshot => {
+                if (window.electronAPI) await window.electronAPI.writeRecovery(snapshot);
+                else localStorage.setItem("vde-recovery", JSON.stringify(snapshot));
+            },
+            status: setFileStatus
+        });
+    }
+    const projectSession = projectSessionRef.current;
+    const [projectDirty, setProjectDirty] = useState(false);
+    useEffect(() => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const dispose = dispatcher.onChange(() => {
+            if (timer !== undefined) clearTimeout(timer);
+            timer = setTimeout(() => setProjectDirty(projectSession.dirty), 200);
+        });
+        return () => { dispose(); if (timer !== undefined) clearTimeout(timer); };
+    }, [dispatcher, projectSession]);
+    const confirmLeaveProject = () => {
+        if (projectSession.busy) { setFileStatus("Wait for the current save to finish."); return false; }
+        return !projectSession.dirty || (window.electronAPI?.confirmDiscard()
+            ?? window.confirm("Discard unsaved changes? Cancel to save first."));
+    };
+    const saveProject = () => {
+        const api = window.electronAPI;
+        const path = currentFilePathRef.current;
+        if (api && !path) void api.requestSaveAs().catch(error => setFileStatus(`Save As failed: ${error.message}`));
+        else void projectSession.save(path ?? "Browser snapshot").then(() => setProjectDirty(projectSession.dirty));
+    };
 
     const refresh = useCallback(() => {
         setUi(prev => ({
@@ -1501,7 +1551,7 @@ export function App() {
             // marquee and a drag preview out of the document too. `doc.frame` is still a real
             // field — it records where the playhead was when the file was SAVED — but the app
             // does not write to it while you scrub.
-            const base = dispatcher.getDocument();
+            const base = (es.playing && runtimeProjectRef.current.document) || dispatcher.getDocument();
             const timed: ReadonlyDocument = es.frame !== undefined
                 ? ({ ...(base as ProjectDocument), frame: es.frame } as ReadonlyDocument) : base;
             // PARALLAX (schema 40): a layered node is shifted HERE, before geometry is computed,
@@ -1525,6 +1575,7 @@ export function App() {
                 world3dRef.current = advanceWorld3D(base, world3dRef.current,
                     (now3d - last3d) / 1000, inputs3d);
                 world3dLastAtRef.current = now3d;
+                if (world3dRef.current.diagnostics?.length) setFileStatus(world3dRef.current.diagnostics[0]);
                 if (world3dRef.current.transitionTo && es.world) {
                     es.world = { ...es.world, transitionTo: world3dRef.current.transitionTo };
                 }
@@ -1559,17 +1610,15 @@ export function App() {
                     // popped another coin, 2 spawns where the level authored 1 — and a BROKEN
                     // brick's cell must stop being solid, which only a step that reads the
                     // stamped document can see.
-                    const live = applyCells(applySpawns(base, world), world);
-                    world = stepWorld(live, world, { input: es.input, controlled: es.controlled });
+                    const step = stepGameplay(base, world, { controlled: es.controlled, bounds: runBoundsRef.current, input: es.input });
                     // THE RULES RUN PER STEP, INSIDE THE LOOP. A frame may earn five steps, and
                     // batching the commands to the end of it would delay every bounce by up to four
                     // — measured at 14.25px on a stomp. The physics still decides nothing: it
                     // produced events, this reads them, and `applyCommands` answers a FINISHED
                     // world. `marioRules` is the game; swapping it changes no line below.
-                        const commands = marioRules(live, world,
-                        { controlled: es.controlled, bounds: runBoundsRef.current, input: es.input });
-                    world = applyCommands(world, commands);
-                    world = animateWorld2D(live, world);
+                    const commands = step.commands;
+                    world = step.world;
+                    for (const sound of step.sounds) void audioRef.current?.play(sound);
                     // A WARP CUTS THE CAMERA (M18 slice 39): the follow camera closes a fraction
                     // per step, so a 3000px teleport would swoosh across the whole level. The
                     // original cuts, and so does this — by finishing the follow in one go.
@@ -1594,13 +1643,14 @@ export function App() {
                         es.world = applyCommands(world, [{ kind: "endRun", outcome: "lost" }]);
                         setRunOutcome("lost");
                     } else {
-                        loadLevelTransition(api, currentFilePathRef.current, target).then(loaded => {
-                            dispatcher.loadDocument(loaded.document);
-                            currentFilePathRef.current = loaded.filePath;
-                            es.frame = frameOnLoad(loaded.document);
-                            es.controlled = playerEntityId(loaded.document.nodes.values());
-                            es.world = restartRun(loaded.document);
-                            world3dRef.current = workspace === "3d" ? restartRun3D(loaded.document) : null;
+                        runtimeProjectRef.current.transition(api, currentFilePathRef.current, target).then(adopted => {
+                            if (!adopted || !es.playing) return;
+                            const runtimeDoc = runtimeProjectRef.current.document!;
+                            audioRef.current?.stop();
+                            es.frame = frameOnLoad(runtimeDoc);
+                            es.controlled = playerEntityId(runtimeDoc.nodes.values());
+                            es.world = restartRun(runtimeDoc);
+                            world3dRef.current = workspace === "3d" ? restartRun3D(runtimeDoc) : null;
                             world3dLastAtRef.current = Date.now();
                             es.worldClock = { accumulator: 0, lastAt: Date.now() };
                             runBoundsRef.current = null;
@@ -1767,7 +1817,7 @@ export function App() {
                 // THROUGH `playBounds`, so a DECLARED screen (schema 72) pins the run's vertical
                 // extent — the death plane and the camera's clamp stop being a measurement an
                 // empty scenery row can move. Without one this is `contentBounds` exactly.
-                runBoundsRef.current = playBounds(contentBounds(computed), dispatcher.getDocument().screen);
+                runBoundsRef.current = playBounds(contentBounds(computed), base.screen);
             }
             prevPendingRef.current = pendingKeys;
             dirtyNodesRef.current = new Set();
@@ -1817,7 +1867,8 @@ export function App() {
                 canvas.style.height = `${host.clientHeight}px`;
                 const scene3d = es.playing && world3dRef.current ? applyWorld3D(doc, world3dRef.current) : doc;
                 const frame3d = buildFrame3D(scene3d, meshLibrary3dRef.current, host.clientWidth, host.clientHeight,
-                    environmentLibrary3dRef.current);
+                    environmentLibrary3dRef.current, es.playing ? world3dRef.current?.time ?? 0 : (es.frame ?? 0) / (doc.timeline?.fps ?? 24));
+                if (frame3d.diagnostics?.length) setFileStatus(frame3d.diagnostics[0]);
                 if (!emitWebGL3D(canvas, frame3d, window.devicePixelRatio || 1)) {
                     host.dataset.vdeGlFallback = lastWebGL3DFailure() ?? "3D WebGL unavailable";
                 } else delete host.dataset.vdeGlFallback;
@@ -1947,9 +1998,9 @@ export function App() {
         if (!api) return;
 
         const saveTo = (filePath: string) => {
-            api.saveFile(filePath, serializeDocument(dispatcher.getDocument()))
-                .catch(err => console.error("Save failed:", err));
+            void projectSession.save(filePath).then(() => setProjectDirty(projectSession.dirty));
         };
+        let projectTarget: ProjectFileTarget;
 
         const disposers = [
             /**
@@ -1966,20 +2017,23 @@ export function App() {
             api.onMenuCommand((command: string) => {
                 switch (command) {
                     case "file.new":
+                        if (!confirmLeaveProject()) return;
+                        runtimeProjectRef.current.reset();
+                        audioRef.current?.stop();
+                        es.playing = false; es.world = null; es.worldClock = null;
                         dispatcher.loadDocument(createEmptyDocument());
                         meshHydrationGenerationRef.current++;
                         meshLibrary3dRef.current.clear();
                         environmentLibrary3dRef.current.clear();
                         currentFilePathRef.current = null;
+                        projectSession.adopt();
+                        void projectSession.checkpoint();
+                        setFileStatus("");
                         es.selectedNodeIds = [];
                         refresh();
                         return;
                     case "file.save": {
-                        const path = currentFilePathRef.current;
-                        if (path) saveTo(path);
-                        // No file yet: prompt for one rather than silently saving somewhere the
-                        // user did not choose.
-                        else api.requestSaveAs().catch(err => console.error("Save As failed:", err));
+                        saveProject();
                         return;
                     }
                     case "file.export": setShowFolders(true); return;
@@ -2060,14 +2114,20 @@ export function App() {
                     default: return;
                 }
             }),
-            bindProjectFileWorkflow(api, {
+            bindProjectFileWorkflow(api, projectTarget = {
                 dispatcher,
                 editorState: es,
                 currentFilePath: currentFilePathRef,
                 refresh,
                 saveTo,
-                reportError: (message, error) => console.error(message, error),
+                beforeOpen: confirmLeaveProject,
+                reportError: (message, error) => setFileStatus(`${message}: ${String(error)}`),
                 afterOpen: ({ filePath }) => {
+                    runtimeProjectRef.current.reset();
+                    audioRef.current?.stop();
+                    es.playing = false; es.world = null; es.worldClock = null;
+                    projectSession.adopt();
+                    setFileStatus("Opened.");
                     const generation = ++meshHydrationGenerationRef.current;
                     meshLibrary3dRef.current.clear();
                     environmentLibrary3dRef.current.clear();
@@ -2096,7 +2156,33 @@ export function App() {
                 }
             })
         ];
-        return () => disposers.forEach(dispose => dispose());
+        let disposed = false;
+        let recoveryReady = false;
+        void api.readRecovery().then(snapshot => {
+            if (disposed) return;
+            if (snapshot && window.confirm("An unsaved recovery snapshot is available. Restore it?")) {
+                const result = applyOpenedProject({ filePath: snapshot.filePath ?? "", content: snapshot.content }, projectTarget);
+                if (result.ok) {
+                    currentFilePathRef.current = snapshot.filePath;
+                    projectSession.adopt(snapshot.savedContent);
+                    setFileStatus("Recovered unsaved changes. Save to keep them.");
+                }
+            }
+            recoveryReady = true;
+        }).catch(error => setFileStatus(`Recovery could not be read; preserved on disk: ${error.message}`));
+        const interval = window.setInterval(() => {
+            if (recoveryReady) void projectSession.checkpoint();
+        }, 5000);
+        const beforeUnload = (event: BeforeUnloadEvent) => {
+            if (!confirmLeaveProject()) { event.preventDefault(); event.returnValue = ""; }
+        };
+        window.addEventListener("beforeunload", beforeUnload);
+        return () => {
+            disposed = true;
+            window.clearInterval(interval);
+            window.removeEventListener("beforeunload", beforeUnload);
+            disposers.forEach(dispose => dispose());
+        };
     }, []);
 
     // Resolved against the EXPANDED document so the inspector can show — and edit — a component
@@ -2590,11 +2676,16 @@ export function App() {
     };
 
     const toggleRuntime = () => {
+        runtimeProjectRef.current.reset();
+        audioRef.current?.stop();
+        audioRef.current?.unlock();
         es.playingTimeline = false;
         es.playing = !es.playing;
         es.playState = null;
         es.transition = null;
         es.viewportTransition = null;
+        if (es.playing) runtimeEntryFrameRef.current = es.frame;
+        else es.frame = runtimeEntryFrameRef.current;
         es.world = es.playing ? worldFrom(dispatcher.getDocument()) : null;
         world3dRef.current = es.playing && workspace === "3d"
             ? restartRun3D(dispatcher.getDocument()) : null;
@@ -2621,7 +2712,12 @@ export function App() {
     };
 
     const restartRuntime = () => {
+        // Restart the authored entry project, not the last level visited during play.
+        runtimeProjectRef.current.reset();
+        audioRef.current?.stop();
         es.world = restartRun(dispatcher.getDocument());
+        es.controlled = playerEntityId(dispatcher.getDocument().nodes.values());
+        es.frame = runtimeEntryFrameRef.current;
         if (workspace === "3d") world3dRef.current = restartRun3D(dispatcher.getDocument());
         world3dLastAtRef.current = workspace === "3d" ? Date.now() : null;
         es.worldClock = { accumulator: 0, lastAt: Date.now() };
@@ -2630,14 +2726,17 @@ export function App() {
         setLastEvent(null);
         transitionLoadingRef.current = null;
         prevComputedRef.current = null;
+        runBoundsRef.current = null;
         refresh();
     };
 
     const respawnRuntime = () => {
         if (!es.world || !es.controlled) return;
-        es.world = respawnRun(dispatcher.getDocument(), es.world, es.controlled);
+        audioRef.current?.stop();
+        const runtimeDoc = runtimeProjectRef.current.document ?? dispatcher.getDocument();
+        es.world = respawnRun(runtimeDoc, es.world, es.controlled);
         if (workspace === "3d" && world3dRef.current) {
-            world3dRef.current = respawnRun3D(dispatcher.getDocument(), world3dRef.current, es.controlled);
+            world3dRef.current = respawnRun3D(runtimeDoc, world3dRef.current, es.controlled);
             world3dLastAtRef.current = Date.now();
         }
         es.worldClock = { accumulator: 0, lastAt: Date.now() };
@@ -2936,15 +3035,14 @@ export function App() {
                             );
                             if (!confirmedOverwriteRef.current) return;
                         }
-                        const result = Serializer.save(dispatcher.getDocument());
-                        if (result.status === "failed") {
-                            window.alert(`Save failed: ${result.error.message}`);
-                        }
+                        saveProject();
                     }}
                     style={{ fontSize: 11, padding: "3px 8px", background: "#00bfff", color: "#000", border: "none", borderRadius: 3, cursor: "pointer" }}
                 >
                     Save
                 </button>
+                <span role="status" style={{ fontSize: 11, marginLeft: 8, color: "#ffcf88" }}>{fileStatus}</span>
+                {projectDirty && <span style={{ fontSize: 11, marginLeft: 8 }}>Unsaved changes</span>}
             </div>
                 {/* THE TOOL OPTIONS BAR — its own row, its own fixed height.
                     Every control here belongs to the ACTIVE TOOL, and they used to sit in the row
@@ -3514,6 +3612,7 @@ export function App() {
                     <div style={{ width: 240, background: UI.panel, borderLeft: `1px solid ${UI.line}`, padding: 10, overflow: "auto" }}>
                         <div style={PANEL_HEADING}>Folders</div>
                         <FoldersDrawer
+                            getProjectPath={() => currentFilePathRef.current}
                             onPlaceImage={placeAsset}
                             getDocument={() => dispatcher.getDocument()}
                             /* An import acts on the selected node only when it IS an image with a
@@ -5678,7 +5777,8 @@ const LAYER_ICONS: Record<string, string> = {
  */
 function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack, onSetRegion, onImportSvg,
     editContentFont, onImportTiles, paintColour, onPickColour, selectedRasterId, onQuantize,
-    onImportSequence, onImportAseprite, onImport3D, onImportEnvironment3D }: {
+    onImportSequence, onImportAseprite, onImport3D, onImportEnvironment3D, getProjectPath }: {
+    getProjectPath: () => string | null;
     onPlaceImage: (dataUrl: string, name: string) => void;
     /** A numbered run of files as one animated node: its name, frame zero's data URL, its track. */
     onImportSequence: (name: string, first: string, track: Keyframe[]) => void;
@@ -6530,6 +6630,22 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                         disabled={busy}
                         style={DRAWER_BUTTON}
                     >{busy ? "Writing…" : "Export SVG to a folder…"}</button>
+                    <button disabled={busy} style={DRAWER_BUTTON} data-export-png="1" onClick={async () => {
+                        setBusy(true);
+                        try {
+                            const folder = await api.pickFolder();
+                            if (folder) setExported(await api.writePngIntoFolder(folder, "design.png", await exportCanvasPng(getDocument())));
+                        } catch (error) { setExported(`PNG export failed: ${String(error)}`); }
+                        finally { setBusy(false); }
+                    }}>Export whole canvas as PNG…</button>
+                    <button disabled={busy} style={DRAWER_BUTTON} data-export-game="1" onClick={async () => {
+                        setBusy(true);
+                        try {
+                            const folder = await api.pickFolder();
+                            if (folder) setExported(await api.exportGame(folder, serializeDocument(getDocument()), getProjectPath()));
+                        } catch (error) { setExported(`Game export failed: ${String(error)}`); }
+                        finally { setBusy(false); }
+                    }}>Export offline 2D game (HTML)…</button>
 
                     {/* A MAP CAN LEAVE AGAIN (2026-08-10). Canvas Fogworks reads a Tiled map, turns each layer
                         into one grid, places its objects and authors terrain — and until now
@@ -7055,6 +7171,13 @@ function MetadataSection({ node, dispatcher, refresh }: { node: Node; dispatcher
                         onChange={v => setEntity(key, Number.isFinite(v) ? v : undefined)} />
                 </div>
             ))}
+            <GameplayPanel key={node.id} entity={node.entity ?? {}} onChange={entity => write({ entity })} />
+            {node.spatial3d && <>
+                <label style={INSPECTOR_LABEL}>3D gravity (enables contact solver)</label>
+                <NumInput value={node.entity?.gravity3d ?? 0} onChange={v => setEntity("gravity3d", Math.max(0, Math.min(1000, v)))} />
+                <label style={INSPECTOR_LABEL}>3D restitution</label>
+                <NumInput value={node.entity?.restitution3d ?? 0} onChange={v => setEntity("restitution3d", Math.max(0, Math.min(1, v)))} />
+            </>}
             <datalist id="vde-prop-types">
                 {["string", "int", "float", "bool", "color", "file", "object"].map(t => <option key={t} value={t} />)}
             </datalist>

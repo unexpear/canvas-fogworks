@@ -1,6 +1,6 @@
 /**
  * @module build
- * @description Build orchestrator. Emits three esbuild bundles — the React app,
+ * @description Build orchestrator. Emits four esbuild bundles — the React app, offline player,
  * the Electron main process, and the preload script (which must be its own file,
  * because Electron loads it at runtime rather than importing it) — then copies
  * index.html with the bundle injected.
@@ -83,13 +83,14 @@ async function build() {
         external: ["electron"]
     });
 
-    await Promise.all([appCtx.rebuild(), electronCtx.rebuild(), preloadCtx.rebuild()]);
+    const playerCtx = await esbuild.context({ entryPoints: [path.join(srcDir, "player", "index.ts")], bundle: true,
+        outfile: path.join(distAppDir, "player.js"), platform: "browser", format: "iife", target: "es2020", minify: true });
+    const contexts = [appCtx, electronCtx, preloadCtx, playerCtx];
+    await Promise.all(contexts.map(context => context.rebuild()));
     copyHtml();
 
     if (watch) {
-        await appCtx.watch();
-        await electronCtx.watch();
-        await preloadCtx.watch();
+        await Promise.all(contexts.map(context => context.watch()));
         // index.html is not part of any esbuild entry graph, so watch it directly.
         fs.watch(htmlSrc, () => {
             try { copyHtml(); console.log("index.html re-copied"); } catch (e) { console.error(e); }
@@ -101,12 +102,11 @@ async function build() {
             child.on("exit", () => process.exit(0));
         }
     } else {
-        appCtx.dispose();
-        electronCtx.dispose();
-        preloadCtx.dispose();
+        await Promise.all(contexts.map(context => context.dispose()));
         console.log("Build complete: dist/");
         console.log("  dist/app/index.html");
         console.log("  dist/app/bundle.js");
+        console.log("  dist/app/player.js");
         console.log("  dist/electron/main.js");
         console.log("  dist/electron/preload.js");
     }

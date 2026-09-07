@@ -19,7 +19,9 @@
 <!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
      below. The earlier note stands — the rectangle gesture added no field. -->
 
-> 🔒 Frozen contract · schema v77 (app v0.0.5). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v78 (app v0.0.5). Types are in `src/core/document/`.
+
+Schema 78 adds `Entity.rules`, `rulePolicy`, `gravity3d`, `restitution3d`, and `Spatial3D.animation`. Migration 77→78 preserves absent fields. Rules hold typed events, conditions and runtime commands; sound commands embed bounded audio data URLs. Mesh playback stores clip indices, optional secondary clip/blend, speed and loop—not joint buffers or clocks. See [Production workflows](PRODUCTION-WORK.md).
 
 ### Animation controllers (schema 77)
 
@@ -131,7 +133,11 @@ interface Node {
 }
 
 interface Entity {
-  body?: "static" | "dynamic" | "kinematic" | "sensor";
+  body?: "static" | "dynamic" | "oneway";
+  rules?: readonly GameplayRule[];
+  rulePolicy?: "platformer" | "authored";
+  gravity3d?: number;
+  restitution3d?: number;
   friction?: number;
   player?: boolean;
   respawnAt?: string;
@@ -140,7 +146,7 @@ interface Entity {
   patrol?: number;
   deadly?: boolean;
   goal?: boolean;
-  collectible?: "coin" | "power" | "star";
+  collectible?: boolean;
   powers?: number;
   stars?: number;
   bounces?: number;

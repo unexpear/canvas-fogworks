@@ -25,8 +25,8 @@
 
 import { Action } from "./Action";
 import { ReadonlyDocument } from "../document/Document";
-import { Keyframe } from "../document/Timeline";
-import { Clip } from "../document/Clips";
+import { Keyframe, timelineError } from "../document/Timeline";
+import { Clip, clipsError, CLIP_NAME_MAX } from "../document/Clips";
 import { AddNodeAction } from "./AddNodeAction";
 import { UpdateNodeContentAction } from "./UpdateNodeContentAction";
 import { SetTrackAction } from "./SetTrackAction";
@@ -64,22 +64,44 @@ export function asepriteImportActions(
     doc: ReadonlyDocument, p: AsepritePlacement
 ): { actions: Action[]; id: string; droppedClips: number } {
     if (p.track.length === 0) return { actions: [], id: "", droppedClips: 0 };
+    // A document's existing clock is authoritative. Never retime another asset to import this one.
+    // Integer-frame storage cannot exactly represent every source rate: refuse those imports
+    // explicitly rather than rounding timestamps or silently changing the project frame rate.
+    const fps = doc.timeline?.fps ?? p.timeline.fps;
+    const ratio = fps / p.timeline.fps;
+    const at = (frame: number) => {
+        const scaled = frame * ratio;
+        if (!Number.isFinite(scaled) || Math.abs(scaled - Math.round(scaled)) > 1e-7) {
+            throw new Error(`This animation's timing cannot be represented exactly at the project's ${fps} fps. Import into a separate document or use matching frame timing.`);
+        }
+        return Math.round(scaled);
+    };
+    const timeline = { fps, frames: Math.max(doc.timeline?.frames ?? 0, at(p.timeline.frames)) };
+    const clockError = timelineError(timeline);
+    if (clockError) throw new Error(clockError);
+    const track = p.track.map(key => ({ ...key, frame: at(key.frame) }));
+    const kept = p.clips.filter(c => c.from >= 0 && c.to >= c.from && c.to <= p.timeline.frames - 1);
+    const clips = [...(doc.clips ?? [])];
+    for (const clip of kept) {
+        let name = clip.name;
+        for (let suffix = 2; clips.some(c => c.name === name); suffix++) {
+            const tail = ` (${suffix})`;
+            name = clip.name.slice(0, CLIP_NAME_MAX - tail.length) + tail;
+        }
+        clips.push({ ...clip, name, from: at(clip.from), to: at(clip.to + 1) - 1 });
+    }
+    const clipError = clipsError(clips, timeline);
+    if (clipError) throw new Error(clipError);
     const id = generateUUID();
     const actions: Action[] = [
         new AddNodeAction(doc, "core.image", p.x, p.y, p.width, p.height, "none", id, null, { src: p.first }),
         new UpdateNodeContentAction(doc, id, { name: p.name }),
-        new SetTrackAction(doc, id, [...p.track]),
-        // THE CLOCK COMES FROM THE FILE, which is the point: Aseprite times every frame and this
-        // engine has one rate, so `asepriteTimeline` picks the shortest — the only choice that
-        // expresses every frame as a whole number of ticks.
-        new SetTimelineAction(doc, p.timeline)
+        new SetTrackAction(doc, id, track),
+        new SetTimelineAction(doc, timeline)
     ];
 
-    const kept = p.clips.filter(c => c.from >= 0 && c.to >= c.from && c.to <= p.timeline.frames - 1);
     if (kept.length > 0) {
-        // VALIDATED AGAINST THE CLOCK ABOVE, not the document's — the document usually has none
-        // yet, and `SetClipsAction` would refuse every range in the file.
-        actions.push(new SetClipsAction(doc, kept.map(c => ({ ...c })), p.timeline));
+        actions.push(new SetClipsAction(doc, clips, timeline));
     }
     return { actions, id, droppedClips: p.clips.length - kept.length };
 }

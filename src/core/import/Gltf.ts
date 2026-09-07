@@ -78,6 +78,9 @@ const TYPE_COMPONENTS: Record<string, number> = {
 
 /** The raw JSON, kept loose: this reads the parts it understands and reports the rest. */
 export interface GltfJson {
+    animations?: { name?: string; channels: { sampler: number; target: { node: number; path: string } }[];
+        samplers: { input: number; output: number; interpolation?: string }[] }[];
+    skins?: { joints: number[]; inverseBindMatrices?: number }[];
     asset?: { version?: string; generator?: string };
     scene?: number;
     scenes?: { nodes?: number[] }[];
@@ -95,6 +98,7 @@ export interface GltfJson {
 }
 
 export interface GltfNode {
+    skin?: number;
     name?: string;
     mesh?: number;
     children?: number[];
@@ -577,9 +581,10 @@ export function parseGltf(json: GltfJson, buffer: Uint8Array): GltfResult {
         const world = multiplyMat4(parent, nodeMatrix(node));
         const mesh = node.mesh === undefined ? undefined : meshes[node.mesh];
         if (mesh) {
-            for (const prim of mesh.primitives ?? []) {
+            for (const [primitiveIndex, prim] of (mesh.primitives ?? []).entries()) {
                 const read = readPrimitive(json, prim, buffer, notes);
-                if (read) instances.push({ name: node.name ?? mesh.name ?? "mesh", matrix: world, primitive: read });
+                if (read) instances.push({ name: node.name ?? mesh.name ?? "mesh", matrix: world, primitive: read,
+                    ...((json.animations?.length || json.skins?.length) ? { nodeIndex: index, primitiveIndex } : {}) });
             }
         }
         for (const child of node.children ?? []) walk(child, world, depth + 1);

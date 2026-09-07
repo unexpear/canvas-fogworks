@@ -11,7 +11,9 @@
      terrain's material LIST position by position, because reordering two materials redraws every
      shore while touching no cell — an edit a set-comparison would refuse as nothing. -->
 
-> 🔒 Frozen contract · schema v77 (app v0.0.5) · includes animation-controller authoring. Code in `src/core/actions/`.
+> 🔒 Frozen contract · schema v78 (app v0.0.5) · includes animation-controller, gameplay-rule and native 3D playback authoring. Code in `src/core/actions/`.
+
+Schema 78 gameplay rules/audio and opt-in 3D physics fields use `UpdateNodeContentAction` on `entity`; native mesh playback uses `SetSpatial3DAction`. Runtime commands, audio voices, sampled mesh buffers, file savepoints and recovery snapshots are not history entries. See [Production workflows](PRODUCTION-WORK.md).
 
 `SetAnimationControllerAction(document, nodeId, controller | undefined)` validates and copies
 the complete controller into a node patch. `animation: null` clears it. State names and

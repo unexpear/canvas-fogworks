@@ -2,7 +2,9 @@
 
 <!-- describes: src/core/document/Document.ts, src/core/tests -->
 
-> **Frozen contracts · schema v77 (app v0.0.5) · current through shared clip preview and runtime animation controllers.**
+> **Frozen contracts · schema v78 (app v0.0.5) · current through project recovery, gameplay rules, offline 2D export and native mesh playback.**
+
+Current workflow scope, limits, commands and measured budgets: [Production workflows](PRODUCTION-WORK.md).
 > These documents describe the *current, verified* implementation and lock the
 > contracts the rest of the engine builds on. See [`../MILESTONES.md`](../MILESTONES.md)
 > for the roadmap and where each layer fits.

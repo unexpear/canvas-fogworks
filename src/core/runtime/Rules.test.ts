@@ -1032,7 +1032,7 @@ describe("playBounds — a declared screen pins the run's vertical extent", () =
 
     it("…and the APP asks it, or the field changes nothing anybody can see", () => {
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
-        expect(app).toMatch(/playBounds\(contentBounds\(computed\), dispatcher\.getDocument\(\)\.screen\)/);
+        expect(/playBounds\(contentBounds\(computed\), base\.screen\)/.test(app)).toBe(true);
     });
 });
 
@@ -1260,8 +1260,10 @@ describe("spawn — the fifth verb, and the only one that ADDS", () => {
 
     it("and the APP steps against the spawned document, not the stored one", () => {
         const app = readFileSync(resolve(__dirname, "../../app/App.tsx"), "utf8");
-        expect(app).toMatch(/const live = applyCells\(applySpawns\(base, world\), world\)/);
-        expect(app).toMatch(/stepWorld\(live, world/);
+        const session = readFileSync(resolve(__dirname, "GameplaySession.ts"), "utf8");
+        expect(/stepGameplay\(base, world/.test(app)).toBe(true);
+        expect(/const live = applyCells\(applySpawns\(doc, previous\), previous\)/.test(session)).toBe(true);
+        expect(/stepWorld\(live, previous/.test(session)).toBe(true);
         // BOTH halves: it must feed the picture too, or a coin is collided with and never seen.
         expect(app).toMatch(/applyWorld\(applySpawns\(timed, world\)/);
     });

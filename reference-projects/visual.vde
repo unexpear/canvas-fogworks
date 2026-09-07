@@ -1,0 +1,233 @@
+{
+  "version": "78",
+  "document": {
+    "metadata": {
+      "project_name": "Fogworks visual reference",
+      "created_by": "system",
+      "date": "2026-09-05T00:00:00.000Z"
+    },
+    "nodes": {
+      "tile-0": {
+        "id": "tile-0",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#e85955",
+          "opacity": 1
+        },
+        "layout": {}
+      },
+      "tile-1": {
+        "id": "tile-1",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 32,
+          "y": 0,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {}
+      },
+      "tile-2": {
+        "id": "tile-2",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 64,
+          "y": 0,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {}
+      },
+      "tile-3": {
+        "id": "tile-3",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 96,
+          "y": 0,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#e85955",
+          "opacity": 1
+        },
+        "layout": {}
+      },
+      "tile-4": {
+        "id": "tile-4",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 0,
+          "y": 32,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {}
+      },
+      "tile-5": {
+        "id": "tile-5",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 32,
+          "y": 32,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {}
+      },
+      "tile-6": {
+        "id": "tile-6",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 64,
+          "y": 32,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#e85955",
+          "opacity": 1
+        },
+        "layout": {}
+      },
+      "tile-7": {
+        "id": "tile-7",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 96,
+          "y": 32,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {}
+      },
+      "tile-8": {
+        "id": "tile-8",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 0,
+          "y": 64,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {}
+      },
+      "tile-9": {
+        "id": "tile-9",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 32,
+          "y": 64,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#e85955",
+          "opacity": 1
+        },
+        "layout": {}
+      },
+      "tile-10": {
+        "id": "tile-10",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 64,
+          "y": 64,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {}
+      },
+      "tile-11": {
+        "id": "tile-11",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 96,
+          "y": 64,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {}
+      }
+    },
+    "rootNodeUuids": [
+      "tile-0",
+      "tile-1",
+      "tile-2",
+      "tile-3",
+      "tile-4",
+      "tile-5",
+      "tile-6",
+      "tile-7",
+      "tile-8",
+      "tile-9",
+      "tile-10",
+      "tile-11"
+    ],
+    "variables": {},
+    "activeTheme": "light",
+    "background": "#162337"
+  }
+}

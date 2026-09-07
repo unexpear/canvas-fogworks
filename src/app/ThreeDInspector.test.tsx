@@ -10,6 +10,11 @@ import { createRoot, Root } from "react-dom/client";
 import { Node } from "../core/document/Node";
 import { IDENTITY_TRANSFORM_3D, Spatial3D } from "../core/document/Spatial3D";
 import { ThreeDInspector } from "./ThreeDInspector";
+import { animatedTriangle } from "../core/examples/AnimatedTriangle";
+import { gameReference } from "../core/examples/ReferenceProjects";
+import { ActionDispatcher } from "../core/actions/ActionDispatcher";
+import { SetSpatial3DAction } from "../core/actions/SetSpatial3DAction";
+import { serializeDocument, deserializeDocument } from "../core/document/Serializer";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -58,6 +63,21 @@ describe("SHELL-001 extracted 3D inspector DOM", () => {
             setInputValue(intensity, "-4");
         });
         expect(changes[changes.length - 1]?.light?.intensity).toBe(0);
+    });
+
+    it("selects an imported animation through an Action and preserves playback across save/reopen and undo", async () => {
+        const doc = gameReference(), fixture = animatedTriangle();
+        doc.assets3d = [{ id: "mesh", kind: "mesh", source: "animated.gltf" }];
+        doc.nodes.get("player")!.spatial3d = { transform: IDENTITY_TRANSFORM_3D, renderable: { meshAssetId: "mesh" } };
+        const dispatcher = new ActionDispatcher(doc);
+        await act(async () => root.render(<ThreeDInspector node={doc.nodes.get("player")!} assets={doc.assets3d!}
+            meshes={new Map([["mesh", { instances: fixture.instances, motion: fixture.motion }]])}
+            onChange={next => { expect(dispatcher.dispatchAction(new SetSpatial3DAction(dispatcher.getDocument(), "player", next)).success).toBe(true); }} />));
+        const clip = host.querySelector<HTMLSelectElement>('[aria-label="3D animation clip"]')!;
+        await act(async () => { clip.value = "0"; clip.dispatchEvent(new Event("change", { bubbles: true })); });
+        expect(deserializeDocument(serializeDocument(dispatcher.getDocument())).nodes.get("player")!.spatial3d!.animation)
+            .toEqual({ clip: 0, speed: 1, loop: true });
+        expect(dispatcher.undo()?.nodes.get("player")!.spatial3d!.animation).toBeUndefined();
     });
 
     it("authors billboard composition and lit state", async () => {

@@ -27,5 +27,8 @@ jobs:
       - name: Verify source, docs, tests and build
         run: npm run ci
 
-      - name: Build installer and smoke-test packaged app
+      - name: Test release archive checks and smoke profile isolation
+        run: npm run test:package
+
+      - name: Verify archive and smoke-test packaged app
         run: npm run smoke:package

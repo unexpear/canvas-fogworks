@@ -49,8 +49,9 @@ reset the affected clock. Component-instance animation expansion is not part of 
 
 Composed 2D visuals now sample timeline tracks and image source rectangles in the 3D renderer.
 Sprite atlas crops share one uploaded texture and preserve nearest-neighbor filtering when authored.
-This does not add glTF animation import, skeletal skinning, morph targets, or 3D transform tracks.
-Those remain `ANIMATION-002`; the glTF importer currently supplies static mesh instances.
+Schema 78 additionally imports native glTF TRS tracks and four-influence skins. Choose a clip in the 3D inspector, Run to play or scrub an enabled timeline to preview. STEP, LINEAR and CUBICSPLINE sampling and two-clip pose blending are supported. CPU skinning is bounded to 100,000 vertices and 128 joints per skin. Morph animation, GPU skinning, automatic crossfading and component-instance playback remain `ANIMATION-002`; this is not a complete character-animation system.
+
+Aseprite imports now preserve the existing project frame rate and clips. Incoming frames are converted only when exact integer-frame timing is possible; incompatible timing is explicitly refused. Colliding names receive numeric suffixes. Existing tracks and controller references are unchanged, and import remains one undoable transaction.
 
 The implementation follows the existing inclusive `Clips.ts` contract. Transition condition/at-end
 behavior was checked against [Godot's animation state machine documentation](https://docs.godotengine.org/en/stable/tutorials/animation/animation_tree.html);

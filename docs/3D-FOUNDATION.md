@@ -28,8 +28,12 @@ specific subsystem.
 ## Model rules
 
 Schema 77 adds shared clip controllers. The 3D runtime advances their movement/outcome conditions;
-composed 2D visuals sample timeline tracks and sprite atlas crops. Native glTF animation/skin
-import is still future work (`ANIMATION-002`), detailed in [ANIMATION.md](ANIMATION.md).
+composed 2D visuals sample timeline tracks and sprite atlas crops. Schema 78 adds native glTF TRS
+animation, bounded four-weight CPU skinning and two-pose blending, detailed in [ANIMATION.md](ANIMATION.md).
+Oriented box and sphere contacts are now shared by runtime queries. Setting typed `gravity3d`
+or `restitution3d` opts a dynamic body into the bounded substep/contact solver; absent fields keep
+the previous movement policy. This does not provide dynamic-body impulse solving, joints,
+angular dynamics or a production character controller. See [Production workflows](PRODUCTION-WORK.md).
 
 1. Keep `Transform2D` and `Transform3D` distinct. A 2D field must not acquire
    a new meaning merely because a 3D viewport exists.

@@ -1755,9 +1755,9 @@ const MUTANTS = [
       from: "            parent: null,",
       to: "            parent: template.parent,",
       note: "a spawned copy KEEPS THE TEMPLATE'S PARENT, so `worldOffsetOf` composes a frame's offset the thing was never positioned against — slice 6's defect, arriving by a new route" },
-    { id: "SP3", file: "src/app/App.tsx",
-      from: "                    const live = applyCells(applySpawns(base, world), world);",
-      to: "                    const live = base;",
+    { id: "SP3", file: "src/core/runtime/GameplaySession.ts",
+      from: "    const live = applyCells(applySpawns(doc, previous), previous);",
+      to: "    const live = doc;",
       note: "the STEP goes back to reading the stored document, so everything this run spawned is drawn and untouchable — not a solid, not a region, not collidable. The picture is perfect and the game is not there" },
 
     // COLLECTING (M18). Despawn used to require a live BODY, so a spawned region could be made and
@@ -1936,7 +1936,7 @@ const MUTANTS = [
       to: "    return { x: 0, y: 0, width: screen.width, height: screen.height };",
       note: "the HORIZONTAL span is pinned to one screen too, so the camera cannot scroll a 3618px level past its first 432px and the death plane is right while the game is unplayable — only an assertion on the width can see it" },
     { id: "RB3", file: "src/app/App.tsx",
-      from: "                runBoundsRef.current = playBounds(contentBounds(computed), dispatcher.getDocument().screen);",
+      from: "                runBoundsRef.current = playBounds(contentBounds(computed), base.screen);",
       to: "                runBoundsRef.current = contentBounds(computed);",
       note: "the app stops asking, so the function is right, tested, and unreachable — the Escape-key shape, a green suite over code nothing calls" },
 

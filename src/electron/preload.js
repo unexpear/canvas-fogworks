@@ -28,7 +28,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     // Fixed-shape acknowledgement used only when main explicitly runs the project-open smoke.
     reportProjectOpened: (filePath, ok, error) =>
         ipcRenderer.send("project-open-result", { filePath, ok, error }),
-    saveFile: (filePath, content) => ipcRenderer.invoke("save-file", filePath, content),
+    saveFile: (filePath, content, sourceProjectPath) => ipcRenderer.invoke("save-file", filePath, content, sourceProjectPath),
+    confirmDiscard: () => ipcRenderer.sendSync("confirm-discard"),
+    readRecovery: () => ipcRenderer.invoke("read-recovery"),
+    writeRecovery: (snapshot) => ipcRenderer.invoke("write-recovery", snapshot),
+    exportGame: (folder, content, sourceProjectPath) => ipcRenderer.invoke("export-game", folder, content, sourceProjectPath),
     readLevelFile: (currentFilePath, target) => ipcRenderer.invoke("read-level-file", currentFilePath, target),
     writePngIntoFolder: (folder, filename, dataUrl) =>
         ipcRenderer.invoke("write-png-into-folder", folder, filename, dataUrl),

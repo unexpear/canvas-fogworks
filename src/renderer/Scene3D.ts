@@ -11,12 +11,14 @@ import { ReadonlyDocument } from "../core/document/Document";
 import { applyFrame } from "../core/document/Timeline";
 import { Camera3D, Transform3D } from "../core/document/Spatial3D";
 import { MeshInstance, MeshPrimitive } from "../core/import/MeshData";
+import { GltfMotion, sampleGltfMotion } from "../core/import/GltfMotion";
 import { HdrEnvironmentImage } from "./HdrEnvironment";
 import { EnvironmentIbl3D, preparedEnvironment3D } from "./EnvironmentIbl3D";
 
 export type Mat4 = number[];
 
 export interface MeshAsset3D {
+    motion?: GltfMotion;
     instances: readonly MeshInstance[];
     /** Linear RGBA per source material slot. Missing slots use the viewport default. */
     materialColors?: readonly (readonly [number, number, number, number])[];
@@ -96,6 +98,7 @@ export interface LitSample3D {
 }
 
 export interface Frame3D {
+    diagnostics?: string[];
     view: Mat4;
     projection: Mat4;
     draws: Draw3D[];
@@ -230,8 +233,9 @@ const DEFAULT_CAMERA: Camera3D = { kind: "perspective", near: 0.1, far: 1000, ve
 const DEFAULT_CAMERA_WORLD = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 5, 1];
 
 export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width: number, height: number,
-                             environments: EnvironmentLibrary3D = new Map()): Frame3D {
+                             environments: EnvironmentLibrary3D = new Map(), animationSeconds = (doc.frame ?? 0) / (doc.timeline?.fps ?? 24)): Frame3D {
     doc = applyFrame(doc, doc.frame);
+    const diagnostics: string[] = [];
     const worlds = new Map<string, Mat4>();
     const visit = (id: string, parent: readonly number[]): void => {
         const node = doc.nodes.get(id);
@@ -340,7 +344,11 @@ export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width
         const asset = meshes.get(renderable.meshAssetId);
         if (!asset) continue;
         const nodeWorld = worlds.get(id) ?? transformMatrix3D(node.spatial3d!.transform);
-        for (const instance of asset.instances) {
+        let instances = asset.instances;
+        try {
+            if (asset.motion) instances = sampleGltfMotion(asset.motion, asset.instances, animationSeconds, node.spatial3d?.animation);
+        } catch (error) { diagnostics.push(`${id}: animation failed; showing imported mesh. ${String(error)}`); }
+        for (const instance of instances) {
             const slot = typeof instance.primitive.material === "number" ? instance.primitive.material : -1;
             const assigned = materialSource(renderable.materialAssetIds?.[slot]);
             const material = assigned?.mesh.materials?.[assigned.slot] ?? asset.materials?.[slot];
@@ -368,6 +376,7 @@ export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width
     }
     return {
         view: invertMat4(cameraWorld) ?? [...MAT4_IDENTITY],
+        diagnostics,
         projection: projectionMatrix3D(camera, Math.max(1, width) / Math.max(1, height)),
         draws,
         lights,

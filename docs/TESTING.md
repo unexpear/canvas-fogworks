@@ -4,7 +4,9 @@
 <!-- re-read 2026-09-03 for the Canvas Fogworks rename: test behavior, compatibility identifiers,
      suite count and verification contract remain unchanged. -->
 
-> 🔒 Frozen contract · schema v77 (app v0.0.5) · current through tested DOM shell controls, 3D runtime projection, shared animation controllers, prefiltered HDR IBL, directional shadows, context recovery and object-id picking. The suite contains more than 2,000 tests; Jest reports the exact current count.
+> 🔒 Frozen contract · schema v78 (app v0.0.5) · current through file savepoints/recovery, dependency relocation, multi-animation imports, authored gameplay, offline 2D export, native mesh motion and oriented 3D collision tests. Jest reports the exact current count.
+
+`npm run smoke:authoring` checks exported PNG pixels and offline-game victory in real Electron Chromium. `npm run benchmark:authoring` reports owned 250/1000-node CPU/load/undo-memory measurements; these are informational, not hardware-dependent CI thresholds. See [Production workflows](PRODUCTION-WORK.md).
 
 `AnimationPlayback.test.ts` covers inclusive frame timing, independent clocks, priority,
 one-shot completion, missing clips, child scopes, Actions, migration, 2D event/outcome
@@ -36,6 +38,12 @@ edit in the saved project. It also authors a selected 2D rectangle as a billboar
 a test that is proven to fail before the fix and pass after (see *regression discipline*).
 
 ## Commands
+
+For actual installation, synthetic-version upgrade and uninstall tests in an offline disposable Windows guest, see [Installer lifecycle testing](INSTALLER-TESTING.md). These checks are separate from the unpacked-app smokes.
+
+`npm run test:package` runs Node's test runner against real temporary ASAR fixtures and smoke-profile isolation. CI runs it before packaging. `npm run check:package` verifies the existing `release/win-unpacked/resources/app.asar` (or an explicit archive path after `--`): required bundles must match the current build, package name/version/main must match, and application entries must match the release allowlist. Runtime dependencies under `node_modules` are allowed; this is not a dependency-license audit. `smoke:package` runs this gate before launching the packaged app.
+
+Startup and Open–Edit–Save smokes set unique temporary `userData` and `sessionData` paths before Electron is ready, so recovery and Chromium storage are separate from normal authoring. Profiles are retained under `%TEMP%/fogworks-smoke-profile-*` for diagnostics; the D: launcher puts them on D:. This follows [Electron's path override contract](https://www.electronjs.org/docs/latest/api/app#appsetpathname-path). These smokes do not install or uninstall the NSIS package.
 
 ```bash
 npm test                                   # jest (ts-jest); prints the exact current test count

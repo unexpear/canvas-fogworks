@@ -20,7 +20,9 @@
      not its readers; API-CONTRACTS carries the reader's surface. -->
 
 
-> 🔒 Frozen contract · schema v77 (app v0.0.5). Describes the verified current implementation, including typed entities, deterministic 2D/3D run flow, rich Tiled metadata, production HDR lighting, and shared clip controllers.
+> 🔒 Frozen contract · schema v78 (app v0.0.5). Includes typed gameplay rules, offline 2D delivery, native mesh playback and opt-in oriented 3D contact resolution.
+
+The file lifecycle is separate from editor history (`ProjectSession`); runtime event/command execution is shared with the standalone player (`GameplaySession`). Imported skeletal buffers remain transient and derive from confined source files, not document history. [Production workflows](PRODUCTION-WORK.md) records the current limits and measurements.
 
 Animation controllers are authored per node through Actions. `AnimationPlayback` owns pure
 state transitions and clip-relative clocks; `AnimationWorld` adapts settled world facts.

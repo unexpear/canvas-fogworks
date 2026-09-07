@@ -7,7 +7,11 @@ export interface ElectronAPI {
     onMenuCommand: (cb: (command: string) => void) => () => void;
     onFileOpened: (cb: (payload: { filePath: string; content: string }) => void) => () => void;
     onRequestSave: (cb: (filePath: string) => void) => () => void;
-    saveFile: (filePath: string, content: string) => Promise<boolean>;
+    saveFile: (filePath: string, content: string, sourceProjectPath?: string | null) => Promise<boolean>;
+    confirmDiscard: () => boolean;
+    readRecovery: () => Promise<import("./ProjectSession").RecoverySnapshot | null>;
+    writeRecovery: (snapshot: import("./ProjectSession").RecoverySnapshot | null) => Promise<void>;
+    exportGame: (folder: string, content: string, sourceProjectPath: string | null) => Promise<string>;
     readLevelFile: (currentFilePath: string, target: string) => Promise<{ filePath: string; content: string }>;
     requestSaveAs: () => Promise<boolean>;
     pickFolder: () => Promise<string | null>;

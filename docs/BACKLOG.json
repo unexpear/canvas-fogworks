@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "lastReconciled": "2026-09-05",
-  "sourceRevision": "e6004d8",
+  "lastReconciled": "2026-09-07",
+  "sourceRevision": "8054021",
   "productDirection": {
     "mode": "dual-track",
     "summary": "Canvas Fogworks is both a general visual/pixel editor and a game-authoring environment.",
@@ -11,6 +11,14 @@
   "statuses": ["open", "deferred"],
   "priorities": ["P0", "P1", "P2", "P3"],
   "items": [
+    {
+      "id": "RELEASE-001",
+      "area": "distribution",
+      "priority": "P1",
+      "status": "open",
+      "summary": "Extend the passing per-user, software-rendered Sandbox installer lifecycle (fresh install, synthetic-version upgrade, uninstall, project/recovery preservation) with historical-release migration, GUI/per-machine installer coverage and hardware-GPU validation. An original vector icon is packaged. Personal publisher metadata and signing are intentionally omitted at the user's request.",
+      "evidence": ["scripts/check-package.js", "scripts/test-installer-sandbox.ps1", "src/electron/smokeProfile.js", "docs/INSTALLER-TESTING.md"]
+    },
     {
       "id": "SHELL-001",
       "area": "app-shell",
@@ -24,7 +32,7 @@
       "area": "animation",
       "priority": "P1",
       "status": "open",
-      "summary": "Extend the delivered named-clip controllers with native glTF animation import, 3D transform tracks and skeletal skinning; add crossfades and component-instance playback with explicit tests.",
+      "summary": "Extend delivered native glTF TRS sampling, bounded CPU skinning and two-clip pose blending with GPU skinning, automatic crossfades, morph animation and component-instance playback.",
       "evidence": ["docs/ANIMATION.md", "src/core/import/Gltf.ts", "src/core/runtime/AnimationPlayback.ts"]
     },
     {
@@ -32,7 +40,7 @@
       "area": "runtime",
       "priority": "P1",
       "status": "open",
-      "summary": "Map runtime events and typed triggers to undo-safe authoring commands and sandboxed gameplay scripts.",
+      "summary": "Extend delivered typed event/player-condition commands and isolated level playback with richer conditions, script bindings and dependency-aware native 3D level transitions.",
       "evidence": ["src/core/runtime/World.ts", "src/core/script/ScriptApi.ts", "MILESTONES.md#phase-18-game-runtime"]
     },
     {
@@ -40,7 +48,7 @@
       "area": "distribution",
       "priority": "P1",
       "status": "open",
-      "summary": "Create and smoke-test a standalone game export path distinct from packaging the Canvas Fogworks editor.",
+      "summary": "Extend the smoke-tested offline 2D HTML player with native 3D distribution, bundled custom fonts and explicit unsupported-feature diagnostics.",
       "evidence": ["package.json", "scripts/smoke-startup.js"]
     },
     {
@@ -48,7 +56,7 @@
       "area": "runtime",
       "priority": "P2",
       "status": "open",
-      "summary": "Add measured production physics fidelity: rotated colliders, slopes, restitution and a replaceable backend boundary.",
+      "summary": "Extend delivered OBB/sphere contacts and opt-in gravity/restitution with dynamic-body impulses, angular dynamics, slopes/character behavior, hierarchical collider transforms and a replaceable backend boundary.",
       "evidence": ["src/core/runtime/World.ts", "src/core/runtime/World3D.ts", "docs/3D-FOUNDATION.md"]
     },
     {
@@ -56,8 +64,24 @@
       "area": "runtime",
       "priority": "P2",
       "status": "open",
-      "summary": "Define persisted audio assets and reachable authoring/runtime playback without coupling audio state to document history each frame.",
-      "evidence": ["MILESTONES.md#phase-18-game-runtime"]
+      "summary": "Extend delivered embedded sound cues and bounded Web Audio playback with a total decoded-byte cache budget, streaming music, buses and dedicated reusable audio assets.",
+      "evidence": ["src/app/RuntimeAudio.ts", "src/core/document/Gameplay.ts", "docs/PRODUCTION-WORK.md"]
+    },
+    {
+      "id": "PROJECT-001",
+      "area": "project-files",
+      "priority": "P1",
+      "status": "open",
+      "summary": "Extend acknowledged Save/Save As and native recovery with linked-level graph relocation, browser recovery restore and process-crash/recovery fault-injection coverage. Current dependency relocation covers referenced 3D sources and glTF sidecars only.",
+      "evidence": ["src/app/ProjectSession.ts", "src/electron/projectDependencies.js", "docs/PRODUCTION-WORK.md"]
+    },
+    {
+      "id": "SCALE-001",
+      "area": "performance",
+      "priority": "P1",
+      "status": "open",
+      "summary": "Extend repeatable owned-fixture CPU/loading/history/skin benchmarks with GPU frame timings, large raster/component workloads, isolated asset-reload measurements and calibrated release budgets.",
+      "evidence": ["scripts/benchmark-authoring.js", "scripts/smoke-authoring.js", "docs/PRODUCTION-WORK.md"]
     },
     {
       "id": "RENDER-002",

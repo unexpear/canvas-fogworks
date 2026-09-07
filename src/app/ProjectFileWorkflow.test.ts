@@ -61,6 +61,14 @@ test("a malformed project changes no live document, path or editor state", () =>
     expect(target.afterOpen).not.toHaveBeenCalled();
 });
 
+test("an unsaved-change cancellation preserves the current project and does not run afterOpen", () => {
+    const target = makeTarget(); target.beforeOpen = () => false; target.afterOpen = jest.fn();
+    const before = target.dispatcher.getDocument(); target.currentFilePath.current = "safe.vde";
+    expect(applyOpenedProject({ filePath: "new.vde", content: serializeDocument(createEmptyDocument()) }, target).ok).toBe(false);
+    expect(target.dispatcher.getDocument()).toBe(before); expect(target.currentFilePath.current).toBe("safe.vde");
+    expect(target.afterOpen).not.toHaveBeenCalled();
+});
+
 test("binding reports open results, routes Save As, and disposes both subscriptions", () => {
     const target = makeTarget();
     let open: ((payload: { filePath: string; content: string }) => void) | undefined;
@@ -76,7 +84,7 @@ test("binding reports open results, routes Save As, and disposes both subscripti
     open?.({ filePath: "C:\\work\\ok.vde", content: serializeDocument(createEmptyDocument()) });
     expect(api.reportProjectOpened).toHaveBeenCalledWith("C:\\work\\ok.vde", true, undefined);
     save?.("C:\\work\\save-as.vde");
-    expect(target.currentFilePath.current).toBe("C:\\work\\save-as.vde");
+    expect(target.currentFilePath.current).toBe("C:\\work\\ok.vde");
     expect(target.saveTo).toHaveBeenCalledWith("C:\\work\\save-as.vde");
 
     dispose();

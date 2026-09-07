@@ -18,6 +18,7 @@ export interface ProjectFileTarget {
     saveTo: (filePath: string) => void;
     reportError?: (message: string, error: unknown) => void;
     afterOpen?: (payload: OpenProjectPayload) => void;
+    beforeOpen?: () => boolean;
 }
 
 export type OpenProjectResult = { ok: true } | { ok: false; error: Error };
@@ -26,6 +27,7 @@ export type OpenProjectResult = { ok: true } | { ok: false; error: Error };
 export function applyOpenedProject(payload: OpenProjectPayload, target: ProjectFileTarget): OpenProjectResult {
     try {
         const opened = deserializeDocument(payload.content);
+        if (target.beforeOpen && !target.beforeOpen()) return { ok: false, error: new Error("Open cancelled.") };
         target.dispatcher.loadDocument(opened);
         target.currentFilePath.current = payload.filePath;
         target.editorState.selectedNodeIds = [];
@@ -48,7 +50,6 @@ export function bindProjectFileWorkflow(api: ElectronAPI, target: ProjectFileTar
             result.ok ? undefined : result.error.message);
     });
     const disposeSave = api.onRequestSave(filePath => {
-        target.currentFilePath.current = filePath;
         target.saveTo(filePath);
     });
     return () => { disposeOpen(); disposeSave(); };

@@ -1094,7 +1094,7 @@ export function regionsOf(doc: ReadonlyDocument): Region[] {
     for (const node of doc.nodes.values()) {
         if (node.hidden) continue;                     // out of the scene, out of the world
         if (isLayered(node)) continue;                 // see `isLayered`
-        const className = node.className;
+        const className = node.className || (node.entity?.rules?.some(rule => rule.event === "enter" || rule.event === "leave") ? "authored-trigger" : "");
         if (!className || bodyTypeOf(node) !== null) continue;
         const g = node.geometry;
         if (g.width <= 0 || g.height <= 0) continue;

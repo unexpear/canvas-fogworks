@@ -7,6 +7,7 @@
 import { ReadonlyDocument } from "../document/Document";
 import { Collider3D, Transform3D, Vec3 } from "../document/Spatial3D";
 import { animateWorld3D } from "./AnimationWorld";
+import { contact3D } from "./Collision3D";
 
 export const FIXED_STEP_3D = 1 / 60;
 export const MAX_STEPS_PER_FRAME_3D = 5;
@@ -20,6 +21,7 @@ export interface Body3D {
 }
 
 export interface World3DState {
+    diagnostics?: readonly string[];
     animations?: import("./AnimationPlayback").AnimationPlayers;
     bodies: ReadonlyMap<string, Body3D>;
     time: number;
@@ -61,21 +63,7 @@ function extents(body: Body3D): Vec3 {
 }
 
 function overlap(a: Body3D, b: Body3D): boolean {
-    if (!a.collider || !b.collider) return false;
-    const ae = extents(a), be = extents(b), ap = a.transform.position, bp = b.transform.position;
-    if (a.collider.kind === "box" && b.collider.kind === "box") {
-        return Math.abs(ap.x - bp.x) <= ae.x + be.x && Math.abs(ap.y - bp.y) <= ae.y + be.y
-            && Math.abs(ap.z - bp.z) <= ae.z + be.z;
-    }
-    if (a.collider.kind === "sphere" && b.collider.kind === "sphere") {
-        return Math.hypot(ap.x - bp.x, ap.y - bp.y, ap.z - bp.z) <= ae.x + be.x;
-    }
-    const sphere = a.collider.kind === "sphere" ? a : b, box = sphere === a ? b : a;
-    const radius = extents(sphere).x, boxExtent = extents(box), sp = sphere.transform.position, bp2 = box.transform.position;
-    const closest = (value: number, center: number, extent: number) => Math.max(center - extent,
-        Math.min(center + extent, value));
-    return Math.hypot(sp.x - closest(sp.x, bp2.x, boxExtent.x), sp.y - closest(sp.y, bp2.y, boxExtent.y),
-        sp.z - closest(sp.z, bp2.z, boxExtent.z)) <= radius;
+    return contact3D(a, b) !== null;
 }
 
 /** Returns stable node ids touching one collider in the current projected world. */
@@ -91,6 +79,7 @@ export function stepWorld3D(doc: ReadonlyDocument, world: World3DState,
                             inputs: ReadonlyMap<string, Input3D> = new Map()): World3DState {
     if (world.outcome !== "running" || world.transitionTo) return world;
     const bodies = new Map<string, Body3D>();
+    const diagnostics: string[] = [];
     for (const [id, source] of world.bodies) bodies.set(id, { ...source, transform: copyTransform(source.transform),
         velocity: { ...source.velocity } });
     const statics = [...bodies.values()].filter(body => {
@@ -100,8 +89,36 @@ export function stepWorld3D(doc: ReadonlyDocument, world: World3DState,
     for (const body of bodies.values()) {
         if (!body.dynamic) continue;
         const input = inputs.get(body.nodeId), speed = input?.speed ?? 4;
-        body.velocity = input ? { x: input.x * speed, y: input.y * speed, z: input.z * speed } : body.velocity;
-        for (const axis of ["x", "y", "z"] as const) {
+        const entity = doc.nodes.get(body.nodeId)?.entity;
+        const rigid = entity?.gravity3d !== undefined || entity?.restitution3d !== undefined;
+        body.velocity = input ? { x: input.x * speed,
+            y: rigid && input.y === 0 ? body.velocity.y : input.y * speed, z: input.z * speed } : body.velocity;
+        if (rigid) {
+            body.velocity.y -= (entity?.gravity3d ?? 0) * FIXED_STEP_3D;
+            const minimum = Math.max(.001, Math.min(...[body, ...statics].filter(b => b.collider).flatMap(b => Object.values(extents(b)))));
+            const required = Math.max(1, Math.ceil(Math.hypot(body.velocity.x, body.velocity.y, body.velocity.z) * FIXED_STEP_3D / (minimum * .5)));
+            if (required > 64) diagnostics.push(`${body.nodeId}: movement limited to 64 collision substeps`);
+            for (let sub = 0; sub < Math.min(64, required); sub++) {
+                const previous = { ...body.transform.position };
+                for (const axis of ["x", "y", "z"] as const) body.transform.position[axis] += body.velocity[axis] * FIXED_STEP_3D / required;
+                for (let pass = 0; pass < 4; pass++) for (const other of statics) {
+                    const contact = contact3D(body, other); if (!contact) continue;
+                    const n = contact.normal;
+                    body.transform.position.x += n[0] * contact.depth;
+                    body.transform.position.y += n[1] * contact.depth;
+                    body.transform.position.z += n[2] * contact.depth;
+                    const toward = body.velocity.x*n[0] + body.velocity.y*n[1] + body.velocity.z*n[2];
+                    if (toward < 0) {
+                        const impulse = (1 + (entity?.restitution3d ?? 0)) * toward;
+                        body.velocity.x -= impulse*n[0]; body.velocity.y -= impulse*n[1]; body.velocity.z -= impulse*n[2];
+                    }
+                }
+                if (statics.some(other => overlap(body, other))) {
+                    body.transform.position = previous; body.velocity = { x: 0, y: 0, z: 0 };
+                    diagnostics.push(`${body.nodeId}: unresolved contact; retained last safe position`); break;
+                }
+            }
+        } else for (const axis of ["x", "y", "z"] as const) {
             const old = body.transform.position[axis];
             body.transform.position[axis] += body.velocity[axis] * FIXED_STEP_3D;
             if (statics.some(other => overlap(body, other))) {
@@ -129,7 +146,7 @@ export function stepWorld3D(doc: ReadonlyDocument, world: World3DState,
             }
         }
     }
-    return animateWorld3D(doc, { ...world, bodies, time: world.time + FIXED_STEP_3D, outcome, transitionTo });
+    return animateWorld3D(doc, { ...world, bodies, time: world.time + FIXED_STEP_3D, outcome, transitionTo, diagnostics });
 }
 
 /** Runs a bounded fixed-step accumulator, preventing a stalled frame from spiralling. */

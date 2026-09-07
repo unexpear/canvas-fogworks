@@ -432,6 +432,8 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "75") { raw = { ...raw, version: "76" }; version = "76"; }
     // 76 -> 77: optional node animation controllers. Absent retains the existing playback paths.
     if (version === "76") { raw = { ...raw, version: "77" }; version = "77"; }
+    // 77 -> 78: typed gameplay/audio, native mesh playback and opt-in gravity/restitution. Absent preserves behavior.
+    if (version === "77") { raw = { ...raw, version: "78" }; version = "78"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {

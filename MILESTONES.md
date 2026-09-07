@@ -3,7 +3,9 @@
 > The engine is built in **layers**, where each milestone proves **one new
 > architectural capability** before the next begins. This is the canonical roadmap.
 > Status reconciled **2026-09-05** against the shared animation-controller implementation and the 2026-08-21
-> mutation-battery close-out; engine **v0.0.5**, schema **77**.
+> mutation-battery close-out; engine **v0.0.5**, schema **78**.
+
+**2026-09-05 production workflow extension:** save/recovery and relocation seams, multi-animation import coexistence, whole-canvas PNG, typed gameplay/audio, offline 2D game export, imported TRS/skin playback and opt-in oriented 3D contacts. This cross-cutting extension is tracked in [Production workflows](docs/PRODUCTION-WORK.md), not retroactively counted as a historical M18 slice.
 >
 > **Seven rows below said ⬜ for capabilities that had shipped.** They said it for three weeks
 > because this file declared no `describes:` directive: `check-doc-drift` named it, looked it

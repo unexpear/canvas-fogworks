@@ -55,6 +55,7 @@ export type Collider3D =
     | { kind: "sphere"; radius: number };
 
 export interface Spatial3D {
+    animation?: { clip: number; secondaryClip?: number; blend?: number; speed?: number; loop?: boolean };
     transform: Transform3D;
     camera?: Camera3D;
     light?: Light3D;
@@ -150,6 +151,15 @@ export function spatial3DError(spatial: unknown): string | null {
     if (spatial === undefined) return null;
     if (!spatial || typeof spatial !== "object" || Array.isArray(spatial)) return "spatial3d must be an object or absent";
     const s = spatial as Partial<Spatial3D>;
+    if (s.animation !== undefined) {
+        const a = s.animation;
+        if (!a || !Number.isInteger(a.clip) || a.clip < 0 || a.clip >= 256
+            || (a.secondaryClip !== undefined && (!Number.isInteger(a.secondaryClip) || a.secondaryClip < 0 || a.secondaryClip >= 256))
+            || (a.blend !== undefined && (!Number.isFinite(a.blend) || a.blend < 0 || a.blend > 1))
+            || (a.speed !== undefined && (!Number.isFinite(a.speed) || a.speed <= 0 || a.speed > 10))
+            || (a.loop !== undefined && typeof a.loop !== "boolean")) return "invalid 3D animation playback settings";
+        if (!s.renderable) return "3D animation playback needs a mesh renderable";
+    }
     if (!s.transform || typeof s.transform !== "object" || Array.isArray(s.transform)) return "spatial3d.transform must be an object";
     const transform = s.transform as Partial<Transform3D>;
     const positionErr = vec3Error("spatial3d.transform.position", transform.position);

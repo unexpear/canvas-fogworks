@@ -43,6 +43,8 @@ export interface MeshPrimitive {
 
 /** A primitive placed in a scene. */
 export interface MeshInstance {
+    nodeIndex?: number;
+    primitiveIndex?: number;
     /** Whatever the source called it, for naming a layer something meaningful. */
     name: string;
     /**

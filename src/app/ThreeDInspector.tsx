@@ -60,6 +60,30 @@ export function ThreeDInspector({ node, assets, meshes, onChange }: ThreeDInspec
 
     return <>
         {spatial.renderable && (() => {
+            const clips = meshes.get(spatial.renderable!.meshAssetId)?.motion?.clips ?? [];
+            if (!clips.length) return null;
+            const change = (animation: Spatial3D["animation"]) => {
+                const next = copySpatial3D(spatial); next.animation = animation; onChange(next);
+            };
+            return <Section title="3D animation">
+                <label style={labelStyle}>Clip (Run to play; timeline to preview)</label>
+                <select aria-label="3D animation clip" value={spatial.animation?.clip ?? ""} onChange={e => change(e.target.value === "" ? undefined : { clip: Number(e.target.value), speed: 1, loop: true })}>
+                    <option value="">Bind pose</option>{clips.map((clip, i) => <option key={i} value={i}>{clip.name}</option>)}
+                </select>
+                {spatial.animation && <>
+                    <label style={labelStyle}>Blend with</label>
+                    <select aria-label="3D secondary animation" value={spatial.animation.secondaryClip ?? ""} onChange={e => change({ ...spatial.animation!, secondaryClip: e.target.value === "" ? undefined : Number(e.target.value) })}>
+                        <option value="">None</option>{clips.map((clip, i) => <option key={i} value={i}>{clip.name}</option>)}
+                    </select>
+                    <label style={labelStyle}>Blend weight</label>
+                    <NumberInput value={spatial.animation.blend ?? 0} onChange={blend => change({ ...spatial.animation!, blend: Math.max(0, Math.min(1, blend)) })} />
+                    <label style={labelStyle}>Playback speed</label>
+                    <NumberInput value={spatial.animation.speed ?? 1} onChange={speed => change({ ...spatial.animation!, speed: Math.max(.01, Math.min(10, speed)) })} />
+                    <label><input type="checkbox" checked={spatial.animation.loop !== false} onChange={e => change({ ...spatial.animation!, loop: e.target.checked })} /> Loop</label>
+                </>}
+            </Section>;
+        })()}
+        {spatial.renderable && (() => {
             const renderable = spatial.renderable!;
             const mesh = meshes.get(renderable.meshAssetId);
             const primitiveSlots = mesh?.instances.reduce((max, instance) => {

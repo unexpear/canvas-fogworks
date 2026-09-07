@@ -12,11 +12,16 @@ const path = require("path");
 // it is an Electron entry point. See src/electron/confine.js and its junction test.
 const { resolveConfined } = require("./confine");
 const { atomicWrite } = require("./atomicWrite");
+const { copyProjectDependencies } = require("./projectDependencies");
+const { gameDocumentTargets, gameHtml } = require("../core/export/GameExport");
 const fs = require("fs");
 const zlib = require("zlib");
 const pkg = require("../../package.json");
 const STARTUP_SMOKE = process.env.VDE_STARTUP_SMOKE === "1";
 const PROJECT_OPEN_SMOKE = process.env.VDE_PROJECT_OPEN_SMOKE || "";
+const { isolateSmokeProfile } = require("./smokeProfile");
+const smokeProfile = isolateSmokeProfile(app, STARTUP_SMOKE || !!PROJECT_OPEN_SMOKE);
+if (smokeProfile) console.log(`VDE_SMOKE_PROFILE: ${smokeProfile}`);
 let projectWorkflowSmokeOpened = false;
 
 let mainWindow;
@@ -24,6 +29,7 @@ let mainWindow;
 // Paths the user has explicitly approved through a Save dialog. The renderer may
 // only write to one of these — it cannot supply an arbitrary filesystem path.
 const approvedSavePaths = new Set();
+const approvedExportFolders = new Set();
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -507,7 +513,9 @@ ipcMain.handle("pick-folder", async () => {
         title: "Choose a folder",
         properties: ["openDirectory"]
     });
-    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+    const folder = result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+    if (folder) approvedExportFolders.add(folder);
+    return folder;
 });
 
 /** Read the SOURCE files under a folder, for the capability scan. */
@@ -800,7 +808,7 @@ ipcMain.handle("request-save-as", async () => {
     return true;
 });
 
-ipcMain.handle("save-file", async (event, filePath, content) => {
+ipcMain.handle("save-file", async (event, filePath, content, sourceProjectPath) => {
     if (!filePath || typeof filePath !== "string") {
         throw new Error("Invalid file path.");
     }
@@ -811,6 +819,12 @@ ipcMain.handle("save-file", async (event, filePath, content) => {
     // arbitrary path chosen by the renderer.
     if (!approvedSavePaths.has(filePath)) {
         throw new Error("Refusing to write to an unapproved path. Use Save As.");
+    }
+    if (sourceProjectPath) {
+        if (!approvedSavePaths.has(sourceProjectPath)) throw new Error("Unapproved source project.");
+        await copyProjectDependencies(sourceProjectPath, filePath, content);
+    } else if ((JSON.parse(content)?.document?.assets3d ?? []).length) {
+        throw new Error("Reopen the original project before relocating its referenced 3D assets.");
     }
     await atomicWrite(filePath, content);
     if (PROJECT_OPEN_SMOKE && projectWorkflowSmokeOpened
@@ -854,6 +868,70 @@ ipcMain.handle("save-file", async (event, filePath, content) => {
         }
     }
     return true;
+});
+
+ipcMain.handle("export-game", async (_event, folder, content, sourceProjectPath) => {
+    if (!approvedExportFolders.has(folder)) throw new Error("Choose an export folder first.");
+    const destination = resolveInsideFolder(folder, "game.html");
+    if (sourceProjectPath && !approvedSavePaths.has(sourceProjectPath)) throw new Error("Unapproved game project path.");
+    const root = sourceProjectPath ? path.dirname(sourceProjectPath) : null;
+    const levels = Object.create(null), seen = new Map();
+    let total = 0;
+    async function visit(file, text) {
+        if (seen.has(file)) return seen.get(file);
+        total += text.length;
+        if (seen.size >= 32 || total > 64 * 1024 * 1024) throw new Error("Game export exceeds 32 levels or 64MB.");
+        const targets = gameDocumentTargets(text), id = `level${seen.size}`;
+        seen.set(file, id); levels[id] = { content: text, links: Object.create(null) };
+        for (const target of targets) {
+            if (!root) throw new Error("Save the project before exporting linked levels.");
+            const next = resolveConfined(root, path.dirname(file), target, "a linked game level");
+            if (!/\.(vde|json)$/i.test(next)) throw new Error("Linked levels must be .vde or .json projects.");
+            if ((await fs.promises.stat(next)).size > 32 * 1024 * 1024) throw new Error("Linked level exceeds 32MB.");
+            levels[id].links[target] = await visit(next, await fs.promises.readFile(next, "utf8"));
+        }
+        return id;
+    }
+    const entry = await visit(sourceProjectPath ? fs.realpathSync.native(sourceProjectPath) : "entry", content);
+    const bundle = await fs.promises.readFile(path.join(__dirname, "..", "app", "player.js"));
+    await atomicWrite(destination, gameHtml({ entry, levels }, bundle.toString("base64")));
+    return destination;
+});
+
+ipcMain.on("confirm-discard", event => {
+    event.returnValue = !!mainWindow && dialog.showMessageBoxSync(mainWindow, {
+        type: "warning", title: "Unsaved changes",
+        message: "Discard unsaved changes?", detail: "Choose Cancel to return to the project and save it first.",
+        buttons: ["Cancel", "Discard"], defaultId: 0, cancelId: 0, noLink: true
+    }) === 1;
+});
+
+// This file lives in Electron's user-data directory, not in a renderer-chosen path.
+const recoveryPath = () => path.join(app.getPath("userData"), "project-recovery.json");
+function validateRecovery(snapshot) {
+    if (snapshot === null) return;
+    if (!snapshot || typeof snapshot.content !== "string" || typeof snapshot.savedContent !== "string"
+        || snapshot.content.length > 64 * 1024 * 1024 || snapshot.savedContent.length > 64 * 1024 * 1024
+        || !(snapshot.filePath === null || typeof snapshot.filePath === "string")) {
+        throw new Error("Invalid or oversized recovery snapshot.");
+    }
+    JSON.parse(snapshot.content);
+    JSON.parse(snapshot.savedContent);
+}
+ipcMain.handle("read-recovery", async () => {
+    let raw;
+    try { raw = await fs.promises.readFile(recoveryPath(), "utf8"); }
+    catch (error) { if (error.code === "ENOENT") return null; throw error; }
+    const snapshot = JSON.parse(raw);
+    validateRecovery(snapshot);
+    // Only main-authored recovery records can restore an earlier approved project path.
+    if (snapshot?.filePath) approvedSavePaths.add(snapshot.filePath);
+    return snapshot;
+});
+ipcMain.handle("write-recovery", async (_event, snapshot) => {
+    validateRecovery(snapshot);
+    if (snapshot?.filePath && !approvedSavePaths.has(snapshot.filePath)) throw new Error("Unapproved recovery project.");
+    await atomicWrite(recoveryPath(), JSON.stringify(snapshot));
 });
 
 /** List and read glTF models under a user-selected folder; external buffers stay confined there. */

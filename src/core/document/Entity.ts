@@ -7,10 +7,16 @@
  * properties remain readable so existing projects do not change when opened by schema 73.
  */
 
+import { GameplayRule, gameplayRulesError } from "./Gameplay";
+
 export const ENTITY_BODY_TYPES = ["static", "dynamic", "oneway"] as const;
 export type EntityBodyType = typeof ENTITY_BODY_TYPES[number];
 
 export interface Entity {
+    rules?: readonly GameplayRule[];
+    rulePolicy?: "platformer" | "authored";
+    gravity3d?: number;
+    restitution3d?: number;
     body?: EntityBodyType;
     friction?: number;
     player?: boolean;
@@ -35,6 +41,9 @@ export function entityError(value: unknown): string | null {
     if (value === undefined) return null;
     if (typeof value !== "object" || value === null || Array.isArray(value)) return "entity must be an object";
     const e = value as Partial<Entity>;
+    if (e.rulePolicy !== undefined && e.rulePolicy !== "platformer" && e.rulePolicy !== "authored") return "invalid gameplay rule policy";
+    if (e.gravity3d !== undefined && (!Number.isFinite(e.gravity3d) || e.gravity3d < 0 || e.gravity3d > 1000)) return "3D gravity must be within 0–1000";
+    if (e.restitution3d !== undefined && (!Number.isFinite(e.restitution3d) || e.restitution3d < 0 || e.restitution3d > 1)) return "3D restitution must be within 0–1";
     if (e.body !== undefined && !(ENTITY_BODY_TYPES as readonly unknown[]).includes(e.body)) {
         return `entity.body must be one of ${ENTITY_BODY_TYPES.join("/")}`;
     }
@@ -56,7 +65,7 @@ export function entityError(value: unknown): string | null {
             return `entity.${key} must be a non-empty string of at most 4096 characters`;
         }
     }
-    return null;
+    return gameplayRulesError(e.rules);
 }
 
 /** Convert the legacy runtime vocabulary without deleting it (it may belong to an imported file). */

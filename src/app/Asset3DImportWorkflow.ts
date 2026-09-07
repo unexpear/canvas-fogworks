@@ -6,6 +6,7 @@
 
 import { gltfMaterials, GltfImageSource, GltfJson, GltfTextureBinding, parseGlb, parseGltf } from "../core/import/Gltf";
 import { Material3D, MeshAsset3D } from "../renderer/Scene3D";
+import { readGltfMotion } from "../core/import/GltfMotion";
 import { ReadonlyDocument } from "../core/document/Document";
 import { ASSET_3D_ID_MAX, Asset3D } from "../core/document/Spatial3D";
 import { Action } from "../core/actions/Action";
@@ -252,6 +253,7 @@ export async function loadAsset3D(reader: Asset3DReader, folder: string, filePat
     return {
         mesh: {
             instances: result.instances,
+            motion: readGltfMotion(json, buffer, result.instances),
             materialColors: materials.map(m => m.baseColor),
             materialUnlit: materials.map(m => m.unlit),
             materials: resolvedMaterials

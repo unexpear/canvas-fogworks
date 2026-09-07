@@ -1,0 +1,95 @@
+{
+  "version": "78",
+  "document": {
+    "metadata": {
+      "project_name": "Fogworks reach the green gate",
+      "created_by": "system",
+      "date": "2026-09-05T00:00:00.000Z"
+    },
+    "nodes": {
+      "player": {
+        "id": "player",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 40,
+          "y": 280,
+          "width": 24,
+          "height": 24
+        },
+        "style": {
+          "fill": "#efbe50",
+          "opacity": 1
+        },
+        "layout": {},
+        "entity": {
+          "body": "dynamic",
+          "player": true,
+          "rulePolicy": "authored"
+        }
+      },
+      "floor": {
+        "id": "floor",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 0,
+          "y": 320,
+          "width": 640,
+          "height": 40
+        },
+        "style": {
+          "fill": "#425876",
+          "opacity": 1
+        },
+        "layout": {},
+        "entity": {
+          "body": "static"
+        }
+      },
+      "goal": {
+        "id": "goal",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 560,
+          "y": 240,
+          "width": 40,
+          "height": 80
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "entity": {
+          "rules": [
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "win"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "rootNodeUuids": [
+      "player",
+      "floor",
+      "goal"
+    ],
+    "variables": {},
+    "activeTheme": "light",
+    "background": "#142338",
+    "screen": {
+      "width": 640,
+      "height": 360
+    }
+  }
+}
