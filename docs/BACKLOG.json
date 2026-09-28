@@ -24,8 +24,8 @@
       "area": "app-shell",
       "priority": "P1",
       "status": "open",
-      "summary": "Continue extracting cohesive panels and workflows from App.tsx; project files, image-sequence import, workspace/runtime controls and the 3D inspector are tested seams.",
-      "evidence": ["src/app/App.tsx", "src/app/AppShellControls.tsx", "src/app/ThreeDInspector.tsx"]
+      "summary": "Continue extracting cohesive panels and workflows from App.tsx; project files, image-sequence import, workspace/runtime controls, the 3D inspector and the folders drawer are tested seams.",
+      "evidence": ["src/app/App.tsx", "src/app/AppShellControls.tsx", "src/app/ThreeDInspector.tsx", "src/app/FoldersDrawer.tsx"]
     },
     {
       "id": "ANIMATION-002",

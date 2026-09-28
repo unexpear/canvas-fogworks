@@ -1,6 +1,8 @@
 # Canvas Fogworks — Core Documentation
 
 <!-- describes: src/core/document/Document.ts, src/core/tests -->
+<!-- re-read 2026-09-28: shell source pins in the test suite now also read FoldersDrawer.tsx.
+     The frozen contracts summarised here are unchanged. -->
 
 > **Frozen contracts · schema v88 (app v0.0.5) · current through project recovery, gameplay rules, offline 2D export and native mesh playback.**
 

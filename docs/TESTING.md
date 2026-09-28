@@ -30,7 +30,10 @@ now completes the original three-level relay and exports the editable pixel/comp
 These checks are in `ci`. `benchmark:authoring` and optional `benchmark:gpu` remain informational;
 exact workloads, limits and measured priorities are recorded in [PRODUCTION-WORK.md](PRODUCTION-WORK.md).
 
-<!-- describes: src/core/tests, src/core/runtime/World3D.test.ts, src/app/ProjectFileWorkflow.ts, src/app/ProjectFileWorkflow.test.ts, src/app/AssetImportWorkflow.ts, src/app/AssetImportWorkflow.test.ts, src/app/Asset3DImportWorkflow.ts, src/app/Asset3DImportWorkflow.test.ts, src/app/AppShellControls.tsx, src/app/AppShellControls.test.tsx, src/app/ThreeDInspector.tsx, src/app/ThreeDInspector.test.tsx, src/electron, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, src/renderer/Scene3D.test.ts, src/renderer/EnvironmentIbl3D.test.ts, jest.config.js, scripts/check-module-headers.js, scripts/mutate-dimensions.js, scripts/smoke-startup.js, scripts/smoke-3d.js -->
+<!-- describes: src/core/tests, src/core/runtime/World3D.test.ts, src/app/ProjectFileWorkflow.ts, src/app/ProjectFileWorkflow.test.ts, src/app/AssetImportWorkflow.ts, src/app/AssetImportWorkflow.test.ts, src/app/Asset3DImportWorkflow.ts, src/app/Asset3DImportWorkflow.test.ts, src/app/AppShellControls.tsx, src/app/AppShellControls.test.tsx, src/app/ThreeDInspector.tsx, src/app/ThreeDInspector.test.tsx, src/app/FoldersDrawer.tsx, src/app/FoldersDrawer.test.tsx, src/electron, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, src/renderer/Scene3D.test.ts, src/renderer/EnvironmentIbl3D.test.ts, jest.config.js, scripts/check-module-headers.js, scripts/mutate-dimensions.js, scripts/smoke-startup.js, scripts/smoke-3d.js -->
+<!-- re-read 2026-09-28 after the folders-drawer extraction: shell source pins now include
+     FoldersDrawer.tsx, and the new jsdom suite drives its import, asset and export controls.
+     The rest of this testing contract is unchanged. -->
 <!-- re-read 2026-09-03 for the Canvas Fogworks rename: test behavior, compatibility identifiers,
      suite count and verification contract remain unchanged. -->
 
@@ -776,7 +779,9 @@ test that was never seen to fail proves nothing.
 - **The interface shell now has a jsdom foothold.** `AppShellControls.test.tsx` drives all five
   workspace tabs, 3D-only control visibility, gizmo state, light routing, and the visible
   Play/Stop/Restart/Respawn states. `ThreeDInspector.test.tsx` drives typed light and 2D-surface
-  edits through the extracted inspector seam. The complete tool strip, options row, menus, canvas
+  edits through the extracted inspector seam. `FoldersDrawer.test.tsx` drives the extracted
+  folders drawer: sheet slicing, atlas regions, SVG placement, palette quantise, numbered-run
+  import (including the tileset-sized refusal), asset placement and export preview. The complete tool strip, options row, menus, canvas
   geometry and pointer plumbing still rely on the Electron/CDP smoke layer; jsdom does not provide
   layout or WebGL and cannot replace those measurements.
 - **Electron main/preload** IPC is not broadly unit-tested (thin, and requires an Electron host).
