@@ -102,6 +102,16 @@ export function AnimationPanel({ document: doc, nodeId, selectedClip, disabled, 
                         <select aria-label={`Condition transition ${i + 1}`} value={t.when} onChange={e => saveController({ ...controller, transitions: controller.transitions.map((v, j) => i === j ? { ...v, when: e.target.value as AnimationCondition } : { ...v }) } as AnimationController)}>
                             {ANIMATION_CONDITIONS.map(condition => <option key={condition}>{condition}</option>)}
                         </select>
+                        <label>fade <input aria-label={`Fade transition ${i + 1}`} type="number" min={0.05} max={1} step={0.05} value={t.fade ?? ""} placeholder="sec"
+                            onChange={e => {
+                                const fade = e.target.value === "" ? undefined : Number(e.target.value);
+                                saveController({ ...controller, transitions: controller.transitions.map((v, j) => {
+                                    if (i !== j) return { ...v };
+                                    const next = { ...v };
+                                    if (fade === undefined) delete next.fade; else next.fade = fade;
+                                    return next;
+                                }) } as AnimationController);
+                            }} /></label>
                         <button disabled={i === 0} onClick={() => {
                             const transitions = controller.transitions.map(v => ({ ...v }));
                             [transitions[i - 1], transitions[i]] = [transitions[i], transitions[i - 1]];

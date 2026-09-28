@@ -81,7 +81,7 @@ The former Morphic engine remains a preserved reference, not a second production
 | Visual, pixel, tile and timeline authoring | Remaining layout, instance-performance and large-raster work still matters |
 | Typed 3D transforms, cameras, lights, mesh/material/texture references | Box/sphere colliders and bounded imported data, not arbitrary engine components |
 | WebGL 3D, picking, PBR textures, shadows and HDR environment lighting | Not scene-dependent global illumination, virtualized geometry or a modern high-end render pipeline |
-| Imported glTF TRS animation, CPU skinning and two-pose blending | Not GPU skinning, morph playback, full animation graphs or character production tools |
+| Imported glTF TRS and morph animation, CPU skinning, 16-joint GPU skinning and two-pose blending | Not full animation graphs, events, root motion or character production tools |
 | 2D/3D gameplay rules, interactions, bounded spawning, checkpoints and current-level progress | Not a general behavior lifecycle, full prefab system, production physics or multiplayer |
 | Dependency-aware Save As and recovery checkpoints | No dependency-folder rollback, power-loss durability guarantee or complete desktop recovery automation |
 | Offline 2D/3D HTML players, unsigned Windows 3D player and separate editor installer | Host-machine smoke evidence; clean-machine game acceptance and broader runtime feature coverage remain open |
@@ -311,15 +311,15 @@ Full comparison includes much more than collision detection; see [Epic physics](
 
 ### ENG-08 — Animation and character production
 
-**State:** native clip playback, bounded CPU skinning and two-pose blend are partial foundations.
+**State:** native clip playback, morph weights, bounded CPU/GPU skinning, crossfades and per-instance clocks are in place. Events, parameters and root motion are not.
 **Phases:** F3; scaling F4; advanced character tools F7. **Role:** animation engineering/tools.
 
-- **First slice:** automatic crossfades, animation events, state parameters, root-motion
-  policy coordinated with collision, and component-instance playback. Preserve existing 2D
+- **First slice:** automatic crossfades and component-instance playback are in place. Still open:
+  animation events, state parameters, and root-motion policy coordinated with collision. Preserve existing 2D
   timeline and sprite timing; explicit behavior for interruption, looping and reversed speed.
-- **Expansion:** blend trees/spaces, layered/additive poses, GPU skinning, morph targets,
-  skeletal LOD, IK, retargeting, rig editing, procedural controls, motion matching and facial
-  workflows. GPU adoption requires CPU-reference equivalence and measured representative skins.
+- **Expansion:** blend trees/spaces, layered/additive poses, skeletal LOD, IK, retargeting, rig editing,
+  procedural controls, motion matching and facial workflows. GPU skinning of up to 16 joints matches the
+  CPU reference; larger skins stay on the CPU. Morph weights are sampled before skinning.
 - **Depends:** ENG-03 events, ENG-05 movement, ENG-02 import fidelity, ENG-09 GPU capabilities.
 - **Acceptance:** idle/walk/run/jump/land works on an owned character with timed footsteps and
   a collision-safe root-motion test. Events fire exactly as specified through transitions;

@@ -8,7 +8,8 @@ import { Node } from "../core/document/Node";
 import { MeshPrimitive, MESH_IDENTITY } from "../core/import/MeshData";
 import { buildFrame3D, captureFrame3D, litColor3D, MAT4_IDENTITY, MeshLibrary3D, multiplyMat4,
     pickCapture3D, projectionMatrix3D, transformMatrix3D } from "./Scene3D";
-import { pickColor3D, pickIndex3D } from "./emitWebGL3D";
+import { pickColor3D, pickIndex3D, webGL3DShaderSources } from "./emitWebGL3D";
+import { animatedTriangle } from "../core/examples/AnimatedTriangle";
 
 const primitive: MeshPrimitive = {
     positions: new Float32Array([-1, -1, 0, 1, -1, 0, 0, 1, 0]),
@@ -172,6 +173,20 @@ describe("3D viewport frame", () => {
         expect(frame.draws[0].model[0]).toBeCloseTo(2);
         expect(frame.draws[0].model[5]).toBeCloseTo(1);
         expect(frame.draws[1]).toMatchObject({ nodeId: "billboard", unlit: true });
+    });
+
+    test("samples a skinned glTF on the gpu and keeps the bind-pose positions", () => {
+        const doc = createEmptyDocument(), model = node("model", 0), asset = animatedTriangle();
+        model.spatial3d!.animation = { clip: 0 };
+        doc.nodes.set(model.id, model); doc.rootNodeUuids = [model.id];
+        const frame = buildFrame3D(doc, new Map([["model", { motion: asset.motion, instances: asset.instances }]]), 64, 64, new Map(), 0.5);
+        expect(Array.from(frame.draws[0].primitive.positions)).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+        expect(frame.draws[0].skin!.palette[12]).toBeCloseTo(1);
+        const vertex = webGL3DShaderSources(false).vertex;
+        expect(vertex).toContain("a_weights");
+        for (let joint = 0; joint < 16; joint++) expect(vertex).toContain(`u_joints[${joint}]`);
+        expect(vertex).not.toContain("u_joints[index]");
+        expect(vertex).toContain("i00 * n.x + i10 * n.y + i20 * n.z");
     });
 
     test("diffuse lighting preserves unlit materials and applies range-limited inverse-square point light", () => {

@@ -11,8 +11,8 @@ import { ReadonlyDocument } from "../core/document/Document";
 import { applyFrame } from "../core/document/Timeline";
 import { dropHidden } from "../core/document/Components";
 import { Camera3D, Transform3D } from "../core/document/Spatial3D";
-import { MeshInstance, MeshPrimitive } from "../core/import/MeshData";
-import { GltfMotion, sampleGltfMotion } from "../core/import/GltfMotion";
+import { GpuSkin, MeshInstance, MeshPrimitive } from "../core/import/MeshData";
+import { gpuSkinBounds, GltfMotion, sampleGltfMotion } from "../core/import/GltfMotion";
 import { HdrEnvironmentImage } from "./HdrEnvironment";
 import { EnvironmentIbl3D, preparedEnvironment3D } from "./EnvironmentIbl3D";
 import {generateBlockout,BlockoutShape} from "../core/geometry/Blockout3D";
@@ -92,6 +92,8 @@ export interface Draw3D {
     doubleSided: boolean;
     alphaMode: "OPAQUE" | "MASK" | "BLEND";
     alphaCutoff: number;
+    /** Rest-pose positions are skinned from this palette. Absent draws the positions as stored. */
+    skin?: GpuSkin;
 }
 
 export type FrameLight3D =
@@ -365,7 +367,7 @@ export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width
         const nodeWorld = worlds.get(id) ?? transformMatrix3D(node.spatial3d!.transform);
         let instances = asset.instances;
         try {
-            if (asset.motion) instances = sampleGltfMotion(asset.motion, asset.instances, animationSeconds, node.spatial3d?.animation);
+            if (asset.motion) instances = sampleGltfMotion(asset.motion, asset.instances, animationSeconds, node.spatial3d?.animation, "gpu");
         } catch (error) { diagnostics.push(`${id}: animation failed; showing imported mesh. ${String(error)}`); }
         for (const instance of instances) {
             const slot = typeof instance.primitive.material === "number" ? instance.primitive.material : -1;
@@ -390,7 +392,8 @@ export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width
                 emissive: material?.emissive ?? [0, 0, 0],
                 doubleSided: material?.doubleSided ?? false,
                 alphaMode: material?.alphaMode ?? "OPAQUE",
-                alphaCutoff: material?.alphaCutoff ?? 0.5 });
+                alphaCutoff: material?.alphaCutoff ?? 0.5,
+                ...(instance.skin ? { skin: instance.skin } : {}) });
         }
     }
     return {
@@ -412,10 +415,12 @@ function directionalShadowFrame3D(draws: readonly Draw3D[], lights: readonly Fra
     const light = lights[lightIndex] as Extract<FrameLight3D, { kind: "directional" }> | undefined;
     if (!light || draws.length === 0) return null;
     const points: [number, number, number][] = [];
-    for (const draw of draws) for (let at = 0; at < draw.primitive.positions.length; at += 3) {
-        const p = transformPoint4(draw.model, draw.primitive.positions[at], draw.primitive.positions[at + 1],
-            draw.primitive.positions[at + 2]);
-        points.push([p[0], p[1], p[2]]);
+    for (const draw of draws) {
+        const positions = draw.skin ? gpuSkinBounds(draw.primitive.positions, draw.skin.palette) : draw.primitive.positions;
+        for (let at = 0; at < positions.length; at += 3) {
+            const p = transformPoint4(draw.model, positions[at], positions[at + 1], positions[at + 2]);
+            points.push([p[0], p[1], p[2]]);
+        }
     }
     if (points.length === 0) return null;
     const center: [number, number, number] = [0, 1, 2].map(axis =>

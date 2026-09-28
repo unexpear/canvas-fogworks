@@ -8,7 +8,7 @@ import type { ReadonlyDocument } from "../core/document/Document";
 import { playerEntityId } from "../core/document/Entity";
 import { advanceWorld3D, applyWorld3D, respawnRun3D, world3DFrom } from "../core/runtime/World3D";
 import type { Input3D, World3DState } from "../core/runtime/World3D";
-import { applyAnimations } from "../core/runtime/AnimationPlayback";
+import { applyAnimations, applyMotionFades } from "../core/runtime/AnimationPlayback";
 import { buildFrame3D } from "../renderer/Scene3D";
 import type { Frame3D } from "../renderer/Scene3D";
 import type { PlayerProjectReader } from "./ProjectReadHost";
@@ -150,7 +150,7 @@ export class PlayerSession3D {
         if (![width, height].every(value => Number.isInteger(value) && value > 0 && value <= 16384)) {
             throw new Error("Player viewport dimensions must be integers within 1–16384.");
         }
-        const visual = applyAnimations(applyWorld3D(current.project.document!, current.world), current.world.animations);
+        const visual = applyMotionFades(applyAnimations(applyWorld3D(current.project.document!, current.world), current.world.animations), current.world.motionFades, current.world.time);
         return buildFrame3D(visual, current.project.meshes, width, height, current.project.environments, current.world.time);
     }
 }

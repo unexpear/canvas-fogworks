@@ -181,13 +181,14 @@ export const CURRENT_VERSION: string =
  *   "87" — adds explicit derived solid collision for blockouts.
  *   "88" — adds editable generated-solid operation trees.
  *         Absent rules and policy preserve the compatibility platformer runtime.
+ *   "89" — optional animation transition fade and 3D clip fade. Absent still switches immediately.
  */
 import type { TimelineSettings } from "./Timeline";
 import type { Light } from "./Light";
 import type { Tileset } from "./Tileset";
 import type { Asset3D } from "./Spatial3D";
 
-export const SCHEMA_VERSION = "88";
+export const SCHEMA_VERSION = "89";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and

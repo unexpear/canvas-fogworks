@@ -95,6 +95,12 @@ export function ThreeDInspector({ node, assets, meshes, onChange }: ThreeDInspec
                     <label style={labelStyle}>Playback speed</label>
                     <NumberInput value={spatial.animation.speed ?? 1} onChange={speed => change({ ...spatial.animation!, speed: Math.max(.01, Math.min(10, speed)) })} />
                     <label><input type="checkbox" checked={spatial.animation.loop !== false} onChange={e => change({ ...spatial.animation!, loop: e.target.checked })} /> Loop</label>
+                    <label style={labelStyle}>Crossfade seconds (0 = off)</label>
+                    <NumberInput value={spatial.animation.fade ?? 0} onChange={fade => {
+                        const next = { ...spatial.animation! };
+                        if (fade > 0) next.fade = Math.max(0.05, Math.min(1, fade)); else delete next.fade;
+                        change(next);
+                    }} />
                 </>}
             </Section>;
         })()}

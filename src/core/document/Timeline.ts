@@ -287,45 +287,58 @@ export function applyFrame(doc: ReadonlyDocument, frame: number | undefined): Re
         // frame 0 is a real frame and the falsy reading would hand it back to the document's.
         const own = n.frame !== undefined && Number.isFinite(n.frame) ? Math.round(n.frame) : f;
         if (!Number.isFinite(own)) { nodes.set(id, n as Node); return; }
-        const track = n.track;
-        const at = track && track.length > 0 ? keyframesAt(track, own) : null;
-        if (!at) { nodes.set(id, applyChannels(n as Node, n as Node, id, own)); return; }
-        // `materializeNode` is the ONE place a node and a statement of differences are combined,
-        // so a keyframe lands exactly as a state and an override do — same field rules, same
-        // layout exclusivity. `isRoot: false`: the node keeps its own position and constraints.
-        const value = (k: Keyframe): Node => {
-            const built = materializeNode(n as Node, k.values, false, id, n.parent ?? null);
-            built.children = [...n.children];       // materializeNode empties children
-            return built;
+        const atFrame = (frame: number): Node => {
+            const track = n.track;
+            const key = track && track.length > 0 ? keyframesAt(track, frame) : null;
+            if (!key) return applyChannels(n as Node, n as Node, id, frame);
+            // `materializeNode` is the ONE place a node and a statement of differences are combined,
+            // so a keyframe lands exactly as a state and an override do — same field rules, same
+            // layout exclusivity. `isRoot: false`: the node keeps its own position and constraints.
+            const value = (k: Keyframe): Node => {
+                const built = materializeNode(n as Node, k.values, false, id, n.parent ?? null);
+                built.children = [...n.children];       // materializeNode empties children
+                return built;
+            };
+            const from = value(key.from);
+            // PER-PROPERTY curves (schema 45): a path named in `easings` is re-eased from the RAW
+            // progress; everything else takes the keyframe's own `t`. Built once per node rather than
+            // per property, and skipped entirely when no keyframe names one — which is every document
+            // authored before this existed.
+            const easings = key.from.easings;
+            const easeFor: EaseFor | undefined = easings
+                ? (path: string) => (easings[path] !== undefined ? easingAt(easings[path], key.raw) : key.t)
+                : undefined;
+            // "step": a keyframed drawing, region or label appears on ITS OWN frame rather than at
+            // the start of the interval leading to it. See `DiscreteMode`.
+            let posed = key.to ? withChildren(blendNode(from, value(key.to), key.t, easeFor, "step"), n.children) : from;
+            // THE ROUTE (schema 48). The straight line `blendNode` produced is replaced by a point on
+            // the curve — at the SAME progress, so the easing still decides the spacing and the path
+            // decides only where the shape goes. Endpoints come from the two keyframes' own blended
+            // positions rather than from the path, which is why a path cannot drift from its keyframes.
+            if (key.to && key.from.motion) {
+                const to = value(key.to);
+                const point = motionPointAt(
+                    { x: from.geometry.x, y: from.geometry.y },
+                    { x: to.geometry.x, y: to.geometry.y },
+                    key.from.motion, key.t);
+                posed = { ...posed, geometry: { ...posed.geometry, x: point.x, y: point.y } };
+            }
+            // CHANNELS LAST (schema 47): the more specific statement wins. A property named by both the
+            // track and a channel takes the channel's, which is the order that makes a channel worth
+            // adding — and it is why a document with none behaves exactly as it did before they existed.
+            return applyChannels(posed, n as Node, id, frame);
         };
-        const from = value(at.from);
-        // PER-PROPERTY curves (schema 45): a path named in `easings` is re-eased from the RAW
-        // progress; everything else takes the keyframe's own `t`. Built once per node rather than
-        // per property, and skipped entirely when no keyframe names one — which is every document
-        // authored before this existed.
-        const easings = at.from.easings;
-        const easeFor: EaseFor | undefined = easings
-            ? (path: string) => (easings[path] !== undefined ? easingAt(easings[path], at.raw) : at.t)
-            : undefined;
-        // "step": a keyframed drawing, region or label appears on ITS OWN frame rather than at
-        // the start of the interval leading to it. See `DiscreteMode`.
-        let posed = at.to ? withChildren(blendNode(from, value(at.to), at.t, easeFor, "step"), n.children) : from;
-        // THE ROUTE (schema 48). The straight line `blendNode` produced is replaced by a point on
-        // the curve — at the SAME progress, so the easing still decides the spacing and the path
-        // decides only where the shape goes. Endpoints come from the two keyframes' own blended
-        // positions rather than from the path, which is why a path cannot drift from its keyframes.
-        if (at.to && at.from.motion) {
-            const to = value(at.to);
-            const point = motionPointAt(
-                { x: from.geometry.x, y: from.geometry.y },
-                { x: to.geometry.x, y: to.geometry.y },
-                at.from.motion, at.t);
-            posed = { ...posed, geometry: { ...posed.geometry, x: point.x, y: point.y } };
+        let posed = atFrame(own);
+        // A controller crossfade evaluates both clips, then uses the same blend as a tween.
+        if (n.fromFrame !== undefined && Number.isFinite(n.fromFrame) && n.frameBlend !== undefined && n.frameBlend < 1) {
+            const outgoing = atFrame(Math.round(n.fromFrame));
+            posed = n.frameBlend <= 0 ? outgoing : withChildren(blendNode(outgoing, posed, n.frameBlend, undefined, "step"), n.children);
         }
-        // CHANNELS LAST (schema 47): the more specific statement wins. A property named by both the
-        // track and a channel takes the channel's, which is the order that makes a channel worth
-        // adding — and it is why a document with none behaves exactly as it did before they existed.
-        nodes.set(id, applyChannels(posed, n as Node, id, own));
+        if (posed.fromFrame !== undefined || posed.frameBlend !== undefined) {
+            if (posed === (n as Node)) posed = { ...(n as Node) };
+            delete posed.fromFrame; delete posed.frameBlend;
+        }
+        nodes.set(id, posed);
     });
 
     // SPREAD, NEVER AN ENUMERATED LITERAL — the SIXTH instance of this bug in this codebase, and the

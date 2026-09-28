@@ -733,10 +733,41 @@ export function resolveScene(doc: ReadonlyDocument): ReadonlyDocument {
     // everything that reads a box — layout, picking, snapping, culling — must see the result rather
     // than the terrain's own smaller one. It is also the cheapest place, because by here the
     // instances are expanded, so a component containing an autotiled layer resolves each copy.
+    // Instance playheads are stamped after expansion. The master is one node, so its frame cannot
+    // also be every copy's frame; each instance carries the clocks applyAnimations recorded.
+    const expanded = expandInstances(applyActiveState(applyIk(applyFrame(dropHidden(doc), doc.frame))));
     return resolveTilemaps(resolveMeshes(
-        resolveBooleans(expandInstances(applyActiveState(applyIk(applyFrame(dropHidden(doc), doc.frame))))),
+        resolveBooleans(stampInstancePlayback(expanded)),
         () => resolveBooleans(expandInstances(applyActiveState(dropHidden(doc))))
     ));
+}
+
+function stampInstancePlayback(doc: ReadonlyDocument): ReadonlyDocument {
+    let any = false;
+    doc.nodes.forEach(node => { if (node.playbackFrames) any = true; });
+    if (!any) return doc;
+    const nodes = new Map<string, Node>();
+    doc.nodes.forEach((node, id) => nodes.set(id, node as Node));
+    let stamped = false;
+    for (const [id, node] of doc.nodes) {
+        if (!id.includes("::")) continue;
+        let current: string | null = id;
+        let record: NonNullable<Node["playbackFrames"]>[string] | undefined;
+        const seen = new Set<string>();
+        while (current && !seen.has(current)) {
+            seen.add(current);
+            record = doc.nodes.get(current.split("::")[0])?.playbackFrames?.[current];
+            if (record || !current.includes("::")) break;
+            current = doc.nodes.get(current)?.parent ?? null;
+        }
+        if (!record) continue;
+        const source = { ...(node as Node), frame: record.frame, ...(record.fromFrame !== undefined ? { fromFrame: record.fromFrame, frameBlend: record.frameBlend } : {}) };
+        const posed = applyFrame({ ...(doc as ProjectDocument), nodes: new Map([[id, source]]) }, undefined);
+        nodes.set(id, (posed.nodes.get(id) ?? source) as Node);
+        stamped = true;
+    }
+    if (!stamped) return doc;
+    return { ...(doc as ProjectDocument), nodes } as ProjectDocument;
 }
 
 /**

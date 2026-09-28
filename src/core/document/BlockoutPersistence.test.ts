@@ -11,7 +11,7 @@ test("blockout parameters survive Action undo/redo, serialization and transform 
     const doc=gameReference(),dispatcher=new ActionDispatcher(doc);
     expect(dispatcher.dispatchAction(new SetSpatial3DAction(doc,"goal",spatial)).success).toBe(true);
     const saved=serializeDocument(dispatcher.getDocument()),parsed=JSON.parse(saved);
-    expect(parsed.version).toBe("88");expect(saved).not.toContain("positions");
+    expect(parsed.version).toBe("89");expect(saved).not.toContain("positions");
     const reopened=deserializeDocument(saved);expect(reopened.nodes.get("goal")!.spatial3d).toEqual(spatial);
     const copy=copySpatial3D(reopened.nodes.get("goal")!.spatial3d!);copy.blockout!.width=9;
     expect(reopened.nodes.get("goal")!.spatial3d!.blockout!.width).toBe(4);
