@@ -1,7 +1,9 @@
 /** @module AuthoringProjects.test @description Validates editable original fixtures, all three game levels and deterministic play-through without mutating authoring documents. */
-import { pixelWorkshop, relayGameLevels } from "./AuthoringProjects";
+import { noisyPixels, pixelWorkshop, relayGameLevels, texturedBillboards, texturedRasterScene } from "./AuthoringProjects";
+import { buildFrame3D } from "../../renderer/Scene3D";
+import { buildRenderModel } from "../../renderer/RenderModel";
 import { deserializeDocument, serializeDocument } from "../document/Serializer";
-import { decodeSurface } from "../paint/PixelCodec";
+import { decodeSurface, encodeSurface } from "../paint/PixelCodec";
 import { computeGeometry } from "../geometry/GeometryEngine";
 import { stepGameplay } from "../runtime/GameplaySession";
 import { NO_INPUT, worldFrom } from "../runtime/World";
@@ -38,4 +40,30 @@ test("relay graph packages and all three stages can be completed with original f
         expect(world.tallies.get("signals")).toBe(8);
         expect(serializeDocument(authored)).toBe(bytes);
     }
+});
+
+test("noisy pixels are deterministic and do not collapse to one run", () => {
+    const first = noisyPixels(4, 1);
+    expect(noisyPixels(4, 1).data).toEqual(first.data);
+    expect(noisyPixels(4, 2).data).not.toEqual(first.data);
+    const encoded = encodeSurface(first);
+    expect(encoded.packedBytes).toBeGreaterThan(6);
+    expect(decodeSurface(encoded.data, 4, 4)?.data).toEqual(first.data);
+});
+
+test("textured raster scenes keep unique payloads and stay renderable", () => {
+    const doc = texturedRasterScene(8, 4, 2);
+    expect(doc.nodes.size).toBe(3);
+    const payloads = [...doc.nodes.values()].map(node => node.surface?.data);
+    expect(new Set(payloads).size).toBe(3);
+    const computed = computeGeometry(doc);
+    expect(buildRenderModel({ width: 32, height: 32 }, doc, {
+        computed, selectedNodeIds: [], hoveredNodeId: null, viewport: { x: 0, y: 0, zoom: 1 }
+    }).content.length).toBeGreaterThan(0);
+});
+
+test("textured billboards become texture-bearing draws", () => {
+    const frame = buildFrame3D(texturedBillboards(8), new Map(), 320, 200, new Map(), 0);
+    expect(frame.draws).toHaveLength(8);
+    expect(new Set(frame.draws.map(draw => draw.baseColorTexture)).size).toBe(4);
 });

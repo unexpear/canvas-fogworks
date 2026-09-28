@@ -20,13 +20,13 @@ All five tracks have implementation; this is a bounded production baseline, not 
 
 4. **Native 3D.** glTF import retains TRS tracks and four-influence skin data. The 3D inspector selects a clip, loop/speed and optional second clip/pose-blend weight; Run or timeline scrubbing samples it. STEP, LINEAR (including quaternion slerp) and CUBICSPLINE are tested. CPU skinning is limited to 100,000 vertices, 128 joints per skin, one buffer and four million imported scalar values. These are safety limits, not a 60 FPS guarantee. Invalid/singular sampled poses report a diagnostic and fall back to the imported pose. Rotated box SAT and sphere contacts replace AABB-only overlap queries. Setting gravity/restitution opts a dynamic entity into bounded substeps and static-contact resolution; absent settings retain legacy movement. Skins of at most 16 joints deform on the GPU; larger skins, morph application and the reference formula stay on the CPU. Automatic crossfades and morph weights are sampled with the clip. Dynamic-pair impulses, angular dynamics and a production character controller remain open.
 
-5. **Owned examples and measurements.** The small original visual/game/animated-triangle examples remain unchanged. `reference-projects/authoring-v1/` adds Signal Garden (editable pixel atlas, palette, master and 15 component instances) and Signal Relay (three 68-node stages, 24 collectibles, upper routes and gates). `npm run examples:create -- <new-folder>` regenerates portable copies and refuses existing folders. CPU benchmarks now include these exact projects, 1024-square raster encoding/decoding, 500 instances, 100 animated mesh draws and isolated disk reload. `benchmark:gpu` measures production WebGL CPU submission and asynchronous GPU queries when available. Chromium completes the three-level offline game and exports the workshop PNG. Hardware-specific release budgets still need calibration.
+5. **Owned examples and measurements.** The small original visual/game/animated-triangle examples remain unchanged. `reference-projects/authoring-v1/` adds Signal Garden (editable pixel atlas, palette, master and 15 component instances) and Signal Relay (three 68-node stages, 24 collectibles, upper routes and gates). `npm run examples:create -- <new-folder>` regenerates portable copies and refuses existing folders. CPU benchmarks now include these exact projects, 1024-square raster encoding/decoding, 500 instances, 100 animated mesh draws and isolated disk reload. `benchmark:gpu` measures production WebGL CPU submission and asynchronous GPU queries when available. Chromium completes the three-level offline game and exports the workshop PNG. SCALE-001 release budgets are calibrated in the section below; they stay informational and are not a hardware-independent CI gate.
 
 ## Commands and evidence
 
 - `npm run ci`: typecheck, module headers, doc drift, header-claim inventory, mutation-target preflight, complete Jest suite, real writer-process crash tests, build, startup/file/lighting/3D/level-transition/authoring Electron smokes.
 - `npm run smoke:package`: build the Windows NSIS package and launch the unpacked executable for startup and Open/Edit/Save tests. It does not silently install the application on the user's machine.
-- `npm run benchmark:authoring`: informational local measurements; intentionally no hardware-dependent CI failure threshold.
+- `npm run benchmark:authoring`: informational local measurements, including the mixed soak, noisy 2048 raster and textured scenes; intentionally no hardware-dependent CI failure threshold. `npm run test:benchmark-budgets` locks the budget formula only.
 - Focused regression suites: `ProjectSession`, `ProjectFileWorkflow`, `projectDependencies`, `asepriteImport`, `CanvasExport`, `GameplayPanel`, `GameplaySession`, `GameExport`, `LevelTransitionWorkflow`, `GltfMotion`, `Collision3D` and `ThreeDInspector`.
 - `smoke:authoring` uses actual Chromium PNG decoding/pixel inspection, silent generated WAV decode/play/stop, and an offline game reaching victory. This is not an audible listening test.
 - Mutation preflight checks all 402 targets still match; it is not equivalent to executing and killing all mutants.
@@ -79,6 +79,63 @@ Follow-up hardening makes archive inspection repeatable with `check:package`, wi
 Follow-up verification: all 22 release-tooling tests, typecheck, module headers, doc drift, archive inspection and both packaged smokes passed. Separate smoke profiles were created under the D: temporary directory. The earlier full Jest run is separate evidence; the whole Jest suite was not rerun for this release-tooling-only pass.
 
 A separate offline [installer lifecycle harness](INSTALLER-TESTING.md) passed the complete per-user sequence on 2026-09-07: fresh install, installed startup/Open–Edit–Save, uninstall, synthetic 0.0.4-to-0.0.5 upgrade, upgraded startup/Open–Edit–Save and final uninstall. Installed archive hashes matched; owned project and recovery bytes survived. Earlier Sandbox desktop crashes were isolated to virtual-GPU mode, so this test configuration explicitly uses software rendering. A Windows PowerShell exit-code reporting issue in the harness was reproduced and corrected before the passing run. This is not historical-project compatibility or hardware-GPU certification. Broader release coverage remains open in `RELEASE-001`; signing and personal publisher identification are not required under the user's current distribution preference.
+
+## Release budget calibration — SCALE-001
+
+Recorded 2026-09-28. The prior host is the September 7 Windows x64 / Node 24.15.0 / Intel Iris Xe sample already in this document. The new host is Linux x64, Node 22.14.0, 4 vCPU Intel Xeon, 16 GiB, with `node --expose-gc`. CPU and GPU runs are separate. Do not add their p95 values or read them as an end-to-end frame rate.
+
+Three workloads were added to the delivered CPU/GPU, 1024 raster, 500-instance, 100-mesh and disk-reload set:
+
+- A mixed soak: 40 cycles of five discrete edits, a 1,000-node frame build, 25 relay steps and a 1024 decode, then further edits through the history ceiling and 30 edits after the first trim.
+- A noisy 2048-square raster (16 MiB raw, 20 MiB packed). Runs do not collapse.
+- Larger textured scenes: one 2048 raster plus eight unique 512 rasters (40 MiB of payload, frame-build p95), and 80 billboards carrying four texture ids (frame-build p95). GPU drawing of those scenes is below.
+
+**Exact retention.** Each history revision stores the UTF-8 length of its canonical snapshot JSON and of its action payload. `retainedAccounting()` counts each distinct snapshot once. `stackBudgetEstimateBytes` is the UTF-16 estimate the trimmer compares with the 128 MiB ceiling. The pinned original is outside that ceiling and is added to `budgetEstimateBytes` only after trim detaches it. Process heap is not this ledger.
+
+| 50 edits | Exact JSON retention | Trim estimate | Process heap delta | Snapshots |
+| --- | ---: | ---: | ---: | ---: |
+| 250 rectangles | 2.361 MiB | 4.712 MiB | 4.27 MiB | 51, not trimmed |
+| 1,000 rectangles | 9.482 MiB | 18.955 MiB | 17.24 MiB | 51, not trimmed |
+
+The September Windows heap deltas (4.32 MiB and 12.13 MiB) are process measurements, not this JSON ledger.
+
+**Soak.** 373 edits in 3.547 s. Growth stayed proportional to new snapshots (`accountedGrowth`). Trim began at the ceiling and the tail held 344 revisions (`tailPlateaued`). Stack estimate at the end: 127.643 MiB, inside 128 MiB. With the detached original: 128.015 MiB. Exact JSON retention at that plateau: 64.042 MiB. Process heap: 134.84 MiB. Retention is bounded by the existing trim rule. That is not a leak and not a reason to replace snapshot history.
+
+**Budget rule.** Interactive frame work still aims at 16.67 ms. Deserialize still aims at 100 ms. A frozen release budget is 1.5× the highest recorded p95, rounded up to 0.1 ms (`scripts/benchmark-budgets.js`). `benchmark:authoring` reports whether a later run exceeded that budget. It does not move the budget, and it does not fail CI. Single-host rows were not measured on Windows. Gameplay includes the small reference scene and the slowest Linux relay stage.
+
+| Workload | Windows p95 | Linux p95 | Release budget | Over 16.67 ms on Linux |
+| --- | ---: | ---: | ---: | --- |
+| 250-rect frame | 3.430 | 0.977 | 5.2 ms | no |
+| 1,000-rect frame | 6.247 | 2.087 | 9.4 ms | no |
+| 250-rect deserialize | 3.934 | 1.487 | 6.0 ms |  |
+| 1,000-rect deserialize | 11.818 | 3.481 | 17.8 ms |  |
+| Signal Garden frame | 1.120 | 0.979 | 1.7 ms | no |
+| Relay frame | 0.218 ceiling | 0.273 max | 0.5 ms | no |
+| 500 instances, geometry | 3.559 | 4.441 | 6.7 ms | no |
+| 100 animated meshes, frame | 1.239 | 2.581 | 3.9 ms | no |
+| 100 gameplay steps | 3.651 | 4.401 relay max | 6.7 ms |  |
+| 3,000 skinned vertices | 7.074 | 4.919 | 10.7 ms |  |
+| 1024 raster encode | 6.889 | 4.766 | 10.4 ms |  |
+| 1024 raster decode | 3.267 | 3.811 | 5.8 ms |  |
+| Disk asset reload | 1.399 | 1.034 | 2.1 ms |  |
+| Noisy 2048 encode |  | 464.389 | 696.6 ms |  |
+| Noisy 2048 decode |  | 27.667 | 41.6 ms |  |
+| Textured rasters, frame |  | 516.552 | 774.9 ms | yes |
+| 80 textured billboards, frame |  | 0.358 | 0.6 ms | no |
+
+Every delivered scene workload stays inside 16.67 ms on both hosts. The new over-goal cost is CPU work on large raster payloads: encoding a noisy 2048 surface, and building a render model that walks 40 MiB of encoded pixels. Billboards that only carry texture ids cost 0.358 ms, so the texture reference itself is not the frame cost. These samples do not justify a renderer rewrite or a Rust migration. A second physical GPU host is still required before any of these budgets become a CI gate.
+
+GPU submission is not part of the CPU budgets above. Plain `npm run benchmark:gpu` on this host reports WebGL 1 unavailable and does not invent a zero time. Rerunning with `electron --ignore-gpu-blocklist --enable-unsafe-swiftshader` used ANGLE llvmpipe (Mesa, LLVM 20.1.2), Electron 43.2.0 / Chromium 150, 1280×800. Timer queries were available and no sample was disjoint. This is a software renderer, not a hardware GPU, and it is not folded into the release budgets. Hardware GPU budgets stay single-host, 1.5× the Iris Xe p95: Signal Garden 3.2 ms, relay 3.5 ms, 100 meshes 2.8 ms.
+
+| Workload | Iris Xe GPU p95 | llvmpipe CPU submission p95 | llvmpipe GPU p95 | Samples |
+| --- | ---: | ---: | ---: | ---: |
+| Signal Garden | 2.076 | 4.9 | 20.442 | 20 |
+| Relay stages | 1.536–2.312 | 2.1–2.6 | 2.424–4.144 | 20 |
+| 100 animated meshes | 1.851 | 3.4 | 14.499 | 20 |
+| Textured rasters |  | 1.4 | 10.93 | 8 |
+| 80 textured billboards |  | 24.9 | 33.707 | 10 |
+
+Cached raster draws are cheaper on this software GL than building the 40 MiB frame (516.552 ms CPU). The 80 billboards, which upload and sample real textures, are the slow software-GL case. Neither result is a hardware certification, and neither selects a new backend.
 
 ## Initial local budgets
 

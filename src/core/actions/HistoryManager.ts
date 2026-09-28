@@ -13,9 +13,33 @@ import { ProjectDocument, ReadonlyDocument } from "../document/Document";
 import { Node } from "../document/Node";
 import { ActionPayload, Revision, DocumentSnapshot } from "./types";
 
-/** Rough retained-bytes estimate for a snapshot (UTF-16 chars ≈ 2 bytes). */
-function approximateSize(snapshot: DocumentSnapshot): number {
-    return JSON.stringify(snapshot).length * 2;
+/**
+ * Exact UTF-8 byte length of a JavaScript string.
+ * BMP characters are not assumed to be one byte; surrogate pairs count as one code point.
+ */
+function utf8ByteLength(text: string): number {
+    let bytes = 0;
+    for (let i = 0; i < text.length; i++) {
+        const code = text.charCodeAt(i);
+        if (code < 0x80) bytes += 1;
+        else if (code < 0x800) bytes += 2;
+        else if (code >= 0xD800 && code <= 0xDBFF && i + 1 < text.length) {
+            const next = text.charCodeAt(i + 1);
+            if (next >= 0xDC00 && next <= 0xDFFF) {
+                bytes += 4;
+                i += 1;
+                continue;
+            }
+            bytes += 3;
+        } else bytes += 3;
+    }
+    return bytes;
+}
+
+/** Trim-budget estimate (UTF-16 code units × 2) and exact UTF-8 length of one JSON value. */
+function measureJson(value: unknown): { utf16Estimate: number; utf8: number } {
+    const text = JSON.stringify(value);
+    return { utf16Estimate: text.length * 2, utf8: utf8ByteLength(text) };
 }
 import { generateUUID } from "../ids/UUID";
 
@@ -99,6 +123,25 @@ export const DEFAULT_HISTORY_LIMITS: HistoryLimits = {
 };
 
 /**
+ * Exact serialized retention of the history stack.
+ *
+ * `serializedUtf8Bytes` is the canonical JSON size of each distinct snapshot, counted once.
+ * The pinned original is included again only after trimming has detached it from the stack.
+ * `budgetEstimateBytes` is what the trimmer charges (UTF-16 code units × 2), not V8 heap.
+ */
+export interface RetainedHistoryAccounting {
+    revisionCount: number;
+    truncated: boolean;
+    uniqueSnapshots: number;
+    serializedUtf8Bytes: number;
+    payloadUtf8Bytes: number;
+    /** Sum of revision `sizeBytes`. This is the total the trimmer compares with `maxBytes`. */
+    stackBudgetEstimateBytes: number;
+    /** Stack estimate plus the pinned original once trimming has detached it. */
+    budgetEstimateBytes: number;
+}
+
+/**
  * A run of edits to the SAME property-set of the SAME node within this window
  * collapses into one undo step. Continuous UI controls (a slider drag, typing
  * in a number field) emit one action per input event; without coalescing a
@@ -143,6 +186,9 @@ export class HistoryManager {
      * at the oldest retained step); `getOriginal()` is the explicit way back.
      */
     private readonly originalSnapshot: DocumentSnapshot;
+    /** Exact UTF-8 and trim-estimate sizes of `originalSnapshot`, which outlives the stack. */
+    private readonly originalUtf8Bytes: number;
+    private readonly originalEstimateBytes: number;
     /** True once trimming has discarded steps, i.e. index 0 is no longer the original. */
     private truncated = false;
     /**
@@ -156,14 +202,20 @@ export class HistoryManager {
     constructor(initialDoc: ReadonlyDocument, limits?: HistoryLimits) {
         this.limits = limits ?? DEFAULT_HISTORY_LIMITS;
         const snapshot = cloneDocument(initialDoc);
+        const measured = measureJson(snapshot);
+        const initialPayload: ActionPayload = { actionId: "INITIAL", payload: null, timestamp: Date.now() };
         this.originalSnapshot = snapshot;
+        this.originalUtf8Bytes = measured.utf8;
+        this.originalEstimateBytes = measured.utf16Estimate;
         this.revisions = [{
             id: generateUUID(),
-            timestamp: Date.now(),
+            timestamp: initialPayload.timestamp,
             actionId: "INITIAL",
-            actionPayload: { actionId: "INITIAL", payload: null, timestamp: Date.now() },
+            actionPayload: initialPayload,
             document: snapshot,
-            sizeBytes: approximateSize(snapshot)
+            sizeBytes: measured.utf16Estimate,
+            serializedUtf8Bytes: measured.utf8,
+            payloadUtf8Bytes: measureJson(initialPayload).utf8
         }];
         this.currentIndex = 0;
     }
@@ -182,13 +234,16 @@ export class HistoryManager {
 
         const now = Date.now();
         const snapshot = cloneDocument(documentState);
+        const measured = measureJson(snapshot);
         const revision: Revision = {
             id: generateUUID(),
             timestamp: now,
             actionId: actionPayload.actionId,
             actionPayload: actionPayload,
             document: snapshot,
-            sizeBytes: approximateSize(snapshot)
+            sizeBytes: measured.utf16Estimate,
+            serializedUtf8Bytes: measured.utf8,
+            payloadUtf8Bytes: measureJson(actionPayload).utf8
         };
 
         // Collapse a rapid run of edits to the same node property into a single
@@ -302,6 +357,40 @@ export class HistoryManager {
 
     public canRedo(): boolean {
         return this.currentIndex < this.revisions.length - 1;
+    }
+
+    /**
+     * Serialized bytes this history is actually keeping.
+     * Distinct snapshot objects are counted once, so the pinned original is not added twice
+     * while it is still revision 0. Process heap is intentionally not part of the result.
+     */
+    public retainedAccounting(): RetainedHistoryAccounting {
+        const seen = new Set<DocumentSnapshot>();
+        let serializedUtf8Bytes = 0;
+        let payloadUtf8Bytes = 0;
+        let stackBudgetEstimateBytes = 0;
+        for (const revision of this.revisions) {
+            stackBudgetEstimateBytes += revision.sizeBytes;
+            payloadUtf8Bytes += revision.payloadUtf8Bytes;
+            if (seen.has(revision.document)) continue;
+            seen.add(revision.document);
+            serializedUtf8Bytes += revision.serializedUtf8Bytes;
+        }
+        let budgetEstimateBytes = stackBudgetEstimateBytes;
+        if (!seen.has(this.originalSnapshot)) {
+            seen.add(this.originalSnapshot);
+            serializedUtf8Bytes += this.originalUtf8Bytes;
+            budgetEstimateBytes += this.originalEstimateBytes;
+        }
+        return {
+            revisionCount: this.revisions.length,
+            truncated: this.truncated,
+            uniqueSnapshots: seen.size,
+            serializedUtf8Bytes,
+            payloadUtf8Bytes,
+            stackBudgetEstimateBytes,
+            budgetEstimateBytes
+        };
     }
 
     public getRevisionCount(): number {

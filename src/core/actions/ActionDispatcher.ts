@@ -7,7 +7,7 @@
 
 import { ProjectDocument, ReadonlyDocument } from "../document/Document";
 import { Action } from "./Action";
-import { HistoryManager, HistoryLimits } from "./HistoryManager";
+import { HistoryManager, HistoryLimits, RetainedHistoryAccounting } from "./HistoryManager";
 import { MutationResult } from "./types";
 import { applyMutationsToDocument } from "./applyMutations";
 import { validateDocumentIntegrity } from "../document/Integrity";
@@ -248,5 +248,10 @@ export class ActionDispatcher {
         this.currentDocumentState = doc;
         this.historyManager = new HistoryManager(doc, this.historyLimits);
         this.notify(this.restoreNotification(previous, doc));
+    }
+
+    /** Exact serialized retention of undo history. Does not measure process heap. */
+    public retainedHistoryAccounting(): RetainedHistoryAccounting {
+        return this.historyManager.retainedAccounting();
     }
 }

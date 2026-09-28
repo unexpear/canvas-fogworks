@@ -1552,6 +1552,7 @@ class ActionDispatcher {
   getDocument(): ReadonlyDocument;   // deep-readonly; mutation requires an Action
   loadDocument(doc: ProjectDocument): void;            // New/Open: replace + reset history
   hasTruncatedHistory(): boolean;                      // undo can no longer reach the start
+  retainedHistoryAccounting(): RetainedHistoryAccounting; // exact serialized retention; not process heap
   revertToOriginal(): ProjectDocument;                 // explicit way back; itself undoable
 }
 
@@ -1567,11 +1568,14 @@ class HistoryManager {
   rollbackTo(revisionId: string): ProjectDocument | null; // DISCARD every revision after the id (undo leaves them redoable; this erases them); null if trimmed
   getRevisionCount(): number;
   hasTruncatedHistory(): boolean;
+  retainedAccounting(): RetainedHistoryAccounting; // distinct snapshots, exact UTF-8 JSON bytes, trim estimate
   getOriginal(): ProjectDocument;      // pinned outside the trimmable list
   getCurrentIndex(): number;
   getCurrentActionId(): string;
 }
 // Retention is memory-bounded: DEFAULT_HISTORY_LIMITS = { maxBytes: 128MB, minEntries: 50, maxEntries: 10_000 }
+// RetainedHistoryAccounting = { revisionCount, truncated, uniqueSnapshots, serializedUtf8Bytes, payloadUtf8Bytes, stackBudgetEstimateBytes, budgetEstimateBytes }
+// serializedUtf8Bytes is exact canonical JSON. stackBudgetEstimateBytes is what the trimmer compares with maxBytes. budgetEstimateBytes adds the pinned original after detach.
 // Injectable via `new ActionDispatcher(doc, limits)` / `new HistoryManager(doc, limits)`.
 ```
 

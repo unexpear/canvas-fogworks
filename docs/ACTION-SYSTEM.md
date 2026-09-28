@@ -275,6 +275,13 @@ cursor. **No actions are re-executed on undo/redo** — a full snapshot is resto
   entries, hard cap 10 000) rather than a fixed step count — a snapshot is a whole
   document, so "200 steps" meant wildly different memory for different documents.
   A normal session never truncates.
+- **Retained bytes are accounted at commit.** Each revision stores `serializedUtf8Bytes`
+  (exact UTF-8 length of the canonical snapshot JSON) and `payloadUtf8Bytes`.
+  `retainedAccounting()` / `retainedHistoryAccounting()` sum each distinct snapshot once.
+  The pinned original is included again only after trimming detaches it from the stack.
+  `sizeBytes` remains the UTF-16 trim estimate (JSON length × 2). `stackBudgetEstimateBytes`
+  is what the 128 MB budget compares. `budgetEstimateBytes` adds the pinned original after
+  trim detaches it. Process heap is not this ledger.
 - **At the truncation boundary, undo STOPS — it does not teleport.** Trimming drops
   the oldest revisions, so after truncation index 0 is the oldest *retained* step, not
   the original. Undo walks back to there and stops. The document the history began

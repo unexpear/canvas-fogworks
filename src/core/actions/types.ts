@@ -256,6 +256,10 @@ export interface Revision {
     actionId: string;
     actionPayload: ActionPayload;
     document: DocumentSnapshot;
-    /** Approximate retained bytes, used for the memory-bounded history budget. */
+    /** UTF-16 trim estimate (JSON length × 2). This is the budget the trimmer charges, not heap. */
     sizeBytes: number;
+    /** Exact UTF-8 byte length of the canonical snapshot JSON. */
+    serializedUtf8Bytes: number;
+    /** Exact UTF-8 byte length of the action payload JSON. */
+    payloadUtf8Bytes: number;
 }

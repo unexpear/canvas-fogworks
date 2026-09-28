@@ -2,7 +2,8 @@
 
 <!-- describes: src/core/document, src/core/runtime, src/core/export, src/core/script, src/runtime, src/renderer, src/app/RuntimeAudio.ts, package.json -->
 <!-- re-read 2026-09-28: the only runtime-tree edit is shell source pins reading FoldersDrawer.tsx.
-     This plan's scope and acceptance gates are unchanged. -->
+     This plan's scope and acceptance gates are unchanged.
+     package.json records benchmark:authoring, benchmark:gpu and test:benchmark-budgets. ENG-16 benchmarks remain informational. -->
 
 Planning assessment: 2026-09-07. Baseline inspected: commit `dac1ef9` plus the current
 uncommitted production-work and Windows Save As fixes; app 0.0.5, schema 78.

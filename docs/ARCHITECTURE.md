@@ -91,6 +91,9 @@ Everything in the engine — now and in every future milestone — rests on thes
 - **Document** is passive data.
 - **HistoryManager** stores snapshots and serves undo/redo (plus `rollbackTo(checkpoint)` — a hard
   cancel that discards revisions since a checkpoint, used to erase a cancelled live-committed gesture).
+  `retainedAccounting()` reports exact UTF-8 JSON bytes for each distinct retained snapshot.
+  `stackBudgetEstimateBytes` is the UTF-16 total the 128 MB trim compares; the pinned original is
+  added only after trim detaches it. Process heap is a separate measurement.
 - **Renderer** reads the document plus `EditorState`-derived `RendererState` and paints via the
   selected backend (SVG or Canvas).
 - **App (React)** wires the pieces and re-renders on a tick. It subscribes to

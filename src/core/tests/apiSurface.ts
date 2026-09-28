@@ -90,7 +90,7 @@ import { SetInstanceOverrideAction } from "../actions/SetInstanceOverrideAction"
 import { geometryActionFor, styleActionFor, overrideTargetFor, isEditableNode } from "../actions/nodeEdit";
 import { applyMutationsToDocument } from "../actions/applyMutations";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
-import { HistoryManager, HistoryLimits, DEFAULT_HISTORY_LIMITS } from "../actions/HistoryManager";
+import { HistoryManager, HistoryLimits, DEFAULT_HISTORY_LIMITS, RetainedHistoryAccounting } from "../actions/HistoryManager";
 import { AddNodeAction } from "../actions/AddNodeAction";
 import { DeleteNodeAction } from "../actions/DeleteNodeAction";
 import { MoveNodeAction } from "../actions/MoveNodeAction";
@@ -520,6 +520,7 @@ export function __apiSurfacePin(): void {
     expectType<boolean>(dispatcher.rollbackToCheckpoint("rev-id"));
     expectType<void>(dispatcher.loadDocument(doc));
     expectType<boolean>(dispatcher.hasTruncatedHistory());
+    expectType<RetainedHistoryAccounting>(dispatcher.retainedHistoryAccounting());
     expectType<ProjectDocument>(dispatcher.revertToOriginal());
 
     const history = new HistoryManager(doc, DEFAULT_HISTORY_LIMITS);
@@ -528,7 +529,11 @@ export function __apiSurfacePin(): void {
     expectType<ProjectDocument>(history.getOriginal());
     expectType<boolean>(history.hasTruncatedHistory());
     expectType<number>(history.getRevisionCount());
+    expectType<RetainedHistoryAccounting>(history.retainedAccounting());
     expectType<Revision["sizeBytes"]>(0);
+    expectType<Revision["serializedUtf8Bytes"]>(0);
+    expectType<Revision["payloadUtf8Bytes"]>(0);
+    expectType<RetainedHistoryAccounting["stackBudgetEstimateBytes"]>(0);
     expectType<DocumentSnapshot["version"]>("1");
 
     // --- Editor & renderer --------------------------------------------------

@@ -1,6 +1,7 @@
 # Standalone 3D export and Windows player
 
 <!-- describes: src/electron/GamePackageExport.ts, src/player3d, src/app/ElectronAPI.ts, scripts/package-game.js, scripts/smoke-player.js, scripts/smoke-player-startup.js, package.json -->
+<!-- re-read 2026-09-28: package.json script additions are authoring benchmarks, not player packaging. -->
 
 Implemented 2026-09-12 as bounded Q03–Q05 work in the [engine roadmap](ENGINE-ROADMAP.md).
 This delivers a real offline host for the existing 3D runtime, not Unreal-level feature parity

@@ -72,8 +72,8 @@
       "area": "performance",
       "priority": "P1",
       "status": "open",
-      "summary": "Calibrate release budgets across hardware using delivered CPU/GPU, 1024-square raster, 500-instance component, 100 animated-mesh and disk asset-reload benchmarks. Add longer soak runs, larger textured scenes and exact retained-memory accounting before choosing performance rewrites.",
-      "evidence": ["scripts/benchmark-authoring.js", "scripts/smoke-authoring.js", "docs/PRODUCTION-WORK.md"]
+      "summary": "Informational release budgets are frozen from the September Windows Iris Xe sample and the 2026-09-28 Linux Xeon run, using CPU/GPU, 1024 raster, 500-instance, 100-mesh and disk-reload benchmarks plus a mixed soak, noisy 2048 rasters, larger textured scenes and exact history JSON accounting. The Linux host has no hardware WebGL; llvmpipe is recorded separately and is not a hardware budget. Further physical GPU hosts are still required before a hardware-independent CI gate. These samples do not justify a renderer rewrite.",
+      "evidence": ["scripts/benchmark-authoring.js", "scripts/benchmark-gpu.js", "scripts/benchmark-budgets.js", "src/core/actions/HistoryManager.ts", "docs/PRODUCTION-WORK.md"]
     },
     {
       "id": "RENDER-002",

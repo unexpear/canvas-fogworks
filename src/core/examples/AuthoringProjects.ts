@@ -1,10 +1,10 @@
 /**
  * @module AuthoringProjects
- * @description Original editable pixel/design workshop and three-level relay game used for authoring, portability and performance regression exercises.
+ * @description Original editable pixel/design workshop, three-level relay game, and owned benchmark scenes used for authoring, portability and performance regression exercises.
  */
 import { createEmptyDocument, ProjectDocument } from "../document/Document";
 import { Node } from "../document/Node";
-import { createPixelBuffer } from "../paint/PixelBuffer";
+import { createPixelBuffer, PixelBuffer } from "../paint/PixelBuffer";
 import { encodeSurface } from "../paint/PixelCodec";
 
 const colors = ["#182638", "#243c50", "#58bfa8", "#eebc55", "#e85955", "#d9e6ec"];
@@ -33,6 +33,25 @@ export function workshopPixels(size = 256) {
         const gem = Math.abs(cellX - 16) + Math.abs(cellY - 16) < 11;
         const color = palette[edge ? 0 : gem ? 2 + ((Math.floor(u / 32) + Math.floor(v / 32)) % 4) : 1];
         pixels.data.set([...color, 255], (y * size + x) * 4);
+    }
+    return pixels;
+}
+
+/**
+ * Deterministic high-frequency pixels for scale measurements.
+ * Adjacent pixels differ, so run-length encoding cannot collapse the surface.
+ */
+export function noisyPixels(size = 256, seed = 1): PixelBuffer {
+    const pixels = createPixelBuffer(size, size);
+    let state = seed >>> 0;
+    if (state === 0) state = 1;
+    const data = pixels.data;
+    for (let i = 0; i < data.length; i += 4) {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        data[i] = state & 255;
+        data[i + 1] = (state >>> 8) & 255;
+        data[i + 2] = (state >>> 16) & 255;
+        data[i + 3] = 255;
     }
     return pixels;
 }
@@ -99,4 +118,41 @@ export function relayGameLevels(): Record<string, ProjectDocument> {
         levels[`relay-${stage + 1}.vde`] = doc;
     }
     return levels;
+}
+
+/**
+ * One large noisy raster plus smaller unique rasters. Benchmark-only; not a checked-in example project.
+ * Defaults are the SCALE-001 scene: 2048 square plus eight 512-square textures.
+ */
+export function texturedRasterScene(large = 2048, small = 512, smallCount = 8): ProjectDocument {
+    const doc = project("Textured raster benchmark", Math.max(large, small * 4), large + small * Math.ceil(Math.max(smallCount, 1) / 4));
+    const place = (id: string, x: number, y: number, size: number, seed: number) => {
+        const encoded = encodeSurface(noisyPixels(size, seed));
+        add(doc, { ...box(id, x, y, size, size, colors[1]), type: "core.raster", pixelated: true,
+            surface: { width: size, height: size, data: encoded.data } });
+    };
+    place("raster-large", 0, 0, large, 1);
+    for (let i = 0; i < smallCount; i++) {
+        place(`raster-small-${i}`, (i % 4) * small, large + Math.floor(i / 4) * small, small, 100 + i);
+    }
+    return doc;
+}
+
+/** Image billboards that carry distinct texture ids. Benchmark-only; sources are synthetic ids, not files. */
+export function texturedBillboards(count = 80): ProjectDocument {
+    const doc = project("Textured billboard benchmark", 1280, 800);
+    for (let i = 0; i < count; i++) {
+        const id = `billboard-${i}`;
+        add(doc, { ...box(id, 0, 0, 64, 64, colors[5]), type: "core.image", pixelated: true,
+            src: `benchmark-texture-${i % 4}`,
+            spatial3d: {
+                transform: {
+                    position: { x: (i % 10) * 0.2, y: Math.floor(i / 10) * 0.2, z: 0 },
+                    rotation: { x: 0, y: 0, z: 0, w: 1 },
+                    scale: { x: 1, y: 1, z: 1 }
+                },
+                composition2d: { mode: "billboard", pixelsPerUnit: 64, lit: false }
+            } });
+    }
+    return doc;
 }
