@@ -26,8 +26,8 @@ Q06 follow-up 2026-09-12: schema 79 adds reusable named input actions, nearest-t
 bounded leaf-template spawning/despawning, checkpoints/respawn and versioned current-level progress
 for 2D/3D players. The native progress bridge is slot-only; it grants no editor authority. See
 [Gameplay foundations](GAMEPLAY-FOUNDATIONS.md) for acceptance evidence and limits. Q06 remains
-partial: general behavior lifecycle, input settings UI, full prefabs, cross-level persistent state,
-save migration and process-crash/relaunch acceptance remain open. F1/F2 are not complete.
+partial: input settings UI, full prefabs, cross-build save migration and process-crash/relaunch
+acceptance remain open. Visited-level campaign progress is player-progress v6. F1/F2 are not complete.
 
 ## 1. Purpose and definition of success
 

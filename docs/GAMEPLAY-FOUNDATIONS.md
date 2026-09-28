@@ -5,7 +5,7 @@ action paths through the same 2D/3D commands. Schema 81 adds delays/repeats, reu
 and debugging; general behavior lifecycle remains open. Player-progress v2 retains pending graph
 continuations and accepts v1 saves without them.
 
-<!-- describes: src/core/document/Gameplay.ts, src/core/runtime/InputActions.ts, src/core/runtime/Interaction.ts, src/core/runtime/GameplaySession.ts, src/core/runtime/Gameplay3D.ts, src/core/runtime/World3D.ts, src/runtime/PlayerProgress.ts, src/runtime/PlayerSession3D.ts, src/player3d, src/player, src/app/GameplayPanel.tsx -->
+<!-- describes: src/core/document/Gameplay.ts, src/core/runtime/InputActions.ts, src/core/runtime/Interaction.ts, src/core/runtime/GameplaySession.ts, src/core/runtime/Gameplay3D.ts, src/core/runtime/World3D.ts, src/runtime/PlayerProgress.ts, src/runtime/CampaignProgress.ts, src/runtime/PlayerSession3D.ts, src/player3d, src/player, src/app/GameplayPanel.tsx -->
 
 Implemented 2026-09-12 as the first bounded Q06 slice. These features serve both 2D and 3D;
 they do not replace the physics solver or constitute a general scripting/component framework.
@@ -63,10 +63,17 @@ Saves retain the current level key, player checkpoint (or current position if no
 instances and their positions, despawned IDs and counters. 2D also retains player power and changed
 tile cells. A fresh simulation is constructed on restore; velocities, contacts, animation clocks,
 temporary invincibility and other actors' arbitrary mid-frame state reset. Start rules do not replay
-and duplicate previously saved effects. Only the current level's mutations are retained; persistent
-quest/inventory state across multiple visited levels is not implemented.
+and duplicate previously saved effects. Player-progress v6 also retains other visited levels and
+game-scoped values. Leaving a level stores that level's actors, entity values, counters and waiting
+graphs, and lifts game-scoped values into one campaign table. Entering a level already visited
+restores that snapshot instead of replaying start events; a new level starts fresh but can read the
+carried game values when it declares the same name and type. A declaration that is missing or a
+different type on one level does not erase the campaign value. Restart and a new editor Play clear
+the campaign. A run that never leaves its level still saves as v5. At most 32 levels are remembered,
+matching the linked-level package cap. Entity-local values stay on their level. Prefab instances
+are not part of this snapshot.
 
-The v1 save format has its own version and profile (`2d`/`3d`), and is tied to the package-content
+The save format has its own version and profile (`2d`/`3d`), and is tied to the package-content
 SHA-256 hash. Changed package content gets a different slot; cross-build save migration is not
 inferred. This hash is not an executable signature or a compatibility promise across engine changes.
 Malformed, oversized, wrong-game/profile, duplicate-ID, missing-template, unknown-level and invalid
@@ -106,7 +113,7 @@ build and file-workflow/level/authoring/player smokes pass. A new unsigned Windo
 owned demo at `release/gameplay-foundation-20260912/desktop/win-unpacked/` also passes the
 actual executable startup smoke. These are host-machine results, not clean-machine certification.
 
-Still open in Q06/F2: a general behavior lifecycle, user-facing input mapping, full prefab instances,
-cross-level persistent state, save migrations, richer character/physics semantics, 3D audio,
-portable/browser save UX and full process-crash/relaunch acceptance. F1 clean-machine certification
-is also still open. Existing installers/assets are retained; no Git commit or push is implied.
+Still open in Q06/F2: user-facing input mapping, full prefab instances, cross-build save migrations,
+richer character/physics semantics, 3D audio, portable/browser save UX and full process-crash/relaunch
+acceptance. Visited-level campaign saves do not by themselves prove a writer crash or a fresh process.
+F1 clean-machine certification is also still open. Existing installers/assets are retained.

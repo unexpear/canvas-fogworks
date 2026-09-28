@@ -6,7 +6,7 @@ Gameplay follow-up (2026-09-12, schema 79): named input actions, interact rules,
 template spawning/despawning, checkpoint respawn and versioned current-level player progress
 are now implemented for 2D/3D. See [Gameplay foundations](GAMEPLAY-FOUNDATIONS.md) for exact
 semantics and verification. The schema 78 baseline below is historical; general scripting,
-full prefabs, cross-level persistent state and complete 3D audio remain open.
+full prefabs and complete 3D audio remain open. Visited-level game values are saved as player-progress v6.
 
 ## Delivered baseline (schema 78, app 0.0.5)
 

@@ -142,6 +142,7 @@ import { worldFrom, stepWorld, applyWorld, movedIds, stepsFor, applyCommands, ap
 import { marioRules } from "../core/runtime/Rules";
 import { applyPose } from "../core/runtime/Parts";
 import { restartRun, respawnRun } from "../core/runtime/RunFlow";
+import { EDITOR_CAMPAIGN_GAME_ID, emptyCampaign, openCampaignLevel, rememberLeavingLevel } from "../runtime/CampaignProgress";
 import { advanceWorld3D, applyWorld3D, respawnRun3D, restartRun3D, World3DState } from "../core/runtime/World3D";
 import { Entity, playerEntityId } from "../core/document/Entity";
 import { RuntimeProject } from "./LevelTransitionWorkflow";
@@ -582,6 +583,7 @@ export function App() {
     const environmentLibrary3dRef = useRef<Map<string, HdrEnvironmentImage>>(new Map());
     const world3dRef = useRef<World3DState | null>(null);
     const world3dLastAtRef = useRef<number | null>(null);
+    const campaignRef = useRef(emptyCampaign());
     /** Invalidates an asynchronous rehydrate when another project replaces the document. */
     const meshHydrationGenerationRef = useRef(0);
     type GizmoDragBase = {
@@ -1535,14 +1537,34 @@ export function App() {
                         es.world = applyCommands(world, [{ kind: "endRun", outcome: "lost" }]);
                         setRunOutcome("lost");
                     } else {
-                        runtimeProjectRef.current.transition(api, currentFilePathRef.current, target).then(adopted => {
+                        const leavingKey = runtimeProjectRef.current.filePath ?? currentFilePathRef.current;
+                        const profile = workspace === "3d" && world3dRef.current ? "3d" as const : "2d" as const;
+                        let nextCampaign = campaignRef.current;
+                        try {
+                            nextCampaign = rememberLeavingLevel(campaignRef.current, profile, profile === "3d" ? world3dRef.current! : world, EDITOR_CAMPAIGN_GAME_ID, leavingKey, es.controlled);
+                        } catch (error) {
+                            console.error("Campaign snapshot failed:", error);
+                            es.world = applyCommands(world, [{ kind: "endRun", outcome: "lost" }]);
+                            runOutcomeRef.current = "lost";
+                            setRunOutcome("lost");
+                            transitionLoadingRef.current = null;
+                        }
+                        if (transitionLoadingRef.current !== null) runtimeProjectRef.current.transition(api, currentFilePathRef.current, target).then(adopted => {
                             if (!adopted || !es.playing) return;
                             const runtimeDoc = runtimeProjectRef.current.document!;
                             audioRef.current?.stop();
                             es.frame = frameOnLoad(runtimeDoc);
                             es.controlled = playerEntityId(runtimeDoc.nodes.values());
-                            es.world = restartRun(runtimeDoc);
-                            world3dRef.current = workspace === "3d" ? restartRun3D(runtimeDoc) : null;
+                            const arrived = runtimeProjectRef.current.filePath;
+                            if (arrived) {
+                                const opened = openCampaignLevel(runtimeDoc, nextCampaign, arrived, profile, EDITOR_CAMPAIGN_GAME_ID);
+                                es.world = opened.world2d;
+                                world3dRef.current = profile === "3d" ? opened.world3d : null;
+                                campaignRef.current = opened.campaign;
+                            } else {
+                                es.world = restartRun(runtimeDoc);
+                                world3dRef.current = profile === "3d" ? restartRun3D(runtimeDoc) : null;
+                            }
                             world3dLastAtRef.current = Date.now();
                             es.worldClock = { accumulator: 0, lastAt: Date.now() };
                             runBoundsRef.current = null;
@@ -1557,6 +1579,7 @@ export function App() {
                             if (es.world) es.world = applyCommands(es.world, [{ kind: "endRun", outcome: "lost" }]);
                             runOutcomeRef.current = "lost";
                             setRunOutcome("lost");
+                            transitionLoadingRef.current = null;
                         });
                     }
                 }
@@ -1912,6 +1935,7 @@ export function App() {
                     case "file.new":
                         if (!confirmLeaveProject()) return;
                         runtimeProjectRef.current.reset();
+                        campaignRef.current = emptyCampaign();
                         audioRef.current?.stop();
                         es.playing = false; es.world = null; es.worldClock = null;
                         dispatcher.loadDocument(createEmptyDocument());
@@ -2017,6 +2041,7 @@ export function App() {
                 reportError: (message, error) => setFileStatus(`${message}: ${String(error)}`),
                 afterOpen: ({ filePath }) => {
                     runtimeProjectRef.current.reset();
+                    campaignRef.current = emptyCampaign();
                     audioRef.current?.stop();
                     es.playing = false; es.world = null; es.worldClock = null;
                     projectSession.adopt();
@@ -2582,6 +2607,7 @@ export function App() {
 
     const toggleRuntime = () => {
         runtimeProjectRef.current.reset();
+        campaignRef.current = emptyCampaign();
         audioRef.current?.stop();
         audioRef.current?.unlock();
         es.playingTimeline = false;
@@ -2619,6 +2645,7 @@ export function App() {
     const restartRuntime = () => {
         // Restart the authored entry project, not the last level visited during play.
         runtimeProjectRef.current.reset();
+        campaignRef.current = emptyCampaign();
         audioRef.current?.stop();
         es.world = restartRun(dispatcher.getDocument());
         es.controlled = playerEntityId(dispatcher.getDocument().nodes.values());

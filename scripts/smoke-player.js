@@ -73,7 +73,7 @@ app.whenReady().then(async () => {
     await until(win, 'document.getElementById("progress-note").textContent.includes("Progress saved")');
     const progress = await win.webContents.executeJavaScript('window.playerProgress.read().then(JSON.parse)');
     if (progress.level !== "level1" || progress.spawns.length !== 1 || progress.tallies[0][1] !== 1) throw new Error("Interaction/save did not retain one instance and tally");
-    if(progress.version!==5||progress.behaviors?.length!==1||progress.behaviors[0].stack[0].remaining!==2)throw new Error("Pending shared graph repeat was not saved");
+    if(progress.version!==6||progress.campaign?.levels?.map(level=>level.level).join()!=="level0"||progress.behaviors?.length!==1||progress.behaviors[0].stack[0].remaining!==2)throw new Error("Pending shared graph repeat or visited level was not saved");
     if(progress.behaviors[0].functions?.length!==2||JSON.stringify(progress).includes('"definitions"'))throw new Error("Nested function frames were not saved as data-only continuations");
     if(progress.data.entities.find(([id])=>id==="lever")?.[1].find(([id])=>id==="health")?.[1]!==75||progress.data.game.find(([id])=>id==="keys")?.[1]!==1)throw new Error("Typed entity/game values were not saved");
     await win.webContents.executeJavaScript('window.dispatchEvent(new Event("blur"))');

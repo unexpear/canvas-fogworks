@@ -65,8 +65,8 @@ Status: implemented through visual authoring and saved execution; final-game acc
 Schema 83 / graph v4 adds entity-local and game-scoped number/boolean/string declarations,
 strict assignment/arithmetic/comparison nodes, immutable runtime tables, inspector authoring,
 debugger watches and undo/reopen validation. Progress v4 preserves assigned values and accepts
-older saves with defaults. Game scope currently means actors in the active level; cross-level
-sharing remains part 4. Verification: 2,341 tests across 55 suites, typecheck, headers and production
+older saves with defaults. Game scope means actors in the active level, and player-progress v6
+carries those values between visited levels. Verification: 2,341 tests across 55 suites, typecheck, headers and production
 build pass. Real Electron behavior-authoring, existing authoring/export and standalone-player
 smokes pass. The exported player saves entity health and shared inventory, reopens, resumes two
 delayed changes exactly once, and rejects corrupt saves. Tests also cover isolated actor values,
@@ -181,7 +181,9 @@ Acceptance:
 
 ## 4. Cross-level saved progress and recovery
 
-Status: pending lifecycle/variable/prefab state shapes.
+Status: visited-level snapshots and game-scoped values are implemented as player-progress v6.
+Prefab instances inside those snapshots, explicit cross-build migration maps, and writer/renderer
+crash plus fresh-process relaunch acceptance are still open.
 
 Introduce a versioned campaign snapshot containing visited-level state and shared gameplay values.
 Stage reads, validation and asset loading before replacing live state. Returning to a visited level

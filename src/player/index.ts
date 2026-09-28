@@ -9,8 +9,9 @@ import { applyAnimations } from "../core/runtime/AnimationPlayback";
 import { stepGameplay, interactGameplay2D } from "../core/runtime/GameplaySession";
 import { InputActions, PLAYER_ACTIONS } from "../core/runtime/InputActions";
 import { captureProgress2D, parseProgress, restoreProgress2D, serializeProgress } from "../runtime/PlayerProgress";
+import { CampaignState, EDITOR_CAMPAIGN_GAME_ID, campaignFromProgress, emptyCampaign, openCampaignLevel, rememberLeavingLevel, withCampaign } from "../runtime/CampaignProgress";
 import { browserProgressStore } from "../runtime/ProgressStore";
-import { worldFrom, stepsFor, NO_INPUT, applyWorld, applySpawns, applyCells, applyFacing, applyTileAnimations, playBounds } from "../core/runtime/World";
+import { worldFrom, stepsFor, NO_INPUT, applyWorld, applySpawns, applyCells, applyFacing, applyTileAnimations, playBounds, type WorldState } from "../core/runtime/World";
 import { respawnRun } from "../core/runtime/RunFlow";
 import { computeGeometry, contentBounds } from "../core/geometry/GeometryEngine";
 import { followCamera } from "../core/runtime/Camera";
@@ -23,6 +24,7 @@ const canvas = document.getElementById("game") as HTMLCanvasElement;
 const status = document.getElementById("status")!;
 const audio = new RuntimeAudio(message => { status.textContent = message; });
 let level = game.entry, doc = deserializeDocument(game.levels[level].content), world = worldFrom(doc);
+let campaign: CampaignState = emptyCampaign();
 let controlled = playerEntityId(doc.nodes.values());
 let input = { ...NO_INPUT }, running = false, last = performance.now(), accumulator = 0;
 const actions = new InputActions(PLAYER_ACTIONS); let generation = 0;
@@ -32,9 +34,22 @@ const gameId = (async () => crypto.subtle.digest("SHA-256", new TextEncoder().en
 void gameId.catch(() => {});
 let bounds = playBounds(contentBounds(computeGeometry(doc)), doc.screen);
 let viewport = { x: bounds?.x ?? 0, y: bounds?.y ?? 0, zoom: 1 };
-function load(id: string) {
+function load(id: string, mode: "fresh" | "transition" | "restore" = "fresh", restored?: WorldState) {
     if (!game.levels[id]) throw new Error("The requested level was not packaged.");
-    generation++; actions.clear(); audio.stop(); level = id; doc = deserializeDocument(game.levels[id].content); world = worldFrom(doc);
+    const nextCampaign = mode === "fresh" ? emptyCampaign()
+        : mode === "transition" ? rememberLeavingLevel(campaign, "2d", world, EDITOR_CAMPAIGN_GAME_ID, level, controlled)
+        : campaign;
+    const nextDoc = deserializeDocument(game.levels[id].content);
+    let adopted = nextCampaign, nextWorld: WorldState;
+    if (mode === "restore") {
+        if (!restored) throw new Error("Missing restored level.");
+        const levels = new Map(adopted.levels); levels.delete(id);
+        adopted = { shared: adopted.shared, levels }; nextWorld = restored;
+    } else {
+        const opened = openCampaignLevel(nextDoc, nextCampaign, id, "2d", EDITOR_CAMPAIGN_GAME_ID);
+        adopted = opened.campaign; nextWorld = opened.world2d;
+    }
+    generation++; actions.clear(); audio.stop(); level = id; doc = nextDoc; world = nextWorld; campaign = adopted;
     controlled = playerEntityId(doc.nodes.values()); input = { ...NO_INPUT }; accumulator = 0;
     bounds = playBounds(contentBounds(computeGeometry(doc)), doc.screen);
     viewport = { x: bounds?.x ?? 0, y: bounds?.y ?? 0, zoom: 1 };
@@ -74,14 +89,15 @@ for (const id of ["checkpoint","save-progress","load-progress"]) document.getEle
         }
         const hash = await gameId; if (token !== generation) return;
         const store = browserProgressStore(hash);
-        if (id === "save-progress") { await store.write(serializeProgress(captureProgress2D(world,hash,level,controlled))); note.textContent = "Progress saved."; }
+        if (id === "save-progress") { await store.write(serializeProgress(withCampaign(captureProgress2D(world,hash,level,controlled), campaign))); note.textContent = "Progress saved."; }
         else {
             const content = await store.read(); if (token !== generation) return;
             if (!content) throw new Error("No saved progress for this game build.");
             const progress = parseProgress(content,hash,"2d"), savedLevel = game.levels[progress.level];
             if (!savedLevel) throw new Error("Saved level is not packaged.");
             const restoredDoc = deserializeDocument(savedLevel.content), restored = restoreProgress2D(restoredDoc,progress);
-            load(progress.level); world = restored; running = true; last = performance.now(); note.textContent = "Progress restored.";
+            campaign = campaignFromProgress(progress);
+            load(progress.level, "restore", restored); running = true; last = performance.now(); note.textContent = "Progress restored.";
         }
     } catch (error) { if (token === generation) note.textContent = `Progress error: ${String(error)}`; }
 });
@@ -92,7 +108,7 @@ function frame(now: number) {
         for (let i = 0; i < spend.steps && running && world.outcome === "running"; i++) {
             const result = stepGameplay(doc, world, { controlled, input, bounds }); world = result.world;
             for (const sound of result.sounds) void audio.play(sound);
-            if (world.transitionTo) { load(game.levels[level].links[world.transitionTo]); break; }
+            if (world.transitionTo) { load(game.levels[level].links[world.transitionTo], "transition"); break; }
         }
         const width = Math.max(1, Math.min(4096, canvas.clientWidth)), height = Math.max(1, Math.min(4096, canvas.clientHeight));
         if (canvas.width !== width) canvas.width = width;

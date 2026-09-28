@@ -126,8 +126,8 @@ This build adds only `progressPreload.js` to the earlier three-file ASAR allowli
 artifacts were retained; full process-crash/relaunch save acceptance is not claimed.
 
 Still open: clean Windows-machine/offline acceptance of an owned playable multi-level game;
-complete 3D audio/game-rule/UI and unsupported-feature reporting; cross-level persistent state,
-portable save files, multiple slots and save migrations;
+complete 3D audio/game-rule/UI and unsupported-feature reporting; prefab campaign snapshots,
+portable save files, multiple slots and cross-build save migrations;
 custom font packaging; long-session/GPU/device-loss evidence; larger-content streaming;
 installer/update/provenance policy and broader platform support. F1 remains partial.
 Asset redistribution and attribution remain the game author's responsibility: an ignored pack

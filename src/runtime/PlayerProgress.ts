@@ -11,7 +11,7 @@ import {emptyBehaviorState} from "../core/runtime/BehaviorRuntime";
 import {SavedGameplayData,validateGameplayDataProgress,captureGameplayData,restoreGameplayData} from "../core/runtime/GameplayDataProgress";
 export const PROGRESS_MAX_BYTES = 2 * 1024 * 1024;
 export interface PlayerProgress {
-    format: "canvas-fogworks-progress"; version: 1 | 2 | 3 | 4 | 5; profile: "2d" | "3d";
+    format: "canvas-fogworks-progress"; version: 1 | 2 | 3 | 4 | 5 | 6; profile: "2d" | "3d";
     gameId: string; level: string; playerId: string; position: Position;
     spawns: { id: string; templateId: string; position: Position }[];
     despawned: string[]; tallies: [string, number][]; power: number;
@@ -19,6 +19,8 @@ export interface PlayerProgress {
     behaviors?:SavedBehaviorJob[];
     data?:SavedGameplayData;
     lifecycle?:{spawned:string[];retired:string[]};
+    /** Other visited levels and game-scoped values. Absent on v1–v5 saves. */
+    campaign?: { shared: SavedGameplayData["game"]; levels: PlayerProgress[] };
 }
 function fields(value: any, names: string[]) {
     if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== names.length
@@ -32,8 +34,8 @@ function point(value: any): void {
 export function parseProgress(text: string, gameId: string, profile: "2d" | "3d"): PlayerProgress {
     if (typeof text !== "string" || text.length > PROGRESS_MAX_BYTES || new TextEncoder().encode(text).length > PROGRESS_MAX_BYTES) throw new Error("Player save exceeds 2MiB.");
     const value = JSON.parse(text);
-    fields(value, ["format","version","profile","gameId","level","playerId","position","spawns","despawned","tallies","power","cells",...(value?.version>=2?["behaviors"]:[]),...(value?.version>=3?["lifecycle"]:[]),...(value?.version>=4?["data"]:[])]);
-    if (value.format !== "canvas-fogworks-progress" || ![1,2,3,4,5].includes(value.version) || value.profile !== profile) throw new Error("Unsupported player save format/version/profile.");
+    fields(value, ["format","version","profile","gameId","level","playerId","position","spawns","despawned","tallies","power","cells",...(value?.version>=2?["behaviors"]:[]),...(value?.version>=3?["lifecycle"]:[]),...(value?.version>=4?["data"]:[]),...(value?.version>=6?["campaign"]:[])]);
+    if (value.format !== "canvas-fogworks-progress" || ![1,2,3,4,5,6].includes(value.version) || value.profile !== profile) throw new Error("Unsupported player save format/version/profile.");
     if (!/^[a-f0-9]{64}$/.test(gameId) || value.gameId !== gameId) throw new Error("This save belongs to a different game build.");
     if (!validId(value.level) || !validId(value.playerId)) throw new Error("Invalid saved level/player ID.");
     point(value.position);
@@ -70,7 +72,23 @@ export function parseProgress(text: string, gameId: string, profile: "2d" | "3d"
         }
     }
     if(value.version>=4)validateGameplayDataProgress(value.data);
+    if(value.version>=6)validateCampaign(value.campaign,gameId,profile,value.level);
     return value;
+}
+function validateCampaign(campaign: unknown, gameId: string, profile: "2d" | "3d", activeLevel: string): void {
+    fields(campaign, ["shared", "levels"]);
+    const record = campaign as { shared: SavedGameplayData["game"]; levels: unknown[] };
+    validateGameplayDataProgress({ game: record.shared, entities: [] });
+    if (!Array.isArray(record.levels) || record.levels.length > 31) throw new Error("Campaign level limit exceeded.");
+    const seen = new Set<string>();
+    for (const level of record.levels) {
+        if (!level || typeof level !== "object" || (level as { version?: unknown }).version !== 5 || "campaign" in (level as object)) {
+            throw new Error("Campaign level snapshots must be progress v5.");
+        }
+        const parsed = parseProgress(JSON.stringify(level), gameId, profile);
+        if (parsed.level === activeLevel || seen.has(parsed.level)) throw new Error("Campaign repeats a level.");
+        seen.add(parsed.level);
+    }
 }
 export function serializeProgress(progress: PlayerProgress): string {
     const text = JSON.stringify(progress); parseProgress(text, progress.gameId, progress.profile); return text;

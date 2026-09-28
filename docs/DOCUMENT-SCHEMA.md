@@ -72,8 +72,9 @@ with entity-local or game scope and type-checked defaults. Graph-v4 assignment/c
 reference these declarations; deleting or changing a referenced type is refused. Arithmetic is
 numeric only, finite and bounded; division by zero fails the current execution. Migration 82→83
 leaves old graphs and design tokens unchanged. Player-progress v4 separately stores typed values
-and accepts older v1/v2/v3 saves with declaration defaults. Shared game values currently span actors
-within one active level, not level transitions; campaign persistence is still pending.
+and accepts older v1/v2/v3 saves with declaration defaults. Shared game values span actors in the
+active level. Player-progress v6, a separate save format, also carries those game values and
+visited-level snapshots across transitions. Document schema 89 is unchanged by that save format.
 
 Schema 84 adds optional `behaviorFunctions` (at most 128 uniquely named-ID definitions), with
 typed inputs, outputs and invocation-local fields. Each body has an explicit entry and at most

@@ -15,6 +15,7 @@ import type { PlayerProjectReader } from "./ProjectReadHost";
 import { RuntimeProject } from "./RuntimeProject";
 import { checkpoint3D, interact3D } from "../core/runtime/Gameplay3D";
 import { captureProgress3D, parseProgress, restoreProgress3D, serializeProgress } from "./PlayerProgress";
+import { CampaignState, campaignFromProgress, emptyCampaign, openCampaignLevel, rememberLeavingLevel, withCampaign } from "./CampaignProgress";
 
 export type PlayerStatus3D = "stopped" | "loading" | "running" | "paused" | "ended";
 interface ActivePlayer3D { project: RuntimeProject; world: World3DState; controlled: string | null }
@@ -26,6 +27,7 @@ export class PlayerSession3D {
     private playing = false;
     private lastTimestamp: number | null = null;
     private failure: Error | null = null;
+    private campaign: CampaignState = emptyCampaign();
 
     constructor(private readonly host: PlayerProjectReader, private readonly entryKey: string, private readonly gameId = "") {}
 
@@ -43,7 +45,10 @@ export class PlayerSession3D {
     /** Restart always reloads the configured entry, not the last visited level. */
     start(): Promise<boolean> {
         this.playing = true;
-        return this.load(staged => staged.open(this.host, this.entryKey));
+        return this.load(staged => staged.open(this.host, this.entryKey)).then(ok => {
+            if (ok) this.campaign = emptyCampaign();
+            return ok;
+        });
     }
     restart(): Promise<boolean> { return this.start(); }
 
@@ -61,22 +66,39 @@ export class PlayerSession3D {
     }
     saveProgress(): string {
         if (!this.active?.controlled || this.pending || this.active.world.transitionTo) throw new Error("Cannot save without a stable playable level.");
-        return serializeProgress(captureProgress3D(this.active.world, this.gameId, this.active.project.filePath!, this.active.controlled));
+        return serializeProgress(withCampaign(captureProgress3D(this.active.world, this.gameId, this.active.project.filePath!, this.active.controlled), this.campaign));
     }
     restoreProgress(serialized: string): Promise<boolean> {
         const progress = parseProgress(serialized, this.gameId, "3d");
+        const loaded = campaignFromProgress(progress);
         const read = this.host.readProgressLevel;
         if (!read) throw new Error("This host does not support saved-level lookup.");
         this.playing = false;
         return this.load(staged => staged.open({ ...this.host, readEntryFile: key => read.call(this.host, key) }, progress.level),
-            (doc, world) => restoreProgress3D(doc, world, progress));
+            (doc, world) => restoreProgress3D(doc, world, progress)).then(ok => {
+            if (ok) this.campaign = loaded;
+            return ok;
+        });
     }
 
     /** Explicit host action: a failed level is not retried on every animation frame. */
     followTransition(): Promise<boolean> {
         const current = this.active, target = current?.world.transitionTo;
         if (!current || !target || this.pending) return Promise.resolve(false);
-        return this.load(staged => staged.transition(this.host, current.project.filePath, target));
+        let next = rememberLeavingLevel(this.campaign, "3d", current.world, this.gameId, current.project.filePath, current.controlled);
+        let arrived: string | null = null;
+        return this.load(staged => staged.transition(this.host, current.project.filePath, target).then(ok => {
+            arrived = staged.filePath; return ok;
+        }), (doc, world) => {
+            const key = arrived;
+            if (!key) return world;
+            const opened = openCampaignLevel(doc, next, key, "3d", this.gameId);
+            next = opened.campaign;
+            return opened.world3d ?? world;
+        }).then(ok => {
+            if (ok) this.campaign = next;
+            return ok;
+        });
     }
 
     stop(): void {
@@ -84,6 +106,7 @@ export class PlayerSession3D {
         this.pending?.reset(); this.pending = null;
         this.active?.project.reset(); this.active = null;
         this.playing = false; this.failure = null; this.lastTimestamp = null;
+        this.campaign = emptyCampaign();
     }
     /** The host must call pause on blur/visibility loss and clear its own pressed-key state. */
     pause(): void { this.playing = false; this.lastTimestamp = null; }
