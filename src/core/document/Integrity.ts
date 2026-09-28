@@ -161,6 +161,25 @@ function checkNodeRanges(node: ReadonlyNode): void {
     const entityErr = entityError(node.entity);
     const animationErr = animationControllerError(node.animation);
     if (animationErr) throw new Error(`Invalid document: node "${node.id}" ${animationErr}.`);
+    if (node.fromFrame !== undefined && (!Number.isFinite(node.fromFrame) || node.fromFrame < 0)) {
+        throw new Error(`Invalid document: node "${node.id}" fromFrame must be a finite number >= 0.`);
+    }
+    if (node.frameBlend !== undefined && (!Number.isFinite(node.frameBlend) || node.frameBlend < 0 || node.frameBlend > 1)) {
+        throw new Error(`Invalid document: node "${node.id}" frameBlend must be from 0 to 1.`);
+    }
+    if (node.playbackFrames !== undefined) {
+        const frames = node.playbackFrames;
+        if (!frames || typeof frames !== "object" || Array.isArray(frames)) throw new Error(`Invalid document: node "${node.id}" playbackFrames must be an object.`);
+        const entries = Object.entries(frames);
+        if (entries.length > 4096) throw new Error(`Invalid document: node "${node.id}" playbackFrames is too large.`);
+        for (const [key, value] of entries) {
+            if (!key || key.length > 8192 || !value || !Number.isFinite(value.frame) || value.frame < 0
+                || (value.fromFrame !== undefined && (!Number.isFinite(value.fromFrame) || value.fromFrame < 0))
+                || (value.frameBlend !== undefined && (!Number.isFinite(value.frameBlend) || value.frameBlend < 0 || value.frameBlend > 1))) {
+                throw new Error(`Invalid document: node "${node.id}" playbackFrames["${key}"] is invalid.`);
+            }
+        }
+    }
     if (entityErr) throw new Error(`Invalid document: node "${node.id}" ${entityErr}.`);
     const spatialErr = spatial3DError(node.spatial3d);
     if (spatialErr) throw new Error(`Invalid document: node "${node.id}" ${spatialErr}.`);

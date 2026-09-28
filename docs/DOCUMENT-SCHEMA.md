@@ -19,7 +19,7 @@
 <!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
      below. The earlier note stands — the rectangle gesture added no field. -->
 
-> 🔒 Frozen contract · schema v88 (app v0.0.5). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v89 (app v0.0.5). Types are in `src/core/document/`.
 
 Schema 86 adds optional `Node.spatial3d.blockout`: editable box/wall/ramp dimensions, stair
 count, or room thickness/ceiling. Geometry buffers are derived, not persisted. Dimensions are
@@ -38,6 +38,11 @@ and depth 8; positions to ±10000, rotations to ±36000, and absolute scales to 
 Unknown fields, invalid topology, excessive evaluation and GPU-degenerate results are refused
 before adoption. Rendering and collision share evaluated geometry; only editable operands are saved.
 Migration 87→88 preserves existing scenes and does not convert blockouts or enable collision.
+
+Schema 89 adds optional `animation.transitions[].fade` and `spatial3d.animation.fade`, both in seconds,
+greater than 0 and at most 1. Absent still cuts to the next clip immediately. A fade blends the
+outgoing and incoming timeline clips, or the previous and next glTF clips, and then finishes.
+Migration 88→89 does not invent fade durations.
 
 Schema 78 adds `Entity.rules`, `rulePolicy`, `gravity3d`, `restitution3d`, and `Spatial3D.animation`. Migration 77→78 preserves absent fields. Rules hold typed events, conditions and runtime commands; sound commands embed bounded audio data URLs. Mesh playback stores clip indices, optional secondary clip/blend, speed and loop—not joint buffers or clocks. See [Production workflows](PRODUCTION-WORK.md).
 

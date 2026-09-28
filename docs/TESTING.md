@@ -37,7 +37,7 @@ exact workloads, limits and measured priorities are recorded in [PRODUCTION-WORK
 <!-- re-read 2026-09-03 for the Canvas Fogworks rename: test behavior, compatibility identifiers,
      suite count and verification contract remain unchanged. -->
 
-> 🔒 Frozen contract · schema v88 (app v0.0.5) · current through file savepoints/recovery, dependency relocation, multi-animation imports, authored gameplay, offline 2D export, native mesh motion and oriented 3D collision tests. Jest reports the exact current count.
+> 🔒 Frozen contract · schema v89 (app v0.0.5) · current through file savepoints/recovery, dependency relocation, multi-animation imports, authored gameplay, offline 2D export, native mesh motion and oriented 3D collision tests. Jest reports the exact current count.
 
 `npm run smoke:authoring` checks exported PNG pixels and offline-game victory in real Electron Chromium. `npm run benchmark:authoring` reports owned 250/1000-node CPU/load/undo-memory measurements; these are informational, not hardware-dependent CI thresholds. See [Production workflows](PRODUCTION-WORK.md).
 

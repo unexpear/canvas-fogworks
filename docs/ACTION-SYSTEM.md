@@ -11,7 +11,7 @@
      terrain's material LIST position by position, because reordering two materials redraws every
      shore while touching no cell — an edit a set-comparison would refuse as nothing. -->
 
-> 🔒 Frozen contract · schema v88 (app v0.0.5) · includes animation-controller, gameplay-rule and native 3D playback authoring. Code in `src/core/actions/`.
+> 🔒 Frozen contract · schema v89 (app v0.0.5) · includes animation-controller, gameplay-rule and native 3D playback authoring. Code in `src/core/actions/`.
 
 Reusable behavior tables use `SetBehaviorAssetsAction`; promotion may bind an entity in the same
 mutation. Transactions preserve the independent `behaviorAssets` document delta. Referenced assets

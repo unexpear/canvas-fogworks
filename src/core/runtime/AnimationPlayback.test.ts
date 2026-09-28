@@ -4,7 +4,9 @@ import { AnimationController, animationControllerError } from "../document/Anima
 import { deserializeDocument, serializeDocument } from "../document/Serializer";
 import { ActionDispatcher } from "../actions/ActionDispatcher";
 import { SetAnimationControllerAction } from "../actions/SetAnimationControllerAction";
-import { applyAnimations, sampleClip, stepAnimations } from "./AnimationPlayback";
+import { applyAnimations, applyMotionFades, sampleClip, stepAnimations, stepMotionFades } from "./AnimationPlayback";
+import { resolveScene } from "../document/Components";
+import { spatial3DError } from "../document/Spatial3D";
 import { animateWorld2D } from "./AnimationWorld";
 import { applyCommands, stepWorld, worldFrom } from "./World";
 import { restartRun, respawnRun } from "./RunFlow";
@@ -92,7 +94,9 @@ describe("animation authoring and persistence", () => {
         { ...controller(), states: [{ name: "idle", clip: "idle", speed: 0 }] },
         { ...controller(), transitions: [{ from: "idle", to: "missing", when: "moving" }] },
         { ...controller(), transitions: [{ from: "idle", to: "walk", when: "unknown" }] },
-        { ...controller(), states: [{ name: "idle", clip: "idle" }, { name: "idle", clip: "walk" }] }
+        { ...controller(), states: [{ name: "idle", clip: "idle" }, { name: "idle", clip: "walk" }] },
+        { ...controller(), transitions: [{ from: "idle", to: "walk", when: "moving", fade: 0 }] },
+        { ...controller(), transitions: [{ from: "idle", to: "walk", when: "moving", fade: 1.1 }] }
     ])("refuses malformed controllers %j", value => expect(animationControllerError(value)).not.toBeNull());
     test("load and action share validation; undo/redo/clear round-trip without live aliasing", () => {
         const { doc, node } = fixture(); delete node.animation;
@@ -109,6 +113,15 @@ describe("animation authoring and persistence", () => {
         expect(dispatcher.dispatchAction(new SetAnimationControllerAction(dispatcher.getDocument(), node.id, undefined)).success).toBe(true);
         expect(dispatcher.getDocument().nodes.get(node.id)?.animation).toBeUndefined();
         expect(dispatcher.dispatchAction(new SetAnimationControllerAction(dispatcher.getDocument(), "absent", controller())).success).toBe(false);
+    });
+    test("schema 88 migrates and an optional fade round-trips", () => {
+        const { doc, node } = fixture();
+        node.animation!.transitions[0].fade = 0.4;
+        const raw = JSON.parse(serializeDocument(doc));
+        raw.version = "88";
+        const loaded = deserializeDocument(JSON.stringify(raw));
+        expect(loaded.version).toBe(SCHEMA_VERSION);
+        expect(loaded.nodes.get(node.id)?.animation?.transitions[0].fade).toBe(0.4);
     });
     test("schema 76 migrates without inventing controllers", () => {
         const { doc, node } = fixture(); delete node.animation;
@@ -151,5 +164,70 @@ describe("runtime adapters and 3D composition", () => {
         expect(restartRun3D(doc).animations?.get(node.id)?.frame).toBe(0);
         expect(respawnRun3D(doc, batch, node.id).animations?.get(node.id)?.frame).toBe(0);
         expect(node.style.fill).toBe("#ff0000");
+    });
+    test("a 3D clip change crossfades from the clip that was playing", () => {
+        const { doc, node } = fixture();
+        node.spatial3d = { transform: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, scale: { x: 1, y: 1, z: 1 } },
+            renderable: { meshAssetId: "mesh" }, animation: { clip: 0, fade: 0.5 } };
+        expect(spatial3DError(node.spatial3d)).toBeNull();
+        expect(spatial3DError({ ...node.spatial3d, animation: { clip: 0, fade: 0 } })).toMatch(/invalid 3D animation/);
+        let fades = stepMotionFades(doc, undefined, 0);
+        expect(fades?.get(node.id)).toMatchObject({ clip: 0, startedAt: 0, fade: 0.5 });
+        expect(fades?.get(node.id)?.fromClip).toBeUndefined();
+        node.spatial3d.animation!.clip = 1;
+        fades = stepMotionFades(doc, fades, 0.25);
+        expect(fades?.get(node.id)).toMatchObject({ clip: 1, fromClip: 0, startedAt: 0.25, fade: 0.5 });
+        const midway = applyMotionFades(doc, fades, 0.5);
+        expect(midway.nodes.get(node.id)?.spatial3d?.animation).toMatchObject({ clip: 1, secondaryClip: 0, blend: 0.5 });
+        expect(applyMotionFades(doc, fades, 0.75)).toBe(doc);
+        expect(node.spatial3d.animation?.secondaryClip).toBeUndefined();
+    });
+});
+
+describe("crossfades and component-instance playback", () => {
+    test("a fade blends the outgoing clip, ignores new rules until it finishes, then commits", () => {
+        const { doc, node } = fixture();
+        node.animation!.transitions = [
+            { from: "idle", to: "walk", when: "moving", fade: 0.5 },
+            { from: "walk", to: "idle", when: "idle" }
+        ];
+        let players = stepAnimations(doc, undefined, 0);
+        players = stepAnimations(doc, players, 0.5, () => new Set(["moving"]));
+        expect(players?.get("hero")).toMatchObject({ state: "walk", blend: 0, frame: 12, from: { state: "idle", frame: 6 } });
+        expect(resolveScene(applyAnimations(doc, players)).nodes.get("hero")?.style.fill).toBe("#ff0000");
+        players = stepAnimations(doc, players, 0.75, () => new Set(["idle"]));
+        expect(players?.get("hero")?.blend).toBeCloseTo(0.5);
+        expect(players?.get("hero")?.state).toBe("walk");
+        expect(resolveScene(applyAnimations(doc, players)).nodes.get("hero")?.style.fill).toBe("#808000");
+        players = stepAnimations(doc, players, 1, () => new Set(["moving"]));
+        expect(players?.get("hero")?.from).toBeUndefined();
+        expect(players?.get("hero")?.state).toBe("walk");
+        expect(resolveScene(applyAnimations(doc, players)).nodes.get("hero")?.style.fill).toBe("#00ff00");
+    });
+    test("a transition without fade still cuts on the same step", () => {
+        const { doc } = fixture();
+        let players = stepAnimations(doc, undefined, 0);
+        players = stepAnimations(doc, players, 0.5, () => new Set(["moving"]));
+        expect(players?.get("hero")?.from).toBeUndefined();
+        expect(resolveScene(applyAnimations(doc, players)).nodes.get("hero")?.style.fill).toBe("#00ff00");
+    });
+    test("each component instance keeps its own playhead", () => {
+        const { doc, node } = fixture();
+        const place = (id: string, x: number) => doc.nodes.set(id, { id, type: "core.instance", parent: null, children: [],
+            geometry: { x, y: 0, width: 10, height: 10 }, style: { fill: "none", opacity: 1 }, layout: {}, componentId: node.id });
+        place("a", 20); place("b", 40);
+        doc.rootNodeUuids = [node.id, "a", "b"];
+        let players = stepAnimations(doc, undefined, 0);
+        players = stepAnimations(doc, players, 0, id => new Set(id === "a" ? ["moving"] : []));
+        expect(players?.get("a::hero")?.frame).toBe(12);
+        expect(players?.get("b::hero")?.frame).toBe(0);
+        players = stepAnimations(doc, players, 0.25, id => new Set(id === "a" ? ["moving"] : []));
+        expect(players?.get("a::hero")?.frame).toBe(15);
+        expect(players?.get("b::hero")?.frame).toBe(3);
+        const scene = resolveScene(applyAnimations(doc, players));
+        expect(scene.nodes.get("a::hero")?.style.fill).toBe("#00ff00");
+        expect(scene.nodes.get("b::hero")?.style.fill).toBe("#ff0000");
+        expect(doc.nodes.get(node.id)?.style.fill).toBe("#ff0000");
+        expect(doc.nodes.get("a")?.playbackFrames).toBeUndefined();
     });
 });

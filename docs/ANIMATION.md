@@ -32,7 +32,10 @@ owns a separate playback scope. A state entry starts at its clip's first frame. 
 at timeline fps × state speed using simulation time, independent of display refresh rate.
 First matching outgoing transition wins; at most one transition occurs per step. A self-transition
 restarts the clip. `finished` means the complete inclusive duration of a non-looping clip elapsed;
-looping clips never fire it. State switches are immediate; crossfading is not implemented.
+looping clips never fire it. A transition may set `fade` in seconds. While that fade runs, the outgoing
+clip keeps advancing, the incoming clip starts at its first frame, and the displayed pose blends
+from one to the other. Another rule waits until the fade finishes. Absent `fade` still switches
+immediately.
 
 2D supports moving/idle (horizontal velocity), grounded/airborne, rising/falling, enter/leave,
 contact/separate, bump and won/lost. Events belong to the selected driver. The shell adapts
@@ -49,13 +52,16 @@ Unconfigured nodes keep their previous animation behavior, including distance-dr
 Configured node playheads take priority on the derived render document. Physics continues to
 read authored geometry, never animated render geometry. Missing target clips cannot be entered;
 a missing active clip is inert until repaired. Runtime edits to controller/clip/timeline definitions
-reset the affected clock. Component-instance animation expansion is not part of this slice.
+reset the affected clock. Each component instance of a mastered controller keeps its own clock,
+keyed by the expanded copy, so two placements can be in different states at the same time. The
+instance node's body supplies movement and event signals when the controller does not name another
+stored driver.
 
 ## 3D boundary and next work
 
 Composed 2D visuals now sample timeline tracks and image source rectangles in the 3D renderer.
 Sprite atlas crops share one uploaded texture and preserve nearest-neighbor filtering when authored.
-Schema 78 additionally imports native glTF TRS tracks and four-influence skins. Choose a clip in the 3D inspector, Run to play or scrub an enabled timeline to preview. STEP, LINEAR and CUBICSPLINE sampling and two-clip pose blending are supported. CPU skinning is bounded to 100,000 vertices and 128 joints per skin. Morph animation, GPU skinning, automatic crossfading and component-instance playback remain `ANIMATION-002`; this is not a complete character-animation system.
+Schema 78 additionally imports native glTF TRS tracks and four-influence skins. Choose a clip in the 3D inspector, Run to play or scrub an enabled timeline to preview. STEP, LINEAR and CUBICSPLINE sampling and two-clip pose blending are supported. CPU skinning is bounded to 100,000 vertices and 128 joints per skin. Morph weights (at most 8 targets) are applied before skinning. Skins of at most 16 joints upload a palette and deform in the vertex shader; larger skins stay on the CPU path, which is the reference for the same formula. A 3D `fade` crossfades from the previous clip when the selected clip changes during a run. This is not a complete character-animation system.
 
 Aseprite imports now preserve the existing project frame rate and clips. Incoming frames are converted only when exact integer-frame timing is possible; incompatible timing is explicitly refused. Colliding names receive numeric suffixes. Existing tracks and controller references are unchanged, and import remains one undoable transaction.
 

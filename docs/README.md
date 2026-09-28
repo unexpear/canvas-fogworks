@@ -4,7 +4,7 @@
 <!-- re-read 2026-09-28: shell source pins in the test suite now also read FoldersDrawer.tsx.
      The frozen contracts summarised here are unchanged. -->
 
-> **Frozen contracts · schema v88 (app v0.0.5) · current through project recovery, gameplay rules, offline 2D export and native mesh playback.**
+> **Frozen contracts · schema v89 (app v0.0.5) · current through project recovery, gameplay rules, offline 2D export and native mesh playback.**
 
 Current workflow scope, limits, commands and measured budgets: [Production workflows](PRODUCTION-WORK.md).
 Timers, bounded repeats, reusable project graphs, saved continuations and editor debugging:

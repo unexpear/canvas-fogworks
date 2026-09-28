@@ -463,6 +463,8 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "86") { raw = { ...raw, version: "87" }; version = "87"; }
     // 87 -> 88: optional solid trees; existing blockouts retain their representation and collision opt-in.
     if (version === "87") { raw = { ...raw, version: "88" }; version = "88"; }
+    // 88 -> 89: optional transition and 3D clip crossfade durations. Absent still cuts immediately.
+    if (version === "88") { raw = { ...raw, version: "89" }; version = "89"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {

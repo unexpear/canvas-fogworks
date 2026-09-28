@@ -390,6 +390,18 @@ export interface Node {
      */
     frame?: number;
     /**
+     * Derived crossfade source, stamped by playback and consumed by `applyFrame`.
+     * Not an authored field: absent means the playhead is a single frame.
+     */
+    fromFrame?: number;
+    /** 0 keeps `fromFrame`; 1 is `frame`. Absent means no crossfade. */
+    frameBlend?: number;
+    /**
+     * Per-copy playheads for one component instance, keyed by the virtual id under that instance.
+     * Stamped on the derived document so each instance can advance alone.
+     */
+    playbackFrames?: Readonly<Record<string, { frame: number; fromFrame?: number; frameBlend?: number }>>;
+    /**
      * Where this node is asked to BE, with its parent and grandparent derived to put it there
      * (schema 49). Absent = the node is placed the ordinary way.
      *
