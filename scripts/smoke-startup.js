@@ -2,7 +2,8 @@
  * @module smoke-startup
  * @description Launches the built Electron app, waits for its renderer-ready sentinel, and fails
  * if startup crashes, loads no UI, or hangs. Accepts `--packaged <exe>` for the unpacked app that
- * electron-builder creates alongside the NSIS installer.
+ * electron-builder creates alongside the NSIS installer, and `--historical-migration` for a
+ * legacy project opened and saved by that same executable.
  */
 
 const { spawn } = require("child_process");
@@ -13,15 +14,33 @@ const ROOT = path.resolve(__dirname, "..");
 const packagedAt = process.argv.indexOf("--packaged");
 const packaged = packagedAt >= 0;
 const projectOpen = process.argv.includes("--project-open");
+const historicalAt = process.argv.indexOf("--historical-migration");
+const historical = historicalAt >= 0 ? path.resolve(process.argv[historicalAt + 1] || "") : "";
+const schemaAt = process.argv.indexOf("--historical-schema");
+const historicalSchema = schemaAt >= 0 ? process.argv[schemaAt + 1] || "" : "";
 const target = packaged
     ? path.resolve(ROOT, process.argv[packagedAt + 1] || "")
     : require("electron");
 const args = packaged ? [] : [path.join(ROOT, "dist", "electron", "main.js")];
 const TIMEOUT_MS = 45_000;
-const READY = projectOpen ? "VDE_PROJECT_FILE_SMOKE_READY" : "VDE_STARTUP_SMOKE_READY";
+const READY = historical
+    ? `VDE_HISTORICAL_MIGRATION_READY ${historicalSchema}`
+    : projectOpen ? "VDE_PROJECT_FILE_SMOKE_READY" : "VDE_STARTUP_SMOKE_READY";
 const smokeProject = path.join(ROOT, "dist", "project-open-smoke.vde");
 const smokeModel = path.join(ROOT, "dist", "project-open-smoke.gltf");
 
+if (historical && projectOpen) {
+    console.error("Historical migration smoke cannot be combined with --project-open.");
+    process.exit(2);
+}
+if ((historical && !/^\d+$/.test(historicalSchema)) || (!historical && schemaAt >= 0)) {
+    console.error("Historical migration smoke requires --historical-migration <file> and a numeric --historical-schema.");
+    process.exit(2);
+}
+if (historical && !fs.existsSync(historical)) {
+    console.error(`Historical project does not exist: ${historical}`);
+    process.exit(2);
+}
 if (!fs.existsSync(target)) {
     console.error(`Startup smoke target does not exist: ${target}`);
     process.exit(2);
@@ -90,7 +109,9 @@ if (projectOpen) {
 }
 const child = spawn(target, args, {
     cwd: ROOT,
-    env: projectOpen
+    env: historical
+        ? { ...process.env, VDE_HISTORICAL_MIGRATION_SMOKE: historical, VDE_HISTORICAL_MIGRATION_SCHEMA: historicalSchema }
+        : projectOpen
         ? { ...process.env, VDE_PROJECT_OPEN_SMOKE: smokeProject }
         : { ...process.env, VDE_STARTUP_SMOKE: "1" },
     stdio: ["ignore", "pipe", "pipe"],
@@ -126,7 +147,8 @@ child.on("exit", code => {
         try { fs.unlinkSync(smokeModel); } catch { /* best-effort smoke cleanup */ }
     }
     if (code === 0 && output.includes(READY)) {
-        console.log(`${projectOpen ? "Open-edit-save" : "Startup"} smoke passed (${packaged ? "packaged app" : "built Electron app"}).`);
+        const label = historical ? "Historical migration" : projectOpen ? "Open-edit-save" : "Startup";
+        console.log(`${label} smoke passed (${packaged ? "packaged app" : "built Electron app"}).`);
         return;
     }
     console.error(`Startup smoke failed with exit code ${code}; ready sentinel was ${output.includes(READY) ? "present" : "absent"}.\n${output}`);

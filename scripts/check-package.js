@@ -1,7 +1,8 @@
 /**
  * @module check-package
- * @description Verifies packaged application identity, current bundles and the release
- * archive allowlist without extracting files or changing an installed application.
+ * @description Verifies packaged application identity, refuses publisher metadata and
+ * signing configuration, and checks current bundles plus the release archive allowlist
+ * without extracting files or changing an installed application.
  */
 const fs = require("node:fs");
 const path = require("node:path");
@@ -12,6 +13,45 @@ const BUNDLES = [
     "dist/electron/main.js", "dist/electron/preload.js"
 ];
 const DIRECTORIES = new Set(["dist", "dist/app", "dist/electron", "node_modules"]);
+// Personal publisher metadata and code signing stay omitted. An explicit
+// forceCodeSigning:false is the same policy stated out loud; true is a request to sign.
+const IDENTITY_FIELDS = [
+    ["author"],
+    ["build", "copyright"],
+    ["build", "win", "publisherName"],
+    ["build", "win", "legalTrademarks"],
+    ["build", "win", "certificateFile"],
+    ["build", "win", "certificatePassword"],
+    ["build", "win", "certificateSubjectName"],
+    ["build", "win", "certificateSha1"],
+    ["build", "win", "signingHashAlgorithms"],
+    ["build", "win", "sign"],
+    ["build", "win", "signtoolOptions"]
+];
+
+function valueAt(source, keys) {
+    let current = source;
+    for (const key of keys) {
+        if (!current || typeof current !== "object" || !Object.prototype.hasOwnProperty.call(current, key)) return undefined;
+        current = current[key];
+    }
+    return current;
+}
+
+function isSpecified(value) {
+    if (value === undefined || value === null) return false;
+    if (typeof value === "string" && value.trim() === "") return false;
+    return true;
+}
+
+function releaseIdentityViolations(pkg) {
+    const violations = [];
+    for (const keys of IDENTITY_FIELDS) {
+        if (isSpecified(valueAt(pkg, keys))) violations.push(keys.join("."));
+    }
+    if (valueAt(pkg, ["build", "forceCodeSigning"]) === true) violations.push("build.forceCodeSigning");
+    return violations;
+}
 
 function checkPackage(root, archive) {
     // ASAR caches headers by path; repeated checks must inspect the current file.
@@ -37,6 +77,10 @@ function checkPackage(root, archive) {
         };
         const expected = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
         const packaged = JSON.parse(read("package.json").toString("utf8"));
+        for (const [label, metadata] of [["Source", expected], ["Packaged", packaged]]) {
+            const violations = releaseIdentityViolations(metadata);
+            if (violations.length) throw new Error(`${label} package identity: ${violations.join(", ")}`);
+        }
         for (const key of ["name", "version", "main"]) {
             if (packaged[key] !== expected[key]) throw new Error(`Packaged ${key} does not match package.json`);
         }
@@ -63,4 +107,4 @@ if (require.main === module) {
     }
 }
 
-module.exports = { checkPackage, BUNDLES };
+module.exports = { checkPackage, BUNDLES, releaseIdentityViolations };

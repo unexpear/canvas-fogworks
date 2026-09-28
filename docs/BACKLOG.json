@@ -16,8 +16,8 @@
       "area": "distribution",
       "priority": "P1",
       "status": "open",
-      "summary": "Extend the passing per-user, software-rendered Sandbox installer lifecycle (fresh install, synthetic-version upgrade, uninstall, project/recovery preservation) with historical-release migration, GUI/per-machine installer coverage and hardware-GPU validation. An original vector icon is packaged. Personal publisher metadata and signing are intentionally omitted at the user's request.",
-      "evidence": ["scripts/check-package.js", "scripts/test-installer-sandbox.ps1", "src/electron/smokeProfile.js", "docs/INSTALLER-TESTING.md"]
+      "summary": "Record a Windows Sandbox pass of the extended installer lifecycle (legacy 0.0.4 project migration, assisted GUI per-user and per-machine install/uninstall, silent per-machine install/uninstall) and a separate host hardware-GPU validation. The September 7 per-user software-rendered synthetic-upgrade pass did not cover those phases. Virtual GPU stays disabled. Personal publisher metadata and signing remain intentionally omitted.",
+      "evidence": ["scripts/check-package.js", "scripts/installerLifecycle.js", "scripts/test-installer-sandbox.ps1", "scripts/validate-hardware-gpu.js", "src/electron/historicalMigration.js", "src/electron/smokeProfile.js", "docs/INSTALLER-TESTING.md"]
     },
     {
       "id": "SHELL-001",

@@ -133,6 +133,8 @@ installer/update/provenance policy and broader platform support. F1 remains part
 Asset redistribution and attribution remain the game author's responsibility: an ignored pack
 does not become redistributable just because a project references it.
 
+The editor installer lifecycle is separate from this player package. It still omits personal publisher metadata and signing; see [Installer lifecycle testing](INSTALLER-TESTING.md).
+
 Implementation was checked against [Electron security](https://www.electronjs.org/docs/latest/tutorial/security),
 [request interception](https://www.electronjs.org/docs/latest/api/web-request),
 [Node bounded file reads](https://nodejs.org/api/fs.html#filehandlereadbuffer-offset-length-position),

@@ -21,8 +21,15 @@ const zlib = require("zlib");
 const pkg = require("../../package.json");
 const STARTUP_SMOKE = process.env.VDE_STARTUP_SMOKE === "1";
 const PROJECT_OPEN_SMOKE = process.env.VDE_PROJECT_OPEN_SMOKE || "";
+const HISTORICAL_MIGRATION_SMOKE = process.env.VDE_HISTORICAL_MIGRATION_SMOKE || "";
+const HISTORICAL_MIGRATION_SCHEMA = process.env.VDE_HISTORICAL_MIGRATION_SCHEMA || "";
 const { isolateSmokeProfile } = require("./smokeProfile");
-const smokeProfile = isolateSmokeProfile(app, STARTUP_SMOKE || !!PROJECT_OPEN_SMOKE);
+const { assertMigratedHistoricalProject } = require("./historicalMigration");
+if (HISTORICAL_MIGRATION_SMOKE && (STARTUP_SMOKE || PROJECT_OPEN_SMOKE)) {
+    console.error("VDE_HISTORICAL_MIGRATION_FAILED: conflicting smoke mode");
+    process.exit(2);
+}
+const smokeProfile = isolateSmokeProfile(app, STARTUP_SMOKE || !!PROJECT_OPEN_SMOKE || !!HISTORICAL_MIGRATION_SMOKE);
 if (smokeProfile) console.log(`VDE_SMOKE_PROFILE: ${smokeProfile}`);
 let projectWorkflowSmokeOpened = false;
 
@@ -46,13 +53,13 @@ function createWindow() {
             contextIsolation: true,
             preload: path.join(__dirname, "preload.js")
         },
-        ...(PROJECT_OPEN_SMOKE ? { x: -10000, y: -10000 } : {}),
+        ...(PROJECT_OPEN_SMOKE || HISTORICAL_MIGRATION_SMOKE ? { x: -10000, y: -10000 } : {}),
         show: false
     });
 
     mainWindow.loadFile(path.join(__dirname, "..", "app", "index.html")).catch((err) => {
-        if (STARTUP_SMOKE) {
-            console.error(`VDE_STARTUP_SMOKE_FAILED: ${err.message}`);
+        if (STARTUP_SMOKE || HISTORICAL_MIGRATION_SMOKE) {
+            console.error(`${HISTORICAL_MIGRATION_SMOKE ? "VDE_HISTORICAL_MIGRATION_FAILED" : "VDE_STARTUP_SMOKE_FAILED"}: ${err.message}`);
             app.exit(1);
             return;
         }
@@ -60,8 +67,8 @@ function createWindow() {
     });
 
     mainWindow.webContents.on("did-fail-load", (_e, errorCode, errorDescription) => {
-        if (STARTUP_SMOKE) {
-            console.error(`VDE_STARTUP_SMOKE_FAILED: ${errorCode} ${errorDescription}`);
+        if (STARTUP_SMOKE || HISTORICAL_MIGRATION_SMOKE) {
+            console.error(`${HISTORICAL_MIGRATION_SMOKE ? "VDE_HISTORICAL_MIGRATION_FAILED" : "VDE_STARTUP_SMOKE_FAILED"}: ${errorCode} ${errorDescription}`);
             app.exit(1);
             return;
         }
@@ -91,6 +98,21 @@ function createWindow() {
                     mainWindow?.webContents.send("file-opened", { filePath, content });
                 } catch (err) {
                     console.error(`VDE_PROJECT_OPEN_SMOKE_FAILED: ${err.message}`);
+                    app.exit(1);
+                }
+            }, 100);
+            return;
+        }
+        if (HISTORICAL_MIGRATION_SMOKE) {
+            mainWindow.showInactive();
+            setTimeout(async () => {
+                try {
+                    const filePath = path.resolve(HISTORICAL_MIGRATION_SMOKE);
+                    const content = await fs.promises.readFile(filePath, "utf-8");
+                    approvedSavePaths.add(filePath);
+                    mainWindow?.webContents.send("file-opened", { filePath, content });
+                } catch (err) {
+                    console.error(`VDE_HISTORICAL_MIGRATION_FAILED: ${err.message}`);
                     app.exit(1);
                 }
             }, 100);
@@ -245,6 +267,17 @@ function createWindow() {
 // This acknowledgement has no authority during an ordinary run. In smoke mode it validates the
 // sender and exact path, proving the file crossed contextBridge and passed the real deserializer.
 ipcMain.on("project-open-result", (event, result) => {
+    if (HISTORICAL_MIGRATION_SMOKE) {
+        if (!mainWindow || event.sender !== mainWindow.webContents) return;
+        const expected = path.resolve(HISTORICAL_MIGRATION_SMOKE);
+        if (!result || result.filePath !== expected || result.ok !== true) {
+            console.error(`VDE_HISTORICAL_MIGRATION_FAILED: ${result?.error || "invalid acknowledgement"}`);
+            app.exit(1);
+            return;
+        }
+        mainWindow.webContents.send("menu-command", "file.save");
+        return;
+    }
     if (!PROJECT_OPEN_SMOKE || !mainWindow || event.sender !== mainWindow.webContents) return;
     const expected = path.resolve(PROJECT_OPEN_SMOKE);
     if (!result || result.filePath !== expected || result.ok !== true) {
@@ -829,6 +862,16 @@ ipcMain.handle("save-file", async (event, filePath, content, sourceProjectPath) 
         throw new Error("Reopen the original project before relocating its referenced 3D assets.");
     }
     await atomicWrite(filePath, content);
+    if (HISTORICAL_MIGRATION_SMOKE && path.resolve(filePath) === path.resolve(HISTORICAL_MIGRATION_SMOKE)) {
+        try {
+            const migrated = assertMigratedHistoricalProject(content, HISTORICAL_MIGRATION_SCHEMA);
+            console.log(`VDE_HISTORICAL_MIGRATION_READY ${migrated.schema}`);
+            app.exit(0);
+        } catch (err) {
+            console.error(`VDE_HISTORICAL_MIGRATION_FAILED: ${err.message}`);
+            app.exit(1);
+        }
+    }
     if (PROJECT_OPEN_SMOKE && projectWorkflowSmokeOpened
         && path.resolve(filePath) === path.resolve(PROJECT_OPEN_SMOKE)) {
         try {

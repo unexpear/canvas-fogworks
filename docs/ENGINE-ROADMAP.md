@@ -536,7 +536,10 @@ neither legal conclusions about packs nor historical asset purging.
   compatibility corpus, clean-profile player smoke and recorded failure triage.
 - **Expansion:** visual/reference tests, importer fuzzing, bounded mutation batches with a
   zero-tests breaker, real desktop recovery, historical upgrade migration, hardware GPU/driver
-  matrix, long sessions, packaging rollback and performance regression gates.
+  matrix, long sessions, packaging rollback and performance regression gates. The installer
+  harness now plans legacy 0.0.4 project migration, assisted GUI and per-machine installs, and
+  a host hardware-GPU classifier outside the software-rendered Sandbox. A recorded Windows run
+  of those phases is still required; that guest result is not hardware certification.
 - **Depends:** each subsystem exposes test seams; ENG-16 measurable diagnostics.
 - **Acceptance:** each supported target can build, launch, author/play where applicable,
   save, migrate and uninstall/update according to its policy without losing user data.

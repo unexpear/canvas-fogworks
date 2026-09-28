@@ -74,6 +74,27 @@ test("rejects a required bundle stored outside the archive", async t => {
     assert.throws(() => checkPackage(root, archive), /must be stored inside the archive/);
 });
 
+test("rejects packaged publisher metadata", async t => {
+    const { root, archive } = await fixture(t, ({ source, write, metadata }) =>
+        write(source, "package.json", JSON.stringify({ ...metadata, author: "Pat Example" })));
+    assert.throws(() => checkPackage(root, archive), /Packaged package identity: author/);
+});
+
+test("rejects signing configuration on the source package", async t => {
+    const { root, archive } = await fixture(t, ({ root: sourceRoot, write, metadata }) =>
+        write(sourceRoot, "package.json", JSON.stringify({ ...metadata, build: { forceCodeSigning: true, win: { signtoolOptions: { publisherName: "Pat Example" } } } })));
+    assert.throws(() => checkPackage(root, archive), /Source package identity: build\.win\.signtoolOptions, build\.forceCodeSigning/);
+});
+
+test("allows an explicit refusal to force code signing", async t => {
+    const { root, archive } = await fixture(t, ({ root: sourceRoot, source, write, metadata }) => {
+        const body = JSON.stringify({ ...metadata, build: { forceCodeSigning: false } });
+        write(sourceRoot, "package.json", body);
+        write(source, "package.json", body);
+    });
+    assert.equal(checkPackage(root, archive).version, "0.0.5");
+});
+
 test("rejects corrupt archives", async t => {
     const { root, archive } = await fixture(t);
     fs.writeFileSync(archive, "not an archive");
