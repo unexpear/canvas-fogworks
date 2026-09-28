@@ -33,6 +33,7 @@ export interface World3DState {
     gameplayContacts?: readonly [string, string][];
     diagnostics?: readonly string[];
     animations?: import("./AnimationPlayback").AnimationPlayers;
+    motionFades?: import("./AnimationPlayback").MotionFades;
     bodies: ReadonlyMap<string, Body3D>;
     time: number;
     accumulator: number;

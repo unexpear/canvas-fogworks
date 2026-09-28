@@ -4,7 +4,7 @@
  */
 import { ReadonlyDocument } from "../document/Document";
 import { AnimationCondition } from "../document/AnimationController";
-import { stepAnimations } from "./AnimationPlayback";
+import { stepAnimations, stepMotionFades } from "./AnimationPlayback";
 import type { WorldState } from "./World";
 import type { World3DState } from "./World3D";
 
@@ -35,5 +35,6 @@ export function animateWorld3D(doc: ReadonlyDocument, world: World3DState): Worl
         if (world.outcome !== "running") active.add(world.outcome);
         return active;
     });
-    return animations || world.animations ? { ...world, animations } : world;
+    const motionFades = stepMotionFades(doc, world.motionFades, world.time);
+    return animations || world.animations || motionFades || world.motionFades ? { ...world, animations, motionFades } : world;
 }

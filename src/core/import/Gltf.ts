@@ -85,7 +85,7 @@ export interface GltfJson {
     scene?: number;
     scenes?: { nodes?: number[] }[];
     nodes?: GltfNode[];
-    meshes?: { name?: string; primitives: GltfPrimitiveJson[] }[];
+    meshes?: { name?: string; weights?: number[]; primitives: GltfPrimitiveJson[] }[];
     accessors?: GltfAccessor[];
     bufferViews?: GltfBufferView[];
     buffers?: { byteLength?: number; uri?: string }[];
@@ -106,6 +106,8 @@ export interface GltfNode {
     translation?: number[];
     rotation?: number[];
     scale?: number[];
+    /** Default morph weights. Absent uses the mesh weights, then zeros. */
+    weights?: number[];
 }
 
 interface GltfPrimitiveJson {
@@ -113,7 +115,7 @@ interface GltfPrimitiveJson {
     indices?: number;
     material?: number;
     mode?: number;
-    targets?: unknown[];
+    targets?: { POSITION?: number; NORMAL?: number; TANGENT?: number }[];
 }
 
 interface GltfAccessor {
@@ -512,7 +514,7 @@ function readPrimitive(
         notes.push(`a primitive draws ${MODE_NAMES[mode] ?? `mode ${mode}`}, which this does not read`);
         return null;
     }
-    if (prim.targets) notes.push("a primitive carries morph targets, which are not applied");
+    if (prim.targets) notes.push("a primitive carries morph targets; motion sampling applies them, this rest pose does not");
 
     const positionIndex = prim.attributes?.POSITION;
     if (positionIndex === undefined) { notes.push("a primitive has no POSITION"); return null; }

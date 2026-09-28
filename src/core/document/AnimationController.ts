@@ -6,7 +6,11 @@ export const ANIMATION_CONDITIONS = ["moving", "idle", "rising", "falling", "gro
     "enter", "leave", "contact", "separate", "bump", "won", "lost", "finished"] as const;
 export type AnimationCondition = typeof ANIMATION_CONDITIONS[number];
 export interface AnimationState { name: string; clip: string; speed?: number }
-export interface AnimationTransition { from: string; to: string; when: AnimationCondition }
+export interface AnimationTransition {
+    from: string; to: string; when: AnimationCondition;
+    /** Seconds to blend from the outgoing clip. Absent switches immediately, as schema 77 did. */
+    fade?: number;
+}
 export interface AnimationController {
     initial: string;
     /** Optional body providing movement/events; absent uses this node. */
@@ -35,6 +39,7 @@ export function animationControllerError(value: unknown): string | null {
     for (const t of c.transitions) {
         if (!t || typeof t !== "object" || Array.isArray(t) || !names.has(t.from) || !names.has(t.to)
             || !(ANIMATION_CONDITIONS as readonly unknown[]).includes(t.when)) return "animation transition has an invalid state or condition";
+        if (t.fade !== undefined && (typeof t.fade !== "number" || !Number.isFinite(t.fade) || t.fade <= 0 || t.fade > 1)) return "animation fade must be greater than 0 and at most 1 second";
     }
     return null;
 }

@@ -55,6 +55,19 @@ export interface MeshInstance {
      */
     matrix: number[];
     primitive: MeshPrimitive;
+    /**
+     * Joint palette for GPU skinning. Absent when the mesh is rigid or the skin exceeds the
+     * uniform budget and was baked on the CPU instead.
+     */
+    skin?: GpuSkin;
+}
+
+/** Four influences and a joint palette the vertex shader can apply without rebaking positions. */
+export interface GpuSkin {
+    joints: Float32Array;
+    weights: Float32Array;
+    /** Column-major matrices, `GPU_SKIN_JOINTS` of them. Unused slots are identity. */
+    palette: Float32Array;
 }
 
 /** The identity, which a reader with no transforms of its own hands back. */

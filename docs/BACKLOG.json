@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "lastReconciled": "2026-09-07",
-  "sourceRevision": "8054021",
+  "lastReconciled": "2026-09-28",
+  "sourceRevision": "78ce04d",
   "productDirection": {
     "mode": "dual-track",
     "summary": "Canvas Fogworks is both a general visual/pixel editor and a game-authoring environment.",
@@ -26,14 +26,6 @@
       "status": "open",
       "summary": "Continue extracting cohesive panels and workflows from App.tsx; project files, image-sequence import, workspace/runtime controls and the 3D inspector are tested seams.",
       "evidence": ["src/app/App.tsx", "src/app/AppShellControls.tsx", "src/app/ThreeDInspector.tsx"]
-    },
-    {
-      "id": "ANIMATION-002",
-      "area": "animation",
-      "priority": "P1",
-      "status": "open",
-      "summary": "Extend delivered native glTF TRS sampling, bounded CPU skinning and two-clip pose blending with GPU skinning, automatic crossfades, morph animation and component-instance playback.",
-      "evidence": ["docs/ANIMATION.md", "src/core/import/Gltf.ts", "src/core/runtime/AnimationPlayback.ts"]
     },
     {
       "id": "GAMEPLAY-001",

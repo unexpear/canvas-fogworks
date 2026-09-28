@@ -64,7 +64,7 @@ export interface Spatial3D {
     solidTree?: SolidTree3D;
     /** Explicit solid opt-in. Absent/false preserves visual-only schema-86 scenes. */
     blockoutCollision?: boolean;
-    animation?: { clip: number; secondaryClip?: number; blend?: number; speed?: number; loop?: boolean };
+    animation?: { clip: number; secondaryClip?: number; blend?: number; speed?: number; loop?: boolean; fade?: number };
     transform: Transform3D;
     camera?: Camera3D;
     light?: Light3D;
@@ -176,6 +176,7 @@ export function spatial3DError(spatial: unknown): string | null {
             || (a.secondaryClip !== undefined && (!Number.isInteger(a.secondaryClip) || a.secondaryClip < 0 || a.secondaryClip >= 256))
             || (a.blend !== undefined && (!Number.isFinite(a.blend) || a.blend < 0 || a.blend > 1))
             || (a.speed !== undefined && (!Number.isFinite(a.speed) || a.speed <= 0 || a.speed > 10))
+            || (a.fade !== undefined && (!Number.isFinite(a.fade) || a.fade <= 0 || a.fade > 1))
             || (a.loop !== undefined && typeof a.loop !== "boolean")) return "invalid 3D animation playback settings";
         if (!s.renderable) return "3D animation playback needs a mesh renderable";
     }

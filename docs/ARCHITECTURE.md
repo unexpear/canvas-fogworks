@@ -20,7 +20,7 @@
      not its readers; API-CONTRACTS carries the reader's surface. -->
 
 
-> 🔒 Frozen contract · schema v88 (app v0.0.5). Includes typed gameplay rules, offline 2D delivery, native mesh playback and opt-in oriented 3D contact resolution.
+> 🔒 Frozen contract · schema v89 (app v0.0.5). Includes typed gameplay rules, offline 2D delivery, native mesh playback and opt-in oriented 3D contact resolution.
 
 The file lifecycle is separate from editor history (`ProjectSession`); runtime event/command execution is shared with the standalone player (`GameplaySession`). Imported skeletal buffers remain transient and derive from confined source files, not document history. [Production workflows](PRODUCTION-WORK.md) records the current limits and measurements.
 

@@ -57,6 +57,17 @@ describe("animation panel authoring", () => {
         expect(dispatcher.getHistoryCheckpoint()).toBe(before);
         expect(dispatcher.undo()?.nodes.get("hero")?.animation?.transitions[0].when).toBe("finished");
     });
+    test("authors an optional transition fade and rejects one outside the allowed range", async () => {
+        await click("Add controller"); await select("Preview clip", "walk");
+        await input("New state name", "walk"); await click("Add state"); await click("Add transition");
+        await input("Fade transition 1", "0.5");
+        expect(dispatcher.getDocument().nodes.get("hero")?.animation?.transitions[0].fade).toBe(0.5);
+        await input("Fade transition 1", "");
+        expect(dispatcher.getDocument().nodes.get("hero")?.animation?.transitions[0].fade).toBeUndefined();
+        await input("Fade transition 1", "4");
+        expect(host.querySelector('[role="alert"]')?.textContent).toMatch(/rejected/);
+        expect(dispatcher.getDocument().nodes.get("hero")?.animation?.transitions[0].fade).toBeUndefined();
+    });
     test("refuses invalid ranges and protects clips used by controllers", async () => {
         await input("Clip to", "99"); await click("Save clip");
         expect(host.querySelector('[role="alert"]')?.textContent).toMatch(/past the timeline/);

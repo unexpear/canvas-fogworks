@@ -11,7 +11,7 @@
      one validator shared by the load and edit paths, and a header that says WHY the value is
      text rather than what it is. -->
 
-> 🔒 Frozen contract · schema v88 (app v0.0.5) · current through gameplay rules and native mesh playback. Conventions + the hard rules that protect the invariants.
+> 🔒 Frozen contract · schema v89 (app v0.0.5) · current through gameplay rules, native mesh playback and animation crossfades. Conventions + the hard rules that protect the invariants.
 
 Persisted rule/playback edits use Actions. Runtime commands, audio voices, sampled mesh arrays and save/recovery bookkeeping must not write document history. New distribution fixtures must be original or explicitly redistributable; ignored third-party reference packs are not fixtures for distribution.
 

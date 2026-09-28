@@ -24,7 +24,7 @@ import { AnimationPanel } from "./AnimationPanel";
 import { SetClipsAction } from "../core/actions/SetClipsAction";
 import { SetAnimationControllerAction } from "../core/actions/SetAnimationControllerAction";
 import { findClip } from "../core/document/Clips";
-import { applyAnimations, sampleClip } from "../core/runtime/AnimationPlayback";
+import { applyAnimations, applyMotionFades, sampleClip } from "../core/runtime/AnimationPlayback";
 import { animateWorld2D } from "../core/runtime/AnimationWorld";
 import { ActionDispatcher } from "../core/actions/ActionDispatcher";
 import { createEmptyDocument, CURRENT_VERSION } from "../core/document/Document";
@@ -1886,7 +1886,7 @@ export function App() {
                 const canvas = host.firstElementChild as HTMLCanvasElement;
                 canvas.style.width = `${host.clientWidth}px`;
                 canvas.style.height = `${host.clientHeight}px`;
-                const scene3d = es.playing && world3dRef.current ? applyWorld3D(doc, world3dRef.current) : doc;
+                const scene3d = es.playing && world3dRef.current ? applyMotionFades(applyWorld3D(doc, world3dRef.current), world3dRef.current.motionFades, world3dRef.current.time) : doc;
                 const runtimeAssets = es.playing && runtimeProjectRef.current.document ? runtimeProjectRef.current : null;
                 const frame3d = buildFrame3D(scene3d, runtimeAssets?.meshes ?? meshLibrary3dRef.current, host.clientWidth, host.clientHeight,
                     runtimeAssets?.environments ?? environmentLibrary3dRef.current, es.playing ? world3dRef.current?.time ?? 0 : (es.frame ?? 0) / (doc.timeline?.fps ?? 24));

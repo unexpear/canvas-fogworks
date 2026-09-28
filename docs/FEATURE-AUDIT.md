@@ -3,7 +3,7 @@
 Shared clip reachability updated 2026-09-07: named clips are listed and editable in the animation
 panel, previewed through the timeline controls, and assigned to per-node runtime states/transitions.
 This includes composed 2D animation in 3D scenes and bounded native glTF TRS animation, CPU skinning
-and two-clip pose blending. GPU skinning, morph targets and automatic crossfades remain open.
+and two-clip pose blending. GPU skinning covers skins of at most 16 joints, with CPU skinning as the fallback and reference. Morph weights, automatic crossfades and component-instance playback are included. Blend trees, animation events and root motion remain open.
 See [Animation workflow](ANIMATION.md).
 
 <!-- describes: src/editor/tools, src/core/paint, src/core/import, src/core/export -->

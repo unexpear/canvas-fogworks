@@ -7,6 +7,49 @@
 import { ENVIRONMENT_COLOR_3D, ENVIRONMENT_INTENSITY_3D, Frame3D, invertMat4,
     MAX_FRAME_LIGHTS_3D, multiplyMat4, TextureInfo3D } from "./Scene3D";
 import { preparedEnvironment3D } from "./EnvironmentIbl3D";
+import { GPU_SKIN_JOINTS } from "../core/import/GltfMotion";
+
+/** Constant-index joint lookup. WebGL 1 rejects a dynamic index into a uniform array. */
+function skinShaderSource(): { declarations: string; functions: string } {
+    const choose = Array.from({ length: GPU_SKIN_JOINTS }, (_, joint) => joint === GPU_SKIN_JOINTS - 1
+        ? `  return u_joints[${joint}];`
+        : `  if (index < ${joint}.5) return u_joints[${joint}];`).join("\n");
+    return {
+        declarations: `
+attribute vec4 a_joints;
+attribute vec4 a_weights;
+uniform float u_skinned;
+uniform mat4 u_joints[${GPU_SKIN_JOINTS}];`,
+        functions: `
+mat4 skinJoint(float index) {
+${choose}
+}
+mat4 skinMatrix() {
+  return skinJoint(a_joints.x) * a_weights.x + skinJoint(a_joints.y) * a_weights.y
+    + skinJoint(a_joints.z) * a_weights.z + skinJoint(a_joints.w) * a_weights.w;
+}
+vec4 skinPoint(vec4 local) {
+  if (u_skinned < 0.5) return local;
+  return skinMatrix() * local;
+}
+vec3 skinNormal(vec3 n) {
+  if (u_skinned < 0.5) return n;
+  mat4 m = skinMatrix();
+  float a00 = m[0][0], a10 = m[0][1], a20 = m[0][2];
+  float a01 = m[1][0], a11 = m[1][1], a21 = m[1][2];
+  float a02 = m[2][0], a12 = m[2][1], a22 = m[2][2];
+  float det = a00 * (a11 * a22 - a12 * a21) - a01 * (a10 * a22 - a12 * a20) + a02 * (a10 * a21 - a11 * a20);
+  if (abs(det) < 0.000000001) return n;
+  float i00 = (a11 * a22 - a12 * a21) / det, i01 = (a02 * a21 - a01 * a22) / det, i02 = (a01 * a12 - a02 * a11) / det;
+  float i10 = (a12 * a20 - a10 * a22) / det, i11 = (a00 * a22 - a02 * a20) / det, i12 = (a02 * a10 - a00 * a12) / det;
+  float i20 = (a10 * a21 - a11 * a20) / det, i21 = (a01 * a20 - a00 * a21) / det, i22 = (a00 * a11 - a01 * a10) / det;
+  vec3 r = vec3(i00 * n.x + i10 * n.y + i20 * n.z, i01 * n.x + i11 * n.y + i21 * n.z, i02 * n.x + i12 * n.y + i22 * n.z);
+  float len = length(r);
+  return len > 0.000000001 ? r / len : n;
+}`
+    };
+}
+const SKIN_SHADER = skinShaderSource();
 
 const VERTEX = `
 attribute vec3 a_position;
@@ -17,19 +60,22 @@ uniform mat4 u_mvp;
 uniform mat4 u_model;
 uniform mat3 u_normalMatrix;
 uniform mat4 u_lightViewProjection;
+${SKIN_SHADER.declarations}
 varying vec3 v_worldPosition;
 varying vec3 v_worldNormal;
 varying vec4 v_shadowPosition;
 varying vec2 v_uv;
 varying vec2 v_uv1;
+${SKIN_SHADER.functions}
 void main() {
-    vec4 world = u_model * vec4(a_position, 1.0);
+    vec4 local = skinPoint(vec4(a_position, 1.0));
+    vec4 world = u_model * local;
     v_worldPosition = world.xyz;
-    v_worldNormal = normalize(u_normalMatrix * a_normal);
+    v_worldNormal = normalize(u_normalMatrix * skinNormal(a_normal));
     v_shadowPosition = u_lightViewProjection * world;
     v_uv = a_uv;
     v_uv1 = a_uv1;
-    gl_Position = u_mvp * vec4(a_position, 1.0);
+    gl_Position = u_mvp * local;
 }
 `;
 function fragmentSource(derivatives: boolean): string { return `${derivatives ? "#extension GL_OES_standard_derivatives : enable" : ""}
@@ -223,7 +269,9 @@ void main() {
 const SHADOW_VERTEX = `
 attribute vec3 a_position;
 uniform mat4 u_mvp;
-void main() { gl_Position = u_mvp * vec4(a_position, 1.0); }
+${SKIN_SHADER.declarations}
+${SKIN_SHADER.functions}
+void main() { gl_Position = u_mvp * skinPoint(vec4(a_position, 1.0)); }
 `;
 const SHADOW_FRAGMENT = `
 precision mediump float;
@@ -248,7 +296,13 @@ interface State3D {
     uv: WebGLBuffer;
     uv1: WebGLBuffer;
     indices: WebGLBuffer;
+    joints: WebGLBuffer;
+    weights: WebGLBuffer;
     positionLoc: number;
+    jointsLoc: number;
+    weightsLoc: number;
+    skinnedLoc: WebGLUniformLocation | null;
+    jointPaletteLoc: WebGLUniformLocation | null;
     normalLoc: number;
     uvLoc: number;
     uv1Loc: number;
@@ -293,6 +347,10 @@ interface State3D {
     shadowTexelLoc: WebGLUniformLocation | null;
     shadowProgram: WebGLProgram;
     shadowPositionLoc: number;
+    shadowJointsLoc: number;
+    shadowWeightsLoc: number;
+    shadowSkinnedLoc: WebGLUniformLocation | null;
+    shadowJointPaletteLoc: WebGLUniformLocation | null;
     shadowMvpLoc: WebGLUniformLocation | null;
     shadowFramebuffer: WebGLFramebuffer;
     shadowTexture: WebGLTexture;
@@ -340,12 +398,13 @@ function init(canvas: HTMLCanvasElement): State3D | null {
     const sources = webGL3DShaderSources(derivatives);
     const vs = shader(gl, gl.VERTEX_SHADER, sources.vertex), fs = shader(gl, gl.FRAGMENT_SHADER, sources.fragment);
     const program = gl.createProgram(), position = gl.createBuffer(), normal = gl.createBuffer(),
-        uv = gl.createBuffer(), uv1 = gl.createBuffer(), indices = gl.createBuffer();
+        uv = gl.createBuffer(), uv1 = gl.createBuffer(), indices = gl.createBuffer(),
+        joints = gl.createBuffer(), weights = gl.createBuffer();
     const pickFramebuffer = gl.createFramebuffer(), pickTexture = gl.createTexture(), pickDepth = gl.createRenderbuffer();
     const shadowVs = shader(gl, gl.VERTEX_SHADER, SHADOW_VERTEX), shadowFs = shader(gl, gl.FRAGMENT_SHADER, SHADOW_FRAGMENT);
     const shadowProgram = gl.createProgram(), shadowFramebuffer = gl.createFramebuffer(), shadowTexture = gl.createTexture(),
         shadowDepth = gl.createRenderbuffer();
-    if (!vs || !fs || !program || !position || !normal || !uv || !uv1 || !indices || !pickFramebuffer || !pickTexture || !pickDepth
+    if (!vs || !fs || !program || !position || !normal || !uv || !uv1 || !indices || !joints || !weights || !pickFramebuffer || !pickTexture || !pickDepth
         || !shadowVs || !shadowFs || !shadowProgram || !shadowFramebuffer || !shadowTexture || !shadowDepth) {
         failure = failure ?? "the 3D viewport could not allocate its WebGL resources"; return null;
     }
@@ -358,7 +417,12 @@ function init(canvas: HTMLCanvasElement): State3D | null {
         failure = `3D shadow program did not link: ${gl.getProgramInfoLog(shadowProgram) ?? "no driver log"}`; return null;
     }
     gl.deleteShader(vs); gl.deleteShader(fs); gl.deleteShader(shadowVs); gl.deleteShader(shadowFs);
-    const state: State3D = { gl, program, position, normal, uv, uv1, indices, positionLoc: gl.getAttribLocation(program, "a_position"),
+    const state: State3D = { gl, program, position, normal, uv, uv1, indices, joints, weights,
+        positionLoc: gl.getAttribLocation(program, "a_position"),
+        jointsLoc: gl.getAttribLocation(program, "a_joints"),
+        weightsLoc: gl.getAttribLocation(program, "a_weights"),
+        skinnedLoc: gl.getUniformLocation(program, "u_skinned"),
+        jointPaletteLoc: gl.getUniformLocation(program, "u_joints[0]"),
         normalLoc: gl.getAttribLocation(program, "a_normal"),
         uvLoc: gl.getAttribLocation(program, "a_uv"),
         uv1Loc: gl.getAttribLocation(program, "a_uv1"),
@@ -404,6 +468,10 @@ function init(canvas: HTMLCanvasElement): State3D | null {
         shadowTextureLoc: gl.getUniformLocation(program, "u_shadowTexture"),
         shadowTexelLoc: gl.getUniformLocation(program, "u_shadowTexel"), shadowProgram,
         shadowPositionLoc: gl.getAttribLocation(shadowProgram, "a_position"),
+        shadowJointsLoc: gl.getAttribLocation(shadowProgram, "a_joints"),
+        shadowWeightsLoc: gl.getAttribLocation(shadowProgram, "a_weights"),
+        shadowSkinnedLoc: gl.getUniformLocation(shadowProgram, "u_skinned"),
+        shadowJointPaletteLoc: gl.getUniformLocation(shadowProgram, "u_joints[0]"),
         shadowMvpLoc: gl.getUniformLocation(shadowProgram, "u_mvp"), shadowFramebuffer, shadowTexture, shadowDepth,
         shadowSize: 0,
         textures: new Map(),
@@ -585,6 +653,26 @@ export function pickIndex3D(pixel: ArrayLike<number>): number {
     return (pixel[0] ?? 0) | ((pixel[1] ?? 0) << 8) | ((pixel[2] ?? 0) << 16);
 }
 
+function bindSkin(gl: WebGLRenderingContext, draw: Frame3D["draws"][number], buffer: { joints: WebGLBuffer; weights: WebGLBuffer },
+    jointsLoc: number, weightsLoc: number, skinnedLoc: WebGLUniformLocation | null, paletteLoc: WebGLUniformLocation | null): void {
+    const skin = draw.skin;
+    gl.uniform1f(skinnedLoc, skin ? 1 : 0);
+    if (skin && jointsLoc >= 0 && weightsLoc >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer.joints);
+        gl.bufferData(gl.ARRAY_BUFFER, skin.joints, gl.STREAM_DRAW);
+        gl.enableVertexAttribArray(jointsLoc);
+        gl.vertexAttribPointer(jointsLoc, 4, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer.weights);
+        gl.bufferData(gl.ARRAY_BUFFER, skin.weights, gl.STREAM_DRAW);
+        gl.enableVertexAttribArray(weightsLoc);
+        gl.vertexAttribPointer(weightsLoc, 4, gl.FLOAT, false, 0, 0);
+        gl.uniformMatrix4fv(paletteLoc, false, skin.palette);
+        return;
+    }
+    if (jointsLoc >= 0) { gl.disableVertexAttribArray(jointsLoc); gl.vertexAttrib4f(jointsLoc, 0, 0, 0, 0); }
+    if (weightsLoc >= 0) { gl.disableVertexAttribArray(weightsLoc); gl.vertexAttrib4f(weightsLoc, 0, 0, 0, 0); }
+}
+
 function renderDirectionalShadow(state: State3D, frame: Frame3D): boolean {
     if (!frame.shadow) return false;
     const { gl } = state, size = Math.min(1024, gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
@@ -619,6 +707,7 @@ function renderDirectionalShadow(state: State3D, frame: Frame3D): boolean {
         const indices = max > 65535 ? draw.primitive.indices : Uint16Array.from(draw.primitive.indices);
         gl.bindBuffer(gl.ARRAY_BUFFER, state.position); gl.bufferData(gl.ARRAY_BUFFER, draw.primitive.positions, gl.STREAM_DRAW);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, state.indices); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STREAM_DRAW);
+        bindSkin(gl, draw, state, state.shadowJointsLoc, state.shadowWeightsLoc, state.shadowSkinnedLoc, state.shadowJointPaletteLoc);
         gl.uniformMatrix4fv(state.shadowMvpLoc, false,
             multiplyMat4(frame.shadow.lightViewProjection, draw.model));
         gl.drawElements(gl.TRIANGLES, indices.length, max > 65535 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT, 0);
@@ -716,6 +805,7 @@ function drawFrame(state: State3D, frame: Frame3D, picking: boolean, hasShadow =
             new Float32Array(draw.primitive.positions.length / 3 * 2), gl.STREAM_DRAW);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, state.indices);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STREAM_DRAW);
+        bindSkin(gl, draw, state, state.jointsLoc, state.weightsLoc, state.skinnedLoc, state.jointPaletteLoc);
         gl.uniformMatrix4fv(state.mvpLoc, false, multiplyMat4(pv, draw.model));
         gl.uniformMatrix4fv(state.modelLoc, false, draw.model);
         gl.uniformMatrix3fv(state.normalMatrixLoc, false, normalMatrix(draw.model));
@@ -817,7 +907,7 @@ export function disposeWebGL3D(canvas: HTMLCanvasElement): void {
     gl.deleteFramebuffer(state.pickFramebuffer);
     gl.deleteTexture(state.shadowTexture); gl.deleteRenderbuffer(state.shadowDepth);
     gl.deleteFramebuffer(state.shadowFramebuffer);
-    for (const buffer of [state.position, state.normal, state.uv, state.uv1, state.indices]) gl.deleteBuffer(buffer);
+    for (const buffer of [state.position, state.normal, state.uv, state.uv1, state.indices, state.joints, state.weights]) gl.deleteBuffer(buffer);
     gl.deleteProgram(state.program); gl.deleteProgram(state.shadowProgram);
     owned.__vde3D = undefined; owned.__vde3DLastFrame = undefined;
 }

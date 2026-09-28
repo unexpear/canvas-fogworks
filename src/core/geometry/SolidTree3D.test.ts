@@ -13,7 +13,7 @@ test("solid tree Actions preserve editable operands, undo/redo, schema migration
     const doc=gameplayFixture(),original=doc.nodes.get("lever")!.spatial3d!,dispatcher=new ActionDispatcher(doc);
     const spatial={...original,solidTree:doorway(),blockoutCollision:true};
     expect(dispatcher.dispatchAction(new SetSpatial3DAction(doc,"lever",spatial)).success).toBe(true);
-    const saved=serializeDocument(dispatcher.getDocument());expect(JSON.parse(saved).version).toBe("88");expect(saved).not.toContain('"vertices"');
+    const saved=serializeDocument(dispatcher.getDocument());expect(JSON.parse(saved).version).toBe("89");expect(saved).not.toContain('"vertices"');
     const reopened=deserializeDocument(saved);expect(reopened.nodes.get("lever")!.spatial3d!.solidTree).toEqual(spatial.solidTree);
     const copied=copySpatial3D(reopened.nodes.get("lever")!.spatial3d!);copied.solidTree!.id="changed";
     expect(reopened.nodes.get("lever")!.spatial3d!.solidTree!.id).toBe("cut");

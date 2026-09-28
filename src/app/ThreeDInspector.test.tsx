@@ -127,6 +127,32 @@ describe("SHELL-001 extracted 3D inspector DOM", () => {
         expect(dispatcher.undo()?.nodes.get("player")!.spatial3d!.animation).toBeUndefined();
     });
 
+    it("stores an optional 3D clip crossfade and treats zero as off", async () => {
+        const doc = gameReference(), fixture = animatedTriangle();
+        doc.assets3d = [{ id: "mesh", kind: "mesh", source: "animated.gltf" }];
+        doc.nodes.get("player")!.spatial3d = { transform: IDENTITY_TRANSFORM_3D, renderable: { meshAssetId: "mesh" } };
+        const dispatcher = new ActionDispatcher(doc);
+        const render = () => root.render(<ThreeDInspector node={dispatcher.getDocument().nodes.get("player") as Node} assets={doc.assets3d!}
+            meshes={new Map([["mesh", { instances: fixture.instances, motion: fixture.motion }]])}
+            onChange={next => {
+                expect(dispatcher.dispatchAction(new SetSpatial3DAction(dispatcher.getDocument(), "player", next)).success).toBe(true);
+                render();
+            }} />);
+        await act(async () => render());
+        const clip = host.querySelector<HTMLSelectElement>('[aria-label="3D animation clip"]')!;
+        await act(async () => { clip.value = "0"; clip.dispatchEvent(new Event("change", { bubbles: true })); });
+        const fade = [...host.querySelectorAll("label")].find(label => label.textContent?.includes("Crossfade seconds"))?.nextElementSibling as HTMLInputElement;
+        expect(fade.value).toBe("0");
+        await act(async () => setInputValue(fade, "0.4"));
+        expect(dispatcher.getDocument().nodes.get("player")!.spatial3d!.animation?.fade).toBe(0.4);
+        const again = [...host.querySelectorAll("label")].find(label => label.textContent?.includes("Crossfade seconds"))?.nextElementSibling as HTMLInputElement;
+        await act(async () => setInputValue(again, "0"));
+        expect(dispatcher.getDocument().nodes.get("player")!.spatial3d!.animation?.fade).toBeUndefined();
+        const clamped = [...host.querySelectorAll("label")].find(label => label.textContent?.includes("Crossfade seconds"))?.nextElementSibling as HTMLInputElement;
+        await act(async () => setInputValue(clamped, "5"));
+        expect(deserializeDocument(serializeDocument(dispatcher.getDocument())).nodes.get("player")!.spatial3d!.animation?.fade).toBe(1);
+    });
+
     it("authors billboard composition and lit state", async () => {
         const spatial: Spatial3D = {
             transform: IDENTITY_TRANSFORM_3D,
