@@ -3,12 +3,15 @@
  * @description Validated event-condition-command rules stored on authored entities; execution state never enters document history.
  */
 export type GameplayAction =
-    | { kind: "win" | "lose" | "despawn" }
+    | { kind: "win" | "lose" | "despawn" | "checkpoint" }
+    | { kind: "spawn"; templateId: string }
     | { kind: "velocity"; x: number; y: number }
     | { kind: "score"; key: string }
     | { kind: "sound"; source: string; volume: number };
 export interface GameplayRule {
-    event: "start" | "enter" | "leave" | "contact" | "separate";
+    event: "start" | "enter" | "leave" | "contact" | "separate" | "interact";
+    /** Interact distance in document units (2D) or world units (3D); defaults to 96 / 2. */
+    range?: number;
     other: "any" | "player";
     target: "self" | "other";
     action: GameplayAction;
@@ -17,11 +20,13 @@ export function gameplayRulesError(value: unknown): string | null {
     if (value === undefined) return null;
     if (!Array.isArray(value) || value.length > 32) return "gameplay rules must be an array of at most 32 entries";
     for (const rule of value) {
-        if (!rule || !["start", "enter", "leave", "contact", "separate"].includes(rule.event)
+        if (!rule || !["start", "enter", "leave", "contact", "separate", "interact"].includes(rule.event)
             || !["any", "player"].includes(rule.other) || !["self", "other"].includes(rule.target)) return "invalid gameplay event, condition or target";
         if (rule.event === "start" && (rule.target !== "self" || rule.other !== "any")) return "start rules must target self with condition any";
+        if (rule.range !== undefined && (!Number.isFinite(rule.range) || rule.range <= 0 || rule.range > 10000)) return "interaction range must be within 0–10000 (exclusive zero)";
         const a = rule.action;
-        if (!a || !["win", "lose", "despawn", "velocity", "score", "sound"].includes(a.kind)) return "invalid gameplay command";
+        if (!a || !["win", "lose", "despawn", "velocity", "score", "sound", "spawn", "checkpoint"].includes(a.kind)) return "invalid gameplay command";
+        if (a.kind === "spawn" && (typeof a.templateId !== "string" || !a.templateId.trim() || a.templateId.length > 4096)) return "spawn needs a template node ID";
         if (a.kind === "velocity" && (!Number.isFinite(a.x) || !Number.isFinite(a.y)
             || Math.abs(a.x) > 100000 || Math.abs(a.y) > 100000)) return "gameplay velocity must be finite and bounded";
         if (a.kind === "score" && (typeof a.key !== "string" || !a.key.trim() || a.key.length > 64)) return "gameplay score key must contain 1–64 characters";

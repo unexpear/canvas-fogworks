@@ -24,6 +24,7 @@ import { ReadonlyDocument } from "../document/Document";
 import { srcError, sourceRectError, nineSliceError, clipsContentError, SourceRect,
     UserData, userDataError, classNameError } from "../document/Node";
 import { Entity, entityError } from "../document/Entity";
+import {behaviorDataBindingsError} from "../document/BehaviorDataBindings";
 import { NineSliceInsets } from "../geometry/NineSlice";
 import { MutationResult, ActionPayload, NodeDelta } from "./types";
 
@@ -103,6 +104,8 @@ export class UpdateNodeContentAction extends Action {
             && userDataError(this.patch.userData) !== null) return false;
         if (this.patch.entity !== undefined && this.patch.entity !== null
             && entityError(this.patch.entity) !== null) return false;
+        if (this.patch.entity?.behaviorAssetId && !this.document.behaviorAssets?.some(a=>a.id===this.patch.entity!.behaviorAssetId)) return false;
+        if(behaviorDataBindingsError(this.patch.entity?.behavior,this.document.gameplayVariables,[],this.document.behaviorFunctions))return false;
         // Again the loader's own rule, so the inspector cannot author insets the document could
         // not reopen — and `null` is the clear rather than a value to check.
         if (this.patch.nineSlice !== undefined && this.patch.nineSlice !== null

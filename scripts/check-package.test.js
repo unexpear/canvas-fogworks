@@ -34,7 +34,7 @@ async function fixture(t, change = () => {}, options = {}) {
 
 test("accepts current bundles and packaged runtime dependencies", async t => {
     const { root, archive } = await fixture(t, ({ source, write }) => write(source, "node_modules/uuid/package.json", "{}"));
-    assert.equal(checkPackage(root, archive).bundles, 5);
+    assert.equal(checkPackage(root, archive).bundles, 6);
 });
 
 for (const file of BUNDLES) {
@@ -47,6 +47,11 @@ for (const file of BUNDLES) {
 test("rejects stale offline player bytes", async t => {
     const { root, archive } = await fixture(t, ({ source, write }) => write(source, "dist/app/player.js", "old build"));
     assert.throws(() => checkPackage(root, archive), /Stale packaged bundle: dist\/app\/player.js/);
+});
+
+test("rejects stale standalone 3D player bytes", async t => {
+    const { root, archive } = await fixture(t, ({ source, write }) => write(source, "dist/app/player3d.js", "old build"));
+    assert.throws(() => checkPackage(root, archive), /Stale packaged bundle: dist\/app\/player3d.js/);
 });
 
 for (const folder of ["freeassets", "possable tools", "legacy", "reference-projects", "test-fixtures", "src", "dist/app/freeassets"]) {

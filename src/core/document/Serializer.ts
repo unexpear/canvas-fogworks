@@ -117,6 +117,9 @@ export interface SerializedDocument {
         ambient?: number;
         /** Stable imported 3D assets (schema 74). */
         assets3d?: readonly import("./Spatial3D").Asset3D[];
+        behaviorAssets?: readonly import("./BehaviorAssets").BehaviorAsset[];
+        gameplayVariables?: readonly import("./GameplayData").GameplayVariable[];
+        behaviorFunctions?: readonly import("./BehaviorFunctions").BehaviorFunction[];
         /** What the document sits on (schema 70). Absent = transparent, as every document was. */
         background?: string;
         screen?: { width: number; height: number };
@@ -158,6 +161,9 @@ export function serializeDocument(doc: ReadonlyDocument): string {
             ...(doc.lights !== undefined ? { lights: doc.lights } : {}),
             ...(doc.ambient !== undefined ? { ambient: doc.ambient } : {}),
             ...(doc.assets3d !== undefined ? { assets3d: doc.assets3d } : {}),
+            ...(doc.behaviorAssets !== undefined ? { behaviorAssets: doc.behaviorAssets } : {}),
+            ...(doc.gameplayVariables !== undefined ? {gameplayVariables:doc.gameplayVariables} : {}),
+            ...(doc.behaviorFunctions !== undefined ? {behaviorFunctions:doc.behaviorFunctions} : {}),
             // Omitted when absent, so a document with no sky serialises byte-for-byte as it did
             // before schema 70 — the same rule every optional field here follows.
             ...(doc.background !== undefined ? { background: doc.background } : {}),
@@ -265,6 +271,9 @@ export function deserializeDocument(json: string): ProjectDocument {
     if ("assets3d" in migrated.document) {
         doc.assets3d = migrated.document.assets3d as import("./Spatial3D").Asset3D[];
     }
+    if ("behaviorAssets" in migrated.document) doc.behaviorAssets = migrated.document.behaviorAssets as import("./BehaviorAssets").BehaviorAsset[];
+    if ("gameplayVariables" in migrated.document) doc.gameplayVariables = migrated.document.gameplayVariables as import("./GameplayData").GameplayVariable[];
+    if ("behaviorFunctions" in migrated.document) doc.behaviorFunctions = migrated.document.behaviorFunctions as import("./BehaviorFunctions").BehaviorFunction[];
 
     // Reconstruct the Map, validating each node's shape and key/id agreement.
     const nodesObj = migrated.document.nodes;
@@ -434,6 +443,26 @@ export function migrateIfNeeded(raw: any, currentSchema: string = SCHEMA_VERSION
     if (version === "76") { raw = { ...raw, version: "77" }; version = "77"; }
     // 77 -> 78: typed gameplay/audio, native mesh playback and opt-in gravity/restitution. Absent preserves behavior.
     if (version === "77") { raw = { ...raw, version: "78" }; version = "78"; }
+    // 78 -> 79: optional interact/range, template spawning and checkpoint gameplay rules.
+    if (version === "78") { raw = { ...raw, version: "79" }; version = "79"; }
+    // 79 -> 80: optional behavior graphs. Existing entities retain their rule semantics.
+    if (version === "79") { raw = { ...raw, version: "80" }; version = "80"; }
+    // 80 -> 81: optional reusable graph assets and graph-v2 delay/repeat nodes; old graphs stay v1.
+    if (version === "80") { raw = { ...raw, version: "81" }; version = "81"; }
+    // 81 -> 82: graph-v3 lifecycle event declarations; prior graphs retain their versions.
+    if (version === "81") { raw = { ...raw, version: "82" }; version = "82"; }
+    // 82 -> 83: optional explicit gameplay variables; design tokens are unchanged.
+    if (version === "82") { raw = { ...raw, version: "83" }; version = "83"; }
+    // 83 -> 84: optional reusable function library; absent fields preserve older behavior.
+    if (version === "83") { raw = { ...raw, version: "84" }; version = "84"; }
+    // 84 -> 85: graph-v5 calls; existing graphs retain their declared versions.
+    if (version === "84") { raw = { ...raw, version: "85" }; version = "85"; }
+    // 85 -> 86: optional blockout parameters; existing spatial components retain their meaning.
+    if (version === "85") { raw = { ...raw, version: "86" }; version = "86"; }
+    // 86 -> 87: absent solid opt-in keeps existing blockouts visual-only.
+    if (version === "86") { raw = { ...raw, version: "87" }; version = "87"; }
+    // 87 -> 88: optional solid trees; existing blockouts retain their representation and collision opt-in.
+    if (version === "87") { raw = { ...raw, version: "88" }; version = "88"; }
 
     // 4. Fully migrated?
     if (version === currentSchema) {

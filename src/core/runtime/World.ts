@@ -156,6 +156,8 @@ import { ReadonlyTilemap, TILE_EMPTY, tileAt, visibleCells } from "../document/T
 import { Tileset, findTileset, tilesetTile } from "../document/Tileset";
 import { isParallaxed } from "../document/Depth";
 import { Entity } from "../document/Entity";
+import { behaviorEvents } from "../document/BehaviorGraph";
+import { resolveBehavior } from "../document/BehaviorAssets";
 import { animateWorld2D } from "./AnimationWorld";
 
 /** One tick, in seconds. 60Hz: the rate every measurement in this module's tests assumes. */
@@ -464,6 +466,8 @@ export interface Body {
 
 /** The run's whole mutable state. Keyed by STORED node id, never serialized. */
 export interface WorldState {
+    behaviorState?: import("./BehaviorRuntime").BehaviorState;
+    checkpoint?: import("./Gameplay3D").Checkpoint;
     /** Transient named-clip players, stepped after gameplay rules. */
     animations?: import("./AnimationPlayback").AnimationPlayers;
     bodies: ReadonlyMap<string, Body>;
@@ -1094,7 +1098,7 @@ export function regionsOf(doc: ReadonlyDocument): Region[] {
     for (const node of doc.nodes.values()) {
         if (node.hidden) continue;                     // out of the scene, out of the world
         if (isLayered(node)) continue;                 // see `isLayered`
-        const className = node.className || (node.entity?.rules?.some(rule => rule.event === "enter" || rule.event === "leave") ? "authored-trigger" : "");
+        const className = node.className || ([...(node.entity?.rules ?? []),...behaviorEvents(resolveBehavior(doc, node.entity))].some(rule => rule.event === "enter" || rule.event === "leave") ? "authored-trigger" : "");
         if (!className || bodyTypeOf(node) !== null) continue;
         const g = node.geometry;
         if (g.width <= 0 || g.height <= 0) continue;
@@ -1538,6 +1542,7 @@ export function applyWorld(doc: ReadonlyDocument, world: WorldState): ReadonlyDo
  * `Document.clips` mistake. Neither is measured — see the invention notice in this module's header.
  */
 export type RuntimeCommand =
+    | { kind: "checkpoint"; playerId: string }
     | { kind: "despawn"; bodyId: string }
     /** Absent components are LEFT ALONE, so a bounce can set vy without touching a walk in progress. */
     | { kind: "setVelocity"; bodyId: string; vx?: number; vy?: number }
@@ -1648,6 +1653,11 @@ export function applyCommands(world: WorldState, commands: readonly RuntimeComma
     let outcome: RunOutcome | null = null;
     let transitionTo: string | null = null;
     for (const c of commands) {
+        if (c.kind === "checkpoint") {
+            const body = (bodies ?? world.bodies).get(c.playerId);
+            if (body) world = { ...world, checkpoint: { playerId: c.playerId, position: { x: body.x, y: body.y, z: 0 } } };
+            continue;
+        }
         if (c.kind === "transition") {
             if (transitionTo === null && world.transitionTo === null && world.outcome === "running") {
                 transitionTo = c.target;

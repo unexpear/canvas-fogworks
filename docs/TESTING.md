@@ -1,10 +1,40 @@
 # Testing Strategy
 
+Behavior timers/reuse/debugging (2026-09-19): **2,326 tests in 52 suites** pass. New coverage
+includes 2D/3D delayed repeats, saved continuations, cancellation, runtime bounds, shared-asset
+undo, inspector authoring and debugger breakpoint/step/counter controls. The real graph panel
+smoke covers asset promotion/detach; the isolated exported-player smoke saves a shared repeat
+during a delay and resumes its remaining iterations in a fresh window. See [Behavior graphs](BEHAVIOR-GRAPHS.md).
+
+Behavior graphs (2026-09-16): 2,310 Jest tests in 50 suites pass. `smoke:behavior` checks the real
+visual panel, Action edits, cyclic-link refusal and serialized reload in Chromium. Existing
+player/authoring smokes now exercise graph-only 3D interaction and 2D enter/victory paths.
+See [Behavior graphs](BEHAVIOR-GRAPHS.md) for execution semantics and remaining limits.
+
+Gameplay follow-up (2026-09-12): 2,287 Jest tests in 48 suites, typecheck, module headers,
+build and file-workflow/level/authoring/player smokes pass. The player smoke now covers
+interaction, spawning, real IPC progress saving, new-window restore and corrupt-save refusal.
+The new `release/gameplay-foundation-20260912/` Windows player also passes executable startup.
+See [Gameplay foundations](GAMEPLAY-FOUNDATIONS.md) for tested boundaries and remaining gates.
+
+Standalone follow-up (2026-09-12): `smoke:player` builds and runs a real owned two-level 3D
+export after removing source-path availability, exercising input, transitions, controls,
+WebGL, isolation and payload corruption refusal. It is included in `ci`.
+`smoke:player-startup -- "path/to/Canvas Fogworks Game.exe"` separately verifies an actual
+unsigned unpacked player executable. See [Standalone player](STANDALONE-PLAYER.md).
+
+Shared-authoring follow-up (2026-09-07): `test:recovery` kills real writer processes at five
+editing/save checkpoints and restores with the production session in a fresh process.
+`smoke:levels` runs native preload/IPC, 3D asset hydration and WebGL submission; `smoke:authoring`
+now completes the original three-level relay and exports the editable pixel/component workshop.
+These checks are in `ci`. `benchmark:authoring` and optional `benchmark:gpu` remain informational;
+exact workloads, limits and measured priorities are recorded in [PRODUCTION-WORK.md](PRODUCTION-WORK.md).
+
 <!-- describes: src/core/tests, src/core/runtime/World3D.test.ts, src/app/ProjectFileWorkflow.ts, src/app/ProjectFileWorkflow.test.ts, src/app/AssetImportWorkflow.ts, src/app/AssetImportWorkflow.test.ts, src/app/Asset3DImportWorkflow.ts, src/app/Asset3DImportWorkflow.test.ts, src/app/AppShellControls.tsx, src/app/AppShellControls.test.tsx, src/app/ThreeDInspector.tsx, src/app/ThreeDInspector.test.tsx, src/electron, src/renderer/RenderModel.test.ts, src/renderer/emitCanvas.test.ts, src/renderer/Scene3D.test.ts, src/renderer/EnvironmentIbl3D.test.ts, jest.config.js, scripts/check-module-headers.js, scripts/mutate-dimensions.js, scripts/smoke-startup.js, scripts/smoke-3d.js -->
 <!-- re-read 2026-09-03 for the Canvas Fogworks rename: test behavior, compatibility identifiers,
      suite count and verification contract remain unchanged. -->
 
-> 🔒 Frozen contract · schema v78 (app v0.0.5) · current through file savepoints/recovery, dependency relocation, multi-animation imports, authored gameplay, offline 2D export, native mesh motion and oriented 3D collision tests. Jest reports the exact current count.
+> 🔒 Frozen contract · schema v88 (app v0.0.5) · current through file savepoints/recovery, dependency relocation, multi-animation imports, authored gameplay, offline 2D export, native mesh motion and oriented 3D collision tests. Jest reports the exact current count.
 
 `npm run smoke:authoring` checks exported PNG pixels and offline-game victory in real Electron Chromium. `npm run benchmark:authoring` reports owned 250/1000-node CPU/load/undo-memory measurements; these are informational, not hardware-dependent CI thresholds. See [Production workflows](PRODUCTION-WORK.md).
 

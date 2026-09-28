@@ -1,8 +1,13 @@
 # 3D Foundation — adoption plan
 
-<!-- describes: src/core/document, src/core/runtime, src/core/import, src/renderer -->
+<!-- describes: src/core/document, src/core/runtime, src/core/import, src/runtime, src/renderer -->
 
 ## Decision
+
+For the longer-term production-engine ambition beyond these bounded foundation slices, see
+the [full engine development plan](ENGINE-ROADMAP.md). It preserves both authoring tracks and
+defines future subsystem scope, dependencies and acceptance gates without changing the
+historical delivery status below.
 
 Canvas Fogworks remains one product for visual/pixel design and game authoring. Three-dimensional
 authoring extends the existing document, Action, history, asset and editor contracts; it
@@ -126,8 +131,17 @@ the gesture. The live smoke performs and verifies translate, rotate and scale ed
 colliders into transient bodies, advances them through a bounded 60 Hz accumulator, exposes stable
 collision queries, follows the controlled body with the runtime camera, and stamps transforms only
 onto a derived render document. Restart, typed-anchor respawn, goal transitions and stable replay
-digests have unit coverage and are wired into 3D play mode. Rotated-box collision and a pluggable
-physics backend remain later fidelity work, not hidden in this baseline.
+digests have unit coverage and are wired into 3D play mode. Rotated-box SAT and sphere contacts,
+bounded CPU skinning and opt-in gravity/restitution are delivered. Destination level meshes,
+material textures and HDR environments now stage before runtime publication; failed or late loads
+cannot replace the current runtime. Authoring asset libraries remain independent. A pluggable
+physics backend, dynamic-body impulses and production character control remain later fidelity work.
+
+Read-only level and asset hydration now lives in `src/runtime`, independent of editor Actions,
+with compatibility exports preserving existing editor callers. The subsequent standalone-player
+work adds a bounded package export, event/render host and unsigned Windows unpacked executable;
+clean-machine acceptance remains open. See [Shared player runtime](PLAYER-RUNTIME.md) and
+[Standalone player](STANDALONE-PLAYER.md).
 
 ### 3D-4 — production renderer
 
@@ -146,9 +160,8 @@ GGX roughness prefiltering. WebGL 1's guaranteed eight fragment texture units ar
 material maps, diffuse irradiance, two specular endpoints and one shadow map; roughness interpolates
 between the specular endpoints. Unsupported float textures retain the neutral analytic fallback.
 
-## First implementation gate
+## Original implementation gate (completed)
 
-Do not begin by merging the legacy renderer. The first 3D implementation change should
-be the `3D-0` contract slice: one schema proposal, one minimal fixture, one reversible
-Action and its round-trip tests. That gives every later renderer and runtime component a
-stable target without destabilizing the working 2D product.
+The `3D-0` contract slice established a schema, a minimal fixture, a reversible Action and
+round-trip tests without merging the legacy renderer. Continue using those boundaries for later
+renderer/runtime work. Current limits and measured priorities are in [PRODUCTION-WORK.md](PRODUCTION-WORK.md).

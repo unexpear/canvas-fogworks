@@ -1,6 +1,6 @@
 /**
  * @module build
- * @description Build orchestrator. Emits four esbuild bundles — the React app, offline player,
+ * @description Build orchestrator. Emits five esbuild bundles — the React app, 2D/3D offline players,
  * the Electron main process, and the preload script (which must be its own file,
  * because Electron loads it at runtime rather than importing it) — then copies
  * index.html with the bundle injected.
@@ -85,7 +85,9 @@ async function build() {
 
     const playerCtx = await esbuild.context({ entryPoints: [path.join(srcDir, "player", "index.ts")], bundle: true,
         outfile: path.join(distAppDir, "player.js"), platform: "browser", format: "iife", target: "es2020", minify: true });
-    const contexts = [appCtx, electronCtx, preloadCtx, playerCtx];
+    const player3dCtx = await esbuild.context({ entryPoints: [path.join(srcDir, "player3d", "index.ts")], bundle: true,
+        outfile: path.join(distAppDir, "player3d.js"), platform: "browser", format: "iife", target: "es2020", minify: true });
+    const contexts = [appCtx, electronCtx, preloadCtx, playerCtx, player3dCtx];
     await Promise.all(contexts.map(context => context.rebuild()));
     copyHtml();
 
@@ -107,6 +109,7 @@ async function build() {
         console.log("  dist/app/index.html");
         console.log("  dist/app/bundle.js");
         console.log("  dist/app/player.js");
+        console.log("  dist/app/player3d.js");
         console.log("  dist/electron/main.js");
         console.log("  dist/electron/preload.js");
     }

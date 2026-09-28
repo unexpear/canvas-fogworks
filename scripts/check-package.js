@@ -8,7 +8,7 @@ const path = require("node:path");
 const asar = require("@electron/asar");
 
 const BUNDLES = [
-    "dist/app/index.html", "dist/app/bundle.js", "dist/app/player.js",
+    "dist/app/index.html", "dist/app/bundle.js", "dist/app/player.js", "dist/app/player3d.js",
     "dist/electron/main.js", "dist/electron/preload.js"
 ];
 const DIRECTORIES = new Set(["dist", "dist/app", "dist/electron", "node_modules"]);

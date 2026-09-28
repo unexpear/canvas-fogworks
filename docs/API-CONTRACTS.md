@@ -15,7 +15,7 @@
      sentence about a grid inheriting an object layer's opacity lived in the code comment, the
      mutant note and ACTION-SYSTEM.md — not here; `TilePlacement` is not part of this surface. -->
 
-> 🔒 Frozen contract · schema v78 (app v0.0.5) · current through gameplay rules, native mesh playback and production workflow seams. The public surface each layer depends on.
+> 🔒 Frozen contract · schema v88 (app v0.0.5) · current through gameplay rules, native mesh playback and production workflow seams. The public surface each layer depends on.
 
 `ProjectSession` owns acknowledged saves and recovery; `stepGameplay` is shared by the editor and offline 2D player. `readGltfMotion`/`sampleGltfMotion` handle bounded imported TRS/skin playback, and `contact3D` supplies oriented collision contacts. Current scope and limits: [Production workflows](PRODUCTION-WORK.md).
 

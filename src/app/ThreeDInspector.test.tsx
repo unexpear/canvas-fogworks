@@ -38,6 +38,27 @@ describe("SHELL-001 extracted 3D inspector DOM", () => {
         host.remove();
     });
 
+    it("edits blockout dimensions through Actions and reopens the edited shape", async () => {
+        const doc=gameReference();doc.nodes.get("goal")!.spatial3d={transform:IDENTITY_TRANSFORM_3D,blockout:{kind:"room",width:4,height:3,depth:5,thickness:.2,ceiling:false}};
+        const dispatcher=new ActionDispatcher(doc);
+        const render=()=>root.render(<ThreeDInspector node={dispatcher.getDocument().nodes.get("goal") as Node} assets={[]} meshes={new Map()} onChange={next=>{
+            expect(dispatcher.dispatchAction(new SetSpatial3DAction(dispatcher.getDocument(),"goal",next)).success).toBe(true);render();
+        }}/>);
+        await act(async()=>render());
+        await act(async()=>setInputValue(host.querySelector<HTMLInputElement>('[aria-label="Blockout width"]')!,"8"));
+        expect(deserializeDocument(serializeDocument(dispatcher.getDocument())).nodes.get("goal")!.spatial3d!.blockout!.width).toBe(8);
+        await act(async()=>setInputValue(host.querySelector<HTMLInputElement>('[aria-label="Blockout width"]')!,"-2"));
+        expect(dispatcher.getDocument().nodes.get("goal")!.spatial3d!.blockout!.width).toBe(8);
+        dispatcher.undo();expect(dispatcher.getDocument().nodes.get("goal")!.spatial3d!.blockout!.width).toBe(4);
+        expect(host.textContent).toContain("Visual blockout only");
+        await act(async()=>render());
+        await act(async()=>host.querySelector<HTMLInputElement>('[aria-label="Blockout solid collision"]')!.click());
+        expect(deserializeDocument(serializeDocument(dispatcher.getDocument())).nodes.get("goal")!.spatial3d!.blockoutCollision).toBe(true);
+        expect(host.textContent).toContain("Solid collision follows the generated shape");
+        dispatcher.undo();expect(dispatcher.getDocument().nodes.get("goal")!.spatial3d!.blockoutCollision).toBeUndefined();
+        dispatcher.redo();expect(dispatcher.getDocument().nodes.get("goal")!.spatial3d!.blockoutCollision).toBe(true);
+    });
+
     it("authors light kind and clamps numeric light values", async () => {
         const spatial: Spatial3D = {
             transform: IDENTITY_TRANSFORM_3D,
@@ -63,6 +84,32 @@ describe("SHELL-001 extracted 3D inspector DOM", () => {
             setInputValue(intensity, "-4");
         });
         expect(changes[changes.length - 1]?.light?.intensity).toBe(0);
+    });
+
+    it("authors nested solid cuts, transforms and safe failure through undoable saved Actions",async()=>{
+        const doc=gameReference();doc.nodes.get("goal")!.spatial3d={transform:IDENTITY_TRANSFORM_3D,blockout:{kind:"wall",width:4,height:3,depth:.4},blockoutCollision:true};
+        const dispatcher=new ActionDispatcher(doc);
+        const render=()=>root.render(<ThreeDInspector node={dispatcher.getDocument().nodes.get("goal") as Node} assets={[]} meshes={new Map()} onChange={next=>{
+            expect(dispatcher.dispatchAction(new SetSpatial3DAction(dispatcher.getDocument(),"goal",next)).success).toBe(true);render();
+        }}/>);
+        const click=async(text:string)=>act(async()=>{const button=Array.from(host.querySelectorAll("button")).find(b=>b.textContent===text);expect(button).toBeDefined();button!.click();});
+        await act(async()=>render());await click("Edit solid operations");await click("subtract operand base");
+        let tree=dispatcher.getDocument().nodes.get("goal")!.spatial3d!.solidTree!;
+        expect(tree.kind).toBe("operation");
+        await act(async()=>setInputValue(host.querySelector<HTMLInputElement>('[aria-label="Solid solid-2 position x"]')!,"0.4"));
+        const saved=serializeDocument(dispatcher.getDocument()),reopened=deserializeDocument(saved);
+        tree=reopened.nodes.get("goal")!.spatial3d!.solidTree!;
+        expect(tree.kind==="operation"&&tree.right.kind==="shape"&&tree.right.position[0]).toBe(.4);
+        await act(async()=>setInputValue(host.querySelector<HTMLInputElement>('[aria-label="Solid solid-2 width"]')!,"-1"));
+        expect(host.querySelector('[role="alert"]')!.textContent).toContain("Previous solid retained");
+        expect(serializeDocument(dispatcher.getDocument())).toBe(saved);
+        await click("add operand solid-2");
+        tree=dispatcher.getDocument().nodes.get("goal")!.spatial3d!.solidTree!;
+        expect(tree.kind==="operation"&&tree.right.kind).toBe("operation");
+        dispatcher.undo();expect(serializeDocument(dispatcher.getDocument())).toBe(saved);
+        dispatcher.redo();await act(async()=>render());await click("Keep left solid-3");
+        expect(dispatcher.getDocument().nodes.get("goal")!.spatial3d!.blockoutCollision).toBe(true);
+        expect(serializeDocument(dispatcher.getDocument())).toBe(saved);
     });
 
     it("selects an imported animation through an Action and preserves playback across save/reopen and undo", async () => {

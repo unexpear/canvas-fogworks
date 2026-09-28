@@ -6,6 +6,7 @@ const fs = require("fs"), path = require("path"), Module = require("module"), es
 const root = path.join(__dirname, "..");
 const bundle = esbuild.buildSync({ stdin: { resolveDir: root, contents: `
 export { visualReference, gameReference } from './src/core/examples/ReferenceProjects';
+export { pixelWorkshop, relayGameLevels } from './src/core/examples/AuthoringProjects';
 export { animatedTriangle } from './src/core/examples/AnimatedTriangle';
 export { createEmptyDocument } from './src/core/document/Document';
 export { serializeDocument, deserializeDocument } from './src/core/document/Serializer';
@@ -26,7 +27,8 @@ for (const n of [node("triangle", { transform: transform({x:0,y:0,z:0}), rendera
     node("light", { transform: transform({x:0,y:0,z:3}), light:{kind:"directional",color:{x:1,y:1,z:1},intensity:2} })]) {
     doc.nodes.set(n.id,n); doc.rootNodeUuids.push(n.id);
 }
-const projects = {"visual.vde":api.visualReference(),"game.vde":api.gameReference(),"animated-3d.vde":doc};
+const projects = {"visual.vde":api.visualReference(),"game.vde":api.gameReference(),"animated-3d.vde":doc,
+    "pixel-workshop.vde":api.pixelWorkshop(), ...api.relayGameLevels()};
 const files = Object.entries(projects).map(([name, project]) => {
     const content = api.serializeDocument(project); api.deserializeDocument(content); return [name, content];
 });

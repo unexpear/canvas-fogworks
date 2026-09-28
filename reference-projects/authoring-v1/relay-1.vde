@@ -1,0 +1,1510 @@
+{
+  "version": "88",
+  "document": {
+    "metadata": {
+      "project_name": "Signal Relay - stage 1 of 3",
+      "created_by": "system",
+      "date": "2026-09-07T00:00:00.000Z"
+    },
+    "nodes": {
+      "sky": {
+        "id": "sky",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 960,
+          "height": 540
+        },
+        "style": {
+          "fill": "#182638",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "sky"
+      },
+      "skyline-0": {
+        "id": "skyline-0",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 0,
+          "y": 404,
+          "width": 32,
+          "height": 48
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 0"
+      },
+      "window-0": {
+        "id": "window-0",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 8,
+          "y": 414,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 0"
+      },
+      "skyline-1": {
+        "id": "skyline-1",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 40,
+          "y": 373,
+          "width": 32,
+          "height": 79
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 1"
+      },
+      "window-1": {
+        "id": "window-1",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 48,
+          "y": 383,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 1"
+      },
+      "skyline-2": {
+        "id": "skyline-2",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 80,
+          "y": 342,
+          "width": 32,
+          "height": 110
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 2"
+      },
+      "window-2": {
+        "id": "window-2",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 88,
+          "y": 352,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 2"
+      },
+      "skyline-3": {
+        "id": "skyline-3",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 120,
+          "y": 311,
+          "width": 32,
+          "height": 141
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 3"
+      },
+      "window-3": {
+        "id": "window-3",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 128,
+          "y": 321,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 3"
+      },
+      "skyline-4": {
+        "id": "skyline-4",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 160,
+          "y": 280,
+          "width": 32,
+          "height": 172
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 4"
+      },
+      "window-4": {
+        "id": "window-4",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 168,
+          "y": 290,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 4"
+      },
+      "skyline-5": {
+        "id": "skyline-5",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 200,
+          "y": 249,
+          "width": 32,
+          "height": 203
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 5"
+      },
+      "window-5": {
+        "id": "window-5",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 208,
+          "y": 259,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 5"
+      },
+      "skyline-6": {
+        "id": "skyline-6",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 240,
+          "y": 378,
+          "width": 32,
+          "height": 74
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 6"
+      },
+      "window-6": {
+        "id": "window-6",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 248,
+          "y": 388,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 6"
+      },
+      "skyline-7": {
+        "id": "skyline-7",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 280,
+          "y": 347,
+          "width": 32,
+          "height": 105
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 7"
+      },
+      "window-7": {
+        "id": "window-7",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 288,
+          "y": 357,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 7"
+      },
+      "skyline-8": {
+        "id": "skyline-8",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 320,
+          "y": 316,
+          "width": 32,
+          "height": 136
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 8"
+      },
+      "window-8": {
+        "id": "window-8",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 328,
+          "y": 326,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 8"
+      },
+      "skyline-9": {
+        "id": "skyline-9",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 360,
+          "y": 285,
+          "width": 32,
+          "height": 167
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 9"
+      },
+      "window-9": {
+        "id": "window-9",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 368,
+          "y": 295,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 9"
+      },
+      "skyline-10": {
+        "id": "skyline-10",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 400,
+          "y": 254,
+          "width": 32,
+          "height": 198
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 10"
+      },
+      "window-10": {
+        "id": "window-10",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 408,
+          "y": 264,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 10"
+      },
+      "skyline-11": {
+        "id": "skyline-11",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 440,
+          "y": 383,
+          "width": 32,
+          "height": 69
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 11"
+      },
+      "window-11": {
+        "id": "window-11",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 448,
+          "y": 393,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 11"
+      },
+      "skyline-12": {
+        "id": "skyline-12",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 480,
+          "y": 352,
+          "width": 32,
+          "height": 100
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 12"
+      },
+      "window-12": {
+        "id": "window-12",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 488,
+          "y": 362,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 12"
+      },
+      "skyline-13": {
+        "id": "skyline-13",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 520,
+          "y": 321,
+          "width": 32,
+          "height": 131
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 13"
+      },
+      "window-13": {
+        "id": "window-13",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 528,
+          "y": 331,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 13"
+      },
+      "skyline-14": {
+        "id": "skyline-14",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 560,
+          "y": 290,
+          "width": 32,
+          "height": 162
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 14"
+      },
+      "window-14": {
+        "id": "window-14",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 568,
+          "y": 300,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 14"
+      },
+      "skyline-15": {
+        "id": "skyline-15",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 600,
+          "y": 259,
+          "width": 32,
+          "height": 193
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 15"
+      },
+      "window-15": {
+        "id": "window-15",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 608,
+          "y": 269,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 15"
+      },
+      "skyline-16": {
+        "id": "skyline-16",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 640,
+          "y": 388,
+          "width": 32,
+          "height": 64
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 16"
+      },
+      "window-16": {
+        "id": "window-16",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 648,
+          "y": 398,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 16"
+      },
+      "skyline-17": {
+        "id": "skyline-17",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 680,
+          "y": 357,
+          "width": 32,
+          "height": 95
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 17"
+      },
+      "window-17": {
+        "id": "window-17",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 688,
+          "y": 367,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 17"
+      },
+      "skyline-18": {
+        "id": "skyline-18",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 720,
+          "y": 326,
+          "width": 32,
+          "height": 126
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 18"
+      },
+      "window-18": {
+        "id": "window-18",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 728,
+          "y": 336,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 18"
+      },
+      "skyline-19": {
+        "id": "skyline-19",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 760,
+          "y": 295,
+          "width": 32,
+          "height": 157
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 19"
+      },
+      "window-19": {
+        "id": "window-19",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 768,
+          "y": 305,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 19"
+      },
+      "skyline-20": {
+        "id": "skyline-20",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 800,
+          "y": 264,
+          "width": 32,
+          "height": 188
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 20"
+      },
+      "window-20": {
+        "id": "window-20",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 808,
+          "y": 274,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 20"
+      },
+      "skyline-21": {
+        "id": "skyline-21",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 840,
+          "y": 393,
+          "width": 32,
+          "height": 59
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 21"
+      },
+      "window-21": {
+        "id": "window-21",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 848,
+          "y": 403,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 21"
+      },
+      "skyline-22": {
+        "id": "skyline-22",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 880,
+          "y": 362,
+          "width": 32,
+          "height": 90
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 22"
+      },
+      "window-22": {
+        "id": "window-22",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 888,
+          "y": 372,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 22"
+      },
+      "skyline-23": {
+        "id": "skyline-23",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 920,
+          "y": 331,
+          "width": 32,
+          "height": 121
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "skyline 23"
+      },
+      "window-23": {
+        "id": "window-23",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 928,
+          "y": 341,
+          "width": 8,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "window 23"
+      },
+      "stage-title": {
+        "id": "stage-title",
+        "type": "core.text",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 32,
+          "y": 24,
+          "width": 720,
+          "height": 28
+        },
+        "style": {
+          "fill": "#d9e6ec",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "stage title",
+        "text": "SIGNAL RELAY / STAGE 1"
+      },
+      "controls": {
+        "id": "controls",
+        "type": "core.text",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 32,
+          "y": 64,
+          "width": 900,
+          "height": 28
+        },
+        "style": {
+          "fill": "#d9e6ec",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "controls",
+        "text": "Move: arrows or A/D. Jump: Space. Run: Shift. Collect signals; reach the gate."
+      },
+      "player": {
+        "id": "player",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 40,
+          "y": 416,
+          "width": 24,
+          "height": 32
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "player",
+        "entity": {
+          "body": "dynamic",
+          "player": true,
+          "rulePolicy": "platformer",
+          "respawnAt": "spawn"
+        }
+      },
+      "spawn": {
+        "id": "spawn",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 40,
+          "y": 416,
+          "width": 8,
+          "height": 8
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "spawn"
+      },
+      "floor": {
+        "id": "floor",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 0,
+          "y": 480,
+          "width": 960,
+          "height": 60
+        },
+        "style": {
+          "fill": "#243c50",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "floor",
+        "entity": {
+          "body": "static"
+        }
+      },
+      "signal-0": {
+        "id": "signal-0",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 160,
+          "y": 456,
+          "width": 12,
+          "height": 12
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "signal 0",
+        "entity": {
+          "rules": [
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "score",
+                "key": "signals"
+              }
+            },
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "despawn"
+              }
+            }
+          ]
+        }
+      },
+      "signal-1": {
+        "id": "signal-1",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 240,
+          "y": 456,
+          "width": 12,
+          "height": 12
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "signal 1",
+        "entity": {
+          "rules": [
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "score",
+                "key": "signals"
+              }
+            },
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "despawn"
+              }
+            }
+          ]
+        }
+      },
+      "signal-2": {
+        "id": "signal-2",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 320,
+          "y": 456,
+          "width": 12,
+          "height": 12
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "signal 2",
+        "entity": {
+          "rules": [
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "score",
+                "key": "signals"
+              }
+            },
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "despawn"
+              }
+            }
+          ]
+        }
+      },
+      "signal-3": {
+        "id": "signal-3",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 400,
+          "y": 456,
+          "width": 12,
+          "height": 12
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "signal 3",
+        "entity": {
+          "rules": [
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "score",
+                "key": "signals"
+              }
+            },
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "despawn"
+              }
+            }
+          ]
+        }
+      },
+      "signal-4": {
+        "id": "signal-4",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 480,
+          "y": 456,
+          "width": 12,
+          "height": 12
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "signal 4",
+        "entity": {
+          "rules": [
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "score",
+                "key": "signals"
+              }
+            },
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "despawn"
+              }
+            }
+          ]
+        }
+      },
+      "signal-5": {
+        "id": "signal-5",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 560,
+          "y": 456,
+          "width": 12,
+          "height": 12
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "signal 5",
+        "entity": {
+          "rules": [
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "score",
+                "key": "signals"
+              }
+            },
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "despawn"
+              }
+            }
+          ]
+        }
+      },
+      "signal-6": {
+        "id": "signal-6",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 640,
+          "y": 456,
+          "width": 12,
+          "height": 12
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "signal 6",
+        "entity": {
+          "rules": [
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "score",
+                "key": "signals"
+              }
+            },
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "despawn"
+              }
+            }
+          ]
+        }
+      },
+      "signal-7": {
+        "id": "signal-7",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 720,
+          "y": 456,
+          "width": 12,
+          "height": 12
+        },
+        "style": {
+          "fill": "#eebc55",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "signal 7",
+        "entity": {
+          "rules": [
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "score",
+                "key": "signals"
+              }
+            },
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "despawn"
+              }
+            }
+          ]
+        }
+      },
+      "upper-platform-0": {
+        "id": "upper-platform-0",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 180,
+          "y": 360,
+          "width": 100,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "upper platform 0",
+        "entity": {
+          "body": "oneway"
+        }
+      },
+      "upper-platform-1": {
+        "id": "upper-platform-1",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 340,
+          "y": 320,
+          "width": 100,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "upper platform 1",
+        "entity": {
+          "body": "oneway"
+        }
+      },
+      "upper-platform-2": {
+        "id": "upper-platform-2",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 500,
+          "y": 360,
+          "width": 100,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "upper platform 2",
+        "entity": {
+          "body": "oneway"
+        }
+      },
+      "upper-platform-3": {
+        "id": "upper-platform-3",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 660,
+          "y": 320,
+          "width": 100,
+          "height": 12
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "upper platform 3",
+        "entity": {
+          "body": "oneway"
+        }
+      },
+      "gate": {
+        "id": "gate",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 872,
+          "y": 384,
+          "width": 48,
+          "height": 96
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "gate",
+        "className": "level-gate",
+        "entity": {
+          "goal": true,
+          "transitionTo": "relay-2.vde"
+        }
+      },
+      "gate-label": {
+        "id": "gate-label",
+        "type": "core.text",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 856,
+          "y": 348,
+          "width": 96,
+          "height": 28
+        },
+        "style": {
+          "fill": "#d9e6ec",
+          "opacity": 1
+        },
+        "layout": {},
+        "name": "gate label",
+        "text": "NEXT"
+      }
+    },
+    "rootNodeUuids": [
+      "sky",
+      "skyline-0",
+      "window-0",
+      "skyline-1",
+      "window-1",
+      "skyline-2",
+      "window-2",
+      "skyline-3",
+      "window-3",
+      "skyline-4",
+      "window-4",
+      "skyline-5",
+      "window-5",
+      "skyline-6",
+      "window-6",
+      "skyline-7",
+      "window-7",
+      "skyline-8",
+      "window-8",
+      "skyline-9",
+      "window-9",
+      "skyline-10",
+      "window-10",
+      "skyline-11",
+      "window-11",
+      "skyline-12",
+      "window-12",
+      "skyline-13",
+      "window-13",
+      "skyline-14",
+      "window-14",
+      "skyline-15",
+      "window-15",
+      "skyline-16",
+      "window-16",
+      "skyline-17",
+      "window-17",
+      "skyline-18",
+      "window-18",
+      "skyline-19",
+      "window-19",
+      "skyline-20",
+      "window-20",
+      "skyline-21",
+      "window-21",
+      "skyline-22",
+      "window-22",
+      "skyline-23",
+      "window-23",
+      "stage-title",
+      "controls",
+      "player",
+      "spawn",
+      "floor",
+      "signal-0",
+      "signal-1",
+      "signal-2",
+      "signal-3",
+      "signal-4",
+      "signal-5",
+      "signal-6",
+      "signal-7",
+      "upper-platform-0",
+      "upper-platform-1",
+      "upper-platform-2",
+      "upper-platform-3",
+      "gate",
+      "gate-label"
+    ],
+    "variables": {},
+    "activeTheme": "light",
+    "background": "#182638",
+    "screen": {
+      "width": 960,
+      "height": 540
+    }
+  }
+}

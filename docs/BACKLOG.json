@@ -40,16 +40,16 @@
       "area": "runtime",
       "priority": "P1",
       "status": "open",
-      "summary": "Extend delivered typed event/player-condition commands and isolated level playback with richer conditions, script bindings and dependency-aware native 3D level transitions.",
-      "evidence": ["src/core/runtime/World.ts", "src/core/script/ScriptApi.ts", "MILESTONES.md#phase-18-game-runtime"]
+      "summary": "Extend delivered schema-81 graphs (events/branches/actions, delays, bounded repeats, reusable project assets, saved continuations and editor debugging) with general behavior lifecycle, richer variables and callable graph functions. Named inputs, 2D/3D interaction/spawning/checkpoints and current-level progress are delivered. Input settings UI, full prefabs, cross-level state, cross-build save migrations and process-crash/relaunch acceptance remain open.",
+      "evidence": ["docs/BEHAVIOR-GRAPHS.md", "docs/GAMEPLAY-FOUNDATIONS.md", "src/core/document/BehaviorGraph.ts", "src/core/runtime/BehaviorRunner.ts", "src/app/BehaviorGraphPanel.tsx", "src/core/runtime/Gameplay3D.ts", "src/core/runtime/GameplaySession.ts", "src/runtime/PlayerProgress.ts", "scripts/smoke-behavior.js", "scripts/smoke-player.js", "MILESTONES.md#phase-18-game-runtime"]
     },
     {
       "id": "EXPORT-001",
       "area": "distribution",
       "priority": "P1",
       "status": "open",
-      "summary": "Extend the smoke-tested offline 2D HTML player with native 3D distribution, bundled custom fonts and explicit unsupported-feature diagnostics.",
-      "evidence": ["package.json", "scripts/smoke-startup.js"]
+      "summary": "Complete clean-machine standalone 3D acceptance, custom font packaging, unsupported-feature diagnostics and release provenance. Shared 3D loading/session, inline manifest/resolver, package export, embedded-payload checksum, event/render host and unsigned Windows unpacked build are implemented; broad runtime feature coverage and F1 certification remain open.",
+      "evidence": ["docs/PLAYER-RUNTIME.md", "docs/GAME-PACKAGE.md", "docs/STANDALONE-PLAYER.md", "src/runtime/RuntimeProject.ts", "src/electron/GamePackageExport.ts", "scripts/package-game.js", "scripts/smoke-player.js", "scripts/smoke-player-startup.js", "package.json"]
     },
     {
       "id": "PHYSICS-001",
@@ -72,7 +72,7 @@
       "area": "project-files",
       "priority": "P1",
       "status": "open",
-      "summary": "Extend acknowledged Save/Save As and native recovery with linked-level graph relocation, browser recovery restore and process-crash/recovery fault-injection coverage. Current dependency relocation covers referenced 3D sources and glTF sidecars only.",
+      "summary": "Extend delivered bounded linked-level/image/3D relocation and five real writer-process crash checkpoints with browser recovery restore, full desktop crash/relaunch automation and transactional dependency-folder rollback. Renamed self-linked entry files and external image URLs are explicitly refused during cross-folder relocation; custom fonts are not packaged.",
       "evidence": ["src/app/ProjectSession.ts", "src/electron/projectDependencies.js", "docs/PRODUCTION-WORK.md"]
     },
     {
@@ -80,7 +80,7 @@
       "area": "performance",
       "priority": "P1",
       "status": "open",
-      "summary": "Extend repeatable owned-fixture CPU/loading/history/skin benchmarks with GPU frame timings, large raster/component workloads, isolated asset-reload measurements and calibrated release budgets.",
+      "summary": "Calibrate release budgets across hardware using delivered CPU/GPU, 1024-square raster, 500-instance component, 100 animated-mesh and disk asset-reload benchmarks. Add longer soak runs, larger textured scenes and exact retained-memory accounting before choosing performance rewrites.",
       "evidence": ["scripts/benchmark-authoring.js", "scripts/smoke-authoring.js", "docs/PRODUCTION-WORK.md"]
     },
     {

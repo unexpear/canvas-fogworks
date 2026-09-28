@@ -9,6 +9,9 @@
  * are authored identity, while source paths are relocatable project metadata.
  */
 
+import {BlockoutShape,blockoutError} from "../geometry/Blockout3D";
+import {SolidTree3D,solidTreeError} from "../geometry/SolidTree3D";
+
 export interface Vec3 { x: number; y: number; z: number }
 /** Quaternion component order matches glTF: x, y, z, w. */
 export interface Quaternion { x: number; y: number; z: number; w: number }
@@ -55,6 +58,12 @@ export type Collider3D =
     | { kind: "sphere"; radius: number };
 
 export interface Spatial3D {
+    /** Editable procedural solid; buffers are derived, never stored. Schema 86. */
+    blockout?: BlockoutShape;
+    /** Non-destructive generated-solid operands and operations. Schema 88. */
+    solidTree?: SolidTree3D;
+    /** Explicit solid opt-in. Absent/false preserves visual-only schema-86 scenes. */
+    blockoutCollision?: boolean;
     animation?: { clip: number; secondaryClip?: number; blend?: number; speed?: number; loop?: boolean };
     transform: Transform3D;
     camera?: Camera3D;
@@ -151,6 +160,16 @@ export function spatial3DError(spatial: unknown): string | null {
     if (spatial === undefined) return null;
     if (!spatial || typeof spatial !== "object" || Array.isArray(spatial)) return "spatial3d must be an object or absent";
     const s = spatial as Partial<Spatial3D>;
+    if(s.blockoutCollision!==undefined&&(typeof s.blockoutCollision!=="boolean"||(!s.blockout&&!s.solidTree)))return "blockoutCollision requires a blockout or solid tree and a boolean value.";
+    if(s.solidTree!==undefined){
+        if(s.blockout||s.renderable||s.composition2d||s.collider)return "Solid tree, blockout, imported mesh, composition and explicit collider are mutually exclusive.";
+        const error=solidTreeError(s.solidTree);if(error)return error;
+    }
+    if(s.blockout!==undefined){
+        const error=blockoutError(s.blockout);if(error)return error;
+        if(s.renderable||s.composition2d)return "Blockout, imported mesh and 2D composition are mutually exclusive.";
+        if(s.collider)return "Blockout collision must be derived from its solid geometry; authored box/sphere approximations are not supported.";
+    }
     if (s.animation !== undefined) {
         const a = s.animation;
         if (!a || !Number.isInteger(a.clip) || a.clip < 0 || a.clip >= 256

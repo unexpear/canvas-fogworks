@@ -12,6 +12,7 @@ export interface ElectronAPI {
     readRecovery: () => Promise<import("./ProjectSession").RecoverySnapshot | null>;
     writeRecovery: (snapshot: import("./ProjectSession").RecoverySnapshot | null) => Promise<void>;
     exportGame: (folder: string, content: string, sourceProjectPath: string | null) => Promise<string>;
+    exportGame3D: (folder: string, content: string, sourceProjectPath: string | null) => Promise<string>;
     readLevelFile: (currentFilePath: string, target: string) => Promise<{ filePath: string; content: string }>;
     requestSaveAs: () => Promise<boolean>;
     pickFolder: () => Promise<string | null>;

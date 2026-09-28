@@ -9,13 +9,26 @@
 
 import { ReadonlyDocument } from "../core/document/Document";
 import { applyFrame } from "../core/document/Timeline";
+import { dropHidden } from "../core/document/Components";
 import { Camera3D, Transform3D } from "../core/document/Spatial3D";
 import { MeshInstance, MeshPrimitive } from "../core/import/MeshData";
 import { GltfMotion, sampleGltfMotion } from "../core/import/GltfMotion";
 import { HdrEnvironmentImage } from "./HdrEnvironment";
 import { EnvironmentIbl3D, preparedEnvironment3D } from "./EnvironmentIbl3D";
+import {generateBlockout,BlockoutShape} from "../core/geometry/Blockout3D";
+import {solidTreeGeometry3D} from "../core/geometry/SolidTree3D";
 
 export type Mat4 = number[];
+
+// Bounded value cache keeps stable GPU buffer identity across immutable document snapshots.
+const blockoutMeshes=new Map<string,MeshPrimitive>();
+function blockoutMesh(shape:BlockoutShape):MeshPrimitive{
+    const key=JSON.stringify(shape),cached=blockoutMeshes.get(key);
+    if(cached){blockoutMeshes.delete(key);blockoutMeshes.set(key,cached);return cached;}
+    const mesh=generateBlockout(shape).mesh;blockoutMeshes.set(key,mesh);
+    if(blockoutMeshes.size>32)blockoutMeshes.delete(blockoutMeshes.keys().next().value!);
+    return mesh;
+}
 
 export interface MeshAsset3D {
     motion?: GltfMotion;
@@ -234,7 +247,7 @@ const DEFAULT_CAMERA_WORLD = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 5, 1];
 
 export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width: number, height: number,
                              environments: EnvironmentLibrary3D = new Map(), animationSeconds = (doc.frame ?? 0) / (doc.timeline?.fps ?? 24)): Frame3D {
-    doc = applyFrame(doc, doc.frame);
+    doc = dropHidden(applyFrame(doc, doc.frame));
     const diagnostics: string[] = [];
     const worlds = new Map<string, Mat4>();
     const visit = (id: string, parent: readonly number[]): void => {
@@ -340,8 +353,14 @@ export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width
                 alphaMode: color[3] < 1 || node.type === "core.image" ? "BLEND" : "OPAQUE", alphaCutoff: 0.5 });
             continue;
         }
-        if (!renderable) continue;
-        const asset = meshes.get(renderable.meshAssetId);
+        const blockout=node.spatial3d?.blockout;
+        const solidTree=node.spatial3d?.solidTree;
+        if (!renderable&&!blockout&&!solidTree) continue;
+        const asset:MeshAsset3D|undefined = solidTree
+            ? {instances:[{name:"solid",matrix:[...MAT4_IDENTITY],primitive:solidTreeGeometry3D(solidTree).mesh}]}
+            : blockout
+            ? {instances:[{name:blockout.kind,matrix:[...MAT4_IDENTITY],primitive:blockoutMesh(blockout)}]}
+            : meshes.get(renderable!.meshAssetId);
         if (!asset) continue;
         const nodeWorld = worlds.get(id) ?? transformMatrix3D(node.spatial3d!.transform);
         let instances = asset.instances;
@@ -350,7 +369,7 @@ export function buildFrame3D(doc: ReadonlyDocument, meshes: MeshLibrary3D, width
         } catch (error) { diagnostics.push(`${id}: animation failed; showing imported mesh. ${String(error)}`); }
         for (const instance of instances) {
             const slot = typeof instance.primitive.material === "number" ? instance.primitive.material : -1;
-            const assigned = materialSource(renderable.materialAssetIds?.[slot]);
+            const assigned = materialSource(renderable?.materialAssetIds?.[slot]);
             const material = assigned?.mesh.materials?.[assigned.slot] ?? asset.materials?.[slot];
             draws.push({ nodeId: id, model: multiplyMat4(nodeWorld, instance.matrix), primitive: instance.primitive,
                 color: material?.baseColor ?? assigned?.mesh.materialColors?.[assigned.slot] ??

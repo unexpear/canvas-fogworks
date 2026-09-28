@@ -51,6 +51,9 @@ export const GIZMO_ROTATE_RADII_PX = [38, 49, 60] as const;
 /** Copy the document's deep-readonly component into the mutable value an Action accepts. */
 export function copySpatial3D(s: DeepReadonly<Spatial3D>): Spatial3D {
     return {
+        ...(s.blockout ? { blockout: { ...s.blockout } } : {}),
+        ...(s.solidTree ? {solidTree:JSON.parse(JSON.stringify(s.solidTree))} : {}),
+        ...(s.blockoutCollision !== undefined ? {blockoutCollision:s.blockoutCollision} : {}),
         ...(s.animation ? { animation: { ...s.animation } } : {}),
         transform: {
             position: { ...s.transform.position }, rotation: { ...s.transform.rotation }, scale: { ...s.transform.scale }

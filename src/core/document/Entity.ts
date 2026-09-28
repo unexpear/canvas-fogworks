@@ -8,11 +8,14 @@
  */
 
 import { GameplayRule, gameplayRulesError } from "./Gameplay";
+import { BehaviorGraph, behaviorGraphError } from "./BehaviorGraph";
 
 export const ENTITY_BODY_TYPES = ["static", "dynamic", "oneway"] as const;
 export type EntityBodyType = typeof ENTITY_BODY_TYPES[number];
 
 export interface Entity {
+    behavior?: BehaviorGraph;
+    behaviorAssetId?: string;
     rules?: readonly GameplayRule[];
     rulePolicy?: "platformer" | "authored";
     gravity3d?: number;
@@ -41,6 +44,7 @@ export function entityError(value: unknown): string | null {
     if (value === undefined) return null;
     if (typeof value !== "object" || value === null || Array.isArray(value)) return "entity must be an object";
     const e = value as Partial<Entity>;
+    if(e.behaviorAssetId!==undefined && (typeof e.behaviorAssetId!=="string"||!/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(e.behaviorAssetId)||e.behavior!==undefined))return "Use either an inline behavior graph or one valid behavior asset ID.";
     if (e.rulePolicy !== undefined && e.rulePolicy !== "platformer" && e.rulePolicy !== "authored") return "invalid gameplay rule policy";
     if (e.gravity3d !== undefined && (!Number.isFinite(e.gravity3d) || e.gravity3d < 0 || e.gravity3d > 1000)) return "3D gravity must be within 0–1000";
     if (e.restitution3d !== undefined && (!Number.isFinite(e.restitution3d) || e.restitution3d < 0 || e.restitution3d > 1)) return "3D restitution must be within 0–1";
@@ -65,7 +69,7 @@ export function entityError(value: unknown): string | null {
             return `entity.${key} must be a non-empty string of at most 4096 characters`;
         }
     }
-    return gameplayRulesError(e.rules);
+    return gameplayRulesError(e.rules) ?? behaviorGraphError(e.behavior);
 }
 
 /** Convert the legacy runtime vocabulary without deleting it (it may belong to an imported file). */

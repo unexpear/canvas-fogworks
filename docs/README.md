@@ -2,12 +2,16 @@
 
 <!-- describes: src/core/document/Document.ts, src/core/tests -->
 
-> **Frozen contracts · schema v78 (app v0.0.5) · current through project recovery, gameplay rules, offline 2D export and native mesh playback.**
+> **Frozen contracts · schema v88 (app v0.0.5) · current through project recovery, gameplay rules, offline 2D export and native mesh playback.**
 
 Current workflow scope, limits, commands and measured budgets: [Production workflows](PRODUCTION-WORK.md).
-> These documents describe the *current, verified* implementation and lock the
-> contracts the rest of the engine builds on. See [`../MILESTONES.md`](../MILESTONES.md)
-> for the roadmap and where each layer fits.
+Timers, bounded repeats, reusable project graphs, saved continuations and editor debugging:
+[Behavior graphs](BEHAVIOR-GRAPHS.md).
+Long-term engine ambition, major gaps, phase dependencies and acceptance gates: [Full engine development plan](ENGINE-ROADMAP.md).
+> The contract documents below describe the *current, verified* implementation and lock
+> the contracts the rest of the engine builds on. The engine development plan is prospective,
+> not a claim of delivered features. See [`../MILESTONES.md`](../MILESTONES.md) for historical
+> delivery and where each layer fits.
 
 ## The freeze rule
 
@@ -48,6 +52,12 @@ For clip browsing, preview and state-driven playback, see [Animation workflow](A
 | [BACKLOG.json](BACKLOG.json) | Machine-readable open work, priorities, status and evidence links | — |
 | [ASSET-INVENTORY.md](ASSET-INVENTORY.md) | Local-only third-party example/test corpus audit and repository policy | — |
 | [3D-FOUNDATION.md](3D-FOUNDATION.md) | Boundary and staged plan for extending the 2D foundation into 3D | — |
+| [ENGINE-ROADMAP.md](ENGINE-ROADMAP.md) | Full dual-track engine plan: 22 major gap work packages, delivery phases, acceptance gates and decision register | Planned |
+| [PLAYER-RUNTIME.md](PLAYER-RUNTIME.md) | Shared level/asset loading and 3D session lifecycle; clean-machine release gate remains open | Partial |
+| [GAME-PACKAGE.md](GAME-PACKAGE.md) | Inline v1 manifest, allowlisted resolver and bounded package contract | Partial |
+| [STANDALONE-PLAYER.md](STANDALONE-PLAYER.md) | 3D HTML export, event/render host and unsigned Windows unpacked build; clean-machine acceptance pending | Partial |
+| [GAMEPLAY-FOUNDATIONS.md](GAMEPLAY-FOUNDATIONS.md) | Named input, 2D/3D interaction/spawn/checkpoint rules and bounded player progress saves | Partial |
+| [BEHAVIOR-GRAPHS.md](BEHAVIOR-GRAPHS.md) | Visual event/branch/action graphs, shared runtime execution, validated links and authoring undo | First slice delivered |
 
 ## Quick facts
 

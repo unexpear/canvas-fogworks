@@ -31,6 +31,15 @@ function node(id: string, z: number, camera = false): Node {
 }
 
 describe("3D viewport frame", () => {
+    test("hidden templates and hidden subtrees never draw or cast shadows", () => {
+        const doc = createEmptyDocument(), parent = node("parent",0), child = node("mesh",0), visible = node("visible",0);
+        parent.hidden=true;parent.children=["mesh"];child.parent="parent";
+        for(const n of [parent,child,visible])doc.nodes.set(n.id,n);doc.rootNodeUuids=["parent","visible"];
+        const meshes:MeshLibrary3D=new Map(["parent","mesh","visible"].map(id=>[id,{instances:[{name:id,matrix:[...MESH_IDENTITY],primitive}]}]));
+        const frame=buildFrame3D(doc,meshes,100,100);
+        expect(frame.draws.map(draw=>draw.nodeId)).toEqual(["visible"]);expect(frame.worlds.has("mesh")).toBe(false);
+        expect(doc.nodes.size).toBe(3);
+    });
     test("composes parent and imported instance transforms without touching 2D geometry", () => {
         const doc = createEmptyDocument();
         const parent = node("parent", 0); delete parent.spatial3d!.renderable;

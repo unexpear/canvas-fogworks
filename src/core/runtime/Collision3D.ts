@@ -1,11 +1,18 @@
 /**
  * @module Collision3D
- * @description Oriented box SAT and sphere/box contact geometry; returns a separating normal and penetration depth for deterministic runtime resolution.
+ * @description Oriented box, sphere and prepared compound contacts; returns normal and penetration depth for deterministic runtime resolution.
  */
 import { Collider3D, Transform3D } from "../document/Spatial3D";
 import { nodeMatrix } from "../import/Gltf";
+import {compoundContact3D} from "./CompoundContact3D";
+import type {ConvexHull3D} from "./ConvexContact3D";
 type V = [number, number, number];
-export interface CollisionShape3D { transform: Transform3D; collider: Collider3D | null; }
+export interface CollisionShape3D {
+    transform: Transform3D; collider: Collider3D | null;
+    /** Transient world-space convex parts, prepared by the runtime projection, never persisted.
+     * When present these replace the primitive collider; [] explicitly means no solid volume. */
+    convexParts?:readonly ConvexHull3D[];
+}
 export interface Contact3D { normal: V; depth: number; }
 const dot = (a: V, b: V) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
 const sub = (a: V, b: V): V => [a[0]-b[0],a[1]-b[1],a[2]-b[2]];
@@ -21,6 +28,7 @@ function geometry(body: CollisionShape3D) {
 }
 /** The normal points from B toward A. Touching alone is not penetration. */
 export function contact3D(a: CollisionShape3D, b: CollisionShape3D): Contact3D | null {
+    if(a.convexParts!==undefined||b.convexParts!==undefined)return compoundContact3D(a,b);
     if (!a.collider || !b.collider) return null;
     const ga = geometry(a), gb = geometry(b), delta = sub(ga.center,gb.center);
     if (a.collider.kind === "sphere" && b.collider.kind === "sphere") {

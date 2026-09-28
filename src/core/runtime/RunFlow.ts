@@ -12,10 +12,16 @@ export function restartRun(doc: ReadonlyDocument): WorldState {
 }
 
 /**
- * Respawn the controlled body in a fresh copy of the level while retaining run-wide tallies and
- * power. `entity.respawnAt` names an anchor node; absent/dangling anchors use the authored start.
+ * A runtime checkpoint retains current-level mutations; otherwise respawn in a fresh level with
+ * tallies and power retained. `entity.respawnAt` names a fallback anchor; absent/dangling anchors use the authored start.
  */
 export function respawnRun(doc: ReadonlyDocument, previous: WorldState, controlled: string): WorldState {
+    const checkpoint = previous.checkpoint, current = previous.bodies.get(controlled) ?? worldFrom(doc).bodies.get(controlled);
+    if (checkpoint?.playerId === controlled && current) {
+        const bodies = new Map(previous.bodies), despawned = new Set(previous.despawned); despawned.delete(controlled);
+        bodies.set(controlled, { ...current, x: checkpoint.position.x, y: checkpoint.position.y, vx: 0, vy: 0, onGround: false });
+        return { ...previous, bodies, despawned, outcome: "running", transitionTo: null, contacts: new Set(), overlaps: new Set(), events: [], jumpWas: false, jumpCut: false };
+    }
     const fresh = worldFrom(doc);
     const body = fresh.bodies.get(controlled);
     if (!body) return fresh;

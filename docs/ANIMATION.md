@@ -39,6 +39,10 @@ moving/idle (3D speed), won/lost and clip completion; it does not infer 2D groun
 Restart, respawn and level changes create fresh players. The existing stopped/finished-world
 behavior freezes simulation time and therefore freezes animations too.
 
+Native 3D level changes now stage destination mesh/motion/material/environment libraries before
+adopting the new runtime document. Stop or a superseding request invalidates pending hydration;
+the author's mesh library, document history and Save path are not replaced by playback assets.
+
 Unconfigured nodes keep their previous animation behavior, including distance-driven poses.
 Configured node playheads take priority on the derived render document. Physics continues to
 read authored geometry, never animated render geometry. Missing target clips cannot be entered;

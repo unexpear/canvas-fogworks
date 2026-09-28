@@ -11,7 +11,12 @@
      terrain's material LIST position by position, because reordering two materials redraws every
      shore while touching no cell — an edit a set-comparison would refuse as nothing. -->
 
-> 🔒 Frozen contract · schema v78 (app v0.0.5) · includes animation-controller, gameplay-rule and native 3D playback authoring. Code in `src/core/actions/`.
+> 🔒 Frozen contract · schema v88 (app v0.0.5) · includes animation-controller, gameplay-rule and native 3D playback authoring. Code in `src/core/actions/`.
+
+Reusable behavior tables use `SetBehaviorAssetsAction`; promotion may bind an entity in the same
+mutation. Transactions preserve the independent `behaviorAssets` document delta. Referenced assets
+cannot be removed; entity edits reject missing asset IDs. Timers, repeat stacks and debugger controls
+belong to transient worlds, never the undo history. See [Behavior graphs](BEHAVIOR-GRAPHS.md).
 
 Schema 78 gameplay rules/audio and opt-in 3D physics fields use `UpdateNodeContentAction` on `entity`; native mesh playback uses `SetSpatial3DAction`. Runtime commands, audio voices, sampled mesh buffers, file savepoints and recovery snapshots are not history entries. See [Production workflows](PRODUCTION-WORK.md).
 

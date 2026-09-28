@@ -19,9 +19,69 @@
 <!-- re-read 2026-08-10 for schema 64: `Node.className` and `Node.userData` are documented
      below. The earlier note stands — the rectangle gesture added no field. -->
 
-> 🔒 Frozen contract · schema v78 (app v0.0.5). Types are in `src/core/document/`.
+> 🔒 Frozen contract · schema v88 (app v0.0.5). Types are in `src/core/document/`.
+
+Schema 86 adds optional `Node.spatial3d.blockout`: editable box/wall/ramp dimensions, stair
+count, or room thickness/ceiling. Geometry buffers are derived, not persisted. Dimensions are
+0.001–10000 and stairs are limited to 256. Imported renderables, 2D composition and explicit
+box/sphere colliders cannot coexist with blockout. Migration 85→86 preserves existing documents unchanged.
+Schema 87 adds optional boolean `spatial3d.blockoutCollision`, initially valid only with a blockout.
+Absent/false means visual-only; true derives convex parts for runtime collision. Migration 86→87
+does not enable collision implicitly. Generated hulls are never serialized into documents or progress.
+
+Schema 88 adds optional `spatial3d.solidTree`, mutually exclusive with `blockout`, `renderable`,
+`composition2d` and explicit `collider`. The existing `blockoutCollision` opt-in also applies to
+solid trees. Shape leaves store an ID, blockout parameters, position/rotation/scale triples;
+rotation is in degrees applied X then Y then Z. Operation branches store an ID, add/subtract/intersect,
+and left/right children. IDs are unique safe 1–64-character names. Trees are limited to 31 nodes
+and depth 8; positions to ±10000, rotations to ±36000, and absolute scales to .001–1000.
+Unknown fields, invalid topology, excessive evaluation and GPU-degenerate results are refused
+before adoption. Rendering and collision share evaluated geometry; only editable operands are saved.
+Migration 87→88 preserves existing scenes and does not convert blockouts or enable collision.
 
 Schema 78 adds `Entity.rules`, `rulePolicy`, `gravity3d`, `restitution3d`, and `Spatial3D.animation`. Migration 77→78 preserves absent fields. Rules hold typed events, conditions and runtime commands; sound commands embed bounded audio data URLs. Mesh playback stores clip indices, optional secondary clip/blend, speed and loop—not joint buffers or clocks. See [Production workflows](PRODUCTION-WORK.md).
+
+Schema 79 adds the optional `interact` gameplay event and positive `range` (at most 10,000),
+`spawn` actions naming a template node ID, and `checkpoint` actions. Migration 78→79 preserves
+all existing fields. Player-save format v1 is separate from project schema and document history.
+See [Gameplay foundations](GAMEPLAY-FOUNDATIONS.md).
+
+Schema 80 adds optional `Entity.behavior`: a version-1 graph with an enabled flag and at most
+64 typed event/branch/action nodes. Links must resolve, cannot target events and cannot form
+cycles. Node IDs, conditions and actions are validated by the same entity validator used by
+load and Actions. Migration 79→80 leaves existing entities unchanged. See [Behavior graphs](BEHAVIOR-GRAPHS.md).
+
+Schema 81 adds graph-v2 delay/repeat nodes and optional `behaviorAssets` (up to 128 unique named
+graphs). An entity may bind `behaviorAssetId` instead of inline `behavior`; load and edit paths
+reject missing references and simultaneous inline/reference fields. `SetBehaviorAssetsAction`
+updates the table and optional entity binding atomically. Migration 80→81 is non-destructive.
+Player-progress v2 is separate and saves bounded continuations without debugger state; v1 saves
+still load with no pending jobs. See [Behavior graphs](BEHAVIOR-GRAPHS.md).
+
+Schema 82 adds graph-v3 lifecycle/custom event declarations and emit nodes; old graphs keep their
+versions. Player-progress v3 separately adds lifecycle notification bookkeeping and accepts v1/v2
+saves. The broader gameplay goal remains in progress; see [its delivery plan](GAMEPLAY-FIVE-PART-GOAL.md).
+
+Schema 83 adds optional `gameplayVariables`: up to 256 number, boolean or string declarations,
+with entity-local or game scope and type-checked defaults. Graph-v4 assignment/comparison nodes
+reference these declarations; deleting or changing a referenced type is refused. Arithmetic is
+numeric only, finite and bounded; division by zero fails the current execution. Migration 82→83
+leaves old graphs and design tokens unchanged. Player-progress v4 separately stores typed values
+and accepts older v1/v2/v3 saves with declaration defaults. Shared game values currently span actors
+within one active level, not level transitions; campaign persistence is still pending.
+
+Schema 84 adds optional `behaviorFunctions` (at most 128 uniquely named-ID definitions), with
+typed inputs, outputs and invocation-local fields. Each body has an explicit entry and at most
+64 nodes; call chains cannot recurse or exceed 16 levels. Local values start at scalar zero.
+Load and library-edit Actions validate nested references and types; gameplay declarations cannot
+be removed while a function uses them. Migration 83→84 is a pass-through. Library persistence and
+single-instruction execution helpers were the initial delivery. Schema 85 adds graph-v5 `call`
+nodes with typed input sources and output destinations. Root calls bind outputs to gameplay fields;
+nested calls may bind to caller locals. Player-progress v5 stores bounded typed call frames without
+definitions; older v1–v4 saves remain supported. The shared scheduler, root-call inspector,
+qualified function breakpoints and frame watches are integrated. The function library also has
+draft-based visual authoring with explicit validated Apply, Action-backed undo, typed ports,
+local storage and nested-call bindings. Unapplied drafts are editor state, not serialized data.
 
 ### Animation controllers (schema 77)
 

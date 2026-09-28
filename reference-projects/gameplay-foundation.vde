@@ -1,0 +1,330 @@
+{
+  "version": "79",
+  "document": {
+    "metadata": {
+      "project_name": "Gameplay foundations demo",
+      "created_by": "system",
+      "date": "2026-09-12T00:00:00.000Z"
+    },
+    "nodes": {
+      "triangle": {
+        "id": "triangle",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "spatial3d": {
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0,
+              "w": 1
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          },
+          "renderable": {
+            "meshAssetId": "triangle-mesh"
+          },
+          "animation": {
+            "clip": 0,
+            "loop": true
+          },
+          "collider": {
+            "kind": "box",
+            "halfExtents": {
+              "x": 0.3,
+              "y": 0.3,
+              "z": 0.3
+            }
+          }
+        },
+        "name": "Player",
+        "entity": {
+          "player": true,
+          "body": "dynamic"
+        }
+      },
+      "camera": {
+        "id": "camera",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "spatial3d": {
+          "transform": {
+            "position": {
+              "x": 1,
+              "y": 0.5,
+              "z": 5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0,
+              "w": 1
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          },
+          "camera": {
+            "kind": "perspective",
+            "near": 0.1,
+            "far": 100,
+            "verticalFovDegrees": 60
+          }
+        }
+      },
+      "light": {
+        "id": "light",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "spatial3d": {
+          "transform": {
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 3
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0,
+              "w": 1
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          },
+          "light": {
+            "kind": "directional",
+            "color": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            },
+            "intensity": 2
+          }
+        }
+      },
+      "lever": {
+        "id": "lever",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "spatial3d": {
+          "transform": {
+            "position": {
+              "x": 1.25,
+              "y": 0,
+              "z": 0
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0,
+              "w": 1
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          },
+          "renderable": {
+            "meshAssetId": "triangle-mesh"
+          },
+          "animation": {
+            "clip": 0,
+            "loop": true
+          }
+        },
+        "name": "Press F nearby: spawn, score and checkpoint",
+        "entity": {
+          "rules": [
+            {
+              "event": "interact",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "spawn",
+                "templateId": "template"
+              }
+            },
+            {
+              "event": "interact",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "score",
+                "key": "spawned"
+              }
+            },
+            {
+              "event": "interact",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "checkpoint"
+              }
+            }
+          ]
+        }
+      },
+      "template": {
+        "id": "template",
+        "type": "core.rectangle",
+        "parent": null,
+        "children": [],
+        "geometry": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "style": {
+          "fill": "#58bfa8",
+          "opacity": 1
+        },
+        "layout": {},
+        "spatial3d": {
+          "transform": {
+            "position": {
+              "x": 100,
+              "y": 0,
+              "z": 0
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0,
+              "w": 1
+            },
+            "scale": {
+              "x": 1,
+              "y": 1,
+              "z": 1
+            }
+          },
+          "renderable": {
+            "meshAssetId": "triangle-mesh"
+          },
+          "animation": {
+            "clip": 0,
+            "loop": true
+          },
+          "collider": {
+            "kind": "box",
+            "halfExtents": {
+              "x": 0.3,
+              "y": 0.3,
+              "z": 0.3
+            }
+          }
+        },
+        "name": "Hidden collectible template",
+        "entity": {
+          "body": "dynamic",
+          "rules": [
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "score",
+                "key": "collected"
+              }
+            },
+            {
+              "event": "enter",
+              "other": "player",
+              "target": "self",
+              "action": {
+                "kind": "despawn"
+              }
+            }
+          ]
+        },
+        "hidden": true
+      }
+    },
+    "rootNodeUuids": [
+      "triangle",
+      "camera",
+      "light",
+      "lever",
+      "template"
+    ],
+    "variables": {},
+    "activeTheme": "light",
+    "timeline": {
+      "fps": 24,
+      "frames": 48
+    },
+    "assets3d": [
+      {
+        "id": "triangle-mesh",
+        "kind": "mesh",
+        "source": "triangle.gltf",
+        "name": "Original skinned triangle"
+      }
+    ]
+  }
+}

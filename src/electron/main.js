@@ -13,7 +13,9 @@ const path = require("path");
 const { resolveConfined } = require("./confine");
 const { atomicWrite } = require("./atomicWrite");
 const { copyProjectDependencies } = require("./projectDependencies");
+const { embedProjectImages } = require("./projectImages");
 const { gameDocumentTargets, gameHtml } = require("../core/export/GameExport");
+const { collectGamePackage, game3DHtml } = require("./GamePackageExport");
 const fs = require("fs");
 const zlib = require("zlib");
 const pkg = require("../../package.json");
@@ -84,7 +86,7 @@ function createWindow() {
             setTimeout(async () => {
                 try {
                     const filePath = path.resolve(PROJECT_OPEN_SMOKE);
-                    const content = await fs.promises.readFile(filePath, "utf-8");
+                    const content = await embedProjectImages(filePath, await fs.promises.readFile(filePath, "utf-8"));
                     approvedSavePaths.add(filePath);
                     mainWindow?.webContents.send("file-opened", { filePath, content });
                 } catch (err) {
@@ -406,7 +408,7 @@ async function openFileDialog() {
         if (!mainWindow) return;
         if (!result.canceled && result.filePaths.length > 0) {
             const filePath = result.filePaths[0];
-            const content = await fs.promises.readFile(filePath, "utf-8");
+            const content = await embedProjectImages(filePath, await fs.promises.readFile(filePath, "utf-8"));
             // The user chose this path, so Save (Ctrl+S) may write back to it
             // without forcing them through Save As.
             approvedSavePaths.add(filePath);
@@ -898,6 +900,19 @@ ipcMain.handle("export-game", async (_event, folder, content, sourceProjectPath)
     return destination;
 });
 
+ipcMain.handle("export-game-3d", async (event, folder, content, sourceProjectPath) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error("Unapproved game export sender.");
+    if (!approvedExportFolders.has(folder)) throw new Error("Choose an export folder first.");
+    if (!sourceProjectPath || !approvedSavePaths.has(sourceProjectPath)) throw new Error("Save the project before exporting a 3D game.");
+    const serialized = await collectGamePackage(sourceProjectPath, content);
+    const bundle = await fs.promises.readFile(path.join(__dirname, "..", "app", "player3d.js"));
+    const destination = resolveInsideFolder(folder, "game-3d.html");
+    if (fs.existsSync(destination)) throw new Error("game-3d.html already exists. Choose an empty export folder to preserve it.");
+    // Exclusive creation also refuses a conflicting file created after the existence check.
+    await fs.promises.writeFile(destination, game3DHtml(serialized, bundle), { flag: "wx" });
+    return destination;
+});
+
 ipcMain.on("confirm-discard", event => {
     event.returnValue = !!mainWindow && dialog.showMessageBoxSync(mainWindow, {
         type: "warning", title: "Unsaved changes",
@@ -1034,7 +1049,7 @@ ipcMain.handle("read-level-file", async (event, currentFilePath, target) => {
     if (!/\.(vde|json)$/i.test(filePath)) throw new Error("A level transition must target a .vde or .json project.");
     const stat = await fs.promises.stat(filePath);
     if (stat.size > 20_000_000) throw new Error("The level project is larger than 20 MB.");
-    const content = await fs.promises.readFile(filePath, "utf-8");
+    const content = await embedProjectImages(filePath, await fs.promises.readFile(filePath, "utf-8"));
     approvedSavePaths.add(filePath);
     return { filePath, content };
 });

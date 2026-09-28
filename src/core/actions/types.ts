@@ -185,7 +185,10 @@ export type NodeDelta =
      *  sits beside. `undefined` removes the declaration — the state of every pre-72 document. */
     | { kind: "screen"; screen: { width: number; height: number } | undefined }
     /** Stable imported 3D assets (schema 74), replaced as one validated table. */
-    | { kind: "assets3d"; assets3d: Asset3D[] | undefined };
+    | { kind: "assets3d"; assets3d: Asset3D[] | undefined }
+    | { kind: "behaviorAssets"; behaviorAssets: import("../document/BehaviorAssets").BehaviorAsset[] | undefined }
+    | { kind: "gameplayVariables"; gameplayVariables: import("../document/GameplayData").GameplayVariable[] | undefined }
+    | { kind: "behaviorFunctions"; behaviorFunctions: import("../document/BehaviorFunctions").BehaviorFunction[] | undefined };
 
 /** The result of an action execution. Communicates changes without coupling services. */
 export interface MutationResult {
@@ -234,6 +237,9 @@ export interface DocumentSnapshot {
     lights?: ProjectDocument["lights"];
     ambient?: ProjectDocument["ambient"];
     assets3d?: ProjectDocument["assets3d"];
+    behaviorAssets?: ProjectDocument["behaviorAssets"];
+    gameplayVariables?: ProjectDocument["gameplayVariables"];
+    behaviorFunctions?: ProjectDocument["behaviorFunctions"];
 }
 
 /** The serialized payload needed to store history for Undo/Redo */

@@ -12,6 +12,13 @@ import { exportCanvasPng } from "./CanvasExport";
 import { stepGameplay } from "../core/runtime/GameplaySession";
 import { RuntimeAudio } from "./RuntimeAudio";
 import { GameplayPanel } from "./GameplayPanel";
+import { ActorPlacementPanel } from "./ActorPlacementPanel";
+import { SetBehaviorAssetsAction } from "../core/actions/SetBehaviorAssetsAction";
+import { SetBehaviorFunctionsAction } from "../core/actions/SetBehaviorFunctionsAction";
+import {SetGameplayVariablesAction} from "../core/actions/SetGameplayVariablesAction";
+import { BehaviorDebugPanel } from "./BehaviorDebugPanel";
+import { advanceBehaviors2D } from "../core/runtime/GameplaySession";
+import { advanceBehaviors3D } from "../core/runtime/Gameplay3D";
 import { prepareSequenceImport } from "./AssetImportWorkflow";
 import { AnimationPanel } from "./AnimationPanel";
 import { SetClipsAction } from "../core/actions/SetClipsAction";
@@ -181,10 +188,13 @@ import { buildRotateGizmo3D, buildTranslateGizmo3D, copySpatial3D, GizmoMode3D, 
     TranslateHandle3D, translatedSpatial3D } from "../renderer/Gizmo3D";
 import { emitRotateGizmo3D, emitScaleGizmo3D, emitTranslateGizmo3D } from "../renderer/emitGizmo3D";
 import { Spatial3D } from "../core/document/Spatial3D";
+import { interact3D } from "../core/runtime/Gameplay3D";
+import { interactGameplay2D } from "../core/runtime/GameplaySession";
 import { SetSpatial3DAction } from "../core/actions/SetSpatial3DAction";
 import { dollyCamera3D, orbitCamera3D, panCamera3D } from "../renderer/CameraOrbit3D";
 import { RuntimeControls, Workspace, WorkspaceControls, WORKSPACES } from "./AppShellControls";
 import { ThreeDInspector } from "./ThreeDInspector";
+import {BlockoutShape} from "../core/geometry/Blockout3D";
 
 
 /**
@@ -1418,6 +1428,17 @@ export function App() {
             // tested by whoever is nearest the keyboard.)
             // Typing in a panel still wins over both — a name field is a name field.
             if (es.playing && !isTypingTarget(e.target as HTMLElement)) {
+                if ((e.code === "KeyF" || e.key.toLowerCase() === "f") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                    e.preventDefault();
+                    if (!e.repeat) {
+                        const runtimeDoc = runtimeProjectRef.current.document ?? dispatcher.getDocument();
+                        const player = playerEntityId(runtimeDoc.nodes.values());
+                        if (world3dRef.current && workspaceRef.current.id === "3d" && player) world3dRef.current = interact3D(runtimeDoc, world3dRef.current, player);
+                        else if (es.world) { const result = interactGameplay2D(runtimeDoc, es.world, player); es.world = result.world; result.sounds.forEach(sound => { void audioRef.current?.play(sound); }); }
+                        refresh();
+                    }
+                    return;
+                }
                 const intent = intentFor(e.key);
                 if (intent) {
                     es.input = { ...es.input, [intent]: true };
@@ -1585,7 +1606,7 @@ export function App() {
                     setRunOutcome(world3dRef.current.outcome);
                 }
             }
-            if (es.playing && es.world && es.worldClock) {
+            if (es.playing && es.world && es.worldClock && !(workspace === "3d" && world3dRef.current?.behaviorState?.debug.paused)) {
                 const now = Date.now();
                 const spend = stepsFor(es.worldClock.accumulator, (now - es.worldClock.lastAt) / 1000);
                 const before = es.world;              // what the last frame DREW, for the dirty set
@@ -1866,8 +1887,9 @@ export function App() {
                 canvas.style.width = `${host.clientWidth}px`;
                 canvas.style.height = `${host.clientHeight}px`;
                 const scene3d = es.playing && world3dRef.current ? applyWorld3D(doc, world3dRef.current) : doc;
-                const frame3d = buildFrame3D(scene3d, meshLibrary3dRef.current, host.clientWidth, host.clientHeight,
-                    environmentLibrary3dRef.current, es.playing ? world3dRef.current?.time ?? 0 : (es.frame ?? 0) / (doc.timeline?.fps ?? 24));
+                const runtimeAssets = es.playing && runtimeProjectRef.current.document ? runtimeProjectRef.current : null;
+                const frame3d = buildFrame3D(scene3d, runtimeAssets?.meshes ?? meshLibrary3dRef.current, host.clientWidth, host.clientHeight,
+                    runtimeAssets?.environments ?? environmentLibrary3dRef.current, es.playing ? world3dRef.current?.time ?? 0 : (es.frame ?? 0) / (doc.timeline?.fps ?? 24));
                 if (frame3d.diagnostics?.length) setFileStatus(frame3d.diagnostics[0]);
                 if (!emitWebGL3D(canvas, frame3d, window.devicePixelRatio || 1)) {
                     host.dataset.vdeGlFallback = lastWebGL3DFailure() ?? "3D WebGL unavailable";
@@ -2358,6 +2380,18 @@ export function App() {
         }
     }, [dispatcher, es, refresh]);
 
+    const addBlockout3D = useCallback((kind:BlockoutShape["kind"])=>{
+        const doc=dispatcher.getDocument(),id=generateUUID();
+        const dimensions={width:4,height:3,depth:kind==="wall"?.2:4};
+        const blockout:BlockoutShape=kind==="room"?{kind,...dimensions,thickness:.2,ceiling:false}
+            :kind==="stairs"?{kind,...dimensions,steps:8}:{kind,...dimensions};
+        const spatial:Spatial3D={transform:{position:{x:0,y:0,z:0},rotation:{x:0,y:0,z:0,w:1},scale:{x:1,y:1,z:1}},blockout};
+        if(dispatcher.dispatchAction(new TransactionAction(doc,"add-blockout-3d",[
+            new AddNodeAction(doc,"core.rectangle",0,0,1,1,"none",id),new SetSpatial3DAction(doc,id,spatial)
+        ])).success)es.selectedNodeIds=[id];
+        refresh();
+    },[dispatcher,es,refresh]);
+
     const addLight3D = useCallback((kind: "directional" | "point") => {
         const doc = dispatcher.getDocument(), id = generateUUID();
         const spatial: Spatial3D = {
@@ -2382,7 +2416,7 @@ export function App() {
     const composeSelected2DIn3D = useCallback(() => {
         const doc = dispatcher.getDocument(), id = es.selectedNodeIds.length === 1 ? es.selectedNodeIds[0] : null;
         const selected = id ? doc.nodes.get(id) : undefined;
-        if (!id || !selected || selected.spatial3d?.renderable) return;
+        if (!id || !selected || selected.spatial3d?.renderable || selected.spatial3d?.blockout || selected.spatial3d?.solidTree) return;
         const spatial: Spatial3D = selected.spatial3d ? copySpatial3D(selected.spatial3d) : {
             transform: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 },
                 scale: { x: 1, y: 1, z: 1 } }
@@ -2753,12 +2787,17 @@ export function App() {
                     to their own row below, so nothing this row does can push the canvas around. */}
                 <div style={{ display: "flex", alignItems: "center", alignContent: "flex-start", flexWrap: "wrap", rowGap: 4, padding: "4px 8px", background: UI.panel, borderBottom: `1px solid ${UI.line}`, gap: 4 }}>
                 <span style={{ fontWeight: 700, marginRight: 8, color: "#00bfff", fontSize: 13 }}>CF</span>
+                {workspace==="3d"&&<select aria-label="Add 3D blockout" value="" onChange={event=>{
+                    if(event.target.value)addBlockout3D(event.target.value as BlockoutShape["kind"]);
+                }}><option value="">Add blockout…</option>{["box","wall","room","ramp","stairs"].map(kind=><option key={kind} value={kind}>{kind}</option>)}</select>}
                 <WorkspaceControls
                     workspace={workspace}
                     gizmoMode={gizmoMode3d}
                     gizmoSpace={gizmoSpace3d}
                     canCompose2D={es.selectedNodeIds.length === 1
-                        && !dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.spatial3d?.renderable}
+                        && !dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.spatial3d?.renderable
+                        && !dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.spatial3d?.blockout
+                        && !dispatcher.getDocument().nodes.get(es.selectedNodeIds[0])?.spatial3d?.solidTree}
                     onWorkspaceChange={pickWorkspace}
                     onGizmoModeChange={mode => {
                         gizmoMode3dRef.current = mode;
@@ -5134,6 +5173,13 @@ export function App() {
                 </div>
             ) : null; })()}
 
+            {es.playing && (()=>{
+                const world=workspace==="3d"?world3dRef.current:es.world;
+                const runtimeDoc=runtimeProjectRef.current.document??dispatcher.getDocument();
+                return world && <BehaviorDebugPanel doc={runtimeDoc} state={world.behaviorState} time={world.time} tallies={world.tallies??new Map()}
+                    onChange={behaviorState=>{if(workspace==="3d"&&world3dRef.current)world3dRef.current={...world3dRef.current,behaviorState};else if(es.world)es.world={...es.world,behaviorState};refresh();}}
+                    onStep={()=>{if(workspace==="3d"&&world3dRef.current)world3dRef.current=advanceBehaviors3D(runtimeDoc,world3dRef.current,[],"step");else if(es.world)es.world=advanceBehaviors2D(runtimeDoc,es.world,es.controlled,[],"step").world;refresh();}}/>;
+            })()}
             <div style={{ padding: "3px 10px", background: UI.panel, borderTop: `1px solid ${UI.line}`, fontSize: 10, color: "#555", display: "flex", justifyContent: "space-between" }}>
                 <span>{toolName.charAt(0).toUpperCase() + toolName.slice(1)} tool</span>
                 {es.playing && <span data-animation-states style={{ color: UI.accent }}>
@@ -6646,6 +6692,15 @@ function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImportTrack
                         } catch (error) { setExported(`Game export failed: ${String(error)}`); }
                         finally { setBusy(false); }
                     }}>Export offline 2D game (HTML)…</button>
+                    <button disabled={busy} style={DRAWER_BUTTON} data-export-game-3d="1" onClick={async () => {
+                        setBusy(true);
+                        try {
+                            const folder = await api.pickFolder();
+                            if (folder) setExported(await api.exportGame3D(folder, serializeDocument(getDocument()), getProjectPath()));
+                        } catch (error) { setExported(`3D game export failed: ${String(error)}`); }
+                        finally { setBusy(false); }
+                    }}>Export offline 3D game (HTML)…</button>
+                    <small>3D export includes referenced assets only. Check their redistribution and credit requirements before sharing.</small>
 
                     {/* A MAP CAN LEAVE AGAIN (2026-08-10). Canvas Fogworks reads a Tiled map, turns each layer
                         into one grid, places its objects and authors terrain — and until now
@@ -7171,7 +7226,14 @@ function MetadataSection({ node, dispatcher, refresh }: { node: Node; dispatcher
                         onChange={v => setEntity(key, Number.isFinite(v) ? v : undefined)} />
                 </div>
             ))}
-            <GameplayPanel key={node.id} entity={node.entity ?? {}} onChange={entity => write({ entity })} />
+            <ActorPlacementPanel key={`actor-${node.id}`} nodeId={node.id} dispatcher={dispatcher} onPlaced={refresh}/>
+            <GameplayPanel key={node.id} entity={node.entity ?? {}} onChange={entity => write({ entity })}
+                assets={dispatcher.getDocument().behaviorAssets}
+                variables={dispatcher.getDocument().gameplayVariables}
+                functions={dispatcher.getDocument().behaviorFunctions}
+                onFunctionsChange={functions=>{const result=dispatcher.dispatchAction(new SetBehaviorFunctionsAction(dispatcher.getDocument(),functions));refresh();return result.success;}}
+                onVariablesChange={variables=>{const result=dispatcher.dispatchAction(new SetGameplayVariablesAction(dispatcher.getDocument(),variables));refresh();return result.success;}}
+                onAssetsChange={(assets,entity)=>{dispatcher.dispatchAction(new SetBehaviorAssetsAction(dispatcher.getDocument(),assets,entity?{nodeId:node.id,entity}:undefined));refresh();}} />
             {node.spatial3d && <>
                 <label style={INSPECTOR_LABEL}>3D gravity (enables contact solver)</label>
                 <NumInput value={node.entity?.gravity3d ?? 0} onChange={v => setEntity("gravity3d", Math.max(0, Math.min(1000, v)))} />

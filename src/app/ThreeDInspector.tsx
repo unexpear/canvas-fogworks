@@ -9,6 +9,9 @@ import { Node } from "../core/document/Node";
 import { Asset3D, Light3D, Spatial3D } from "../core/document/Spatial3D";
 import { copySpatial3D } from "../renderer/Gizmo3D";
 import { MeshAsset3D } from "../renderer/Scene3D";
+import {BlockoutPanel} from "./BlockoutPanel";
+import {SolidTreePanel} from "./SolidTreePanel";
+import {solidLeaf3D} from "../core/geometry/SolidTree3D";
 
 const colors = {
     bg: "#0e0e18",
@@ -59,6 +62,18 @@ export function ThreeDInspector({ node, assets, meshes, onChange }: ThreeDInspec
     const materialAssets = assets.filter(asset => asset.kind === "material");
 
     return <>
+        {spatial.blockout&&<button type="button" onClick={()=>{
+            const next=copySpatial3D(spatial);next.solidTree=solidLeaf3D("base",next.blockout!);delete next.blockout;onChange(next);
+        }}>Edit solid operations</button>}
+        {spatial.solidTree&&<>
+            <label><input aria-label="Blockout solid collision" type="checkbox" checked={spatial.blockoutCollision===true}
+                onChange={e=>{const next=copySpatial3D(spatial);next.blockoutCollision=e.target.checked;onChange(next);}}/>Solid collision</label>
+            <SolidTreePanel tree={spatial.solidTree} onChange={solidTree=>{const next=copySpatial3D(spatial);next.solidTree=solidTree;onChange(next);}}/>
+        </>}
+        {spatial.blockout&&<BlockoutPanel shape={spatial.blockout} solid={spatial.blockoutCollision===true}
+            onSolidChange={solid=>{const next=copySpatial3D(spatial);next.blockoutCollision=solid;onChange(next);}} onChange={blockout=>{
+            const next=copySpatial3D(spatial);next.blockout=blockout;onChange(next);
+        }}/>}
         {spatial.renderable && (() => {
             const clips = meshes.get(spatial.renderable!.meshAssetId)?.motion?.clips ?? [];
             if (!clips.length) return null;

@@ -3,9 +3,19 @@
 > The engine is built in **layers**, where each milestone proves **one new
 > architectural capability** before the next begins. This is the canonical roadmap.
 > Status reconciled **2026-09-05** against the shared animation-controller implementation and the 2026-08-21
-> mutation-battery close-out; engine **v0.0.5**, schema **78**.
+> mutation-battery close-out; engine **v0.0.5**, schema **88**.
+
+**2026-09-16 behavior graphs:** visual event/branch/action authoring and bounded shared 2D/3D
+execution are delivered as the first ENG-04/Q06 graph slice. See [Behavior graphs](docs/BEHAVIOR-GRAPHS.md).
+Historical milestone slice counts are unchanged.
+
+**2026-09-19 graph follow-up:** simulation-time delays, bounded repeats, reusable project graphs,
+saved continuations and editor breakpoint/step/trace debugging extend ENG-04/Q06. See the graph guide
+for limits and verification; this does not complete the broader engine milestones.
 
 **2026-09-05 production workflow extension:** save/recovery and relocation seams, multi-animation import coexistence, whole-canvas PNG, typed gameplay/audio, offline 2D game export, imported TRS/skin playback and opt-in oriented 3D contacts. This cross-cutting extension is tracked in [Production workflows](docs/PRODUCTION-WORK.md), not retroactively counted as a historical M18 slice.
+
+**2026-09-07 shared-authoring follow-up:** bounded linked-level/image portability, five real writer-process crash checkpoints, staged 3D level asset hydration, an original pixel/component workshop and three-stage relay game, plus CPU/GPU/raster/component/mesh/reload measurements. Exact bounds and remaining production work are in [Production workflows](docs/PRODUCTION-WORK.md) and the machine-readable backlog. Historical slice totals are unchanged.
 >
 > **Seven rows below said ⬜ for capabilities that had shipped.** They said it for three weeks
 > because this file declared no `describes:` directive: `check-doc-drift` named it, looked it

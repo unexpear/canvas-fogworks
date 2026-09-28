@@ -7,6 +7,8 @@
 > [MILESTONES.md](MILESTONES.md) and [docs/README.md](docs/README.md).
 
 <!-- describes: src/core/document -->
+<!-- re-read 2026-09-07 against schema 78 and the shared-authoring follow-up. This is still
+     the historical July fix-pass record; current evidence is in docs/PRODUCTION-WORK.md. -->
 <!-- re-read 2026-09-05: schema 77 adds animation controllers; this historical fix-pass record
      remains unchanged in meaning. Current behavior is described in docs/ANIMATION.md. -->
 <!-- re-read 2026-09-03 for the Canvas Fogworks rename: still accurate BECAUSE IT IS FROZEN;

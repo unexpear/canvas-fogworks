@@ -170,6 +170,16 @@ export const CURRENT_VERSION: string =
  *   "77" — adds optional `Node.animation`, naming clip states and ordered runtime transitions.
  *         Absent retains the prior timeline and distance-driven playback paths.
  *   "78" — adds typed gameplay rules, embedded sound cues, native mesh playback and opt-in gravity/restitution.
+ *   "79" — adds optional interaction ranges, template-spawn and checkpoint gameplay rules.
+ *   "80" — adds validated optional event/branch/action behavior graphs on entities.
+ *   "81" — adds behavior assets and graph-v2 delay/repeat execution.
+ *   "82" — adds graph-v3 lifecycle events and bounded named custom-event sends.
+ *   "83" — adds typed gameplay declarations and graph-v4 assignment/comparison nodes.
+ *   "84" — adds typed reusable behavior function definitions.
+ *   "85" — adds graph-v5 function call nodes and typed output bindings.
+ *   "86" — adds editable procedural 3D blockout parameters.
+ *   "87" — adds explicit derived solid collision for blockouts.
+ *   "88" — adds editable generated-solid operation trees.
  *         Absent rules and policy preserve the compatibility platformer runtime.
  */
 import type { TimelineSettings } from "./Timeline";
@@ -177,7 +187,7 @@ import type { Light } from "./Light";
 import type { Tileset } from "./Tileset";
 import type { Asset3D } from "./Spatial3D";
 
-export const SCHEMA_VERSION = "78";
+export const SCHEMA_VERSION = "88";
 
 /**
  * Recursively strips mutability. `Date` is left intact (it is a value here, and
@@ -251,6 +261,9 @@ export interface ProjectDocument {
     tilesets?: Tileset[];
     /** Stable imported 3D asset records (schema 74). Source paths are metadata, not identity. */
     assets3d?: Asset3D[];
+    behaviorAssets?: import("./BehaviorAssets").BehaviorAsset[];
+    gameplayVariables?: import("./GameplayData").GameplayVariable[];
+    behaviorFunctions?: import("./BehaviorFunctions").BehaviorFunction[];
     /**
      * What the document is LIT by (schema 42). Absent = unlit, which every document was.
      *

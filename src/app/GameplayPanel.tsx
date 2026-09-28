@@ -1,12 +1,17 @@
 /**
  * @module GameplayPanel
- * @description Reachable typed 2D event/condition/command authoring, including embedded sound cues; all edits return through the entity Action.
+ * @description Reachable typed event/command authoring and interactions; sound remains 2D-only, all edits return through the entity Action.
  */
 import React, { useEffect, useRef, useState } from "react";
 import { Entity } from "../core/document/Entity";
 import { GameplayAction, GameplayRule, gameplayRulesError } from "../core/document/Gameplay";
+import {GameplayVariablesPanel} from "./GameplayVariablesPanel";
+import {GameplayVariable} from "../core/document/GameplayData";
+import {BehaviorFunction} from "../core/document/BehaviorFunctions";
+import {BehaviorFunctionsPanel} from "./BehaviorFunctionsPanel";
+import { BehaviorGraphPanel, BehaviorAssetProps } from "./BehaviorGraphPanel";
 
-export function GameplayPanel({ entity, onChange }: { entity: Entity; onChange: (entity: Entity) => void }) {
+export function GameplayPanel({ entity, onChange, assets, onAssetsChange, variables=[],onVariablesChange,functions=[],onFunctionsChange }: { entity: Entity; onChange: (entity: Entity) => void } & BehaviorAssetProps & {onVariablesChange?:(variables:GameplayVariable[])=>boolean;onFunctionsChange?:(functions:BehaviorFunction[])=>boolean}) {
     const [error, setError] = useState("");
     const rules = entity.rules ?? [];
     const currentRules = useRef(rules); currentRules.current = rules;
@@ -17,7 +22,7 @@ export function GameplayPanel({ entity, onChange }: { entity: Entity; onChange: 
         if (!error) onChange({ ...entity, rules: next });
     };
     const replace = (index: number, patch: Partial<GameplayRule>) => save(rules.map((r, i) => i === index ? { ...r, ...patch } : r));
-    return <fieldset style={{ marginTop: 8, padding: 6 }}><legend>2D gameplay rules</legend>
+    return <fieldset style={{ marginTop: 8, padding: 6, minWidth: 0 }}><legend>Gameplay rules</legend>
         {entity.player && <label>Rule policy <select aria-label="Gameplay policy" value={entity.rulePolicy ?? "platformer"}
             onChange={e => onChange({ ...entity, rulePolicy: e.target.value as Entity["rulePolicy"] })}>
             <option value="platformer">Platformer + authored rules</option><option value="authored">Authored rules only</option>
@@ -26,7 +31,9 @@ export function GameplayPanel({ entity, onChange }: { entity: Entity; onChange: 
             <select aria-label={`Rule ${index + 1} event`} value={rule.event} onChange={e => {
                 const event = e.target.value as GameplayRule["event"];
                 replace(index, { event, ...(event === "start" ? { other: "any", target: "self" } : {}) });
-            }}>{["start", "enter", "leave", "contact", "separate"].map(v => <option key={v}>{v}</option>)}</select>
+            }}>{["start", "enter", "leave", "contact", "separate", "interact"].map(v => <option key={v}>{v}</option>)}</select>
+            {rule.event === "interact" && <input type="number" min="0.01" max="10000" aria-label={`Rule ${index + 1} interaction range`}
+                placeholder="Default: 96 (2D), 2 (3D)" value={rule.range ?? ""} onChange={e => replace(index, { range: e.target.value === "" ? undefined : Number(e.target.value) })} />}
             <select aria-label={`Rule ${index + 1} condition`} disabled={rule.event === "start"} value={rule.other}
                 onChange={e => replace(index, { other: e.target.value as GameplayRule["other"] })}>
                 <option value="any">Any actor</option><option value="player">Player only</option></select>
@@ -36,8 +43,10 @@ export function GameplayPanel({ entity, onChange }: { entity: Entity; onChange: 
             <select aria-label={`Rule ${index + 1} action`} value={rule.action.kind} onChange={e => {
                 const kind = e.target.value as GameplayAction["kind"];
                 if (kind === "sound") { setError("Choose an audio file with the Sound file control below."); return; }
-                replace(index, { action: kind === "velocity" ? { kind, x: 0, y: 0 } : kind === "score" ? { kind, key: "score" } : { kind } });
-            }}>{["win", "lose", "despawn", "velocity", "score", "sound"].map(v => <option key={v}>{v}</option>)}</select>
+                replace(index, { action: kind === "velocity" ? { kind, x: 0, y: 0 } : kind === "score" ? { kind, key: "score" } : kind === "spawn" ? { kind, templateId: "template" } : { kind } });
+            }}>{["win", "lose", "despawn", "velocity", "score", "sound", "spawn", "checkpoint"].map(v => <option key={v}>{v}</option>)}</select>
+            {rule.action.kind === "spawn" && <input aria-label={`Rule ${index + 1} template ID`} value={rule.action.templateId}
+                onChange={e => replace(index, { action: { kind: "spawn", templateId: e.target.value } })} />}
             {rule.action.kind === "velocity" && (["x", "y"] as const).map(axis => <input key={axis} type="number"
                 aria-label={`Rule ${index + 1} velocity ${axis}`} value={rule.action.kind === "velocity" ? rule.action[axis] : 0}
                 onChange={e => replace(index, { action: { ...rule.action, [axis]: Number(e.target.value) } as GameplayAction })} />)}
@@ -61,6 +70,10 @@ export function GameplayPanel({ entity, onChange }: { entity: Entity; onChange: 
             <button onClick={() => save(rules.filter((_, i) => i !== index))}>Remove rule {index + 1}</button>
         </div>)}
         <button disabled={rules.length >= 32} onClick={() => save([...rules, { event: "enter", other: "player", target: "self", action: { kind: "win" } }])}>Add gameplay rule</button>
+        <p>F interacts with the nearest target in range. Spawn copies one leaf template at the selected target (256 per run). Checkpoints record the player position. Sound playback is currently 2D-only.</p>
         {error && <p role="alert">{error}</p>}
+        {onVariablesChange&&<GameplayVariablesPanel variables={variables} onChange={onVariablesChange}/>}
+        {onFunctionsChange&&<BehaviorFunctionsPanel functions={functions} variables={variables} onChange={onFunctionsChange}/>}
+        <BehaviorGraphPanel functions={functions} variables={variables} entity={entity} onChange={onChange} assets={assets} onAssetsChange={onAssetsChange}/>
     </fieldset>;
 }

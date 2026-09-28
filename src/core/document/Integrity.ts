@@ -16,6 +16,10 @@ import { transformError, layoutError, dimensionError, pathError, booleanOpError,
 import { interactionsError } from "./Prototype";
 import { timelineError, trackError, channelsError } from "./Timeline";
 import { clipsError } from "./Clips";
+import { behaviorAssetsError } from "./BehaviorAssets";
+import { gameplayVariablesError } from "./GameplayData";
+import { behaviorFunctionsError } from "./BehaviorFunctions";
+import { behaviorDataBindingsError } from "./BehaviorDataBindings";
 import { tilesetsError } from "./Tileset";
 import { ikError } from "./Rig";
 import { clipsContentError } from "./Node";
@@ -213,6 +217,17 @@ export function validateDocumentIntegrity(doc: ReadonlyDocument): void {
     if (tilesetErr) throw new Error(`Invalid document: ${tilesetErr}.`);
     const assetsErr = assets3DError(doc.assets3d);
     if (assetsErr) throw new Error(`Invalid document: ${assetsErr}.`);
+    const behaviorErr=behaviorAssetsError(doc.behaviorAssets);
+    if(behaviorErr)throw new Error(`Invalid document: ${behaviorErr}`);
+    const gameplayDataError=gameplayVariablesError(doc.gameplayVariables);
+    if(gameplayDataError)throw new Error(gameplayDataError);
+    const functionsError=behaviorFunctionsError(doc.behaviorFunctions,doc.gameplayVariables);
+    if(functionsError)throw new Error(functionsError);
+    for(const graph of [...(doc.behaviorAssets??[]).map(a=>a.graph),...[...doc.nodes.values()].map(n=>n.entity?.behavior)]){
+        const error=behaviorDataBindingsError(graph,doc.gameplayVariables,[],doc.behaviorFunctions);if(error)throw new Error(error);
+    }
+    const behaviorIds=new Set(doc.behaviorAssets?.map(a=>a.id));
+    for(const node of doc.nodes.values())if(node.entity?.behaviorAssetId&&!behaviorIds.has(node.entity.behaviorAssetId))throw new Error(`Invalid document: missing behavior asset ${node.entity.behaviorAssetId}.`);
     const environmentNodes = [...doc.nodes.values()].filter(node => node.spatial3d?.environment);
     if (environmentNodes.length > 1) {
         throw new Error("Invalid document: only one authored 3D environment is allowed.");

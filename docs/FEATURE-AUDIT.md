@@ -1,11 +1,14 @@
 # Feature audit — Canvas Fogworks against Pixelorama and Tiled
 
-Shared clip reachability updated 2026-09-05: named clips are listed and editable in the animation
+Shared clip reachability updated 2026-09-07: named clips are listed and editable in the animation
 panel, previewed through the timeline controls, and assigned to per-node runtime states/transitions.
-This includes composed 2D animation in 3D scenes; native glTF animation and skinning remain absent.
+This includes composed 2D animation in 3D scenes and bounded native glTF TRS animation, CPU skinning
+and two-clip pose blending. GPU skinning, morph targets and automatic crossfades remain open.
 See [Animation workflow](ANIMATION.md).
 
 <!-- describes: src/editor/tools, src/core/paint, src/core/import, src/core/export -->
+<!-- re-read 2026-09-07: native animation, Aseprite timing preservation, whole-canvas PNG and
+     dependency-aware authoring are now described by docs/PRODUCTION-WORK.md. -->
 <!-- re-read 2026-08-14 after extracting the Tiled placement logic into core/import/tiledPlacements.
      THE UNREACHABLE LIST WAS MISSING ITS LARGEST ENTRY: 241 lines deciding what a .tmx places lived
      inside a <select onChange> in App.tsx, and window.electronAPI is frozen, so nothing could call
@@ -88,10 +91,10 @@ broke a test whose subject was still true. Both are fixed.
 | Indexed colour mode | **absent** | Pixelorama carries index maps and a palette index per pixel |
 | Onion skinning, animation tags, timeline | **have** | schema 39 |
 | GIF export | **absent** | Canvas Fogworks exports SVG and a sprite-sheet atlas |
-| Import Aseprite | **have** | `import/Aseprite` — reachable since 2026-08-13. One `.aseprite` becomes one animated node with the file's OWN frame rate and its TAGS as clips (a rename, not a translation). Opening the door needed three things that were not about Aseprite: `composeFrame` (the reader could describe a file and draw nothing), `SetClipsAction` (`Document.clips` had no write path at all), and document deltas keyed by kind (a transaction could carry only one document-level change; this carries the clock and the ranges that index into it). Measured on the real tree: 23 files composite to real pixels, 96 tags, and the seven refusals are all `__MACOSX/._*` stubs |
+| Import Aseprite | **have** | `import/Aseprite` and `asepriteImport` create an animated node and named clips. Existing document FPS, timeline, clips and controllers are preserved; incoming timing must map exactly to frame boundaries or import fails before mutation. Clip collisions receive unique names. The initial August corpus exercise composited 23 files / 96 tags; the seven refusals were `__MACOSX/._*` stubs. |
 | Import Krita, Photoshop | **absent** | Pixelorama parses both |
 | Import a NUMBERED FRAME RUN | **have** | `import/Sequence` was the fourth unreachable importer and is now wired: the Assets drawer lists the runs a folder holds and imports one as a single `core.image` with a keyframed `src`. The guard is the interesting part — a tileset exported one file per tile is a numbered run by every rule a name reader has, and one pack here groups to **11,846 frames**, so runs longer than 240 are refused with the reason. Reliability follow-up 2026-09-02: every frame must read as an embedded image before anything is placed; missing/unreadable frames and duplicate basenames across subfolders refuse the whole run, and reads are confined to the chosen folder |
-| Import glTF / GLB geometry | **have** | The 3D assets drawer opens confined `.gltf`/`.glb` files through `Asset3DImportWorkflow`, creates stable mesh/material assets plus a renderable scene node and first camera in one undoable transaction, rehydrates project-relative sources after reopen, and renders them through the live WebGL 3D path. Materials, textures, hierarchy, skin data, PBR, picking and Open–Edit–Save behavior are covered by unit and Electron smoke tests. glTF animation import remains absent. |
+| Import glTF / GLB geometry | **have** | The 3D assets drawer opens confined `.gltf`/`.glb` files through `Asset3DImportWorkflow`, creates stable mesh/material assets plus a renderable scene node and first camera in one undoable transaction, rehydrates project-relative sources after reopen, and renders them through the live WebGL 3D path. Native TRS animation, bounded CPU skinning and two-clip pose blending are reachable. Level transitions stage their destination libraries before publication. Materials, textures, hierarchy, PBR, picking and Open–Edit–Save behavior have unit and Electron smoke coverage. |
 | Import OBJ geometry | **built, unreachable** | `import/Obj` parses and tests OBJ triangle geometry, but the live 3D asset workflow and confined Electron file boundary currently accept only `.gltf` and `.glb`; OBJ material sidecars and an authoring caller remain absent. |
 | Reference images | **absent** | |
 | Tile mode (seamless-texture preview with offsets and masking) | **absent** | a different feature from tilemaps |
@@ -174,9 +177,9 @@ broke a test whose subject was still true. Both are fixed.
    inside. A tile object becomes a `core.image` with its source rect, a rectangle a box, an ellipse
    a `core.ellipse`, a polygon or polyline a `core.path`. **CLASS AND CUSTOM PROPERTIES ARE CARRIED
    NOW** — schema 64 gave them a home (`Node.className`, `Node.userData`), the import writes them and
-   the `.tmx` export writes them back, so a round trip keeps a door's `door=true`. They are carried
-   and NOT READ: nothing in the engine derives from them, which is the honest state and exactly what
-   a `core.entity` would change. WHAT IS STILL NOT CARRIED, and is counted rather than dropped
+   the `.tmx` export writes them back, so a round trip keeps a door's `door=true`. Runtime conventions
+   are also projected into typed entity fields; unrelated custom properties remain round-trip data.
+   WHAT IS STILL NOT CARRIED, and is counted rather than dropped
    silently: template references (`.tx` files are not opened), text objects, points, and an object
    layer's parallax factor.
 5. ~~**A tileset as editable content**~~ — DONE 2026-08-13 as schema 67. `Document.tilesets`, a
@@ -188,4 +191,4 @@ broke a test whose subject was still true. Both are fixed.
    `.tmx`, an autotiled layer exports the picture its terrain DERIVES, and a layer the format
    cannot hold (one map size, one tile size) is reported rather than dropped. The oracle is the
    round trip: a real Kenney map imported, exported and imported again, compared cell by cell.
-   Object layers go out too, as objectgroups with their shapes, rotations and the bottom-left anchoring reversed. Still absent: copying the sheet beside the file, and an object's class and custom properties (they have no field to come from).
+   Object layers go out too, as objectgroups with their shapes, rotations, class/custom properties and the bottom-left anchoring reversed. Copying the sheet beside a TMX export remains absent; project Save As portability is a separate workflow.
