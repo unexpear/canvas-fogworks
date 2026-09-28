@@ -8,6 +8,10 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import "./ElectronAPI";
 import { applyOpenedProject, bindProjectFileWorkflow, ProjectFileTarget } from "./ProjectFileWorkflow";
 import { ProjectSession } from "./ProjectSession";
+import {
+    BROWSER_DOCUMENT_KEY, BROWSER_RECOVERY_KEY, isDeclinedRecovery, isPreservedRecovery,
+    isRecoverySnapshot, markRecovery, restoreBrowserRecovery
+} from "./RecoveryRestore";
 import { stepGameplay } from "../core/runtime/GameplaySession";
 import { RuntimeAudio } from "./RuntimeAudio";
 import { GameplayPanel } from "./GameplayPanel";
@@ -659,12 +663,12 @@ export function App() {
             write: async (path, content, source) => {
                 const api = window.electronAPI;
                 if (api) return api.saveFile(path, content, source);
-                localStorage.setItem("vde-document", content);
+                localStorage.setItem(BROWSER_DOCUMENT_KEY, content);
                 return true;
             },
             recover: async snapshot => {
                 if (window.electronAPI) await window.electronAPI.writeRecovery(snapshot);
-                else localStorage.setItem("vde-recovery", JSON.stringify(snapshot));
+                else localStorage.setItem(BROWSER_RECOVERY_KEY, JSON.stringify(snapshot));
             },
             status: setFileStatus
         });
@@ -2076,20 +2080,37 @@ export function App() {
         ];
         let disposed = false;
         let recoveryReady = false;
-        void api.readRecovery().then(snapshot => {
+        let holdCleanCheckpoint = false;
+        void api.readRecovery().then(result => {
             if (disposed) return;
-            if (snapshot && window.confirm("An unsaved recovery snapshot is available. Restore it?")) {
-                const result = applyOpenedProject({ filePath: snapshot.filePath ?? "", content: snapshot.content }, projectTarget);
-                if (result.ok) {
-                    currentFilePathRef.current = snapshot.filePath;
-                    projectSession.adopt(snapshot.savedContent);
+            if (isPreservedRecovery(result)) {
+                holdCleanCheckpoint = true;
+                setFileStatus("Saved project differs from this recovery snapshot, so it was left unchanged.");
+                markRecovery("preserved");
+            } else if (isDeclinedRecovery(result)) {
+                markRecovery("declined");
+            } else if (isRecoverySnapshot(result)) {
+                const opened = applyOpenedProject({ filePath: result.filePath ?? "", content: result.content }, projectTarget);
+                if (opened.ok) {
+                    currentFilePathRef.current = result.filePath;
+                    projectSession.adopt(result.savedContent);
                     setFileStatus("Recovered unsaved changes. Save to keep them.");
+                    markRecovery("restored");
+                } else {
+                    holdCleanCheckpoint = true;
+                    markRecovery("error");
                 }
-            }
+            } else markRecovery("empty");
             recoveryReady = true;
-        }).catch(error => setFileStatus(`Recovery could not be read; preserved on disk: ${error.message}`));
+        }).catch(error => {
+            setFileStatus(`Recovery could not be read; preserved on disk: ${error.message}`);
+            markRecovery("error");
+        });
         const interval = window.setInterval(() => {
-            if (recoveryReady) void projectSession.checkpoint();
+            if (!recoveryReady) return;
+            if (holdCleanCheckpoint && !projectSession.dirty) return;
+            holdCleanCheckpoint = false;
+            void projectSession.checkpoint();
         }, 5000);
         const beforeUnload = (event: BeforeUnloadEvent) => {
             if (!confirmLeaveProject()) { event.preventDefault(); event.returnValue = ""; }
@@ -2100,6 +2121,57 @@ export function App() {
             window.clearInterval(interval);
             window.removeEventListener("beforeunload", beforeUnload);
             disposers.forEach(dispose => dispose());
+        };
+    }, []);
+
+    // The browser has no main-process recovery file. The same snapshot key is offered here,
+    // and a clean checkpoint must not erase a snapshot that belongs to a newer explicit save.
+    useEffect(() => {
+        if (window.electronAPI) return;
+        const outcome = restoreBrowserRecovery({
+            getItem: key => localStorage.getItem(key),
+            setItem: (key, value) => localStorage.setItem(key, value),
+            confirm: message => window.confirm(message),
+            apply: snapshot => {
+                const opened = applyOpenedProject({ filePath: snapshot.filePath ?? "", content: snapshot.content }, {
+                    dispatcher,
+                    editorState: es,
+                    currentFilePath: currentFilePathRef,
+                    refresh,
+                    saveTo: () => {},
+                    beforeOpen: confirmLeaveProject,
+                    reportError: (message, error) => setFileStatus(`${message}: ${String(error)}`),
+                    afterOpen: () => {
+                        runtimeProjectRef.current.reset();
+                        campaignRef.current = emptyCampaign();
+                        audioRef.current?.stop();
+                        es.playing = false; es.world = null; es.worldClock = null;
+                        projectSession.adopt();
+                    }
+                });
+                if (!opened.ok) return false;
+                currentFilePathRef.current = snapshot.filePath;
+                return true;
+            },
+            adopt: savedContent => projectSession.adopt(savedContent),
+            status: setFileStatus,
+            mark: markRecovery
+        });
+        let holdCleanCheckpoint = outcome.holdCleanCheckpoint;
+        let recoveryReady = outcome.ready;
+        const interval = window.setInterval(() => {
+            if (!recoveryReady) return;
+            if (holdCleanCheckpoint && !projectSession.dirty) return;
+            holdCleanCheckpoint = false;
+            void projectSession.checkpoint();
+        }, 5000);
+        const beforeUnload = (event: BeforeUnloadEvent) => {
+            if (!confirmLeaveProject()) { event.preventDefault(); event.returnValue = ""; }
+        };
+        window.addEventListener("beforeunload", beforeUnload);
+        return () => {
+            window.clearInterval(interval);
+            window.removeEventListener("beforeunload", beforeUnload);
         };
     }, []);
 

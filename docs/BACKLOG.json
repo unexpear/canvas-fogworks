@@ -64,8 +64,8 @@
       "area": "project-files",
       "priority": "P1",
       "status": "open",
-      "summary": "Extend delivered bounded linked-level/image/3D relocation and five real writer-process crash checkpoints with browser recovery restore, full desktop crash/relaunch automation and transactional dependency-folder rollback. Renamed self-linked entry files and external image URLs are explicitly refused during cross-folder relocation; custom fonts are not packaged.",
-      "evidence": ["src/app/ProjectSession.ts", "src/electron/projectDependencies.js", "docs/PRODUCTION-WORK.md"]
+      "summary": "Delivered browser recovery restore, desktop crash/relaunch automation, and transactional dependency-folder rollback on top of bounded linked-level/image/3D relocation and five writer-process crash checkpoints. A failed or killed dependency copy removes only files and directories that copy created; the next cross-folder Save As finishes a leftover journal. Recovery does not replace Save and does not apply over a newer explicit save. Power-loss durability is still not claimed. Renamed self-linked entry files and external image URLs stay refused; custom fonts are not packaged.",
+      "evidence": ["src/app/ProjectSession.ts", "src/app/RecoveryRestore.ts", "src/electron/projectDependencies.js", "scripts/crash-recovery.test.js", "scripts/smoke-crash-relaunch.js", "docs/PRODUCTION-WORK.md"]
     },
     {
       "id": "SCALE-001",

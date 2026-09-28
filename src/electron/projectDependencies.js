@@ -1,15 +1,68 @@
 /**
  * @module projectDependencies
  * @description Relocates bounded linked-level graphs, relative images and 3D sidecars without copying unreferenced packs or overwriting conflicting files.
+ * An incomplete copy deletes only the destination files and directories that copy created. A killed copy leaves a journal the next cross-folder Save As rolls back. Power loss during the journal write is not a durability claim.
  */
 const fs = require("fs");
 const path = require("path");
 const { resolveConfined } = require("./confine");
+const { atomicWrite } = require("./atomicWrite");
+
+const DEPENDENCY_JOURNAL_NAME = ".fogworks-dependency-journal.json";
+
+function journalPath(destinationRoot) {
+    return path.join(destinationRoot, DEPENDENCY_JOURNAL_NAME);
+}
+
+function assertJournalRelative(relative) {
+    if (typeof relative !== "string" || relative === "" || relative === "."
+        || path.isAbsolute(relative) || path.win32.isAbsolute(relative)) {
+        throw new Error("Invalid dependency rollback journal.");
+    }
+    const parts = relative.split(/[\\/]+/);
+    if (parts.some(part => part === "" || part === "." || part === "..")) {
+        throw new Error("Invalid dependency rollback journal.");
+    }
+}
+
+/**
+ * Remove a crashed copy's created files and directories, then the journal.
+ * Missing pieces are already gone. A path that leaves the destination is refused before any delete.
+ */
+async function rollbackDependencyJournal(destinationRoot) {
+    const journalFile = journalPath(destinationRoot);
+    let raw;
+    try { raw = await fs.promises.readFile(journalFile, "utf8"); }
+    catch (error) { if (error.code === "ENOENT") return false; throw error; }
+    const journal = JSON.parse(raw);
+    if (!journal || journal.version !== 1 || !Array.isArray(journal.directories) || !Array.isArray(journal.files)) {
+        throw new Error("Invalid dependency rollback journal.");
+    }
+    for (const relative of journal.files) assertJournalRelative(relative);
+    for (const relative of journal.directories) assertJournalRelative(relative);
+    for (const relative of [...journal.files].reverse()) {
+        const parent = path.dirname(path.join(destinationRoot, relative));
+        if (!fs.existsSync(parent)) continue;
+        const target = resolveConfined(destinationRoot, destinationRoot, relative, "a rolled-back dependency");
+        await fs.promises.unlink(target).catch(error => { if (error.code !== "ENOENT") throw error; });
+    }
+    for (const relative of [...journal.directories].reverse()) {
+        const parent = path.dirname(path.join(destinationRoot, relative));
+        if (!fs.existsSync(parent)) continue;
+        const target = resolveConfined(destinationRoot, destinationRoot, relative, "a rolled-back directory");
+        await fs.promises.rmdir(target).catch(error => {
+            if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+        });
+    }
+    await fs.promises.unlink(journalFile);
+    return true;
+}
 
 /** Discover all dependencies before creating destination directories or files. */
 async function copyProjectDependencies(sourceProject, destinationProject, content) {
     const sourceRoot = path.dirname(sourceProject), destinationRoot = path.dirname(destinationProject);
     if (fs.realpathSync.native(sourceRoot) === fs.realpathSync.native(destinationRoot)) return;
+    await rollbackDependencyJournal(destinationRoot);
     // The opened spelling need not match the directory entry's spelling on Windows.
     // Resolve identity without lowercasing source paths: case-sensitive folders can contain both.
     const sourceEntry = resolveConfined(sourceRoot, sourceRoot, path.basename(sourceProject), "the source project");
@@ -107,45 +160,94 @@ async function copyProjectDependencies(sourceProject, destinationProject, conten
     }
     await visit(path.resolve(sourceProject), content);
     const planned = [];
+    const directories = [];
+    const seenDirs = new Set();
+    const conflictsWithEntry = confined => confined === destinationEntry || (process.platform === "win32"
+        && confined.toLowerCase() === destinationEntry.toLowerCase());
     for (const [logical, { data }] of files) {
         const relative = path.relative(path.resolve(sourceRoot), logical);
-        const target = path.join(destinationRoot, relative);
-        // Create one level at a time, verifying existing junctions before entering them.
+        if (!relative || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+            throw new Error("Dependency outside the chosen folder.");
+        }
+        if (path.basename(relative) === DEPENDENCY_JOURNAL_NAME) throw new Error("A dependency conflicts with the copy journal.");
+        const parts = path.dirname(relative).split(path.sep).filter(part => part && part !== ".");
         let parent = destinationRoot;
-        for (const part of path.dirname(relative).split(path.sep).filter(p => p && p !== ".")) {
-            const next = resolveConfined(destinationRoot, parent, part, "a destination directory");
-            try { await fs.promises.mkdir(next); } catch (error) { if (error.code !== "EEXIST") throw error; }
+        let relativeDir = "";
+        let missingParent = false;
+        for (const part of parts) {
+            relativeDir = relativeDir ? path.join(relativeDir, part) : part;
+            if (missingParent) {
+                if (!seenDirs.has(relativeDir)) { seenDirs.add(relativeDir); directories.push(relativeDir); }
+                continue;
+            }
+            if (!fs.existsSync(path.join(parent, part))) {
+                missingParent = true;
+                if (!seenDirs.has(relativeDir)) { seenDirs.add(relativeDir); directories.push(relativeDir); }
+                continue;
+            }
+            // Enter an existing directory only after resolving junctions, one level at a time.
             parent = resolveConfined(destinationRoot, parent, part, "a destination directory");
+        }
+        if (missingParent) {
+            planned.push({ data, relative });
+            continue;
         }
         const confined = resolveConfined(destinationRoot, destinationRoot, relative, "a destination dependency");
         // Reserve the entry's spelling and Windows case aliases even while the entry is absent.
         // Conservatively refuse ambiguous entry names on Windows case-sensitive folders too.
-        if (confined === destinationEntry || (process.platform === "win32"
-            && confined.toLowerCase() === destinationEntry.toLowerCase())) {
-            throw new Error("A dependency conflicts with the project filename.");
-        }
+        if (conflictsWithEntry(confined)) throw new Error("A dependency conflicts with the project filename.");
         try {
             if (!(await fs.promises.readFile(confined)).equals(data)) throw new Error(`Dependency conflict: ${relative}. Choose an empty project folder.`);
         } catch (error) {
             if (error.code !== "ENOENT") throw error;
-            planned.push({ data, target, relative });
+            planned.push({ data, relative });
         }
     }
-    for (const { data, target, relative } of planned) {
-        resolveConfined(destinationRoot, destinationRoot, relative, "a destination dependency");
-        // Write the bytes actually validated, not a source that may have changed since discovery.
-        try {
-            await fs.promises.writeFile(target, data, { flag: "wx" });
-        } catch (error) {
-            if (error.code !== "EEXIST") throw error;
-            // Two logical spellings may name one destination file. Keep both placements for
-            // case-sensitive filesystems/junction aliases; let exclusive creation detect aliases.
-            // Recheck confinement before reading and accept only the exact validated bytes.
-            const existing = resolveConfined(destinationRoot, destinationRoot, relative, "a destination dependency");
-            if (!(await fs.promises.readFile(existing)).equals(data)) {
-                throw new Error(`Dependency conflict: ${relative}. Choose an empty project folder.`);
+    if (directories.length === 0 && planned.length === 0) return;
+    const journal = { version: 1, directories: [...directories], files: planned.map(item => item.relative) };
+    const persistJournal = () => atomicWrite(journalPath(destinationRoot), JSON.stringify(journal));
+    await persistJournal();
+    try {
+        for (const relative of [...directories]) {
+            const parentRelative = path.dirname(relative);
+            const parent = parentRelative === "."
+                ? destinationRoot
+                : resolveConfined(destinationRoot, destinationRoot, parentRelative, "a destination directory");
+            const next = resolveConfined(destinationRoot, parent, path.basename(relative), "a destination directory");
+            try { await fs.promises.mkdir(next); }
+            catch (error) {
+                if (error.code !== "EEXIST") throw error;
+                // A directory that already existed is not ours to remove if a later step fails.
+                journal.directories = journal.directories.filter(entry => entry !== relative);
+                await persistJournal();
             }
         }
+        for (const item of planned) {
+            const confined = resolveConfined(destinationRoot, destinationRoot, item.relative, "a destination dependency");
+            if (conflictsWithEntry(confined)) throw new Error("A dependency conflicts with the project filename.");
+            // Write the bytes actually validated, not a source that may have changed since discovery.
+            try {
+                await fs.promises.writeFile(confined, item.data, { flag: "wx" });
+            } catch (error) {
+                if (error.code !== "EEXIST") throw error;
+                // Two logical spellings may name one destination file. Keep both placements for
+                // case-sensitive filesystems/junction aliases; let exclusive creation detect aliases.
+                // The existing file is not ours, so a later failure must not delete it.
+                journal.files = journal.files.filter(entry => entry !== item.relative);
+                await persistJournal();
+                const existing = resolveConfined(destinationRoot, destinationRoot, item.relative, "a destination dependency");
+                if (!(await fs.promises.readFile(existing)).equals(item.data)) {
+                    throw new Error(`Dependency conflict: ${item.relative}. Choose an empty project folder.`);
+                }
+            }
+        }
+    } catch (error) {
+        try { await rollbackDependencyJournal(destinationRoot); }
+        catch (rollbackError) {
+            error.message += ` Rollback failed: ${rollbackError.message}`;
+        }
+        throw error;
     }
+    await fs.promises.unlink(journalPath(destinationRoot));
 }
-module.exports = { copyProjectDependencies };
+module.exports = { copyProjectDependencies, rollbackDependencyJournal, DEPENDENCY_JOURNAL_NAME };

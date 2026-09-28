@@ -1,5 +1,11 @@
 # Testing Strategy
 
+Project recovery (2026-09-28): browser restore, a newer-explicit-save refusal, and dependency-copy
+rollback are covered in Jest. `smoke:crash-relaunch` kills the built Electron editor after a real
+recovery checkpoint and relaunches it twice, once to restore and once to discard, without rewriting
+the project file. `test:recovery` still kills the isolated writer at five save checkpoints.
+Power-loss durability is not claimed. See [Production workflows](PRODUCTION-WORK.md).
+
 Behavior timers/reuse/debugging (2026-09-19): **2,326 tests in 52 suites** pass. New coverage
 includes 2D/3D delayed repeats, saved continuations, cancellation, runtime bounds, shared-asset
 undo, inspector authoring and debugger breakpoint/step/counter controls. The real graph panel

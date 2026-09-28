@@ -9,7 +9,7 @@ export interface ElectronAPI {
     onRequestSave: (cb: (filePath: string) => void) => () => void;
     saveFile: (filePath: string, content: string, sourceProjectPath?: string | null) => Promise<boolean>;
     confirmDiscard: () => boolean;
-    readRecovery: () => Promise<import("./ProjectSession").RecoverySnapshot | null>;
+    readRecovery: () => Promise<import("./RecoveryRestore").DesktopRecoveryRead>;
     writeRecovery: (snapshot: import("./ProjectSession").RecoverySnapshot | null) => Promise<void>;
     exportGame: (folder: string, content: string, sourceProjectPath: string | null) => Promise<string>;
     exportGame3D: (folder: string, content: string, sourceProjectPath: string | null) => Promise<string>;

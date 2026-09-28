@@ -13,6 +13,9 @@ const path = require("path");
 const { resolveConfined } = require("./confine");
 const { atomicWrite } = require("./atomicWrite");
 const { copyProjectDependencies } = require("./projectDependencies");
+const {
+    parseRecoverySnapshot, readDesktopRecovery, recoveryChoiceFromDialog, scriptedRecoveryChoice, RECOVERY_PROMPT
+} = require("../app/RecoveryRestore");
 const { embedProjectImages } = require("./projectImages");
 const { gameDocumentTargets, gameHtml } = require("../core/export/GameExport");
 const { collectGamePackage, game3DHtml } = require("./GamePackageExport");
@@ -23,13 +26,16 @@ const STARTUP_SMOKE = process.env.VDE_STARTUP_SMOKE === "1";
 const PROJECT_OPEN_SMOKE = process.env.VDE_PROJECT_OPEN_SMOKE || "";
 const HISTORICAL_MIGRATION_SMOKE = process.env.VDE_HISTORICAL_MIGRATION_SMOKE || "";
 const HISTORICAL_MIGRATION_SCHEMA = process.env.VDE_HISTORICAL_MIGRATION_SCHEMA || "";
+const CRASH_RELAUNCH = process.env.VDE_CRASH_RELAUNCH_SMOKE || "";
+const CRASH_PROJECT = process.env.VDE_CRASH_PROJECT || "";
 const { isolateSmokeProfile } = require("./smokeProfile");
 const { assertMigratedHistoricalProject } = require("./historicalMigration");
-if (HISTORICAL_MIGRATION_SMOKE && (STARTUP_SMOKE || PROJECT_OPEN_SMOKE)) {
+if (HISTORICAL_MIGRATION_SMOKE && (STARTUP_SMOKE || PROJECT_OPEN_SMOKE || CRASH_RELAUNCH)) {
     console.error("VDE_HISTORICAL_MIGRATION_FAILED: conflicting smoke mode");
     process.exit(2);
 }
-const smokeProfile = isolateSmokeProfile(app, STARTUP_SMOKE || !!PROJECT_OPEN_SMOKE || !!HISTORICAL_MIGRATION_SMOKE);
+const smokeIsolation = STARTUP_SMOKE || !!PROJECT_OPEN_SMOKE || !!HISTORICAL_MIGRATION_SMOKE || !!CRASH_RELAUNCH;
+const smokeProfile = isolateSmokeProfile(app, smokeIsolation, smokeIsolation ? (process.env.VDE_SMOKE_PROFILE || "") : "");
 if (smokeProfile) console.log(`VDE_SMOKE_PROFILE: ${smokeProfile}`);
 let projectWorkflowSmokeOpened = false;
 
@@ -53,7 +59,7 @@ function createWindow() {
             contextIsolation: true,
             preload: path.join(__dirname, "preload.js")
         },
-        ...(PROJECT_OPEN_SMOKE || HISTORICAL_MIGRATION_SMOKE ? { x: -10000, y: -10000 } : {}),
+        ...(PROJECT_OPEN_SMOKE || HISTORICAL_MIGRATION_SMOKE || CRASH_RELAUNCH ? { x: -10000, y: -10000 } : {}),
         show: false
     });
 
@@ -83,6 +89,26 @@ function createWindow() {
         if (STARTUP_SMOKE) {
             console.log("VDE_STARTUP_SMOKE_READY");
             app.exit(0);
+            return;
+        }
+        if (CRASH_RELAUNCH === "restore" || CRASH_RELAUNCH === "discard") {
+            mainWindow.showInactive();
+            watchCrashRecovery(CRASH_RELAUNCH === "restore" ? "restored" : "declined");
+            return;
+        }
+        if (CRASH_RELAUNCH === "edit") {
+            mainWindow.showInactive();
+            setTimeout(async () => {
+                try {
+                    const filePath = path.resolve(CRASH_PROJECT);
+                    const content = await embedProjectImages(filePath, await fs.promises.readFile(filePath, "utf-8"));
+                    approvedSavePaths.add(filePath);
+                    mainWindow?.webContents.send("file-opened", { filePath, content });
+                } catch (err) {
+                    console.error(`VDE_CRASH_RELAUNCH_FAILED: ${err.message}`);
+                    app.exit(1);
+                }
+            }, 100);
             return;
         }
         if (PROJECT_OPEN_SMOKE) {
@@ -267,8 +293,8 @@ function createWindow() {
 // This acknowledgement has no authority during an ordinary run. In smoke mode it validates the
 // sender and exact path, proving the file crossed contextBridge and passed the real deserializer.
 ipcMain.on("project-open-result", (event, result) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return;
     if (HISTORICAL_MIGRATION_SMOKE) {
-        if (!mainWindow || event.sender !== mainWindow.webContents) return;
         const expected = path.resolve(HISTORICAL_MIGRATION_SMOKE);
         if (!result || result.filePath !== expected || result.ok !== true) {
             console.error(`VDE_HISTORICAL_MIGRATION_FAILED: ${result?.error || "invalid acknowledgement"}`);
@@ -278,7 +304,18 @@ ipcMain.on("project-open-result", (event, result) => {
         mainWindow.webContents.send("menu-command", "file.save");
         return;
     }
-    if (!PROJECT_OPEN_SMOKE || !mainWindow || event.sender !== mainWindow.webContents) return;
+    if (CRASH_RELAUNCH === "edit") {
+        const expected = path.resolve(CRASH_PROJECT);
+        if (!result || result.filePath !== expected || result.ok !== true) {
+            console.error(`VDE_CRASH_RELAUNCH_FAILED: ${result?.error || "invalid acknowledgement"}`);
+            app.exit(1);
+            return;
+        }
+        mainWindow.webContents.send("menu-command", "view.timeline");
+        console.log("VDE_CRASH_EDIT_READY");
+        return;
+    }
+    if (!PROJECT_OPEN_SMOKE) return;
     const expected = path.resolve(PROJECT_OPEN_SMOKE);
     if (!result || result.filePath !== expected || result.ok !== true) {
         console.error(`VDE_PROJECT_OPEN_SMOKE_FAILED: ${result?.error || "invalid acknowledgement"}`);
@@ -966,31 +1003,78 @@ ipcMain.on("confirm-discard", event => {
 
 // This file lives in Electron's user-data directory, not in a renderer-chosen path.
 const recoveryPath = () => path.join(app.getPath("userData"), "project-recovery.json");
-function validateRecovery(snapshot) {
-    if (snapshot === null) return;
-    if (!snapshot || typeof snapshot.content !== "string" || typeof snapshot.savedContent !== "string"
-        || snapshot.content.length > 64 * 1024 * 1024 || snapshot.savedContent.length > 64 * 1024 * 1024
-        || !(snapshot.filePath === null || typeof snapshot.filePath === "string")) {
-        throw new Error("Invalid or oversized recovery snapshot.");
-    }
-    JSON.parse(snapshot.content);
-    JSON.parse(snapshot.savedContent);
+function askRestoreRecovery() {
+    const scripted = scriptedRecoveryChoice({
+        smoke: process.env.VDE_CRASH_RELAUNCH_SMOKE,
+        decision: process.env.VDE_RECOVERY_DECISION
+    });
+    if (scripted !== null) return scripted;
+    if (!mainWindow) return false;
+    return recoveryChoiceFromDialog(dialog.showMessageBoxSync(mainWindow, {
+        type: "question", title: "Unsaved recovery", message: RECOVERY_PROMPT,
+        detail: "Restore puts those edits back in the editor. The project file is not overwritten until you Save. Cancel leaves the saved project unchanged.",
+        buttons: ["Cancel", "Restore"], defaultId: 0, cancelId: 0, noLink: true
+    }));
 }
-ipcMain.handle("read-recovery", async () => {
-    let raw;
-    try { raw = await fs.promises.readFile(recoveryPath(), "utf8"); }
-    catch (error) { if (error.code === "ENOENT") return null; throw error; }
-    const snapshot = JSON.parse(raw);
-    validateRecovery(snapshot);
-    // Only main-authored recovery records can restore an earlier approved project path.
-    if (snapshot?.filePath) approvedSavePaths.add(snapshot.filePath);
-    return snapshot;
-});
+ipcMain.handle("read-recovery", () => readDesktopRecovery({
+    readRecovery: async () => {
+        try { return await fs.promises.readFile(recoveryPath(), "utf8"); }
+        catch (error) { if (error.code === "ENOENT") return null; throw error; }
+    },
+    // Compare the save the editor would open, including embedded images, not the raw file spelling.
+    readExplicit: async filePath => {
+        try { return await embedProjectImages(filePath, await fs.promises.readFile(filePath, "utf8")); }
+        catch (error) { if (error.code === "ENOENT") return null; throw error; }
+    },
+    clearRecovery: () => atomicWrite(recoveryPath(), "null"),
+    confirm: askRestoreRecovery,
+    approve: filePath => { approvedSavePaths.add(filePath); }
+}));
 ipcMain.handle("write-recovery", async (_event, snapshot) => {
-    validateRecovery(snapshot);
+    if (snapshot !== null) parseRecoverySnapshot(JSON.stringify(snapshot));
     if (snapshot?.filePath && !approvedSavePaths.has(snapshot.filePath)) throw new Error("Unapproved recovery project.");
     await atomicWrite(recoveryPath(), JSON.stringify(snapshot));
 });
+
+function watchCrashRecovery(expected) {
+    const deadline = Date.now() + 20000;
+    const poll = async () => {
+        if (!mainWindow) return;
+        let marker = "";
+        try {
+            marker = await mainWindow.webContents.executeJavaScript("document.documentElement.dataset.vdeRecovery || \"\"");
+        } catch { /* the page may still be loading */ }
+        if (!marker) {
+            if (Date.now() > deadline) {
+                console.error("VDE_CRASH_RELAUNCH_FAILED: recovery marker timed out");
+                app.exit(1);
+                return;
+            }
+            setTimeout(poll, 100);
+            return;
+        }
+        console.log(`VDE_CRASH_RECOVERY_MARKER:${marker}`);
+        if (marker !== expected) {
+            console.error(`VDE_CRASH_RELAUNCH_FAILED: expected ${expected}, got ${marker}`);
+            app.exit(1);
+            return;
+        }
+        const panel = await mainWindow.webContents.executeJavaScript("Boolean(document.querySelector(\"[data-animation-panel]\"))");
+        if (expected === "restored" && !panel) {
+            console.error("VDE_CRASH_RELAUNCH_FAILED: restored document has no timeline");
+            app.exit(1);
+            return;
+        }
+        if (expected === "declined" && panel) {
+            console.error("VDE_CRASH_RELAUNCH_FAILED: discarded recovery still showed the timeline");
+            app.exit(1);
+            return;
+        }
+        console.log(expected === "restored" ? "VDE_CRASH_RECOVERY_RESTORED" : "VDE_CRASH_RECOVERY_DISCARDED");
+        app.exit(0);
+    };
+    setTimeout(poll, 100);
+}
 
 /** List and read glTF models under a user-selected folder; external buffers stay confined there. */
 ipcMain.handle("read-3d-folder", async (event, folder) => {

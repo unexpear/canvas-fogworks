@@ -34,3 +34,13 @@ test("smokes use separate existing temporary profiles for recovery and Chromium"
     }
     assert.notEqual(profiles[0], profiles[1]);
 });
+
+test("an explicit smoke profile is reused instead of allocated", t => {
+    const profile = fs.mkdtempSync(path.join(os.tmpdir(), "fogworks-smoke-explicit-"));
+    t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
+    const calls = [];
+    const isolated = isolateSmokeProfile({ isReady: () => false, setPath: (name, value) => calls.push([name, value]) }, true, profile);
+    assert.equal(isolated, path.resolve(profile));
+    assert.deepEqual(calls, [["userData", path.resolve(profile)], ["sessionData", path.resolve(profile)]]);
+    assert.equal(isolateSmokeProfile({ isReady: () => false, setPath: () => { throw new Error("normal launch"); } }, false, profile), null);
+});

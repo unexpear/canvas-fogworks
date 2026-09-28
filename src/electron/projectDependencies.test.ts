@@ -5,7 +5,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, readdirSync, promises } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-const { copyProjectDependencies } = require("./projectDependencies");
+const { copyProjectDependencies, rollbackDependencyJournal, DEPENDENCY_JOURNAL_NAME } = require("./projectDependencies");
 
 let dir: string, source: string, dest: string;
 beforeEach(() => {
@@ -55,7 +55,7 @@ windowsTest("a differently cased existing asset conflict is refused before any f
     writeFileSync(join(dest, "COLOR.png"), "keep existing");
     await expect(copy()).rejects.toThrow("Dependency conflict");
     expect(readFileSync(join(dest, "color.png"), "utf8")).toBe("keep existing");
-    expect(existsSync(join(dest, "models", "shape.gltf"))).toBe(false);
+    expect(existsSync(join(dest, "models"))).toBe(false);
 });
 
 windowsTest("a dependency cannot occupy a differently cased destination entry filename", async () => {
@@ -98,7 +98,8 @@ test("conflicts do not overwrite destination assets", async () => {
     writeFileSync(join(dest, "color.png"), "keep existing");
     await expect(copy()).rejects.toThrow("Dependency conflict");
     expect(readFileSync(join(dest, "color.png"), "utf8")).toBe("keep existing");
-    expect(existsSync(join(dest, "models", "shape.gltf"))).toBe(false);
+    expect(existsSync(join(dest, "models"))).toBe(false);
+    expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(false);
 });
 test("missing dependencies are detected before copying files", async () => {
     rmSync(join(source, "color.png"));
@@ -152,6 +153,53 @@ test("image embedding covers overrides and tilesets, skips user data, and confin
 test("self-links with a relative dot retain their meaning when the entry filename is preserved", async () => {
     await expect(copyProjectDependencies(join(source, "project.vde"), join(dest, "project.vde"),
         JSON.stringify({ document: { nodes: { gate: { entity: { transitionTo: "./project.vde" } } } } }))).resolves.toBeUndefined();
+});
+
+test("a failed dependency write rolls back created files and directories", async () => {
+    writeFileSync(join(dest, "notes.txt"), "keep");
+    const write = promises.writeFile.bind(promises);
+    const spy = jest.spyOn(promises, "writeFile").mockImplementation(async (file, data, options) => {
+        if (String(file).endsWith(`${join("models", "shape.bin")}`)) throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+        return write(file, data, options);
+    });
+    try {
+        await expect(copy()).rejects.toThrow("disk full");
+        expect(existsSync(join(dest, "models"))).toBe(false);
+        expect(existsSync(join(dest, "color.png"))).toBe(false);
+        expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(false);
+        expect(readFileSync(join(dest, "notes.txt"), "utf8")).toBe("keep");
+        expect(readFileSync(join(source, "color.png"), "utf8")).toBe("owned texture");
+    } finally { spy.mockRestore(); }
+});
+
+test("a crashed copy's journal is removed on the next relocation without deleting unrelated files", async () => {
+    writeFileSync(join(dest, "notes.txt"), "keep");
+    mkdirSync(join(dest, "models"));
+    writeFileSync(join(dest, "models", "shape.gltf"), "partial");
+    writeFileSync(join(dest, "color.png"), "partial texture");
+    writeFileSync(join(dest, DEPENDENCY_JOURNAL_NAME), JSON.stringify({
+        version: 1, directories: ["models"], files: ["models/shape.gltf", "color.png"]
+    }));
+    await copy();
+    expect(readFileSync(join(dest, "notes.txt"), "utf8")).toBe("keep");
+    expect(readFileSync(join(dest, "models", "shape.bin"), "utf8")).toBe("owned mesh");
+    expect(readFileSync(join(dest, "color.png"), "utf8")).toBe("owned texture");
+    expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(false);
+});
+
+test("a rollback journal cannot delete outside the destination", async () => {
+    const outside = join(dir, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "secret"), "safe");
+    writeFileSync(join(dest, DEPENDENCY_JOURNAL_NAME), JSON.stringify({
+        version: 1, directories: [], files: ["../outside/secret"]
+    }));
+    await expect(rollbackDependencyJournal(dest)).rejects.toThrow(/journal/);
+    expect(readFileSync(join(outside, "secret"), "utf8")).toBe("safe");
+    expect(existsSync(join(dest, DEPENDENCY_JOURNAL_NAME))).toBe(true);
+    await expect(copy()).rejects.toThrow(/journal/);
+    expect(readFileSync(join(outside, "secret"), "utf8")).toBe("safe");
+    expect(existsSync(join(dest, "models"))).toBe(false);
 });
 
 test("the 32-level cap stops graph discovery before writing destination files", async () => {
