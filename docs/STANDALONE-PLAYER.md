@@ -1,8 +1,8 @@
 # Standalone 3D export and Windows player
 
-<!-- describes: src/electron/GamePackageExport.ts, src/player3d, src/app/ElectronAPI.ts, scripts/package-game.js, scripts/smoke-player.js, scripts/smoke-player-startup.js, package.json -->
-<!-- re-read 2026-09-28: package.json script additions are authoring benchmarks, not player packaging.
-     package.json also runs smoke:crash-relaunch, and readRecovery can now decline or preserve a snapshot. 3D export and the player host are unchanged. -->
+<!-- describes: src/electron/GamePackageExport.ts, src/player3d, src/runtime/PackageProfile.ts, src/app/ElectronAPI.ts, scripts/package-game.js, scripts/smoke-player.js, scripts/smoke-player-acceptance.js, scripts/smoke-player-startup.js, package.json -->
+<!-- re-read 2026-09-28: package.json also records authoring benchmarks and smoke:crash-relaunch.
+     readRecovery can decline or preserve a snapshot. 3D export packages custom fonts, diagnostics and unsigned provenance. -->
 
 Implemented 2026-09-12 as bounded Q03–Q05 work in the [engine roadmap](ENGINE-ROADMAP.md).
 This delivers a real offline host for the existing 3D runtime, not Unreal-level feature parity
@@ -38,17 +38,20 @@ runs synchronously in bounded portions; background-worker validation remains fut
 From the repository, using a **new**, nonexistent output directory whose parent exists:
 
 ```powershell
-npm run package:game -- "reference-projects/animated-3d.vde" "D:\game-builds\owned-demo" --desktop
+npm run package:game -- "reference-projects/animated-3d.vde" "D:\game-builds\owned-demo" --desktop --fonts "D:\game-builds\fonts"
 ```
 
-This command reads the saved entry from disk; save current editor changes first. Without
-`--desktop`, it generates HTML, the manifest and the desktop host staging app without bundling
+`--fonts` is a directory of `.ttf`/`.otf` files, not a recursive asset scan. Only faces whose family
+is used by a packaged level are embedded. The editor export uses faces registered in that session
+instead of a directory. This command reads the saved entry from disk; save current editor changes first. Without
+`--desktop`, it generates HTML, the manifest, provenance and the desktop host staging app without bundling
 Electron. It does not rebuild or replace the editor installer. Output:
 
 | Path inside the new output directory | Purpose |
 |---|---|
 | `game.cfgame.json` | Validated inline package for inspection/future hosts |
-| `app/game.html` | Self-contained browser player and embedded package |
+| `game.provenance.json` | Unsigned hashes, packaged faces and profile warnings; not a signature |
+| `app/game.html` | Self-contained browser player, embedded package and the same provenance |
 | `app/main.cjs`, `app/progressPreload.js`, `app/package.json` | Dedicated Electron host and bounded progress bridge |
 | `desktop/win-unpacked/Canvas Fogworks Game.exe` | Windows x64 player when `--desktop` is supplied |
 
@@ -87,7 +90,9 @@ only read/write of a bounded main-process-selected save slot, never arbitrary pa
 SHA-256 verification checks the embedded package bytes before starting the player. The expected
 digest is in the same HTML: it detects accidental damage, **not authenticity** against an attacker
 who can replace both data and digest or replace the player program. The standalone JSON manifest
-does not itself carry a digest. Signatures, trusted updates and release provenance are separate work.
+does not itself carry a digest. `game.provenance.json` repeats that manifest hash, per-file hashes,
+the app version and an optional source revision. It is release provenance for inspection, not a
+signature or a trusted-update mechanism. Anonymous unsigned distribution is unchanged.
 
 ## Verification and remaining gates
 
@@ -126,11 +131,18 @@ file-workflow/level/authoring/player smokes pass. The new unsigned example at
 This build adds only `progressPreload.js` to the earlier three-file ASAR allowlist. Existing
 artifacts were retained; full process-crash/relaunch save acceptance is not claimed.
 
-Still open: clean Windows-machine/offline acceptance of an owned playable multi-level game;
-complete 3D audio/game-rule/UI and unsupported-feature reporting; prefab campaign snapshots,
-portable save files, multiple slots and cross-build save migrations;
-custom font packaging; long-session/GPU/device-loss evidence; larger-content streaming;
-installer/update/provenance policy and broader platform support. F1 remains partial.
+`npm run smoke:player-acceptance` packages an owned scene that uses a custom face and an embedded
+sound cue, deletes the source project and font directory, and launches the HTML under an isolated
+profile. It checks WebGL presentation, registration of the packaged face, visible diagnostics for
+unplayed sound and undrawn 2D text, absent Node/editor authority, and a provenance record that
+matches the HTML and contains no host path. It is included in `ci`. The harness asks Electron for SwiftShader so a blocklisted host GPU
+still has a context; that is clean-profile acceptance of the unpacked player, not hardware-GPU
+certification or a signed Windows image on a separate computer.
+
+Still open: separate clean Windows-machine certification of the unpacked EXE; playing embedded sound;
+drawing 2D text into the 3D view; prefab campaign snapshots, portable save files, multiple slots
+and cross-build save migrations; long-session/GPU/device-loss evidence; larger-content streaming; signatures,
+trusted updates and broader platform support. F1 remains partial.
 Asset redistribution and attribution remain the game author's responsibility: an ignored pack
 does not become redistributable just because a project references it.
 

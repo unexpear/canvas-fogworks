@@ -18,7 +18,7 @@ const {
 } = require("../app/RecoveryRestore");
 const { embedProjectImages } = require("./projectImages");
 const { gameDocumentTargets, gameHtml } = require("../core/export/GameExport");
-const { collectGamePackage, game3DHtml } = require("./GamePackageExport");
+const { collectGamePackage, fontPayloadsFromJson, game3DHtml, gameProvenance } = require("./GamePackageExport");
 const fs = require("fs");
 const zlib = require("zlib");
 const pkg = require("../../package.json");
@@ -980,16 +980,17 @@ ipcMain.handle("export-game", async (_event, folder, content, sourceProjectPath)
     return destination;
 });
 
-ipcMain.handle("export-game-3d", async (event, folder, content, sourceProjectPath) => {
+ipcMain.handle("export-game-3d", async (event, folder, content, sourceProjectPath, fonts) => {
     if (event.sender !== mainWindow?.webContents) throw new Error("Unapproved game export sender.");
     if (!approvedExportFolders.has(folder)) throw new Error("Choose an export folder first.");
     if (!sourceProjectPath || !approvedSavePaths.has(sourceProjectPath)) throw new Error("Save the project before exporting a 3D game.");
-    const serialized = await collectGamePackage(sourceProjectPath, content);
+    const serialized = await collectGamePackage(sourceProjectPath, content, { fontPayloads: fontPayloadsFromJson(fonts) });
     const bundle = await fs.promises.readFile(path.join(__dirname, "..", "app", "player3d.js"));
+    const provenance = gameProvenance(serialized, { appVersion: pkg.version, sourceRevision: null });
     const destination = resolveInsideFolder(folder, "game-3d.html");
     if (fs.existsSync(destination)) throw new Error("game-3d.html already exists. Choose an empty export folder to preserve it.");
     // Exclusive creation also refuses a conflicting file created after the existence check.
-    await fs.promises.writeFile(destination, game3DHtml(serialized, bundle), { flag: "wx" });
+    await fs.promises.writeFile(destination, game3DHtml(serialized, bundle, provenance), { flag: "wx" });
     return destination;
 });
 

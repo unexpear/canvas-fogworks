@@ -40,8 +40,8 @@
       "area": "distribution",
       "priority": "P1",
       "status": "open",
-      "summary": "Complete clean-machine standalone 3D acceptance, custom font packaging, unsupported-feature diagnostics and release provenance. Shared 3D loading/session, inline manifest/resolver, package export, embedded-payload checksum, event/render host and unsigned Windows unpacked build are implemented; broad runtime feature coverage and F1 certification remain open.",
-      "evidence": ["docs/PLAYER-RUNTIME.md", "docs/GAME-PACKAGE.md", "docs/STANDALONE-PLAYER.md", "src/runtime/RuntimeProject.ts", "src/electron/GamePackageExport.ts", "scripts/package-game.js", "scripts/smoke-player.js", "scripts/smoke-player-startup.js", "package.json"]
+      "summary": "Delivered clean-profile standalone 3D acceptance, custom font packaging, unsupported-feature diagnostics and unsigned release provenance. The acceptance smoke removes the source and font directories, then checks WebGL presentation, packaged font registration, visible sound/text diagnostics and a path-free provenance record. spatial3d-v1 still does not play embedded sound or draw 2D text into the 3D view. Windows clean-machine EXE certification, signatures, streaming and broader runtime coverage remain open.",
+      "evidence": ["docs/PLAYER-RUNTIME.md", "docs/GAME-PACKAGE.md", "docs/STANDALONE-PLAYER.md", "src/runtime/PackageProfile.ts", "src/runtime/GamePackage.ts", "src/electron/GamePackageExport.ts", "src/player3d/packageFonts.ts", "scripts/package-game.js", "scripts/smoke-player.js", "scripts/smoke-player-acceptance.js", "scripts/smoke-player-startup.js", "package.json"]
     },
     {
       "id": "PHYSICS-001",
@@ -64,7 +64,7 @@
       "area": "project-files",
       "priority": "P1",
       "status": "open",
-      "summary": "Delivered browser recovery restore, desktop crash/relaunch automation, and transactional dependency-folder rollback on top of bounded linked-level/image/3D relocation and five writer-process crash checkpoints. A failed or killed dependency copy removes only files and directories that copy created; the next cross-folder Save As finishes a leftover journal. Recovery does not replace Save and does not apply over a newer explicit save. Power-loss durability is still not claimed. Renamed self-linked entry files and external image URLs stay refused; custom fonts are not packaged.",
+      "summary": "Delivered browser recovery restore, desktop crash/relaunch automation, and transactional dependency-folder rollback on top of bounded linked-level/image/3D relocation and five writer-process crash checkpoints. A failed or killed dependency copy removes only files and directories that copy created; the next cross-folder Save As finishes a leftover journal. Recovery does not replace Save and does not apply over a newer explicit save. Power-loss durability is still not claimed. Renamed self-linked entry files and external image URLs stay refused; project relocation does not copy custom fonts.",
       "evidence": ["src/app/ProjectSession.ts", "src/app/RecoveryRestore.ts", "src/electron/projectDependencies.js", "scripts/crash-recovery.test.js", "scripts/smoke-crash-relaunch.js", "docs/PRODUCTION-WORK.md"]
     },
     {

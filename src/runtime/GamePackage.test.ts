@@ -3,6 +3,8 @@
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { createPackageReader, GAME_PACKAGE_LIMITS } from "./GamePackage";
+import { fontStackFamilies } from "./PackageProfile";
+const { ownedTestFont } = require("../../scripts/owned-test-font");
 import type { GamePackageManifest } from "./GamePackage";
 import { PlayerSession3D } from "./PlayerSession3D";
 
@@ -172,6 +174,75 @@ test("GLB with an embedded binary chunk loads through the same package player", 
     await session.start(); expect(session.frame(400, 300)!.draws).toHaveLength(1);
     manifest.files[0].data = "AAAA"; manifest.files[0].bytes = 3;
     expect(() => load(manifest)).toThrow("GLB");
+});
+
+function withLabel(manifest: GamePackageManifest, family: string) {
+    const doc = JSON.parse(manifest.levels[0].content);
+    doc.document.nodes.label = { id: "label", type: "core.text", parent: null, children: [],
+        geometry: { x: 0, y: 0, width: 120, height: 24 }, style: { fill: "#ffffff", opacity: 1, fontFamily: `"${family}", sans-serif` },
+        layout: {}, text: "Hello" };
+    doc.document.rootNodeUuids.push("label");
+    manifest.levels[0].content = JSON.stringify(doc);
+    return manifest;
+}
+function attachFont(manifest: GamePackageManifest, family = "Owned Face") {
+    const bytes = Buffer.from(ownedTestFont(family));
+    manifest.files = [...manifest.files, { id: "face", kind: "font", bytes: bytes.length, data: bytes.toString("base64") }];
+    manifest.fonts = [{ family, weight: 400, italic: false, file: "face" }];
+    return manifest;
+}
+test("quoted font stacks keep commas inside a family name", () => {
+    expect(fontStackFamilies('"Owned Face", sans-serif')).toEqual(["Owned Face", "sans-serif"]);
+    expect(fontStackFamilies("'Name, With Comma', serif")).toEqual(["Name, With Comma", "serif"]);
+});
+test("a packaged custom face is retained and a missing one is named", () => {
+    const reader = load(attachFont(withLabel(fixture(), "Owned Face")));
+    expect(reader.fonts.map(font => font.family)).toEqual(["Owned Face"]);
+    expect(reader.warnings.map(warning => warning.code)).toContain("undrawn-text");
+    expect(() => load(withLabel(fixture(), "Owned Face"))).toThrow(/custom font "Owned Face" on label/);
+    const mismatch = attachFont(withLabel(fixture(), "Owned Face"));
+    mismatch.fonts![0].family = "Other Face";
+    expect(() => load(mismatch)).toThrow(/does not match|not Other Face|font bytes/);
+});
+test("generic families need no face, and unused or duplicate faces are refused", () => {
+    const generic = fixture(), doc = JSON.parse(generic.levels[0].content);
+    doc.document.nodes.label = { id: "label", type: "core.text", parent: null, children: [],
+        geometry: { x: 0, y: 0, width: 120, height: 24 }, style: { fill: "#ffffff", opacity: 1, fontFamily: "sans-serif" },
+        layout: {}, text: "Hello" };
+    doc.document.rootNodeUuids.push("label");
+    generic.levels[0].content = JSON.stringify(doc);
+    expect(load(generic).fonts).toEqual([]);
+    const extra = attachFont(fixture());
+    expect(() => load(extra)).toThrow(/Unused packaged font/);
+    const duplicated = attachFont(withLabel(fixture(), "Owned Face"));
+    duplicated.fonts!.push({ ...duplicated.fonts![0] });
+    expect(() => load(duplicated)).toThrow(/Duplicate packaged font/);
+});
+test("sound cues, morph targets and unsupported glTF requirements are diagnosed", () => {
+    const sound = fixture(), doc = JSON.parse(sound.levels[0].content);
+    doc.document.nodes.triangle.entity = { ...doc.document.nodes.triangle.entity, rules: [{ event: "start", other: "any", target: "self",
+        action: { kind: "sound", source: "data:audio/wav;base64,AAAA", volume: 1 } }] };
+    sound.levels[0].content = JSON.stringify(doc);
+    const reader = load(sound);
+    expect(reader.warnings.map(warning => warning.code)).toContain("sound-cue");
+    expect(reader.warnings.find(warning => warning.code === "sound-cue")!.detail).toContain("triangle");
+    const morph = fixture(), json = JSON.parse(Buffer.from(morph.files[0].data, "base64").toString("utf8"));
+    json.meshes[0].primitives[0].targets = [{}];
+    const encoded = Buffer.from(JSON.stringify(json));
+    morph.files[0].data = encoded.toString("base64"); morph.files[0].bytes = encoded.length;
+    expect(load(morph).warnings.map(warning => warning.code)).toContain("morph-target");
+    json.extensionsRequired = ["KHR_draco_mesh_compression"];
+    const refused = Buffer.from(JSON.stringify(json));
+    morph.files[0].data = refused.toString("base64"); morph.files[0].bytes = refused.length;
+    expect(() => load(morph)).toThrow(/KHR_draco_mesh_compression/);
+});
+test("embedded SVG scene images are refused by name", () => {
+    const manifest = fixture(), doc = JSON.parse(manifest.levels[0].content);
+    doc.document.nodes.badge = { ...doc.document.nodes.triangle, id: "badge", type: "core.image", spatial3d: undefined,
+        src: "data:image/svg+xml;base64,PHN2Zz4=" };
+    doc.document.rootNodeUuids.push("badge");
+    manifest.levels[0].content = JSON.stringify(doc);
+    expect(() => load(manifest)).toThrow(/SVG image payloads are not packaged/);
 });
 
 test("network and missing image dependencies in model JSON are refused eagerly", () => {

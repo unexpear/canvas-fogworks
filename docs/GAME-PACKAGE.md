@@ -1,6 +1,6 @@
 # Inline game package v1 — manifest and read-only resolver
 
-<!-- describes: src/runtime/GamePackage.ts, src/runtime/GamePackage.test.ts, src/runtime/RuntimeBoundary.test.ts, scripts/smoke-level-transition.js -->
+<!-- describes: src/runtime/GamePackage.ts, src/runtime/PackageProfile.ts, src/runtime/GamePackage.test.ts, src/runtime/RuntimeBoundary.test.ts, scripts/smoke-level-transition.js -->
 
 Implemented 2026-09-12 as the bounded Q03 format/resolver slice of the
 [engine roadmap](ENGINE-ROADMAP.md). This is a new runtime package format, separate from
@@ -34,6 +34,7 @@ Unknown fields are refused in the v1 envelope and its level/link/resource/file r
 | `requiredCapabilities` | Exactly `["spatial3d-v1"]` in this implementation |
 | `levels` | Array of `{ id, content, links, resources }` |
 | `files` | Array of `{ id, kind, bytes, data }` |
+| `fonts` | Optional array of `{ family, weight, italic, file }`. Absent means no custom faces |
 
 IDs contain lowercase ASCII letters, digits, `_` and `-`, start with a letter/digit and are at
 most 64 characters. Reserved prototype names are refused. Duplicate level/file IDs are errors.
@@ -50,7 +51,7 @@ Each level contains:
 
 Each file contains:
 
-- `kind`: `gltf`, `glb`, `hdr`, `buffer` or `image`.
+- `kind`: `gltf`, `glb`, `hdr`, `buffer`, `image` or `font`.
 - `bytes`: exact nonnegative decoded-byte count, within the per-file limit.
 - `data`: canonical padded standard base64; whitespace, URL-safe variants, missing padding,
   invalid characters and nonzero unused padding bits are refused.
@@ -104,7 +105,7 @@ limits still apply during hydration and frame construction.
 Ordinary scene image `src` fields, including nested node/tileset fields, must already contain
 embedded PNG/JPEG/WebP/GIF base64. Relative/network images are not silently fetched. `userData`
 is treated as metadata, not a dependency instruction. Image embedding remains the writer's job.
-Custom fonts, arbitrary scripts, SVG image payloads and new asset types are not packaged here.
+Custom font families used by packaged text are embedded as `font` files when the exporter is given a font directory or the editor's registered faces. Generic CSS families need no file. A missing, conflicting or unused face fails the package by name. SVG image payloads and unsupported required glTF extensions also fail by name. Embedded sound cues, morph targets, non-triangle primitives and 2D text that the 3D view does not draw are warnings on the reader, not silent omissions.
 
 The `spatial3d-v1` marker identifies this bounded reader/player profile. It is not a claim of
 full glTF support, complete game-rule/audio support, render parity on every GPU or general engine
@@ -134,10 +135,12 @@ Streaming and larger-content formats require a later design; do not just raise t
 
 Byte counts and strict encoding catch malformed/truncated payloads but are **not cryptographic
 integrity or authenticity**. A same-length malicious edit can still be structurally valid.
-The standalone HTML writer now adds a SHA-256 digest over the entire embedded manifest, checked
-before play; that digest is outside this format and does not provide authenticity. Artifact
-provenance, signatures and update verification remain separate distribution work; anonymous,
-unsigned distribution is retained.
+The standalone HTML writer adds a SHA-256 digest over the entire embedded manifest, checked
+before play; that digest detects accidental damage and does not provide authenticity. The exporter
+also writes an unsigned provenance record (`game.provenance.json`, and the same object inside the
+HTML) listing the app version, optional source revision, manifest hash, per-file hashes, packaged
+faces and profile warnings. It contains no host paths and is not a signature. Anonymous unsigned
+distribution is retained. Trusted updates remain separate work.
 
 ## Verification and remaining work
 
@@ -157,8 +160,9 @@ or clean-machine standalone-game certification was performed.
 
 Follow-up delivery: the explicit package writer/export path, dedicated event/render host and
 unsigned executable packaging are implemented; see [Standalone player](STANDALONE-PLAYER.md).
-Clean-machine verification and broader profile/unsupported-feature coverage remain open.
-Do not mark F1 complete on the strength of host-machine smoke results.
+`npm run smoke:player-acceptance` is the clean-profile gate: it deletes the source project and font
+directory before launching the packaged HTML. Windows EXE certification on a separate machine,
+signatures and broader runtime coverage remain open. Do not mark F1 complete on this smoke alone.
 
 Encoding behavior was checked against [TextEncoder](https://developer.mozilla.org/en-US/docs/Web/API/TextEncoder/encode)
 and [base64 byte conversion](https://developer.mozilla.org/en-US/docs/Web/API/Window/btoa).

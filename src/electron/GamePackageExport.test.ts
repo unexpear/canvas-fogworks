@@ -3,7 +3,8 @@ import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSy
 import { tmpdir } from "os";
 import { resolve, join } from "path";
 import { createHash } from "crypto";
-import { collectGamePackage, game3DHtml } from "./GamePackageExport";
+import { collectGamePackage, fontPayloadsFromJson, game3DHtml, gameProvenance } from "./GamePackageExport";
+const { ownedTestFont } = require("../../scripts/owned-test-font");
 import { createPackageReader, GAME_PACKAGE_LIMITS } from "../runtime/GamePackage";
 import { PlayerSession3D } from "../runtime/PlayerSession3D";
 let temp: string, project: string, raw: any;
@@ -112,6 +113,37 @@ test("the packaging command refuses an existing output directory without alterin
     const before = readFileSync(project, "utf8");
     await expect(packageGame(project, temp)).rejects.toThrow();
     expect(readFileSync(project, "utf8")).toBe(before);
+});
+test("custom fonts are packaged from a directory or payload and provenance omits host paths", async () => {
+    const fonts = join(temp, "fonts"); mkdirSync(fonts);
+    writeFileSync(join(fonts, "owned.ttf"), ownedTestFont("Owned Face"));
+    writeFileSync(join(fonts, "unused.ttf"), ownedTestFont("Unused Face"));
+    raw.document.nodes.label = { id: "label", type: "core.text", parent: null, children: [],
+        geometry: { x: 0, y: 0, width: 120, height: 24 }, style: { fill: "#ffffff", opacity: 1, fontFamily: "Owned Face, sans-serif" },
+        layout: {}, text: "Hello" };
+    raw.document.rootNodeUuids.push("label");
+    raw.document.nodes.triangle.entity = { rules: [{ event: "start", other: "any", target: "self",
+        action: { kind: "sound", source: "data:audio/wav;base64,AAAA", volume: 1 } }] };
+    const serialized = await collectGamePackage(project, JSON.stringify(raw), { fontsDirectory: fonts });
+    const manifest = JSON.parse(serialized), reader = createPackageReader(serialized);
+    expect(manifest.fonts.map((font: { family: string }) => font.family)).toEqual(["Owned Face"]);
+    expect(manifest.files.some((file: { kind: string }) => file.kind === "font")).toBe(true);
+    expect(serialized).not.toContain("Unused Face"); expect(serialized).not.toContain(temp);
+    expect(reader.fonts[0].family).toBe("Owned Face");
+    expect(reader.warnings.map(warning => warning.code).sort()).toEqual(["sound-cue", "undrawn-text"]);
+    const provenance = gameProvenance(serialized, { appVersion: "0.0.5", sourceRevision: null });
+    expect(provenance.authenticity).toBe("unsigned");
+    expect(provenance.manifestSha256).toBe(createHash("sha256").update(serialized).digest("hex"));
+    expect(provenance.fonts[0].sha256).toHaveLength(64);
+    expect(JSON.stringify(provenance)).not.toContain(temp);
+    const html = game3DHtml(serialized, Buffer.from("/* owned player */"), provenance);
+    expect(html).toContain("font-src data: blob:"); expect(html).toContain('id="diagnostics"');
+    expect(html).toContain(provenance.manifestSha256);
+    expect(() => game3DHtml(serialized, Buffer.from("/* owned player */"), { ...provenance, manifestSha256: "a".repeat(64) })).toThrow("Provenance");
+    const payload = fontPayloadsFromJson([{ data: Buffer.from(ownedTestFont("Owned Face")).toString("base64") }]);
+    const fromPayload = JSON.parse(await collectGamePackage(project, JSON.stringify(raw), { fontPayloads: payload }));
+    expect(fromPayload.fonts).toHaveLength(1);
+    await expect(collectGamePackage(project, JSON.stringify(raw))).rejects.toThrow(/custom font "Owned Face"/);
 });
 test("HTML keeps untrusted document text out of markup and binds the UTF8 payload digest", async () => {
     raw.document.nodes.triangle.userData = { note: { type: "string", value: "</script><script>alert('bad')</script> café" } };

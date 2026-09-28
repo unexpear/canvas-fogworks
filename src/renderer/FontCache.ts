@@ -16,12 +16,23 @@
 
 import { FontInfo } from "../core/import/FontFile";
 
-/** Families registered this session, by family name. */
-const faces = new Map<string, FontInfo>();
+/** Families registered this session, by family name, with the bytes a package export can embed. */
+const faces = new Map<string, { info: FontInfo; bytes: Uint8Array }>();
 
 /** What has been registered — for a picker, and so a caller can tell what a document may ask for. */
 export function registeredFonts(): FontInfo[] {
-    return [...faces.values()];
+    return [...faces.values()].map(face => face.info);
+}
+function base64(bytes: Uint8Array): string {
+    let binary = "";
+    for (let index = 0; index < bytes.length; index += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+    }
+    return btoa(binary);
+}
+/** Copies of the faces loaded in this editor session, for offline package export. */
+export function registeredFontPayloads(): { data: string }[] {
+    return [...faces.values()].map(face => ({ data: base64(face.bytes) }));
 }
 
 /** Forget everything. Exists for tests; a real session only ever adds. */
@@ -52,7 +63,7 @@ export async function registerFont(info: FontInfo, bytes: Uint8Array): Promise<s
         });
         await face.load();
         document.fonts.add(face);
-        faces.set(info.family, info);
+        faces.set(info.family, { info, bytes: bytes.slice() });
         return null;
     } catch (e) {
         // A font the platform refuses is a fact worth reporting, not a crash: one bad file in a

@@ -18,8 +18,9 @@ adoption, restart, pause/Stop and bounded simulation timing. F1 is not complete.
 baseline remains pending an authorized commit. Q03 implements a bounded inline package manifest
 and read-only resolver; see [Game package v1](GAME-PACKAGE.md). The subsequent Q03–Q05 slice adds
 package export, an embedded-payload checksum, a real event/render host and an unsigned Windows
-unpacked build; see [Standalone player](STANDALONE-PLAYER.md). Clean-machine acceptance, complete
-runtime feature diagnostics and release provenance remain open.
+unpacked build; see [Standalone player](STANDALONE-PLAYER.md). Clean-profile acceptance, custom font
+packaging, unsupported-feature diagnostics and unsigned provenance are now part of that player.
+Separate Windows clean-machine EXE certification, signatures and broader runtime coverage remain open.
 See PLAYER-RUNTIME.md for scoped verification evidence.
 
 Q06 follow-up 2026-09-12: schema 79 adds reusable named input actions, nearest-target interaction,
@@ -87,7 +88,7 @@ The former Morphic engine remains a preserved reference, not a second production
 | Imported glTF TRS and morph animation, CPU skinning, 16-joint GPU skinning and two-pose blending | Not full animation graphs, events, root motion or character production tools |
 | 2D/3D gameplay rules, interactions, bounded spawning, checkpoints and current-level progress | Not a general behavior lifecycle, full prefab system, production physics or multiplayer |
 | Dependency-aware Save As, recovery checkpoints, browser restore, desktop crash/relaunch, and dependency-folder rollback | Power-loss durability is not guaranteed. A killed copy is repaired from its journal on the next cross-folder Save As |
-| Offline 2D/3D HTML players, unsigned Windows 3D player and separate editor installer | Host-machine smoke evidence; clean-machine game acceptance and broader runtime feature coverage remain open |
+| Offline 2D/3D HTML players, unsigned Windows 3D player and separate editor installer | Clean-profile acceptance, custom fonts and unsigned provenance; separate Windows clean-machine certification and broader runtime coverage remain open |
 | Tests, Electron smokes and CPU/GPU benchmarks | Hardware-specific, bounded fixtures; not a broad compatibility or scalability certification |
 
 Evidence starting points:
@@ -176,9 +177,10 @@ explicitly called the full gate. Every slice also obeys section 7's common defin
 
 ### ENG-01 — Standalone runtime and game distribution
 
-**State:** partial; 2D/3D HTML export, editor packaging and an unsigned Windows standalone 3D
-unpacked build exist. Clean-machine game acceptance, full runtime-profile diagnostics and broader
-distribution/provenance gates remain open; see [Standalone player](STANDALONE-PLAYER.md).
+**State:** partial; 2D/3D HTML export, editor packaging, an unsigned Windows standalone 3D unpacked
+build, custom font embedding, profile diagnostics, unsigned provenance and a clean-profile
+acceptance smoke exist. Separate Windows clean-machine certification and signatures remain open;
+see [Standalone player](STANDALONE-PLAYER.md).
 **Phases:** F1, then F4/F6. **Role:** runtime/release engineering.
 
 - **First slice:** extract a minimal runtime host; build a Windows game player without editor

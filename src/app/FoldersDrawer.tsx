@@ -29,7 +29,7 @@ import { svgNodeSpecs, SvgNodeSpec } from "../core/import/SvgNodes";
 import { parseFontFile, fontFileError, FontInfo } from "../core/import/FontFile";
 import { parseTiledMap, parseTiledTileset, tiledMapError, tilesetOverflow, withImageSize,
     TiledTileset } from "../core/import/TiledMap";
-import { registerFont, registeredFonts } from "../renderer/FontCache";
+import { registerFont, registeredFontPayloads, registeredFonts } from "../renderer/FontCache";
 import { generateUUID } from "../core/ids/UUID";
 import { naturalSize, surfaceUrl, imageSizeAsync } from "../renderer/ImageCache";
 import { SourceRect } from "../core/document/Node";
@@ -1056,7 +1056,7 @@ export function FoldersDrawer({ onPlaceImage, getDocument, selectedImage, onImpo
                         setBusy(true);
                         try {
                             const folder = await api.pickFolder();
-                            if (folder) setExported(await api.exportGame3D(folder, serializeDocument(getDocument()), getProjectPath()));
+                            if (folder) setExported(await api.exportGame3D(folder, serializeDocument(getDocument()), getProjectPath(), registeredFontPayloads()));
                         } catch (error) { setExported(`3D game export failed: ${String(error)}`); }
                         finally { setBusy(false); }
                     }}>Export offline 3D game (HTML)…</button>
